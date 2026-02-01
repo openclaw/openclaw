@@ -1,5 +1,4 @@
 import type { TSchema } from "@sinclair/typebox";
-
 import {
   AgentEventSchema,
   AgentIdentityParamsSchema,
@@ -52,15 +51,6 @@ import {
   CronUpdateParamsSchema,
 } from "./cron.js";
 import {
-  ExecApprovalsGetParamsSchema,
-  ExecApprovalsNodeGetParamsSchema,
-  ExecApprovalsNodeSetParamsSchema,
-  ExecApprovalsSetParamsSchema,
-  ExecApprovalsSnapshotSchema,
-  ExecApprovalRequestParamsSchema,
-  ExecApprovalResolveParamsSchema,
-} from "./exec-approvals.js";
-import {
   DevicePairApproveParamsSchema,
   DevicePairListParamsSchema,
   DevicePairRejectParamsSchema,
@@ -69,6 +59,15 @@ import {
   DeviceTokenRevokeParamsSchema,
   DeviceTokenRotateParamsSchema,
 } from "./devices.js";
+import {
+  ExecApprovalsGetParamsSchema,
+  ExecApprovalsNodeGetParamsSchema,
+  ExecApprovalsNodeSetParamsSchema,
+  ExecApprovalsSetParamsSchema,
+  ExecApprovalsSnapshotSchema,
+  ExecApprovalRequestParamsSchema,
+  ExecApprovalResolveParamsSchema,
+} from "./exec-approvals.js";
 import {
   ConnectParamsSchema,
   ErrorShapeSchema,

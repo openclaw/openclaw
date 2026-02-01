@@ -1,6 +1,6 @@
+import type { CliDeps } from "../cli/deps.js";
 import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
-import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
@@ -16,7 +16,9 @@ import { loadSessionEntry } from "./session-utils.js";
 
 export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const sentinel = await consumeRestartSentinel();
-  if (!sentinel) return;
+  if (!sentinel) {
+    return;
+  }
   const payload = sentinel.payload;
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);

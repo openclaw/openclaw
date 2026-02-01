@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { resolveStateDir } from "../config/paths.js";
 
 export type DeviceAuthEntry = {
@@ -27,22 +26,32 @@ function normalizeRole(role: string): string {
 }
 
 function normalizeScopes(scopes: string[] | undefined): string[] {
-  if (!Array.isArray(scopes)) return [];
+  if (!Array.isArray(scopes)) {
+    return [];
+  }
   const out = new Set<string>();
   for (const scope of scopes) {
     const trimmed = scope.trim();
-    if (trimmed) out.add(trimmed);
+    if (trimmed) {
+      out.add(trimmed);
+    }
   }
-  return [...out].sort();
+  return [...out].toSorted();
 }
 
 function readStore(filePath: string): DeviceAuthStore | null {
   try {
-    if (!fs.existsSync(filePath)) return null;
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
     const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as DeviceAuthStore;
-    if (parsed?.version !== 1 || typeof parsed.deviceId !== "string") return null;
-    if (!parsed.tokens || typeof parsed.tokens !== "object") return null;
+    if (parsed?.version !== 1 || typeof parsed.deviceId !== "string") {
+      return null;
+    }
+    if (!parsed.tokens || typeof parsed.tokens !== "object") {
+      return null;
+    }
     return parsed;
   } catch {
     return null;
@@ -66,11 +75,17 @@ export function loadDeviceAuthToken(params: {
 }): DeviceAuthEntry | null {
   const filePath = resolveDeviceAuthPath(params.env);
   const store = readStore(filePath);
-  if (!store) return null;
-  if (store.deviceId !== params.deviceId) return null;
+  if (!store) {
+    return null;
+  }
+  if (store.deviceId !== params.deviceId) {
+    return null;
+  }
   const role = normalizeRole(params.role);
   const entry = store.tokens[role];
-  if (!entry || typeof entry.token !== "string") return null;
+  if (!entry || typeof entry.token !== "string") {
+    return null;
+  }
   return entry;
 }
 
@@ -110,9 +125,13 @@ export function clearDeviceAuthToken(params: {
 }): void {
   const filePath = resolveDeviceAuthPath(params.env);
   const store = readStore(filePath);
-  if (!store || store.deviceId !== params.deviceId) return;
+  if (!store || store.deviceId !== params.deviceId) {
+    return;
+  }
   const role = normalizeRole(params.role);
-  if (!store.tokens[role]) return;
+  if (!store.tokens[role]) {
+    return;
+  }
   const next: DeviceAuthStore = {
     version: 1,
     deviceId: store.deviceId,

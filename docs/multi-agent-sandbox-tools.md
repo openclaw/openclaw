@@ -10,10 +10,12 @@ status: active
 ## Overview
 
 Each agent in a multi-agent setup can now have its own:
+
 - **Sandbox configuration** (`agents.list[].sandbox` overrides `agents.defaults.sandbox`)
 - **Tool restrictions** (`tools.allow` / `tools.deny`, plus `agents.list[].tools`)
 
 This allows you to run multiple agents with different security profiles:
+
 - Personal assistant with full access
 - Family/work agents with restricted tools
 - Public-facing agents in sandboxes
@@ -24,14 +26,14 @@ when the container is created.
 Auth is per-agent: each agent reads from its own `agentDir` auth store at:
 
 ```
-~/.clawdbot/agents/<agentId>/agent/auth-profiles.json
+~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
 Credentials are **not** shared between agents. Never reuse `agentDir` across agents.
 If you want to share creds, copy `auth-profiles.json` into the other agent's `agentDir`.
 
 For how sandboxing behaves at runtime, see [Sandboxing](/gateway/sandboxing).
-For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) and `moltbot sandbox explain`.
+For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) and `openclaw sandbox explain`.
 
 ---
 
@@ -47,13 +49,13 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
         "id": "main",
         "default": true,
         "name": "Personal Assistant",
-        "workspace": "~/clawd",
+        "workspace": "~/.openclaw/workspace",
         "sandbox": { "mode": "off" }
       },
       {
         "id": "family",
         "name": "Family Bot",
-        "workspace": "~/clawd-family",
+        "workspace": "~/.openclaw/workspace-family",
         "sandbox": {
           "mode": "all",
           "scope": "agent"
@@ -82,6 +84,7 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
 ```
 
 **Result:**
+
 - `main` agent: Runs on host, full tool access
 - `family` agent: Runs in Docker (one container per agent), only `read` tool
 
@@ -95,12 +98,12 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
     "list": [
       {
         "id": "personal",
-        "workspace": "~/clawd-personal",
+        "workspace": "~/.openclaw/workspace-personal",
         "sandbox": { "mode": "off" }
       },
       {
         "id": "work",
-        "workspace": "~/clawd-work",
+        "workspace": "~/.openclaw/workspace-work",
         "sandbox": {
           "mode": "all",
           "scope": "shared",
@@ -135,6 +138,7 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
 ```
 
 **Result:**
+
 - default agents get coding tools
 - `support` agent is messaging-only (+ Slack tool)
 
@@ -147,23 +151,23 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
   "agents": {
     "defaults": {
       "sandbox": {
-        "mode": "non-main",  // Global default
+        "mode": "non-main", // Global default
         "scope": "session"
       }
     },
     "list": [
       {
         "id": "main",
-        "workspace": "~/clawd",
+        "workspace": "~/.openclaw/workspace",
         "sandbox": {
-          "mode": "off"  // Override: main never sandboxed
+          "mode": "off" // Override: main never sandboxed
         }
       },
       {
         "id": "public",
-        "workspace": "~/clawd-public",
+        "workspace": "~/.openclaw/workspace-public",
         "sandbox": {
-          "mode": "all",  // Override: public always sandboxed
+          "mode": "all", // Override: public always sandboxed
           "scope": "agent"
         },
         "tools": {
@@ -183,7 +187,9 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
 When both global (`agents.defaults.*`) and agent-specific (`agents.list[].*`) configs exist:
 
 ### Sandbox Config
+
 Agent-specific settings override global:
+
 ```
 agents.list[].sandbox.mode > agents.defaults.sandbox.mode
 agents.list[].sandbox.scope > agents.defaults.sandbox.scope
@@ -195,10 +201,13 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 ```
 
 **Notes:**
+
 - `agents.list[].sandbox.{docker,browser,prune}.*` overrides `agents.defaults.sandbox.{docker,browser,prune}.*` for that agent (ignored when sandbox scope resolves to `"shared"`).
 
 ### Tool Restrictions
+
 The filtering order is:
+
 1. **Tool profile** (`tools.profile` or `agents.list[].tools.profile`)
 2. **Provider tool profile** (`tools.byProvider[provider].profile` or `agents.list[].tools.byProvider[provider].profile`)
 3. **Global tool policy** (`tools.allow` / `tools.deny`)
@@ -225,12 +234,14 @@ Tool policies (global, agent, sandbox) support `group:*` entries that expand to 
 - `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
-- `group:moltbot`: all built-in Moltbot tools (excludes provider plugins)
+- `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
 
 ### Elevated Mode
+
 `tools.elevated` is the global baseline (sender-based allowlist). `agents.list[].tools.elevated` can further restrict elevated for specific agents (both must allow).
 
 Mitigation patterns:
+
 - Deny `exec` for untrusted agents (`agents.list[].tools.deny: ["exec"]`)
 - Avoid allowlisting senders that route to restricted agents
 - Disable elevated globally (`tools.elevated.enabled: false`) if you only want sandboxed execution
@@ -241,11 +252,12 @@ Mitigation patterns:
 ## Migration from Single Agent
 
 **Before (single agent):**
+
 ```json
 {
   "agents": {
     "defaults": {
-      "workspace": "~/clawd",
+      "workspace": "~/.openclaw/workspace",
       "sandbox": {
         "mode": "non-main"
       }
@@ -263,6 +275,7 @@ Mitigation patterns:
 ```
 
 **After (multi-agent with different profiles):**
+
 ```json
 {
   "agents": {
@@ -270,7 +283,7 @@ Mitigation patterns:
       {
         "id": "main",
         "default": true,
-        "workspace": "~/clawd",
+        "workspace": "~/.openclaw/workspace",
         "sandbox": { "mode": "off" }
       }
     ]
@@ -278,13 +291,14 @@ Mitigation patterns:
 }
 ```
 
-Legacy `agent.*` configs are migrated by `moltbot doctor`; prefer `agents.defaults` + `agents.list` going forward.
+Legacy `agent.*` configs are migrated by `openclaw doctor`; prefer `agents.defaults` + `agents.list` going forward.
 
 ---
 
 ## Tool Restriction Examples
 
 ### Read-only Agent
+
 ```json
 {
   "tools": {
@@ -295,6 +309,7 @@ Legacy `agent.*` configs are migrated by `moltbot doctor`; prefer `agents.defaul
 ```
 
 ### Safe Execution Agent (no file modifications)
+
 ```json
 {
   "tools": {
@@ -305,6 +320,7 @@ Legacy `agent.*` configs are migrated by `moltbot doctor`; prefer `agents.defaul
 ```
 
 ### Communication-only Agent
+
 ```json
 {
   "tools": {
@@ -330,13 +346,15 @@ sandbox, set `agents.list[].sandbox.mode: "off"`.
 After configuring multi-agent sandbox and tools:
 
 1. **Check agent resolution:**
+
    ```exec
-   moltbot agents list --bindings
+   openclaw agents list --bindings
    ```
 
 2. **Verify sandbox containers:**
+
    ```exec
-   docker ps --filter "label=moltbot.sandbox=1"
+   docker ps --filter "name=openclaw-sbx-"
    ```
 
 3. **Test tool restrictions:**
@@ -345,7 +363,7 @@ After configuring multi-agent sandbox and tools:
 
 4. **Monitor logs:**
    ```exec
-   tail -f "${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}/logs/gateway.log" | grep -E "routing|sandbox|tools"
+   tail -f "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/logs/gateway.log" | grep -E "routing|sandbox|tools"
    ```
 
 ---
@@ -353,15 +371,18 @@ After configuring multi-agent sandbox and tools:
 ## Troubleshooting
 
 ### Agent not sandboxed despite `mode: "all"`
+
 - Check if there's a global `agents.defaults.sandbox.mode` that overrides it
 - Agent-specific config takes precedence, so set `agents.list[].sandbox.mode: "all"`
 
 ### Tools still available despite deny list
+
 - Check tool filtering order: global → agent → sandbox → subagent
 - Each level can only further restrict, not grant back
 - Verify with logs: `[tools] filtering tools for agent:${agentId}`
 
 ### Container not isolated per agent
+
 - Set `scope: "agent"` in agent-specific sandbox config
 - Default is `"session"` which creates one container per session
 

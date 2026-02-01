@@ -1,8 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-
-import { DEFAULT_CRON_FORM } from "../app-defaults";
 import type { CronJob } from "../types";
+import { DEFAULT_CRON_FORM } from "../app-defaults";
 import { renderCron, type CronProps } from "./cron";
 
 function createJob(id: string): CronJob {

@@ -10,10 +10,10 @@ describe("config pruning defaults", () => {
     process.env.ANTHROPIC_API_KEY = "";
     process.env.ANTHROPIC_OAUTH_TOKEN = "";
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".clawdbot");
+      const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "moltbot.json"),
+        path.join(configDir, "openclaw.json"),
         JSON.stringify({ agents: { defaults: {} } }, null, 2),
         "utf-8",
       );
@@ -38,10 +38,10 @@ describe("config pruning defaults", () => {
 
   it("enables cache-ttl pruning + 1h heartbeat for Anthropic OAuth", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".clawdbot");
+      const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "moltbot.json"),
+        path.join(configDir, "openclaw.json"),
         JSON.stringify(
           {
             auth: {
@@ -69,10 +69,10 @@ describe("config pruning defaults", () => {
 
   it("enables cache-ttl pruning + 1h cache TTL for Anthropic API keys", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".clawdbot");
+      const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "moltbot.json"),
+        path.join(configDir, "openclaw.json"),
         JSON.stringify(
           {
             auth: {
@@ -107,10 +107,10 @@ describe("config pruning defaults", () => {
 
   it("does not override explicit contextPruning mode", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".clawdbot");
+      const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "moltbot.json"),
+        path.join(configDir, "openclaw.json"),
         JSON.stringify({ agents: { defaults: { contextPruning: { mode: "off" } } } }, null, 2),
         "utf-8",
       );

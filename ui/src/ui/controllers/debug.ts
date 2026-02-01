@@ -29,9 +29,7 @@ export async function loadDebug(state: DebugState) {
     state.debugStatus = status as StatusSummary;
     state.debugHealth = health as HealthSnapshot;
     const modelPayload = models as { models?: unknown[] } | undefined;
-    state.debugModels = Array.isArray(modelPayload?.models)
-      ? modelPayload?.models
-      : [];
+    state.debugModels = Array.isArray(modelPayload?.models) ? modelPayload?.models : [];
     state.debugHeartbeat = heartbeat as unknown;
   } catch (err) {
     state.debugCallError = String(err);

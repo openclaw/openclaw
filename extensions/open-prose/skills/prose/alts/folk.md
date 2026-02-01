@@ -29,55 +29,55 @@ An alternative register for OpenProse that leans into literary, theatrical, and 
 
 ### Core Constructs
 
-| Functional | Folk | Origin | Connotation |
-|------------|------|--------|-------------|
-| `agent` | `sprite` | Folklore | Quick, light, ephemeral spirit helper |
-| `session` | `scene` | Theatre | A moment of action, theatrical framing |
-| `parallel` | `ensemble` | Theatre | Everyone performs together |
-| `block` | `act` | Theatre | Reusable unit of dramatic action |
+| Functional | Folk       | Origin   | Connotation                            |
+| ---------- | ---------- | -------- | -------------------------------------- |
+| `agent`    | `sprite`   | Folklore | Quick, light, ephemeral spirit helper  |
+| `session`  | `scene`    | Theatre  | A moment of action, theatrical framing |
+| `parallel` | `ensemble` | Theatre  | Everyone performs together             |
+| `block`    | `act`      | Theatre  | Reusable unit of dramatic action       |
 
 ### Composition & Binding
 
-| Functional | Folk | Origin | Connotation |
-|------------|------|--------|-------------|
-| `use` | `summon` | Folklore | Calling forth from elsewhere |
-| `input` | `given` | Fairy tale | "Given a magic sword..." |
-| `output` | `yield` | Agriculture/magic | What the spell produces |
-| `let` | `name` | Folklore | Naming has power (true names) |
-| `const` | `seal` | Medieval | Unchangeable, wax seal on decree |
-| `context` | `bearing` | Heraldry | What the messenger carries |
+| Functional | Folk      | Origin            | Connotation                      |
+| ---------- | --------- | ----------------- | -------------------------------- |
+| `use`      | `summon`  | Folklore          | Calling forth from elsewhere     |
+| `input`    | `given`   | Fairy tale        | "Given a magic sword..."         |
+| `output`   | `yield`   | Agriculture/magic | What the spell produces          |
+| `let`      | `name`    | Folklore          | Naming has power (true names)    |
+| `const`    | `seal`    | Medieval          | Unchangeable, wax seal on decree |
+| `context`  | `bearing` | Heraldry          | What the messenger carries       |
 
 ### Control Flow
 
-| Functional | Folk | Origin | Connotation |
-|------------|------|--------|-------------|
-| `repeat N` | `N times` | Fairy tale | "Three times she called..." |
-| `for...in` | `for each...among` | Narrative | Slightly more storytelling |
-| `loop` | `loop` | — | Already poetic, unchanged |
-| `until` | `until` | — | Already works, unchanged |
-| `while` | `while` | — | Already works, unchanged |
-| `choice` | `crossroads` | Folklore | Fateful decisions at the crossroads |
-| `option` | `path` | Journey | Which path to take |
-| `if` | `when` | Narrative | "When the moon rises..." |
-| `elif` | `or when` | Narrative | Continued conditional |
-| `else` | `otherwise` | Storytelling | Natural narrative alternative |
+| Functional | Folk               | Origin       | Connotation                         |
+| ---------- | ------------------ | ------------ | ----------------------------------- |
+| `repeat N` | `N times`          | Fairy tale   | "Three times she called..."         |
+| `for...in` | `for each...among` | Narrative    | Slightly more storytelling          |
+| `loop`     | `loop`             | —            | Already poetic, unchanged           |
+| `until`    | `until`            | —            | Already works, unchanged            |
+| `while`    | `while`            | —            | Already works, unchanged            |
+| `choice`   | `crossroads`       | Folklore     | Fateful decisions at the crossroads |
+| `option`   | `path`             | Journey      | Which path to take                  |
+| `if`       | `when`             | Narrative    | "When the moon rises..."            |
+| `elif`     | `or when`          | Narrative    | Continued conditional               |
+| `else`     | `otherwise`        | Storytelling | Natural narrative alternative       |
 
 ### Error Handling
 
-| Functional | Folk | Origin | Connotation |
-|------------|------|--------|-------------|
-| `try` | `venture` | Adventure | Attempting something uncertain |
-| `catch` | `should it fail` | Narrative | Conditional failure handling |
-| `finally` | `ever after` | Fairy tale | "And ever after..." |
-| `throw` | `cry` | Drama | Raising alarm, calling out |
-| `retry` | `persist` | Quest | Keep trying against odds |
+| Functional | Folk             | Origin     | Connotation                    |
+| ---------- | ---------------- | ---------- | ------------------------------ |
+| `try`      | `venture`        | Adventure  | Attempting something uncertain |
+| `catch`    | `should it fail` | Narrative  | Conditional failure handling   |
+| `finally`  | `ever after`     | Fairy tale | "And ever after..."            |
+| `throw`    | `cry`            | Drama      | Raising alarm, calling out     |
+| `retry`    | `persist`        | Quest      | Keep trying against odds       |
 
 ### Session Properties
 
-| Functional | Folk | Origin | Connotation |
-|------------|------|--------|-------------|
-| `prompt` | `charge` | Chivalry | Giving a quest or duty |
-| `model` | `voice` | Theatre | Which voice speaks |
+| Functional | Folk     | Origin   | Connotation            |
+| ---------- | -------- | -------- | ---------------------- |
+| `prompt`   | `charge` | Chivalry | Giving a quest or duty |
+| `model`    | `voice`  | Theatre  | Which voice speaks     |
 
 ### Unchanged
 
@@ -274,39 +274,39 @@ perform review("quantum computing")
 
 ### For `sprite` (ephemeral agent)
 
-| Keyword | Origin | Rejected because |
-|---------|--------|------------------|
-| `spark` | English | Good but less folklore |
-| `wisp` | English | Too insubstantial |
-| `herald` | English | More messenger than worker |
-| `courier` | French | Good functional alternative, not literary |
-| `envoy` | French | Formal, diplomatic |
+| Keyword   | Origin  | Rejected because                          |
+| --------- | ------- | ----------------------------------------- |
+| `spark`   | English | Good but less folklore                    |
+| `wisp`    | English | Too insubstantial                         |
+| `herald`  | English | More messenger than worker                |
+| `courier` | French  | Good functional alternative, not literary |
+| `envoy`   | French  | Formal, diplomatic                        |
 
 ### For `shade` (persistent agent, if implemented)
 
-| Keyword | Origin | Rejected because |
-|---------|--------|------------------|
-| `daemon` | Greek/Unix | Unix "always running" connotation |
-| `oracle` | Greek | Too "read-only" feeling |
-| `spirit` | Latin | Too close to `sprite` |
-| `specter` | Latin | Negative/spooky connotation |
-| `genius` | Roman | Overloaded (smart person) |
+| Keyword   | Origin     | Rejected because                  |
+| --------- | ---------- | --------------------------------- |
+| `daemon`  | Greek/Unix | Unix "always running" connotation |
+| `oracle`  | Greek      | Too "read-only" feeling           |
+| `spirit`  | Latin      | Too close to `sprite`             |
+| `specter` | Latin      | Negative/spooky connotation       |
+| `genius`  | Roman      | Overloaded (smart person)         |
 
 ### For `ensemble` (parallel)
 
-| Keyword | Origin | Rejected because |
-|---------|--------|------------------|
-| `chorus` | Greek | Everyone speaks same thing, not different |
-| `troupe` | French | Good alternative, slightly less clear |
-| `company` | Theatre | Overloaded (business) |
+| Keyword   | Origin  | Rejected because                          |
+| --------- | ------- | ----------------------------------------- |
+| `chorus`  | Greek   | Everyone speaks same thing, not different |
+| `troupe`  | French  | Good alternative, slightly less clear     |
+| `company` | Theatre | Overloaded (business)                     |
 
 ### For `crossroads` (choice)
 
-| Keyword | Origin | Rejected because |
-|---------|--------|------------------|
-| `fork` | Path | Too technical (git fork) |
-| `branch` | Tree | Also too technical |
-| `divergence` | Latin | Too abstract |
+| Keyword      | Origin | Rejected because         |
+| ------------ | ------ | ------------------------ |
+| `fork`       | Path   | Too technical (git fork) |
+| `branch`     | Tree   | Also too technical       |
+| `divergence` | Latin  | Too abstract             |
 
 ---
 

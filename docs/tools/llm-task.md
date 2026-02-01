@@ -3,6 +3,7 @@ summary: "JSON-only LLM tasks for workflows (optional plugin tool)"
 read_when:
   - You want a JSON-only LLM step inside workflows
   - You need schema-validated LLM output for automation
+title: "LLM Task"
 ---
 
 # LLM Task
@@ -11,11 +12,11 @@ read_when:
 returns structured output (optionally validated against JSON Schema).
 
 This is ideal for workflow engines like Lobster: you can add a single LLM step
-without writing custom Moltbot code for each workflow.
+without writing custom OpenClaw code for each workflow.
 
 ## Enable the plugin
 
-1) Enable the plugin:
+1. Enable the plugin:
 
 ```json
 {
@@ -27,7 +28,7 @@ without writing custom Moltbot code for each workflow.
 }
 ```
 
-2) Allowlist the tool (it is registered with `optional: true`):
+2. Allowlist the tool (it is registered with `optional: true`):
 
 ```json
 {
@@ -87,7 +88,7 @@ Returns `details.json` containing the parsed JSON (and validates against
 ## Example: Lobster workflow step
 
 ```lobster
-clawd.invoke --tool llm-task --action json --args-json '{
+openclaw.invoke --tool llm-task --action json --args-json '{
   "prompt": "Given the input email, return intent and draft.",
   "input": {
     "subject": "Hello",

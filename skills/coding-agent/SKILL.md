@@ -1,7 +1,10 @@
 ---
 name: coding-agent
 description: Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.
-metadata: {"moltbot":{"emoji":"🧩","requires":{"anyBins":["claude","codex","opencode","pi"]}}}
+metadata:
+  {
+    "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "opencode", "pi"] } },
+  }
 ---
 
 # Coding Agent (bash-first)
@@ -24,27 +27,27 @@ bash command:"codex exec 'Your prompt'"
 
 ### Bash Tool Parameters
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `command` | string | The shell command to run |
-| `pty` | boolean | **Use for coding agents!** Allocates a pseudo-terminal for interactive CLIs |
-| `workdir` | string | Working directory (agent sees only this folder's context) |
-| `background` | boolean | Run in background, returns sessionId for monitoring |
-| `timeout` | number | Timeout in seconds (kills process on expiry) |
-| `elevated` | boolean | Run on host instead of sandbox (if allowed) |
+| Parameter    | Type    | Description                                                                 |
+| ------------ | ------- | --------------------------------------------------------------------------- |
+| `command`    | string  | The shell command to run                                                    |
+| `pty`        | boolean | **Use for coding agents!** Allocates a pseudo-terminal for interactive CLIs |
+| `workdir`    | string  | Working directory (agent sees only this folder's context)                   |
+| `background` | boolean | Run in background, returns sessionId for monitoring                         |
+| `timeout`    | number  | Timeout in seconds (kills process on expiry)                                |
+| `elevated`   | boolean | Run on host instead of sandbox (if allowed)                                 |
 
 ### Process Tool Actions (for background sessions)
 
-| Action | Description |
-|--------|-------------|
-| `list` | List all running/recent sessions |
-| `poll` | Check if session is still running |
-| `log` | Get session output (with optional offset/limit) |
-| `write` | Send raw data to stdin |
-| `submit` | Send data + newline (like typing and pressing Enter) |
-| `send-keys` | Send key tokens or hex bytes |
-| `paste` | Paste text (with optional bracketed mode) |
-| `kill` | Terminate the session |
+| Action      | Description                                          |
+| ----------- | ---------------------------------------------------- |
+| `list`      | List all running/recent sessions                     |
+| `poll`      | Check if session is still running                    |
+| `log`       | Get session output (with optional offset/limit)      |
+| `write`     | Send raw data to stdin                               |
+| `submit`    | Send data + newline (like typing and pressing Enter) |
+| `send-keys` | Send key tokens or hex bytes                         |
+| `paste`     | Paste text (with optional bracketed mode)            |
+| `kill`      | Terminate the session                                |
 
 ---
 
@@ -99,13 +102,14 @@ process action:kill sessionId:XXX
 
 ### Flags
 
-| Flag | Effect |
-|------|--------|
-| `exec "prompt"` | One-shot execution, exits when done |
-| `--full-auto` | Sandboxed but auto-approves in workspace |
-| `--yolo` | NO sandbox, NO approvals (fastest, most dangerous) |
+| Flag            | Effect                                             |
+| --------------- | -------------------------------------------------- |
+| `exec "prompt"` | One-shot execution, exits when done                |
+| `--full-auto`   | Sandboxed but auto-approves in workspace           |
+| `--yolo`        | NO sandbox, NO approvals (fastest, most dangerous) |
 
 ### Building/Creating
+
 ```bash
 # Quick one-shot (auto-approves) - remember PTY!
 bash pty:true workdir:~/project command:"codex exec --full-auto 'Build a dark mode toggle'"
@@ -116,7 +120,7 @@ bash pty:true workdir:~/project background:true command:"codex --yolo 'Refactor 
 
 ### Reviewing PRs
 
-**⚠️ CRITICAL: Never review PRs in Moltbot's own project folder!**
+**⚠️ CRITICAL: Never review PRs in OpenClaw's own project folder!**
 Clone to temp folder or use git worktree.
 
 ```bash
@@ -133,6 +137,7 @@ bash pty:true workdir:/tmp/pr-130-review command:"codex review --base main"
 ```
 
 ### Batch PR Reviews (parallel army!)
+
 ```bash
 # Fetch all PR refs first
 git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*'
@@ -227,7 +232,7 @@ git worktree remove /tmp/issue-99
 6. **vanilla for reviewing** - no special flags needed
 7. **Parallel is OK** - run many Codex processes at once for batch work
 8. **NEVER start Codex in ~/clawd/** - it'll read your soul docs and get weird ideas about the org chart!
-9. **NEVER checkout branches in ~/Projects/moltbot/** - that's the LIVE Moltbot instance!
+9. **NEVER checkout branches in ~/Projects/openclaw/** - that's the LIVE OpenClaw instance!
 
 ---
 
@@ -249,20 +254,21 @@ This prevents the user from seeing only "Agent failed before reply" and having n
 
 ## Auto-Notify on Completion
 
-For long-running background tasks, append a wake trigger to your prompt so Moltbot gets notified immediately when the agent finishes (instead of waiting for the next heartbeat):
+For long-running background tasks, append a wake trigger to your prompt so OpenClaw gets notified immediately when the agent finishes (instead of waiting for the next heartbeat):
 
 ```
 ... your task here.
 
 When completely finished, run this command to notify me:
-moltbot gateway wake --text "Done: [brief summary of what was built]" --mode now
+openclaw gateway wake --text "Done: [brief summary of what was built]" --mode now
 ```
 
 **Example:**
+
 ```bash
 bash pty:true workdir:~/project background:true command:"codex --yolo exec 'Build a REST API for todos.
 
-When completely finished, run: moltbot gateway wake --text \"Done: Built todos REST API with CRUD endpoints\" --mode now'"
+When completely finished, run: openclaw gateway wake --text \"Done: Built todos REST API with CRUD endpoints\" --mode now'"
 ```
 
 This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 minutes.
@@ -275,4 +281,4 @@ This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 
 - **Git repo required:** Codex won't run outside a git directory. Use `mktemp -d && git init` for scratch work.
 - **exec is your friend:** `codex exec "prompt"` runs and exits cleanly - perfect for one-shots.
 - **submit vs write:** Use `submit` to send input + Enter, `write` for raw data without newline.
-- **Sass works:** Codex responds well to playful prompts. Asked it to write a haiku about being second fiddle to a space lobster, got: *"Second chair, I code / Space lobster sets the tempo / Keys glow, I follow"* 🦞
+- **Sass works:** Codex responds well to playful prompts. Asked it to write a haiku about being second fiddle to a space lobster, got: _"Second chair, I code / Space lobster sets the tempo / Keys glow, I follow"_ 🦞

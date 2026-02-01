@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   buildSlackSlashCommandMatcher,
   isSlackChannelAllowedByPolicy,
@@ -159,16 +158,16 @@ describe("resolveSlackThreadTs", () => {
 
 describe("buildSlackSlashCommandMatcher", () => {
   it("matches with or without a leading slash", () => {
-    const matcher = buildSlackSlashCommandMatcher("clawd");
+    const matcher = buildSlackSlashCommandMatcher("openclaw");
 
-    expect(matcher.test("clawd")).toBe(true);
-    expect(matcher.test("/clawd")).toBe(true);
+    expect(matcher.test("openclaw")).toBe(true);
+    expect(matcher.test("/openclaw")).toBe(true);
   });
 
   it("does not match similar names", () => {
-    const matcher = buildSlackSlashCommandMatcher("clawd");
+    const matcher = buildSlackSlashCommandMatcher("openclaw");
 
-    expect(matcher.test("/clawd-bot")).toBe(false);
-    expect(matcher.test("clawd-bot")).toBe(false);
+    expect(matcher.test("/openclaw-bot")).toBe(false);
+    expect(matcher.test("openclaw-bot")).toBe(false);
   });
 });

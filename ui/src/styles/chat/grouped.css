@@ -105,7 +105,9 @@ img.chat-avatar {
   border-radius: var(--radius-lg);
   padding: 10px 14px;
   box-shadow: none;
-  transition: background 150ms ease-out, border-color 150ms ease-out;
+  transition:
+    background 150ms ease-out,
+    border-color 150ms ease-out;
   max-width: 100%;
   word-wrap: break-word;
 }
@@ -128,7 +130,9 @@ img.chat-avatar {
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 120ms ease-out, background 120ms ease-out;
+  transition:
+    opacity 120ms ease-out,
+    background 120ms ease-out;
 }
 
 .chat-copy-btn__icon {
@@ -243,7 +247,8 @@ img.chat-avatar {
 }
 
 @keyframes pulsing-border {
-  0%, 100% {
+  0%,
+  100% {
     border-color: var(--border);
   }
   50% {

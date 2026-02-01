@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { setActiveWebListener } from "./active-listener.js";
 

@@ -5,7 +5,6 @@ import {
   select as clackSelect,
   text as clackText,
 } from "@clack/prompts";
-
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 
 export const CONFIGURE_WIZARD_SECTIONS = [

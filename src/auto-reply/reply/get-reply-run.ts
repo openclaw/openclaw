@@ -1,13 +1,19 @@
 import crypto from "node:crypto";
+import type { ExecToolDefaults } from "../../agents/bash-tools.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { MsgContext, TemplateContext } from "../templating.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { buildCommandContext } from "./commands.js";
+import type { InlineDirectives } from "./directive-handling.js";
+import type { createModelSelectionState } from "./model-selection.js";
+import type { TypingController } from "./typing.js";
+import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
-import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
-import type { ExecToolDefaults } from "../../agents/bash-tools.js";
-import type { MoltbotConfig } from "../../config/config.js";
 import {
   resolveGroupSessionKey,
   resolveSessionFilePath,
@@ -20,7 +26,6 @@ import { normalizeMainKey } from "../../routing/session-key.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
-import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
   formatXHighModelHint,
@@ -31,20 +36,15 @@ import {
   type VerboseLevel,
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyAgent } from "./agent-runner.js";
 import { applySessionHints } from "./body.js";
-import { routeReply } from "./route-reply.js";
-import type { buildCommandContext } from "./commands.js";
-import type { InlineDirectives } from "./directive-handling.js";
 import { buildGroupIntro } from "./groups.js";
-import type { createModelSelectionState } from "./model-selection.js";
 import { resolveQueueSettings } from "./queue.js";
+import { routeReply } from "./route-reply.js";
 import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
-import type { TypingController } from "./typing.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
-type AgentDefaults = NonNullable<MoltbotConfig["agents"]>["defaults"];
+type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
 const BARE_SESSION_RESET_PROMPT =
@@ -53,11 +53,11 @@ const BARE_SESSION_RESET_PROMPT =
 type RunPreparedReplyParams = {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
   agentCfg: AgentDefaults;
-  sessionCfg: MoltbotConfig["session"];
+  sessionCfg: OpenClawConfig["session"];
   commandAuthorized: boolean;
   command: ReturnType<typeof buildCommandContext>;
   commandSource: string;
@@ -248,7 +248,7 @@ export async function runPreparedReply(
   const prefixedBody = [threadStarterNote, prefixedBodyBase].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(ctx);
   const mediaReplyHint = mediaNote
-    ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:/path or MEDIA:https://example.com/image.jpg (spaces ok, quote if needed). Keep caption in the text body."
+    ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
     : undefined;
   let prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""].filter(Boolean).join("\n").trim()

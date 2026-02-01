@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import {
   buildExecApprovalCustomId,
   parseExecApprovalData,
   type ExecApprovalRequest,
   DiscordExecApprovalHandler,
 } from "./exec-approvals.js";
-import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 
 describe("buildExecApprovalCustomId", () => {
   it("encodes approval id and action", () => {

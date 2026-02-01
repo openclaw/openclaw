@@ -26,9 +26,7 @@ const PENDING_UPLOAD_TTL_MS = 5 * 60 * 1000;
  * Store a file pending user consent.
  * Returns the upload ID to include in the FileConsentCard context.
  */
-export function storePendingUpload(
-  upload: Omit<PendingUpload, "id" | "createdAt">,
-): string {
+export function storePendingUpload(upload: Omit<PendingUpload, "id" | "createdAt">): string {
   const id = crypto.randomUUID();
   const entry: PendingUpload = {
     ...upload,
@@ -50,9 +48,13 @@ export function storePendingUpload(
  * Returns undefined if not found or expired.
  */
 export function getPendingUpload(id?: string): PendingUpload | undefined {
-  if (!id) return undefined;
+  if (!id) {
+    return undefined;
+  }
   const entry = pendingUploads.get(id);
-  if (!entry) return undefined;
+  if (!entry) {
+    return undefined;
+  }
 
   // Check if expired (in case timeout hasn't fired yet)
   if (Date.now() - entry.createdAt > PENDING_UPLOAD_TTL_MS) {

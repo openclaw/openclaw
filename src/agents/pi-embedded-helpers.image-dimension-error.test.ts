@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { isImageDimensionErrorMessage, parseImageDimensionError } from "./pi-embedded-helpers.js";
 
 describe("image dimension errors", () => {

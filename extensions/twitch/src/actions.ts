@@ -4,9 +4,9 @@
  * Handles tool-based actions for Twitch, such as sending messages.
  */
 
+import type { ChannelMessageActionAdapter, ChannelMessageActionContext } from "./types.js";
 import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
 import { twitchOutbound } from "./outbound.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionContext } from "./types.js";
 
 /**
  * Create a tool result with error content.
@@ -116,7 +116,7 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
    * const result = await twitchMessageActions.handleAction!({
    *   action: "send",
    *   params: { message: "Hello Twitch!", to: "#mychannel" },
-   *   cfg: moltbotConfig,
+   *   cfg: openclawConfig,
    *   accountId: "default",
    * });
    */

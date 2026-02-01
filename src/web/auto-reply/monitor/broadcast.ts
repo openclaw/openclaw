@@ -1,5 +1,7 @@
 import type { loadConfig } from "../../../config/config.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import type { WebInboundMsg } from "../types.js";
+import type { GroupHistoryEntry } from "./process-message.js";
 import { buildAgentSessionKey } from "../../../routing/resolve-route.js";
 import {
   buildAgentMainSessionKey,
@@ -8,8 +10,6 @@ import {
 } from "../../../routing/session-key.js";
 import { formatError } from "../../session.js";
 import { whatsappInboundLog } from "../loggers.js";
-import type { WebInboundMsg } from "../types.js";
-import type { GroupHistoryEntry } from "./process-message.js";
 
 export async function maybeBroadcastMessage(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -29,8 +29,12 @@ export async function maybeBroadcastMessage(params: {
   ) => Promise<boolean>;
 }) {
   const broadcastAgents = params.cfg.broadcast?.[params.peerId];
-  if (!broadcastAgents || !Array.isArray(broadcastAgents)) return false;
-  if (broadcastAgents.length === 0) return false;
+  if (!broadcastAgents || !Array.isArray(broadcastAgents)) {
+    return false;
+  }
+  if (broadcastAgents.length === 0) {
+    return false;
+  }
 
   const strategy = params.cfg.broadcast?.strategy || "parallel";
   whatsappInboundLog.info(`Broadcasting message to ${broadcastAgents.length} agents (${strategy})`);

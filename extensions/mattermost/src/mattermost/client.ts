@@ -42,14 +42,18 @@ export type MattermostFileInfo = {
 
 export function normalizeMattermostBaseUrl(raw?: string | null): string | undefined {
   const trimmed = raw?.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const withoutTrailing = trimmed.replace(/\/+$/, "");
   return withoutTrailing.replace(/\/api\/v4$/i, "");
 }
 
 function buildMattermostApiUrl(baseUrl: string, path: string): string {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
-  if (!normalized) throw new Error("Mattermost baseUrl is required");
+  if (!normalized) {
+    throw new Error("Mattermost baseUrl is required");
+  }
   const suffix = path.startsWith("/") ? path : `/${path}`;
   return `${normalized}/api/v4${suffix}`;
 }
@@ -58,7 +62,9 @@ async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     const data = (await res.json()) as { message?: string } | undefined;
-    if (data?.message) return data.message;
+    if (data?.message) {
+      return data.message;
+    }
     return JSON.stringify(data);
   }
   return await res.text();
@@ -70,7 +76,9 @@ export function createMattermostClient(params: {
   fetchImpl?: typeof fetch;
 }): MattermostClient {
   const baseUrl = normalizeMattermostBaseUrl(params.baseUrl);
-  if (!baseUrl) throw new Error("Mattermost baseUrl is required");
+  if (!baseUrl) {
+    throw new Error("Mattermost baseUrl is required");
+  }
   const apiBaseUrl = `${baseUrl}/api/v4`;
   const token = params.botToken.trim();
   const fetchImpl = params.fetchImpl ?? fetch;
@@ -128,7 +136,9 @@ export async function sendMattermostTyping(
     channel_id: params.channelId,
   };
   const parentId = params.parentId?.trim();
-  if (parentId) payload.parent_id = parentId;
+  if (parentId) {
+    payload.parent_id = parentId;
+  }
   await client.request<Record<string, unknown>>("/users/me/typing", {
     method: "POST",
     body: JSON.stringify(payload),
@@ -158,7 +168,9 @@ export async function createMattermostPost(
     channel_id: params.channelId,
     message: params.message,
   };
-  if (params.rootId) payload.root_id = params.rootId;
+  if (params.rootId) {
+    payload.root_id = params.rootId;
+  }
   if (params.fileIds?.length) {
     (payload as Record<string, unknown>).file_ids = params.fileIds;
   }

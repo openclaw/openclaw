@@ -1,5 +1,4 @@
 import type { Guild, Message, User } from "@buape/carbon";
-
 import { formatAgentEnvelope, type EnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import { formatDiscordUserTag, resolveTimestampMs } from "./format.js";
 
@@ -9,11 +8,15 @@ export function resolveReplyContext(
   options?: { envelope?: EnvelopeFormatOptions },
 ): string | null {
   const referenced = message.referencedMessage;
-  if (!referenced?.author) return null;
+  if (!referenced?.author) {
+    return null;
+  }
   const referencedText = resolveDiscordMessageText(referenced, {
     includeForwarded: true,
   });
-  if (!referencedText) return null;
+  if (!referencedText) {
+    return null;
+  }
   const fromLabel = referenced.author ? buildDirectLabel(referenced.author) : "Unknown";
   const body = `${referencedText}\n[discord message id: ${referenced.id} channel: ${referenced.channelId} from: ${formatDiscordUserTag(referenced.author)} user id:${referenced.author?.id ?? "unknown"}]`;
   return formatAgentEnvelope({

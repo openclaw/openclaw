@@ -1,31 +1,26 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-
 import SlackBolt from "@slack/bolt";
-
+import type { SessionScope } from "../../config/sessions.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import type { MonitorSlackOpts } from "./types.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import { mergeAllowlist, summarizeMapping } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
-import type { SessionScope } from "../../config/sessions.js";
-import type { DmPolicy, GroupPolicy } from "../../config/types.js";
 import { warn } from "../../globals.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
-import type { RuntimeEnv } from "../../runtime.js";
-
 import { resolveSlackAccount } from "../accounts.js";
+import { resolveSlackWebClientOptions } from "../client.js";
+import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
-import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
-import { resolveSlackWebClientOptions } from "../client.js";
+import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMonitorEvents } from "./events.js";
 import { createSlackMessageHandler } from "./message-handler.js";
 import { registerSlackMonitorSlashCommands } from "./slash.js";
-import { normalizeAllowList } from "./allow-list.js";
-
-import type { MonitorSlackOpts } from "./types.js";
 
 const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
   default?: typeof import("@slack/bolt");
@@ -37,7 +32,9 @@ const slackBolt =
 const { App, HTTPReceiver } = slackBolt;
 function parseApiAppIdFromAppToken(raw?: string) {
   const token = raw?.trim();
-  if (!token) return undefined;
+  if (!token) {
+    return undefined;
+  }
   const match = /^xapp-\d-([a-z0-9]+)-/i.exec(token);
   return match?.[1]?.toUpperCase();
 }
@@ -91,13 +88,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const dmConfig = slackCfg.dm;
 
   const dmEnabled = dmConfig?.enabled ?? true;
-  const dmPolicy = (dmConfig?.policy ?? "pairing") as DmPolicy;
+  const dmPolicy = dmConfig?.policy ?? "pairing";
   let allowFrom = dmConfig?.allowFrom;
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   let channelsConfig = slackCfg.channels;
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = (slackCfg.groupPolicy ?? defaultGroupPolicy ?? "open") as GroupPolicy;
+  const groupPolicy = slackCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
   if (
     slackCfg.groupPolicy === undefined &&
     slackCfg.channels === undefined &&
@@ -221,7 +218,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   if (resolveToken) {
     void (async () => {
-      if (opts.abortSignal?.aborted) return;
+      if (opts.abortSignal?.aborted) {
+        return;
+      }
 
       if (channelsConfig && Object.keys(channelsConfig).length > 0) {
         try {
@@ -236,7 +235,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             const unresolved: string[] = [];
             for (const entry of resolved) {
               const source = channelsConfig?.[entry.input];
-              if (!source) continue;
+              if (!source) {
+                continue;
+              }
               if (!entry.resolved || !entry.id) {
                 unresolved.push(entry.input);
                 continue;
@@ -285,12 +286,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       if (channelsConfig && Object.keys(channelsConfig).length > 0) {
         const userEntries = new Set<string>();
         for (const channel of Object.values(channelsConfig)) {
-          if (!channel || typeof channel !== "object") continue;
+          if (!channel || typeof channel !== "object") {
+            continue;
+          }
           const channelUsers = (channel as { users?: Array<string | number> }).users;
-          if (!Array.isArray(channelUsers)) continue;
+          if (!Array.isArray(channelUsers)) {
+            continue;
+          }
           for (const entry of channelUsers) {
             const trimmed = String(entry).trim();
-            if (trimmed && trimmed !== "*") userEntries.add(trimmed);
+            if (trimmed && trimmed !== "*") {
+              userEntries.add(trimmed);
+            }
           }
         }
 
@@ -310,14 +317,20 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
             const nextChannels = { ...channelsConfig };
             for (const [channelKey, channelConfig] of Object.entries(channelsConfig)) {
-              if (!channelConfig || typeof channelConfig !== "object") continue;
+              if (!channelConfig || typeof channelConfig !== "object") {
+                continue;
+              }
               const channelUsers = (channelConfig as { users?: Array<string | number> }).users;
-              if (!Array.isArray(channelUsers) || channelUsers.length === 0) continue;
+              if (!Array.isArray(channelUsers) || channelUsers.length === 0) {
+                continue;
+              }
               const additions: string[] = [];
               for (const entry of channelUsers) {
                 const trimmed = String(entry).trim();
                 const resolved = resolvedMap.get(trimmed);
-                if (resolved?.resolved && resolved.id) additions.push(resolved.id);
+                if (resolved?.resolved && resolved.id) {
+                  additions.push(resolved.id);
+                }
               }
               nextChannels[channelKey] = {
                 ...channelConfig,
@@ -338,7 +351,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 
   const stopOnAbort = () => {
-    if (opts.abortSignal?.aborted && slackMode === "socket") void app.stop();
+    if (opts.abortSignal?.aborted && slackMode === "socket") {
+      void app.stop();
+    }
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
 
@@ -349,7 +364,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     } else {
       runtime.log?.(`slack http mode listening at ${slackWebhookPath}`);
     }
-    if (opts.abortSignal?.aborted) return;
+    if (opts.abortSignal?.aborted) {
+      return;
+    }
     await new Promise<void>((resolve) => {
       opts.abortSignal?.addEventListener("abort", () => resolve(), {
         once: true,

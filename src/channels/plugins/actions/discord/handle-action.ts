@@ -1,19 +1,23 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ChannelMessageActionContext } from "../../types.js";
 import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
 } from "../../../../agents/tools/common.js";
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
-import type { ChannelMessageActionContext } from "../../types.js";
-import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 import { resolveDiscordChannelId } from "../../../../discord/targets.js";
+import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 
 const providerId = "discord";
 
 function readParentIdParam(params: Record<string, unknown>): string | null | undefined {
-  if (params.clearParent === true) return null;
-  if (params.parentId === null) return null;
+  if (params.clearParent === true) {
+    return null;
+  }
+  if (params.parentId === null) {
+    return null;
+  }
   return readStringParam(params, "parentId");
 }
 
@@ -219,7 +223,9 @@ export async function handleDiscordMessageAction(
     resolveChannelId,
     readParentIdParam,
   });
-  if (adminResult !== undefined) return adminResult;
+  if (adminResult !== undefined) {
+    return adminResult;
+  }
 
   throw new Error(`Action ${String(action)} is not supported for provider ${providerId}.`);
 }

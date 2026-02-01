@@ -1,16 +1,16 @@
 import type {
-    ChannelAccountSnapshot,
-    ChannelsStatusSnapshot,
-    ConfigUiHints,
-    DiscordStatus,
-    GoogleChatStatus,
-    IMessageStatus,
-    NostrProfile,
-    NostrStatus,
-    SignalStatus,
-    SlackStatus,
-    TelegramStatus,
-    WhatsAppStatus,
+  ChannelAccountSnapshot,
+  ChannelsStatusSnapshot,
+  ConfigUiHints,
+  DiscordStatus,
+  GoogleChatStatus,
+  IMessageStatus,
+  NostrProfile,
+  NostrStatus,
+  SignalStatus,
+  SlackStatus,
+  TelegramStatus,
+  WhatsAppStatus,
 } from "../types";
 import type { NostrProfileFormState } from "./channels.nostr-profile-form";
 

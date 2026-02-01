@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { collectZalouserStatusIssues } from "./status-issues.js";
 
 describe("collectZalouserStatusIssues", () => {

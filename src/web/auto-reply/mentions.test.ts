@@ -19,11 +19,11 @@ const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
   }) as WebInboundMsg;
 
 describe("isBotMentionedFromTargets", () => {
-  const mentionCfg = { mentionRegexes: [/\bclawd\b/i] };
+  const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
 
   it("ignores regex matches when other mentions are present", () => {
     const msg = makeMsg({
-      body: "@Clawd please help",
+      body: "@OpenClaw please help",
       mentionedJids: ["19998887777@s.whatsapp.net"],
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
@@ -45,7 +45,7 @@ describe("isBotMentionedFromTargets", () => {
 
   it("falls back to regex when no mentions are present", () => {
     const msg = makeMsg({
-      body: "clawd can you help?",
+      body: "openclaw can you help?",
       selfE164: "+15551234567",
       selfJid: "15551234567@s.whatsapp.net",
     });

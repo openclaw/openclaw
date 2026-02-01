@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
-import { DEFAULT_MEMORY_FLUSH_PROMPT } from "./memory-flush.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import { DEFAULT_MEMORY_FLUSH_PROMPT } from "./memory-flush.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -124,7 +124,7 @@ function createBaseRun(params: {
 describe("runReplyAgent memory flush", () => {
   it("uses configured prompts for memory flush runs", async () => {
     runEmbeddedPiAgentMock.mockReset();
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-flush-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-flush-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {
@@ -201,7 +201,7 @@ describe("runReplyAgent memory flush", () => {
   });
   it("skips memory flush after a prior flush in the same compaction cycle", async () => {
     runEmbeddedPiAgentMock.mockReset();
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-flush-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-flush-"));
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
     const sessionEntry = {

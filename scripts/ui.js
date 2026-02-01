@@ -11,9 +11,7 @@ const uiDir = path.join(repoRoot, "ui");
 
 function usage() {
   // keep this tiny; it's invoked from npm scripts too
-  process.stderr.write(
-    "Usage: node scripts/ui.js <install|dev|build|test> [...args]\n",
-  );
+  process.stderr.write("Usage: node scripts/ui.js <install|dev|build|test> [...args]\n");
 }
 
 function which(cmd) {
@@ -24,15 +22,15 @@ function which(cmd) {
       .filter(Boolean);
     const extensions =
       process.platform === "win32"
-        ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-            .split(";")
-            .filter(Boolean)
+        ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean)
         : [""];
     for (const entry of paths) {
       for (const ext of extensions) {
         const candidate = path.join(entry, process.platform === "win32" ? `${cmd}${ext}` : cmd);
         try {
-          if (fs.existsSync(candidate)) return candidate;
+          if (fs.existsSync(candidate)) {
+            return candidate;
+          }
         } catch {
           // ignore
         }
@@ -46,7 +44,9 @@ function which(cmd) {
 
 function resolveRunner() {
   const pnpm = which("pnpm");
-  if (pnpm) return { cmd: pnpm, kind: "pnpm" };
+  if (pnpm) {
+    return { cmd: pnpm, kind: "pnpm" };
+  }
   return null;
 }
 
@@ -58,7 +58,9 @@ function run(cmd, args) {
     shell: process.platform === "win32",
   });
   child.on("exit", (code, signal) => {
-    if (signal) process.exit(1);
+    if (signal) {
+      process.exit(1);
+    }
     process.exit(code ?? 1);
   });
 }
@@ -70,8 +72,12 @@ function runSync(cmd, args, envOverride) {
     env: envOverride ?? process.env,
     shell: process.platform === "win32",
   });
-  if (result.signal) process.exit(1);
-  if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
+  if (result.signal) {
+    process.exit(1);
+  }
+  if ((result.status ?? 1) !== 0) {
+    process.exit(result.status ?? 1);
+  }
 }
 
 function depsInstalled(kind) {
@@ -118,15 +124,13 @@ if (action !== "install" && !script) {
   process.exit(2);
 }
 
-if (action === "install") run(runner.cmd, ["install", ...rest]);
-else {
+if (action === "install") {
+  run(runner.cmd, ["install", ...rest]);
+} else {
   if (!depsInstalled(action === "test" ? "test" : "build")) {
     const installEnv =
-      action === "build"
-        ? { ...process.env, NODE_ENV: "production" }
-        : process.env;
-    const installArgs =
-      action === "build" ? ["install", "--prod"] : ["install"];
+      action === "build" ? { ...process.env, NODE_ENV: "production" } : process.env;
+    const installArgs = action === "build" ? ["install", "--prod"] : ["install"];
     runSync(runner.cmd, installArgs, installEnv);
   }
   run(runner.cmd, ["run", script, ...rest]);

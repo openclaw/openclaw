@@ -1,10 +1,9 @@
 import type { RequestClient } from "@buape/carbon";
-
 import type { ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
-import { convertMarkdownTables } from "../../markdown/tables.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { convertMarkdownTables } from "../../markdown/tables.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { sendMessageDiscord } from "../send.js";
 
@@ -27,7 +26,9 @@ export async function deliverDiscordReply(params: {
     const rawText = payload.text ?? "";
     const tableMode = params.tableMode ?? "code";
     const text = convertMarkdownTables(rawText, tableMode);
-    if (!text && mediaList.length === 0) continue;
+    if (!text && mediaList.length === 0) {
+      continue;
+    }
     const replyTo = params.replyToId?.trim() || undefined;
 
     if (mediaList.length === 0) {
@@ -38,10 +39,14 @@ export async function deliverDiscordReply(params: {
         maxLines: params.maxLinesPerMessage,
         chunkMode: mode,
       });
-      if (!chunks.length && text) chunks.push(text);
+      if (!chunks.length && text) {
+        chunks.push(text);
+      }
       for (const chunk of chunks) {
         const trimmed = chunk.trim();
-        if (!trimmed) continue;
+        if (!trimmed) {
+          continue;
+        }
         await sendMessageDiscord(params.target, trimmed, {
           token: params.token,
           rest: params.rest,
@@ -54,7 +59,9 @@ export async function deliverDiscordReply(params: {
     }
 
     const firstMedia = mediaList[0];
-    if (!firstMedia) continue;
+    if (!firstMedia) {
+      continue;
+    }
     await sendMessageDiscord(params.target, text, {
       token: params.token,
       rest: params.rest,

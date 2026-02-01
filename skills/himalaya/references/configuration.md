@@ -32,20 +32,24 @@ message.send.backend.auth.raw = "your-password"
 ## Password Options
 
 ### Raw password (testing only, not recommended)
+
 ```toml
 backend.auth.raw = "your-password"
 ```
 
 ### Password from command (recommended)
+
 ```toml
 backend.auth.cmd = "pass show email/imap"
 # backend.auth.cmd = "security find-generic-password -a user@example.com -s imap -w"
 ```
 
 ### System keyring (requires keyring feature)
+
 ```toml
 backend.auth.keyring = "imap-example"
 ```
+
 Then run `himalaya account configure <account>` to store the password.
 
 ## Gmail Configuration
@@ -104,6 +108,7 @@ message.send.backend.auth.cmd = "pass show icloud/app-password"
 ## Folder Aliases
 
 Map custom folder names:
+
 ```toml
 [accounts.default.folder.alias]
 inbox = "INBOX"
@@ -126,6 +131,7 @@ email = "work@company.com"
 ```
 
 Switch accounts with `--account`:
+
 ```bash
 himalaya --account work envelope list
 ```
@@ -155,6 +161,7 @@ backend.auth.token-url = "https://provider.com/oauth/token"
 ## Additional Options
 
 ### Signature
+
 ```toml
 [accounts.default]
 signature = "Best regards,\nYour Name"
@@ -162,13 +169,16 @@ signature-delim = "-- \n"
 ```
 
 ### Downloads directory
+
 ```toml
 [accounts.default]
 downloads-dir = "~/Downloads/himalaya"
 ```
 
 ### Editor for composing
+
 Set via environment variable:
+
 ```bash
 export EDITOR="vim"
 ```

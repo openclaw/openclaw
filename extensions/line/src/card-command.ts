@@ -1,4 +1,4 @@
-import type { MoltbotPluginApi, LineChannelData, ReplyPayload } from "clawdbot/plugin-sdk";
+import type { LineChannelData, OpenClawPluginApi, ReplyPayload } from "openclaw/plugin-sdk";
 import {
   createActionCard,
   createImageCard,
@@ -7,7 +7,7 @@ import {
   createReceiptCard,
   type CardAction,
   type ListItem,
-} from "clawdbot/plugin-sdk";
+} from "openclaw/plugin-sdk";
 
 const CARD_USAGE = `Usage: /card <type> "title" "body" [options]
 
@@ -38,7 +38,9 @@ function buildLineReply(lineData: LineChannelData): ReplyPayload {
  * Data can be a URL (uri action) or plain text (message action) or key=value (postback)
  */
 function parseActions(actionsStr: string | undefined): CardAction[] {
-  if (!actionsStr) return [];
+  if (!actionsStr) {
+    return [];
+  }
 
   const results: CardAction[] = [];
 
@@ -47,7 +49,9 @@ function parseActions(actionsStr: string | undefined): CardAction[] {
       .trim()
       .split("|")
       .map((s) => s.trim());
-    if (!label) continue;
+    if (!label) {
+      continue;
+    }
 
     const actionData = data || label;
 
@@ -150,7 +154,7 @@ function parseCardArgs(argsStr: string): {
   return result;
 }
 
-export function registerLineCardCommand(api: MoltbotPluginApi): void {
+export function registerLineCardCommand(api: OpenClawPluginApi): void {
   api.registerCommand({
     name: "card",
     description: "Send a rich card message (LINE).",
@@ -158,12 +162,16 @@ export function registerLineCardCommand(api: MoltbotPluginApi): void {
     requireAuth: false,
     handler: async (ctx) => {
       const argsStr = ctx.args?.trim() ?? "";
-      if (!argsStr) return { text: CARD_USAGE };
+      if (!argsStr) {
+        return { text: CARD_USAGE };
+      }
 
       const parsed = parseCardArgs(argsStr);
       const { type, args, flags } = parsed;
 
-      if (!type) return { text: CARD_USAGE };
+      if (!type) {
+        return { text: CARD_USAGE };
+      }
 
       // Only LINE supports rich cards; fallback to text elsewhere.
       if (ctx.channel !== "line") {
@@ -221,8 +229,7 @@ export function registerLineCardCommand(api: MoltbotPluginApi): void {
             const items = parseListItems(itemsStr || flags.items || "");
             if (items.length === 0) {
               return {
-                text:
-                  'Error: List card requires items. Usage: /card list "Title" "Item1|Desc1,Item2|Desc2"',
+                text: 'Error: List card requires items. Usage: /card list "Title" "Item1|Desc1,Item2|Desc2"',
               };
             }
             const bubble = createListCard(title, items);
@@ -242,8 +249,7 @@ export function registerLineCardCommand(api: MoltbotPluginApi): void {
 
             if (items.length === 0) {
               return {
-                text:
-                  'Error: Receipt card requires items. Usage: /card receipt "Title" "Item1:$10,Item2:$20" --total "$30"',
+                text: 'Error: Receipt card requires items. Usage: /card receipt "Title" "Item1:$10,Item2:$20" --total "$30"',
               };
             }
 

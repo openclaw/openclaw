@@ -24,7 +24,9 @@ export function findCall(params: {
   callIdOrProviderCallId: string;
 }): CallRecord | undefined {
   const directCall = params.activeCalls.get(params.callIdOrProviderCallId);
-  if (directCall) return directCall;
+  if (directCall) {
+    return directCall;
+  }
   return getCallByProviderCallId({
     activeCalls: params.activeCalls,
     providerCallIdMap: params.providerCallIdMap,

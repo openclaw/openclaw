@@ -1,13 +1,12 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
-
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractAssistantText,
@@ -17,14 +16,27 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
-import { createInlineCodeState } from "../markdown/code-spans.js";
+
+const stripTrailingDirective = (text: string): string => {
+  const openIndex = text.lastIndexOf("[[");
+  if (openIndex < 0) {
+    return text;
+  }
+  const closeIndex = text.indexOf("]]", openIndex + 2);
+  if (closeIndex >= 0) {
+    return text;
+  }
+  return text.slice(0, openIndex);
+};
 
 export function handleMessageStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") return;
+  if (msg?.role !== "assistant") {
+    return;
+  }
 
   // KNOWN: Resetting at `text_end` is unsafe (late/duplicate end events).
   // ASSUME: `message_start` is the only reliable boundary for “new assistant message begins”.
@@ -41,7 +53,9 @@ export function handleMessageUpdate(
   evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") return;
+  if (msg?.role !== "assistant") {
+    return;
+  }
 
   const assistantEvent = evt.assistantMessageEvent;
   const assistantRecord =
@@ -107,20 +121,38 @@ export function handleMessageUpdate(
       inlineCode: createInlineCodeState(),
     })
     .trim();
-  if (next && next !== ctx.state.lastStreamedAssistant) {
-    const previousText = ctx.state.lastStreamedAssistant ?? "";
-    const { text: cleanedText, mediaUrls } = parseReplyDirectives(next);
-    const { text: previousCleanedText } = parseReplyDirectives(previousText);
-    if (cleanedText.startsWith(previousCleanedText)) {
-      const deltaText = cleanedText.slice(previousCleanedText.length);
-      ctx.state.lastStreamedAssistant = next;
+  if (next) {
+    const visibleDelta = chunk ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState) : "";
+    const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
+    const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
+    const cleanedText = parsedFull.text;
+    const mediaUrls = parsedDelta?.mediaUrls;
+    const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+    const hasAudio = Boolean(parsedDelta?.audioAsVoice);
+    const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
+
+    let shouldEmit = false;
+    let deltaText = "";
+    if (!cleanedText && !hasMedia && !hasAudio) {
+      shouldEmit = false;
+    } else if (previousCleaned && !cleanedText.startsWith(previousCleaned)) {
+      shouldEmit = false;
+    } else {
+      deltaText = cleanedText.slice(previousCleaned.length);
+      shouldEmit = Boolean(deltaText || hasMedia || hasAudio);
+    }
+
+    ctx.state.lastStreamedAssistant = next;
+    ctx.state.lastStreamedAssistantCleaned = cleanedText;
+
+    if (shouldEmit) {
       emitAgentEvent({
         runId: ctx.params.runId,
         stream: "assistant",
         data: {
           text: cleanedText,
           delta: deltaText,
-          mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+          mediaUrls: hasMedia ? mediaUrls : undefined,
         },
       });
       void ctx.params.onAgentEvent?.({
@@ -128,13 +160,13 @@ export function handleMessageUpdate(
         data: {
           text: cleanedText,
           delta: deltaText,
-          mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+          mediaUrls: hasMedia ? mediaUrls : undefined,
         },
       });
       if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
         void ctx.params.onPartialReply({
           text: cleanedText,
-          mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+          mediaUrls: hasMedia ? mediaUrls : undefined,
         });
       }
     }
@@ -160,9 +192,11 @@ export function handleMessageEnd(
   evt: AgentEvent & { message: AgentMessage },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") return;
+  if (msg?.role !== "assistant") {
+    return;
+  }
 
-  const assistantMessage = msg as AssistantMessage;
+  const assistantMessage = msg;
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);
@@ -196,12 +230,16 @@ export function handleMessageEnd(
   const shouldEmitReasoningBeforeAnswer =
     shouldEmitReasoning && ctx.state.blockReplyBreak === "message_end" && !addedDuringMessage;
   const maybeEmitReasoning = () => {
-    if (!shouldEmitReasoning || !formattedReasoning) return;
+    if (!shouldEmitReasoning || !formattedReasoning) {
+      return;
+    }
     ctx.state.lastReasoningSent = formattedReasoning;
     void onBlockReply?.({ text: formattedReasoning });
   };
 
-  if (shouldEmitReasoningBeforeAnswer) maybeEmitReasoning();
+  if (shouldEmitReasoningBeforeAnswer) {
+    maybeEmitReasoning();
+  }
 
   if (
     (ctx.state.blockReplyBreak === "message_end" ||
@@ -252,7 +290,9 @@ export function handleMessageEnd(
     }
   }
 
-  if (!shouldEmitReasoningBeforeAnswer) maybeEmitReasoning();
+  if (!shouldEmitReasoningBeforeAnswer) {
+    maybeEmitReasoning();
+  }
   if (ctx.state.streamReasoning && rawThinking) {
     ctx.emitReasoningStream(rawThinking);
   }
@@ -288,4 +328,5 @@ export function handleMessageEnd(
   ctx.state.blockState.final = false;
   ctx.state.blockState.inlineCode = createInlineCodeState();
   ctx.state.lastStreamedAssistant = undefined;
+  ctx.state.lastStreamedAssistantCleaned = undefined;
 }

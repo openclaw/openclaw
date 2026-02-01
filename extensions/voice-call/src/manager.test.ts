@@ -1,10 +1,7 @@
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
-import { VoiceCallConfigSchema } from "./config.js";
-import { CallManager } from "./manager.js";
+import type { VoiceCallProvider } from "./providers/base.js";
 import type {
   HangupCallInput,
   InitiateCallInput,
@@ -16,7 +13,8 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "./types.js";
-import type { VoiceCallProvider } from "./providers/base.js";
+import { VoiceCallConfigSchema } from "./config.js";
+import { CallManager } from "./manager.js";
 
 class FakeProvider implements VoiceCallProvider {
   readonly name = "plivo" as const;
@@ -47,7 +45,7 @@ describe("CallManager", () => {
       fromNumber: "+15550000000",
     });
 
-    const storePath = path.join(os.tmpdir(), `moltbot-voice-call-test-${Date.now()}`);
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
     const manager = new CallManager(config, storePath);
     manager.initialize(new FakeProvider(), "https://example.com/voice/webhook");
 
@@ -80,16 +78,15 @@ describe("CallManager", () => {
       fromNumber: "+15550000000",
     });
 
-    const storePath = path.join(os.tmpdir(), `moltbot-voice-call-test-${Date.now()}`);
+    const storePath = path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}`);
     const provider = new FakeProvider();
     const manager = new CallManager(config, storePath);
     manager.initialize(provider, "https://example.com/voice/webhook");
 
-    const { callId, success } = await manager.initiateCall(
-      "+15550000002",
-      undefined,
-      { message: "Hello there", mode: "notify" },
-    );
+    const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
+      message: "Hello there",
+      mode: "notify",
+    });
     expect(success).toBe(true);
 
     manager.processEvent({

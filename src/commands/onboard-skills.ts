@@ -1,14 +1,16 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { MoltbotConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
 
 function summarizeInstallFailure(message: string): string | undefined {
   const cleaned = message.replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "").trim();
-  if (!cleaned) return undefined;
+  if (!cleaned) {
+    return undefined;
+  }
   const maxLen = 140;
   return cleaned.length > maxLen ? `${cleaned.slice(0, maxLen - 1)}…` : cleaned;
 }
@@ -20,16 +22,18 @@ function formatSkillHint(skill: {
   const desc = skill.description?.trim();
   const installLabel = skill.install[0]?.label?.trim();
   const combined = desc && installLabel ? `${desc} — ${installLabel}` : desc || installLabel;
-  if (!combined) return "install";
+  if (!combined) {
+    return "install";
+  }
   const maxLen = 90;
   return combined.length > maxLen ? `${combined.slice(0, maxLen - 1)}…` : combined;
 }
 
 function upsertSkillEntry(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   skillKey: string,
   patch: { apiKey?: string },
-): MoltbotConfig {
+): OpenClawConfig {
   const entries = { ...cfg.skills?.entries };
   const existing = (entries[skillKey] as { apiKey?: string } | undefined) ?? {};
   entries[skillKey] = { ...existing, ...patch };
@@ -43,11 +47,11 @@ function upsertSkillEntry(
 }
 
 export async function setupSkills(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   workspaceDir: string,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
-): Promise<MoltbotConfig> {
+): Promise<OpenClawConfig> {
   const report = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
   const eligible = report.skills.filter((s) => s.eligible);
   const missing = report.skills.filter((s) => !s.eligible && !s.disabled && !s.blockedByAllowlist);
@@ -71,7 +75,9 @@ export async function setupSkills(
     message: "Configure skills now? (recommended)",
     initialValue: true,
   });
-  if (!shouldConfigure) return cfg;
+  if (!shouldConfigure) {
+    return cfg;
+  }
 
   if (needsBrewPrompt) {
     await prompter.note(
@@ -101,7 +107,7 @@ export async function setupSkills(
     options: resolveNodeManagerOptions(),
   })) as "npm" | "pnpm" | "bun";
 
-  let next: MoltbotConfig = {
+  let next: OpenClawConfig = {
     ...cfg,
     skills: {
       ...cfg.skills,
@@ -132,12 +138,16 @@ export async function setupSkills(
       ],
     });
 
-    const selected = (toInstall as string[]).filter((name) => name !== "__skip__");
+    const selected = toInstall.filter((name) => name !== "__skip__");
     for (const name of selected) {
       const target = installable.find((s) => s.name === name);
-      if (!target || target.install.length === 0) continue;
+      if (!target || target.install.length === 0) {
+        continue;
+      }
       const installId = target.install[0]?.id;
-      if (!installId) continue;
+      if (!installId) {
+        continue;
+      }
       const spin = prompter.progress(`Installing ${name}…`);
       const result = await installSkill({
         workspaceDir,
@@ -151,23 +161,30 @@ export async function setupSkills(
         const code = result.code == null ? "" : ` (exit ${result.code})`;
         const detail = summarizeInstallFailure(result.message);
         spin.stop(`Install failed: ${name}${code}${detail ? ` — ${detail}` : ""}`);
-        if (result.stderr) runtime.log(result.stderr.trim());
-        else if (result.stdout) runtime.log(result.stdout.trim());
+        if (result.stderr) {
+          runtime.log(result.stderr.trim());
+        } else if (result.stdout) {
+          runtime.log(result.stdout.trim());
+        }
         runtime.log(
-          `Tip: run \`${formatCliCommand("moltbot doctor")}\` to review skills + requirements.`,
+          `Tip: run \`${formatCliCommand("openclaw doctor")}\` to review skills + requirements.`,
         );
-        runtime.log("Docs: https://docs.molt.bot/skills");
+        runtime.log("Docs: https://docs.openclaw.ai/skills");
       }
     }
   }
 
   for (const skill of missing) {
-    if (!skill.primaryEnv || skill.missing.env.length === 0) continue;
+    if (!skill.primaryEnv || skill.missing.env.length === 0) {
+      continue;
+    }
     const wantsKey = await prompter.confirm({
       message: `Set ${skill.primaryEnv} for ${skill.name}?`,
       initialValue: false,
     });
-    if (!wantsKey) continue;
+    if (!wantsKey) {
+      continue;
+    }
     const apiKey = String(
       await prompter.text({
         message: `Enter ${skill.primaryEnv}`,

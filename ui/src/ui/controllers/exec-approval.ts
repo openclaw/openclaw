@@ -80,6 +80,9 @@ export function addExecApproval(
   return next;
 }
 
-export function removeExecApproval(queue: ExecApprovalRequest[], id: string): ExecApprovalRequest[] {
+export function removeExecApproval(
+  queue: ExecApprovalRequest[],
+  id: string,
+): ExecApprovalRequest[] {
   return pruneExecApprovalQueue(queue).filter((entry) => entry.id !== id);
 }

@@ -1,5 +1,5 @@
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk";
 import { z } from "zod";
-import { buildChannelConfigSchema } from "clawdbot/plugin-sdk";
 
 const ShipSchema = z.string().min(1);
 const ChannelNestSchema = z.string().min(1);

@@ -24,8 +24,12 @@ vi.mock("../gateway/call.js", () => ({
     if (typed.method === "agent.wait") {
       return { status: "error", startedAt: 10, endedAt: 20, error: "boom" };
     }
-    if (typed.method === "sessions.patch") return {};
-    if (typed.method === "sessions.delete") return {};
+    if (typed.method === "sessions.patch") {
+      return {};
+    }
+    if (typed.method === "sessions.delete") {
+      return {};
+    }
     return {};
   }),
 }));
@@ -186,7 +190,7 @@ describe("subagent announce formatting", () => {
     });
 
     expect(didAnnounce).toBe(true);
-    await new Promise((r) => setTimeout(r, 5));
+    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
 
     const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.channel).toBe("whatsapp");
@@ -299,6 +303,44 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.accountId).toBe("acct-987");
   });
 
+  it("prefers requesterOrigin channel over stale session lastChannel in queued announce", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    // Session store has stale whatsapp channel, but the requesterOrigin says bluebubbles.
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-stale",
+        lastChannel: "whatsapp",
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-stale-channel",
+      requesterSessionKey: "main",
+      requesterOrigin: { channel: "bluebubbles", to: "bluebubbles:chat_guid:123" },
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    // The channel should match requesterOrigin, NOT the stale session entry.
+    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.to).toBe("bluebubbles:chat_guid:123");
+  });
+
   it("splits collect-mode announces when accountId differs", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
@@ -343,7 +385,7 @@ describe("subagent announce formatting", () => {
       outcome: { status: "ok" },
     });
 
-    await new Promise((r) => setTimeout(r, 5));
+    await expect.poll(() => agentSpy.mock.calls.length).toBe(2);
 
     const accountIds = agentSpy.mock.calls.map(
       (call) => (call[0] as { params?: Record<string, unknown> }).params?.accountId,

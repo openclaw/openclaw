@@ -32,14 +32,24 @@ export function resolveCommandStdio(params: {
 }
 
 export function formatSpawnError(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
+  if (!(err instanceof Error)) {
+    return String(err);
+  }
   const details = err as NodeJS.ErrnoException;
   const parts: string[] = [];
   const message = err.message?.trim();
-  if (message) parts.push(message);
-  if (details.code && !message?.includes(details.code)) parts.push(details.code);
-  if (details.syscall) parts.push(`syscall=${details.syscall}`);
-  if (typeof details.errno === "number") parts.push(`errno=${details.errno}`);
+  if (message) {
+    parts.push(message);
+  }
+  if (details.code && !message?.includes(details.code)) {
+    parts.push(details.code);
+  }
+  if (details.syscall) {
+    parts.push(`syscall=${details.syscall}`);
+  }
+  if (typeof details.errno === "number") {
+    parts.push(`errno=${details.errno}`);
+  }
   return parts.join(" ");
 }
 
@@ -63,13 +73,17 @@ async function spawnAndWaitForSpawn(
       child.removeListener("spawn", onSpawn);
     };
     const finishResolve = () => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       cleanup();
       resolve(child);
     };
     const onError = (err: unknown) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       cleanup();
       reject(err);

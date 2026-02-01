@@ -1,6 +1,6 @@
-import { isRemoteEnvironment } from "./oauth-env.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { loginChutes } from "./chutes-oauth.js";
+import { isRemoteEnvironment } from "./oauth-env.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 import { applyAuthProfileConfig, writeOAuthCredentials } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
@@ -68,7 +68,8 @@ export async function applyAuthChoiceOAuth(
       });
 
       spin.stop("Chutes OAuth complete");
-      const email = creds.email?.trim() || "default";
+      const email =
+        typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
       const profileId = `chutes:${email}`;
 
       await writeOAuthCredentials("chutes", creds, params.agentDir);

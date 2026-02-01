@@ -2,10 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-
 import type { TemplateContext } from "../templating.js";
-import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -154,7 +153,7 @@ describe("runReplyAgent messaging tool suppression", () => {
 
   it("persists usage even when replies are suppressed", async () => {
     const storePath = path.join(
-      await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-session-store-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-")),
       "sessions.json",
     );
     const sessionKey = "main";

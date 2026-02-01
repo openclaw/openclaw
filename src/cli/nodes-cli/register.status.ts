@@ -1,17 +1,21 @@
 import type { Command } from "commander";
-import { defaultRuntime } from "../../runtime.js";
-import { formatAge, formatPermissions, parseNodeList, parsePairingList } from "./format.js";
-import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
+import { defaultRuntime } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
-import { parseDurationMs } from "../parse-duration.js";
 import { shortenHomeInString } from "../../utils.js";
+import { parseDurationMs } from "../parse-duration.js";
+import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { formatAge, formatPermissions, parseNodeList, parsePairingList } from "./format.js";
+import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
-  if (!trimmed) return raw;
-  if (trimmed.toLowerCase().startsWith("v")) return trimmed;
+  if (!trimmed) {
+    return raw;
+  }
+  if (trimmed.toLowerCase().startsWith("v")) {
+    return trimmed;
+  }
   return /^\d/.test(trimmed) ? `v${trimmed}` : trimmed;
 }
 
@@ -23,9 +27,13 @@ function resolveNodeVersions(node: {
 }) {
   const core = node.coreVersion?.trim() || undefined;
   const ui = node.uiVersion?.trim() || undefined;
-  if (core || ui) return { core, ui };
+  if (core || ui) {
+    return { core, ui };
+  }
   const legacy = node.version?.trim();
-  if (!legacy) return { core: undefined, ui: undefined };
+  if (!legacy) {
+    return { core: undefined, ui: undefined };
+  }
   const platform = node.platform?.trim().toLowerCase() ?? "";
   const headless =
     platform === "darwin" || platform === "linux" || platform === "win32" || platform === "windows";
@@ -40,15 +48,23 @@ function formatNodeVersions(node: {
 }) {
   const { core, ui } = resolveNodeVersions(node);
   const parts: string[] = [];
-  if (core) parts.push(`core ${formatVersionLabel(core)}`);
-  if (ui) parts.push(`ui ${formatVersionLabel(ui)}`);
+  if (core) {
+    parts.push(`core ${formatVersionLabel(core)}`);
+  }
+  if (ui) {
+    parts.push(`ui ${formatVersionLabel(ui)}`);
+  }
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function formatPathEnv(raw?: string): string | null {
-  if (typeof raw !== "string") return null;
+  if (typeof raw !== "string") {
+    return null;
+  }
   const trimmed = raw.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   const parts = trimmed.split(":").filter(Boolean);
   const display =
     parts.length <= 3 ? trimmed : `${parts.slice(0, 2).join(":")}:…:${parts.slice(-1)[0]}`;
@@ -56,7 +72,9 @@ function formatPathEnv(raw?: string): string | null {
 }
 
 function parseSinceMs(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null) return undefined;
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
   const value =
     typeof raw === "string" ? raw.trim() : typeof raw === "number" ? String(raw).trim() : null;
   if (value === null) {
@@ -64,7 +82,9 @@ function parseSinceMs(raw: unknown, label: string): number | undefined {
     defaultRuntime.exit(1);
     return undefined;
   }
-  if (!value) return undefined;
+  if (!value) {
+    return undefined;
+  }
   try {
     return parseDurationMs(value);
   } catch (err) {
@@ -86,11 +106,9 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("status", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = (await callGatewayCli("node.list", opts, {})) as unknown;
-          const obj =
-            typeof result === "object" && result !== null
-              ? (result as Record<string, unknown>)
-              : {};
+          const result = await callGatewayCli("node.list", opts, {});
+          const obj: Record<string, unknown> =
+            typeof result === "object" && result !== null ? result : {};
           const { ok, warn, muted } = getNodesTheme();
           const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
           const now = Date.now();
@@ -104,7 +122,9 @@ export function registerNodesStatusCommands(nodes: Command) {
                 )
               : null;
           const filtered = nodes.filter((n) => {
-            if (connectedOnly && !n.connected) return false;
+            if (connectedOnly && !n.connected) {
+              return false;
+            }
             if (sinceMs !== undefined) {
               const paired = lastConnectedById?.get(n.nodeId);
               const lastConnectedAtMs =
@@ -113,8 +133,12 @@ export function registerNodesStatusCommands(nodes: Command) {
                   : typeof n.connectedAtMs === "number"
                     ? n.connectedAtMs
                     : undefined;
-              if (typeof lastConnectedAtMs !== "number") return false;
-              if (now - lastConnectedAtMs > sinceMs) return false;
+              if (typeof lastConnectedAtMs !== "number") {
+                return false;
+              }
+              if (now - lastConnectedAtMs > sinceMs) {
+                return false;
+              }
             }
             return true;
           });
@@ -131,7 +155,9 @@ export function registerNodesStatusCommands(nodes: Command) {
           defaultRuntime.log(
             `Known: ${filtered.length}${filteredLabel} · Paired: ${pairedCount} · Connected: ${connectedCount}`,
           );
-          if (filtered.length === 0) return;
+          if (filtered.length === 0) {
+            return;
+          }
 
           const rows = filtered.map((n) => {
             const name = n.displayName?.trim() ? n.displayName.trim() : n.nodeId;
@@ -146,7 +172,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               pathEnv ? `path: ${pathEnv}` : null,
             ].filter(Boolean) as string[];
             const caps = Array.isArray(n.caps)
-              ? n.caps.map(String).filter(Boolean).sort().join(", ")
+              ? n.caps.map(String).filter(Boolean).toSorted().join(", ")
               : "?";
             const paired = n.paired ? ok("paired") : warn("unpaired");
             const connected = n.connected ? ok("connected") : muted("disconnected");
@@ -191,24 +217,24 @@ export function registerNodesStatusCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("describe", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const result = (await callGatewayCli("node.describe", opts, {
+          const result = await callGatewayCli("node.describe", opts, {
             nodeId,
-          })) as unknown;
+          });
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
           }
 
-          const obj =
-            typeof result === "object" && result !== null
-              ? (result as Record<string, unknown>)
-              : {};
+          const obj: Record<string, unknown> =
+            typeof result === "object" && result !== null ? result : {};
           const displayName = typeof obj.displayName === "string" ? obj.displayName : nodeId;
           const connected = Boolean(obj.connected);
           const paired = Boolean(obj.paired);
-          const caps = Array.isArray(obj.caps) ? obj.caps.map(String).filter(Boolean).sort() : null;
+          const caps = Array.isArray(obj.caps)
+            ? obj.caps.map(String).filter(Boolean).toSorted()
+            : null;
           const commands = Array.isArray(obj.commands)
-            ? obj.commands.map(String).filter(Boolean).sort()
+            ? obj.commands.map(String).filter(Boolean).toSorted()
             : [];
           const perms = formatPermissions(obj.permissions);
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
@@ -259,7 +285,9 @@ export function registerNodesStatusCommands(nodes: Command) {
             defaultRuntime.log(muted("- (none reported)"));
             return;
           }
-          for (const c of commands) defaultRuntime.log(`- ${c}`);
+          for (const c of commands) {
+            defaultRuntime.log(`- ${c}`);
+          }
         });
       }),
   );
@@ -274,7 +302,7 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("list", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = (await callGatewayCli("node.pair.list", opts, {})) as unknown;
+          const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending, paired } = parsePairingList(result);
           const { heading, muted, warn } = getNodesTheme();
           const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
@@ -292,7 +320,9 @@ export function registerNodesStatusCommands(nodes: Command) {
           const filteredPaired = paired.filter((node) => {
             if (connectedOnly) {
               const live = connectedById?.get(node.nodeId);
-              if (!live?.connected) return false;
+              if (!live?.connected) {
+                return false;
+              }
             }
             if (sinceMs !== undefined) {
               const live = connectedById?.get(node.nodeId);
@@ -302,8 +332,12 @@ export function registerNodesStatusCommands(nodes: Command) {
                   : typeof live?.connectedAtMs === "number"
                     ? live.connectedAtMs
                     : undefined;
-              if (typeof lastConnectedAtMs !== "number") return false;
-              if (now - lastConnectedAtMs > sinceMs) return false;
+              if (typeof lastConnectedAtMs !== "number") {
+                return false;
+              }
+              if (now - lastConnectedAtMs > sinceMs) {
+                return false;
+              }
             }
             return true;
           });

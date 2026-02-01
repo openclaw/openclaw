@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { buildConfigSchema } from "./schema.js";
 
 describe("config schema", () => {

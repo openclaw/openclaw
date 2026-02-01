@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { probeSignal } from "./probe.js";
 
 const signalCheckMock = vi.fn();

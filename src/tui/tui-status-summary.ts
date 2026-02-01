@@ -1,7 +1,7 @@
+import type { GatewayStatusSummary } from "./tui-types.js";
 import { formatAge } from "../infra/channel-summary.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 import { formatContextUsageLine } from "./tui-formatters.js";
-import type { GatewayStatusSummary } from "./tui-types.js";
 
 export function formatStatusSummary(summary: GatewayStatusSummary) {
   const lines: string[] = [];
@@ -32,7 +32,9 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
   if (heartbeatAgents.length > 0) {
     const heartbeatParts = heartbeatAgents.map((agent) => {
       const agentId = agent.agentId ?? "unknown";
-      if (!agent.enabled || !agent.everyMs) return `disabled (${agentId})`;
+      if (!agent.enabled || !agent.everyMs) {
+        return `disabled (${agentId})`;
+      }
       return `${agent.every ?? "unknown"} (${agentId})`;
     });
     lines.push("");

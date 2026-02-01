@@ -1,5 +1,5 @@
-import type { ChannelDirectoryEntry } from "../channels/plugins/types.js";
 import type { DirectoryConfigParams } from "../channels/plugins/directory-config.js";
+import type { ChannelDirectoryEntry } from "../channels/plugins/types.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { fetchDiscord } from "./api.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
@@ -23,7 +23,9 @@ export async function listDiscordDirectoryGroupsLive(
 ): Promise<ChannelDirectoryEntry[]> {
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
   const token = normalizeDiscordToken(account.token);
-  if (!token) return [];
+  if (!token) {
+    return [];
+  }
   const query = normalizeQuery(params.query);
   const guilds = await fetchDiscord<DiscordGuild[]>("/users/@me/guilds", token);
   const rows: ChannelDirectoryEntry[] = [];
@@ -32,8 +34,12 @@ export async function listDiscordDirectoryGroupsLive(
     const channels = await fetchDiscord<DiscordChannel[]>(`/guilds/${guild.id}/channels`, token);
     for (const channel of channels) {
       const name = channel.name?.trim();
-      if (!name) continue;
-      if (query && !normalizeDiscordSlug(name).includes(normalizeDiscordSlug(query))) continue;
+      if (!name) {
+        continue;
+      }
+      if (query && !normalizeDiscordSlug(name).includes(normalizeDiscordSlug(query))) {
+        continue;
+      }
       rows.push({
         kind: "group",
         id: `channel:${channel.id}`,
@@ -55,9 +61,13 @@ export async function listDiscordDirectoryPeersLive(
 ): Promise<ChannelDirectoryEntry[]> {
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
   const token = normalizeDiscordToken(account.token);
-  if (!token) return [];
+  if (!token) {
+    return [];
+  }
   const query = normalizeQuery(params.query);
-  if (!query) return [];
+  if (!query) {
+    return [];
+  }
 
   const guilds = await fetchDiscord<DiscordGuild[]>("/users/@me/guilds", token);
   const rows: ChannelDirectoryEntry[] = [];
@@ -74,7 +84,9 @@ export async function listDiscordDirectoryPeersLive(
     );
     for (const member of members) {
       const user = member.user;
-      if (!user?.id) continue;
+      if (!user?.id) {
+        continue;
+      }
       const name = member.nick?.trim() || user.global_name?.trim() || user.username?.trim();
       rows.push({
         kind: "user",
@@ -84,7 +96,9 @@ export async function listDiscordDirectoryPeersLive(
         rank: buildUserRank(user),
         raw: member,
       });
-      if (rows.length >= limit) return rows;
+      if (rows.length >= limit) {
+        return rows;
+      }
     }
   }
 

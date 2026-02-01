@@ -1,17 +1,21 @@
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { createActionGate, jsonResult, readStringParam } from "../../../agents/tools/common.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "../../../signal/accounts.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { sendReactionSignal, removeReactionSignal } from "../../../signal/send-reactions.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";
 
 function normalizeSignalReactionRecipient(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) return trimmed;
+  if (!trimmed) {
+    return trimmed;
+  }
   const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
-  if (!withoutSignal) return withoutSignal;
+  if (!withoutSignal) {
+    return withoutSignal;
+  }
   if (withoutSignal.toLowerCase().startsWith("uuid:")) {
     return withoutSignal.slice("uuid:".length).trim();
   }
@@ -20,9 +24,13 @@ function normalizeSignalReactionRecipient(raw: string): string {
 
 function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId?: string } {
   const trimmed = raw.trim();
-  if (!trimmed) return {};
+  if (!trimmed) {
+    return {};
+  }
   const withoutSignal = trimmed.replace(/^signal:/i, "").trim();
-  if (!withoutSignal) return {};
+  if (!withoutSignal) {
+    return {};
+  }
   if (withoutSignal.toLowerCase().startsWith(GROUP_PREFIX)) {
     const groupId = withoutSignal.slice(GROUP_PREFIX.length).trim();
     return groupId ? { groupId } : {};
@@ -33,9 +41,13 @@ function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId
 export const signalMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
     const accounts = listEnabledSignalAccounts(cfg);
-    if (accounts.length === 0) return [];
+    if (accounts.length === 0) {
+      return [];
+    }
     const configuredAccounts = accounts.filter((account) => account.configured);
-    if (configuredAccounts.length === 0) return [];
+    if (configuredAccounts.length === 0) {
+      return [];
+    }
 
     const actions = new Set<ChannelMessageActionName>(["send"]);
 
@@ -105,7 +117,9 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       }
 
       if (remove) {
-        if (!emoji) throw new Error("Emoji required to remove reaction.");
+        if (!emoji) {
+          throw new Error("Emoji required to remove reaction.");
+        }
         await removeReactionSignal(target.recipient ?? "", timestamp, emoji, {
           accountId: accountId ?? undefined,
           groupId: target.groupId,
@@ -115,7 +129,9 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         return jsonResult({ ok: true, removed: emoji });
       }
 
-      if (!emoji) throw new Error("Emoji required to add reaction.");
+      if (!emoji) {
+        throw new Error("Emoji required to add reaction.");
+      }
       await sendReactionSignal(target.recipient ?? "", timestamp, emoji, {
         accountId: accountId ?? undefined,
         groupId: target.groupId,

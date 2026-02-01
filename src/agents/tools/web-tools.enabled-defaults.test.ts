@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
 
 describe("web tools defaults", () => {

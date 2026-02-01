@@ -8,7 +8,7 @@ export type VoiceWakeConfig = {
   updatedAtMs: number;
 };
 
-const DEFAULT_TRIGGERS = ["clawd", "claude", "computer"];
+const DEFAULT_TRIGGERS = ["openclaw", "claude", "computer"];
 
 function resolvePath(baseDir?: string) {
   const root = baseDir ?? resolveStateDir();

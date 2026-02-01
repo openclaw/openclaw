@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-
 import { buildInboundLine } from "./message-line.js";
 
 describe("buildInboundLine", () => {
   it("prefixes group messages with sender", () => {
     const line = buildInboundLine({
       cfg: {
-        agents: { defaults: { workspace: "/tmp/clawd" } },
+        agents: { defaults: { workspace: "/tmp/openclaw" } },
         channels: { whatsapp: { messagePrefix: "" } },
       } as never,
       agentId: "main",

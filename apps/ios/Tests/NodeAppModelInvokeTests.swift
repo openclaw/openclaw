@@ -1,8 +1,8 @@
-import MoltbotKit
+import OpenClawKit
 import Foundation
 import Testing
 import UIKit
-@testable import Moltbot
+@testable import OpenClaw
 
 private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws -> T) rethrows -> T {
     let defaults = UserDefaults.standard
@@ -32,7 +32,7 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
 @Suite(.serialized) struct NodeAppModelInvokeTests {
     @Test @MainActor func decodeParamsFailsWithoutJSON() {
         #expect(throws: Error.self) {
-            _ = try NodeAppModel._test_decodeParams(MoltbotCanvasNavigateParams.self, from: nil)
+            _ = try NodeAppModel._test_decodeParams(OpenClawCanvasNavigateParams.self, from: nil)
         }
     }
 
@@ -48,7 +48,7 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
         let appModel = NodeAppModel()
         appModel.setScenePhase(.background)
 
-        let req = BridgeInvokeRequest(id: "bg", command: MoltbotCanvasCommand.present.rawValue)
+        let req = BridgeInvokeRequest(id: "bg", command: OpenClawCanvasCommand.present.rawValue)
         let res = await appModel._test_handleInvoke(req)
         #expect(res.ok == false)
         #expect(res.error?.code == .backgroundUnavailable)
@@ -56,7 +56,7 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
 
     @Test @MainActor func handleInvokeRejectsCameraWhenDisabled() async {
         let appModel = NodeAppModel()
-        let req = BridgeInvokeRequest(id: "cam", command: MoltbotCameraCommand.snap.rawValue)
+        let req = BridgeInvokeRequest(id: "cam", command: OpenClawCameraCommand.snap.rawValue)
 
         let defaults = UserDefaults.standard
         let key = "camera.enabled"
@@ -78,13 +78,13 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
 
     @Test @MainActor func handleInvokeRejectsInvalidScreenFormat() async {
         let appModel = NodeAppModel()
-        let params = MoltbotScreenRecordParams(format: "gif")
+        let params = OpenClawScreenRecordParams(format: "gif")
         let data = try? JSONEncoder().encode(params)
         let json = data.flatMap { String(data: $0, encoding: .utf8) }
 
         let req = BridgeInvokeRequest(
             id: "screen",
-            command: MoltbotScreenCommand.record.rawValue,
+            command: OpenClawScreenCommand.record.rawValue,
             paramsJSON: json)
 
         let res = await appModel._test_handleInvoke(req)
@@ -96,28 +96,28 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
         let appModel = NodeAppModel()
         appModel.screen.navigate(to: "http://example.com")
 
-        let present = BridgeInvokeRequest(id: "present", command: MoltbotCanvasCommand.present.rawValue)
+        let present = BridgeInvokeRequest(id: "present", command: OpenClawCanvasCommand.present.rawValue)
         let presentRes = await appModel._test_handleInvoke(present)
         #expect(presentRes.ok == true)
         #expect(appModel.screen.urlString.isEmpty)
 
-        let navigateParams = MoltbotCanvasNavigateParams(url: "http://localhost:18789/")
+        let navigateParams = OpenClawCanvasNavigateParams(url: "http://localhost:18789/")
         let navData = try JSONEncoder().encode(navigateParams)
         let navJSON = String(decoding: navData, as: UTF8.self)
         let navigate = BridgeInvokeRequest(
             id: "nav",
-            command: MoltbotCanvasCommand.navigate.rawValue,
+            command: OpenClawCanvasCommand.navigate.rawValue,
             paramsJSON: navJSON)
         let navRes = await appModel._test_handleInvoke(navigate)
         #expect(navRes.ok == true)
         #expect(appModel.screen.urlString == "http://localhost:18789/")
 
-        let evalParams = MoltbotCanvasEvalParams(javaScript: "1+1")
+        let evalParams = OpenClawCanvasEvalParams(javaScript: "1+1")
         let evalData = try JSONEncoder().encode(evalParams)
         let evalJSON = String(decoding: evalData, as: UTF8.self)
         let eval = BridgeInvokeRequest(
             id: "eval",
-            command: MoltbotCanvasCommand.evalJS.rawValue,
+            command: OpenClawCanvasCommand.evalJS.rawValue,
             paramsJSON: evalJSON)
         let evalRes = await appModel._test_handleInvoke(eval)
         #expect(evalRes.ok == true)
@@ -129,18 +129,18 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
     @Test @MainActor func handleInvokeA2UICommandsFailWhenHostMissing() async throws {
         let appModel = NodeAppModel()
 
-        let reset = BridgeInvokeRequest(id: "reset", command: MoltbotCanvasA2UICommand.reset.rawValue)
+        let reset = BridgeInvokeRequest(id: "reset", command: OpenClawCanvasA2UICommand.reset.rawValue)
         let resetRes = await appModel._test_handleInvoke(reset)
         #expect(resetRes.ok == false)
         #expect(resetRes.error?.message.contains("A2UI_HOST_NOT_CONFIGURED") == true)
 
         let jsonl = "{\"beginRendering\":{}}"
-        let pushParams = MoltbotCanvasA2UIPushJSONLParams(jsonl: jsonl)
+        let pushParams = OpenClawCanvasA2UIPushJSONLParams(jsonl: jsonl)
         let pushData = try JSONEncoder().encode(pushParams)
         let pushJSON = String(decoding: pushData, as: UTF8.self)
         let push = BridgeInvokeRequest(
             id: "push",
-            command: MoltbotCanvasA2UICommand.pushJSONL.rawValue,
+            command: OpenClawCanvasA2UICommand.pushJSONL.rawValue,
             paramsJSON: pushJSON)
         let pushRes = await appModel._test_handleInvoke(push)
         #expect(pushRes.ok == false)
@@ -157,7 +157,7 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
 
     @Test @MainActor func handleDeepLinkSetsErrorWhenNotConnected() async {
         let appModel = NodeAppModel()
-        let url = URL(string: "moltbot://agent?message=hello")!
+        let url = URL(string: "openclaw://agent?message=hello")!
         await appModel.handleDeepLink(url: url)
         #expect(appModel.screen.errorText?.contains("Gateway not connected") == true)
     }
@@ -165,7 +165,7 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
     @Test @MainActor func handleDeepLinkRejectsOversizedMessage() async {
         let appModel = NodeAppModel()
         let msg = String(repeating: "a", count: 20001)
-        let url = URL(string: "moltbot://agent?message=\(msg)")!
+        let url = URL(string: "openclaw://agent?message=\(msg)")!
         await appModel.handleDeepLink(url: url)
         #expect(appModel.screen.errorText?.contains("Deep link too large") == true)
     }

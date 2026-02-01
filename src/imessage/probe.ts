@@ -1,7 +1,7 @@
+import type { RuntimeEnv } from "../runtime.js";
 import { detectBinary } from "../commands/onboard-helpers.js";
 import { loadConfig } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { createIMessageRpcClient } from "./client.js";
 
 export type IMessageProbe = {
@@ -26,7 +26,9 @@ const rpcSupportCache = new Map<string, RpcSupportResult>();
 
 async function probeRpcSupport(cliPath: string): Promise<RpcSupportResult> {
   const cached = rpcSupportCache.get(cliPath);
-  if (cached) return cached;
+  if (cached) {
+    return cached;
+  }
   try {
     const result = await runCommandWithTimeout([cliPath, "rpc", "--help"], { timeoutMs: 2000 });
     const combined = `${result.stdout}\n${result.stderr}`.trim();

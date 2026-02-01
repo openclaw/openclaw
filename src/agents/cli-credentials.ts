@@ -1,10 +1,8 @@
+import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-
-import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
-
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
@@ -14,6 +12,7 @@ const log = createSubsystemLogger("agents/auth-profiles");
 const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
 const CODEX_CLI_AUTH_FILENAME = "auth.json";
 const QWEN_CLI_CREDENTIALS_RELATIVE_PATH = ".qwen/oauth_creds.json";
+const MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH = ".minimax/oauth_creds.json";
 
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_CLI_KEYCHAIN_ACCOUNT = "Claude Code";
@@ -27,11 +26,13 @@ type CachedValue<T> = {
 let claudeCliCache: CachedValue<ClaudeCliCredential> | null = null;
 let codexCliCache: CachedValue<CodexCliCredential> | null = null;
 let qwenCliCache: CachedValue<QwenCliCredential> | null = null;
+let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 
 export function resetCliCredentialCachesForTest(): void {
   claudeCliCache = null;
   codexCliCache = null;
   qwenCliCache = null;
+  minimaxCliCache = null;
 }
 
 export type ClaudeCliCredential =
@@ -61,6 +62,14 @@ export type CodexCliCredential = {
 export type QwenCliCredential = {
   type: "oauth";
   provider: "qwen-portal";
+  access: string;
+  refresh: string;
+  expires: number;
+};
+
+export type MiniMaxCliCredential = {
+  type: "oauth";
+  provider: "minimax-portal";
   access: string;
   refresh: string;
   expires: number;
@@ -102,6 +111,11 @@ function resolveQwenCliCredentialsPath(homeDir?: string) {
   return path.join(baseDir, QWEN_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
+function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
+  const baseDir = homeDir ?? resolveUserPath("~");
+  return path.join(baseDir, MINIMAX_CLI_CREDENTIALS_RELATIVE_PATH);
+}
+
 function computeCodexKeychainAccount(codexHome: string) {
   const hash = createHash("sha256").update(codexHome).digest("hex");
   return `cli|${hash.slice(0, 16)}`;
@@ -112,7 +126,9 @@ function readCodexKeychainCredentials(options?: {
   execSync?: ExecSyncFn;
 }): CodexCliCredential | null {
   const platform = options?.platform ?? process.platform;
-  if (platform !== "darwin") return null;
+  if (platform !== "darwin") {
+    return null;
+  }
   const execSyncImpl = options?.execSync ?? execSync;
 
   const codexHome = resolveCodexHomePath();
@@ -132,8 +148,12 @@ function readCodexKeychainCredentials(options?: {
     const tokens = parsed.tokens as Record<string, unknown> | undefined;
     const accessToken = tokens?.access_token;
     const refreshToken = tokens?.refresh_token;
-    if (typeof accessToken !== "string" || !accessToken) return null;
-    if (typeof refreshToken !== "string" || !refreshToken) return null;
+    if (typeof accessToken !== "string" || !accessToken) {
+      return null;
+    }
+    if (typeof refreshToken !== "string" || !refreshToken) {
+      return null;
+    }
 
     // No explicit expiry stored; treat as fresh for an hour from last_refresh or now.
     const lastRefreshRaw = parsed.last_refresh;
@@ -167,19 +187,57 @@ function readCodexKeychainCredentials(options?: {
 function readQwenCliCredentials(options?: { homeDir?: string }): QwenCliCredential | null {
   const credPath = resolveQwenCliCredentialsPath(options?.homeDir);
   const raw = loadJsonFile(credPath);
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
   const data = raw as Record<string, unknown>;
   const accessToken = data.access_token;
   const refreshToken = data.refresh_token;
   const expiresAt = data.expiry_date;
 
-  if (typeof accessToken !== "string" || !accessToken) return null;
-  if (typeof refreshToken !== "string" || !refreshToken) return null;
-  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) return null;
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return null;
+  }
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
+    return null;
+  }
 
   return {
     type: "oauth",
     provider: "qwen-portal",
+    access: accessToken,
+    refresh: refreshToken,
+    expires: expiresAt,
+  };
+}
+
+function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
+  const credPath = resolveMiniMaxCliCredentialsPath(options?.homeDir);
+  const raw = loadJsonFile(credPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const data = raw as Record<string, unknown>;
+  const accessToken = data.access_token;
+  const refreshToken = data.refresh_token;
+  const expiresAt = data.expiry_date;
+
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return null;
+  }
+  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
+    return null;
+  }
+
+  return {
+    type: "oauth",
+    provider: "minimax-portal",
     access: accessToken,
     refresh: refreshToken,
     expires: expiresAt,
@@ -197,14 +255,20 @@ function readClaudeCliKeychainCredentials(
 
     const data = JSON.parse(result.trim());
     const claudeOauth = data?.claudeAiOauth;
-    if (!claudeOauth || typeof claudeOauth !== "object") return null;
+    if (!claudeOauth || typeof claudeOauth !== "object") {
+      return null;
+    }
 
     const accessToken = claudeOauth.accessToken;
     const refreshToken = claudeOauth.refreshToken;
     const expiresAt = claudeOauth.expiresAt;
 
-    if (typeof accessToken !== "string" || !accessToken) return null;
-    if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
+    if (typeof accessToken !== "string" || !accessToken) {
+      return null;
+    }
+    if (typeof expiresAt !== "number" || expiresAt <= 0) {
+      return null;
+    }
 
     if (typeof refreshToken === "string" && refreshToken) {
       return {
@@ -246,18 +310,26 @@ export function readClaudeCliCredentials(options?: {
 
   const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
   const raw = loadJsonFile(credPath);
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
 
   const data = raw as Record<string, unknown>;
   const claudeOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
-  if (!claudeOauth || typeof claudeOauth !== "object") return null;
+  if (!claudeOauth || typeof claudeOauth !== "object") {
+    return null;
+  }
 
   const accessToken = claudeOauth.accessToken;
   const refreshToken = claudeOauth.refreshToken;
   const expiresAt = claudeOauth.expiresAt;
 
-  if (typeof accessToken !== "string" || !accessToken) return null;
-  if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof expiresAt !== "number" || expiresAt <= 0) {
+    return null;
+  }
 
   if (typeof refreshToken === "string" && refreshToken) {
     return {
@@ -362,11 +434,15 @@ export function writeClaudeCliFileCredentials(
 
   try {
     const raw = loadJsonFile(credPath);
-    if (!raw || typeof raw !== "object") return false;
+    if (!raw || typeof raw !== "object") {
+      return false;
+    }
 
     const data = raw as Record<string, unknown>;
     const existingOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
-    if (!existingOauth || typeof existingOauth !== "object") return false;
+    if (!existingOauth || typeof existingOauth !== "object") {
+      return false;
+    }
 
     data.claudeAiOauth = {
       ...existingOauth,
@@ -416,21 +492,31 @@ export function readCodexCliCredentials(options?: {
     platform: options?.platform,
     execSync: options?.execSync,
   });
-  if (keychain) return keychain;
+  if (keychain) {
+    return keychain;
+  }
 
   const authPath = resolveCodexCliAuthPath();
   const raw = loadJsonFile(authPath);
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
 
   const data = raw as Record<string, unknown>;
   const tokens = data.tokens as Record<string, unknown> | undefined;
-  if (!tokens || typeof tokens !== "object") return null;
+  if (!tokens || typeof tokens !== "object") {
+    return null;
+  }
 
   const accessToken = tokens.access_token;
   const refreshToken = tokens.refresh_token;
 
-  if (typeof accessToken !== "string" || !accessToken) return null;
-  if (typeof refreshToken !== "string" || !refreshToken) return null;
+  if (typeof accessToken !== "string" || !accessToken) {
+    return null;
+  }
+  if (typeof refreshToken !== "string" || !refreshToken) {
+    return null;
+  }
 
   let expires: number;
   try {
@@ -494,6 +580,28 @@ export function readQwenCliCredentialsCached(options?: {
   const value = readQwenCliCredentials({ homeDir: options?.homeDir });
   if (ttlMs > 0) {
     qwenCliCache = { value, readAt: now, cacheKey };
+  }
+  return value;
+}
+
+export function readMiniMaxCliCredentialsCached(options?: {
+  ttlMs?: number;
+  homeDir?: string;
+}): MiniMaxCliCredential | null {
+  const ttlMs = options?.ttlMs ?? 0;
+  const now = Date.now();
+  const cacheKey = resolveMiniMaxCliCredentialsPath(options?.homeDir);
+  if (
+    ttlMs > 0 &&
+    minimaxCliCache &&
+    minimaxCliCache.cacheKey === cacheKey &&
+    now - minimaxCliCache.readAt < ttlMs
+  ) {
+    return minimaxCliCache.value;
+  }
+  const value = readMiniMaxCliCredentials({ homeDir: options?.homeDir });
+  if (ttlMs > 0) {
+    minimaxCliCache = { value, readAt: now, cacheKey };
   }
   return value;
 }

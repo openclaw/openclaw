@@ -59,9 +59,9 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {
-  MoltbotPluginApi,
-  MoltbotPluginService,
-  MoltbotPluginServiceContext,
+  OpenClawPluginApi,
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
 } from "../plugins/types.js";
 export type {
   GatewayRequestHandler,
@@ -72,7 +72,7 @@ export type { PluginRuntime } from "../plugins/runtime/types.js";
 export { normalizePluginHttpPath } from "../plugins/http-path.js";
 export { registerPluginHttpRoute } from "../plugins/http-registry.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-export type { MoltbotConfig } from "../config/config.js";
+export type { OpenClawConfig } from "../config/config.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export type {

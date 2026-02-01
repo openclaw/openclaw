@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-
 import type { SystemPresence } from "../infra/system-presence.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
@@ -28,7 +27,9 @@ export type GatewayProbeResult = {
 };
 
 function formatError(err: unknown): string {
-  if (err instanceof Error) return err.message;
+  if (err instanceof Error) {
+    return err.message;
+  }
   return String(err);
 }
 
@@ -46,7 +47,9 @@ export async function probeGateway(opts: {
   return await new Promise<GatewayProbeResult>((resolve) => {
     let settled = false;
     const settle = (result: Omit<GatewayProbeResult, "url">) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       client.stop();

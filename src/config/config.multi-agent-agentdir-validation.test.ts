@@ -8,7 +8,7 @@ describe("multi-agent agentDir validation", () => {
   it("rejects shared agents.list agentDir", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
-    const shared = path.join(tmpdir(), "moltbot-shared-agentdir");
+    const shared = path.join(tmpdir(), "openclaw-shared-agentdir");
     const res = validateConfigObject({
       agents: {
         list: [
@@ -26,16 +26,16 @@ describe("multi-agent agentDir validation", () => {
 
   it("throws on shared agentDir during loadConfig()", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".clawdbot");
+      const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "moltbot.json"),
+        path.join(configDir, "openclaw.json"),
         JSON.stringify(
           {
             agents: {
               list: [
-                { id: "a", agentDir: "~/.clawdbot/agents/shared/agent" },
-                { id: "b", agentDir: "~/.clawdbot/agents/shared/agent" },
+                { id: "a", agentDir: "~/.openclaw/agents/shared/agent" },
+                { id: "b", agentDir: "~/.openclaw/agents/shared/agent" },
               ],
             },
             bindings: [{ agentId: "a", match: { channel: "telegram" } }],

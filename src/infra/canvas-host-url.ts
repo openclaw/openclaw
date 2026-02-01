@@ -11,23 +11,39 @@ type CanvasHostUrlParams = {
 
 const isLoopbackHost = (value: string) => {
   const normalized = value.trim().toLowerCase();
-  if (!normalized) return false;
-  if (normalized === "localhost") return true;
-  if (normalized === "::1") return true;
-  if (normalized === "0.0.0.0" || normalized === "::") return true;
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === "localhost") {
+    return true;
+  }
+  if (normalized === "::1") {
+    return true;
+  }
+  if (normalized === "0.0.0.0" || normalized === "::") {
+    return true;
+  }
   return normalized.startsWith("127.");
 };
 
 const normalizeHost = (value: HostSource, rejectLoopback: boolean) => {
-  if (!value) return "";
+  if (!value) {
+    return "";
+  }
   const trimmed = value.trim();
-  if (!trimmed) return "";
-  if (rejectLoopback && isLoopbackHost(trimmed)) return "";
+  if (!trimmed) {
+    return "";
+  }
+  if (rejectLoopback && isLoopbackHost(trimmed)) {
+    return "";
+  }
   return trimmed;
 };
 
 const parseHostHeader = (value: HostSource) => {
-  if (!value) return "";
+  if (!value) {
+    return "";
+  }
   try {
     return new URL(`http://${String(value).trim()}`).hostname;
   } catch {
@@ -36,13 +52,17 @@ const parseHostHeader = (value: HostSource) => {
 };
 
 const parseForwardedProto = (value: HostSource | HostSource[]) => {
-  if (Array.isArray(value)) return value[0];
+  if (Array.isArray(value)) {
+    return value[0];
+  }
   return value;
 };
 
 export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
   const port = params.canvasPort;
-  if (!port) return undefined;
+  if (!port) {
+    return undefined;
+  }
 
   const scheme =
     params.scheme ??
@@ -53,7 +73,9 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
   const localAddress = normalizeHost(params.localAddress, Boolean(override || requestHost));
 
   const host = override || requestHost || localAddress;
-  if (!host) return undefined;
+  if (!host) {
+    return undefined;
+  }
   const formatted = host.includes(":") ? `[${host}]` : host;
   return `${scheme}://${formatted}:${port}`;
 }

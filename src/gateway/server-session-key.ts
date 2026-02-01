@@ -5,7 +5,9 @@ import { toAgentRequestSessionKey } from "../routing/session-key.js";
 
 export function resolveSessionKeyForRun(runId: string) {
   const cached = getAgentRunContext(runId)?.sessionKey;
-  if (cached) return cached;
+  if (cached) {
+    return cached;
+  }
   const cfg = loadConfig();
   const storePath = resolveStorePath(cfg.session?.store);
   const store = loadSessionStore(storePath);

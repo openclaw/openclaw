@@ -1,7 +1,7 @@
-import { buildMentionRegexes, normalizeMentionText } from "../../auto-reply/reply/mentions.js";
 import type { loadConfig } from "../../config/config.js";
-import { isSelfChatMode, jidToE164, normalizeE164 } from "../../utils.js";
 import type { WebInboundMsg } from "./types.js";
+import { buildMentionRegexes, normalizeMentionText } from "../../auto-reply/reply/mentions.js";
+import { isSelfChatMode, jidToE164, normalizeE164 } from "../../utils.js";
 
 export type MentionConfig = {
   mentionRegexes: RegExp[];
@@ -45,10 +45,14 @@ export function isBotMentionedFromTargets(
 
   const hasMentions = (msg.mentionedJids?.length ?? 0) > 0;
   if (hasMentions && !isSelfChat) {
-    if (targets.selfE164 && targets.normalizedMentions.includes(targets.selfE164)) return true;
+    if (targets.selfE164 && targets.normalizedMentions.includes(targets.selfE164)) {
+      return true;
+    }
     if (targets.selfJid) {
       // Some mentions use the bare JID; match on E.164 to be safe.
-      if (targets.normalizedMentions.includes(targets.selfJid)) return true;
+      if (targets.normalizedMentions.includes(targets.selfJid)) {
+        return true;
+      }
     }
     // If the message explicitly mentions someone else, do not fall back to regex matches.
     return false;
@@ -56,17 +60,23 @@ export function isBotMentionedFromTargets(
     // Self-chat mode: ignore WhatsApp @mention JIDs, otherwise @mentioning the owner in group chats triggers the bot.
   }
   const bodyClean = clean(msg.body);
-  if (mentionCfg.mentionRegexes.some((re) => re.test(bodyClean))) return true;
+  if (mentionCfg.mentionRegexes.some((re) => re.test(bodyClean))) {
+    return true;
+  }
 
   // Fallback: detect body containing our own number (with or without +, spacing)
   if (targets.selfE164) {
     const selfDigits = targets.selfE164.replace(/\D/g, "");
     if (selfDigits) {
       const bodyDigits = bodyClean.replace(/[^\d]/g, "");
-      if (bodyDigits.includes(selfDigits)) return true;
+      if (bodyDigits.includes(selfDigits)) {
+        return true;
+      }
       const bodyNoSpace = msg.body.replace(/[\s-]/g, "");
       const pattern = new RegExp(`\\+?${selfDigits}`, "i");
-      if (pattern.test(bodyNoSpace)) return true;
+      if (pattern.test(bodyNoSpace)) {
+        return true;
+      }
     }
   }
 

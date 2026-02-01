@@ -1,7 +1,9 @@
 import { normalizeShip } from "../targets.js";
 
 export function formatModelName(modelString?: string | null): string {
-  if (!modelString) return "AI";
+  if (!modelString) {
+    return "AI";
+  }
   const modelName = modelString.includes("/") ? modelString.split("/")[1] : modelString;
   const modelMappings: Record<string, string> = {
     "claude-opus-4-5": "Claude Opus 4.5",
@@ -14,7 +16,9 @@ export function formatModelName(modelString?: string | null): string {
     "gemini-pro": "Gemini Pro",
   };
 
-  if (modelMappings[modelName]) return modelMappings[modelName];
+  if (modelMappings[modelName]) {
+    return modelMappings[modelName];
+  }
   return modelName
     .replace(/-/g, " ")
     .split(" ")
@@ -23,7 +27,9 @@ export function formatModelName(modelString?: string | null): string {
 }
 
 export function isBotMentioned(messageText: string, botShipName: string): boolean {
-  if (!messageText || !botShipName) return false;
+  if (!messageText || !botShipName) {
+    return false;
+  }
   const normalizedBotShip = normalizeShip(botShipName);
   const escapedShip = normalizedBotShip.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const mentionPattern = new RegExp(`(^|\\s)${escapedShip}(?=\\s|$)`, "i");
@@ -31,26 +37,36 @@ export function isBotMentioned(messageText: string, botShipName: string): boolea
 }
 
 export function isDmAllowed(senderShip: string, allowlist: string[] | undefined): boolean {
-  if (!allowlist || allowlist.length === 0) return true;
+  if (!allowlist || allowlist.length === 0) {
+    return true;
+  }
   const normalizedSender = normalizeShip(senderShip);
-  return allowlist
-    .map((ship) => normalizeShip(ship))
-    .some((ship) => ship === normalizedSender);
+  return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedSender);
 }
 
 export function extractMessageText(content: unknown): string {
-  if (!content || !Array.isArray(content)) return "";
+  if (!content || !Array.isArray(content)) {
+    return "";
+  }
 
   return content
     .map((block: any) => {
       if (block.inline && Array.isArray(block.inline)) {
         return block.inline
           .map((item: any) => {
-            if (typeof item === "string") return item;
+            if (typeof item === "string") {
+              return item;
+            }
             if (item && typeof item === "object") {
-              if (item.ship) return item.ship;
-              if (item.break !== undefined) return "\n";
-              if (item.link && item.link.href) return item.link.href;
+              if (item.ship) {
+                return item.ship;
+              }
+              if (item.break !== undefined) {
+                return "\n";
+              }
+              if (item.link && item.link.href) {
+                return item.link.href;
+              }
             }
             return "";
           })

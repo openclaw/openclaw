@@ -1,5 +1,6 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
 import { verifyEvent, getPublicKey } from "nostr-tools";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { NostrProfile } from "./config-schema.js";
 import {
   createProfileEvent,
   profileToContent,
@@ -8,13 +9,10 @@ import {
   sanitizeProfileForDisplay,
   type ProfileContent,
 } from "./nostr-profile.js";
-import type { NostrProfile } from "./config-schema.js";
 
 // Test private key (DO NOT use in production - this is a known test key)
 const TEST_HEX_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const TEST_SK = new Uint8Array(
-  TEST_HEX_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16))
-);
+const TEST_SK = new Uint8Array(TEST_HEX_KEY.match(/.{2}/g)!.map((byte) => parseInt(byte, 16)));
 const TEST_PUBKEY = getPublicKey(TEST_SK);
 
 // ============================================================================
@@ -88,7 +86,9 @@ describe("contentToProfile", () => {
   it("handles empty content", () => {
     const content: ProfileContent = {};
     const profile = contentToProfile(content);
-    expect(Object.keys(profile).filter((k) => profile[k as keyof NostrProfile] !== undefined)).toHaveLength(0);
+    expect(
+      Object.keys(profile).filter((k) => profile[k as keyof NostrProfile] !== undefined),
+    ).toHaveLength(0);
   });
 
   it("round-trips profile data", () => {
@@ -300,7 +300,7 @@ describe("sanitizeProfileForDisplay", () => {
     const sanitized = sanitizeProfileForDisplay(profile);
 
     expect(sanitized.about).toBe(
-      'Check out &lt;img src=&quot;x&quot; onerror=&quot;alert(1)&quot;&gt;'
+      "Check out &lt;img src=&quot;x&quot; onerror=&quot;alert(1)&quot;&gt;",
     );
   });
 

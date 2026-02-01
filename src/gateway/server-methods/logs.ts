@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { GatewayRequestHandlers } from "./types.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import {
   ErrorCodes,
@@ -7,13 +8,12 @@ import {
   formatValidationErrors,
   validateLogsTailParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_LIMIT = 500;
 const DEFAULT_MAX_BYTES = 250_000;
 const MAX_LIMIT = 5000;
 const MAX_BYTES = 1_000_000;
-const ROLLING_LOG_RE = /^moltbot-\d{4}-\d{2}-\d{2}\.log$/;
+const ROLLING_LOG_RE = /^openclaw-\d{4}-\d{2}-\d{2}\.log$/;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -25,12 +25,18 @@ function isRollingLogFile(file: string): boolean {
 
 async function resolveLogFile(file: string): Promise<string> {
   const stat = await fs.stat(file).catch(() => null);
-  if (stat) return file;
-  if (!isRollingLogFile(file)) return file;
+  if (stat) {
+    return file;
+  }
+  if (!isRollingLogFile(file)) {
+    return file;
+  }
 
   const dir = path.dirname(file);
   const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => null);
-  if (!entries) return file;
+  if (!entries) {
+    return file;
+  }
 
   const candidates = await Promise.all(
     entries
@@ -43,7 +49,7 @@ async function resolveLogFile(file: string): Promise<string> {
   );
   const sorted = candidates
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    .toSorted((a, b) => b.mtimeMs - a.mtimeMs);
   return sorted[0]?.path ?? file;
 }
 

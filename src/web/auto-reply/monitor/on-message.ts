@@ -1,15 +1,15 @@
-import type { MsgContext } from "../../../auto-reply/templating.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
+import type { MsgContext } from "../../../auto-reply/templating.js";
 import type { loadConfig } from "../../../config/config.js";
+import type { MentionConfig } from "../mentions.js";
+import type { WebInboundMsg } from "../types.js";
+import type { EchoTracker } from "./echo.js";
+import type { GroupHistoryEntry } from "./group-gating.js";
 import { logVerbose } from "../../../globals.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { buildGroupHistoryKey } from "../../../routing/session-key.js";
 import { normalizeE164 } from "../../../utils.js";
-import type { MentionConfig } from "../mentions.js";
-import type { WebInboundMsg } from "../types.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
-import type { EchoTracker } from "./echo.js";
-import type { GroupHistoryEntry } from "./group-gating.js";
 import { applyGroupGating } from "./group-gating.js";
 import { updateLastRouteInBackground } from "./last-route.js";
 import { resolvePeerId } from "./peer.js";
@@ -138,7 +138,9 @@ export function createWebOnMessageHandler(params: {
         logVerbose,
         replyLogger: params.replyLogger,
       });
-      if (!gating.shouldProcess) return;
+      if (!gating.shouldProcess) {
+        return;
+      }
     } else {
       // Ensure `peerId` for DMs is stable and stored as E.164 when possible.
       if (!msg.senderE164 && peerId && peerId.startsWith("+")) {

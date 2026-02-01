@@ -1,6 +1,6 @@
-import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
-import type { MoltbotConfig } from "../config/config.js";
 import type { GetReplyOptions } from "../auto-reply/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../agents/identity.js";
 import {
   extractShortModelName,
   type ResponsePrefixContext,
@@ -16,7 +16,7 @@ export type ReplyPrefixContextBundle = {
 };
 
 export function createReplyPrefixContext(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentId: string;
 }): ReplyPrefixContextBundle {
   const { cfg, agentId } = params;

@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import type { MoltbotConfig } from "../config/config.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "moltbot-models-" });
+  return withTempHomeBase(fn, { prefix: "openclaw-models-" });
 }
 
-const _MODELS_CONFIG: MoltbotConfig = {
+const _MODELS_CONFIG: OpenClawConfig = {
   models: {
     providers: {
       "custom-proxy": {
@@ -56,12 +56,12 @@ describe("models-config", () => {
           resolveCopilotApiToken: vi.fn().mockRejectedValue(new Error("boom")),
         }));
 
-        const { ensureMoltbotModelsJson } = await import("./models-config.js");
-        const { resolveMoltbotAgentDir } = await import("./agent-paths.js");
+        const { ensureOpenClawModelsJson } = await import("./models-config.js");
+        const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
 
-        await ensureMoltbotModelsJson({ models: { providers: {} } });
+        await ensureOpenClawModelsJson({ models: { providers: {} } });
 
-        const agentDir = resolveMoltbotAgentDir();
+        const agentDir = resolveOpenClawAgentDir();
         const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
         const parsed = JSON.parse(raw) as {
           providers: Record<string, { baseUrl?: string }>;
@@ -115,9 +115,9 @@ describe("models-config", () => {
           }),
         }));
 
-        const { ensureMoltbotModelsJson } = await import("./models-config.js");
+        const { ensureOpenClawModelsJson } = await import("./models-config.js");
 
-        await ensureMoltbotModelsJson({ models: { providers: {} } }, agentDir);
+        await ensureOpenClawModelsJson({ models: { providers: {} } }, agentDir);
 
         const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
         const parsed = JSON.parse(raw) as {
@@ -126,12 +126,21 @@ describe("models-config", () => {
 
         expect(parsed.providers["github-copilot"]?.baseUrl).toBe("https://api.copilot.example");
       } finally {
-        if (previous === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
-        else process.env.COPILOT_GITHUB_TOKEN = previous;
-        if (previousGh === undefined) delete process.env.GH_TOKEN;
-        else process.env.GH_TOKEN = previousGh;
-        if (previousGithub === undefined) delete process.env.GITHUB_TOKEN;
-        else process.env.GITHUB_TOKEN = previousGithub;
+        if (previous === undefined) {
+          delete process.env.COPILOT_GITHUB_TOKEN;
+        } else {
+          process.env.COPILOT_GITHUB_TOKEN = previous;
+        }
+        if (previousGh === undefined) {
+          delete process.env.GH_TOKEN;
+        } else {
+          process.env.GH_TOKEN = previousGh;
+        }
+        if (previousGithub === undefined) {
+          delete process.env.GITHUB_TOKEN;
+        } else {
+          process.env.GITHUB_TOKEN = previousGithub;
+        }
       }
     });
   });

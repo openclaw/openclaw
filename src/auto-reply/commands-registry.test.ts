@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
+import type { ChatCommandDefinition } from "./commands-registry.types.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildCommandText,
   buildCommandTextFromArgs,
@@ -15,9 +17,6 @@ import {
   serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
-import type { ChatCommandDefinition } from "./commands-registry.types.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 beforeEach(() => {
   setActivePluginRegistry(createTestRegistry([]));
@@ -147,21 +146,21 @@ describe("commands registry", () => {
   });
 
   it("normalizes telegram-style command mentions for the current bot", () => {
-    expect(normalizeCommandBody("/help@moltbot", { botUsername: "moltbot" })).toBe("/help");
+    expect(normalizeCommandBody("/help@openclaw", { botUsername: "openclaw" })).toBe("/help");
     expect(
-      normalizeCommandBody("/help@moltbot args", {
-        botUsername: "moltbot",
+      normalizeCommandBody("/help@openclaw args", {
+        botUsername: "openclaw",
       }),
     ).toBe("/help args");
     expect(
-      normalizeCommandBody("/help@moltbot: args", {
-        botUsername: "moltbot",
+      normalizeCommandBody("/help@openclaw: args", {
+        botUsername: "openclaw",
       }),
     ).toBe("/help args");
   });
 
   it("keeps telegram-style command mentions for other bots", () => {
-    expect(normalizeCommandBody("/help@otherbot", { botUsername: "moltbot" })).toBe(
+    expect(normalizeCommandBody("/help@otherbot", { botUsername: "openclaw" })).toBe(
       "/help@otherbot",
     );
   });

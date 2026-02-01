@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";

@@ -1,11 +1,9 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-
+import type { SlackMonitorContext } from "../context.js";
+import type { SlackReactionEvent } from "../types.js";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
-
 import { resolveSlackChannelLabel } from "../channel-config.js";
-import type { SlackMonitorContext } from "../context.js";
-import type { SlackMessageEvent, SlackReactionEvent } from "../types.js";
 
 export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
@@ -13,10 +11,12 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
   const handleReactionEvent = async (event: SlackReactionEvent, action: string) => {
     try {
       const item = event.item;
-      if (!item || item.type !== "message") return;
+      if (!item || item.type !== "message") {
+        return;
+      }
 
       const channelInfo = item.channel ? await ctx.resolveChannelName(item.channel) : {};
-      const channelType = channelInfo?.type as SlackMessageEvent["channel_type"];
+      const channelType = channelInfo?.type;
       if (
         !ctx.isChannelAllowed({
           channelId: item.channel,
@@ -54,7 +54,9 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
   ctx.app.event(
     "reaction_added",
     async ({ event, body }: SlackEventMiddlewareArgs<"reaction_added">) => {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+      if (ctx.shouldDropMismatchedSlackEvent(body)) {
+        return;
+      }
       await handleReactionEvent(event as SlackReactionEvent, "added");
     },
   );
@@ -62,7 +64,9 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
   ctx.app.event(
     "reaction_removed",
     async ({ event, body }: SlackEventMiddlewareArgs<"reaction_removed">) => {
-      if (ctx.shouldDropMismatchedSlackEvent(body)) return;
+      if (ctx.shouldDropMismatchedSlackEvent(body)) {
+        return;
+      }
       await handleReactionEvent(event as SlackReactionEvent, "removed");
     },
   );

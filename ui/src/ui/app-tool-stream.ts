@@ -191,8 +191,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (payload.stream !== "tool") return;
-  const sessionKey =
-    typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && sessionKey !== host.sessionKey) return;
   // Fallback: only accept session-less events for the active run.
   if (!sessionKey && host.chatRunId && payload.runId !== host.chatRunId) return;

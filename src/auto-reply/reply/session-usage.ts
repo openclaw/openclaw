@@ -19,7 +19,9 @@ export async function persistSessionUsageUpdate(params: {
   logLabel?: string;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
-  if (!storePath || !sessionKey) return;
+  if (!storePath || !sessionKey) {
+    return;
+  }
 
   const label = params.logLabel ? `${params.logLabel} ` : "";
   if (hasNonzeroUsage(params.usage)) {

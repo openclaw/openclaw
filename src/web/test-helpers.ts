@@ -1,10 +1,9 @@
 import { vi } from "vitest";
-
 import type { MockBaileysSocket } from "../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../test/mocks/baileys.js";
 
 // Use globalThis to store the mock config so it survives vi.mock hoisting
-const CONFIG_KEY = Symbol.for("moltbot:testConfigMock");
+const CONFIG_KEY = Symbol.for("openclaw:testConfigMock");
 const DEFAULT_CONFIG = {
   channels: {
     whatsapp: {
@@ -37,7 +36,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
     ...actual,
     loadConfig: () => {
       const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
-      if (typeof getter === "function") return getter();
+      if (typeof getter === "function") {
+        return getter();
+      }
       return DEFAULT_CONFIG;
     },
   };
@@ -54,7 +55,7 @@ vi.mock("../media/store.js", () => ({
 
 vi.mock("@whiskeysockets/baileys", () => {
   const created = createMockBaileys();
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("moltbot:lastSocket")] =
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     created.lastSocket;
   return created.mod;
 });
@@ -74,7 +75,7 @@ export const baileys =
 
 export function resetBaileysMocks() {
   const recreated = createMockBaileys();
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("moltbot:lastSocket")] =
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     recreated.lastSocket;
   baileys.makeWASocket.mockImplementation(recreated.mod.makeWASocket);
   baileys.useMultiFileAuthState.mockImplementation(recreated.mod.useMultiFileAuthState);
@@ -83,8 +84,12 @@ export function resetBaileysMocks() {
 }
 
 export function getLastSocket(): MockBaileysSocket {
-  const getter = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("moltbot:lastSocket")];
-  if (typeof getter === "function") return (getter as () => MockBaileysSocket)();
-  if (!getter) throw new Error("Baileys mock not initialized");
+  const getter = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")];
+  if (typeof getter === "function") {
+    return (getter as () => MockBaileysSocket)();
+  }
+  if (!getter) {
+    throw new Error("Baileys mock not initialized");
+  }
   throw new Error("Invalid Baileys socket getter");
 }

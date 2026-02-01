@@ -1,9 +1,9 @@
 import type { ReplyToMode } from "../../config/types.js";
+import type { OriginatingChannelType } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import { logVerbose } from "../../globals.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { ReplyPayload } from "../types.js";
 import { formatBunFetchSocketError, isBunFetchSocketError } from "./agent-runner-utils.js";
 import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
@@ -52,7 +52,9 @@ export function buildReplyPayloads(params: {
           logVerbose("Stripped stray HEARTBEAT_OK token from reply");
         }
         const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-        if (stripped.shouldSkip && !hasMedia) return [];
+        if (stripped.shouldSkip && !hasMedia) {
+          return [];
+        }
         return [{ ...payload, text: stripped.text }];
       });
 

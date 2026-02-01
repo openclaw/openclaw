@@ -1,12 +1,14 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
+import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 
 const getGroupSurfaces = () => new Set<string>([...listDeliverableMessageChannels(), "webchat"]);
 
 function normalizeGroupLabel(raw?: string) {
   const trimmed = raw?.trim().toLowerCase() ?? "";
-  if (!trimmed) return "";
+  if (!trimmed) {
+    return "";
+  }
   const dashed = trimmed.replace(/\s+/g, "-");
   const cleaned = dashed.replace(/[^a-z0-9#@._+-]+/g, "-");
   return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
@@ -14,8 +16,12 @@ function normalizeGroupLabel(raw?: string) {
 
 function shortenGroupId(value?: string) {
   const trimmed = value?.trim() ?? "";
-  if (!trimmed) return "";
-  if (trimmed.length <= 14) return trimmed;
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.length <= 14) {
+    return trimmed;
+  }
   return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
 }
 
@@ -63,7 +69,9 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     from.includes(":group:") ||
     from.includes(":channel:") ||
     isWhatsAppGroupId;
-  if (!looksLikeGroup) return null;
+  if (!looksLikeGroup) {
+    return null;
+  }
 
   const providerHint = ctx.Provider?.trim().toLowerCase();
 
@@ -74,12 +82,14 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   const provider = headIsSurface
     ? head
     : (providerHint ?? (isWhatsAppGroupId ? "whatsapp" : undefined));
-  if (!provider) return null;
+  if (!provider) {
+    return null;
+  }
 
   const second = parts[1]?.trim().toLowerCase();
   const secondIsKind = second === "group" || second === "channel";
   const kind = secondIsKind
-    ? (second as "group" | "channel")
+    ? second
     : from.includes(":channel:") || normalizedChatType === "channel"
       ? "channel"
       : "group";
@@ -89,7 +99,9 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
       : parts.slice(1).join(":")
     : from;
   const finalId = id.trim().toLowerCase();
-  if (!finalId) return null;
+  if (!finalId) {
+    return null;
+  }
 
   return {
     key: `${provider}:${kind}:${finalId}`,

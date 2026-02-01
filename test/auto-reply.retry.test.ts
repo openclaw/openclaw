@@ -9,9 +9,9 @@ vi.mock("../src/web/media.js", () => ({
   })),
 }));
 
+import type { WebInboundMessage } from "../src/web/inbound.js";
 import { defaultRuntime } from "../src/runtime.js";
 import { deliverWebReply } from "../src/web/auto-reply.js";
-import type { WebInboundMessage } from "../src/web/inbound.js";
 
 const noopLogger = {
   info: vi.fn(),

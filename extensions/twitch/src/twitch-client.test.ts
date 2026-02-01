@@ -10,8 +10,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TwitchClientManager } from "./twitch-client.js";
 import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import { TwitchClientManager } from "./twitch-client.js";
 
 // Mock @twurple dependencies
 const mockConnect = vi.fn().mockResolvedValue(undefined);
@@ -416,7 +416,9 @@ describe("TwitchClientManager", () => {
 
       // Get the onMessage callback
       const onMessageCallback = messageHandlers[0];
-      if (!onMessageCallback) throw new Error("onMessageCallback not found");
+      if (!onMessageCallback) {
+        throw new Error("onMessageCallback not found");
+      }
 
       // Simulate Twitch message
       onMessageCallback("#testchannel", "testuser", "Hello bot!", {
@@ -521,7 +523,9 @@ describe("TwitchClientManager", () => {
 
       // Simulate message for first account
       const onMessage1 = messageHandlers[0];
-      if (!onMessage1) throw new Error("onMessage1 not found");
+      if (!onMessage1) {
+        throw new Error("onMessage1 not found");
+      }
       onMessage1("#testchannel", "user1", "msg1", {
         userInfo: {
           userName: "user1",
@@ -537,7 +541,9 @@ describe("TwitchClientManager", () => {
 
       // Simulate message for second account
       const onMessage2 = messageHandlers[1];
-      if (!onMessage2) throw new Error("onMessage2 not found");
+      if (!onMessage2) {
+        throw new Error("onMessage2 not found");
+      }
       onMessage2("#testchannel2", "user2", "msg2", {
         userInfo: {
           userName: "user2",

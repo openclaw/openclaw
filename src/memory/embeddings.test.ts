@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(),
   requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
-    if (auth?.apiKey) return auth.apiKey;
+    if (auth?.apiKey) {
+      return auth.apiKey;
+    }
     throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
   },
 }));

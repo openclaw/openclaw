@@ -1,5 +1,5 @@
+import fs from "node:fs";
 import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
@@ -8,6 +8,26 @@ import { buildDockerExecArgs } from "./bash-tools.shared.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
+const resolveShellFromPath = (name: string) => {
+  const envPath = process.env.PATH ?? "";
+  if (!envPath) {
+    return undefined;
+  }
+  const entries = envPath.split(path.delimiter).filter(Boolean);
+  for (const entry of entries) {
+    const candidate = path.join(entry, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // ignore missing or non-executable entries
+    }
+  }
+  return undefined;
+};
+const defaultShell = isWin
+  ? undefined
+  : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 50" : "sleep 0.05";
 const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 200" : "sleep 0.2";
@@ -52,11 +72,15 @@ describe("exec tool backgrounding", () => {
   const originalShell = process.env.SHELL;
 
   beforeEach(() => {
-    if (!isWin) process.env.SHELL = "/bin/bash";
+    if (!isWin && defaultShell) {
+      process.env.SHELL = defaultShell;
+    }
   });
 
   afterEach(() => {
-    if (!isWin) process.env.SHELL = originalShell;
+    if (!isWin) {
+      process.env.SHELL = originalShell;
+    }
   });
 
   it(
@@ -282,12 +306,16 @@ describe("exec PATH handling", () => {
   const originalShell = process.env.SHELL;
 
   beforeEach(() => {
-    if (!isWin) process.env.SHELL = "/bin/bash";
+    if (!isWin && defaultShell) {
+      process.env.SHELL = defaultShell;
+    }
   });
 
   afterEach(() => {
     process.env.PATH = originalPath;
-    if (!isWin) process.env.SHELL = originalShell;
+    if (!isWin) {
+      process.env.SHELL = originalShell;
+    }
   });
 
   it("prepends configured path entries", async () => {
@@ -318,16 +346,16 @@ describe("buildDockerExecArgs", () => {
     });
 
     const commandArg = args[args.length - 1];
-    expect(args).toContain("CLAWDBOT_PREPEND_PATH=/custom/bin:/usr/local/bin:/usr/bin");
-    expect(commandArg).toContain('export PATH="${CLAWDBOT_PREPEND_PATH}:$PATH"');
+    expect(args).toContain("OPENCLAW_PREPEND_PATH=/custom/bin:/usr/local/bin:/usr/bin");
+    expect(commandArg).toContain('export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"');
     expect(commandArg).toContain("echo hello");
     expect(commandArg).toBe(
-      'export PATH="${CLAWDBOT_PREPEND_PATH}:$PATH"; unset CLAWDBOT_PREPEND_PATH; echo hello',
+      'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; echo hello',
     );
   });
 
   it("does not interpolate PATH into the shell command", () => {
-    const injectedPath = "$(touch /tmp/moltbot-path-injection)";
+    const injectedPath = "$(touch /tmp/openclaw-path-injection)";
     const args = buildDockerExecArgs({
       containerName: "test-container",
       command: "echo hello",
@@ -339,9 +367,9 @@ describe("buildDockerExecArgs", () => {
     });
 
     const commandArg = args[args.length - 1];
-    expect(args).toContain(`CLAWDBOT_PREPEND_PATH=${injectedPath}`);
+    expect(args).toContain(`OPENCLAW_PREPEND_PATH=${injectedPath}`);
     expect(commandArg).not.toContain(injectedPath);
-    expect(commandArg).toContain("CLAWDBOT_PREPEND_PATH");
+    expect(commandArg).toContain("OPENCLAW_PREPEND_PATH");
   });
 
   it("does not add PATH export when PATH is not in env", () => {

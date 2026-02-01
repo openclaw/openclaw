@@ -26,7 +26,7 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
   return { url, token, timeoutMs };
 }
 
-export async function callGatewayTool<T = unknown>(
+export async function callGatewayTool<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCallOptions,
   params?: unknown,

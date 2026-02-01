@@ -3,6 +3,7 @@ summary: "Exec tool usage, stdin modes, and TTY support"
 read_when:
   - Using or modifying the exec tool
   - Debugging stdin or TTY behavior
+title: "Exec Tool"
 ---
 
 # Exec tool
@@ -27,9 +28,10 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - `elevated` (bool): request elevated mode (gateway host); `security=full` is only forced when elevated resolves to `full`
 
 Notes:
+
 - `host` defaults to `sandbox`.
 - `elevated` is ignored when sandboxing is off (exec already runs on the host).
-- `gateway`/`node` approvals are controlled by `~/.clawdbot/exec-approvals.json`.
+- `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.
 - `node` requires a paired node (companion app or headless node host).
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
 - On non-Windows hosts, exec uses `SHELL` when set; if `SHELL` is `fish`, it prefers `bash` (or `sh`)
@@ -50,13 +52,14 @@ Notes:
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries.
 
 Example:
+
 ```json5
 {
   tools: {
     exec: {
-      pathPrepend: ["~/bin", "/opt/oss/bin"]
-    }
-  }
+      pathPrepend: ["~/bin", "/opt/oss/bin"],
+    },
+  },
 }
 ```
 
@@ -67,7 +70,7 @@ Example:
   - macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
   - Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
 - `host=sandbox`: runs `sh -lc` (login shell) inside the container, so `/etc/profile` may reset `PATH`.
-  Moltbot prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation);
+  OpenClaw prepends `env.PATH` after profile sourcing via an internal env var (no shell interpolation);
   `tools.exec.pathPrepend` applies here too.
 - `host=node`: only env overrides you pass are sent to the node. `tools.exec.pathPrepend` only applies
   if the exec call already sets `env.PATH`. Headless node hosts accept `PATH` only when it prepends
@@ -76,8 +79,8 @@ Example:
 Per-agent node binding (use the agent list index in config):
 
 ```bash
-moltbot config get agents.list
-moltbot config set agents.list[0].tools.exec.node "node-id-or-name"
+openclaw config get agents.list
+openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 ```
 
 Control UI: the Nodes tab includes a small “Exec node binding” panel for the same settings.
@@ -88,6 +91,7 @@ Use `/exec` to set **per-session** defaults for `host`, `security`, `ask`, and `
 Send `/exec` with no arguments to show the current values.
 
 Example:
+
 ```
 /exec host=gateway security=allowlist ask=on-miss node=mac-1
 ```
@@ -119,17 +123,20 @@ allowlist mode.
 ## Examples
 
 Foreground:
+
 ```json
-{"tool":"exec","command":"ls -la"}
+{ "tool": "exec", "command": "ls -la" }
 ```
 
 Background + poll:
+
 ```json
 {"tool":"exec","command":"npm run build","yieldMs":1000}
 {"tool":"process","action":"poll","sessionId":"<id>"}
 ```
 
 Send keys (tmux-style):
+
 ```json
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["Enter"]}
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["C-c"]}
@@ -137,13 +144,15 @@ Send keys (tmux-style):
 ```
 
 Submit (send CR only):
+
 ```json
-{"tool":"process","action":"submit","sessionId":"<id>"}
+{ "tool": "process", "action": "submit", "sessionId": "<id>" }
 ```
 
 Paste (bracketed by default):
+
 ```json
-{"tool":"process","action":"paste","sessionId":"<id>","text":"line1\nline2\n"}
+{ "tool": "process", "action": "paste", "sessionId": "<id>", "text": "line1\nline2\n" }
 ```
 
 ## apply_patch (experimental)
@@ -155,13 +164,14 @@ Enable it explicitly:
 {
   tools: {
     exec: {
-      applyPatch: { enabled: true, allowModels: ["gpt-5.2"] }
-    }
-  }
+      applyPatch: { enabled: true, allowModels: ["gpt-5.2"] },
+    },
+  },
 }
 ```
 
 Notes:
+
 - Only available for OpenAI/OpenAI Codex models.
 - Tool policy still applies; `allow: ["exec"]` implicitly allows `apply_patch`.
 - Config lives under `tools.exec.applyPatch`.

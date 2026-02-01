@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
-
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { createHash } from "node:crypto";
 
 export type ToolCallIdMode = "strict" | "strict9";
 
@@ -14,14 +13,20 @@ const STRICT9_LEN = 9;
  */
 export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
   if (!id || typeof id !== "string") {
-    if (mode === "strict9") return "defaultid";
+    if (mode === "strict9") {
+      return "defaultid";
+    }
     return "defaulttoolid";
   }
 
   if (mode === "strict9") {
     const alphanumericOnly = id.replace(/[^a-zA-Z0-9]/g, "");
-    if (alphanumericOnly.length >= STRICT9_LEN) return alphanumericOnly.slice(0, STRICT9_LEN);
-    if (alphanumericOnly.length > 0) return shortHash(alphanumericOnly, STRICT9_LEN);
+    if (alphanumericOnly.length >= STRICT9_LEN) {
+      return alphanumericOnly.slice(0, STRICT9_LEN);
+    }
+    if (alphanumericOnly.length > 0) {
+      return shortHash(alphanumericOnly, STRICT9_LEN);
+    }
     return shortHash("sanitized", STRICT9_LEN);
   }
 
@@ -31,7 +36,9 @@ export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"):
 }
 
 export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "strict"): boolean {
-  if (!id || typeof id !== "string") return false;
+  if (!id || typeof id !== "string") {
+    return false;
+  }
   if (mode === "strict9") {
     return /^[a-zA-Z0-9]{9}$/.test(id);
   }
@@ -47,11 +54,15 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
   if (params.mode === "strict9") {
     const base = sanitizeToolCallId(params.id, params.mode);
     const candidate = base.length >= STRICT9_LEN ? base.slice(0, STRICT9_LEN) : "";
-    if (candidate && !params.used.has(candidate)) return candidate;
+    if (candidate && !params.used.has(candidate)) {
+      return candidate;
+    }
 
     for (let i = 0; i < 1000; i += 1) {
       const hashed = shortHash(`${params.id}:${i}`, STRICT9_LEN);
-      if (!params.used.has(hashed)) return hashed;
+      if (!params.used.has(hashed)) {
+        return hashed;
+      }
     }
 
     return shortHash(`${params.id}:${Date.now()}`, STRICT9_LEN);
@@ -60,7 +71,9 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
   const MAX_LEN = 40;
 
   const base = sanitizeToolCallId(params.id, params.mode).slice(0, MAX_LEN);
-  if (!params.used.has(base)) return base;
+  if (!params.used.has(base)) {
+    return base;
+  }
 
   const hash = shortHash(params.id);
   // Use separator based on mode: none for strict, underscore for non-strict variants
@@ -68,12 +81,16 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
   const maxBaseLen = MAX_LEN - separator.length - hash.length;
   const clippedBase = base.length > maxBaseLen ? base.slice(0, maxBaseLen) : base;
   const candidate = `${clippedBase}${separator}${hash}`;
-  if (!params.used.has(candidate)) return candidate;
+  if (!params.used.has(candidate)) {
+    return candidate;
+  }
 
   for (let i = 2; i < 1000; i += 1) {
     const suffix = params.mode === "strict" ? `x${i}` : `_${i}`;
     const next = `${candidate.slice(0, MAX_LEN - suffix.length)}${suffix}`;
-    if (!params.used.has(next)) return next;
+    if (!params.used.has(next)) {
+      return next;
+    }
   }
 
   const ts = params.mode === "strict" ? `t${Date.now()}` : `_${Date.now()}`;
@@ -85,11 +102,15 @@ function rewriteAssistantToolCallIds(params: {
   resolve: (id: string) => string;
 }): Extract<AgentMessage, { role: "assistant" }> {
   const content = params.message.content;
-  if (!Array.isArray(content)) return params.message;
+  if (!Array.isArray(content)) {
+    return params.message;
+  }
 
   let changed = false;
   const next = content.map((block) => {
-    if (!block || typeof block !== "object") return block;
+    if (!block || typeof block !== "object") {
+      return block;
+    }
     const rec = block as { type?: unknown; id?: unknown };
     const type = rec.type;
     const id = rec.id;
@@ -101,12 +122,16 @@ function rewriteAssistantToolCallIds(params: {
       return block;
     }
     const nextId = params.resolve(id);
-    if (nextId === id) return block;
+    if (nextId === id) {
+      return block;
+    }
     changed = true;
     return { ...(block as unknown as Record<string, unknown>), id: nextId };
   });
 
-  if (!changed) return params.message;
+  if (!changed) {
+    return params.message;
+  }
   return { ...params.message, content: next as typeof params.message.content };
 }
 
@@ -154,7 +179,9 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
 
   const resolve = (id: string) => {
     const existing = map.get(id);
-    if (existing) return existing;
+    if (existing) {
+      return existing;
+    }
     const next = makeUniqueToolId({ id, used, mode });
     map.set(id, next);
     used.add(next);
@@ -163,14 +190,18 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
 
   let changed = false;
   const out = messages.map((msg) => {
-    if (!msg || typeof msg !== "object") return msg;
+    if (!msg || typeof msg !== "object") {
+      return msg;
+    }
     const role = (msg as { role?: unknown }).role;
     if (role === "assistant") {
       const next = rewriteAssistantToolCallIds({
         message: msg as Extract<AgentMessage, { role: "assistant" }>,
         resolve,
       });
-      if (next !== msg) changed = true;
+      if (next !== msg) {
+        changed = true;
+      }
       return next;
     }
     if (role === "toolResult") {
@@ -178,7 +209,9 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
         message: msg as Extract<AgentMessage, { role: "toolResult" }>,
         resolve,
       });
-      if (next !== msg) changed = true;
+      if (next !== msg) {
+        changed = true;
+      }
       return next;
     }
     return msg;

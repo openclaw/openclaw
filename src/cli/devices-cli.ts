@@ -1,10 +1,9 @@
 import type { Command } from "commander";
-
 import { callGateway } from "../gateway/call.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { defaultRuntime } from "../runtime.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withProgress } from "./progress.js";
 
 type DevicesRpcOpts = {
@@ -52,11 +51,17 @@ type DevicePairingList = {
 
 function formatAge(msAgo: number) {
   const s = Math.max(0, Math.floor(msAgo / 1000));
-  if (s < 60) return `${s}s`;
+  if (s < 60) {
+    return `${s}s`;
+  }
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
+  if (m < 60) {
+    return `${m}m`;
+  }
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
+  if (h < 24) {
+    return `${h}h`;
+  }
   const d = Math.floor(h / 24);
   return `${d}d`;
 }
@@ -98,10 +103,12 @@ function parseDevicePairingList(value: unknown): DevicePairingList {
 }
 
 function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
-  if (!tokens || tokens.length === 0) return "none";
+  if (!tokens || tokens.length === 0) {
+    return "none";
+  }
   const parts = tokens
     .map((t) => `${t.role}${t.revokedAtMs ? " (revoked)" : ""}`)
-    .sort((a, b) => a.localeCompare(b));
+    .toSorted((a, b) => a.localeCompare(b));
   return parts.join(", ");
 }
 

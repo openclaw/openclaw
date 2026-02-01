@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { createTypingCallbacks } from "./typing.js";
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));

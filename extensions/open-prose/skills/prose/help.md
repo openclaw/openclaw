@@ -33,30 +33,30 @@ Options:
 - **Learn the syntax**: Show examples from `examples/`, explain the VM model
 - **Explore possibilities**: Walk through key examples like `37-the-forge.prose` or `28-gas-town.prose`
 
-
-
 ---
 
 ## Available Commands
 
-| Command | What it does |
-|---------|--------------|
-| `prose help` | This help - guides you to what you need |
-| `prose run <file>` | Execute a .prose program |
-| `prose compile <file>` | Validate syntax without running |
-| `prose update` | Migrate legacy workspace files |
-| `prose examples` | Browse and run example programs |
+| Command                | What it does                            |
+| ---------------------- | --------------------------------------- |
+| `prose help`           | This help - guides you to what you need |
+| `prose run <file>`     | Execute a .prose program                |
+| `prose compile <file>` | Validate syntax without running         |
+| `prose update`         | Migrate legacy workspace files          |
+| `prose examples`       | Browse and run example programs         |
 
 ---
 
 ## Quick Start
 
 **Run an example:**
+
 ```
 prose run examples/01-hello-world.prose
 ```
 
 **Create your first program:**
+
 ```
 prose help
 → Select "Build something new"
@@ -123,21 +123,22 @@ For complete syntax and validation rules, see `compiler.md`.
 
 The `examples/` directory contains 37 example programs:
 
-| Range | Category |
-|-------|----------|
-| 01-08 | Basics (hello world, research, code review, debugging) |
-| 09-12 | Agents and skills |
-| 13-15 | Variables and composition |
-| 16-19 | Parallel execution |
-| 20-21 | Loops and pipelines |
-| 22-23 | Error handling |
-| 24-27 | Advanced (choice, conditionals, blocks, interpolation) |
-| 28 | Gas Town (multi-agent orchestration) |
-| 29-31 | Captain's chair pattern (persistent orchestrator) |
+| Range | Category                                                                          |
+| ----- | --------------------------------------------------------------------------------- |
+| 01-08 | Basics (hello world, research, code review, debugging)                            |
+| 09-12 | Agents and skills                                                                 |
+| 13-15 | Variables and composition                                                         |
+| 16-19 | Parallel execution                                                                |
+| 20-21 | Loops and pipelines                                                               |
+| 22-23 | Error handling                                                                    |
+| 24-27 | Advanced (choice, conditionals, blocks, interpolation)                            |
+| 28    | Gas Town (multi-agent orchestration)                                              |
+| 29-31 | Captain's chair pattern (persistent orchestrator)                                 |
 | 33-36 | Production workflows (PR auto-fix, content pipeline, feature factory, bug hunter) |
-| 37 | The Forge (build a browser from scratch) |
+| 37    | The Forge (build a browser from scratch)                                          |
 
 **Recommended starting points:**
+
 - `01-hello-world.prose` - Simplest possible program
 - `16-parallel-reviews.prose` - See parallel execution
 - `37-the-forge.prose` - Watch AI build a web browser

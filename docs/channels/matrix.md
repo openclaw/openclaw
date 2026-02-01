@@ -2,10 +2,12 @@
 summary: "Matrix support status, capabilities, and configuration"
 read_when:
   - Working on Matrix channel features
+title: "Matrix"
 ---
+
 # Matrix (plugin)
 
-Matrix is an open, decentralized messaging protocol. Moltbot connects as a Matrix **user**
+Matrix is an open, decentralized messaging protocol. OpenClaw connects as a Matrix **user**
 on any homeserver, so you need a Matrix account for the bot. Once it is logged in, you can DM
 the bot directly or invite it to rooms (Matrix "groups"). Beeper is a valid client option too,
 but it requires E2EE to be enabled.
@@ -20,29 +22,29 @@ Matrix ships as a plugin and is not bundled with the core install.
 Install via CLI (npm registry):
 
 ```bash
-moltbot plugins install @moltbot/matrix
+openclaw plugins install @openclaw/matrix
 ```
 
 Local checkout (when running from a git repo):
 
 ```bash
-moltbot plugins install ./extensions/matrix
+openclaw plugins install ./extensions/matrix
 ```
 
 If you choose Matrix during configure/onboarding and a git checkout is detected,
-Moltbot will offer the local install path automatically.
+OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/plugin)
 
 ## Setup
 
-1) Install the Matrix plugin:
-   - From npm: `moltbot plugins install @moltbot/matrix`
-   - From a local checkout: `moltbot plugins install ./extensions/matrix`
-2) Create a Matrix account on a homeserver:
+1. Install the Matrix plugin:
+   - From npm: `openclaw plugins install @openclaw/matrix`
+   - From a local checkout: `openclaw plugins install ./extensions/matrix`
+2. Create a Matrix account on a homeserver:
    - Browse hosting options at [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Or host it yourself.
-3) Get an access token for the bot account:
+3. Get an access token for the bot account:
    - Use the Matrix login API with `curl` at your home server:
 
    ```bash
@@ -60,17 +62,18 @@ Details: [Plugins](/plugin)
    ```
 
    - Replace `matrix.example.org` with your homeserver URL.
-   - Or set `channels.matrix.userId` + `channels.matrix.password`: Moltbot calls the same
-     login endpoint, stores the access token in `~/.clawdbot/credentials/matrix/credentials.json`,
+   - Or set `channels.matrix.userId` + `channels.matrix.password`: OpenClaw calls the same
+     login endpoint, stores the access token in `~/.openclaw/credentials/matrix/credentials.json`,
      and reuses it on next start.
-4) Configure credentials:
+
+4. Configure credentials:
    - Env: `MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN` (or `MATRIX_USER_ID` + `MATRIX_PASSWORD`)
    - Or config: `channels.matrix.*`
    - If both are set, config takes precedence.
    - With access token: user ID is fetched automatically via `/whoami`.
    - When set, `channels.matrix.userId` should be the full Matrix ID (example: `@bot:example.org`).
-5) Restart the gateway (or finish onboarding).
-6) Start a DM with the bot or invite it to a room from any Matrix client
+5. Restart the gateway (or finish onboarding).
+6. Start a DM with the bot or invite it to a room from any Matrix client
    (Element, Beeper, etc.; see https://matrix.org/ecosystem/clients/). Beeper requires E2EE,
    so set `channels.matrix.encryption: true` and verify the device.
 
@@ -83,9 +86,9 @@ Minimal config (access token, user ID auto-fetched):
       enabled: true,
       homeserver: "https://matrix.example.org",
       accessToken: "syt_***",
-      dm: { policy: "pairing" }
-    }
-  }
+      dm: { policy: "pairing" },
+    },
+  },
 }
 ```
 
@@ -99,9 +102,9 @@ E2EE config (end to end encryption enabled):
       homeserver: "https://matrix.example.org",
       accessToken: "syt_***",
       encryption: true,
-      dm: { policy: "pairing" }
-    }
-  }
+      dm: { policy: "pairing" },
+    },
+  },
 }
 ```
 
@@ -113,17 +116,17 @@ Enable with `channels.matrix.encryption: true`:
 
 - If the crypto module loads, encrypted rooms are decrypted automatically.
 - Outbound media is encrypted when sending to encrypted rooms.
-- On first connection, Moltbot requests device verification from your other sessions.
+- On first connection, OpenClaw requests device verification from your other sessions.
 - Verify the device in another Matrix client (Element, etc.) to enable key sharing.
 - If the crypto module cannot be loaded, E2EE is disabled and encrypted rooms will not decrypt;
-  Moltbot logs a warning.
+  OpenClaw logs a warning.
 - If you see missing crypto module errors (for example, `@matrix-org/matrix-sdk-crypto-nodejs-*`),
   allow build scripts for `@matrix-org/matrix-sdk-crypto-nodejs` and run
   `pnpm rebuild @matrix-org/matrix-sdk-crypto-nodejs` or fetch the binary with
   `node node_modules/@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js`.
 
 Crypto state is stored per account + access token in
-`~/.clawdbot/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/crypto/`
+`~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/crypto/`
 (SQLite database). Sync state lives alongside it in `bot-storage.json`.
 If the access token (device) changes, a new store is created and the bot must be
 re-verified for encrypted rooms.
@@ -142,8 +145,8 @@ Once verified, the bot can decrypt messages in encrypted rooms.
 
 - Default: `channels.matrix.dm.policy = "pairing"`. Unknown senders get a pairing code.
 - Approve via:
-  - `moltbot pairing list matrix`
-  - `moltbot pairing approve matrix <CODE>`
+  - `openclaw pairing list matrix`
+  - `openclaw pairing approve matrix <CODE>`
 - Public DMs: `channels.matrix.dm.policy="open"` plus `channels.matrix.dm.allowFrom=["*"]`.
 - `channels.matrix.dm.allowFrom` accepts user IDs or display names. The wizard resolves display names to user IDs when directory search is available.
 
@@ -159,11 +162,11 @@ Once verified, the bot can decrypt messages in encrypted rooms.
       groupPolicy: "allowlist",
       groups: {
         "!roomId:example.org": { allow: true },
-        "#alias:example.org": { allow: true }
+        "#alias:example.org": { allow: true },
       },
-      groupAllowFrom: ["@owner:example.org"]
-    }
-  }
+      groupAllowFrom: ["@owner:example.org"],
+    },
+  },
 }
 ```
 
@@ -172,7 +175,7 @@ Once verified, the bot can decrypt messages in encrypted rooms.
 - `groupAllowFrom` restricts which senders can trigger the bot in rooms (optional).
 - Per-room `users` allowlists can further restrict senders inside a specific room.
 - The configure wizard prompts for room allowlists (room IDs, aliases, or names) and resolves names when possible.
-- On startup, Moltbot resolves room/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
+- On startup, OpenClaw resolves room/user names in allowlists to IDs and logs the mapping; unresolved entries are kept as typed.
 - Invites are auto-joined by default; control with `channels.matrix.autoJoin` and `channels.matrix.autoJoinAllowlist`.
 - To allow **no rooms**, set `channels.matrix.groupPolicy: "disabled"` (or keep an empty allowlist).
 - Legacy key: `channels.matrix.rooms` (same shape as `groups`).
@@ -187,17 +190,17 @@ Once verified, the bot can decrypt messages in encrypted rooms.
 
 ## Capabilities
 
-| Feature | Status |
-|---------|--------|
-| Direct messages | ✅ Supported |
-| Rooms | ✅ Supported |
-| Threads | ✅ Supported |
-| Media | ✅ Supported |
-| E2EE | ✅ Supported (crypto module required) |
-| Reactions | ✅ Supported (send/read via tools) |
-| Polls | ✅ Send supported; inbound poll starts are converted to text (responses/ends ignored) |
-| Location | ✅ Supported (geo URI; altitude ignored) |
-| Native commands | ✅ Supported |
+| Feature         | Status                                                                                |
+| --------------- | ------------------------------------------------------------------------------------- |
+| Direct messages | ✅ Supported                                                                          |
+| Rooms           | ✅ Supported                                                                          |
+| Threads         | ✅ Supported                                                                          |
+| Media           | ✅ Supported                                                                          |
+| E2EE            | ✅ Supported (crypto module required)                                                 |
+| Reactions       | ✅ Supported (send/read via tools)                                                    |
+| Polls           | ✅ Send supported; inbound poll starts are converted to text (responses/ends ignored) |
+| Location        | ✅ Supported (geo URI; altitude ignored)                                              |
+| Native commands | ✅ Supported                                                                          |
 
 ## Configuration reference (Matrix)
 

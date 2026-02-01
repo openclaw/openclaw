@@ -28,9 +28,13 @@ function requireSessionKey(key?: string | null): string {
 }
 
 function normalizeContextKey(key?: string | null): string | null {
-  if (!key) return null;
+  if (!key) {
+    return null;
+  }
   const trimmed = key.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   return trimmed.toLowerCase();
 }
 
@@ -58,18 +62,26 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
       return created;
     })();
   const cleaned = text.trim();
-  if (!cleaned) return;
+  if (!cleaned) {
+    return;
+  }
   entry.lastContextKey = normalizeContextKey(options?.contextKey);
-  if (entry.lastText === cleaned) return; // skip consecutive duplicates
+  if (entry.lastText === cleaned) {
+    return;
+  } // skip consecutive duplicates
   entry.lastText = cleaned;
   entry.queue.push({ text: cleaned, ts: Date.now() });
-  if (entry.queue.length > MAX_EVENTS) entry.queue.shift();
+  if (entry.queue.length > MAX_EVENTS) {
+    entry.queue.shift();
+  }
 }
 
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
   const key = requireSessionKey(sessionKey);
   const entry = queues.get(key);
-  if (!entry || entry.queue.length === 0) return [];
+  if (!entry || entry.queue.length === 0) {
+    return [];
+  }
   const out = entry.queue.slice();
   entry.queue.length = 0;
   entry.lastText = null;

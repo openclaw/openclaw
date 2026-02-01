@@ -1,5 +1,4 @@
 import { Type } from "@sinclair/typebox";
-
 import { NonEmptyString } from "./primitives.js";
 
 export const NodePairRequestParamsSchema = Type.Object(

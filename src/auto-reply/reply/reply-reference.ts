@@ -26,13 +26,19 @@ export function createReplyReferencePlanner(options: {
   const startId = options.startId?.trim();
 
   const use = (): string | undefined => {
-    if (!allowReference) return undefined;
+    if (!allowReference) {
+      return undefined;
+    }
     if (existingId) {
       hasReplied = true;
       return existingId;
     }
-    if (!startId) return undefined;
-    if (options.replyToMode === "off") return undefined;
+    if (!startId) {
+      return undefined;
+    }
+    if (options.replyToMode === "off") {
+      return undefined;
+    }
     if (options.replyToMode === "all") {
       hasReplied = true;
       return startId;

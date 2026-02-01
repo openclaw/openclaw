@@ -29,10 +29,12 @@ git log --oneline --left-right main...upstream/main | head -20
 ```
 
 This shows:
+
 - `<` = your local commits (ahead)
 - `>` = upstream commits you're missing (behind)
 
 **Decision point:**
+
 - Few local commits, many upstream → **Rebase** (cleaner history)
 - Many local commits or shared branch → **Merge** (preserves history)
 
@@ -70,12 +72,12 @@ git rebase --abort
 
 ### Common Conflict Patterns
 
-| File | Resolution |
-|------|------------|
-| `package.json` | Take upstream deps, keep local scripts if needed |
-| `pnpm-lock.yaml` | Accept upstream, regenerate with `pnpm install` |
-| `*.patch` files | Usually take upstream version |
-| Source files | Merge logic carefully, prefer upstream structure |
+| File             | Resolution                                       |
+| ---------------- | ------------------------------------------------ |
+| `package.json`   | Take upstream deps, keep local scripts if needed |
+| `pnpm-lock.yaml` | Accept upstream, regenerate with `pnpm install`  |
+| `*.patch` files  | Usually take upstream version                    |
+| Source files     | Merge logic carefully, prefer upstream structure |
 
 ---
 
@@ -88,6 +90,7 @@ git merge upstream/main --no-edit
 ```
 
 Resolve conflicts same as rebase, then:
+
 ```bash
 git add <resolved-files>
 git commit
@@ -170,6 +173,7 @@ pnpm clawdbot agent --message "Verification: macOS app rebuild successful - agen
 Upstream updates may introduce Swift 6.2 / macOS 26 SDK incompatibilities. Use analyze-mode for systematic debugging:
 
 ### Analyze-Mode Investigation
+
 ```bash
 # Gather context with parallel agents
 morph-mcp_warpgrep_codebase_search search_string="Find deprecated FileManager.default and Thread.isMainThread usages in Swift files" repo_path="/Volumes/Main SSD/Developer/clawdis"
@@ -179,6 +183,7 @@ morph-mcp_warpgrep_codebase_search search_string="Locate Peekaboo submodule and 
 ### Common Swift 6.2 Fixes
 
 **FileManager.default Deprecation:**
+
 ```bash
 # Search for deprecated usage
 grep -r "FileManager\.default" src/ apps/ --include="*.swift"
@@ -189,6 +194,7 @@ grep -r "FileManager\.default" src/ apps/ --include="*.swift"
 ```
 
 **Thread.isMainThread Deprecation:**
+
 ```bash
 # Search for deprecated usage
 grep -r "Thread\.isMainThread" src/ apps/ --include="*.swift"
@@ -199,6 +205,7 @@ grep -r "Thread\.isMainThread" src/ apps/ --include="*.swift"
 ```
 
 ### Peekaboo Submodule Fixes
+
 ```bash
 # Check Peekaboo for concurrency issues
 cd src/canvas-host/a2ui
@@ -210,6 +217,7 @@ pnpm canvas:a2ui:bundle
 ```
 
 ### macOS App Concurrency Fixes
+
 ```bash
 # Check macOS app for issues
 grep -r "Thread\.isMainThread\|FileManager\.default" apps/macos/ --include="*.swift"
@@ -220,7 +228,9 @@ cd apps/macos && rm -rf .build .swiftpm
 ```
 
 ### Model Configuration Updates
+
 If upstream introduced new model configurations:
+
 ```bash
 # Check for OpenRouter API key requirements
 grep -r "openrouter\|OPENROUTER" src/ --include="*.ts" --include="*.js"
@@ -265,6 +275,7 @@ Common issue: `fetch.preconnect` type mismatch. Fix by using `FetchLike` type in
 ### macOS App Crashes on Launch
 
 Usually resource bundle mismatch. Full rebuild required:
+
 ```bash
 cd apps/macos && rm -rf .build .swiftpm
 ./scripts/restart-mac.sh
@@ -285,12 +296,14 @@ pnpm install 2>&1 | grep -i patch
 **Symptoms:** Build fails with deprecation warnings about `FileManager.default` or `Thread.isMainThread`
 
 **Search-Mode Investigation:**
+
 ```bash
 # Exhaustive search for deprecated APIs
 morph-mcp_warpgrep_codebase_search search_string="Find all Swift files using deprecated FileManager.default or Thread.isMainThread" repo_path="/Volumes/Main SSD/Developer/clawdis"
 ```
 
 **Quick Fix Commands:**
+
 ```bash
 # Find all affected files
 find . -name "*.swift" -exec grep -l "FileManager\.default\|Thread\.isMainThread" {} \;
@@ -303,6 +316,7 @@ grep -rn "Thread\.isMainThread" --include="*.swift" .
 ```
 
 **Rebuild After Fixes:**
+
 ```bash
 # Clean all build artifacts
 rm -rf apps/macos/.build apps/macos/.swiftpm

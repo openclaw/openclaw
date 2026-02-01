@@ -1,5 +1,5 @@
-import { normalizeProviderId } from "../agents/model-selection.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
 
 export const DEFAULT_TIMEOUT_MS = 5000;
 
@@ -10,6 +10,7 @@ export const PROVIDER_LABELS: Record<UsageProviderId, string> = {
   "google-antigravity": "Antigravity",
   minimax: "MiniMax",
   "openai-codex": "Codex",
+  xiaomi: "Xiaomi",
   zai: "z.ai",
 };
 
@@ -20,11 +21,14 @@ export const usageProviders: UsageProviderId[] = [
   "google-antigravity",
   "minimax",
   "openai-codex",
+  "xiaomi",
   "zai",
 ];
 
 export function resolveUsageProviderId(provider?: string | null): UsageProviderId | undefined {
-  if (!provider) return undefined;
+  if (!provider) {
+    return undefined;
+  }
   const normalized = normalizeProviderId(provider);
   return usageProviders.includes(normalized as UsageProviderId)
     ? (normalized as UsageProviderId)
@@ -52,6 +56,8 @@ export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T):
       }),
     ]);
   } finally {
-    if (timeout) clearTimeout(timeout);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 };

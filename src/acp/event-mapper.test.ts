@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { extractAttachmentsFromPrompt, extractTextFromPrompt } from "./event-mapper.js";
 
 describe("acp event mapper", () => {

@@ -1,10 +1,9 @@
 import { Type } from "@sinclair/typebox";
-
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const MemorySearchSchema = Type.Object({
@@ -20,16 +19,20 @@ const MemoryGetSchema = Type.Object({
 });
 
 export function createMemorySearchTool(options: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   agentSessionKey?: string;
 }): AnyAgentTool | null {
   const cfg = options.config;
-  if (!cfg) return null;
+  if (!cfg) {
+    return null;
+  }
   const agentId = resolveSessionAgentId({
     sessionKey: options.agentSessionKey,
     config: cfg,
   });
-  if (!resolveMemorySearchConfig(cfg, agentId)) return null;
+  if (!resolveMemorySearchConfig(cfg, agentId)) {
+    return null;
+  }
   return {
     label: "Memory Search",
     name: "memory_search",
@@ -69,21 +72,25 @@ export function createMemorySearchTool(options: {
 }
 
 export function createMemoryGetTool(options: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   agentSessionKey?: string;
 }): AnyAgentTool | null {
   const cfg = options.config;
-  if (!cfg) return null;
+  if (!cfg) {
+    return null;
+  }
   const agentId = resolveSessionAgentId({
     sessionKey: options.agentSessionKey,
     config: cfg,
   });
-  if (!resolveMemorySearchConfig(cfg, agentId)) return null;
+  if (!resolveMemorySearchConfig(cfg, agentId)) {
+    return null;
+  }
   return {
     label: "Memory Get",
     name: "memory_get",
     description:
-      "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; use after memory_search to pull only the needed lines and keep context small.",
+      "Safe snippet read from MEMORY.md, memory/*.md, or configured memorySearch.extraPaths with optional from/lines; use after memory_search to pull only the needed lines and keep context small.",
     parameters: MemoryGetSchema,
     execute: async (_toolCallId, params) => {
       const relPath = readStringParam(params, "path", { required: true });

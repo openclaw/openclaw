@@ -12,7 +12,9 @@ export type QueueState<T> = QueueSummaryState & {
 };
 
 export function elideQueueText(text: string, limit = 140): string {
-  if (text.length <= limit) return text;
+  if (text.length <= limit) {
+    return text;
+  }
   return `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
@@ -26,7 +28,9 @@ export function shouldSkipQueueItem<T>(params: {
   items: T[];
   dedupe?: (item: T, items: T[]) => boolean;
 }): boolean {
-  if (!params.dedupe) return false;
+  if (!params.dedupe) {
+    return false;
+  }
   return params.dedupe(params.item, params.items);
 }
 
@@ -36,8 +40,12 @@ export function applyQueueDropPolicy<T>(params: {
   summaryLimit?: number;
 }): boolean {
   const cap = params.queue.cap;
-  if (cap <= 0 || params.queue.items.length < cap) return true;
-  if (params.queue.dropPolicy === "new") return false;
+  if (cap <= 0 || params.queue.items.length < cap) {
+    return true;
+  }
+  if (params.queue.dropPolicy === "new") {
+    return false;
+  }
   const dropCount = params.queue.items.length - cap + 1;
   const dropped = params.queue.items.splice(0, dropCount);
   if (params.queue.dropPolicy === "summarize") {
@@ -46,7 +54,9 @@ export function applyQueueDropPolicy<T>(params: {
       params.queue.summaryLines.push(buildQueueSummaryLine(params.summarize(item)));
     }
     const limit = Math.max(0, params.summaryLimit ?? cap);
-    while (params.queue.summaryLines.length > limit) params.queue.summaryLines.shift();
+    while (params.queue.summaryLines.length > limit) {
+      params.queue.summaryLines.shift();
+    }
   }
   return true;
 }
@@ -56,7 +66,9 @@ export function waitForQueueDebounce(queue: {
   lastEnqueuedAt: number;
 }): Promise<void> {
   const debounceMs = Math.max(0, queue.debounceMs);
-  if (debounceMs <= 0) return Promise.resolve();
+  if (debounceMs <= 0) {
+    return Promise.resolve();
+  }
   return new Promise<void>((resolve) => {
     const check = () => {
       const since = Date.now() - queue.lastEnqueuedAt;
@@ -101,7 +113,9 @@ export function buildCollectPrompt<T>(params: {
   renderItem: (item: T, index: number) => string;
 }): string {
   const blocks: string[] = [params.title];
-  if (params.summary) blocks.push(params.summary);
+  if (params.summary) {
+    blocks.push(params.summary);
+  }
   params.items.forEach((item, idx) => {
     blocks.push(params.renderItem(item, idx));
   });
@@ -117,7 +131,9 @@ export function hasCrossChannelItems<T>(
 
   for (const item of items) {
     const resolved = resolveKey(item);
-    if (resolved.cross) return true;
+    if (resolved.cross) {
+      return true;
+    }
     if (!resolved.key) {
       hasUnkeyed = true;
       continue;
@@ -125,7 +141,11 @@ export function hasCrossChannelItems<T>(
     keys.add(resolved.key);
   }
 
-  if (keys.size === 0) return false;
-  if (hasUnkeyed) return true;
+  if (keys.size === 0) {
+    return false;
+  }
+  if (hasUnkeyed) {
+    return true;
+  }
   return keys.size > 1;
 }

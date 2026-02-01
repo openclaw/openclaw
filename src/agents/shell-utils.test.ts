@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getShellConfig } from "./shell-utils.js";
 
@@ -13,7 +12,7 @@ describe("getShellConfig", () => {
   const tempDirs: string[] = [];
 
   const createTempBin = (files: string[]) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-shell-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-"));
     tempDirs.push(dir);
     for (const name of files) {
       const filePath = path.join(dir, name);

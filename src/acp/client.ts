@@ -1,7 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import * as readline from "node:readline";
-import { Readable, Writable } from "node:stream";
-
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
@@ -9,8 +5,10 @@ import {
   type RequestPermissionRequest,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
-
-import { ensureMoltbotCliOnPath } from "../infra/path-env.js";
+import { spawn, type ChildProcess } from "node:child_process";
+import * as readline from "node:readline";
+import { Readable, Writable } from "node:stream";
+import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 
 export type AcpClientOptions = {
   cwd?: string;
@@ -27,7 +25,9 @@ export type AcpClientHandle = {
 };
 
 function toArgs(value: string[] | string | undefined): string[] {
-  if (!value) return [];
+  if (!value) {
+    return [];
+  }
   return Array.isArray(value) ? value : [value];
 }
 
@@ -41,7 +41,9 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
 
 function printSessionUpdate(notification: SessionNotification): void {
   const update = notification.update;
-  if (!("sessionUpdate" in update)) return;
+  if (!("sessionUpdate" in update)) {
+    return;
+  }
 
   switch (update.sessionUpdate) {
     case "agent_message_chunk": {
@@ -62,7 +64,9 @@ function printSessionUpdate(notification: SessionNotification): void {
     }
     case "available_commands_update": {
       const names = update.availableCommands?.map((cmd) => `/${cmd.name}`).join(" ");
-      if (names) console.log(`\n[commands] ${names}`);
+      if (names) {
+        console.log(`\n[commands] ${names}`);
+      }
       return;
     }
     default:
@@ -75,8 +79,8 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
 
-  ensureMoltbotCliOnPath({ cwd });
-  const serverCommand = opts.serverCommand ?? "moltbot";
+  ensureOpenClawCliOnPath({ cwd });
+  const serverCommand = opts.serverCommand ?? "openclaw";
   const serverArgs = buildServerArgs(opts);
 
   log(`spawning: ${serverCommand} ${serverArgs.join(" ")}`);
@@ -122,7 +126,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
       fs: { readTextFile: true, writeTextFile: true },
       terminal: true,
     },
-    clientInfo: { name: "moltbot-acp-client", version: "1.0.0" },
+    clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
   });
 
   log("creating session");
@@ -146,7 +150,7 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
     output: process.stdout,
   });
 
-  console.log("Moltbot ACP client");
+  console.log("OpenClaw ACP client");
   console.log(`Session: ${sessionId}`);
   console.log('Type a prompt, or "exit" to quit.\n');
 

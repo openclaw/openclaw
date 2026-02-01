@@ -3,8 +3,8 @@ import { messageCommand } from "../../../commands/message.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
 import { defaultRuntime } from "../../../runtime.js";
-import { createDefaultDeps } from "../../deps.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
+import { createDefaultDeps } from "../../deps.js";
 import { ensurePluginRegistryLoaded } from "../../plugin-registry.js";
 
 export type MessageCliHelpers = {

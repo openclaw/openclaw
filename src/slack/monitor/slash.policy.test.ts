@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 
 const dispatchMock = vi.fn();
@@ -61,7 +60,12 @@ function createHarness(overrides?: {
     groupPolicy: overrides?.groupPolicy ?? "open",
     useAccessGroups: true,
     channelsConfig: overrides?.channelsConfig,
-    slashCommand: { enabled: true, name: "clawd", ephemeral: true, sessionPrefix: "slack:slash" },
+    slashCommand: {
+      enabled: true,
+      name: "openclaw",
+      ephemeral: true,
+      sessionPrefix: "slack:slash",
+    },
     textLimit: 4000,
     app,
     isChannelAllowed: () => true,
@@ -96,7 +100,9 @@ describe("slack slash commands channel policy", () => {
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
     const handler = [...commands.values()][0];
-    if (!handler) throw new Error("Missing slash handler");
+    if (!handler) {
+      throw new Error("Missing slash handler");
+    }
 
     const respond = vi.fn().mockResolvedValue(undefined);
     await handler({
@@ -128,7 +134,9 @@ describe("slack slash commands channel policy", () => {
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
     const handler = [...commands.values()][0];
-    if (!handler) throw new Error("Missing slash handler");
+    if (!handler) {
+      throw new Error("Missing slash handler");
+    }
 
     const respond = vi.fn().mockResolvedValue(undefined);
     await handler({
@@ -161,7 +169,9 @@ describe("slack slash commands channel policy", () => {
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
     const handler = [...commands.values()][0];
-    if (!handler) throw new Error("Missing slash handler");
+    if (!handler) {
+      throw new Error("Missing slash handler");
+    }
 
     const respond = vi.fn().mockResolvedValue(undefined);
     await handler({

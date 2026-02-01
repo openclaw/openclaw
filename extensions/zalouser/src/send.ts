@@ -34,7 +34,9 @@ export async function sendMessageZalouser(
 
   // Send text message
   const args = ["msg", "send", threadId.trim(), text.slice(0, 2000)];
-  if (options.isGroup) args.push("-g");
+  if (options.isGroup) {
+    args.push("-g");
+  }
 
   try {
     const result = await runZca(args, { profile });
@@ -79,7 +81,9 @@ async function sendMediaZalouser(
   if (options.caption) {
     args.push("-m", options.caption.slice(0, 2000));
   }
-  if (options.isGroup) args.push("-g");
+  if (options.isGroup) {
+    args.push("-g");
+  }
 
   try {
     const result = await runZca(args, { profile });
@@ -104,7 +108,9 @@ export async function sendImageZalouser(
   if (options.caption) {
     args.push("-m", options.caption.slice(0, 2000));
   }
-  if (options.isGroup) args.push("-g");
+  if (options.isGroup) {
+    args.push("-g");
+  }
 
   try {
     const result = await runZca(args, { profile });
@@ -124,7 +130,9 @@ export async function sendLinkZalouser(
 ): Promise<ZalouserSendResult> {
   const profile = options.profile || process.env.ZCA_PROFILE || "default";
   const args = ["msg", "link", threadId.trim(), url.trim()];
-  if (options.isGroup) args.push("-g");
+  if (options.isGroup) {
+    args.push("-g");
+  }
 
   try {
     const result = await runZca(args, { profile });
@@ -140,7 +148,9 @@ export async function sendLinkZalouser(
 function extractMessageId(stdout: string): string | undefined {
   // Try to extract message ID from output
   const match = stdout.match(/message[_\s]?id[:\s]+(\S+)/i);
-  if (match) return match[1];
+  if (match) {
+    return match[1];
+  }
   // Return first word if it looks like an ID
   const firstWord = stdout.trim().split(/\s+/)[0];
   if (firstWord && /^[a-zA-Z0-9_-]+$/.test(firstWord)) {

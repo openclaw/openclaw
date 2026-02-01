@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-
 import type { SnapshotResult } from "../browser/client.js";
 import { loadConfig } from "../config/config.js";
 import { danger } from "../globals.js";

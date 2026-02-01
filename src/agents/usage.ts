@@ -31,20 +31,28 @@ export type NormalizedUsage = {
 };
 
 const asFiniteNumber = (value: unknown): number | undefined => {
-  if (typeof value !== "number") return undefined;
-  if (!Number.isFinite(value)) return undefined;
+  if (typeof value !== "number") {
+    return undefined;
+  }
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
   return value;
 };
 
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
-  if (!usage) return false;
+  if (!usage) {
+    return false;
+  }
   return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].some(
     (v) => typeof v === "number" && Number.isFinite(v) && v > 0,
   );
 }
 
 export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefined {
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
 
   const input = asFiniteNumber(
     raw.input ?? raw.inputTokens ?? raw.input_tokens ?? raw.promptTokens ?? raw.prompt_tokens,
@@ -86,7 +94,9 @@ export function derivePromptTokens(usage?: {
   cacheRead?: number;
   cacheWrite?: number;
 }): number | undefined {
-  if (!usage) return undefined;
+  if (!usage) {
+    return undefined;
+  }
   const input = usage.input ?? 0;
   const cacheRead = usage.cacheRead ?? 0;
   const cacheWrite = usage.cacheWrite ?? 0;

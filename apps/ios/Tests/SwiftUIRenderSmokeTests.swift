@@ -1,8 +1,8 @@
-import MoltbotKit
+import OpenClawKit
 import SwiftUI
 import Testing
 import UIKit
-@testable import Moltbot
+@testable import OpenClaw
 
 @Suite struct SwiftUIRenderSmokeTests {
     @MainActor private static func host(_ view: some View) -> UIWindow {
@@ -75,7 +75,7 @@ import UIKit
     }
 
     @Test @MainActor func voiceWakeToastBuildsAViewHierarchy() {
-        let root = VoiceWakeToast(command: "moltbot: do something")
+        let root = VoiceWakeToast(command: "openclaw: do something")
         _ = Self.host(root)
     }
 }

@@ -1,9 +1,8 @@
 import crypto from "node:crypto";
-
+import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
@@ -33,14 +32,14 @@ export async function runSessionsSendA2AFlow(params: {
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
       const waitMs = Math.min(params.announceTimeoutMs, 60_000);
-      const wait = (await callGateway({
+      const wait = await callGateway<{ status: string }>({
         method: "agent.wait",
         params: {
           runId: params.waitRunId,
           timeoutMs: waitMs,
         },
         timeoutMs: waitMs + 2000,
-      })) as { status?: string };
+      });
       if (wait?.status === "ok") {
         primaryReply = await readLatestAssistantReply({
           sessionKey: params.targetSessionKey,
@@ -48,7 +47,9 @@ export async function runSessionsSendA2AFlow(params: {
         latestReply = primaryReply;
       }
     }
-    if (!latestReply) return;
+    if (!latestReply) {
+      return;
+    }
 
     const announceTarget = await resolveAnnounceTarget({
       sessionKey: params.targetSessionKey,
