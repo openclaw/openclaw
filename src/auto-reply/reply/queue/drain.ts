@@ -80,7 +80,7 @@ export function scheduleFollowupDrain(
             (i) => i.originatingAccountId,
           )?.originatingAccountId;
           const originatingThreadId = items.find(
-            (i) => typeof i.originatingThreadId === "number",
+            (i) => i.originatingThreadId != null,
           )?.originatingThreadId;
 
           const prompt = buildCollectPrompt({
