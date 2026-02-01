@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Browser: secure Chrome extension relay CDP sessions.
 - Docker: use container port for gateway command instead of host port. (#5110) Thanks @mise42.
 - fix(lobster): block arbitrary exec via lobsterPath/cwd injection (GHSA-4mhr-g7xj-cg8j). (#5335) Thanks @vignesh07.
+- Security: harden web tool content wrapping + file parsing safeguards. (#4058) Thanks @VACInc.
 
 ## 2026.1.30
 
