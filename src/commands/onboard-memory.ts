@@ -51,7 +51,7 @@ export async function setupMemoryOptimization(
     ],
   });
 
-  const choices = new Set(selected.filter((v) => v !== "__skip__"));
+  const choices = new Set((selected ?? []).filter((v) => v !== "__skip__"));
   if (choices.size === 0) {
     return cfg;
   }
