@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
@@ -135,6 +136,43 @@ export async function resolveSystemNodeInfo(params: {
   };
 }
 
+/**
+ * Resolve the bundled node path installed by install-cli.sh.
+ * The installer creates ~/.openclaw/tools/node as a symlink to the versioned directory.
+ */
+export function resolveBundledNodePath(
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const home = env.HOME ?? env.USERPROFILE ?? os.homedir();
+  const pathModule = getPathModule(platform);
+  const nodeBinary = platform === "win32" ? "node.exe" : "node";
+  return pathModule.join(home, ".openclaw", "tools", "node", "bin", nodeBinary);
+}
+
+export async function resolveBundledNodeInfo(params: {
+  env?: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
+  execFile?: ExecFileAsync;
+}): Promise<SystemNodeInfo | null> {
+  const env = params.env ?? process.env;
+  const platform = params.platform ?? process.platform;
+  const bundledNode = resolveBundledNodePath(env, platform);
+
+  try {
+    await fs.access(bundledNode);
+  } catch {
+    return null;
+  }
+
+  const version = await resolveNodeVersion(bundledNode, params.execFile ?? execFileAsync);
+  return {
+    path: bundledNode,
+    version,
+    supported: isSupportedNodeVersion(version),
+  };
+}
+
 export function renderSystemNodeWarning(
   systemNode: SystemNodeInfo | null,
   selectedNodePath?: string,
@@ -156,6 +194,14 @@ export async function resolvePreferredNodePath(params: {
   if (params.runtime !== "node") {
     return undefined;
   }
+
+  // Prefer bundled node installed by install-cli.sh (isolation from system updates)
+  const bundledNode = await resolveBundledNodeInfo(params);
+  if (bundledNode?.supported) {
+    return bundledNode.path;
+  }
+
+  // Fallback to system node
   const systemNode = await resolveSystemNodeInfo(params);
   if (!systemNode?.supported) {
     return undefined;
