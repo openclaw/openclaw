@@ -168,7 +168,11 @@ export function buildAgentPeerSessionKey(params: {
     });
   }
   const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
-  const peerId = ((params.peerId ?? "").trim() || "unknown").toLowerCase();
+  const rawPeerId = (params.peerId ?? "").trim() || "unknown";
+  // Most session keys normalize peer IDs to lowercase for stable, comparable keys across providers.
+  // Signal group IDs are Base64-encoded and case-sensitive, so lowercasing breaks downstream actions
+  // that reconstruct targets from session keys (e.g. reactions).
+  const peerId = channel === "signal" && peerKind === "group" ? rawPeerId : rawPeerId.toLowerCase();
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
