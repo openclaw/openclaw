@@ -16,6 +16,11 @@ function resolveCommand(command: string): string {
     return command;
   }
   const basename = path.basename(command).toLowerCase();
+  // Skip if already has an extension (.cmd, .exe, .bat, etc.)
+  const ext = path.extname(basename);
+  if (ext) {
+    return command;
+  }
   // Common npm-related commands that need .cmd extension on Windows
   const cmdCommands = ["npm", "pnpm", "yarn", "npx"];
   if (cmdCommands.includes(basename)) {
