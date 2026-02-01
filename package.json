@@ -179,6 +179,7 @@
     "express": "^5.2.1",
     "file-type": "^21.3.0",
     "grammy": "^1.39.3",
+    "hono": "4.11.7",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
@@ -237,8 +238,14 @@
   "pnpm": {
     "minimumReleaseAge": 2880,
     "overrides": {
+      "fast-xml-parser": "5.3.4",
+      "form-data": "2.5.4",
+      "@hono/node-server>hono": "4.11.7",
+      "hono": "4.11.7",
+      "qs": "6.14.1",
       "@sinclair/typebox": "0.34.47",
-      "tar": "7.5.7"
+      "tar": "7.5.7",
+      "tough-cookie": "4.1.3"
     }
   },
   "vitest": {
