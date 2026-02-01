@@ -118,6 +118,10 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
   return `${base}\n\n${suffix}`.trim();
 }
 
+/**
+ * Checks if the buffer starts with a UTF-16 BOM (Byte Order Mark).
+ * Returns true for UTF-16LE BOM (0xFF 0xFE) or UTF-16BE BOM (0xFE 0xFF).
+ */
 function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
   if (!buffer || buffer.length < 2) {
     return undefined;
@@ -253,12 +257,14 @@ async function extractFileBlocks(params: {
     }
     const nameHint = bufferResult?.fileName ?? attachment.path ?? attachment.url;
     const forcedTextMimeResolved = forcedTextMime ?? resolveTextMimeFromName(nameHint ?? "");
-    const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
-    const textSample = decodeTextSample(bufferResult?.buffer);
-    const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
-    if (!forcedTextMimeResolved && kind === "audio" && !textLike) {
+    // Skip audio files unconditionally - they're handled by the transcription pipeline.
+    // Only exception: files with a text extension (forcedTextMimeResolved) are processed as text.
+    if (!forcedTextMimeResolved && kind === "audio") {
       continue;
     }
+    const utf16Charset = resolveUtf16Charset(bufferResult.buffer);
+    const textSample = decodeTextSample(bufferResult.buffer);
+    const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult.buffer);
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
     const textHint =
       forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);

@@ -488,18 +488,18 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("audio ok");
   });
 
-  it("treats text-like audio attachments as CSV (comma wins over tabs)", async () => {
+  it("treats UTF-16 text files as CSV (comma wins over tabs)", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
-    const csvPath = path.join(dir, "data.mp3");
+    const csvPath = path.join(dir, "data.csv");
     const csvText = '"a","b"\t"c"\n"1","2"\t"3"';
     const csvBuffer = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(csvText, "utf16le")]);
     await fs.writeFile(csvPath, csvBuffer);
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "<media:document>",
       MediaPath: csvPath,
-      MediaType: "audio/mpeg",
+      MediaType: "text/csv",
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -514,21 +514,21 @@ describe("applyMediaUnderstanding", () => {
     const result = await applyMediaUnderstanding({ ctx, cfg });
 
     expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain('<file name="data.mp3" mime="text/csv">');
+    expect(ctx.Body).toContain('<file name="data.csv" mime="text/csv">');
     expect(ctx.Body).toContain('"a","b"\t"c"');
   });
 
   it("infers TSV when tabs are present without commas", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
-    const tsvPath = path.join(dir, "report.mp3");
+    const tsvPath = path.join(dir, "report.tsv");
     const tsvText = "a\tb\tc\n1\t2\t3";
     await fs.writeFile(tsvPath, tsvText);
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "<media:document>",
       MediaPath: tsvPath,
-      MediaType: "audio/mpeg",
+      MediaType: "text/tab-separated-values",
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -543,7 +543,7 @@ describe("applyMediaUnderstanding", () => {
     const result = await applyMediaUnderstanding({ ctx, cfg });
 
     expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain('<file name="report.mp3" mime="text/tab-separated-values">');
+    expect(ctx.Body).toContain('<file name="report.tsv" mime="text/tab-separated-values">');
     expect(ctx.Body).toContain("a\tb\tc");
   });
 
@@ -669,5 +669,99 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain("中文内容");
+  });
+
+  it("skips binary audio files with null bytes (OGG/Opus false UTF-16 positive)", async () => {
+    // Binary audio formats often have many null bytes that falsely trigger UTF-16 detection.
+    // When MIME sniffing confirms the file is audio, it should NOT be extracted as text.
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const audioPath = path.join(dir, "voice.ogg");
+    // Create a buffer with many null bytes (>20% nulls triggers UTF-16 heuristic)
+    // This simulates binary OGG/Opus audio data
+    const binaryAudioData = Buffer.alloc(256);
+    for (let i = 0; i < 256; i++) {
+      binaryAudioData[i] = i % 4 === 0 ? 0 : (i * 7) % 256; // ~25% null bytes
+    }
+    await fs.writeFile(audioPath, binaryAudioData);
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPath: audioPath,
+      MediaType: "audio/ogg",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    // Should NOT be extracted as a text file block
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).not.toContain("<file");
+  });
+
+  it("skips realistic OGG Opus voice message that would falsely trigger UTF-16 detection", async () => {
+    // This test uses a realistic OGG/Opus file structure that reproduces issue #5552.
+    // OGG files start with "OggS" magic, followed by binary data containing null bytes.
+    // The null byte frequency in Opus audio data often exceeds 20%, which triggers
+    // the UTF-16 detection heuristic. Without the fix, this would be extracted as
+    // garbage "text" in a <file> block.
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const audioPath = path.join(dir, "voice-note.ogg");
+
+    // Simulate OGG/Opus structure: OggS magic + binary data with high null byte ratio
+    // Real Opus audio frames contain lots of null bytes due to silence/padding
+    const oggHeader = Buffer.from("OggS"); // OGG magic bytes
+    const binaryPayload = Buffer.alloc(512);
+    for (let i = 0; i < 512; i++) {
+      // Pattern that mimics Opus frame data: ~30% null bytes interspersed with random data
+      if (i % 3 === 0) {
+        binaryPayload[i] = 0x00; // null byte
+      } else if (i % 7 === 0) {
+        binaryPayload[i] = 0x00; // extra nulls to exceed 20% threshold
+      } else {
+        binaryPayload[i] = (i * 13 + 0x80) % 256; // non-printable binary data
+      }
+    }
+    const oggFile = Buffer.concat([oggHeader, binaryPayload]);
+    await fs.writeFile(audioPath, oggFile);
+
+    // Verify the buffer would trigger false UTF-16 detection (>20% null bytes)
+    const nullCount = [...oggFile].filter((b) => b === 0).length;
+    const nullRatio = nullCount / oggFile.length;
+    expect(nullRatio).toBeGreaterThan(0.2); // Confirms this would trigger the heuristic
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPath: audioPath,
+      MediaType: "audio/ogg",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    // Without the fix, appliedFile would be true and Body would contain garbage like:
+    // <file name="voice-note.ogg" mime="text/plain">\u0000O\u0000g\u0000g\u0000S...</file>
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).not.toContain("<file");
+    expect(ctx.Body).not.toContain("OggS"); // Should not extract binary content as text
   });
 });
