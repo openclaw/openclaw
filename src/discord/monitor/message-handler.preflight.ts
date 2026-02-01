@@ -92,14 +92,39 @@ export async function preflightDiscordMessage(
     pluralkitInfo,
   });
 
+  const isGuildMessage = Boolean(params.data.guild_id);
+  // Note: historyIncludeBots is account-level only (not per-channel) because
+  // the bot filter runs before channel config is resolved. This is intentional
+  // to keep the early-exit path simple.
+  const historyIncludeBots = params.discordConfig?.historyIncludeBots ?? false;
+
   if (author.bot) {
     if (!allowBots && !sender.isPluralKit) {
+      // Record to history before dropping if historyIncludeBots is enabled
+      // This allows other agents to see this bot's messages in their context
+      if (isGuildMessage && historyIncludeBots && params.historyLimit > 0) {
+        const textForBotHistory = resolveDiscordMessageText(message, {
+          includeForwarded: true,
+        });
+        if (textForBotHistory) {
+          recordPendingHistoryEntryIfEnabled({
+            historyMap: params.guildHistories,
+            historyKey: message.channelId,
+            limit: params.historyLimit,
+            entry: {
+              sender: sender.label,
+              body: textForBotHistory,
+              timestamp: resolveTimestampMs(message.timestamp),
+              messageId: message.id,
+            },
+          });
+          logVerbose("discord: recorded bot message to history before drop");
+        }
+      }
       logVerbose("discord: drop bot message (allowBots=false)");
       return null;
     }
   }
-
-  const isGuildMessage = Boolean(params.data.guild_id);
   const channelInfo = await resolveDiscordChannelInfo(params.client, message.channelId);
   const isDirectMessage = channelInfo?.type === ChannelType.DM;
   const isGroupDm = channelInfo?.type === ChannelType.GroupDM;
