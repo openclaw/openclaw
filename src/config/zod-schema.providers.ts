@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   BlueBubblesConfigSchema,
   DingTalkConfigSchema,
+  DingTalkGatewayConfigSchema,
   DiscordConfigSchema,
   GoogleChatConfigSchema,
   IMessageConfigSchema,

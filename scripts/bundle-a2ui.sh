@@ -20,6 +20,14 @@ if [[ ! -d "$A2UI_RENDERER_DIR" || ! -d "$A2UI_APP_DIR" ]]; then
   exit 0
 fi
 
+# Allow skipping A2UI bundling via environment variable
+if [[ "${OPENCLAW_A2UI_SKIP_MISSING:-}" == "1" ]]; then
+  if [[ ! -f "$OUTPUT_FILE" ]]; then
+    echo "Warning: A2UI bundle missing but OPENCLAW_A2UI_SKIP_MISSING=1 is set. Skipping bundling." >&2
+  fi
+  exit 0
+fi
+
 INPUT_PATHS=(
   "$ROOT_DIR/package.json"
   "$ROOT_DIR/pnpm-lock.yaml"
@@ -84,12 +92,25 @@ fi
 # Ensure vendor dependencies are installed
 if [[ ! -d "$A2UI_RENDERER_DIR/node_modules" ]]; then
   echo "Installing vendor dependencies for A2UI renderer..."
-  (cd "$A2UI_RENDERER_DIR" && pnpm install --silent) || {
-    echo "Warning: Failed to install vendor dependencies. A2UI bundling may fail." >&2
-  }
+  if ! (cd "$A2UI_RENDERER_DIR" && pnpm install --silent 2>&1); then
+    echo "Error: Failed to install vendor dependencies." >&2
+    echo "You can:" >&2
+    echo "  1. Manually run: cd vendor/a2ui/renderers/lit && pnpm install" >&2
+    echo "  2. Skip A2UI bundling: OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build" >&2
+    exit 1
+  fi
 fi
 
-pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json"
-rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs"
+# Check if dist directory exists after compilation
+if ! pnpm -s exec tsc -p "$A2UI_RENDERER_DIR/tsconfig.json" 2>&1; then
+  echo "Error: TypeScript compilation failed for A2UI renderer." >&2
+  echo "Check vendor/a2ui/renderers/lit for compilation errors." >&2
+  exit 1
+fi
+
+if ! rolldown -c "$A2UI_APP_DIR/rolldown.config.mjs" 2>&1; then
+  echo "Error: Rolldown bundling failed for A2UI app." >&2
+  exit 1
+fi
 
 echo "$current_hash" > "$HASH_FILE"

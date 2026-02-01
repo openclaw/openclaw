@@ -26,6 +26,7 @@
     }
   },
   "dependencies": {
+    "axios": "^1.4.0",
     "dingtalk-stream": "^2.1.4",
     "openclaw": "workspace:*"
   },

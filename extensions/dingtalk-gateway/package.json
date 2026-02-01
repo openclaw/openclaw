@@ -1,0 +1,35 @@
+{
+  "name": "@openclaw/dingtalk-gateway",
+  "version": "2026.1.31",
+  "type": "module",
+  "description": "OpenClaw DingTalk Gateway channel plugin (Kafka-based)",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "dingtalk-gateway",
+      "label": "DingTalk Gateway",
+      "selectionLabel": "DingTalk Gateway (Kafka)",
+      "docsPath": "/channels/dingtalk-gateway",
+      "docsLabel": "dingtalk-gateway",
+      "blurb": "Enterprise messaging via Kafka.",
+      "aliases": [
+        "dt-gateway",
+        "dtgw"
+      ],
+      "order": 71
+    },
+    "install": {
+      "npmSpec": "@openclaw/dingtalk-gateway",
+      "localPath": "extensions/dingtalk-gateway",
+      "defaultChoice": "npm"
+    }
+  },
+  "dependencies": {
+    "dingtalk-stream": "^2.1.4",
+    "kafkajs": "^2.2.4",
+    "openclaw": "workspace:*"
+  },
+  "repository": "https://github.com/openclaw/openclaw.git"
+}
