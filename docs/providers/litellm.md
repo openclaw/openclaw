@@ -4,6 +4,7 @@ read_when:
   - You want to route OpenClaw through a LiteLLM proxy
   - You need cost tracking, logging, or model routing through LiteLLM
 ---
+
 # LiteLLM
 
 [LiteLLM](https://litellm.ai) is an open-source LLM gateway that provides a unified API to 100+ model providers. Route OpenClaw through LiteLLM to get centralized cost tracking, logging, and the flexibility to switch backends without changing your OpenClaw config.
@@ -28,14 +29,14 @@ openclaw onboard --auth-choice litellm-api-key
 
 ### Manual setup
 
-1) Start LiteLLM Proxy:
+1. Start LiteLLM Proxy:
 
 ```bash
 pip install 'litellm[proxy]'
 litellm --model anthropic/claude-sonnet-4-20250514
 ```
 
-2) Point OpenClaw to LiteLLM:
+2. Point OpenClaw to LiteLLM:
 
 ```bash
 export LITELLM_API_KEY="your-litellm-key"  # or any string if no auth
@@ -61,13 +62,13 @@ export ANTHROPIC_API_BASE="http://localhost:4000"
 {
   env: {
     ANTHROPIC_API_BASE: "http://localhost:4000",
-    LITELLM_API_KEY: "sk-litellm-key"
+    LITELLM_API_KEY: "sk-litellm-key",
   },
   agents: {
     defaults: {
-      model: { primary: "litellm/claude-sonnet-4-20250514" }
-    }
-  }
+      model: { primary: "litellm/claude-sonnet-4-20250514" },
+    },
+  },
 }
 ```
 
@@ -85,16 +86,16 @@ For more control, define LiteLLM as an explicit provider:
         api: "anthropic-messages",
         models: [
           { id: "claude-sonnet-4-20250514", name: "Claude Sonnet" },
-          { id: "gpt-4o", name: "GPT-4o" }
-        ]
-      }
-    }
+          { id: "gpt-4o", name: "GPT-4o" },
+        ],
+      },
+    },
   },
   agents: {
     defaults: {
-      model: { primary: "litellm/claude-sonnet-4-20250514" }
-    }
-  }
+      model: { primary: "litellm/claude-sonnet-4-20250514" },
+    },
+  },
 }
 ```
 
