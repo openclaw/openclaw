@@ -98,12 +98,15 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
     const raw = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
       profiles?: Record<string, unknown>;
     };
-    expect(raw.profiles?.["anthropic:claude-cli"]).toBeUndefined();
+    // anthropic:claude-cli is no longer deprecated — it provides full OAuth
+    // credentials (including refresh token) synced from Claude Code CLI.
+    expect(raw.profiles?.["anthropic:claude-cli"]).toBeDefined();
     expect(raw.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
 
-    expect(next.auth?.profiles?.["anthropic:claude-cli"]).toBeUndefined();
+    expect(next.auth?.profiles?.["anthropic:claude-cli"]).toBeDefined();
     expect(next.auth?.profiles?.["openai-codex:codex-cli"]).toBeUndefined();
-    expect(next.auth?.order?.anthropic).toBeUndefined();
+    // anthropic order preserved since claude-cli is no longer deprecated
+    expect(next.auth?.order?.anthropic).toBeDefined();
     expect(next.auth?.order?.["openai-codex"]).toBeUndefined();
   });
 });
