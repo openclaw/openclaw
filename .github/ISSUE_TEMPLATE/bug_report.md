@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a problem or unexpected behavior in Clawdbot.
+about: Report a problem or unexpected behavior in OpenClaw.
 title: "[Bug]: "
 labels: bug
 ---
@@ -25,9 +25,10 @@ What actually happened?
 
 ## Environment
 
-- Clawdbot version:
+- OpenClaw version (or commit SHA):
 - OS:
 - Install method (pnpm/npx/docker/etc):
+- Messaging channel (if relevant: telegram/discord/slack/signal/imessage/web/...):
 
 ## Logs or screenshots
 
