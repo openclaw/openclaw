@@ -192,6 +192,32 @@ export async function preflightDiscordMessage(
     accountId: params.accountId,
     direction: "inbound",
   });
+
+  // Resolve thread parent early for binding inheritance
+  const channelName =
+    channelInfo?.name ??
+    ((isGuildMessage || isGroupDm) && message.channel && "name" in message.channel
+      ? message.channel.name
+      : undefined);
+  const earlyThreadChannel = resolveDiscordThreadChannel({
+    isGuildMessage,
+    message,
+    channelInfo,
+  });
+  let earlyThreadParentId: string | undefined;
+  let earlyThreadParentName: string | undefined;
+  let earlyThreadParentType: ChannelType | undefined;
+  if (earlyThreadChannel) {
+    const parentInfo = await resolveDiscordThreadParentInfo({
+      client: params.client,
+      threadChannel: earlyThreadChannel,
+      channelInfo,
+    });
+    earlyThreadParentId = parentInfo.id;
+    earlyThreadParentName = parentInfo.name;
+    earlyThreadParentType = parentInfo.type;
+  }
+
   const route = resolveAgentRoute({
     cfg: params.cfg,
     channel: "discord",
@@ -201,6 +227,8 @@ export async function preflightDiscordMessage(
       kind: isDirectMessage ? "dm" : isGroupDm ? "group" : "channel",
       id: isDirectMessage ? author.id : message.channelId,
     },
+    // Pass parent peer for thread binding inheritance
+    parentPeer: earlyThreadParentId ? { kind: "channel", id: earlyThreadParentId } : undefined,
   });
   const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
   const explicitlyMentioned = Boolean(
@@ -262,29 +290,11 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const channelName =
-    channelInfo?.name ??
-    ((isGuildMessage || isGroupDm) && message.channel && "name" in message.channel
-      ? message.channel.name
-      : undefined);
-  const threadChannel = resolveDiscordThreadChannel({
-    isGuildMessage,
-    message,
-    channelInfo,
-  });
-  let threadParentId: string | undefined;
-  let threadParentName: string | undefined;
-  let threadParentType: ChannelType | undefined;
-  if (threadChannel) {
-    const parentInfo = await resolveDiscordThreadParentInfo({
-      client: params.client,
-      threadChannel,
-      channelInfo,
-    });
-    threadParentId = parentInfo.id;
-    threadParentName = parentInfo.name;
-    threadParentType = parentInfo.type;
-  }
+  // Reuse early thread resolution from above (for binding inheritance)
+  const threadChannel = earlyThreadChannel;
+  const threadParentId = earlyThreadParentId;
+  const threadParentName = earlyThreadParentName;
+  const threadParentType = earlyThreadParentType;
   const threadName = threadChannel?.name;
   const configChannelName = threadParentName ?? channelName;
   const configChannelSlug = configChannelName ? normalizeDiscordSlug(configChannelName) : "";

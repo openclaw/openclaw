@@ -736,6 +736,7 @@ async function dispatchDiscordCommandInteraction(params: {
       kind: isDirectMessage ? "dm" : isGroupDm ? "group" : "channel",
       id: isDirectMessage ? user.id : channelId,
     },
+    parentPeer: threadParentId ? { kind: "channel", id: threadParentId } : undefined,
   });
   const conversationLabel = isDirectMessage ? (user.globalName ?? user.username) : channelId;
   const ctxPayload = finalizeInboundContext({
