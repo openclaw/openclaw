@@ -212,7 +212,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   let snapshot = await readConfigFileSnapshot();
-  const baseCfg = snapshot.config ?? {};
+  // Use snapshot.parsed (pre-env-substitution) to preserve ${VAR} references when writing back.
+  // snapshot.config has env vars resolved, which would leak secrets if written to disk.
+  // See: https://github.com/moltbot/moltbot/issues/4654
+  const baseCfg = (snapshot.parsed ?? {}) as OpenClawConfig;
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
