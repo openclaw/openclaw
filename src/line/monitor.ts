@@ -85,12 +85,56 @@ export function getLineRuntimeState(accountId: string) {
   return runtimeState.get(`line:${accountId}`);
 }
 
-async function readRequestBody(req: IncomingMessage): Promise<string> {
+async function readRequestBody(
+  req: IncomingMessage,
+  maxSizeBytes = 1024 * 1024, // 1MB default
+  timeoutMs = 30000,
+): Promise<string> {
   return new Promise((resolve, reject) => {
+    let done = false;
+    let totalSize = 0;
     const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(chunk));
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
+
+    const timeout = setTimeout(() => {
+      if (done) return;
+      done = true;
+      req.destroy();
+      reject(new Error("Request body read timeout"));
+    }, timeoutMs);
+
+    req.on("data", (chunk: Buffer) => {
+      if (done) return;
+      totalSize += chunk.length;
+      if (totalSize > maxSizeBytes) {
+        done = true;
+        clearTimeout(timeout);
+        req.destroy();
+        reject(new Error("Request body too large"));
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on("end", () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeout);
+      resolve(Buffer.concat(chunks).toString("utf-8"));
+    });
+
+    req.on("error", (err) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeout);
+      reject(err);
+    });
+
+    req.on("close", () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeout);
+      reject(new Error("Client disconnected"));
+    });
   });
 }
 
