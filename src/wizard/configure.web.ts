@@ -226,18 +226,33 @@ export async function runConfigureWizardWeb(
   if (sections.includes("channels")) {
     await prompter.note(
       [
-        "Basic channel setup.",
-        "For advanced routing (allowlists, group policies, multiple accounts), edit openclaw.json manually after this.",
+        "Channel setup (basic).",
+        "Tip: set allowlists so your bot does not respond to random people.",
       ].join("\n"),
       "Channels",
     );
+
+    const parseAllowFrom = (raw: string): Array<string | number> | undefined => {
+      const trimmed = raw.trim();
+      if (!trimmed) return undefined;
+      const parts = trimmed
+        .split(/[,\n]/g)
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (parts.length === 0) return undefined;
+      return parts.map((p) => {
+        if (p === "*") return "*";
+        const n = Number(p);
+        return Number.isFinite(n) && String(n) === p ? n : p;
+      });
+    };
 
     type ChannelChoice = "discord" | "telegram";
     const picks = await prompter.multiselect<ChannelChoice>({
       message: "Which channels do you want to configure?",
       options: [
-        { value: "discord", label: "Discord", hint: "Bot token" },
-        { value: "telegram", label: "Telegram", hint: "Bot token" },
+        { value: "discord", label: "Discord", hint: "Bot token + DM allowlist" },
+        { value: "telegram", label: "Telegram", hint: "Bot token + allowlist" },
       ],
       initialValues: ["discord"],
     });
@@ -257,10 +272,37 @@ export async function runConfigureWizardWeb(
         validate: (v) => (v.trim() || nextChannels.discord?.token ? undefined : "Required"),
       });
 
+      const dmPolicy = await prompter.select({
+        message: "Discord DM policy",
+        options: [
+          { value: "pairing", label: "Pairing" },
+          { value: "allowlist", label: "Allowlist" },
+          { value: "open", label: "Open (dangerous)" },
+          { value: "disabled", label: "Disabled" },
+        ],
+        initialValue: (nextChannels.discord?.dm?.policy ?? "pairing") as any,
+      });
+
+      let dmAllowFrom = nextChannels.discord?.dm?.allowFrom;
+      if (dmPolicy === "allowlist" || dmPolicy === "open") {
+        const raw = await prompter.text({
+          message: 'Discord allowFrom (comma separated user ids). Use "*" for open',
+          initialValue: "",
+          placeholder: dmAllowFrom?.length ? "Leave blank to keep current" : "123, 456",
+          validate: (v) => (v.trim() || dmAllowFrom?.length ? undefined : "Required"),
+        });
+        if (raw.trim()) dmAllowFrom = parseAllowFrom(raw);
+      }
+
       nextChannels.discord = {
         ...(nextChannels.discord ?? {}),
         enabled,
         ...(token.trim() ? { token: token.trim() } : {}),
+        dm: {
+          ...(nextChannels.discord?.dm ?? {}),
+          policy: dmPolicy,
+          ...(dmAllowFrom ? { allowFrom: dmAllowFrom } : {}),
+        },
       };
     }
 
@@ -279,10 +321,34 @@ export async function runConfigureWizardWeb(
         validate: (v) => (v.trim() || nextChannels.telegram?.botToken ? undefined : "Required"),
       });
 
+      const dmPolicy = await prompter.select({
+        message: "Telegram DM policy",
+        options: [
+          { value: "pairing", label: "Pairing" },
+          { value: "allowlist", label: "Allowlist" },
+          { value: "open", label: "Open (dangerous)" },
+          { value: "disabled", label: "Disabled" },
+        ],
+        initialValue: (nextChannels.telegram?.dmPolicy ?? "pairing") as any,
+      });
+
+      let allowFrom = nextChannels.telegram?.allowFrom;
+      if (dmPolicy === "allowlist" || dmPolicy === "open") {
+        const raw = await prompter.text({
+          message: 'Telegram allowFrom (comma separated user ids). Use "*" for open',
+          initialValue: "",
+          placeholder: allowFrom?.length ? "Leave blank to keep current" : "123, 456",
+          validate: (v) => (v.trim() || allowFrom?.length ? undefined : "Required"),
+        });
+        if (raw.trim()) allowFrom = parseAllowFrom(raw);
+      }
+
       nextChannels.telegram = {
         ...(nextChannels.telegram ?? {}),
         enabled,
+        dmPolicy,
         ...(botToken.trim() ? { botToken: botToken.trim() } : {}),
+        ...(allowFrom ? { allowFrom } : {}),
       };
     }
 
