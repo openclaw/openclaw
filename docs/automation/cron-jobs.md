@@ -4,6 +4,7 @@ read_when:
   - Scheduling background jobs or wakeups
   - Wiring automation that should run with or alongside heartbeats
   - Deciding between heartbeat and cron for scheduled tasks
+title: "Cron Jobs"
 ---
 
 # Cron jobs (Gateway scheduler)
@@ -385,6 +386,7 @@ openclaw cron add \
 ```
 
 Agent selection (multi-agent setups):
+
 ```bash
 # Pin a job to agent "ops" (falls back to default if that agent is missing)
 openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
@@ -395,6 +397,7 @@ openclaw cron edit <jobId> --clear-agent
 ```
 
 Manual run (debug):
+
 ```bash
 openclaw cron run <jobId> --force
 ```

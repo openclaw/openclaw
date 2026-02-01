@@ -4,6 +4,7 @@ read_when:
   - You want the agent to drive an existing Chrome tab (toolbar button)
   - You need remote Gateway + local browser automation via Tailscale
   - You want to understand the security implications of browser takeover
+title: "Chrome Extension"
 ---
 
 # Chrome extension (browser relay)
@@ -168,6 +169,7 @@ Recommendations:
 - Prefer a dedicated Chrome profile (separate from your personal browsing) for extension relay usage.
 - Keep the Gateway and any node hosts tailnet-only; rely on Gateway auth + node pairing.
 - Avoid exposing relay ports over LAN (`0.0.0.0`) and avoid Funnel (public).
+- The relay blocks non-extension origins and requires an internal auth token for CDP clients.
 
 Related:
 

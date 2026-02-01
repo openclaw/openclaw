@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { transcribeDeepgramAudio } from "./audio.js";
 
 const resolveRequestUrl = (input: RequestInfo | URL) => {

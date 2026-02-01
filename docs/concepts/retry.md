@@ -3,6 +3,7 @@ summary: "Retry policy for outbound provider calls"
 read_when:
   - Updating provider retry behavior or defaults
   - Debugging provider send errors or rate limits
+title: "Retry Policy"
 ---
 
 # Retry policy

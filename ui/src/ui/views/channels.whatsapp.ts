@@ -1,8 +1,7 @@
 import { html, nothing } from "lit";
-
-import { formatAgo } from "../format";
 import type { WhatsAppStatus } from "../types";
 import type { ChannelsProps } from "./channels.types";
+import { formatAgo } from "../format";
 import { renderChannelConfigSection } from "./channels.config";
 import { formatDuration } from "./channels.shared";
 

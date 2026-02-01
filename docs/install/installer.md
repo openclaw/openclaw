@@ -1,23 +1,24 @@
 ---
 summary: "How the installer scripts work (install.sh + install-cli.sh), flags, and automation"
 read_when:
-  - You want to understand `openclaw.bot/install.sh`
+  - You want to understand `openclaw.ai/install.sh`
   - You want to automate installs (CI / headless)
   - You want to install from a GitHub checkout
+title: "Installer Internals"
 ---
 
 # Installer internals
 
 OpenClaw ships two installer scripts (served from `openclaw.ai`):
 
-- `https://openclaw.bot/install.sh` — “recommended” installer (global npm install by default; can also install from a GitHub checkout)
-- `https://openclaw.bot/install-cli.sh` — non-root-friendly CLI installer (installs into a prefix with its own Node)
+- `https://openclaw.ai/install.sh` — “recommended” installer (global npm install by default; can also install from a GitHub checkout)
+- `https://openclaw.ai/install-cli.sh` — non-root-friendly CLI installer (installs into a prefix with its own Node)
 - `https://openclaw.ai/install.ps1` — Windows PowerShell installer (npm by default; optional git install)
 
 To see the current flags/behavior, run:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --help
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --help
 ```
 
 Windows (PowerShell) help:
@@ -45,7 +46,7 @@ What it does (high level):
 If you _want_ `sharp` to link against a globally-installed libvips (or you’re debugging), set:
 
 ```bash
-SHARP_IGNORE_GLOBAL_LIBVIPS=0 curl -fsSL https://openclaw.bot/install.sh | bash
+SHARP_IGNORE_GLOBAL_LIBVIPS=0 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 ### Discoverability / “git install” prompt
@@ -78,7 +79,7 @@ This script installs `openclaw` into a prefix (default: `~/.openclaw`) and also 
 Help:
 
 ```bash
-curl -fsSL https://openclaw.bot/install-cli.sh | bash -s -- --help
+curl -fsSL https://openclaw.ai/install-cli.sh | bash -s -- --help
 ```
 
 ## install.ps1 (Windows PowerShell)

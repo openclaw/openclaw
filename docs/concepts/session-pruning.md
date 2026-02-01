@@ -40,12 +40,13 @@ Session pruning trims **old tool results** from the in-memory context right befo
 
 ## Context window estimation
 
-Pruning uses an estimated context window (chars ≈ tokens × 4). The window size is resolved in this order:
+Pruning uses an estimated context window (chars ≈ tokens × 4). The base window is resolved in this order:
 
-1. Model definition `contextWindow` (from the model registry).
-2. `models.providers.*.models[].contextWindow` override.
-3. `agents.defaults.contextTokens`.
-4. Default `200000` tokens.
+1. `models.providers.*.models[].contextWindow` override.
+2. Model definition `contextWindow` (from the model registry).
+3. Default `200000` tokens.
+
+If `agents.defaults.contextTokens` is set, it is treated as a cap (min) on the resolved window.
 
 ## Mode
 

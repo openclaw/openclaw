@@ -4,6 +4,7 @@ read_when:
   - Pairing iOS/Android nodes to a gateway
   - Using node canvas/camera for agent context
   - Adding new node commands or CLI helpers
+title: "Nodes"
 ---
 
 # Nodes

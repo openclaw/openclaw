@@ -5,6 +5,7 @@ read_when:
   - You hit token invalidation / logout issues
   - You want setup-token or OAuth auth flows
   - You want multiple accounts or profile routing
+title: "OAuth"
 ---
 
 # OAuth

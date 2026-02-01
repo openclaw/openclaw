@@ -2,6 +2,7 @@
 summary: "Twitch chat bot configuration and setup"
 read_when:
   - Setting up Twitch chat integration for OpenClaw
+title: "Twitch"
 ---
 
 # Twitch (plugin)

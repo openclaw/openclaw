@@ -1,5 +1,4 @@
 import path from "node:path";
-
 import { detectMime, extensionForMime } from "./mime.js";
 
 type FetchMediaResult = {

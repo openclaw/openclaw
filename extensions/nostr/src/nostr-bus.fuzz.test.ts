@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { createMetrics, type MetricName } from "./metrics.js";
 import { validatePrivateKey, isValidPubkey, normalizePubkey } from "./nostr-bus.js";
 import { createSeenTracker } from "./seen-tracker.js";
-import { createMetrics, type MetricName } from "./metrics.js";
 
 // ============================================================================
 // Fuzz Tests for validatePrivateKey

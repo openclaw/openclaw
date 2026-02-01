@@ -4,6 +4,7 @@ read_when:
   - Setting up DM access control
   - Pairing a new iOS/Android node
   - Reviewing OpenClaw security posture
+title: "Pairing"
 ---
 
 # Pairing

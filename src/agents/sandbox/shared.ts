@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import path from "node:path";
-
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentIdFromSessionKey } from "../agent-scope.js";

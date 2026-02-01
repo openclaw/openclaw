@@ -2,6 +2,7 @@
 summary: "All configuration options for ~/.openclaw/openclaw.json with examples"
 read_when:
   - Adding or modifying config fields
+title: "Configuration"
 ---
 
 # Configuration 🔧
@@ -1090,7 +1091,7 @@ Set `channels.telegram.configWrites: false` to block Telegram-initiated config w
         autoSelectFamily: false,
       },
       proxy: "socks5://localhost:9050",
-      webhookUrl: "https://example.com/telegram-webhook",
+      webhookUrl: "https://example.com/telegram-webhook", // requires webhookSecret
       webhookSecret: "secret",
       webhookPath: "/telegram-webhook",
     },

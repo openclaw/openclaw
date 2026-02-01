@@ -17,8 +17,8 @@ import {
   resolveBlueBubblesAccount,
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
-import { normalizeBlueBubblesServerUrl } from "./types.js";
 import { parseBlueBubblesAllowTarget } from "./targets.js";
+import { normalizeBlueBubblesServerUrl } from "./types.js";
 
 const channel = "bluebubbles" as const;
 

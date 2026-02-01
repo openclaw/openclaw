@@ -2,6 +2,7 @@
 summary: "Backstory and lore of OpenClaw for context and tone"
 read_when:
   - Writing docs or UX copy that reference lore
+title: "OpenClaw Lore"
 ---
 
 # The Lore of OpenClaw 🦞📖

@@ -2,6 +2,7 @@
 summary: "Google Chat app support status, capabilities, and configuration"
 read_when:
   - Working on Google Chat channel features
+title: "Google Chat"
 ---
 
 # Google Chat (Chat API)

@@ -1,17 +1,16 @@
 import { html, nothing } from "lit";
-
-import { clampText, formatAgo, formatList } from "../format";
-import type {
-  ExecApprovalsAllowlistEntry,
-  ExecApprovalsFile,
-  ExecApprovalsSnapshot,
-} from "../controllers/exec-approvals";
 import type {
   DevicePairingList,
   DeviceTokenSummary,
   PairedDevice,
   PendingDevice,
 } from "../controllers/devices";
+import type {
+  ExecApprovalsAllowlistEntry,
+  ExecApprovalsFile,
+  ExecApprovalsSnapshot,
+} from "../controllers/exec-approvals";
+import { clampText, formatAgo, formatList } from "../format";
 
 export type NodesProps = {
   loading: boolean;

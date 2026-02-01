@@ -1,6 +1,5 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-
 import { analyzeConfigSchema, renderConfigForm } from "./views/config-form";
 
 const rootSchema = {

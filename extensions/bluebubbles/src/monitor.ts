@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   logAckFailure,
@@ -8,20 +7,20 @@ import {
   resolveAckReaction,
   resolveControlCommandGate,
 } from "openclaw/plugin-sdk";
-import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
-import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
+import type { ResolvedBlueBubblesAccount } from "./accounts.js";
+import type { BlueBubblesAccountConfig, BlueBubblesAttachment } from "./types.js";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
+import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
+import { sendBlueBubblesMedia } from "./media-send.js";
+import { fetchBlueBubblesServerInfo } from "./probe.js";
+import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
+import { getBlueBubblesRuntime } from "./runtime.js";
+import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import {
   formatBlueBubblesChatTarget,
   isAllowedBlueBubblesSender,
   normalizeBlueBubblesHandle,
 } from "./targets.js";
-import { sendBlueBubblesMedia } from "./media-send.js";
-import type { BlueBubblesAccountConfig, BlueBubblesAttachment } from "./types.js";
-import type { ResolvedBlueBubblesAccount } from "./accounts.js";
-import { getBlueBubblesRuntime } from "./runtime.js";
-import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
-import { fetchBlueBubblesServerInfo } from "./probe.js";
 
 export type BlueBubblesRuntimeEnv = {
   log?: (message: string) => void;

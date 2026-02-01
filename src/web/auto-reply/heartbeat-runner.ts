@@ -1,11 +1,11 @@
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   resolveHeartbeatPrompt,
   stripHeartbeatToken,
 } from "../../auto-reply/heartbeat.js";
-import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import { getReplyFromConfig } from "../../auto-reply/reply.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
+import { HEARTBEAT_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveWhatsAppHeartbeatRecipients } from "../../channels/plugins/whatsapp-heartbeat.js";
 import { loadConfig } from "../../config/config.js";
 import {

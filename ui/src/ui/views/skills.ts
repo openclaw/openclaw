@@ -1,8 +1,7 @@
 import { html, nothing } from "lit";
-
-import { clampText } from "../format";
-import type { SkillStatusEntry, SkillStatusReport } from "../types";
 import type { SkillMessageMap } from "../controllers/skills";
+import type { SkillStatusEntry, SkillStatusReport } from "../types";
+import { clampText } from "../format";
 
 export type SkillsProps = {
   loading: boolean;

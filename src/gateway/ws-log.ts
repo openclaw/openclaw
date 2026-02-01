@@ -1,9 +1,9 @@
 import chalk from "chalk";
 import { isVerbose } from "../globals.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import { shouldLogSubsystemToConsole } from "../logging/console.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
 const LOG_VALUE_LIMIT = 240;

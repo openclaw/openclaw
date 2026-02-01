@@ -1,9 +1,8 @@
 import { html } from "lit";
-
 import type { GatewayHelloOk } from "../gateway";
+import type { UiSettings } from "../storage";
 import { formatAgo, formatDurationMs } from "../format";
 import { formatNextRun } from "../presenter";
-import type { UiSettings } from "../storage";
 
 export type OverviewProps = {
   connected: boolean;

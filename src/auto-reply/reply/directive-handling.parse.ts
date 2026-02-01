@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
-import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
+import type { QueueDropPolicy, QueueMode } from "./queue.js";
+import { extractModelDirective } from "../model.js";
 import {
   extractElevatedDirective,
   extractExecDirective,
@@ -12,7 +13,6 @@ import {
   extractVerboseDirective,
 } from "./directives.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import type { QueueDropPolicy, QueueMode } from "./queue.js";
 import { extractQueueDirective } from "./queue.js";
 
 export type InlineDirectives = {

@@ -1,7 +1,8 @@
 import { format } from "node:util";
-
 import { mergeAllowlist, summarizeMapping, type RuntimeEnv } from "openclaw/plugin-sdk";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
+import { resolveMatrixTargets } from "../../resolve-targets.js";
+import { getMatrixRuntime } from "../../runtime.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
   isBunRuntime,
@@ -14,8 +15,6 @@ import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
-import { resolveMatrixTargets } from "../../resolve-targets.js";
-import { getMatrixRuntime } from "../../runtime.js";
 
 export type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;

@@ -2,6 +2,7 @@
 summary: "Gateway dashboard (Control UI) access and auth"
 read_when:
   - Changing dashboard authentication or exposure modes
+title: "Dashboard"
 ---
 
 # Dashboard (Control UI)

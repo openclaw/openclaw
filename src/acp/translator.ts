@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import type {
   Agent,
   AgentSideConnection,
@@ -21,21 +19,21 @@ import type {
   StopReason,
 } from "@agentclientprotocol/sdk";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
-
+import { randomUUID } from "node:crypto";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";
 import { getAvailableCommands } from "./commands.js";
-import { readBool, readNumber, readString } from "./meta.js";
 import {
   extractAttachmentsFromPrompt,
   extractTextFromPrompt,
   formatToolTitle,
   inferToolKind,
 } from "./event-mapper.js";
+import { readBool, readNumber, readString } from "./meta.js";
 import { parseSessionMeta, resetSessionIfNeeded, resolveSessionKey } from "./session-mapper.js";
-import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 import { defaultAcpSessionStore, type AcpSessionStore } from "./session.js";
+import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
 
 type PendingPrompt = {
   sessionId: string;

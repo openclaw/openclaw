@@ -2,6 +2,7 @@
 summary: "Quick troubleshooting guide for common OpenClaw failures"
 read_when:
   - Investigating runtime issues or failures
+title: "Troubleshooting"
 ---
 
 # Troubleshooting 🔧
@@ -540,13 +541,13 @@ upgrades in place and rewrites the gateway service to point at the new install.
 Switch **to git install**:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --install-method git --no-onboard
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
 ```
 
 Switch **to npm global**:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 Notes:
