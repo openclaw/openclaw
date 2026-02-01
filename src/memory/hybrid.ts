@@ -33,9 +33,27 @@ export function buildFtsQuery(raw: string): string | null {
   return quoted.join(" AND ");
 }
 
-export function bm25RankToScore(rank: number): number {
-  const normalized = Number.isFinite(rank) ? Math.max(0, rank) : 999;
-  return 1 / (1 + normalized);
+/**
+ * Convert SQLite FTS5 bm25() score to a normalized [0,1] range.
+ *
+ * FTS5 bm25() returns negative values where more negative = better match.
+ * For example: -4.2 is better than -2.1
+ *
+ * This function converts to positive and applies sigmoid normalization
+ * to bring values into [0,1] range compatible with cosine similarity.
+ *
+ * @param bm25Score - Raw bm25() score from FTS5 (negative, more negative = better)
+ * @param k - Sigmoid steepness factor (default 0.5, tune based on score distribution)
+ */
+export function bm25RankToScore(bm25Score: number, k = 0.5): number {
+  if (!Number.isFinite(bm25Score)) {
+    return 0;
+  }
+  const positive = -bm25Score;
+  if (positive <= 0) {
+    return 0;
+  }
+  return 1 - 1 / (1 + k * positive);
 }
 
 export function mergeHybridResults(params: {
