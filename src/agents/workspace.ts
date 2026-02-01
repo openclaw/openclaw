@@ -166,22 +166,36 @@ export async function ensureAgentWorkspace(params?: {
     return existing.every((v) => !v);
   })();
 
-  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
-  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
-  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
-  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
-  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
-  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
-  const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
+  // Helper function to ensure file exists, only loading template if missing
+  async function ensureFileFromTemplate(filePath: string, templateName: string): Promise<void> {
+    try {
+      await fs.access(filePath);
+    } catch (err) {
+      const anyErr = err as { code?: string };
+      if (anyErr.code === "ENOENT") {
+        await writeFileIfMissing(filePath, await loadTemplate(templateName));
+      } else {
+        throw err;
+      }
+    }
+  }
 
-  await writeFileIfMissing(agentsPath, agentsTemplate);
-  await writeFileIfMissing(soulPath, soulTemplate);
-  await writeFileIfMissing(toolsPath, toolsTemplate);
-  await writeFileIfMissing(identityPath, identityTemplate);
-  await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  // Check if workspace is incomplete and copy missing files
+  const filesToEnsure = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
+  const templates = [
+    DEFAULT_AGENTS_FILENAME,
+    DEFAULT_SOUL_FILENAME,
+    DEFAULT_TOOLS_FILENAME,
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_USER_FILENAME,
+    DEFAULT_HEARTBEAT_FILENAME,
+  ];
+
+  for (let i = 0; i < filesToEnsure.length; i++) {
+    await ensureFileFromTemplate(filesToEnsure[i], templates[i]);
+  }
   if (isBrandNewWorkspace) {
-    await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
+    await ensureFileFromTemplate(bootstrapPath, DEFAULT_BOOTSTRAP_FILENAME);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
 

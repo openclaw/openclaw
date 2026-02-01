@@ -12,9 +12,8 @@ import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 
-function bundledExtensionRootDir() {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, "../../assets/chrome-extension");
+function workspaceExtensionSourceDir() {
+  return path.join(STATE_DIR, "browser", "chrome-extension-source");
 }
 
 function installedExtensionRootDir() {
@@ -25,14 +24,59 @@ function hasManifest(dir: string) {
   return fs.existsSync(path.join(dir, "manifest.json"));
 }
 
+async function ensureExtensionSourceInWorkspace(): Promise<string> {
+  const workspaceSourceDir = workspaceExtensionSourceDir();
+
+  // If already copied and valid, return it
+  if (hasManifest(workspaceSourceDir)) {
+    return workspaceSourceDir;
+  }
+
+  // Find the source assets - try multiple possible locations
+  const possibleSources = [
+    // Relative to compiled code location (current approach)
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../assets/chrome-extension"),
+    // Relative to project root when running from source
+    path.resolve(process.cwd(), "assets/chrome-extension"),
+    // In case we're in a subdirectory
+    path.resolve(process.cwd(), "../assets/chrome-extension"),
+  ];
+
+  let foundSource: string | null = null;
+  for (const candidate of possibleSources) {
+    if (hasManifest(candidate)) {
+      foundSource = candidate;
+      break;
+    }
+  }
+
+  if (!foundSource) {
+    throw new Error(
+      "Chrome extension source assets not found. Ensure you're running from a complete OpenClaw installation.",
+    );
+  }
+
+  // Copy source assets to workspace
+  fs.mkdirSync(path.dirname(workspaceSourceDir), { recursive: true });
+  if (fs.existsSync(workspaceSourceDir)) {
+    await fs.promises.rm(workspaceSourceDir, { recursive: true });
+  }
+
+  await fs.promises.cp(foundSource, workspaceSourceDir, { recursive: true });
+
+  if (!hasManifest(workspaceSourceDir)) {
+    throw new Error("Failed to copy Chrome extension source to workspace.");
+  }
+
+  return workspaceSourceDir;
+}
+
 export async function installChromeExtension(opts?: {
   stateDir?: string;
   sourceDir?: string;
 }): Promise<{ path: string }> {
-  const src = opts?.sourceDir ?? bundledExtensionRootDir();
-  if (!hasManifest(src)) {
-    throw new Error("Bundled Chrome extension is missing. Reinstall OpenClaw and try again.");
-  }
+  // Use provided source directory or find/copy assets to workspace
+  const src = opts?.sourceDir ?? (await ensureExtensionSourceInWorkspace());
 
   const stateDir = opts?.stateDir ?? STATE_DIR;
   const dest = path.join(stateDir, "browser", "chrome-extension");
