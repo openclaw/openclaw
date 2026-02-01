@@ -71,6 +71,48 @@ describe("security-audit interceptor", () => {
     expect(result.block).toBe(true);
   });
 
+  it("blocks Claude Code credentials", async () => {
+    const result = await run("read", "/home/user/.claude/.credentials.json");
+    expect(result.block).toBe(true);
+  });
+
+  it("blocks OpenClaw credentials directory", async () => {
+    const result = await run("read", "/home/user/.openclaw/credentials/oauth.json");
+    expect(result.block).toBe(true);
+  });
+
+  it("blocks Codex auth file", async () => {
+    const result = await run("read", "/home/user/.codex/auth.json");
+    expect(result.block).toBe(true);
+  });
+
+  it("blocks auth-profiles.json", async () => {
+    const result = await run("read", "/home/user/.openclaw/agents/abc/agent/auth-profiles.json");
+    expect(result.block).toBe(true);
+  });
+
+  it("blocks GitHub Copilot token file", async () => {
+    const result = await run("read", "/home/user/.openclaw/credentials/github-copilot.token.json");
+    expect(result.block).toBe(true);
+  });
+
+  it("blocks shell profile files", async () => {
+    expect((await run("read", "/home/user/.bashrc")).block).toBe(true);
+    expect((await run("read", "/home/user/.zshrc")).block).toBe(true);
+    expect((await run("read", "/home/user/.profile")).block).toBe(true);
+    expect((await run("read", "/home/user/.config/fish/config.fish")).block).toBe(true);
+  });
+
+  it("blocks Qwen OAuth credentials", async () => {
+    const result = await run("read", "/home/user/.qwen/oauth_creds.json");
+    expect(result.block).toBe(true);
+  });
+
+  it("blocks MiniMax OAuth credentials", async () => {
+    const result = await run("read", "/home/user/.minimax/oauth_creds.json");
+    expect(result.block).toBe(true);
+  });
+
   it("does not trigger on exec tool", async () => {
     // Security audit only matches read/write/edit, not exec
     const registry = createInterceptorRegistry();

@@ -32,6 +32,31 @@ const BLOCKED_PATH_PATTERNS: string[] = [
   "service-account.json",
   ".boto",
   "kubeconfig",
+  // Claude Code auth
+  ".claude/.credentials.json",
+  ".claude/credentials/",
+  // OpenClaw / Clawdbot auth
+  ".openclaw/credentials/",
+  ".clawdbot/credentials/",
+  "auth-profiles.json",
+  // OpenAI Codex auth
+  ".codex/auth.json",
+  // Qwen / MiniMax portal OAuth
+  ".qwen/oauth_creds.json",
+  ".minimax/oauth_creds.json",
+  // Google CLI OAuth
+  "gogcli/credentials.json",
+  // WhatsApp session creds
+  "whatsapp/default/creds.json",
+  // GitHub Copilot tokens
+  "github-copilot.token.json",
+  // Shell profile files (may export API keys)
+  "/.profile",
+  "/.bash_profile",
+  "/.bashrc",
+  "/.zshrc",
+  "/.zprofile",
+  "/.config/fish/config.fish",
 ];
 
 // Allow-list: paths that contain a blocked substring but are actually safe

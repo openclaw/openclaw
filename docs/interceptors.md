@@ -159,6 +159,14 @@ Blocked path patterns:
 - System auth files (`/etc/passwd`, `/etc/shadow`, `/etc/sudoers`)
 - Environment files (`/.env`)
 - Certificate/key files (`.pem`, `.key`, `.p12`, `.pfx`)
+- Claude Code auth (`.claude/.credentials.json`, `.claude/credentials/`)
+- OpenClaw/Clawdbot auth (`.openclaw/credentials/`, `.clawdbot/credentials/`, `auth-profiles.json`)
+- OpenAI Codex auth (`.codex/auth.json`)
+- GitHub Copilot tokens (`github-copilot.token.json`)
+- Qwen/MiniMax portal OAuth (`.qwen/oauth_creds.json`, `.minimax/oauth_creds.json`)
+- Google CLI OAuth (`gogcli/credentials.json`)
+- WhatsApp session creds (`whatsapp/default/creds.json`)
+- Shell profile files (`/.profile`, `/.bashrc`, `/.zshrc`, `/.zprofile`, `/.bash_profile`, `.config/fish/config.fish`) — may contain exported API keys
 
 Allow-listed exceptions (not blocked):
 
