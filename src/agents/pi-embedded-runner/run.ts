@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -408,6 +409,24 @@ export async function runEmbeddedPiAgent(
                 );
               }
               const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+
+              // Emit agent:context_overflow hook event for external handlers (e.g. ClawVault)
+              const hookEvent = createInternalHookEvent(
+                "agent",
+                "context_overflow",
+                params.sessionKey ?? params.sessionId,
+                {
+                  sessionId: sessionIdUsed,
+                  sessionFile: params.sessionFile,
+                  provider,
+                  model: model.id,
+                  errorMessage: errorText,
+                  isCompactionFailure,
+                  autoCompactionAttempted: overflowCompactionAttempted,
+                },
+              );
+              void triggerInternalHook(hookEvent);
+
               return {
                 payloads: [
                   {
