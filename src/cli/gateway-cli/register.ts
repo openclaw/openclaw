@@ -194,7 +194,7 @@ export function registerGatewayCli(program: Command) {
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
     .option("--safe", "Enable automatic rollback if gateway crashes within timeout", false)
     .option("--timeout <ms>", "Rollback timeout in ms (default: 30000, requires --safe)", "30000")
-    .option("--no-wait-idle", "Skip waiting for active sessions to finish (not recommended)")
+    .option("--wait-idle", "Wait for active sessions to finish before restart (default: true)", true)
     .option(
       "--wait-timeout <ms>",
       "Max time to wait for sessions to idle (default: 60000)",
@@ -207,8 +207,9 @@ export function registerGatewayCli(program: Command) {
           await import("../../agents/pi-embedded.js");
         const { writePendingMarker } = await import("../../config/config-pending.js");
 
-        // Wait for all sessions to be idle before restarting (default behavior)
-        if (opts.waitIdle !== false) {
+        // Wait for all sessions to be idle before restarting (default: true)
+        // Use --no-wait-idle to skip (not recommended - may interrupt active work)
+        if (opts.waitIdle) {
           const activeCount = getActiveSessionCount();
           if (activeCount > 0) {
             const activeIds = getActiveSessionIds();
