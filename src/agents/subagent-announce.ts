@@ -462,32 +462,36 @@ export async function runSubagentAnnounceFlow(params: {
       return true;
     }
 
-    // Send to main agent - it will respond in its own voice
-    let directOrigin = requesterOrigin;
-    if (!directOrigin) {
+    // Fix 2v2: Always enqueue announces — never send directly to the gateway.
+    // This eliminates race conditions where a direct callGateway("agent")
+    // bypasses queue ordering and gets processed before user messages that
+    // are still in the dispatch pipeline. The announce queue's debounce
+    // (default 1000ms) provides a timing buffer, and the drain's followup-
+    // queue yield check ensures user messages are always processed first.
+    {
+      const cfg = loadConfig();
+      const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
       const { entry } = loadRequesterSessionEntry(params.requesterSessionKey);
-      directOrigin = deliveryContextFromSession(entry);
+      const queueSettings = resolveQueueSettings({
+        cfg,
+        channel: entry?.channel ?? entry?.lastChannel,
+        sessionEntry: entry,
+      });
+      const origin = resolveAnnounceOrigin(entry, requesterOrigin);
+      enqueueAnnounce({
+        key: canonicalKey,
+        item: {
+          prompt: triggerMessage,
+          summaryLine: taskLabel,
+          enqueuedAt: Date.now(),
+          sessionKey: canonicalKey,
+          origin,
+        },
+        settings: queueSettings,
+        send: sendAnnounce,
+      });
+      didAnnounce = true;
     }
-    await callGateway({
-      method: "agent",
-      params: {
-        sessionKey: params.requesterSessionKey,
-        message: triggerMessage,
-        deliver: true,
-        channel: directOrigin?.channel,
-        accountId: directOrigin?.accountId,
-        to: directOrigin?.to,
-        threadId:
-          directOrigin?.threadId != null && directOrigin.threadId !== ""
-            ? String(directOrigin.threadId)
-            : undefined,
-        idempotencyKey: crypto.randomUUID(),
-      },
-      expectFinal: true,
-      timeoutMs: 60_000,
-    });
-
-    didAnnounce = true;
   } catch (err) {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.

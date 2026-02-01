@@ -1,4 +1,5 @@
 import { type QueueDropPolicy, type QueueMode } from "../auto-reply/reply/queue.js";
+import { FOLLOWUP_QUEUES } from "../auto-reply/reply/queue/state.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   type DeliveryContext,
@@ -12,6 +13,27 @@ import {
   hasCrossChannelItems,
   waitForQueueDebounce,
 } from "../utils/queue-helpers.js";
+
+/**
+ * Fix 2v2: Wait for the followup queue (user messages) to finish draining
+ * before processing announce items. This ensures user messages are always
+ * handled before sub-agent announcements in the per-session lane.
+ *
+ * Uses polling (100ms interval) with a 30s timeout to avoid deadlocks.
+ */
+async function waitForFollowupQueueIdle(key: string, timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const fq = FOLLOWUP_QUEUES.get(key);
+    if (!fq || (fq.items.length === 0 && !fq.draining && fq.droppedCount === 0)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  defaultRuntime.error?.(
+    `announce drain: followup queue yield timeout for ${key} (${timeoutMs}ms)`,
+  );
+}
 
 export type AnnounceQueueItem = {
   prompt: string;
@@ -91,6 +113,8 @@ function scheduleAnnounceDrain(key: string) {
       let forceIndividualCollect = false;
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
+        // Fix 2v2: Yield to followup queue — user messages always go first.
+        await waitForFollowupQueueIdle(key);
         if (queue.mode === "collect") {
           if (forceIndividualCollect) {
             const next = queue.items.shift();
