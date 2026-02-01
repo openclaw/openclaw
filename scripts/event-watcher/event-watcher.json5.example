@@ -1,0 +1,132 @@
+{
+  // ============================================================================
+  // Event Watcher Configuration
+  // ============================================================================
+  // Copy this file to ~/.clawdbot/event-watcher.json5 and customize.
+  //
+  // This defines which sources to monitor and how to wake Clawdbot.
+  // ============================================================================
+
+  // How often to check all sources (in seconds)
+  // Lower = more responsive, but more API calls
+  // Recommended: 30-60 for email, 5-15 for urgent monitoring
+  "pollIntervalSeconds": 30,
+
+  // Where to store state between runs
+  // Default: ~/.clawdbot/event-watcher-state.json
+  "stateFile": "~/.clawdbot/event-watcher-state.json",
+
+  // How to wake Clawdbot when something needs attention
+  //   "now"            - Trigger immediate heartbeat (fastest response)
+  //   "next-heartbeat" - Wait for next scheduled heartbeat (batches events)
+  "wakeMode": "now",
+
+  // ============================================================================
+  // Watchers
+  // ============================================================================
+  // Enable the sources you want to monitor.
+  // Each watcher checks a specific service and wakes Clawdbot when something new arrives.
+  // ============================================================================
+
+  "watchers": {
+    
+    // ------------------------------------------------------------------------
+    // Gmail Watcher
+    // Monitors for new unread emails
+    // ------------------------------------------------------------------------
+    "gmail": {
+      "enabled": true,
+      
+      // Path to Google OAuth tokens (from Clawdbot Google setup)
+      // Default locations tried:
+      //   ~/.clawdbot/credentials/google-tokens.json
+      //   ~/clawd/google-tokens.json
+      "credentialsFile": "~/.clawdbot/credentials/google-tokens.json",
+      
+      // Optional: Only wake for emails matching these criteria
+      "filters": {
+        // Only wake for emails from these domains (empty = all)
+        "fromDomains": [],
+        
+        // Ignore emails with these Gmail labels
+        "excludeLabels": ["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "CATEGORY_UPDATES"],
+        
+        // Only wake for emails containing these words in subject (empty = all)
+        "subjectContains": []
+      }
+    },
+    
+    // ------------------------------------------------------------------------
+    // Google Calendar Watcher
+    // Alerts when events are approaching
+    // ------------------------------------------------------------------------
+    "calendar": {
+      "enabled": false,
+      
+      "credentialsFile": "~/.clawdbot/credentials/google-tokens.json",
+      
+      // Wake when an event is this many minutes away
+      "lookaheadMinutes": 15,
+      
+      // Don't wake for all-day events
+      "ignoreAllDay": true,
+      
+      // Only wake for events on these calendars (empty = all)
+      "calendarIds": []
+    },
+    
+    // ------------------------------------------------------------------------
+    // Matrix Watcher (for self-hosted Matrix servers)
+    // ------------------------------------------------------------------------
+    "matrix": {
+      "enabled": false,
+      
+      // Matrix homeserver URL
+      "homeserver": "https://matrix.example.com",
+      
+      // Access token for the bot user
+      "accessToken": "",
+      
+      // Rooms to monitor (empty = all joined rooms)
+      "roomIds": []
+    },
+    
+    // ------------------------------------------------------------------------
+    // Generic Webhook/URL Watcher
+    // Checks if a URL returns new content
+    // ------------------------------------------------------------------------
+    "webhook": {
+      "enabled": false,
+      
+      // URL to poll
+      "url": "https://api.example.com/events",
+      
+      // HTTP method
+      "method": "GET",
+      
+      // Headers to include
+      "headers": {
+        // "Authorization": "Bearer your-token"
+      },
+      
+      // JSONPath to extract value to compare (empty = compare whole response)
+      "jsonPath": ".events[0].id",
+      
+      // Custom wake message template
+      // Available variables: {value}, {url}
+      "wakeMessage": "New event from webhook: {value}"
+    }
+    
+    // ------------------------------------------------------------------------
+    // ADD YOUR CUSTOM WATCHERS HERE
+    // ------------------------------------------------------------------------
+    // See the script's watcher_template function for how to implement.
+    // Examples you might add:
+    //   - RSS feed monitor
+    //   - Discord webhook receiver
+    //   - File system watcher
+    //   - Database change detector
+    //   - API health checker
+    // ------------------------------------------------------------------------
+  }
+}

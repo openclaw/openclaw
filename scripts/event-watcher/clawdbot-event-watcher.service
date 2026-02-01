@@ -1,0 +1,21 @@
+[Unit]
+Description=Clawdbot Event Watcher - Lightweight polling for external services
+Documentation=https://github.com/clawdbot/clawdbot/tree/main/scripts/event-watcher
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.clawdbot/scripts/event-watcher.sh --loop
+Restart=always
+RestartSec=10
+
+# Optional: Set environment variables
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+# Environment=EVENT_WATCHER_DEBUG=1
+
+# Optional: Resource limits
+MemoryMax=100M
+CPUQuota=10%
+
+[Install]
+WantedBy=default.target
