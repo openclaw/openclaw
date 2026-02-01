@@ -1,0 +1,63 @@
+services:
+  moltbot-gateway:
+    image: ${CLAWDBOT_IMAGE:-moltbot:local}
+    env_file:
+      - .env
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      MOLTBOT_STATE_DIR: /home/node/.clawdbot
+      CLAWDBOT_GATEWAY_BIND: ${CLAWDBOT_GATEWAY_BIND:-lan}
+      CLAWDBOT_GATEWAY_PORT: ${CLAWDBOT_GATEWAY_PORT:-18789}
+      # Keep this in sync with gateway.auth.token in moltbot.json.
+      CLAWDBOT_GATEWAY_TOKEN: ${CLAWDBOT_GATEWAY_TOKEN:-change-me}
+    volumes:
+      - /mnt/user/appdata/moltbot/config:/home/node/.clawdbot
+      - /mnt/user/appdata/moltbot/workspace:/home/node/clawd
+    ports:
+      - "${CLAWDBOT_GATEWAY_PORT:-18789}:18789"
+      - "${CLAWDBOT_BRIDGE_PORT:-18790}:18790"
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "dist/index.js",
+          "health",
+          "--token",
+          "${CLAWDBOT_GATEWAY_TOKEN}"
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${CLAWDBOT_GATEWAY_BIND:-lan}",
+        "--port",
+        "${CLAWDBOT_GATEWAY_PORT:-18789}"
+      ]
+
+  moltbot-cli:
+    image: ${CLAWDBOT_IMAGE:-moltbot:local}
+    env_file:
+      - .env
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      BROWSER: echo
+      MOLTBOT_STATE_DIR: /home/node/.clawdbot
+      CLAWDBOT_GATEWAY_TOKEN: ${CLAWDBOT_GATEWAY_TOKEN:-change-me}
+    volumes:
+      - /mnt/user/appdata/moltbot/config:/home/node/.clawdbot
+      - /mnt/user/appdata/moltbot/workspace:/home/node/clawd
+    stdin_open: true
+    tty: true
+    init: true
+    entrypoint: ["node", "dist/index.js"]

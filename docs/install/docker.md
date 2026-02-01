@@ -64,6 +64,73 @@ It writes config/workspace on the host:
 
 Running on a VPS? See [Hetzner (Docker VPS)](/platforms/hetzner).
 
+### Unraid compose setup
+
+Unraid runs Docker as root, so the default `~/.clawdbot` and `~/clawd` paths
+land under `/root`. Use the Unraid compose file to bind to `appdata` instead.
+
+1) Create persistent folders and set ownership to the container user (uid 1000):
+
+```bash
+mkdir -p /mnt/user/appdata/moltbot/config /mnt/user/appdata/moltbot/workspace
+chown -R 1000:1000 /mnt/user/appdata/moltbot
+```
+
+2) Copy `docker-compose.unraid.yml` into `/mnt/user/appdata/moltbot/`.
+Optionally run the helper to generate `.env` and copy the compose file:
+
+```bash
+./scripts/unraid-setup.sh /mnt/user/appdata/moltbot
+```
+
+3) Create a stack in the Unraid Compose Manager plugin using that file. Set:
+- `CLAWDBOT_GATEWAY_TOKEN` to a strong value
+- Keep `CLAWDBOT_GATEWAY_TOKEN` in sync with `gateway.auth.token` in `moltbot.json`
+- Optional: `CLAWDBOT_GATEWAY_PORT` and `CLAWDBOT_GATEWAY_BIND` (default `18789` / `lan`)
+- Optional: `CLAWDBOT_IMAGE` if you build or pull a custom tag
+
+4) Build or pull your image (same tag as `CLAWDBOT_IMAGE`), then start the stack.
+
+5) Run onboarding from a shell (Compose Manager does not run interactive TTY):
+
+```bash
+docker compose -f /mnt/user/appdata/moltbot/docker-compose.unraid.yml run --rm moltbot-cli onboard --no-install-daemon
+```
+
+6) Open the Control UI from a **secure context** (LAN HTTP is blocked). The
+quickest path is an SSH tunnel:
+
+```bash
+ssh -N -L 18789:127.0.0.1:18789 root@gateway-host
+```
+
+Then open:
+`http://127.0.0.1:18789/?token=<gateway-token>`
+
+7) If the UI says `pairing required`, approve the device:
+
+```bash
+TOKEN="<gateway-token>"
+docker compose -f /mnt/user/appdata/moltbot/docker-compose.unraid.yml exec \
+  -e CLAWDBOT_GATEWAY_TOKEN="$TOKEN" \
+  moltbot-gateway node dist/index.js devices list
+docker compose -f /mnt/user/appdata/moltbot/docker-compose.unraid.yml exec \
+  -e CLAWDBOT_GATEWAY_TOKEN="$TOKEN" \
+  moltbot-gateway node dist/index.js devices approve <requestId>
+```
+
+Note: the Unraid compose file sets `MOLTBOT_STATE_DIR=/home/node/.clawdbot` to
+avoid legacy state migration warnings when the config dir is bind-mounted.
+
+Troubleshooting: if you run `docker compose` without `-f`, Compose uses the
+default `docker-compose.yml` and expects `CLAWDBOT_CONFIG_DIR` /
+`CLAWDBOT_WORKSPACE_DIR`. Either use `-f docker-compose.unraid.yml` or copy it
+to `docker-compose.yml` in `/mnt/user/appdata/moltbot/`.
+
+If you must use plain HTTP over LAN, you can disable device identity checks
+with `gateway.controlUi.allowInsecureAuth: true`, but this is a security
+downgrade. Prefer SSH tunnels or HTTPS.
+
 ### Manual flow (compose)
 
 ```bash
