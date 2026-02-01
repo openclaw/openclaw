@@ -148,7 +148,54 @@ export function getTotalQueueSize() {
   return total;
 }
 
-export function clearCommandLane(lane: string = CommandLane.Main) {
+/**
+ * Returns the current number of lanes in the map.
+ * Useful for monitoring memory usage and detecting leaks.
+ */
+export function getLaneCount(): number {
+  return lanes.size;
+}
+
+/**
+ * Check if a lane is idle (no queued tasks and no active tasks).
+ */
+function isLaneIdle(state: LaneState): boolean {
+  return state.queue.length === 0 && state.active === 0;
+}
+
+/**
+ * Remove a lane from the map entirely.
+ * Only removes if the lane exists and is idle (no queued or active tasks).
+ * Returns true if the lane was removed, false otherwise.
+ */
+export function removeLane(lane: string): boolean {
+  const cleaned = lane.trim() || CommandLane.Main;
+  // Never remove the main lane - it should always exist
+  if (cleaned === CommandLane.Main) {
+    return false;
+  }
+  const state = lanes.get(cleaned);
+  if (!state) {
+    return false;
+  }
+  // Only remove if idle to prevent data loss
+  if (!isLaneIdle(state)) {
+    diag.debug(
+      `removeLane: lane=${cleaned} not idle (queued=${state.queue.length} active=${state.active}), skipping removal`,
+    );
+    return false;
+  }
+  lanes.delete(cleaned);
+  diag.debug(`removeLane: lane=${cleaned} removed`);
+  return true;
+}
+
+/**
+ * Clear all queued (not active) tasks from a lane.
+ * If removeWhenIdle is true (default), also removes the lane entry when it becomes idle.
+ * Returns the number of cleared tasks.
+ */
+export function clearCommandLane(lane: string = CommandLane.Main, removeWhenIdle = true): number {
   const cleaned = lane.trim() || CommandLane.Main;
   const state = lanes.get(cleaned);
   if (!state) {
@@ -156,5 +203,33 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
   }
   const removed = state.queue.length;
   state.queue.length = 0;
+  // Auto-remove the lane entry if it's now idle and not the main lane
+  if (removeWhenIdle && isLaneIdle(state) && cleaned !== CommandLane.Main) {
+    lanes.delete(cleaned);
+    diag.debug(`clearCommandLane: lane=${cleaned} removed (idle after clear)`);
+  }
   return removed;
+}
+
+/**
+ * Remove all idle lanes from the map.
+ * Useful for periodic cleanup to prevent unbounded growth.
+ * Returns the number of lanes removed.
+ */
+export function pruneIdleLanes(): number {
+  let pruned = 0;
+  for (const [lane, state] of lanes.entries()) {
+    // Never remove the main lane
+    if (lane === CommandLane.Main) {
+      continue;
+    }
+    if (isLaneIdle(state)) {
+      lanes.delete(lane);
+      pruned++;
+    }
+  }
+  if (pruned > 0) {
+    diag.debug(`pruneIdleLanes: removed ${pruned} idle lanes, ${lanes.size} remaining`);
+  }
+  return pruned;
 }
