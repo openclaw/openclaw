@@ -59,9 +59,7 @@ export type HookAction =
       timeoutSeconds?: number;
     };
 
-type ActionValidationResult =
-  | { ok: true; action: HookAction }
-  | { ok: false; error: string };
+type ActionValidationResult = { ok: true; action: HookAction } | { ok: false; error: string };
 
 export type HookMappingResult =
   | ({ ok: true; action: HookAction } & { agentId?: string; accountId?: string })
