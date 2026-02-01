@@ -166,6 +166,9 @@ Isolation options (only for `session=isolated`):
 - `postToMainMode`: `summary` (default) or `full`.
 - `postToMainMaxChars`: max chars when `postToMainMode=full` (default 8000).
 
+> **Note:** `postToMainMode` requires specific configuration to work — see
+> [Troubleshooting: postToMainMode not working](#posttomainmode-not-working-isolated-jobs).
+
 ### Model and thinking overrides
 
 Isolated jobs (`agentTurn`) can override the model and thinking level:
@@ -436,6 +439,22 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - Check cron is enabled: `cron.enabled` and `OPENCLAW_SKIP_CRON`.
 - Check the Gateway is running continuously (cron runs inside the Gateway process).
 - For `cron` schedules: confirm timezone (`--tz`) vs the host timezone.
+
+### postToMainMode not working (isolated jobs)
+
+Isolated jobs can post a summary to the agent's main session after each run,
+but this requires all of the following:
+
+1. **`wakeMode: "now"`** on the cron job (CLI: `--wake now`) — this triggers an immediate heartbeat
+   to process the queued summary (it does not cause the cron job itself to
+   fire immediately).
+2. **A `heartbeat` block on the agent** with a non-zero interval — without this,
+   the heartbeat runner won't include the agent in its processing loop. The
+   interval can be long (e.g. `"1440m"`) since `wakeMode: "now"` triggers processing
+   on demand.
+3. **A non-empty `HEARTBEAT.md`** in the agent's workspace — if the file contains
+   only comments or headers, the heartbeat skips processing, including the
+   summary drain. Add at least one non-comment line.
 
 ### Telegram delivers to the wrong place
 
