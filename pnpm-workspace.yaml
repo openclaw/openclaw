@@ -7,6 +7,7 @@ packages:
 onlyBuiltDependencies:
   - "@whiskeysockets/baileys"
   - "@lydell/node-pty"
+  - "@lancedb/lancedb"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
   - authenticate-pam
   - esbuild

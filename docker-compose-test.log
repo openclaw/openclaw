@@ -1,0 +1,176 @@
+ Network openclaw-repo_default Creating 
+ Network openclaw-repo_default Created 
+ Container openclaw-repo-browser-1 Creating 
+ Container openclaw-repo-openclaw-gateway-1 Creating 
+ Container openclaw-repo-openclaw-cli-1 Creating 
+ Container openclaw-repo-openclaw-gateway-1 Created 
+ Container openclaw-repo-openclaw-cli-1 Created 
+ Container openclaw-repo-browser-1 Created 
+Attaching to browser-1, openclaw-cli-1, openclaw-gateway-1
+ Container openclaw-repo-browser-1 Starting 
+ Container openclaw-repo-openclaw-cli-1 Starting 
+ Container openclaw-repo-openclaw-gateway-1 Starting 
+ Container openclaw-repo-browser-1 Started 
+ Container openclaw-repo-openclaw-cli-1 Started 
+ Container openclaw-repo-openclaw-gateway-1 Started 
+browser-1  | 2026-01-31T15:42:15.795Z browserless:server Using configuration: 
+browser-1  | 2026-01-31T15:42:15.800Z browserless:server {
+browser-1  |   CONNECTION_TIMEOUT: 60000,
+browser-1  |   MAX_CONCURRENT_SESSIONS: 5,
+browser-1  |   QUEUE_LENGTH: 10,
+browser-1  |   SINGLE_RUN: false,
+browser-1  |   CHROME_REFRESH_TIME: 1800000,
+browser-1  |   KEEP_ALIVE: false,
+browser-1  |   DEFAULT_BLOCK_ADS: false,
+browser-1  |   DEFAULT_HEADLESS: 'new',
+browser-1  |   DEFAULT_LAUNCH_ARGS: [],
+browser-1  |   DEFAULT_IGNORE_DEFAULT_ARGS: false,
+browser-1  |   DEFAULT_IGNORE_HTTPS_ERRORS: false,
+browser-1  |   DEFAULT_DUMPIO: false,
+browser-1  |   DEFAULT_STEALTH: false,
+browser-1  |   DEFAULT_USER_DATA_DIR: undefined,
+browser-1  |   PREBOOT_CHROME: false,
+browser-1  |   PREBOOT_QUANTITY: 0,
+browser-1  |   PRINT_GET_STARTED_LINKS: true,
+browser-1  |   PRINT_NETWORK_INFO: true,
+browser-1  |   DEBUG: 'browserless*',
+browser-1  |   DISABLED_FEATURES: [],
+browser-1  |   ENABLE_CORS: false,
+browser-1  |   ENABLE_API_GET: false,
+browser-1  |   TOKEN: null,
+browser-1  |   ENABLE_HEAP_DUMP: false,
+browser-1  |   ALLOW_FILE_PROTOCOL: false,
+browser-1  |   DISABLE_AUTO_SET_DOWNLOAD_BEHAVIOR: false,
+browser-1  |   FUNCTION_BUILT_INS: [ 'url' ],
+browser-1  |   FUNCTION_ENV_VARS: [],
+browser-1  |   FUNCTION_ENABLE_INCOGNITO_MODE: false,
+browser-1  |   FUNCTION_EXTERNALS: [ 'lighthouse', 'node-pdftk', 'sharp' ],
+browser-1  |   WORKSPACE_DIR: '/usr/src/app/workspace',
+browser-1  |   WORKSPACE_DELETE_EXPIRED: false,
+browser-1  |   WORKSPACE_EXPIRE_DAYS: 30,
+browser-1  |   FAILED_HEALTH_URL: null,
+browser-1  |   QUEUE_ALERT_URL: null,
+browser-1  |   REJECT_ALERT_URL: null,
+browser-1  |   TIMEOUT_ALERT_URL: null,
+browser-1  |   ERROR_ALERT_URL: null,
+browser-1  |   SESSION_CHECK_FAIL_URL: null,
+browser-1  |   PRE_REQUEST_HEALTH_CHECK: false,
+browser-1  |   EXIT_ON_HEALTH_FAILURE: false,
+browser-1  |   MAX_CPU_PERCENT: 99,
+browser-1  |   MAX_MEMORY_PERCENT: 99,
+browser-1  |   METRICS_JSON_PATH: null,
+browser-1  |   HOST: '0.0.0.0',
+browser-1  |   PORT: 3000,
+browser-1  |   SOCKET_CLOSE_METHOD: 'http',
+browser-1  |   PROXY_URL: undefined,
+browser-1  |   MAX_PAYLOAD_SIZE: '5mb'
+browser-1  | }
+browser-1  | 2026-01-31T15:42:15.801Z browserless:server 
+browser-1  | 
+browser-1  | Running on port 3000
+browser-1  | 	Localhost	 ws:localhost:3000
+browser-1  | 	Local network	 ws:172.18.0.2:3000
+browser-1  | 2026-01-31T15:42:15.803Z browserless:server 
+browser-1  | Get started at	 https://www.browserless.io/docs/start
+browser-1  | Get a license at	 https://www.browserless.io/sign-up?type=commercial
+browser-1  | Get support at	 https://www.browserless.io/contact
+browser-1  | 
+browser-1  | Happy coding!
+browser-1  | 
+openclaw-cli-1  | 
+openclaw-cli-1  | [1m[38;5;209m🦞 OpenClaw[39m[22m [38;5;216m2026.1.30[39m [38;5;138m(unknown)[39m
+openclaw-cli-1  |    [38;5;167mShip fast, log faster.[39m
+openclaw-cli-1  | 
+openclaw-cli-1  | Usage: openclaw [options] [command]
+openclaw-cli-1  | 
+openclaw-cli-1  | Options:
+openclaw-cli-1  |   [38;5;215m-V, --version[39m     output the version number
+openclaw-cli-1  |   [38;5;215m--dev[39m             Dev profile: isolate state under ~/.openclaw-dev, default gateway port 19001, and shift derived ports (browser/canvas)
+openclaw-cli-1  |   [38;5;215m--profile <name>[39m  Use a named profile (isolates OPENCLAW_STATE_DIR/OPENCLAW_CONFIG_PATH under ~/.openclaw-<name>)
+openclaw-cli-1  |   [38;5;215m--no-color[39m        Disable ANSI colors
+openclaw-cli-1  |   [38;5;215m-h, --help[39m        display help for command
+openclaw-cli-1  | 
+openclaw-cli-1  | Commands:
+openclaw-cli-1  |   [38;5;209msetup[39m             Initialize ~/.openclaw/openclaw.json and the agent workspace
+openclaw-cli-1  |   [38;5;209monboard[39m           Interactive wizard to set up the gateway, workspace, and skills
+openclaw-cli-1  |   [38;5;209mconfigure[39m         Interactive prompt to set up credentials, devices, and agent defaults
+openclaw-cli-1  |   [38;5;209mconfig[39m            Config helpers (get/set/unset). Run without subcommand for the wizard.
+openclaw-cli-1  |   [38;5;209mdoctor[39m            Health checks + quick fixes for the gateway and channels
+openclaw-cli-1  |   [38;5;209mdashboard[39m         Open the Control UI with your current token
+openclaw-cli-1  |   [38;5;209mreset[39m             Reset local config/state (keeps the CLI installed)
+openclaw-cli-1  |   [38;5;209muninstall[39m         Uninstall the gateway service + local data (CLI remains)
+openclaw-cli-1  |   [38;5;209mmessage[39m           Send messages and channel actions
+openclaw-cli-1  |   [38;5;209mmemory[39m            Memory search tools
+openclaw-cli-1  |   [38;5;209magent[39m             Run an agent turn via the Gateway (use --local for embedded)
+openclaw-cli-1  |   [38;5;209magents[39m            Manage isolated agents (workspaces + auth + routing)
+openclaw-cli-1  |   [38;5;209macp[39m               Agent Control Protocol tools
+openclaw-cli-1  |   [38;5;209mgateway[39m           Gateway control
+openclaw-cli-1  |   [38;5;209mdaemon[39m            Gateway service (legacy alias)
+openclaw-cli-1  |   [38;5;209mlogs[39m              Gateway logs
+openclaw-cli-1  |   [38;5;209msystem[39m            System events, heartbeat, and presence
+openclaw-cli-1  |   [38;5;209mmodels[39m            Model configuration
+openclaw-cli-1  |   [38;5;209mapprovals[39m         Exec approvals
+openclaw-cli-1  |   [38;5;209mnodes[39m             Node commands
+openclaw-cli-1  |   [38;5;209mdevices[39m           Device pairing + token management
+openclaw-cli-1  |   [38;5;209mnode[39m              Node control
+openclaw-cli-1  |   [38;5;209msandbox[39m           Sandbox tools
+openclaw-cli-1  |   [38;5;209mtui[39m               Terminal UI
+openclaw-cli-1  |   [38;5;209mcron[39m              Cron scheduler
+openclaw-cli-1  |   [38;5;209mdns[39m               DNS helpers
+openclaw-cli-1  |   [38;5;209mdocs[39m              Docs helpers
+openclaw-cli-1  |   [38;5;209mhooks[39m             Hooks tooling
+openclaw-cli-1  |   [38;5;209mwebhooks[39m          Webhook helpers
+openclaw-cli-1  |   [38;5;209mpairing[39m           Pairing helpers
+openclaw-cli-1  |   [38;5;209mplugins[39m           Plugin management
+openclaw-cli-1  |   [38;5;209mchannels[39m          Channel management
+openclaw-cli-1  |   [38;5;209mdirectory[39m         Directory commands
+openclaw-cli-1  |   [38;5;209msecurity[39m          Security helpers
+openclaw-cli-1  |   [38;5;209mskills[39m            Skills management
+openclaw-cli-1  |   [38;5;209mupdate[39m            CLI update helpers
+openclaw-cli-1  |   [38;5;209mcompletion[39m        Generate shell completion script
+openclaw-cli-1  |   [38;5;209mstatus[39m            Show channel health and recent session recipients
+openclaw-cli-1  |   [38;5;209mhealth[39m            Fetch health from the running gateway
+openclaw-cli-1  |   [38;5;209msessions[39m          List stored conversation sessions
+openclaw-cli-1  |   [38;5;209mbrowser[39m           Manage OpenClaw's dedicated browser (Chrome/Chromium)
+openclaw-cli-1  |   [38;5;209mhelp[39m              display help for command
+openclaw-cli-1  | 
+openclaw-cli-1  | [1m[38;5;209mExamples:[39m[22m
+openclaw-cli-1  |   [38;5;209mopenclaw channels login --verbose[39m
+openclaw-cli-1  |     [38;5;138mLink personal WhatsApp Web and show QR + connection logs.[39m
+openclaw-cli-1  |   [38;5;209mopenclaw message send --target +15555550123 --message "Hi" --json[39m
+openclaw-cli-1  |     [38;5;138mSend via your web session and print JSON result.[39m
+openclaw-cli-1  |   [38;5;209mopenclaw gateway --port 18789[39m
+openclaw-cli-1  |     [38;5;138mRun the WebSocket Gateway locally.[39m
+openclaw-cli-1  |   [38;5;209mopenclaw --dev gateway[39m
+openclaw-cli-1  |     [38;5;138mRun a dev Gateway (isolated state/config) on ws://127.0.0.1:19001.[39m
+openclaw-cli-1  |   [38;5;209mopenclaw gateway --force[39m
+openclaw-cli-1  |     [38;5;138mKill anything bound to the default gateway port, then start it.[39m
+openclaw-cli-1  |   [38;5;209mopenclaw gateway ...[39m
+openclaw-cli-1  |     [38;5;138mGateway control via WebSocket.[39m
+openclaw-cli-1  |   [38;5;209mopenclaw agent --to +15555550123 --message "Run summary" --deliver[39m
+openclaw-cli-1  |     [38;5;138mTalk directly to the agent using the Gateway; optionally send the WhatsApp reply.[39m
+openclaw-cli-1  |   [38;5;209mopenclaw message send --channel telegram --target @mychat --message "Hi"[39m
+openclaw-cli-1  |     [38;5;138mSend via your Telegram bot.[39m
+openclaw-cli-1  | 
+openclaw-cli-1  | [38;5;138mDocs:[39m ]8;;https://docs.openclaw.ai/clidocs.openclaw.ai/cli]8;;
+openclaw-cli-1  | 
+[Kopenclaw-cli-1 exited with code 1
+openclaw-gateway-1  | [90m2026-01-31T15:42:49.218Z[39m [36m[gateway][39m [36mmemory-lancedb: plugin registered (db: /home/node/.openclaw/memory/lancedb, lazy init)[39m
+openclaw-gateway-1  | [90m2026-01-31T15:42:49.341Z[39m [35m[canvas][39m [36mhost mounted at http://0.0.0.0:18789/__openclaw__/canvas/ (root /home/node/.openclaw/canvas)[39m
+openclaw-gateway-1  | [90m2026-01-31T15:42:49.441Z[39m [36m[heartbeat][39m [36mstarted[39m
+openclaw-gateway-1  | [90m2026-01-31T15:42:49.445Z[39m [36m[gateway][39m [36magent model: github-copilot/gpt-4o[39m
+openclaw-gateway-1  | [90m2026-01-31T15:42:49.447Z[39m [36m[gateway][39m [36mlistening on ws://0.0.0.0:18789 (PID 7)[39m
+openclaw-gateway-1  | [90m2026-01-31T15:42:49.450Z[39m [36m[gateway][39m [36mlog file: /tmp/openclaw/openclaw-2026-01-31.log[39m
+openclaw-gateway-1  | [90m2026-01-31T15:42:49.480Z[39m [35m[browser/service][39m [36mBrowser control service ready (profiles=2)[39m
+openclaw-gateway-1  | [90m2026-01-31T15:42:49.487Z[39m [36m[gateway][39m [36mmemory-lancedb: initialized (db: /home/node/.openclaw/memory/lancedb, model: gemini-embedding-001)[39m
+openclaw-gateway-1  | [90m2026-01-31T15:42:49.600Z[39m [36m[ws][39m [36mwebchat connected conn=b49fad9d-82e7-46b0-b104-2be81a4fc407 remote=10.66.66.2 client=openclaw-control-ui webchat vdev[39m
+openclaw-gateway-1  | [90m2026-01-31T15:42:50.079Z[39m [34m[telegram][39m [36m[default] starting provider (@guang3000bot)[39m
+openclaw-gateway-1  | [90m2026-01-31T15:42:50.085Z[39m [34m[telegram][39m [36mautoSelectFamily=false (default-node22)[39m
+ Compose Stopping Gracefully Stopping... press Ctrl+C again to force
+ Container openclaw-repo-openclaw-gateway-1 Stopping 
+ Container openclaw-repo-browser-1 Stopping 
+ Container openclaw-repo-openclaw-cli-1 Stopping 
+ Container openclaw-repo-openclaw-cli-1 Stopped 
+ Container openclaw-repo-browser-1 Stopped 
+ Container openclaw-repo-openclaw-gateway-1 Stopped 
+

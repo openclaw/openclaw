@@ -1,10 +1,11 @@
+import { Type } from "@sinclair/typebox";
 import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type MemoryConfig = {
   embedding: {
-    provider: "openai";
+    provider: "openai" | "google";
     model?: string;
     apiKey: string;
   };
@@ -49,6 +50,7 @@ const DEFAULT_DB_PATH = resolveDefaultDbPath();
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
+  "gemini-embedding-001": 768,
 };
 
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
@@ -83,6 +85,53 @@ function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
   return model;
 }
 
+function resolveEmbeddingProvider(model: string, explicitProvider?: string): "openai" | "google" {
+  // If provider is explicitly specified, use it
+  if (explicitProvider === "google" || explicitProvider === "openai") {
+    return explicitProvider;
+  }
+  // Otherwise, auto-detect based on model name
+  if (model.startsWith("gemini-")) {
+    return "google";
+  }
+  return "openai";
+}
+
+// Typebox schema for config validation
+export const memoryConfigTypeboxSchema = Type.Object({
+  embedding: Type.Object({
+    apiKey: Type.String({
+      description: "API key for embeddings provider",
+    }),
+    provider: Type.Optional(
+      Type.Union([Type.Literal("openai"), Type.Literal("google")], {
+        description: "Embedding provider (auto-detected from model if not specified)",
+      }),
+    ),
+    model: Type.Optional(
+      Type.String({
+        description:
+          "Embedding model to use (OpenAI: text-embedding-3-small/3-large, Google: gemini-embedding-001)",
+      }),
+    ),
+  }),
+  dbPath: Type.Optional(
+    Type.String({
+      description: "Database path",
+    }),
+  ),
+  autoCapture: Type.Optional(
+    Type.Boolean({
+      description: "Automatically capture important information from conversations",
+    }),
+  ),
+  autoRecall: Type.Optional(
+    Type.Boolean({
+      description: "Automatically inject relevant memories into context",
+    }),
+  ),
+});
+
 export const memoryConfigSchema = {
   parse(value: unknown): MemoryConfig {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -95,13 +144,16 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
+    assertAllowedKeys(embedding, ["apiKey", "model", "provider"], "embedding config");
 
     const model = resolveEmbeddingModel(embedding);
+    const explicitProvider =
+      typeof embedding.provider === "string" ? embedding.provider : undefined;
+    const provider = resolveEmbeddingProvider(model, explicitProvider);
 
     return {
       embedding: {
-        provider: "openai",
+        provider,
         model,
         apiKey: resolveEnvVars(embedding.apiKey),
       },
@@ -112,15 +164,19 @@ export const memoryConfigSchema = {
   },
   uiHints: {
     "embedding.apiKey": {
-      label: "OpenAI API Key",
+      label: "API Key",
       sensitive: true,
-      placeholder: "sk-proj-...",
-      help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
+      placeholder: "sk-proj-... (for OpenAI) or AIza... (for Google)",
+      help: "API key for embeddings provider (use ${OPENAI_API_KEY} or ${GOOGLE_API_KEY})",
+    },
+    "embedding.provider": {
+      label: "Provider",
+      help: "Embedding provider (auto-detected from model if not specified)",
     },
     "embedding.model": {
       label: "Embedding Model",
       placeholder: DEFAULT_MODEL,
-      help: "OpenAI embedding model to use",
+      help: "Embedding model to use (OpenAI or Google Gemini)",
     },
     dbPath: {
       label: "Database Path",

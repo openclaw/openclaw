@@ -1,0 +1,10 @@
+services:
+  # Browser service for web scraping and automation
+  browser:
+    image: browserless/chrome:latest
+    restart: always
+    expose:
+      - "3000"
+    environment:
+      - CONNECTION_TIMEOUT=60000
+      - MAX_CONCURRENT_SESSIONS=5

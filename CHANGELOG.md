@@ -84,6 +84,8 @@ Docs: https://docs.openclaw.ai
 - Agents: expand cron tool description with full schema docs. (#1988) Thanks @tomascupr.
 - Agents: honor tools.exec.safeBins in exec allowlist checks. (#2281)
 - Memory Search: allow extra paths for memory indexing (ignores symlinks). (#3600) Thanks @kira-ariaki.
+- Memory (LanceDB): add Google Gemini embeddings support with 768-dimension vectors alongside OpenAI models (1536/3072 dimensions). Auto-detects provider from model name or allows explicit provider selection.
+- Memory (LanceDB): add strict API response validation and configurable embedding dimensions for future model support.
 - Skills: add multi-image input support to Nano Banana Pro skill. (#1958) Thanks @tyler6204.
 - Skills: add missing dependency metadata for GitHub, Notion, Slack, Discord. (#1995) Thanks @jackheuberger.
 - Commands: group /help and /commands output with Telegram paging. (#2504) Thanks @hougangdev.
