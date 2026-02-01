@@ -435,6 +435,8 @@ export type ToolsConfig = {
   subagents?: {
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
+    /** Default thinking level for spawned sub-agents. */
+    thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
     tools?: {
       allow?: string[];
       deny?: string[];

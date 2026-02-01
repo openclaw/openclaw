@@ -204,6 +204,8 @@ export type AgentDefaultsConfig = {
     archiveAfterMinutes?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
+    /** Default thinking level for spawned sub-agents. */
+    thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {

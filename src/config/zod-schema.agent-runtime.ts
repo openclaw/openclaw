@@ -530,6 +530,27 @@ export const ToolsSchema = z
     subagents: z
       .object({
         tools: ToolPolicySchema,
+        model: z
+          .union([
+            z.string(),
+            z
+              .object({
+                primary: z.string().optional(),
+                fallbacks: z.array(z.string()).optional(),
+              })
+              .strict(),
+          ])
+          .optional(),
+        thinking: z
+          .union([
+            z.literal("off"),
+            z.literal("minimal"),
+            z.literal("low"),
+            z.literal("medium"),
+            z.literal("high"),
+            z.literal("xhigh"),
+          ])
+          .optional(),
       })
       .strict()
       .optional(),
