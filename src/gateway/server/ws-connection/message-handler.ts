@@ -25,10 +25,10 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
+import { resolveAssistantIdentity } from "../../assistant-identity.js";
 import { authorizeGatewayConnect, isLocalDirectRequest } from "../../auth.js";
 import { buildDeviceAuthPayload } from "../../device-auth.js";
 import { isLoopbackAddress, isTrustedProxyAddress, resolveGatewayClientIp } from "../../net.js";
-import { resolveAssistantIdentity } from "../../assistant-identity.js";
 import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
 import {
@@ -826,10 +826,12 @@ export function attachGatewayWsMessageHandler(params: {
           },
           identity: (() => {
             try {
-              const cfg = loadConfig();
-              const resolved = resolveAssistantIdentity({ cfg });
+              const resolved = resolveAssistantIdentity({ cfg: configSnapshot });
               return { name: resolved.name, avatar: resolved.avatar };
-            } catch {
+            } catch (err) {
+              logGateway.warn(
+                `failed to resolve agent identity for hello-ok: ${formatForLog(err)}`,
+              );
               return undefined;
             }
           })(),
