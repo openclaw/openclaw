@@ -488,7 +488,7 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("audio ok");
   });
 
-  it("treats text-like audio attachments as CSV (comma wins over tabs)", async () => {
+  it("skips audio files from text extraction even if they contain text-like data", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const csvPath = path.join(dir, "data.mp3");
@@ -513,22 +513,22 @@ describe("applyMediaUnderstanding", () => {
 
     const result = await applyMediaUnderstanding({ ctx, cfg });
 
-    expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain('<file name="data.mp3" mime="text/csv">');
-    expect(ctx.Body).toContain('"a","b"\t"c"');
+    // Audio files should not be processed as text files — they go through STT pipeline
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).not.toContain("<file");
   });
 
-  it("infers TSV when tabs are present without commas", async () => {
+  it("skips video files from text extraction even if they contain text-like data", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
-    const tsvPath = path.join(dir, "report.mp3");
+    const tsvPath = path.join(dir, "report.mp4");
     const tsvText = "a\tb\tc\n1\t2\t3";
     await fs.writeFile(tsvPath, tsvText);
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "<media:video>",
       MediaPath: tsvPath,
-      MediaType: "audio/mpeg",
+      MediaType: "video/mp4",
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -542,9 +542,9 @@ describe("applyMediaUnderstanding", () => {
 
     const result = await applyMediaUnderstanding({ ctx, cfg });
 
-    expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain('<file name="report.mp3" mime="text/tab-separated-values">');
-    expect(ctx.Body).toContain("a\tb\tc");
+    // Video files should not be processed as text files — they go through description pipeline
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).not.toContain("<file");
   });
 
   it("escapes XML special characters in filenames to prevent injection", async () => {
