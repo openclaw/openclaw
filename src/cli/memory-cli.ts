@@ -533,7 +533,10 @@ export function registerMemoryCli(program: Command) {
                 );
                 const requestedProvider = status.requestedProvider ?? status.provider;
                 const modelLabel = status.model ?? status.provider;
-                const extraPaths = formatExtraPaths(status.workspaceDir, status.extraPaths ?? []);
+                const extraPaths = formatExtraPaths(
+                  status.workspaceDir ?? "",
+                  status.extraPaths ?? [],
+                );
                 const lines = [
                   `${heading("Memory Index")} ${muted(`(${agentId})`)}`,
                   `${label("Provider")} ${info(status.provider)} ${muted(

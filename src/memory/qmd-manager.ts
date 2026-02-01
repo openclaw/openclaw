@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -50,7 +50,7 @@ type SessionExporterConfig = {
 
 export class QmdMemoryManager implements MemorySearchManager {
   static async create(params: {
-    cfg: MoltbotConfig;
+    cfg: OpenClawConfig;
     agentId: string;
     resolved: ResolvedMemoryBackendConfig;
   }): Promise<QmdMemoryManager | null> {
@@ -61,7 +61,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     return manager;
   }
 
-  private readonly cfg: MoltbotConfig;
+  private readonly cfg: OpenClawConfig;
   private readonly agentId: string;
   private readonly qmd: ResolvedQmdConfig;
   private readonly workspaceDir: string;
@@ -87,7 +87,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private lastEmbedAt: number | null = null;
 
   private constructor(params: {
-    cfg: MoltbotConfig;
+    cfg: OpenClawConfig;
     agentId: string;
     resolved: ResolvedQmdConfig;
   }) {

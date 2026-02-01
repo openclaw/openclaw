@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type {
   MemoryBackend,
   MemoryCitationsMode,
@@ -214,7 +214,7 @@ function resolveDefaultCollections(
 }
 
 export function resolveMemoryBackendConfig(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentId: string;
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
