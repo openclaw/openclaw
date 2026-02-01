@@ -88,6 +88,14 @@ const NETWORK_ERROR_SNIPPETS = [
   "undici",
 ];
 
+const AGENT_EXECUTION_ERROR_SNIPPETS = [
+  "exec failed",
+  "command failed",
+  "command exited with code",
+  "tool execution failed",
+  "agent tool error",
+];
+
 const isNetworkRelatedError = (err: unknown) => {
   if (!err) {
     return false;
@@ -97,6 +105,17 @@ const isNetworkRelatedError = (err: unknown) => {
     return false;
   }
   return NETWORK_ERROR_SNIPPETS.some((snippet) => message.includes(snippet));
+};
+
+const isAgentExecutionError = (err: unknown) => {
+  if (!err) {
+    return false;
+  }
+  const message = formatErrorMessage(err).toLowerCase();
+  if (!message) {
+    return false;
+  }
+  return AGENT_EXECUTION_ERROR_SNIPPETS.some((snippet) => message.includes(snippet));
 };
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
@@ -185,13 +204,21 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       const isConflict = isGetUpdatesConflict(err);
       const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
       const isNetworkError = isNetworkRelatedError(err);
-      if (!isConflict && !isRecoverable && !isNetworkError) {
+      const isAgentError = isAgentExecutionError(err);
+      if (!isConflict && !isRecoverable && !isNetworkError && !isAgentError) {
         throw err;
+      }
+      const errMsg = formatErrorMessage(err);
+      if (isAgentError) {
+        // Log agent execution errors but don't restart the channel
+        (opts.runtime?.error ?? console.error)(
+          `Telegram agent execution error (non-fatal): ${errMsg}`,
+        );
+        return; // Continue running the channel without restart
       }
       restartAttempts += 1;
       const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
       const reason = isConflict ? "getUpdates conflict" : "network error";
-      const errMsg = formatErrorMessage(err);
       (opts.runtime?.error ?? console.error)(
         `Telegram ${reason}: ${errMsg}; retrying in ${formatDurationMs(delayMs)}.`,
       );

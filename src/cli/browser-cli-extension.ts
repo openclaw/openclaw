@@ -35,7 +35,7 @@ async function ensureExtensionSourceInWorkspace(): Promise<string> {
   // Find the source assets - try multiple possible locations
   const possibleSources = [
     // Relative to compiled code location (current approach)
-    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../assets/chrome-extension"),
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../assets/chrome-extension"),
     // Relative to project root when running from source
     path.resolve(process.cwd(), "assets/chrome-extension"),
     // In case we're in a subdirectory
@@ -59,7 +59,7 @@ async function ensureExtensionSourceInWorkspace(): Promise<string> {
   // Copy source assets to workspace
   fs.mkdirSync(path.dirname(workspaceSourceDir), { recursive: true });
   if (fs.existsSync(workspaceSourceDir)) {
-    await fs.promises.rm(workspaceSourceDir, { recursive: true });
+    await fs.promises.rm(workspaceSourceDir, { recursive: true, force: true });
   }
 
   await fs.promises.cp(foundSource, workspaceSourceDir, { recursive: true });
