@@ -108,6 +108,7 @@ export type ResolvedTtsConfig = {
     apiKey?: string;
     model: string;
     voice: string;
+    speed?: number;
   };
   edge: {
     enabled: boolean;
@@ -282,6 +283,7 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       apiKey: raw.openai?.apiKey,
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
+      speed: raw.openai?.speed,
     },
     edge: {
       enabled: raw.edge?.enabled ?? true,
@@ -1081,8 +1083,9 @@ async function openaiTTS(params: {
   voice: string;
   responseFormat: "mp3" | "opus" | "pcm";
   timeoutMs: number;
+  speed?: number;
 }): Promise<Buffer> {
-  const { text, apiKey, model, voice, responseFormat, timeoutMs } = params;
+  const { text, apiKey, model, voice, responseFormat, timeoutMs, speed } = params;
 
   if (!isValidOpenAIModel(model)) {
     throw new Error(`Invalid model: ${model}`);
@@ -1106,6 +1109,7 @@ async function openaiTTS(params: {
         input: text,
         voice,
         response_format: responseFormat,
+        ...(speed !== undefined && { speed }),
       }),
       signal: controller.signal,
     });
@@ -1295,6 +1299,7 @@ export async function textToSpeech(params: {
           voice: openaiVoiceOverride ?? config.openai.voice,
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
+          speed: config.openai.speed,
         });
       }
 
@@ -1397,6 +1402,7 @@ export async function textToSpeechTelephony(params: {
         voice: config.openai.voice,
         responseFormat: output.format,
         timeoutMs: config.timeoutMs,
+        speed: config.openai.speed,
       });
 
       return {

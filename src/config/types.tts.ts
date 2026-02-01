@@ -58,6 +58,7 @@ export type TtsConfig = {
     apiKey?: string;
     model?: string;
     voice?: string;
+    speed?: number;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {
