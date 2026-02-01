@@ -70,8 +70,11 @@ export function isPrivateIPv6(ip: string): boolean {
 export function isPrivateIP(ip: string): boolean {
   if (!ip) return false;
   const trimmed = ip.trim();
-  if (trimmed.includes(":")) return isPrivateIPv6(trimmed);
-  return isPrivateIPv4(trimmed);
+  const version = net.isIP(trimmed);
+  if (version === 6) return isPrivateIPv6(trimmed);
+  if (version === 4) return isPrivateIPv4(trimmed);
+  // Not a valid IP address string; treat as not private.
+  return false;
 }
 
 /**
