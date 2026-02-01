@@ -2,7 +2,22 @@ import type { WebClient as SlackWebClient } from "@slack/web-api";
 import type { FetchLike } from "../../media/fetch.js";
 import type { SlackFile } from "../types.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
+import { logWarn } from "../../logger.js";
 import { saveMediaBuffer } from "../../media/store.js";
+
+/**
+ * Detects if buffer content looks like HTML (login page / error page).
+ * Slack sometimes returns HTML login pages when auth fails instead of binary media.
+ */
+function looksLikeHtml(buffer: Buffer): boolean {
+  const head = buffer.subarray(0, 512).toString("utf-8").trim().toLowerCase();
+  return (
+    head.startsWith("<!doctype html") ||
+    head.startsWith("<html") ||
+    head.includes("slack-edge.com") ||
+    head.includes("redirecturl:")
+  );
+}
 
 /**
  * Fetches a URL with Authorization header, handling cross-origin redirects.
@@ -64,7 +79,20 @@ export async function resolveSlackMedia(params: {
         fetchImpl,
         filePathHint: file.name,
       });
-      if (fetched.buffer.byteLength > params.maxBytes) {
+      if (fetched.buffer.byteLength > params.maxBytes) continue;
+
+      // Guard: reject if we received HTML instead of expected media.
+      // This happens when Slack auth fails and returns a login page.
+      // Skip this check if the file metadata indicates it's genuinely an HTML file.
+      const detectedMime = fetched.contentType?.split(";")[0]?.trim().toLowerCase();
+      const expectedMime = file.mimetype?.split(";")[0]?.trim().toLowerCase();
+      const isExpectedHtml =
+        expectedMime === "text/html" || file.name?.toLowerCase().endsWith(".html");
+      if (!isExpectedHtml && (detectedMime === "text/html" || looksLikeHtml(fetched.buffer))) {
+        const fileId = file.name ?? file.id ?? "unknown";
+        logWarn(
+          `slack: received HTML instead of media for file ${fileId}; possible auth failure or expired URL`,
+        );
         continue;
       }
       const saved = await saveMediaBuffer(

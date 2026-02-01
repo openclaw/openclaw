@@ -242,6 +242,161 @@ describe("resolveSlackMedia", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("rejects HTML response (auth failure) and returns null", async () => {
+    const { resolveSlackMedia } = await import("./media.js");
+
+    // Simulate Slack returning an HTML login page instead of the image
+    const htmlContent = `<!DOCTYPE html>
+<html data-cdn="https://a.slack-edge.com/">
+<head><title>Slack</title></head>
+<body>
+<script>redirectURL: "/files-pri/T123-F456/download/image.png"</script>
+</body>
+</html>`;
+    const htmlResponse = new Response(htmlContent, {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+    mockFetch.mockResolvedValueOnce(htmlResponse);
+
+    const result = await resolveSlackMedia({
+      files: [{ url_private_download: "https://files.slack.com/test.png", name: "test.png" }],
+      token: "invalid-or-expired-token",
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    // Should reject HTML and return null
+    expect(result).toBeNull();
+  });
+
+  it("rejects HTML response detected by buffer content even if content-type header is missing", async () => {
+    const { resolveSlackMedia } = await import("./media.js");
+
+    // HTML content but no content-type header (edge case)
+    const htmlContent = `<!doctype html><html><body>Slack login page</body></html>`;
+    const htmlResponse = new Response(htmlContent, {
+      status: 200,
+      // No content-type header
+    });
+    mockFetch.mockResolvedValueOnce(htmlResponse);
+
+    const result = await resolveSlackMedia({
+      files: [{ url_private: "https://files.slack.com/test.jpg", name: "test.jpg" }],
+      token: "xoxb-test-token",
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("allows genuine HTML file when mimetype indicates text/html", async () => {
+    // Mock the store module
+    vi.doMock("../../media/store.js", () => ({
+      saveMediaBuffer: vi.fn().mockResolvedValue({
+        path: "/tmp/test.html",
+        contentType: "text/html",
+      }),
+    }));
+
+    const { resolveSlackMedia } = await import("./media.js");
+
+    // A genuine HTML file shared by a user
+    const htmlContent = `<!DOCTYPE html><html><body>User's HTML page</body></html>`;
+    const htmlResponse = new Response(htmlContent, {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+    mockFetch.mockResolvedValueOnce(htmlResponse);
+
+    const result = await resolveSlackMedia({
+      files: [
+        {
+          url_private: "https://files.slack.com/page.html",
+          name: "page.html",
+          mimetype: "text/html",
+        },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    // Should allow genuine HTML files
+    expect(result).not.toBeNull();
+    expect(result?.contentType).toBe("text/html");
+  });
+
+  it("allows HTML file based on .html extension even without mimetype", async () => {
+    // Mock the store module
+    vi.doMock("../../media/store.js", () => ({
+      saveMediaBuffer: vi.fn().mockResolvedValue({
+        path: "/tmp/test.html",
+        contentType: "text/html",
+      }),
+    }));
+
+    const { resolveSlackMedia } = await import("./media.js");
+
+    const htmlContent = `<!DOCTYPE html><html><body>User's HTML snippet</body></html>`;
+    const htmlResponse = new Response(htmlContent, {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    });
+    mockFetch.mockResolvedValueOnce(htmlResponse);
+
+    const result = await resolveSlackMedia({
+      files: [
+        {
+          url_private: "https://files.slack.com/snippet.html",
+          name: "snippet.html",
+          // No mimetype set
+        },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    // Should allow based on .html extension
+    expect(result).not.toBeNull();
+  });
+
+  it("falls through to next file when first returns HTML", async () => {
+    // Mock the store module
+    vi.doMock("../../media/store.js", () => ({
+      saveMediaBuffer: vi.fn().mockResolvedValue({
+        path: "/tmp/test.jpg",
+        contentType: "image/jpeg",
+      }),
+    }));
+
+    const { resolveSlackMedia } = await import("./media.js");
+
+    // First file: HTML (auth failure)
+    const htmlResponse = new Response("<!DOCTYPE html><html>login</html>", {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    });
+    // Second file: actual image
+    const imageResponse = new Response(Buffer.from("image data"), {
+      status: 200,
+      headers: { "content-type": "image/jpeg" },
+    });
+
+    mockFetch.mockResolvedValueOnce(htmlResponse).mockResolvedValueOnce(imageResponse);
+
+    const result = await resolveSlackMedia({
+      files: [
+        { url_private: "https://files.slack.com/first.png", name: "first.png" },
+        { url_private: "https://files.slack.com/second.jpg", name: "second.jpg" },
+      ],
+      token: "xoxb-test-token",
+      maxBytes: 10 * 1024 * 1024,
+    });
+
+    // Should skip HTML and succeed with the second file
+    expect(result).not.toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("falls through to next file when first file returns error", async () => {
     // Mock the store module
     vi.doMock("../../media/store.js", () => ({
