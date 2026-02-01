@@ -296,7 +296,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     for (const svc of extraServices) {
       defaultRuntime.error(`- ${errorText(svc.label)} (${svc.scope}, ${svc.detail})`);
     }
-    for (const hint of renderGatewayServiceCleanupHints()) {
+    for (const hint of renderGatewayServiceCleanupHints(extraServices)) {
       defaultRuntime.error(`${errorText("Cleanup hint:")} ${hint}`);
     }
     spacer();

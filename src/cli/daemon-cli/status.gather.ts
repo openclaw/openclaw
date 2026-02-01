@@ -1,5 +1,4 @@
 import type { GatewayBindMode, GatewayControlUiConfig } from "../../config/types.js";
-import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayRpcOpts } from "./types.js";
 import {
@@ -9,7 +8,11 @@ import {
   resolveStateDir,
 } from "../../config/config.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
-import { findExtraGatewayServices } from "../../daemon/inspect.js";
+import {
+  findExtraGatewayServices,
+  type ExtraGatewayService,
+  type FindExtraGatewayServicesOptions,
+} from "../../daemon/inspect.js";
 import { auditGatewayServiceConfig } from "../../daemon/service-audit.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveGatewayBindHost } from "../../gateway/net.js";
@@ -92,7 +95,7 @@ export type DaemonStatus = {
     error?: string;
     url?: string;
   };
-  extraServices: Array<{ label: string; detail: string; scope: string }>;
+  extraServices: ExtraGatewayService[];
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {

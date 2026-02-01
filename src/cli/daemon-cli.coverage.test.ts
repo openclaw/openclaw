@@ -59,7 +59,7 @@ vi.mock("../daemon/legacy.js", () => ({
 
 vi.mock("../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
-  renderGatewayServiceCleanupHints: () => [],
+  renderGatewayServiceCleanupHints: (_services: unknown[]) => [],
 }));
 
 vi.mock("../infra/ports.js", () => ({
