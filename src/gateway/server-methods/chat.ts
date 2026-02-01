@@ -65,6 +65,24 @@ function resolveTranscriptPath(params: {
   return path.join(path.dirname(storePath), `${sessionId}.jsonl`);
 }
 
+/**
+ * Get the id of the last entry in the transcript file.
+ * Used to set parentId for injected messages to maintain tree structure.
+ */
+function getLastEntryId(transcriptPath: string): string | null {
+  try {
+    const content = fs.readFileSync(transcriptPath, "utf-8").trim();
+    const lines = content.split("\n").filter((l) => l.trim());
+    if (lines.length > 0) {
+      const lastEntry = JSON.parse(lines[lines.length - 1]);
+      return lastEntry.id ?? null;
+    }
+  } catch {
+    // ignore read errors
+  }
+  return null;
+}
+
 function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }): {
   ok: boolean;
   error?: string;
@@ -120,6 +138,7 @@ function appendAssistantTranscriptMessage(params: {
 
   const now = Date.now();
   const messageId = randomUUID().slice(0, 8);
+  const parentId = getLastEntryId(transcriptPath);
   const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
   const messageBody: Record<string, unknown> = {
     role: "assistant",
@@ -131,6 +150,7 @@ function appendAssistantTranscriptMessage(params: {
   const transcriptEntry = {
     type: "message",
     id: messageId,
+    parentId,
     timestamp: new Date(now).toISOString(),
     message: messageBody,
   };
@@ -652,6 +672,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     // Build transcript entry
     const now = Date.now();
     const messageId = randomUUID().slice(0, 8);
+    const parentId = getLastEntryId(transcriptPath);
     const labelPrefix = p.label ? `[${p.label}]\n\n` : "";
     const messageBody: Record<string, unknown> = {
       role: "assistant",
@@ -663,6 +684,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const transcriptEntry = {
       type: "message",
       id: messageId,
+      parentId,
       timestamp: new Date(now).toISOString(),
       message: messageBody,
     };
