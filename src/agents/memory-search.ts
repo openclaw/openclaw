@@ -2,12 +2,30 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  DEFAULT_CACHE_ENABLED,
+  DEFAULT_CHUNK_OVERLAP,
+  DEFAULT_CHUNK_TOKENS,
+  DEFAULT_GEMINI_EMBEDDING_MODEL,
+  DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
+  DEFAULT_HYBRID_ENABLED,
+  DEFAULT_HYBRID_TEXT_WEIGHT,
+  DEFAULT_HYBRID_VECTOR_WEIGHT,
+  DEFAULT_MAX_RESULTS,
+  DEFAULT_MIN_SCORE,
+  DEFAULT_OPENAI_EMBEDDING_MODEL,
+  DEFAULT_SESSION_DELTA_BYTES,
+  DEFAULT_SESSION_DELTA_MESSAGES,
+  DEFAULT_SOURCES,
+  DEFAULT_WATCH_DEBOUNCE_MS,
+  type MemorySource,
+} from "../memory/constants.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
-  sources: Array<"memory" | "sessions">;
+  sources: MemorySource[];
   extraPaths: string[];
   provider: "openai" | "local" | "gemini" | "auto";
   remote?: {
@@ -70,27 +88,11 @@ export type ResolvedMemorySearchConfig = {
   };
 };
 
-const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
-const DEFAULT_GEMINI_MODEL = "gemini-embedding-001";
-const DEFAULT_CHUNK_TOKENS = 400;
-const DEFAULT_CHUNK_OVERLAP = 80;
-const DEFAULT_WATCH_DEBOUNCE_MS = 1500;
-const DEFAULT_SESSION_DELTA_BYTES = 100_000;
-const DEFAULT_SESSION_DELTA_MESSAGES = 50;
-const DEFAULT_MAX_RESULTS = 6;
-const DEFAULT_MIN_SCORE = 0.35;
-const DEFAULT_HYBRID_ENABLED = true;
-const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
-const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
-const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
-const DEFAULT_CACHE_ENABLED = true;
-const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
-
 function normalizeSources(
-  sources: Array<"memory" | "sessions"> | undefined,
+  sources: MemorySource[] | undefined,
   sessionMemoryEnabled: boolean,
-): Array<"memory" | "sessions"> {
-  const normalized = new Set<"memory" | "sessions">();
+): MemorySource[] {
+  const normalized = new Set<MemorySource>();
   const input = sources?.length ? sources : DEFAULT_SOURCES;
   for (const source of input) {
     if (source === "memory") {
@@ -160,9 +162,9 @@ function mergeConfig(
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
   const modelDefault =
     provider === "gemini"
-      ? DEFAULT_GEMINI_MODEL
+      ? DEFAULT_GEMINI_EMBEDDING_MODEL
       : provider === "openai"
-        ? DEFAULT_OPENAI_MODEL
+        ? DEFAULT_OPENAI_EMBEDDING_MODEL
         : undefined;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const local = {
