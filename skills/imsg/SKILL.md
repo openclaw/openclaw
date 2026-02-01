@@ -1,6 +1,6 @@
 ---
 name: imsg
-description: iMessage/SMS CLI for listing chats, history, watch, and sending.
+description: Read iMessage and SMS chat history, watch for new messages, and send messages from the command line on macOS. Use when you want to check Messages app conversations, send quick texts, or monitor chats without opening the Messages app.
 homepage: https://imsg.to
 metadata:
   {

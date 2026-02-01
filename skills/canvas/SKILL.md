@@ -1,3 +1,8 @@
+---
+name: canvas
+description: Display HTML content on connected OpenClaw nodes (Mac, iOS, Android) via the canvas tool. Use when asked to show games, dashboards, visualizations, interactive demos, or any web content on a node's canvas view. Supports present, hide, navigate, eval, and snapshot actions.
+---
+
 # Canvas Skill
 
 Display HTML content on connected OpenClaw nodes (Mac app, iOS, Android).

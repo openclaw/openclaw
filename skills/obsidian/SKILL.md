@@ -1,6 +1,6 @@
 ---
 name: obsidian
-description: Work with Obsidian vaults (plain Markdown notes) and automate via obsidian-cli.
+description: Create, search, move, delete, and refactor Obsidian vault notes with wikilink updates and content management from the command line. Use when you want to automate note management, batch rename files, or integrate Obsidian with other tools.
 homepage: https://help.obsidian.md
 metadata:
   {

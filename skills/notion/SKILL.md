@@ -1,6 +1,6 @@
 ---
 name: notion
-description: Notion API for creating and managing pages, databases, and blocks.
+description: Create, read, update, and query Notion pages, databases (data sources), and content blocks via REST API with support for custom properties. Use when you want to automate Notion workflows, sync data, or manage content programmatically from scripts.
 homepage: https://developers.notion.com
 metadata:
   {

@@ -1,6 +1,6 @@
 ---
 name: sag
-description: ElevenLabs text-to-speech with mac-style say UX.
+description: Convert text to realistic speech using ElevenLabs with voice selection, speaking styles, and audio tags (whispers, shouts, laughs) for natural-sounding narration. Use when you want to generate spoken audio for storytelling, announcements, or adding voice to content.
 homepage: https://sag.sh
 metadata:
   {

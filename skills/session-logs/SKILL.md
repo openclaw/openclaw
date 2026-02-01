@@ -1,6 +1,6 @@
 ---
 name: session-logs
-description: Search and analyze your own session logs (older/parent conversations) using jq.
+description: Search through conversation history, analyze session transcripts, extract messages by role, and calculate costs using jq from stored JSONL session logs. Use when you need to recall older conversations, find context from previous chats, or analyze past interactions.
 metadata: { "openclaw": { "emoji": "📜", "requires": { "bins": ["jq", "rg"] } } }
 ---
 
