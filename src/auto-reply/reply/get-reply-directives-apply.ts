@@ -184,6 +184,12 @@ export async function applyInlineDirectiveOverrides(params: {
       currentReasoningLevel,
       currentElevatedLevel,
     });
+
+    const effectiveThinkLevel =
+      directives.thinkLevel ??
+      (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+      resolvedDefaultThinkLevel;
+
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
       statusReply = await buildStatusReply({
@@ -195,11 +201,11 @@ export async function applyInlineDirectiveOverrides(params: {
         provider,
         model,
         contextTokens,
-        resolvedThinkLevel: resolvedDefaultThinkLevel,
+        resolvedThinkLevel: effectiveThinkLevel,
         resolvedVerboseLevel: currentVerboseLevel ?? "off",
         resolvedReasoningLevel: currentReasoningLevel ?? "off",
         resolvedElevatedLevel,
-        resolveDefaultThinkingLevel: async () => resolvedDefaultThinkLevel,
+        resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
         isGroup,
         defaultGroupActivation: defaultActivation,
         mediaDecisions: ctx.MediaUnderstandingDecisions,
