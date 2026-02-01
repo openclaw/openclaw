@@ -187,4 +187,122 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await expect(monitorTelegramProvider({ token: "tok" })).rejects.toThrow("bad token");
   });
+
+  it("retries on getUpdates timeout errors", async () => {
+    const timeoutError = Object.assign(
+      new Error("Request to 'getUpdates' timed out after 30 seconds"),
+      {
+        method: "getUpdates",
+        description: "Request timed out",
+      },
+    );
+    runSpy
+      .mockImplementationOnce(() => ({
+        task: () => Promise.reject(timeoutError),
+        stop: vi.fn(),
+      }))
+      .mockImplementationOnce(() => ({
+        task: () => Promise.resolve(),
+        stop: vi.fn(),
+      }));
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("restarts when runner exhausts retries and stops normally", async () => {
+    runSpy
+      .mockImplementationOnce(() => ({
+        task: () => Promise.resolve(), // Runner stopped normally after exhausting retries
+        stop: vi.fn(),
+      }))
+      .mockImplementationOnce(() => ({
+        task: () => Promise.resolve(),
+        stop: vi.fn(),
+      }));
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries on getUpdates conflict errors (409)", async () => {
+    const conflictError = Object.assign(new Error("Conflict: terminated by other getUpdates"), {
+      error_code: 409,
+      description: "Conflict: terminated by other getUpdates request",
+      method: "getUpdates",
+    });
+    runSpy
+      .mockImplementationOnce(() => ({
+        task: () => Promise.reject(conflictError),
+        stop: vi.fn(),
+      }))
+      .mockImplementationOnce(() => ({
+        task: () => Promise.resolve(),
+        stop: vi.fn(),
+      }));
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("respects abort signal during retry backoff", async () => {
+    const abortController = new AbortController();
+    const networkError = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+
+    // Mock sleepWithAbort to abort mid-sleep
+    sleepWithAbort.mockImplementationOnce(async () => {
+      abortController.abort();
+      throw new Error("Aborted");
+    });
+
+    runSpy.mockImplementationOnce(() => ({
+      task: () => Promise.reject(networkError),
+      stop: vi.fn(),
+    }));
+
+    await monitorTelegramProvider({ token: "tok", abortSignal: abortController.signal });
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+  });
+
+  it("uses exponential backoff for consecutive failures", async () => {
+    computeBackoff.mockReturnValueOnce(2000).mockReturnValueOnce(3600).mockReturnValueOnce(6480);
+
+    runSpy
+      .mockImplementationOnce(() => ({
+        task: () => Promise.reject(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })),
+        stop: vi.fn(),
+      }))
+      .mockImplementationOnce(() => ({
+        task: () => Promise.reject(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })),
+        stop: vi.fn(),
+      }))
+      .mockImplementationOnce(() => ({
+        task: () => Promise.reject(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })),
+        stop: vi.fn(),
+      }))
+      .mockImplementationOnce(() => ({
+        task: () => Promise.resolve(),
+        stop: vi.fn(),
+      }));
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    // Verify backoff was called with increasing attempt numbers
+    expect(computeBackoff).toHaveBeenCalledTimes(4); // 3 failures + 1 normal stop
+    expect(computeBackoff).toHaveBeenCalledWith(expect.anything(), 1);
+    expect(computeBackoff).toHaveBeenCalledWith(expect.anything(), 2);
+    expect(computeBackoff).toHaveBeenCalledWith(expect.anything(), 3);
+  });
 });

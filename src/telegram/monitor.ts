@@ -78,6 +78,22 @@ const isGetUpdatesConflict = (err: unknown) => {
   return haystack.includes("getupdates");
 };
 
+const isGetUpdatesTimeout = (err: unknown) => {
+  if (!err || typeof err !== "object") return false;
+  const typed = err as {
+    description?: string;
+    method?: string;
+    message?: string;
+    error_description?: string;
+  };
+  const haystack = [typed.method, typed.description, typed.message, typed.error_description]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+
+  return haystack.includes("getupdates") && haystack.includes("timeout");
+};
+
 const NETWORK_ERROR_SNIPPETS = [
   "fetch failed",
   "network",
@@ -177,20 +193,41 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     try {
       // runner.task() returns a promise that resolves when the runner stops
       await runner.task();
-      return;
+      // Runner stopped normally (aborted or exhausted retries).
+      // If not aborted, this is a transient failure - retry with backoff.
+      if (opts.abortSignal?.aborted) {
+        return;
+      }
+      // grammY runner exhausted its maxRetryTime - treat as recoverable network error
+      restartAttempts += 1;
+      const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
+      (opts.runtime?.error ?? console.error)(
+        `Telegram polling stopped after retry timeout; restarting in ${formatDurationMs(delayMs)}.`,
+      );
+      try {
+        await sleepWithAbort(delayMs, opts.abortSignal);
+      } catch (sleepErr) {
+        if (opts.abortSignal?.aborted) return;
+        throw sleepErr;
+      }
     } catch (err) {
       if (opts.abortSignal?.aborted) {
         throw err;
       }
       const isConflict = isGetUpdatesConflict(err);
+      const isTimeout = isGetUpdatesTimeout(err);
       const isRecoverable = isRecoverableTelegramNetworkError(err, { context: "polling" });
       const isNetworkError = isNetworkRelatedError(err);
-      if (!isConflict && !isRecoverable && !isNetworkError) {
+      if (!isConflict && !isTimeout && !isRecoverable && !isNetworkError) {
         throw err;
       }
       restartAttempts += 1;
       const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
-      const reason = isConflict ? "getUpdates conflict" : "network error";
+      const reason = isConflict
+        ? "getUpdates conflict"
+        : isTimeout
+          ? "getUpdates timeout"
+          : "network error";
       const errMsg = formatErrorMessage(err);
       (opts.runtime?.error ?? console.error)(
         `Telegram ${reason}: ${errMsg}; retrying in ${formatDurationMs(delayMs)}.`,
