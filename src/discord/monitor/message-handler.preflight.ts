@@ -55,6 +55,7 @@ export type {
   DiscordMessagePreflightContext,
   DiscordMessagePreflightParams,
 } from "./message-handler.preflight.types.js";
+export type { DiscordSenderIdentity } from "./sender-identity.js";
 
 export async function preflightDiscordMessage(
   params: DiscordMessagePreflightParams,
