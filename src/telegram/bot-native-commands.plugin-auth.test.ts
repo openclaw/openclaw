@@ -18,8 +18,8 @@ vi.mock("../plugins/commands.js", () => ({
 const deliverReplies = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("./bot/delivery.js", () => ({ deliverReplies }));
 
-vi.mock("./pairing-store.js", () => ({
-  readTelegramAllowFromStore: vi.fn(async () => []),
+vi.mock("../pairing/pairing-store.js", () => ({
+  readChannelAllowFromStore: vi.fn(async () => []),
 }));
 
 describe("registerTelegramNativeCommands (plugin auth)", () => {
