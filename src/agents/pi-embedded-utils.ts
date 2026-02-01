@@ -199,22 +199,40 @@ export function stripThinkingTagsFromText(text: string): string {
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {
-  const isTextBlock = (block: unknown): block is { type: "text"; text: string } => {
+  const extractTextFromBlock = (block: unknown): string | null => {
     if (!block || typeof block !== "object") {
-      return false;
+      return null;
     }
     const rec = block as Record<string, unknown>;
-    return rec.type === "text" && typeof rec.text === "string";
+
+    // Standard format: { type: "text", text: "..." }
+    if (rec.type === "text" && typeof rec.text === "string") {
+      return rec.text;
+    }
+
+    // Fallback: Extract text field even if type is missing or different
+    // This handles providers that don't set type correctly (e.g., some Gemini responses)
+    if (typeof rec.text === "string" && rec.text.trim()) {
+      // Only accept if it's not a tool call block (they have type: "toolCall")
+      if (rec.type !== "toolCall" && rec.type !== "thinking") {
+        return rec.text;
+      }
+    }
+
+    return null;
   };
 
   const blocks = Array.isArray(msg.content)
     ? msg.content
-        .filter(isTextBlock)
-        .map((c) =>
-          stripThinkingTagsFromText(
-            stripDowngradedToolCallText(stripMinimaxToolCallXml(c.text)),
-          ).trim(),
-        )
+        .map((block) => {
+          const text = extractTextFromBlock(block);
+          if (!text) {
+            return "";
+          }
+          return stripThinkingTagsFromText(
+            stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+          ).trim();
+        })
         .filter(Boolean)
     : [];
   const extracted = blocks.join("\n").trim();

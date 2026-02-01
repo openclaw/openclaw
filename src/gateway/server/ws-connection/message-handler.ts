@@ -667,12 +667,25 @@ export function attachGatewayWsMessageHandler(params: {
                 requestId: pairing.request.requestId,
                 reason,
               });
+              const helpMessage =
+                `Device pairing required. ` +
+                `On the OpenClaw server machine, run: ` +
+                `'openclaw devices list' to see pending requests, then ` +
+                `'openclaw devices approve ${pairing.request.requestId}' to approve this device. ` +
+                `Alternatively, access the Control UI from the server's localhost to approve.`;
               send({
                 type: "res",
                 id: frame.id,
                 ok: false,
-                error: errorShape(ErrorCodes.NOT_PAIRED, "pairing required", {
-                  details: { requestId: pairing.request.requestId },
+                error: errorShape(ErrorCodes.NOT_PAIRED, helpMessage, {
+                  details: {
+                    requestId: pairing.request.requestId,
+                    deviceId: device.id,
+                    instructions: {
+                      list: "openclaw devices list",
+                      approve: `openclaw devices approve ${pairing.request.requestId}`,
+                    },
+                  },
                 }),
               });
               close(1008, "pairing required");
