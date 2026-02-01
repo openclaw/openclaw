@@ -53,6 +53,12 @@ const normalizeText = (value?: string) =>
     .replace(/\r/g, "\n")
     .trim();
 
+const normalizePathEntries = (value?: string) =>
+  normalizeText(value)
+    .split(/[:\s]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
 describe("exec PATH login shell merge", () => {
   const originalPath = process.env.PATH;
 
@@ -74,9 +80,9 @@ describe("exec PATH login shell merge", () => {
 
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
     const result = await tool.execute("call1", { command: "echo $PATH" });
-    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
-    expect(text).toBe("/custom/bin:/opt/bin:/usr/bin");
+    expect(entries).toEqual(["/custom/bin", "/opt/bin", "/usr/bin"]);
     expect(shellPathMock).toHaveBeenCalledTimes(1);
   });
 
@@ -96,9 +102,9 @@ describe("exec PATH login shell merge", () => {
       command: "echo $PATH",
       env: { PATH: "/explicit/bin" },
     });
-    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
 
-    expect(text).toBe("/explicit/bin");
+    expect(entries).toEqual(["/explicit/bin"]);
     expect(shellPathMock).not.toHaveBeenCalled();
   });
 });

@@ -1,8 +1,6 @@
 import type { User } from "@buape/carbon";
-
-import { formatDiscordUserTag } from "./format.js";
-import type { DiscordMessageEvent } from "./listeners.js";
 import type { PluralKitMessageInfo } from "../pluralkit.js";
+import { formatDiscordUserTag } from "./format.js";
 
 export type DiscordSenderIdentity = {
   id: string;
@@ -30,7 +28,7 @@ export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): str
 
 export function resolveDiscordSenderIdentity(params: {
   author: User;
-  member?: DiscordMessageEvent["member"] | null;
+  member?: any;
   pluralkitInfo?: PluralKitMessageInfo | null;
 }): DiscordSenderIdentity {
   const pkInfo = params.pluralkitInfo ?? null;
@@ -75,7 +73,7 @@ export function resolveDiscordSenderIdentity(params: {
 
 export function resolveDiscordSenderLabel(params: {
   author: User;
-  member?: DiscordMessageEvent["member"] | null;
+  member?: any;
   pluralkitInfo?: PluralKitMessageInfo | null;
 }): string {
   return resolveDiscordSenderIdentity(params).label;
