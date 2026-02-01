@@ -134,7 +134,7 @@ export async function loadGatewayTlsRuntime(
         cert,
         key,
         ca,
-        minVersion: "TLSv1.2",
+        minVersion: "TLSv1.3",
       },
     };
   } catch (err) {
