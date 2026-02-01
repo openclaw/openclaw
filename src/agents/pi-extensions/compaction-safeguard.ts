@@ -14,6 +14,26 @@ import {
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
+
+/**
+ * Extract model info from assistant messages as fallback when ctx.model is undefined.
+ * This can happen when createAgentSession() is used without extensionRunner.initialize().
+ */
+function extractModelFromMessages(
+  messages: AgentMessage[],
+): { provider: string; modelId: string } | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === "assistant") {
+      const assistant = msg as { provider?: string; model?: string };
+      if (assistant.provider && assistant.model) {
+        return { provider: assistant.provider, modelId: assistant.model };
+      }
+    }
+  }
+  return null;
+}
+
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -170,7 +190,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const toolFailureSection = formatToolFailuresSection(toolFailures);
     const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
 
-    const model = ctx.model;
+    // Try ctx.model first, then fall back to extracting from messages
+    let model = ctx.model;
+    if (!model) {
+      const allMessages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
+      const extracted = extractModelFromMessages(allMessages);
+      if (extracted) {
+        const availableModels = ctx.modelRegistry.getAvailable();
+        model = availableModels.find(
+          (m) => m.provider === extracted.provider && m.id === extracted.modelId,
+        );
+      }
+    }
+
     if (!model) {
       return {
         compaction: {
