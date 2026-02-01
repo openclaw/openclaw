@@ -17,6 +17,7 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
   if (
     normalized === "ollama" ||
     normalized === "litellm" ||
+    normalized.startswith("litellm/") ||
     normalized === "google-gemini-cli" ||
     normalized === "google-generative-ai"
   ) {
