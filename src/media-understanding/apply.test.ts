@@ -547,6 +547,73 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain("a\tb\tc");
   });
 
+  it("does not treat OGG audio as text even with ASCII-heavy headers (issue #1989)", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const oggPath = path.join(dir, "voice.ogg");
+    // Simulate OGG file with "OggS" magic bytes followed by ASCII-heavy content
+    // that would pass looksLikeUtf8Text() if not for magic byte detection
+    // Real OGG Opus files (Telegram voice) have similar structure
+    const oggMagic = Buffer.from([0x4f, 0x67, 0x67, 0x53]); // "OggS"
+    const fakeMetadata = Buffer.from("ENCODER=test\tVERSION=1\nTITLE=hello\t");
+    const oggBuffer = Buffer.concat([oggMagic, fakeMetadata]);
+    await fs.writeFile(oggPath, oggBuffer);
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPath: oggPath,
+      MediaType: "audio/ogg",
+    };
+    const cfg: MoltbotConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    // OGG should NOT be treated as a text file
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).not.toContain("<file");
+  });
+
+  it("does not treat MP3 with ID3 tag as text even with ASCII-heavy metadata", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const mp3Path = path.join(dir, "song.mp3");
+    // Simulate MP3 file with ID3v2 tag followed by ASCII-heavy metadata
+    // ID3 tags can contain lyrics, comments, and other text that passes looksLikeUtf8Text()
+    const id3Magic = Buffer.from([0x49, 0x44, 0x33]); // "ID3"
+    const fakeMetadata = Buffer.from("TIT2=Song Title\tTPE1=Artist Name\nTALB=Album\t");
+    const mp3Buffer = Buffer.concat([id3Magic, fakeMetadata]);
+    await fs.writeFile(mp3Path, mp3Buffer);
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPath: mp3Path,
+      MediaType: "audio/mpeg",
+    };
+    const cfg: MoltbotConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    // MP3 with ID3 should NOT be treated as a text file
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).not.toContain("<file");
+  });
+
   it("escapes XML special characters in filenames to prevent injection", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));

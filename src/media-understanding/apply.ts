@@ -169,6 +169,48 @@ function looksLikeUtf8Text(buffer?: Buffer): boolean {
   return printable / total > 0.85;
 }
 
+/**
+ * Detects binary audio/video formats by magic bytes (file signatures).
+ *
+ * OGG files (used by Telegram voice messages as OGG Opus) have ASCII-heavy
+ * headers that can pass looksLikeUtf8Text() due to Vorbis/Opus comment metadata
+ * containing printable strings. This causes them to be misidentified as text.
+ *
+ * Magic bytes provide authoritative format detection independent of MIME type
+ * or file extension, following established file format specifications.
+ *
+ * References:
+ * - OGG container: RFC 3533 (https://datatracker.ietf.org/doc/html/rfc3533)
+ *   Section 6: "OggS" capture pattern at byte offset 0
+ * - MP3 ID3v2: id3.org spec (https://id3.org/id3v2.4.0-structure)
+ *   Section 3.1: "ID3" identifier at file start
+ *
+ * @see https://github.com/moltbot/moltbot/issues/1989
+ */
+function hasBinaryAudioMagic(buffer?: Buffer): boolean {
+  if (!buffer || buffer.length < 4) return false;
+  // OGG container format: "OggS" signature (RFC 3533 Section 6)
+  // Covers OGG Vorbis, OGG Opus (Telegram voice), OGG Theora, etc.
+  if (
+    buffer[0] === 0x4f && // 'O'
+    buffer[1] === 0x67 && // 'g'
+    buffer[2] === 0x67 && // 'g'
+    buffer[3] === 0x53 // 'S'
+  ) {
+    return true;
+  }
+  // MP3 with ID3v2 tag: "ID3" signature (id3.org spec Section 3.1)
+  // ID3v2 tags can contain large amounts of ASCII text (lyrics, comments)
+  if (
+    buffer[0] === 0x49 && // 'I'
+    buffer[1] === 0x44 && // 'D'
+    buffer[2] === 0x33 // '3'
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function decodeTextSample(buffer?: Buffer): string {
   if (!buffer || buffer.length === 0) {
     return "";
@@ -255,7 +297,11 @@ async function extractFileBlocks(params: {
     const forcedTextMimeResolved = forcedTextMime ?? resolveTextMimeFromName(nameHint ?? "");
     const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
     const textSample = decodeTextSample(bufferResult?.buffer);
-    const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
+    // Check if content looks like text, but exclude files with known binary audio magic bytes
+    // OGG files can pass looksLikeUtf8Text() due to ASCII-heavy headers (>85% printable)
+    const textLike =
+      (Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer)) &&
+      !hasBinaryAudioMagic(bufferResult?.buffer);
     if (!forcedTextMimeResolved && kind === "audio" && !textLike) {
       continue;
     }
