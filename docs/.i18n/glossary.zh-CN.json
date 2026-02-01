@@ -1,0 +1,82 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "agent",
+    "target": "智能体"
+  },
+  {
+    "source": "channel",
+    "target": "渠道"
+  },
+  {
+    "source": "session",
+    "target": "会话"
+  },
+  {
+    "source": "provider",
+    "target": "提供商"
+  },
+  {
+    "source": "model",
+    "target": "模型"
+  },
+  {
+    "source": "tool",
+    "target": "工具"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "install sanity",
+    "target": "安装完整性检查"
+  },
+  {
+    "source": "get unstuck",
+    "target": "快速排障"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "故障排除"
+  },
+  {
+    "source": "FAQ",
+    "target": "常见问题"
+  },
+  {
+    "source": "onboarding",
+    "target": "上手引导"
+  },
+  {
+    "source": "wizard",
+    "target": "向导"
+  },
+  {
+    "source": "environment variables",
+    "target": "环境变量"
+  },
+  {
+    "source": "environment variable",
+    "target": "环境变量"
+  },
+  {
+    "source": "env vars",
+    "target": "环境变量"
+  },
+  {
+    "source": "env var",
+    "target": "环境变量"
+  }
+]
