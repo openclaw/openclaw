@@ -1,15 +1,14 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { vi } from "vitest";
-
+import { Mock, vi } from "vitest";
 import type { ChannelPlugin, ChannelOutboundAdapter } from "../channels/plugins/types.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { HooksConfig } from "../config/types.hooks.js";
 import type { PluginRegistry } from "../plugins/registry.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
@@ -199,8 +198,8 @@ export const setTestConfigRoot = (root: string) => {
 export const testTailnetIPv4 = hoisted.testTailnetIPv4;
 export const piSdkMock = hoisted.piSdkMock;
 export const cronIsolatedRun = hoisted.cronIsolatedRun;
-export const agentCommand = hoisted.agentCommand;
-export const getReplyFromConfig = hoisted.getReplyFromConfig;
+export const agentCommand: Mock<() => void> = hoisted.agentCommand;
+export const getReplyFromConfig: Mock<() => void> = hoisted.getReplyFromConfig;
 
 export const testState = {
   agentConfig: undefined as Record<string, unknown> | undefined,

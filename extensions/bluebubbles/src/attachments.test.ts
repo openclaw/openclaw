@@ -1,7 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-
-import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 import type { BlueBubblesAttachment } from "./types.js";
+import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
 
 vi.mock("./accounts.js", () => ({
   resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {

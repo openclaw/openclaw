@@ -1,5 +1,5 @@
-import { runZca, parseJsonOutput } from "./zca.js";
 import type { ZcaUserInfo } from "./types.js";
+import { runZca, parseJsonOutput } from "./zca.js";
 
 export interface ZalouserProbeResult {
   ok: boolean;

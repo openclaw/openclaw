@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
 import type { VoiceCallTtsConfig } from "./config.js";
 
 export type CoreConfig = {
@@ -51,10 +50,7 @@ type CoreAgentDeps = {
   ensureAgentWorkspace: (params?: { dir: string }) => Promise<void>;
   resolveStorePath: (store?: string, opts?: { agentId?: string }) => string;
   loadSessionStore: (storePath: string) => Record<string, unknown>;
-  saveSessionStore: (
-    storePath: string,
-    store: Record<string, unknown>,
-  ) => Promise<void>;
+  saveSessionStore: (storePath: string, store: Record<string, unknown>) => Promise<void>;
   resolveSessionFilePath: (
     sessionId: string,
     entry: unknown,
@@ -75,19 +71,25 @@ function findPackageRoot(startDir: string, name: string): string | null {
       if (fs.existsSync(pkgPath)) {
         const raw = fs.readFileSync(pkgPath, "utf8");
         const pkg = JSON.parse(raw) as { name?: string };
-        if (pkg.name === name) return dir;
+        if (pkg.name === name) {
+          return dir;
+        }
       }
     } catch {
       // ignore parse errors and keep walking
     }
     const parent = path.dirname(dir);
-    if (parent === dir) return null;
+    if (parent === dir) {
+      return null;
+    }
     dir = parent;
   }
 }
 
 function resolveOpenClawRoot(): string {
-  if (coreRootCache) return coreRootCache;
+  if (coreRootCache) {
+    return coreRootCache;
+  }
   const override = process.env.OPENCLAW_ROOT?.trim();
   if (override) {
     coreRootCache = override;
@@ -116,9 +118,7 @@ function resolveOpenClawRoot(): string {
     }
   }
 
-  throw new Error(
-    "Unable to resolve core root. Set OPENCLAW_ROOT to the package root.",
-  );
+  throw new Error("Unable to resolve core root. Set OPENCLAW_ROOT to the package root.");
 }
 
 async function importCoreModule<T>(relativePath: string): Promise<T> {
@@ -133,7 +133,9 @@ async function importCoreModule<T>(relativePath: string): Promise<T> {
 }
 
 export async function loadCoreAgentDeps(): Promise<CoreAgentDeps> {
-  if (coreDepsPromise) return coreDepsPromise;
+  if (coreDepsPromise) {
+    return coreDepsPromise;
+  }
 
   coreDepsPromise = (async () => {
     const [

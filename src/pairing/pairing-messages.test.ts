@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
 import { buildPairingReply } from "./pairing-messages.js";
 
 describe("buildPairingReply", () => {

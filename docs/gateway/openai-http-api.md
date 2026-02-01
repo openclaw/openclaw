@@ -2,7 +2,9 @@
 summary: "Expose an OpenAI-compatible /v1/chat/completions HTTP endpoint from the Gateway"
 read_when:
   - Integrating tools that expect OpenAI Chat Completions
+title: "OpenAI Chat Completions"
 ---
+
 # OpenAI Chat Completions (HTTP)
 
 OpenClaw’s Gateway can serve a small OpenAI-compatible Chat Completions endpoint.
@@ -21,6 +23,7 @@ Uses the Gateway auth configuration. Send a bearer token:
 - `Authorization: Bearer <token>`
 
 Notes:
+
 - When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
 - When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
 
@@ -36,6 +39,7 @@ Or target a specific OpenClaw agent by header:
 - `x-openclaw-agent-id: <agentId>` (default: `main`)
 
 Advanced:
+
 - `x-openclaw-session-key: <sessionKey>` to fully control session routing.
 
 ## Enabling the endpoint
@@ -47,10 +51,10 @@ Set `gateway.http.endpoints.chatCompletions.enabled` to `true`:
   gateway: {
     http: {
       endpoints: {
-        chatCompletions: { enabled: true }
-      }
-    }
-  }
+        chatCompletions: { enabled: true },
+      },
+    },
+  },
 }
 ```
 
@@ -63,10 +67,10 @@ Set `gateway.http.endpoints.chatCompletions.enabled` to `false`:
   gateway: {
     http: {
       endpoints: {
-        chatCompletions: { enabled: false }
-      }
-    }
-  }
+        chatCompletions: { enabled: false },
+      },
+    },
+  },
 }
 ```
 
@@ -87,6 +91,7 @@ Set `stream: true` to receive Server-Sent Events (SSE):
 ## Examples
 
 Non-streaming:
+
 ```bash
 curl -sS http://127.0.0.1:18789/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_TOKEN' \
@@ -99,6 +104,7 @@ curl -sS http://127.0.0.1:18789/v1/chat/completions \
 ```
 
 Streaming:
+
 ```bash
 curl -N http://127.0.0.1:18789/v1/chat/completions \
   -H 'Authorization: Bearer YOUR_TOKEN' \

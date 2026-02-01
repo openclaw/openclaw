@@ -1,8 +1,6 @@
 {
   "id": "google-gemini-cli-auth",
-  "providers": [
-    "google-gemini-cli"
-  ],
+  "providers": ["google-gemini-cli"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

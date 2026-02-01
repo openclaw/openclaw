@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   CHUTES_TOKEN_ENDPOINT,
   CHUTES_USERINFO_ENDPOINT,

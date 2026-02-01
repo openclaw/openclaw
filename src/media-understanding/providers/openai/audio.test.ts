@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { transcribeOpenAiCompatibleAudio } from "./audio.js";
 
 const resolveRequestUrl = (input: RequestInfo | URL) => {

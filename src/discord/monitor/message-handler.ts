@@ -1,16 +1,15 @@
 import type { Client } from "@buape/carbon";
-
+import type { HistoryEntry } from "../../auto-reply/reply/history.js";
+import type { ReplyToMode } from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import type { DiscordGuildEntryResolved } from "./allow-list.js";
+import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import type { HistoryEntry } from "../../auto-reply/reply/history.js";
-import type { ReplyToMode } from "../../config/config.js";
 import { danger } from "../../globals.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import type { DiscordGuildEntryResolved } from "./allow-list.js";
-import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import { processDiscordMessage } from "./message-handler.process.js";
 import { resolveDiscordMessageText } from "./message-utils.js";

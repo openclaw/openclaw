@@ -27,7 +27,7 @@ Today, complex workflows require many back-and-forth tool calls. Each call costs
 
 Lobster is intentionally small. The goal is not "a new language," it's a predictable, AI-friendly pipeline spec with first-class approvals and resume tokens.
 
-- **Approve/resume is built in**: A normal program can prompt a human, but it can’t *pause and resume* with a durable token without you inventing that runtime yourself.
+- **Approve/resume is built in**: A normal program can prompt a human, but it can’t _pause and resume_ with a durable token without you inventing that runtime yourself.
 - **Determinism + auditability**: Pipelines are data, so they’re easy to log, diff, replay, and review.
 - **Constrained surface for AI**: A tiny grammar + JSON piping reduces “creative” code paths and makes validation realistic.
 - **Safety policy baked in**: Timeouts, output caps, sandbox checks, and allowlists are enforced by the runtime, not each script.
@@ -196,6 +196,7 @@ tools, include the core tools or groups you want in the allowlist too.
 ## Example: Email triage
 
 Without Lobster:
+
 ```
 User: "Check my email and draft replies"
 → openclaw calls gmail.list
@@ -208,6 +209,7 @@ User: "Check my email and draft replies"
 ```
 
 With Lobster:
+
 ```json
 {
   "action": "run",
@@ -217,6 +219,7 @@ With Lobster:
 ```
 
 Returns a JSON envelope (truncated):
+
 ```json
 {
   "ok": true,
@@ -232,6 +235,7 @@ Returns a JSON envelope (truncated):
 ```
 
 User approves → resume:
+
 ```json
 {
   "action": "resume",

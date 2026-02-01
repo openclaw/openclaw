@@ -84,9 +84,12 @@ To target a specific Gateway or agent:
       "command": "openclaw",
       "args": [
         "acp",
-        "--url", "wss://gateway-host:18789",
-        "--token", "<token>",
-        "--session", "agent:design:main"
+        "--url",
+        "wss://gateway-host:18789",
+        "--token",
+        "<token>",
+        "--session",
+        "agent:design:main"
       ],
       "env": {}
     }
@@ -112,7 +115,7 @@ By default each ACP session is mapped to a dedicated Gateway session key:
 
 You can override or reuse sessions in two ways:
 
-1) CLI defaults
+1. CLI defaults
 
 ```bash
 openclaw acp --session agent:main:main
@@ -120,7 +123,7 @@ openclaw acp --session-label "support inbox"
 openclaw acp --reset-session
 ```
 
-2) ACP metadata per session
+2. ACP metadata per session
 
 ```json
 {

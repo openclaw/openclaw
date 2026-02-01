@@ -1,5 +1,4 @@
 import type { WebClient } from "@slack/web-api";
-
 import { createSlackWebClient } from "./client.js";
 
 export type SlackUserLookup = {

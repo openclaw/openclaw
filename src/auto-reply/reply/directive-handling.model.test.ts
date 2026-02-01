@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { parseInlineDirectives } from "./directive-handling.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
+import { parseInlineDirectives } from "./directive-handling.js";
 import {
   maybeHandleModelDirectiveInfo,
   resolveModelSelectionFromDirective,

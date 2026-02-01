@@ -3,6 +3,7 @@ summary: "Run OpenClaw Gateway on exe.dev (VM + HTTPS proxy) for remote access"
 read_when:
   - You want a cheap always-on Linux host for the Gateway
   - You want remote Control UI access without running your own VPS
+title: "exe.dev"
 ---
 
 # exe.dev
@@ -13,17 +14,16 @@ This page assumes exe.dev's default **exeuntu** image. If you picked a different
 
 ## Beginner quick path
 
-1) [https://exe.new/openclaw](https://exe.new/openclaw)
-2) Fill in your auth key/token as needed
-3) Click on "Agent" next to your VM, and wait...
-4) ???
-5) Profit
+1. [https://exe.new/openclaw](https://exe.new/openclaw)
+2. Fill in your auth key/token as needed
+3. Click on "Agent" next to your VM, and wait...
+4. ???
+5. Profit
 
 ## What you need
 
 - exe.dev account
 - `ssh exe.dev` access to [exe.dev](https://exe.dev) virtual machines (optional)
-
 
 ## Automated Install with Shelley
 
@@ -41,7 +41,7 @@ Set up OpenClaw (https://docs.openclaw.ai/install) on this VM. Use the non-inter
 From your device:
 
 ```bash
-ssh exe.dev new 
+ssh exe.dev new
 ```
 
 Then connect:
@@ -64,7 +64,7 @@ sudo apt-get install -y git curl jq ca-certificates openssl
 Run the OpenClaw install script:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 ## 4) Setup nginx to proxy OpenClaw to port 8000
@@ -111,7 +111,7 @@ use Shelley from your browser!
 
 Remote access is handled by [exe.dev](https://exe.dev)'s authentication. By
 default, HTTP traffic from port 8000 is forwarded to `https://<vm-name>.exe.xyz`
-with email auth. 
+with email auth.
 
 ## Updating
 

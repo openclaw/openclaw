@@ -1,6 +1,6 @@
 import { listChannelPluginCatalogEntries } from "../channels/plugins/catalog.js";
-import { CHAT_CHANNEL_ORDER } from "../channels/registry.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import { CHAT_CHANNEL_ORDER } from "../channels/registry.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
 

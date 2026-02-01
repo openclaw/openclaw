@@ -6,37 +6,15 @@
  * @see https://www.open-responses.com/
  */
 
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-
+import { randomUUID } from "node:crypto";
+import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
+import type { ImageContent } from "../commands/agent/types.js";
+import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
-import { defaultRuntime } from "../runtime.js";
-import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
-import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
-import {
-  readJsonBodyOrError,
-  sendJson,
-  sendMethodNotAllowed,
-  sendUnauthorized,
-  setSseHeaders,
-  writeDone,
-} from "./http-common.js";
-import {
-  CreateResponseBodySchema,
-  type ContentPart,
-  type CreateResponseBody,
-  type ItemParam,
-  type OutputItem,
-  type ResponseResource,
-  type StreamingEvent,
-  type Usage,
-} from "./open-responses.schema.js";
-import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
-import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
-import type { ImageContent } from "../commands/agent/types.js";
 import {
   DEFAULT_INPUT_FILE_MAX_BYTES,
   DEFAULT_INPUT_FILE_MAX_CHARS,
@@ -55,6 +33,27 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { defaultRuntime } from "../runtime.js";
+import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  readJsonBodyOrError,
+  sendJson,
+  sendMethodNotAllowed,
+  sendUnauthorized,
+  setSseHeaders,
+  writeDone,
+} from "./http-common.js";
+import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import {
+  CreateResponseBodySchema,
+  type ContentPart,
+  type CreateResponseBody,
+  type ItemParam,
+  type OutputItem,
+  type ResponseResource,
+  type StreamingEvent,
+  type Usage,
+} from "./open-responses.schema.js";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;

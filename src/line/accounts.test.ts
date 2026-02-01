@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveLineAccount,
   listLineAccountIds,
@@ -6,7 +7,6 @@ import {
   normalizeAccountId,
   DEFAULT_ACCOUNT_ID,
 } from "./accounts.js";
-import type { OpenClawConfig } from "../config/config.js";
 
 describe("LINE accounts", () => {
   const originalEnv = { ...process.env };

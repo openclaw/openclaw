@@ -1,11 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { maybeRemoveDeprecatedCliAuthProfiles } from "./doctor-auth.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { maybeRemoveDeprecatedCliAuthProfiles } from "./doctor-auth.js";
 
 let originalAgentDir: string | undefined;
 let originalPiAgentDir: string | undefined;

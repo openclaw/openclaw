@@ -1,10 +1,8 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-import type { PluginRuntime } from "openclaw/plugin-sdk";
-
 import {
   readNostrBusState,
   writeNostrBusState,
@@ -19,9 +17,10 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
   setNostrRuntime({
     state: {
       resolveStateDir: (env, homedir) => {
-        const override =
-          env.OPENCLAW_STATE_DIR?.trim() || env.OPENCLAW_STATE_DIR?.trim();
-        if (override) return override;
+        const override = env.OPENCLAW_STATE_DIR?.trim() || env.OPENCLAW_STATE_DIR?.trim();
+        if (override) {
+          return override;
+        }
         return path.join(homedir(), ".openclaw");
       },
     },
@@ -29,8 +28,11 @@ async function withTempStateDir<T>(fn: (dir: string) => Promise<T>) {
   try {
     return await fn(dir);
   } finally {
-    if (previous === undefined) delete process.env.OPENCLAW_STATE_DIR;
-    else process.env.OPENCLAW_STATE_DIR = previous;
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
     await fs.rm(dir, { recursive: true, force: true });
   }
 }

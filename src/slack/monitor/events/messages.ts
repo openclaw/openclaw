@@ -1,10 +1,5 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-
-import { danger } from "../../../globals.js";
-import { enqueueSystemEvent } from "../../../infra/system-events.js";
-
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
-import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type {
@@ -12,6 +7,9 @@ import type {
   SlackMessageDeletedEvent,
   SlackThreadBroadcastEvent,
 } from "../types.js";
+import { danger } from "../../../globals.js";
+import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { resolveSlackChannelLabel } from "../channel-config.js";
 
 export function registerSlackMessageEvents(params: {
   ctx: SlackMonitorContext;

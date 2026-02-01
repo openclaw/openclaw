@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw update` (safe-ish source update + gateway 
 read_when:
   - You want to update a source checkout safely
   - You need to understand `--update` shorthand behavior
+title: "update"
 ---
 
 # `openclaw update`
@@ -46,6 +47,7 @@ openclaw update status --timeout 10
 ```
 
 Options:
+
 - `--json`: print machine-readable status JSON.
 - `--timeout <seconds>`: timeout for checks (default is 3s).
 

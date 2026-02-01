@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../gateway/call.js", () => ({
@@ -13,11 +12,11 @@ vi.mock("./agent.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import * as configModule from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { agentCommand } from "./agent.js";
 import { agentCliCommand } from "./agent-via-gateway.js";
+import { agentCommand } from "./agent.js";
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),

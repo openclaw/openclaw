@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { normalizeChatType } from "./chat-type.js";
 
 describe("normalizeChatType", () => {

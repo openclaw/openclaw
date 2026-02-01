@@ -3,15 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
+import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
 import { detectMime, getFileExtension, isAudioFileName, kindFromMime } from "../media/mime.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { fetchWithTimeout } from "./providers/shared.js";
-import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
+import { fetchWithTimeout } from "./providers/shared.js";
 
 type MediaBufferResult = {
   buffer: Buffer;

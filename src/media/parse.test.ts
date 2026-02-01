@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { splitMediaFromOutput } from "./parse.js";
 
 describe("splitMediaFromOutput", () => {

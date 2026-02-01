@@ -1,9 +1,8 @@
 import { MatrixClient } from "@vector-im/matrix-bot-sdk";
-
 import type { CoreConfig } from "../types.js";
+import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
-import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
 function clean(value?: string): string {
   return value?.trim() ?? "";
@@ -16,11 +15,9 @@ export function resolveMatrixConfig(
   const matrix = cfg.channels?.matrix ?? {};
   const homeserver = clean(matrix.homeserver) || clean(env.MATRIX_HOMESERVER);
   const userId = clean(matrix.userId) || clean(env.MATRIX_USER_ID);
-  const accessToken =
-    clean(matrix.accessToken) || clean(env.MATRIX_ACCESS_TOKEN) || undefined;
+  const accessToken = clean(matrix.accessToken) || clean(env.MATRIX_ACCESS_TOKEN) || undefined;
   const password = clean(matrix.password) || clean(env.MATRIX_PASSWORD) || undefined;
-  const deviceName =
-    clean(matrix.deviceName) || clean(env.MATRIX_DEVICE_NAME) || undefined;
+  const deviceName = clean(matrix.deviceName) || clean(env.MATRIX_DEVICE_NAME) || undefined;
   const initialSyncLimit =
     typeof matrix.initialSyncLimit === "number"
       ? Math.max(0, Math.floor(matrix.initialSyncLimit))
@@ -106,9 +103,7 @@ export async function resolveMatrixAuth(params?: {
   }
 
   if (!resolved.userId) {
-    throw new Error(
-      "Matrix userId is required when no access token is configured (matrix.userId)",
-    );
+    throw new Error("Matrix userId is required when no access token is configured (matrix.userId)");
   }
 
   if (!resolved.password) {

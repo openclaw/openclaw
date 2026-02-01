@@ -1,5 +1,4 @@
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
-
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { loginMiniMaxPortalOAuth, type MiniMaxRegion } from "./oauth.js";
 
 const PROVIDER_ID = "minimax-portal";
@@ -19,7 +18,11 @@ function modelRef(modelId: string): string {
   return `${PROVIDER_ID}/${modelId}`;
 }
 
-function buildModelDefinition(params: { id: string; name: string; input: Array<"text" | "image"> }) {
+function buildModelDefinition(params: {
+  id: string;
+  name: string;
+  input: Array<"text" | "image">;
+}) {
   return {
     id: params.id,
     name: params.name,

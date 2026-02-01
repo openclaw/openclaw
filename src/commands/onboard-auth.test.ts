@@ -1,10 +1,8 @@
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-
 import {
   applyAuthProfileConfig,
   applyMinimaxApiConfig,

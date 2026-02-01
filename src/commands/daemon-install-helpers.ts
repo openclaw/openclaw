@@ -1,3 +1,7 @@
+import type { OpenClawConfig } from "../config/types.js";
+import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { collectConfigEnvVars } from "../config/env-vars.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import {
@@ -6,10 +10,6 @@ import {
   resolveSystemNodeInfo,
 } from "../daemon/runtime-paths.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import { collectConfigEnvVars } from "../config/env-vars.js";
-import type { OpenClawConfig } from "../config/types.js";
-import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 type WarnFn = (message: string, title?: string) => void;
 

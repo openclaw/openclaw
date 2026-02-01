@@ -246,10 +246,6 @@ vi.mock("../daemon/service.js", () => ({
   }),
 }));
 
-vi.mock("../telegram/pairing-store.js", () => ({
-  readTelegramAllowFromStore: vi.fn().mockResolvedValue([]),
-}));
-
 vi.mock("../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
   upsertChannelPairingRequest: vi.fn().mockResolvedValue({ code: "000000", created: false }),

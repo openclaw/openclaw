@@ -1,8 +1,9 @@
 ---
-summary: 'OpenClaw plugins/extensions: discovery, config, and safety'
+summary: "OpenClaw plugins/extensions: discovery, config, and safety"
 read_when:
   - Adding or modifying plugins/extensions
   - Documenting plugin install or load rules
+title: "Plugins"
 ---
 
 # Plugins (Extensions)
@@ -74,7 +75,7 @@ Plugins can access selected core helpers via `api.runtime`. For telephony TTS:
 
 ```ts
 const result = await api.runtime.tts.textToSpeechTelephony({
-  text: 'Hello from OpenClaw',
+  text: "Hello from OpenClaw",
   cfg: api.config,
 });
 ```
@@ -195,11 +196,11 @@ configured id.
 {
   plugins: {
     enabled: true,
-    allow: ['voice-call'],
-    deny: ['untrusted-plugin'],
-    load: { paths: ['~/Projects/oss/voice-call-extension'] },
+    allow: ["voice-call"],
+    deny: ["untrusted-plugin"],
+    load: { paths: ["~/Projects/oss/voice-call-extension"] },
     entries: {
-      'voice-call': { enabled: true, config: { provider: 'twilio' } },
+      "voice-call": { enabled: true, config: { provider: "twilio" } },
     },
   },
 }
@@ -233,7 +234,7 @@ Some plugin categories are **exclusive** (only one active at a time). Use
 {
   plugins: {
     slots: {
-      memory: 'memory-core', // or "none" to disable memory plugins
+      memory: "memory-core", // or "none" to disable memory plugins
     },
   },
 }
@@ -340,29 +341,29 @@ Example:
 
 ```ts
 api.registerProvider({
-  id: 'acme',
-  label: 'AcmeAI',
+  id: "acme",
+  label: "AcmeAI",
   auth: [
     {
-      id: 'oauth',
-      label: 'OAuth',
-      kind: 'oauth',
+      id: "oauth",
+      label: "OAuth",
+      kind: "oauth",
       run: async (ctx) => {
         // Run OAuth flow and return auth profiles.
         return {
           profiles: [
             {
-              profileId: 'acme:default',
+              profileId: "acme:default",
               credential: {
-                type: 'oauth',
-                provider: 'acme',
-                access: '...',
-                refresh: '...',
+                type: "oauth",
+                provider: "acme",
+                access: "...",
+                refresh: "...",
                 expires: Date.now() + 3600 * 1000,
               },
             },
           ],
-          defaultModel: 'acme/opus-1',
+          defaultModel: "acme/opus-1",
         };
       },
     },
@@ -385,26 +386,25 @@ validated by your channel plugin code.
 
 ```ts
 const myChannel = {
-  id: 'acmechat',
+  id: "acmechat",
   meta: {
-    id: 'acmechat',
-    label: 'AcmeChat',
-    selectionLabel: 'AcmeChat (API)',
-    docsPath: '/channels/acmechat',
-    blurb: 'demo channel plugin.',
-    aliases: ['acme'],
+    id: "acmechat",
+    label: "AcmeChat",
+    selectionLabel: "AcmeChat (API)",
+    docsPath: "/channels/acmechat",
+    blurb: "demo channel plugin.",
+    aliases: ["acme"],
   },
-  capabilities: { chatTypes: ['direct'] },
+  capabilities: { chatTypes: ["direct"] },
   config: {
-    listAccountIds: (cfg) =>
-      Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
+    listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
     resolveAccount: (cfg, accountId) =>
-      cfg.channels?.acmechat?.accounts?.[accountId ?? 'default'] ?? {
+      cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? {
         accountId,
       },
   },
   outbound: {
-    deliveryMode: 'direct',
+    deliveryMode: "direct",
     sendText: async () => ({ ok: true }),
   },
 };
@@ -462,7 +462,7 @@ Minimal config example:
   channels: {
     acmechat: {
       accounts: {
-        default: { token: 'ACME_TOKEN', enabled: true },
+        default: { token: "ACME_TOKEN", enabled: true },
       },
     },
   },
@@ -473,26 +473,25 @@ Minimal channel plugin (outbound‑only):
 
 ```ts
 const plugin = {
-  id: 'acmechat',
+  id: "acmechat",
   meta: {
-    id: 'acmechat',
-    label: 'AcmeChat',
-    selectionLabel: 'AcmeChat (API)',
-    docsPath: '/channels/acmechat',
-    blurb: 'AcmeChat messaging channel.',
-    aliases: ['acme'],
+    id: "acmechat",
+    label: "AcmeChat",
+    selectionLabel: "AcmeChat (API)",
+    docsPath: "/channels/acmechat",
+    blurb: "AcmeChat messaging channel.",
+    aliases: ["acme"],
   },
-  capabilities: { chatTypes: ['direct'] },
+  capabilities: { chatTypes: ["direct"] },
   config: {
-    listAccountIds: (cfg) =>
-      Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
+    listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
     resolveAccount: (cfg, accountId) =>
-      cfg.channels?.acmechat?.accounts?.[accountId ?? 'default'] ?? {
+      cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? {
         accountId,
       },
   },
   outbound: {
-    deliveryMode: 'direct',
+    deliveryMode: "direct",
     sendText: async ({ text }) => {
       // deliver `text` to your channel here
       return { ok: true };
@@ -516,7 +515,7 @@ See the dedicated guide: [Plugin agent tools](/plugins/agent-tools).
 
 ```ts
 export default function (api) {
-  api.registerGatewayMethod('myplugin.status', ({ respond }) => {
+  api.registerGatewayMethod("myplugin.status", ({ respond }) => {
     respond(true, { ok: true });
   });
 }
@@ -528,11 +527,11 @@ export default function (api) {
 export default function (api) {
   api.registerCli(
     ({ program }) => {
-      program.command('mycmd').action(() => {
-        console.log('Hello');
+      program.command("mycmd").action(() => {
+        console.log("Hello");
       });
     },
-    { commands: ['mycmd'] },
+    { commands: ["mycmd"] },
   );
 }
 ```
@@ -546,8 +545,8 @@ that don't need LLM processing.
 ```ts
 export default function (api) {
   api.registerCommand({
-    name: 'mystatus',
-    description: 'Show plugin status',
+    name: "mystatus",
+    description: "Show plugin status",
     handler: (ctx) => ({
       text: `Plugin is running! Channel: ${ctx.channel}`,
     }),
@@ -576,12 +575,12 @@ Example with authorization and arguments:
 
 ```ts
 api.registerCommand({
-  name: 'setmode',
-  description: 'Set plugin mode',
+  name: "setmode",
+  description: "Set plugin mode",
   acceptsArgs: true,
   requireAuth: true,
   handler: async (ctx) => {
-    const mode = ctx.args?.trim() || 'default';
+    const mode = ctx.args?.trim() || "default";
     await saveMode(mode);
     return { text: `Mode set to: ${mode}` };
   },
@@ -602,9 +601,9 @@ Notes:
 ```ts
 export default function (api) {
   api.registerService({
-    id: 'my-service',
-    start: () => api.logger.info('ready'),
-    stop: () => api.logger.info('bye'),
+    id: "my-service",
+    start: () => api.logger.info("ready"),
+    stop: () => api.logger.info("bye"),
   });
 }
 ```

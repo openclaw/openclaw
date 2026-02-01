@@ -3,7 +3,9 @@ summary: "Global voice wake words (Gateway-owned) and how they sync across nodes
 read_when:
   - Changing voice wake words behavior or defaults
   - Adding new node platforms that need wake word sync
+title: "Voice Wake"
 ---
+
 # Voice Wake (Global Wake Words)
 
 OpenClaw treats **wake words as a single global list** owned by the **Gateway**.
@@ -32,6 +34,7 @@ Shape:
 - `voicewake.set` with params `{ triggers: string[] }` → `{ triggers: string[] }`
 
 Notes:
+
 - Triggers are normalized (trimmed, empties dropped). Empty lists fall back to defaults.
 - Limits are enforced for safety (count/length caps).
 
@@ -40,6 +43,7 @@ Notes:
 - `voicewake.changed` payload `{ triggers: string[] }`
 
 Who receives it:
+
 - All WebSocket clients (macOS app, WebChat, etc.)
 - All connected nodes (iOS/Android), and also on node connect as an initial “current state” push.
 

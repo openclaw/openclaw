@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 
 export async function resolveOpenClawDocsPath(params: {

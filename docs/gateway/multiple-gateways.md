@@ -3,12 +3,15 @@ summary: "Run multiple OpenClaw Gateways on one host (isolation, ports, and prof
 read_when:
   - Running more than one Gateway on the same machine
   - You need isolated config/state/ports per Gateway
+title: "Multiple Gateways"
 ---
+
 # Multiple Gateways (same host)
 
 Most setups should use one Gateway because a single Gateway can handle multiple messaging connections and agents. If you need stronger isolation or redundancy (e.g., a rescue bot), run separate Gateways with isolated profiles/ports.
 
 ## Isolation checklist (required)
+
 - `OPENCLAW_CONFIG_PATH` — per-instance config file
 - `OPENCLAW_STATE_DIR` — per-instance sessions, creds, caches
 - `agents.defaults.workspace` — per-instance workspace root
@@ -32,6 +35,7 @@ openclaw --profile rescue gateway --port 19001
 ```
 
 Per-profile services:
+
 ```bash
 openclaw --profile main gateway install
 openclaw --profile rescue gateway install
@@ -40,6 +44,7 @@ openclaw --profile rescue gateway install
 ## Rescue-bot guide
 
 Run a second Gateway on the same host with its own:
+
 - profile/config
 - state dir
 - workspace
@@ -53,15 +58,15 @@ Port spacing: leave at least 20 ports between base ports so the derived browser/
 
 ```bash
 # Main bot (existing or fresh, without --profile param)
-# Runs on port 18789 + Chrome CDC/Canvas/... Ports 
+# Runs on port 18789 + Chrome CDC/Canvas/... Ports
 openclaw onboard
 openclaw gateway install
 
 # Rescue bot (isolated profile + ports)
 openclaw --profile rescue onboard
-# Notes: 
+# Notes:
 # - workspace name will be postfixed with -rescue per default
-# - Port should be at least 18789 + 20 Ports, 
+# - Port should be at least 18789 + 20 Ports,
 #   better choose completely different base port, like 19789,
 # - rest of the onboarding is the same as normal
 

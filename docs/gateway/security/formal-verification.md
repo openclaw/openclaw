@@ -15,6 +15,7 @@ intended security policy (authorization, session isolation, tool gating, and
 misconfiguration safety), under explicit assumptions.
 
 **What this is (today):** an executable, attacker-driven **security regression suite**:
+
 - Each claim has a runnable model-check over a finite state space.
 - Many claims have a paired **negative model** that produces a counterexample trace for a realistic bug class.
 
@@ -33,6 +34,7 @@ Models are maintained in a separate repo: [vignesh07/openclaw-formal-models](htt
 ## Reproducing results
 
 Today, results are reproduced by cloning the models repo locally and running TLC (see below). A future iteration could offer:
+
 - CI-run models with public artifacts (counterexample traces, run logs)
 - a hosted “run this model” workflow for small, bounded checks
 
@@ -100,7 +102,6 @@ See also: `docs/gateway-exposure-matrix.md` in the models repo.
 - Red (expected):
   - `make routing-isolation-negative`
 
-
 ## v1++: additional bounded models (concurrency, retries, trace correctness)
 
 These are follow-on models that tighten fidelity around real-world failure modes (non-atomic updates, retries, and message fan-out).
@@ -110,6 +111,7 @@ These are follow-on models that tighten fidelity around real-world failure modes
 **Claim:** a pairing store should enforce `MaxPending` and idempotency even under interleavings (i.e., “check-then-write” must be atomic / locked; refresh shouldn’t create duplicates).
 
 What it means:
+
 - Under concurrent requests, you can’t exceed `MaxPending` for a channel.
 - Repeated requests/refreshes for the same `(channel, sender)` should not create duplicate live pending rows.
 
@@ -129,6 +131,7 @@ What it means:
 **Claim:** ingestion should preserve trace correlation across fan-out and be idempotent under provider retries.
 
 What it means:
+
 - When one external event becomes multiple internal messages, every part keeps the same trace/event identity.
 - Retries do not result in double-processing.
 - If provider event IDs are missing, dedupe falls back to a safe key (e.g., trace ID) to avoid dropping distinct events.
@@ -149,6 +152,7 @@ What it means:
 **Claim:** routing must keep DM sessions isolated by default, and only collapse sessions when explicitly configured (channel precedence + identity links).
 
 What it means:
+
 - Channel-specific dmScope overrides must win over global defaults.
 - identityLinks should collapse only within explicit linked groups, not across unrelated peers.
 

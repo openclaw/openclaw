@@ -1,5 +1,4 @@
 import { GoogleAuth, OAuth2Client } from "google-auth-library";
-
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";
@@ -15,15 +14,21 @@ const verifyClient = new OAuth2Client();
 let cachedCerts: { fetchedAt: number; certs: Record<string, string> } | null = null;
 
 function buildAuthKey(account: ResolvedGoogleChatAccount): string {
-  if (account.credentialsFile) return `file:${account.credentialsFile}`;
-  if (account.credentials) return `inline:${JSON.stringify(account.credentials)}`;
+  if (account.credentialsFile) {
+    return `file:${account.credentialsFile}`;
+  }
+  if (account.credentials) {
+    return `inline:${JSON.stringify(account.credentials)}`;
+  }
   return "none";
 }
 
 function getAuthInstance(account: ResolvedGoogleChatAccount): GoogleAuth {
   const key = buildAuthKey(account);
   const cached = authCache.get(account.accountId);
-  if (cached && cached.key === key) return cached.auth;
+  if (cached && cached.key === key) {
+    return cached.auth;
+  }
 
   if (account.credentialsFile) {
     const auth = new GoogleAuth({ keyFile: account.credentialsFile, scopes: [CHAT_SCOPE] });
@@ -77,9 +82,13 @@ export async function verifyGoogleChatRequest(params: {
   audience?: string | null;
 }): Promise<{ ok: boolean; reason?: string }> {
   const bearer = params.bearer?.trim();
-  if (!bearer) return { ok: false, reason: "missing token" };
+  if (!bearer) {
+    return { ok: false, reason: "missing token" };
+  }
   const audience = params.audience?.trim();
-  if (!audience) return { ok: false, reason: "missing audience" };
+  if (!audience) {
+    return { ok: false, reason: "missing audience" };
+  }
   const audienceType = params.audienceType ?? null;
 
   if (audienceType === "app-url") {
@@ -90,7 +99,8 @@ export async function verifyGoogleChatRequest(params: {
       });
       const payload = ticket.getPayload();
       const email = payload?.email ?? "";
-      const ok = payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
+      const ok =
+        payload?.email_verified && (email === CHAT_ISSUER || ADDON_ISSUER_PATTERN.test(email));
       return ok ? { ok: true } : { ok: false, reason: `invalid issuer: ${email}` };
     } catch (err) {
       return { ok: false, reason: err instanceof Error ? err.message : "invalid token" };

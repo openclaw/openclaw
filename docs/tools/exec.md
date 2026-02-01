@@ -3,6 +3,7 @@ summary: "Exec tool usage, stdin modes, and TTY support"
 read_when:
   - Using or modifying the exec tool
   - Debugging stdin or TTY behavior
+title: "Exec Tool"
 ---
 
 # Exec tool
@@ -27,6 +28,7 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - `elevated` (bool): request elevated mode (gateway host); `security=full` is only forced when elevated resolves to `full`
 
 Notes:
+
 - `host` defaults to `sandbox`.
 - `elevated` is ignored when sandboxing is off (exec already runs on the host).
 - `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.
@@ -50,13 +52,14 @@ Notes:
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries.
 
 Example:
+
 ```json5
 {
   tools: {
     exec: {
-      pathPrepend: ["~/bin", "/opt/oss/bin"]
-    }
-  }
+      pathPrepend: ["~/bin", "/opt/oss/bin"],
+    },
+  },
 }
 ```
 
@@ -88,6 +91,7 @@ Use `/exec` to set **per-session** defaults for `host`, `security`, `ask`, and `
 Send `/exec` with no arguments to show the current values.
 
 Example:
+
 ```
 /exec host=gateway security=allowlist ask=on-miss node=mac-1
 ```
@@ -119,17 +123,20 @@ allowlist mode.
 ## Examples
 
 Foreground:
+
 ```json
-{"tool":"exec","command":"ls -la"}
+{ "tool": "exec", "command": "ls -la" }
 ```
 
 Background + poll:
+
 ```json
 {"tool":"exec","command":"npm run build","yieldMs":1000}
 {"tool":"process","action":"poll","sessionId":"<id>"}
 ```
 
 Send keys (tmux-style):
+
 ```json
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["Enter"]}
 {"tool":"process","action":"send-keys","sessionId":"<id>","keys":["C-c"]}
@@ -137,13 +144,15 @@ Send keys (tmux-style):
 ```
 
 Submit (send CR only):
+
 ```json
-{"tool":"process","action":"submit","sessionId":"<id>"}
+{ "tool": "process", "action": "submit", "sessionId": "<id>" }
 ```
 
 Paste (bracketed by default):
+
 ```json
-{"tool":"process","action":"paste","sessionId":"<id>","text":"line1\nline2\n"}
+{ "tool": "process", "action": "paste", "sessionId": "<id>", "text": "line1\nline2\n" }
 ```
 
 ## apply_patch (experimental)
@@ -155,13 +164,14 @@ Enable it explicitly:
 {
   tools: {
     exec: {
-      applyPatch: { enabled: true, allowModels: ["gpt-5.2"] }
-    }
-  }
+      applyPatch: { enabled: true, allowModels: ["gpt-5.2"] },
+    },
+  },
 }
 ```
 
 Notes:
+
 - Only available for OpenAI/OpenAI Codex models.
 - Tool policy still applies; `allow: ["exec"]` implicitly allows `apply_patch`.
 - Config lives under `tools.exec.applyPatch`.

@@ -1,8 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
-
 import type { PluginRuntime } from "openclaw/plugin-sdk";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { CoreConfig } from "./types.js";
-
 import { matrixPlugin } from "./channel.js";
 import { setMatrixRuntime } from "./runtime.js";
 
@@ -34,7 +32,12 @@ describe("matrix directory", () => {
     expect(matrixPlugin.directory?.listGroups).toBeTruthy();
 
     await expect(
-      matrixPlugin.directory!.listPeers({ cfg, accountId: undefined, query: undefined, limit: undefined }),
+      matrixPlugin.directory!.listPeers({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+      }),
     ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "user", id: "user:@alice:example.org" },
@@ -45,7 +48,12 @@ describe("matrix directory", () => {
     );
 
     await expect(
-      matrixPlugin.directory!.listGroups({ cfg, accountId: undefined, query: undefined, limit: undefined }),
+      matrixPlugin.directory!.listGroups({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+      }),
     ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "group", id: "room:!room1:example.org" },

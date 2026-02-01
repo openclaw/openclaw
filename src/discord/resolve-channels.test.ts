@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { resolveDiscordChannelAllowlist } from "./resolve-channels.js";
 
 function jsonResponse(body: unknown) {

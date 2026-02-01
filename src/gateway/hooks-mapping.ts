@@ -1,8 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-
-import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 import type { HookMessageChannel } from "./hooks.js";
+import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 
 export type HookMappingResolved = {
   id: string;

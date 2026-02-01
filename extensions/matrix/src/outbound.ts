@@ -1,7 +1,6 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
-
-import { getMatrixRuntime } from "./runtime.js";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
+import { getMatrixRuntime } from "./runtime.js";
 
 export const matrixOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",

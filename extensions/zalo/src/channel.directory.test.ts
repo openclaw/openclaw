@@ -1,7 +1,5 @@
-import { describe, expect, it } from "vitest";
-
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-
+import { describe, expect, it } from "vitest";
 import { zaloPlugin } from "./channel.js";
 
 describe("zalo directory", () => {
@@ -19,7 +17,12 @@ describe("zalo directory", () => {
     expect(zaloPlugin.directory?.listGroups).toBeTruthy();
 
     await expect(
-      zaloPlugin.directory!.listPeers({ cfg, accountId: undefined, query: undefined, limit: undefined }),
+      zaloPlugin.directory!.listPeers({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+      }),
     ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "user", id: "123" },
@@ -28,8 +31,13 @@ describe("zalo directory", () => {
       ]),
     );
 
-    await expect(zaloPlugin.directory!.listGroups({ cfg, accountId: undefined, query: undefined, limit: undefined })).resolves.toEqual(
-      [],
-    );
+    await expect(
+      zaloPlugin.directory!.listGroups({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+      }),
+    ).resolves.toEqual([]);
   });
 });

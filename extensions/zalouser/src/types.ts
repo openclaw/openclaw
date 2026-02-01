@@ -75,7 +75,10 @@ export type ZalouserAccountConfig = {
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: Array<string | number>;
   groupPolicy?: "open" | "allowlist" | "disabled";
-  groups?: Record<string, { allow?: boolean; enabled?: boolean; tools?: { allow?: string[]; deny?: string[] } }>;
+  groups?: Record<
+    string,
+    { allow?: boolean; enabled?: boolean; tools?: { allow?: string[]; deny?: string[] } }
+  >;
   messagePrefix?: string;
 };
 
@@ -87,7 +90,10 @@ export type ZalouserConfig = {
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: Array<string | number>;
   groupPolicy?: "open" | "allowlist" | "disabled";
-  groups?: Record<string, { allow?: boolean; enabled?: boolean; tools?: { allow?: string[]; deny?: string[] } }>;
+  groups?: Record<
+    string,
+    { allow?: boolean; enabled?: boolean; tools?: { allow?: string[]; deny?: string[] } }
+  >;
   messagePrefix?: string;
   accounts?: Record<string, ZalouserAccountConfig>;
 };

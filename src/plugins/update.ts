@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-
 import type { OpenClawConfig } from "../config/config.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";

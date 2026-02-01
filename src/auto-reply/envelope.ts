@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
-import type { OpenClawConfig } from "../config/config.js";
 
 export type AgentEnvelopeParams = {
   channel: string;
@@ -103,7 +103,7 @@ function formatUtcTimestamp(date: Date): string {
   return `${yyyy}-${mm}-${dd}T${hh}:${min}Z`;
 }
 
-function formatZonedTimestamp(date: Date, timeZone?: string): string | undefined {
+export function formatZonedTimestamp(date: Date, timeZone?: string): string | undefined {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     year: "numeric",

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
@@ -7,7 +8,6 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 

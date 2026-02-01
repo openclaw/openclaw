@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("telegram custom commands schema", () => {

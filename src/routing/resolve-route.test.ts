@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentRoute } from "./resolve-route.js";
 
@@ -252,4 +251,161 @@ test("dmScope=per-account-channel-peer uses default accountId when not provided"
     peer: { kind: "dm", id: "7550356539" },
   });
   expect(route.sessionKey).toBe("agent:main:telegram:default:dm:7550356539");
+});
+
+describe("parentPeer binding inheritance (thread support)", () => {
+  test("thread inherits binding from parent channel when no direct match", () => {
+    const cfg: MoltbotConfig = {
+      bindings: [
+        {
+          agentId: "adecco",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-channel-123" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: { kind: "channel", id: "parent-channel-123" },
+    });
+    expect(route.agentId).toBe("adecco");
+    expect(route.matchedBy).toBe("binding.peer.parent");
+  });
+
+  test("direct peer binding wins over parent peer binding", () => {
+    const cfg: MoltbotConfig = {
+      bindings: [
+        {
+          agentId: "thread-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "thread-456" },
+          },
+        },
+        {
+          agentId: "parent-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-channel-123" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: { kind: "channel", id: "parent-channel-123" },
+    });
+    expect(route.agentId).toBe("thread-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  test("parent peer binding wins over guild binding", () => {
+    const cfg: MoltbotConfig = {
+      bindings: [
+        {
+          agentId: "parent-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-channel-123" },
+          },
+        },
+        {
+          agentId: "guild-agent",
+          match: {
+            channel: "discord",
+            guildId: "guild-789",
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: { kind: "channel", id: "parent-channel-123" },
+      guildId: "guild-789",
+    });
+    expect(route.agentId).toBe("parent-agent");
+    expect(route.matchedBy).toBe("binding.peer.parent");
+  });
+
+  test("falls back to guild binding when no parent peer match", () => {
+    const cfg: MoltbotConfig = {
+      bindings: [
+        {
+          agentId: "other-parent-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "other-parent-999" },
+          },
+        },
+        {
+          agentId: "guild-agent",
+          match: {
+            channel: "discord",
+            guildId: "guild-789",
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: { kind: "channel", id: "parent-channel-123" },
+      guildId: "guild-789",
+    });
+    expect(route.agentId).toBe("guild-agent");
+    expect(route.matchedBy).toBe("binding.guild");
+  });
+
+  test("parentPeer with empty id is ignored", () => {
+    const cfg: MoltbotConfig = {
+      bindings: [
+        {
+          agentId: "parent-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-channel-123" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: { kind: "channel", id: "" },
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+
+  test("null parentPeer is handled gracefully", () => {
+    const cfg: MoltbotConfig = {
+      bindings: [
+        {
+          agentId: "parent-agent",
+          match: {
+            channel: "discord",
+            peer: { kind: "channel", id: "parent-channel-123" },
+          },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      peer: { kind: "channel", id: "thread-456" },
+      parentPeer: null,
+    });
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
 });

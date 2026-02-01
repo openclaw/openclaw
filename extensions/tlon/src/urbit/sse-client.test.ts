@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { UrbitSSEClient } from "./sse-client.js";
 
 const mockFetch = vi.fn();

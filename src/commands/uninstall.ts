@@ -1,6 +1,6 @@
-import path from "node:path";
 import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
-
+import path from "node:path";
+import type { RuntimeEnv } from "../runtime.js";
 import {
   isNixMode,
   loadConfig,
@@ -9,7 +9,6 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveHomeDir } from "../utils.js";
 import { collectWorkspaceDirs, isPathWithin, removePath } from "./cleanup-utils.js";

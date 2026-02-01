@@ -1,5 +1,5 @@
-import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
 
 export function applyOpencodeZenProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   // Use the built-in opencode provider from pi-ai; only seed the allowlist alias.

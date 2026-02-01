@@ -3,7 +3,9 @@ summary: "First-run onboarding flow for OpenClaw (macOS app)"
 read_when:
   - Designing the macOS onboarding assistant
   - Implementing auth or identity setup
+title: "Onboarding"
 ---
+
 # Onboarding (macOS app)
 
 This doc describes the **current** first‑run onboarding flow. The goal is a
@@ -12,14 +14,14 @@ wizard, and let the agent bootstrap itself.
 
 ## Page order (current)
 
-1) Welcome + security notice
-2) **Gateway selection** (Local / Remote / Configure later)
-3) **Auth (Anthropic OAuth)** — local only
-4) **Setup Wizard** (Gateway‑driven)
-5) **Permissions** (TCC prompts)
-6) **CLI** (optional)
-7) **Onboarding chat** (dedicated session)
-8) Ready
+1. Welcome + security notice
+2. **Gateway selection** (Local / Remote / Configure later)
+3. **Auth (Anthropic OAuth)** — local only
+4. **Setup Wizard** (Gateway‑driven)
+5. **Permissions** (TCC prompts)
+6. **CLI** (optional)
+7. **Onboarding chat** (dedicated session)
+8. Ready
 
 ## 1) Local vs Remote
 
@@ -32,6 +34,7 @@ Where does the **Gateway** run?
 - **Configure later:** skip setup and leave the app unconfigured.
 
 Gateway auth tip:
+
 - The wizard now generates a **token** even for loopback, so local WS clients must authenticate.
 - If you disable auth, any local process can connect; use that only on fully trusted machines.
 - Use a **token** for multi‑machine access or non‑loopback binds.

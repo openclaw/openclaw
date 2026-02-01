@@ -4,10 +4,8 @@
  */
 
 import crypto from "node:crypto";
-
-import { loadCoreAgentDeps, type CoreConfig } from "./core-bridge.js";
-
 import type { VoiceCallConfig } from "./config.js";
+import { loadCoreAgentDeps, type CoreConfig } from "./core-bridge.js";
 
 export type VoiceResponseParams = {
   /** Voice call config */
@@ -41,8 +39,7 @@ type SessionEntry = {
 export async function generateVoiceResponse(
   params: VoiceResponseParams,
 ): Promise<VoiceResponseResult> {
-  const { voiceConfig, callId, from, transcript, userMessage, coreConfig } =
-    params;
+  const { voiceConfig, callId, from, transcript, userMessage, coreConfig } = params;
 
   if (!coreConfig) {
     return { text: null, error: "Core config unavailable for voice response" };
@@ -54,10 +51,7 @@ export async function generateVoiceResponse(
   } catch (err) {
     return {
       text: null,
-      error:
-        err instanceof Error
-          ? err.message
-          : "Unable to load core agent dependencies",
+      error: err instanceof Error ? err.message : "Unable to load core agent dependencies",
     };
   }
   const cfg = coreConfig;
@@ -95,12 +89,9 @@ export async function generateVoiceResponse(
   });
 
   // Resolve model from config
-  const modelRef =
-    voiceConfig.responseModel ||
-    `${deps.DEFAULT_PROVIDER}/${deps.DEFAULT_MODEL}`;
+  const modelRef = voiceConfig.responseModel || `${deps.DEFAULT_PROVIDER}/${deps.DEFAULT_MODEL}`;
   const slashIndex = modelRef.indexOf("/");
-  const provider =
-    slashIndex === -1 ? deps.DEFAULT_PROVIDER : modelRef.slice(0, slashIndex);
+  const provider = slashIndex === -1 ? deps.DEFAULT_PROVIDER : modelRef.slice(0, slashIndex);
   const model = slashIndex === -1 ? modelRef : modelRef.slice(slashIndex + 1);
 
   // Resolve thinking level
@@ -118,17 +109,13 @@ export async function generateVoiceResponse(
   let extraSystemPrompt = basePrompt;
   if (transcript.length > 0) {
     const history = transcript
-      .map(
-        (entry) =>
-          `${entry.speaker === "bot" ? "You" : "Caller"}: ${entry.text}`,
-      )
+      .map((entry) => `${entry.speaker === "bot" ? "You" : "Caller"}: ${entry.text}`)
       .join("\n");
     extraSystemPrompt = `${basePrompt}\n\nConversation so far:\n${history}`;
   }
 
   // Resolve timeout
-  const timeoutMs =
-    voiceConfig.responseTimeoutMs ?? deps.resolveAgentTimeoutMs({ cfg });
+  const timeoutMs = voiceConfig.responseTimeoutMs ?? deps.resolveAgentTimeoutMs({ cfg });
   const runId = `voice:${callId}:${Date.now()}`;
 
   try {

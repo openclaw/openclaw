@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { hasBinary } from "../agents/skills.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";

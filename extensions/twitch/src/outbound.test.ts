@@ -9,9 +9,9 @@
  * - Abort signal handling
  */
 
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { twitchOutbound } from "./outbound.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
 // Mock dependencies
 vi.mock("./config.js", () => ({

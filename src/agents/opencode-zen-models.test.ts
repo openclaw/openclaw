@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   getOpencodeZenStaticFallbackModels,
   OPENCODE_ZEN_MODEL_ALIASES,

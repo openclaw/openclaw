@@ -1,37 +1,37 @@
 import { ChannelType } from "@buape/carbon";
+import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
-import {
-  removeAckReactionAfterReply,
-  shouldAckReaction as shouldAckReactionGate,
-} from "../../channels/ack-reactions.js";
-import { logTypingFailure, logAckFailure } from "../../channels/logging.js";
-import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
-import { createTypingCallbacks } from "../../channels/typing.js";
+import { resolveChunkMode } from "../../auto-reply/chunk.js";
+import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   formatInboundEnvelope,
   formatThreadStarterEnvelope,
   resolveEnvelopeFormatOptions,
 } from "../../auto-reply/envelope.js";
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
+import {
+  removeAckReactionAfterReply,
+  shouldAckReaction as shouldAckReactionGate,
+} from "../../channels/ack-reactions.js";
+import { logTypingFailure, logAckFailure } from "../../channels/logging.js";
+import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
-import { resolveChunkMode } from "../../auto-reply/chunk.js";
+import { createTypingCallbacks } from "../../channels/typing.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
+import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
 import { normalizeDiscordSlug } from "./allow-list.js";
-import { formatDiscordUserTag, resolveTimestampMs } from "./format.js";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import { resolveTimestampMs } from "./format.js";
 import {
   buildDiscordMediaPayload,
   resolveDiscordMessageText,
@@ -57,6 +57,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ackReactionScope,
     message,
     author,
+    sender,
     data,
     client,
     channelInfo,
@@ -125,12 +126,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         channelName: channelName ?? message.channelId,
         channelId: message.channelId,
       });
-  const senderTag = formatDiscordUserTag(author);
-  const senderDisplay = data.member?.nickname ?? author.globalName ?? author.username;
-  const senderLabel =
-    senderDisplay && senderTag && senderDisplay !== senderTag
-      ? `${senderDisplay} (${senderTag})`
-      : (senderDisplay ?? senderTag ?? author.id);
+  const senderLabel = sender.label;
   const isForumParent =
     threadParentType === ChannelType.GuildForum || threadParentType === ChannelType.GuildMedia;
   const forumParentSlug =
@@ -142,6 +138,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
   const groupSubject = isDirectMessage ? undefined : groupChannel;
   const channelDescription = channelInfo?.topic?.trim();
+  const senderName = sender.isPluralKit
+    ? (sender.name ?? author.username)
+    : (data.member?.nickname ?? author.globalName ?? author.username);
+  const senderUsername = sender.isPluralKit
+    ? (sender.tag ?? sender.name ?? author.username)
+    : author.username;
+  const senderTag = sender.tag;
   const systemPromptParts = [
     channelDescription ? `Channel topic: ${channelDescription}` : null,
     channelConfig?.systemPrompt?.trim() || null,
@@ -272,10 +275,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     AccountId: route.accountId,
     ChatType: isDirectMessage ? "direct" : "channel",
     ConversationLabel: fromLabel,
-    SenderName: data.member?.nickname ?? author.globalName ?? author.username,
-    SenderId: author.id,
-    SenderUsername: author.username,
-    SenderTag: formatDiscordUserTag(author),
+    SenderName: senderName,
+    SenderId: sender.id,
+    SenderUsername: senderUsername,
+    SenderTag: senderTag,
     GroupSubject: groupSubject,
     GroupChannel: groupChannel,
     GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,

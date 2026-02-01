@@ -44,8 +44,18 @@ describe("message-normalizer", () => {
 
       expect(result.role).toBe("assistant");
       expect(result.content).toHaveLength(2);
-      expect(result.content[0]).toEqual({ type: "text", text: "Here is the result", name: undefined, args: undefined });
-      expect(result.content[1]).toEqual({ type: "tool_use", text: undefined, name: "bash", args: { command: "ls" } });
+      expect(result.content[0]).toEqual({
+        type: "text",
+        text: "Here is the result",
+        name: undefined,
+        args: undefined,
+      });
+      expect(result.content[1]).toEqual({
+        type: "tool_use",
+        text: undefined,
+        name: "bash",
+        args: { command: "ls" },
+      });
     });
 
     it("normalizes message with text field (alternative format)", () => {

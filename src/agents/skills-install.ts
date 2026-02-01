@@ -1,9 +1,8 @@
+import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
-import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
-
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
 import { runCommandWithTimeout } from "../process/exec.js";

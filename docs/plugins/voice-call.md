@@ -3,6 +3,7 @@ summary: "Voice Call plugin: outbound + inbound calls via Twilio/Telnyx/Plivo (p
 read_when:
   - You want to place an outbound voice call from OpenClaw
   - You are configuring or developing the voice-call plugin
+title: "Voice Call Plugin"
 ---
 
 # Voice Call (plugin)
@@ -11,12 +12,14 @@ Voice calls for OpenClaw via a plugin. Supports outbound notifications and
 multi-turn conversations with inbound policies.
 
 Current providers:
+
 - `twilio` (Programmable Voice + Media Streams)
 - `telnyx` (Call Control v2)
 - `plivo` (Voice API + XML transfer + GetInput speech)
 - `mock` (dev/no network)
 
 Quick mental model:
+
 - Install plugin
 - Restart Gateway
 - Configure under `plugins.entries.voice-call.config`
@@ -64,18 +67,18 @@ Set config under `plugins.entries.voice-call.config`:
 
           twilio: {
             accountSid: "ACxxxxxxxx",
-            authToken: "..."
+            authToken: "...",
           },
 
           plivo: {
             authId: "MAxxxxxxxxxxxxxxxxxxxx",
-            authToken: "..."
+            authToken: "...",
           },
 
           // Webhook server
           serve: {
             port: 3334,
-            path: "/voice/webhook"
+            path: "/voice/webhook",
           },
 
           // Public exposure (pick one)
@@ -84,21 +87,22 @@ Set config under `plugins.entries.voice-call.config`:
           // tailscale: { mode: "funnel", path: "/voice/webhook" }
 
           outbound: {
-            defaultMode: "notify" // notify | conversation
+            defaultMode: "notify", // notify | conversation
           },
 
           streaming: {
             enabled: true,
-            streamPath: "/voice/stream"
-          }
-        }
-      }
-    }
-  }
+            streamPath: "/voice/stream",
+          },
+        },
+      },
+    },
+  },
 }
 ```
 
 Notes:
+
 - Twilio/Telnyx require a **publicly reachable** webhook URL.
 - Plivo requires a **publicly reachable** webhook URL.
 - `mock` is a local dev provider (no network calls).
@@ -119,13 +123,14 @@ streaming speech on calls. You can override it under the plugin config with the
     provider: "elevenlabs",
     elevenlabs: {
       voiceId: "pMsXgVXv3BLzUgSXRplE",
-      modelId: "eleven_multilingual_v2"
-    }
-  }
+      modelId: "eleven_multilingual_v2",
+    },
+  },
 }
 ```
 
 Notes:
+
 - **Edge TTS is ignored for voice calls** (telephony audio needs PCM; Edge output is unreliable).
 - Core TTS is used when Twilio media streaming is enabled; otherwise calls fall back to provider native voices.
 
@@ -138,9 +143,9 @@ Use core TTS only (no override):
   messages: {
     tts: {
       provider: "openai",
-      openai: { voice: "alloy" }
-    }
-  }
+      openai: { voice: "alloy" },
+    },
+  },
 }
 ```
 
@@ -157,13 +162,13 @@ Override to ElevenLabs just for calls (keep core default elsewhere):
             elevenlabs: {
               apiKey: "elevenlabs_key",
               voiceId: "pMsXgVXv3BLzUgSXRplE",
-              modelId: "eleven_multilingual_v2"
-            }
-          }
-        }
-      }
-    }
-  }
+              modelId: "eleven_multilingual_v2",
+            },
+          },
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -178,13 +183,13 @@ Override only the OpenAI model for calls (deep‑merge example):
           tts: {
             openai: {
               model: "gpt-4o-mini-tts",
-              voice: "marin"
-            }
-          }
-        }
-      }
-    }
-  }
+              voice: "marin",
+            },
+          },
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -196,11 +201,12 @@ Inbound policy defaults to `disabled`. To enable inbound calls, set:
 {
   inboundPolicy: "allowlist",
   allowFrom: ["+15550001234"],
-  inboundGreeting: "Hello! How can I help?"
+  inboundGreeting: "Hello! How can I help?",
 }
 ```
 
 Auto-responses use the agent system. Tune with:
+
 - `responseModel`
 - `responseSystemPrompt`
 - `responseTimeoutMs`
@@ -222,6 +228,7 @@ openclaw voicecall expose --mode funnel
 Tool name: `voice_call`
 
 Actions:
+
 - `initiate_call` (message, to?, mode?)
 - `continue_call` (callId, message)
 - `speak_to_user` (callId, message)

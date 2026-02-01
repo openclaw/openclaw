@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { visibleWidth } from "./ansi.js";
 import { renderTable } from "./table.js";
 

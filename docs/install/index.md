@@ -3,6 +3,7 @@ summary: "Install OpenClaw (recommended installer, global install, or from sourc
 read_when:
   - Installing OpenClaw
   - You want to install from GitHub
+title: "Install"
 ---
 
 # Install
@@ -12,7 +13,7 @@ Use the installer unless you have a reason not to. It sets up the CLI and runs o
 ## Quick install (recommended)
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 Windows (PowerShell):
@@ -40,13 +41,13 @@ openclaw onboard --install-daemon
 Installs `openclaw` globally via npm and runs onboarding.
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 Installer flags:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --help
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --help
 ```
 
 Details: [Installer internals](/install/installer).
@@ -54,7 +55,7 @@ Details: [Installer internals](/install/installer).
 Non-interactive (skip onboarding):
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --no-onboard
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
 ```
 
 ### 2) Global install (manual)
@@ -123,10 +124,10 @@ The installer supports two methods:
 
 ```bash
 # Explicit npm
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --install-method npm
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm
 
 # Install from GitHub (source checkout)
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --install-method git
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git
 ```
 
 Common flags:

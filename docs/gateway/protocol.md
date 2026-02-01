@@ -4,6 +4,7 @@ read_when:
   - Implementing or updating gateway WS clients
   - Debugging protocol mismatches or connect failures
   - Regenerating protocol schema/models
+title: "Gateway Protocol"
 ---
 
 # Gateway protocol (WebSocket)
@@ -125,8 +126,8 @@ When a device token is issued, `hello-ok` also includes:
 
 ## Framing
 
-- **Request**: `{type:"req", id, method, params}`  
-- **Response**: `{type:"res", id, ok, payload|error}`  
+- **Request**: `{type:"req", id, method, params}`
+- **Response**: `{type:"res", id, ok, payload|error}`
 - **Event**: `{type:"event", event, payload, seq?, stateVersion?}`
 
 Side-effecting methods require **idempotency keys** (see schema).
@@ -134,11 +135,14 @@ Side-effecting methods require **idempotency keys** (see schema).
 ## Roles + scopes
 
 ### Roles
+
 - `operator` = control plane client (CLI/UI/automation).
 - `node` = capability host (camera/screen/canvas/system.run).
 
 ### Scopes (operator)
+
 Common scopes:
+
 - `operator.read`
 - `operator.write`
 - `operator.admin`
@@ -146,7 +150,9 @@ Common scopes:
 - `operator.pairing`
 
 ### Caps/commands/permissions (node)
+
 Nodes declare capability claims at connect time:
+
 - `caps`: high-level capability categories.
 - `commands`: command allowlist for invoke.
 - `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).

@@ -1,5 +1,5 @@
-import { resolveUserPath } from "../utils.js";
 import type { OpenClawConfig } from "./types.js";
+import { resolveUserPath } from "../utils.js";
 
 const PATH_VALUE_RE = /^~(?=$|[\\/])/;
 

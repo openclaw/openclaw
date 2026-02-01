@@ -6,11 +6,9 @@ import {
   MessageReactionRemoveListener,
   PresenceUpdateListener,
 } from "@buape/carbon";
-
 import { danger } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-duration.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { setPresence } from "./presence-cache.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
@@ -21,6 +19,7 @@ import {
 } from "./allow-list.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
+import { setPresence } from "./presence-cache.js";
 
 type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
 type RuntimeEnv = import("../../runtime.js").RuntimeEnv;
@@ -278,6 +277,7 @@ async function handleDiscordReactionEvent(params: {
       accountId: params.accountId,
       guildId: data.guild_id ?? undefined,
       peer: { kind: "channel", id: data.channel_id },
+      parentPeer: parentId ? { kind: "channel", id: parentId } : undefined,
     });
     enqueueSystemEvent(text, {
       sessionKey: route.sessionKey,

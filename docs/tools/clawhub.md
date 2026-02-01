@@ -4,6 +4,7 @@ read_when:
   - Introducing ClawHub to new users
   - Installing, searching, or publishing skills
   - Explaining ClawHub CLI flags and sync behavior
+title: "ClawHub"
 ---
 
 # ClawHub
@@ -23,12 +24,12 @@ If you want to add new capabilities to your OpenClaw agent, ClawHub is the easie
 
 ## Quick start (non-technical)
 
-1) Install the CLI (see next section).
-2) Search for something you need:
+1. Install the CLI (see next section).
+2. Search for something you need:
    - `clawhub search "calendar"`
-3) Install a skill:
+3. Install a skill:
    - `clawhub install <skill-slug>`
-4) Start a new OpenClaw session so it picks up the new skill.
+4. Start a new OpenClaw session so it picks up the new skill.
 
 ## Install the CLI
 

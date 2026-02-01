@@ -1,6 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-
 import { SILENT_REPLY_TOKEN, type PluginRuntime } from "openclaw/plugin-sdk";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { StoredConversationReference } from "./conversation-store.js";
 import {
   type MSTeamsAdapter,
@@ -10,8 +9,12 @@ import {
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const chunkMarkdownText = (text: string, limit: number) => {
-  if (!text) return [];
-  if (limit <= 0 || text.length <= limit) return [text];
+  if (!text) {
+    return [];
+  }
+  if (limit <= 0 || text.length <= limit) {
+    return [text];
+  }
   const chunks: string[] = [];
   for (let index = 0; index < text.length; index += limit) {
     chunks.push(text.slice(index, index + limit));

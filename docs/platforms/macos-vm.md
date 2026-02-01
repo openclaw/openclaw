@@ -5,6 +5,7 @@ read_when:
   - You want iMessage integration (BlueBubbles) in a sandbox
   - You want a resettable macOS environment you can clone
   - You want to compare local vs hosted macOS VM options
+title: "macOS VMs"
 ---
 
 # OpenClaw on macOS VMs (Sandboxing)
@@ -24,6 +25,7 @@ Use a macOS VM when you specifically need macOS-only capabilities (iMessage/Blue
 Run OpenClaw in a sandboxed macOS VM on your existing Apple Silicon Mac using [Lume](https://cua.ai/docs/lume).
 
 This gives you:
+
 - Full macOS environment in isolation (your host stays clean)
 - iMessage support via BlueBubbles (impossible on Linux/Windows)
 - Instant reset by cloning VMs
@@ -32,6 +34,7 @@ This gives you:
 ### Hosted Mac providers (cloud)
 
 If you want macOS in the cloud, hosted Mac providers work too:
+
 - [MacStadium](https://www.macstadium.com/) (hosted Macs)
 - Other hosted Mac vendors also work; follow their VM + SSH docs
 
@@ -96,12 +99,14 @@ Note: The download can take a while depending on your connection.
 ## 3) Complete Setup Assistant
 
 In the VNC window:
+
 1. Select language and region
 2. Skip Apple ID (or sign in if you want iMessage later)
 3. Create a user account (remember the username and password)
 4. Skip all optional features
 
 After setup completes, enable SSH:
+
 1. Open System Settings → General → Sharing
 2. Enable "Remote Login"
 
@@ -244,6 +249,7 @@ lume run openclaw --no-display
 ## Running 24/7
 
 Keep the VM running by:
+
 - Keeping your Mac plugged in
 - Disabling sleep in System Settings → Energy Saver
 - Using `caffeinate` if needed
@@ -254,11 +260,11 @@ For true always-on, consider a dedicated Mac mini or a small VPS. See [VPS hosti
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| Can't SSH into VM | Check "Remote Login" is enabled in VM's System Settings |
-| VM IP not showing | Wait for VM to fully boot, run `lume get openclaw` again |
-| Lume command not found | Add `~/.local/bin` to your PATH |
+| Problem                  | Solution                                                                           |
+| ------------------------ | ---------------------------------------------------------------------------------- |
+| Can't SSH into VM        | Check "Remote Login" is enabled in VM's System Settings                            |
+| VM IP not showing        | Wait for VM to fully boot, run `lume get openclaw` again                           |
+| Lume command not found   | Add `~/.local/bin` to your PATH                                                    |
 | WhatsApp QR not scanning | Ensure you're logged into the VM (not host) when running `openclaw channels login` |
 
 ---

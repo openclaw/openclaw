@@ -6,7 +6,9 @@
   margin-top: 8px;
   background: var(--card);
   box-shadow: inset 0 1px 0 var(--card-highlight);
-  transition: border-color 150ms ease-out, background 150ms ease-out;
+  transition:
+    border-color 150ms ease-out,
+    background 150ms ease-out;
   /* Fixed max-height to ensure cards don't expand too much */
   max-height: 120px;
   overflow: hidden;
@@ -187,7 +189,9 @@
 }
 
 @keyframes reading-pulse {
-  0%, 60%, 100% {
+  0%,
+  60%,
+  100% {
     opacity: 0.3;
     transform: scale(0.8);
   }

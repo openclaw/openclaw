@@ -1,7 +1,5 @@
 import { readFileSync } from "node:fs";
-
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
-
 import type { ZaloConfig } from "./types.js";
 
 export type ZaloTokenResolution = {
@@ -23,12 +21,16 @@ export function resolveZaloToken(
 
   if (accountConfig) {
     const token = accountConfig.botToken?.trim();
-    if (token) return { token, source: "config" };
+    if (token) {
+      return { token, source: "config" };
+    }
     const tokenFile = accountConfig.tokenFile?.trim();
     if (tokenFile) {
       try {
         const fileToken = readFileSync(tokenFile, "utf8").trim();
-        if (fileToken) return { token: fileToken, source: "configFile" };
+        if (fileToken) {
+          return { token: fileToken, source: "configFile" };
+        }
       } catch {
         // ignore read failures
       }
@@ -37,18 +39,24 @@ export function resolveZaloToken(
 
   if (isDefaultAccount) {
     const token = baseConfig?.botToken?.trim();
-    if (token) return { token, source: "config" };
+    if (token) {
+      return { token, source: "config" };
+    }
     const tokenFile = baseConfig?.tokenFile?.trim();
     if (tokenFile) {
       try {
         const fileToken = readFileSync(tokenFile, "utf8").trim();
-        if (fileToken) return { token: fileToken, source: "configFile" };
+        if (fileToken) {
+          return { token: fileToken, source: "configFile" };
+        }
       } catch {
         // ignore read failures
       }
     }
     const envToken = process.env.ZALO_BOT_TOKEN?.trim();
-    if (envToken) return { token: envToken, source: "env" };
+    if (envToken) {
+      return { token: envToken, source: "env" };
+    }
   }
 
   return { token: "", source: "none" };

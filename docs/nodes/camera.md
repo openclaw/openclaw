@@ -3,6 +3,7 @@ summary: "Camera capture (iOS node + macOS app) for agent use: photos (jpg) and 
 read_when:
   - Adding or modifying camera capture on iOS nodes or macOS
   - Extending agent-accessible MEDIA temp-file workflows
+title: "Camera Capture"
 ---
 
 # Camera capture (agent)
@@ -74,6 +75,7 @@ openclaw nodes camera clip --node <id> --no-audio
 ```
 
 Notes:
+
 - `nodes camera snap` defaults to **both** facings to give the agent both views.
 - Output files are temporary (in the OS temp directory) unless you build your own wrapper.
 
@@ -131,6 +133,7 @@ openclaw nodes camera clip --node <id> --no-audio
 ```
 
 Notes:
+
 - `openclaw nodes camera snap` defaults to `maxWidth=1600` unless overridden.
 - On macOS, `camera.snap` waits `delayMs` (default 2000ms) after warm-up/exposure settle before capturing.
 - Photo payloads are recompressed to keep base64 under 5 MB.
@@ -142,11 +145,12 @@ Notes:
 
 ## macOS screen video (OS-level)
 
-For *screen* video (not camera), use the macOS companion:
+For _screen_ video (not camera), use the macOS companion:
 
 ```bash
 openclaw nodes screen record --node <id> --duration 10s --fps 15   # prints MEDIA:<path>
 ```
 
 Notes:
+
 - Requires macOS **Screen Recording** permission (TCC).

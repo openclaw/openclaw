@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { fetchRemoteMedia } from "./fetch.js";
 
 function makeStream(chunks: Uint8Array[]) {

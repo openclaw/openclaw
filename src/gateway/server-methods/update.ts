@@ -1,10 +1,11 @@
+import type { GatewayRequestHandlers } from "./types.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
+import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
 import {
   ErrorCodes,
@@ -12,7 +13,6 @@ import {
   formatValidationErrors,
   validateUpdateRunParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
   "update.run": async ({ params, respond }) => {

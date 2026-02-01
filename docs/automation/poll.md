@@ -3,11 +3,13 @@ summary: "Poll sending via gateway + CLI"
 read_when:
   - Adding or modifying poll support
   - Debugging poll sends from the CLI or gateway
+title: "Polls"
 ---
+
 # Polls
 
-
 ## Supported channels
+
 - WhatsApp (web channel)
 - Discord
 - MS Teams (Adaptive Cards)
@@ -33,6 +35,7 @@ openclaw message poll --channel msteams --target conversation:19:abc@thread.tacv
 ```
 
 Options:
+
 - `--channel`: `whatsapp` (default), `discord`, or `msteams`
 - `--poll-multi`: allow selecting multiple options
 - `--poll-duration-hours`: Discord-only (defaults to 24 when omitted)
@@ -42,6 +45,7 @@ Options:
 Method: `poll`
 
 Params:
+
 - `to` (string, required)
 - `question` (string, required)
 - `options` (string[], required)
@@ -51,11 +55,13 @@ Params:
 - `idempotencyKey` (string, required)
 
 ## Channel differences
+
 - WhatsApp: 2-12 options, `maxSelections` must be within option count, ignores `durationHours`.
 - Discord: 2-10 options, `durationHours` clamped to 1-768 hours (default 24). `maxSelections > 1` enables multi-select; Discord does not support a strict selection count.
 - MS Teams: Adaptive Card polls (OpenClaw-managed). No native poll API; `durationHours` is ignored.
 
 ## Agent tool (Message)
+
 Use the `message` tool with `poll` action (`to`, `pollQuestion`, `pollOption`, optional `pollMulti`, `pollDurationHours`, `channel`).
 
 Note: Discord has no “pick exactly N” mode; `pollMulti` maps to multi-select.

@@ -1,5 +1,3 @@
-import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
-import type { TelegramAccountConfig } from "../../config/types.telegram.js";
 import type {
   TelegramForwardChat,
   TelegramForwardOrigin,
@@ -10,6 +8,7 @@ import type {
   TelegramStreamMode,
   TelegramVenue,
 } from "./types.js";
+import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -61,9 +60,9 @@ export function buildTypingThreadParams(messageThreadId?: number) {
   return { message_thread_id: Math.trunc(messageThreadId) };
 }
 
-export function resolveTelegramStreamMode(
-  telegramCfg: Pick<TelegramAccountConfig, "streamMode"> | undefined,
-): TelegramStreamMode {
+export function resolveTelegramStreamMode(telegramCfg?: {
+  streamMode?: TelegramStreamMode;
+}): TelegramStreamMode {
   const raw = telegramCfg?.streamMode?.trim().toLowerCase();
   if (raw === "off" || raw === "partial" || raw === "block") {
     return raw;

@@ -3,7 +3,9 @@ summary: "Use Z.AI (GLM models) with OpenClaw"
 read_when:
   - You want Z.AI / GLM models in OpenClaw
   - You need a simple ZAI_API_KEY setup
+title: "Z.AI"
 ---
+
 # Z.AI
 
 Z.AI is the API platform for **GLM** models. It provides REST APIs for GLM and uses API keys
@@ -23,7 +25,7 @@ openclaw onboard --zai-api-key "$ZAI_API_KEY"
 ```json5
 {
   env: { ZAI_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "zai/glm-4.7" } } }
+  agents: { defaults: { model: { primary: "zai/glm-4.7" } } },
 }
 ```
 

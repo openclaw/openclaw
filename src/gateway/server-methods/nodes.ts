@@ -1,3 +1,6 @@
+import type { GatewayRequestHandlers } from "./types.js";
+import { loadConfig } from "../../config/config.js";
+import { listDevicePairing } from "../../infra/device-pairing.js";
 import {
   approveNodePairing,
   listNodePairing,
@@ -6,7 +9,7 @@ import {
   requestNodePairing,
   verifyNodeToken,
 } from "../../infra/node-pairing.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import {
   ErrorCodes,
   errorShape,
@@ -28,9 +31,6 @@ import {
   safeParseJson,
   uniqueSortedStrings,
 } from "./nodes.helpers.js";
-import { loadConfig } from "../../config/config.js";
-import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 function isNodeEntry(entry: { role?: string; roles?: string[] }) {
   if (entry.role === "node") {

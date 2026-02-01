@@ -1,9 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveTelegramToken } from "./token.js";
 

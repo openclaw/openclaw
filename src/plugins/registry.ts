@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
@@ -5,8 +6,8 @@ import type {
   GatewayRequestHandler,
   GatewayRequestHandlers,
 } from "../gateway/server-methods/types.js";
-import { registerInternalHook } from "../hooks/internal-hooks.js";
-import { resolveUserPath } from "../utils.js";
+import type { HookEntry } from "../hooks/types.js";
+import type { PluginRuntime } from "./runtime/types.js";
 import type {
   OpenClawPluginApi,
   OpenClawPluginChannelRegistration,
@@ -28,10 +29,9 @@ import type {
   PluginHookHandlerMap,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
+import { registerInternalHook } from "../hooks/internal-hooks.js";
+import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
-import type { PluginRuntime } from "./runtime/types.js";
-import type { HookEntry } from "../hooks/types.js";
-import path from "node:path";
 import { normalizePluginHttpPath } from "./http-path.js";
 
 export type PluginToolRegistration = {

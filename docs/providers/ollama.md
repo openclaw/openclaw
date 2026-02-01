@@ -3,16 +3,18 @@ summary: "Run OpenClaw with Ollama (local LLM runtime)"
 read_when:
   - You want to run OpenClaw with local models via Ollama
   - You need Ollama setup and configuration guidance
+title: "Ollama"
 ---
+
 # Ollama
 
 Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's OpenAI-compatible API and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
 ## Quick start
 
-1) Install Ollama: https://ollama.ai
+1. Install Ollama: https://ollama.ai
 
-2) Pull a model:
+2. Pull a model:
 
 ```bash
 ollama pull llama3.3
@@ -22,7 +24,7 @@ ollama pull qwen2.5-coder:32b
 ollama pull deepseek-r1:32b
 ```
 
-3) Enable Ollama for OpenClaw (any value works; Ollama doesn't require a real key):
+3. Enable Ollama for OpenClaw (any value works; Ollama doesn't require a real key):
 
 ```bash
 # Set environment variable
@@ -32,15 +34,15 @@ export OLLAMA_API_KEY="ollama-local"
 openclaw config set models.providers.ollama.apiKey "ollama-local"
 ```
 
-4) Use Ollama models:
+4. Use Ollama models:
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "ollama/llama3.3" }
-    }
-  }
+      model: { primary: "ollama/llama3.3" },
+    },
+  },
 }
 ```
 
@@ -87,6 +89,7 @@ export OLLAMA_API_KEY="ollama-local"
 ### Explicit setup (manual models)
 
 Use explicit config when:
+
 - Ollama runs on another host/port.
 - You want to force specific context windows or model lists.
 - You want to include models that do not report tool support.
@@ -129,10 +132,10 @@ If Ollama is running on a different host or port (explicit config disables auto-
     providers: {
       ollama: {
         apiKey: "ollama-local",
-        baseUrl: "http://ollama-host:11434/v1"
-      }
-    }
-  }
+        baseUrl: "http://ollama-host:11434/v1",
+      },
+    },
+  },
 }
 ```
 
@@ -146,10 +149,10 @@ Once configured, all your Ollama models are available:
     defaults: {
       model: {
         primary: "ollama/llama3.3",
-        fallback: ["ollama/qwen2.5-coder:32b"]
-      }
-    }
-  }
+        fallback: ["ollama/qwen2.5-coder:32b"],
+      },
+    },
+  },
 }
 ```
 
@@ -190,6 +193,7 @@ curl http://localhost:11434/api/tags
 ### No models available
 
 OpenClaw only auto-discovers models that report tool support. If your model isn't listed, either:
+
 - Pull a tool-capable model, or
 - Define the model explicitly in `models.providers.ollama`.
 

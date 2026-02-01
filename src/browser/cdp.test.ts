@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";

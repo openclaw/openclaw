@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
 import { OpenClawApp } from "./app";
 
 const originalConnect = OpenClawApp.prototype.connect;
@@ -46,9 +45,7 @@ describe("chat markdown rendering", () => {
 
     await app.updateComplete;
 
-    const toolCards = Array.from(
-      app.querySelectorAll<HTMLElement>(".chat-tool-card"),
-    );
+    const toolCards = Array.from(app.querySelectorAll<HTMLElement>(".chat-tool-card"));
     const toolCard = toolCards.find((card) =>
       card.querySelector(".chat-tool-card__preview, .chat-tool-card__inline"),
     );

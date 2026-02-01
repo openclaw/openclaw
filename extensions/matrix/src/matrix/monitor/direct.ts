@@ -12,17 +12,16 @@ type DirectRoomTrackerOptions = {
 
 const DM_CACHE_TTL_MS = 30_000;
 
-export function createDirectRoomTracker(
-  client: MatrixClient,
-  opts: DirectRoomTrackerOptions = {},
-) {
+export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTrackerOptions = {}) {
   const log = opts.log ?? (() => {});
   let lastDmUpdateMs = 0;
   let cachedSelfUserId: string | null = null;
   const memberCountCache = new Map<string, { count: number; ts: number }>();
 
   const ensureSelfUserId = async (): Promise<string | null> => {
-    if (cachedSelfUserId) return cachedSelfUserId;
+    if (cachedSelfUserId) {
+      return cachedSelfUserId;
+    }
     try {
       cachedSelfUserId = await client.getUserId();
     } catch {
@@ -33,7 +32,9 @@ export function createDirectRoomTracker(
 
   const refreshDmCache = async (): Promise<void> => {
     const now = Date.now();
-    if (now - lastDmUpdateMs < DM_CACHE_TTL_MS) return;
+    if (now - lastDmUpdateMs < DM_CACHE_TTL_MS) {
+      return;
+    }
     lastDmUpdateMs = now;
     try {
       await client.dms.update();
@@ -61,7 +62,9 @@ export function createDirectRoomTracker(
 
   const hasDirectFlag = async (roomId: string, userId?: string): Promise<boolean> => {
     const target = userId?.trim();
-    if (!target) return false;
+    if (!target) {
+      return false;
+    }
     try {
       const state = await client.getRoomStateEvent(roomId, "m.room.member", target);
       return state?.is_direct === true;
@@ -94,11 +97,7 @@ export function createDirectRoomTracker(
         return true;
       }
 
-      log(
-        `matrix: dm check room=${roomId} result=group members=${
-          memberCount ?? "unknown"
-        }`,
-      );
+      log(`matrix: dm check room=${roomId} result=group members=${memberCount ?? "unknown"}`);
       return false;
     },
   };

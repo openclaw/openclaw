@@ -3,7 +3,9 @@ summary: "Bonjour/mDNS discovery + debugging (Gateway beacons, clients, and comm
 read_when:
   - Debugging Bonjour discovery issues on macOS/iOS
   - Changing mDNS service types, TXT records, or discovery UX
+title: "Bonjour Discovery"
 ---
+
 # Bonjour / mDNS discovery
 
 OpenClaw uses Bonjour (mDNS / DNS‑SD) as a **LAN‑only convenience** to discover
@@ -18,10 +20,10 @@ boundary. You can keep the same discovery UX by switching to **unicast DNS‑SD*
 
 High‑level steps:
 
-1) Run a DNS server on the gateway host (reachable over Tailnet).
-2) Publish DNS‑SD records for `_openclaw-gw._tcp` under a dedicated zone
+1. Run a DNS server on the gateway host (reachable over Tailnet).
+2. Publish DNS‑SD records for `_openclaw-gw._tcp` under a dedicated zone
    (example: `openclaw.internal.`).
-3) Configure Tailscale **split DNS** so your chosen domain resolves via that
+3. Configure Tailscale **split DNS** so your chosen domain resolves via that
    DNS server for clients (including iOS).
 
 OpenClaw supports any discovery domain; `openclaw.internal.` is just an example.
@@ -32,7 +34,7 @@ iOS/Android nodes browse both `local.` and your configured wide‑area domain.
 ```json5
 {
   gateway: { bind: "tailnet" }, // tailnet-only (recommended)
-  discovery: { wideArea: { enabled: true } } // enables wide-area DNS-SD publishing
+  discovery: { wideArea: { enabled: true } }, // enables wide-area DNS-SD publishing
 }
 ```
 
@@ -43,6 +45,7 @@ openclaw dns setup --apply
 ```
 
 This installs CoreDNS and configures it to:
+
 - listen on port 53 only on the gateway’s Tailscale interfaces
 - serve your chosen domain (example: `openclaw.internal.`) from `~/.openclaw/dns/<domain>.db`
 
@@ -69,6 +72,7 @@ The Gateway WS port (default `18789`) binds to loopback by default. For LAN/tail
 access, bind explicitly and keep auth enabled.
 
 For tailnet‑only setups:
+
 - Set `gateway.bind: "tailnet"` in `~/.openclaw/openclaw.json`.
 - Restart the Gateway (or restart the macOS menubar app).
 
@@ -126,6 +130,7 @@ The Gateway writes a rolling log file (printed on startup as
 The iOS node uses `NWBrowser` to discover `_openclaw-gw._tcp`.
 
 To capture logs:
+
 - Settings → Gateway → Advanced → **Discovery Debug Logs**
 - Settings → Gateway → Advanced → **Discovery Logs** → reproduce → **Copy**
 

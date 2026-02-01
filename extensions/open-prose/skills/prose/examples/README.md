@@ -108,13 +108,13 @@ These examples demonstrate workflows using OpenProse's full feature set.
 
 ### Meta / Self-Hosting (44-48)
 
-| File                              | Description                                            |
-| --------------------------------- | ------------------------------------------------------ |
-| `44-run-endpoint-ux-test.prose`   | Concurrent agents testing the /run API endpoint        |
-| `45-plugin-release.prose`         | OpenProse plugin release workflow (this repo)          |
-| `46-workflow-crystallizer.prose`  | Reflective: observes thread, extracts workflow, writes .prose |
+| File                                 | Description                                                        |
+| ------------------------------------ | ------------------------------------------------------------------ |
+| `44-run-endpoint-ux-test.prose`      | Concurrent agents testing the /run API endpoint                    |
+| `45-plugin-release.prose`            | OpenProse plugin release workflow (this repo)                      |
+| `46-workflow-crystallizer.prose`     | Reflective: observes thread, extracts workflow, writes .prose      |
 | `47-language-self-improvement.prose` | Meta-level 2: analyzes .prose corpus to evolve the language itself |
-| `48-habit-miner.prose`            | Mines AI session logs for patterns, generates .prose automations |
+| `48-habit-miner.prose`               | Mines AI session logs for patterns, generates .prose automations   |
 
 ## The Architect By Simulation Pattern
 

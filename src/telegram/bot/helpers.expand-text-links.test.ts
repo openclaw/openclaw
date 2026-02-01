@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { expandTextLinks } from "./helpers.js";
 
 describe("expandTextLinks", () => {

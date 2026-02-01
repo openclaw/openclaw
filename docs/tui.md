@@ -3,27 +3,37 @@ summary: "Terminal UI (TUI): connect to the Gateway from any machine"
 read_when:
   - You want a beginner-friendly walkthrough of the TUI
   - You need the complete list of TUI features, commands, and shortcuts
+title: "TUI"
 ---
+
 # TUI (Terminal UI)
 
 ## Quick start
-1) Start the Gateway.
+
+1. Start the Gateway.
+
 ```bash
 openclaw gateway
 ```
-2) Open the TUI.
+
+2. Open the TUI.
+
 ```bash
 openclaw tui
 ```
-3) Type a message and press Enter.
+
+3. Type a message and press Enter.
 
 Remote Gateway:
+
 ```bash
 openclaw tui --url ws://<host>:<port> --token <gateway-token>
 ```
+
 Use `--password` if your Gateway uses password auth.
 
 ## What you see
+
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
@@ -31,6 +41,7 @@ Use `--password` if your Gateway uses password auth.
 - Input: text editor with autocomplete.
 
 ## Mental model: agents + sessions
+
 - Agents are unique slugs (e.g. `main`, `research`). The Gateway exposes the list.
 - Sessions belong to the current agent.
 - Session keys are stored as `agent:<agentId>:<sessionKey>`.
@@ -42,6 +53,7 @@ Use `--password` if your Gateway uses password auth.
 - The current agent + session are always visible in the footer.
 
 ## Sending + delivery
+
 - Messages are sent to the Gateway; delivery to providers is off by default.
 - Turn delivery on:
   - `/deliver on`
@@ -49,12 +61,14 @@ Use `--password` if your Gateway uses password auth.
   - or start with `openclaw tui --deliver`
 
 ## Pickers + overlays
+
 - Model picker: list available models and set the session override.
 - Agent picker: choose a different agent.
 - Session picker: shows only sessions for the current agent.
 - Settings: toggle deliver, tool output expansion, and thinking visibility.
 
 ## Keyboard shortcuts
+
 - Enter: send message
 - Esc: abort active run
 - Ctrl+C: clear input (press twice to exit)
@@ -66,7 +80,9 @@ Use `--password` if your Gateway uses password auth.
 - Ctrl+T: toggle thinking visibility (reloads history)
 
 ## Slash commands
+
 Core:
+
 - `/help`
 - `/status`
 - `/agent <id>` (or `/agents`)
@@ -74,6 +90,7 @@ Core:
 - `/model <provider/model>` (or `/models`)
 
 Session controls:
+
 - `/think <off|minimal|low|medium|high>`
 - `/verbose <on|full|off>`
 - `/reasoning <on|off|stream>`
@@ -83,6 +100,7 @@ Session controls:
 - `/deliver <on|off>`
 
 Session lifecycle:
+
 - `/new` or `/reset` (reset the session)
 - `/abort` (abort the active run)
 - `/settings`
@@ -91,26 +109,31 @@ Session lifecycle:
 Other Gateway slash commands (for example, `/context`) are forwarded to the Gateway and shown as system output. See [Slash commands](/tools/slash-commands).
 
 ## Local shell commands
+
 - Prefix a line with `!` to run a local shell command on the TUI host.
 - The TUI prompts once per session to allow local execution; declining keeps `!` disabled for the session.
 - Commands run in a fresh, non-interactive shell in the TUI working directory (no persistent `cd`/env).
 - A lone `!` is sent as a normal message; leading spaces do not trigger local exec.
 
 ## Tool output
+
 - Tool calls show as cards with args + results.
 - Ctrl+O toggles between collapsed/expanded views.
 - While tools run, partial updates stream into the same card.
 
 ## History + streaming
+
 - On connect, the TUI loads the latest history (default 200 messages).
 - Streaming responses update in place until finalized.
 - The TUI also listens to agent tool events for richer tool cards.
 
 ## Connection details
+
 - The TUI registers with the Gateway as `mode: "tui"`.
 - Reconnects show a system message; event gaps are surfaced in the log.
 
 ## Options
+
 - `--url <url>`: Gateway WebSocket URL (defaults to config or `ws://127.0.0.1:<port>`)
 - `--token <token>`: Gateway token (if required)
 - `--password <password>`: Gateway password (if required)
@@ -122,6 +145,7 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 ## Troubleshooting
 
 No output after sending a message:
+
 - Run `/status` in the TUI to confirm the Gateway is connected and idle/busy.
 - Check the Gateway logs: `openclaw logs --follow`.
 - Confirm the agent can run: `openclaw status` and `openclaw models status`.
@@ -129,6 +153,7 @@ No output after sending a message:
 - `--history-limit <n>`: History entries to load (default 200)
 
 ## Troubleshooting
+
 - `disconnected`: ensure the Gateway is running and your `--url/--token/--password` are correct.
 - No agents in picker: check `openclaw agents list` and your routing config.
 - Empty session picker: you might be in global scope or have no sessions yet.

@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 

@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { defaultRuntime } from "../runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { __testing, listAllChannelSupportedActions } from "./channel-tools.js";
 
 describe("channel tools", () => {

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, test } from "vitest";
 import WebSocket from "ws";
-
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { getFreePort, onceMessage, startGatewayServer } from "./test-helpers.server.js";
 

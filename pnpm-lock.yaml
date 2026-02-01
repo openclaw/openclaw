@@ -6,7 +6,7 @@ settings:
 
 overrides:
   '@sinclair/typebox': 0.34.47
-  tar: 7.5.4
+  tar: 7.5.7
 
 importers:
 
@@ -40,11 +40,11 @@ importers:
         specifier: 1.2.0-beta.3
         version: 1.2.0-beta.3
       '@mariozechner/pi-agent-core':
-        specifier: 0.50.7
-        version: 0.50.7(ws@8.19.0)(zod@4.3.6)
+        specifier: 0.50.9
+        version: 0.50.9(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-ai':
-        specifier: 0.50.7
-        version: 0.50.7(ws@8.19.0)(zod@4.3.6)
+        specifier: 0.50.9
+        version: 0.50.9(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
         specifier: 0.50.7
         version: 0.50.7(ws@8.19.0)(zod@4.3.6)
@@ -151,8 +151,8 @@ importers:
         specifier: 0.1.7-alpha.2
         version: 0.1.7-alpha.2
       tar:
-        specifier: 7.5.4
-        version: 7.5.4
+        specifier: 7.5.7
+        version: 7.5.7
       tslog:
         specifier: ^4.10.2
         version: 4.10.2
@@ -230,9 +230,17 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.1.0)(@vitest/browser-playwright@4.0.18)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
 
-  extensions/bluebubbles: {}
+  extensions/bluebubbles:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/copilot-proxy: {}
+  extensions/copilot-proxy:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/diagnostics-otel:
     dependencies:
@@ -269,6 +277,10 @@ importers:
       '@opentelemetry/semantic-conventions':
         specifier: ^1.39.0
         version: 1.39.0
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/dingtalk:
     dependencies:
@@ -294,11 +306,22 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/discord: {}
+  extensions/discord:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
 
-  extensions/google-antigravity-auth: {}
+  extensions/google-antigravity-auth:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/google-gemini-cli-auth: {}
+  extensions/google-gemini-cli-auth:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/googlechat:
     dependencies:
@@ -310,7 +333,11 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/imessage: {}
+  extensions/imessage:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/line:
     devDependencies:
@@ -318,9 +345,17 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/llm-task: {}
+  extensions/llm-task:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/lobster: {}
+  extensions/lobster:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/matrix:
     dependencies:
@@ -344,7 +379,11 @@ importers:
         specifier: workspace:*
         version: link:../..
 
-  extensions/mattermost: {}
+  extensions/mattermost:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/memory-core:
     devDependencies:
@@ -363,8 +402,16 @@ importers:
       openai:
         specifier: ^6.17.0
         version: 6.17.0(ws@8.19.0)(zod@4.3.6)
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/minimax-portal-auth: {}
+  extensions/minimax-portal-auth:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/msteams:
     dependencies:
@@ -387,7 +434,11 @@ importers:
         specifier: ^4.1.2
         version: 4.1.2
 
-  extensions/nextcloud-talk: {}
+  extensions/nextcloud-talk:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/nostr:
     dependencies:
@@ -401,13 +452,29 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
-  extensions/open-prose: {}
+  extensions/open-prose:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/signal: {}
+  extensions/signal:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/slack: {}
+  extensions/slack:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/telegram: {}
+  extensions/telegram:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/tlon:
     dependencies:
@@ -417,6 +484,10 @@ importers:
       '@urbit/http-api':
         specifier: ^3.0.0
         version: 3.0.0
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/twitch:
     dependencies:
@@ -448,8 +519,16 @@ importers:
       zod:
         specifier: ^4.3.6
         version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
-  extensions/whatsapp: {}
+  extensions/whatsapp:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/zalo:
     dependencies:
@@ -1335,12 +1414,12 @@ packages:
     resolution: {integrity: sha512-faGUlTcXka5l7rv0lP3K3vGW/ejRuOS24RR2aSFWREUQqzjgdsuWNo/IiPqL3kWRGt6Ahl2+qcDAwtdeWeuGUw==}
     hasBin: true
 
-  '@mariozechner/pi-agent-core@0.50.7':
-    resolution: {integrity: sha512-iSNh+7QQFVge3co0Au1X6sqXAr+X6e3XlRXM7oE3m6zMWj76A1YCciV2sLI/imBcoFLum8blIaM0empwL477dQ==}
+  '@mariozechner/pi-agent-core@0.50.9':
+    resolution: {integrity: sha512-Zsgqs/f2Fxrub1k95vj8kg7M1eTDdS1lP3gTV7h9raBUQzoaPP+9jYGoUL5KKqxsBbt7WgeAQrK3nrev400EHA==}
     engines: {node: '>=20.0.0'}
 
-  '@mariozechner/pi-ai@0.50.7':
-    resolution: {integrity: sha512-mVqaTE/Ulijd1olduEU02IfIP91aNt6F0UYJQNLR+m3b/6bsn21csZJZnkjYia0kHX7PnOLtikO2jG7dJpYY6g==}
+  '@mariozechner/pi-ai@0.50.9':
+    resolution: {integrity: sha512-a6sLIHLH+wo5zTFoo/0AE/P6GPyJzaXnE86z89t6tINzeSdKMApZZ+B4Cy4U3GpsYfxuZ9gBJlcKbfj+oKP3wg==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
@@ -1351,6 +1430,10 @@ packages:
 
   '@mariozechner/pi-tui@0.50.7':
     resolution: {integrity: sha512-O8H8hXqoWdE+5eUUPiswq+WT+2eeshJHJmXKWMJMoSitNqdwzYZds9umAKdVLII6ZvjnFtd0awnf4VThYQBFIA==}
+    engines: {node: '>=20.0.0'}
+
+  '@mariozechner/pi-tui@0.50.9':
+    resolution: {integrity: sha512-suMWoh+XB3JKkwrXfXSwEAsvkrPUn6Zn8JQ1I+1hcNQqH/lY6e8LFRwVBkkvPt/jwoxBh8jGoiTNVh5i7Yod0g==}
     engines: {node: '>=20.0.0'}
 
   '@matrix-org/matrix-sdk-crypto-nodejs@0.4.0':
@@ -4924,10 +5007,9 @@ packages:
     resolution: {integrity: sha512-iK5/YhZxq5GO5z8wb0bY1317uDF3Zjpha0QFFLA8/trAoiLbQD0HUbMesEaxyzUgDxi2QlcbM8IvqOlEjgoXBA==}
     engines: {node: '>=12.17'}
 
-  tar@7.5.4:
-    resolution: {integrity: sha512-AN04xbWGrSTDmVwlI4/GTlIIwMFk/XEv7uL8aa57zuvRy6s4hdBed+lVq2fAZ89XDa7Us3ANXcE3Tvqvja1kTA==}
+  tar@7.5.7:
+    resolution: {integrity: sha512-fov56fJiRuThVFXD6o6/Q354S7pnWMJIVlDBYijsTNx6jKSE4pvrDTs6lUnmGvNyfJwFQQwWy3owKz1ucIhveQ==}
     engines: {node: '>=18'}
-    deprecated: Old versions of tar are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exhorbitant rates) by contacting i@izs.me
 
   thenify-all@1.6.0:
     resolution: {integrity: sha512-RNxQH/qI8/t3thXJDwcstUO4zeqo64+Uy/+sNVRBx4Xn2OX+OZ9oP+iJnNFqplFra2ZUVeKCSa2oVWi3T4uVmA==}
@@ -6341,10 +6423,10 @@ snapshots:
       std-env: 3.10.0
       yoctocolors: 2.1.2
 
-  '@mariozechner/pi-agent-core@0.50.7(ws@8.19.0)(zod@4.3.6)':
+  '@mariozechner/pi-agent-core@0.50.9(ws@8.19.0)(zod@4.3.6)':
     dependencies:
-      '@mariozechner/pi-ai': 0.50.7(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-tui': 0.50.7
+      '@mariozechner/pi-ai': 0.50.9(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-tui': 0.50.9
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -6354,7 +6436,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.50.7(ws@8.19.0)(zod@4.3.6)':
+  '@mariozechner/pi-ai@0.50.9(ws@8.19.0)(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.6)
       '@aws-sdk/client-bedrock-runtime': 3.980.0
@@ -6382,8 +6464,8 @@ snapshots:
     dependencies:
       '@mariozechner/clipboard': 0.3.0
       '@mariozechner/jiti': 2.6.5
-      '@mariozechner/pi-agent-core': 0.50.7(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.50.7(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-agent-core': 0.50.9(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.50.9(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.50.7
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
@@ -6406,6 +6488,14 @@ snapshots:
       - zod
 
   '@mariozechner/pi-tui@0.50.7':
+    dependencies:
+      '@types/mime-types': 2.1.4
+      chalk: 5.6.2
+      get-east-asian-width: 1.4.0
+      marked: 15.0.12
+      mime-types: 3.0.2
+
+  '@mariozechner/pi-tui@0.50.9':
     dependencies:
       '@types/mime-types': 2.1.4
       chalk: 5.6.2
@@ -8325,7 +8415,7 @@ snapshots:
       npmlog: 6.0.2
       rc: 1.2.8
       semver: 7.7.3
-      tar: 7.5.4
+      tar: 7.5.7
       url-join: 4.0.1
       which: 2.0.2
       yargs: 17.7.2
@@ -10480,7 +10570,7 @@ snapshots:
       array-back: 6.2.2
       wordwrapjs: 5.1.1
 
-  tar@7.5.4:
+  tar@7.5.7:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0

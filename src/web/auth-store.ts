@@ -1,14 +1,13 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-
+import type { WebChannel } from "../utils.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { info, success } from "../globals.js";
 import { getChildLogger } from "../logging.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { WebChannel } from "../utils.js";
 import { jidToE164, resolveUserPath } from "../utils.js";
 
 export function resolveDefaultWebAuthDir(): string {

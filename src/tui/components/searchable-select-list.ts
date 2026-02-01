@@ -228,9 +228,9 @@ export class SearchableSelectList implements Component {
       const remainingWidth = width - descriptionStart - 2;
       if (remainingWidth > 10) {
         const truncatedDesc = truncateToWidth(item.description, remainingWidth, "");
-        const descText = isSelected
-          ? this.highlightMatch(truncatedDesc, query)
-          : this.highlightMatch(this.theme.description(truncatedDesc), query);
+        // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
+        const highlightedDesc = this.highlightMatch(truncatedDesc, query);
+        const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
         const line = `${prefix}${valueText}${spacing}${descText}`;
         return isSelected ? this.theme.selectedText(line) : line;
       }

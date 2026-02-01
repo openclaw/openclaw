@@ -3,8 +3,8 @@
  */
 
 import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   formatAge,
   formatImageMatch,

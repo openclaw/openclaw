@@ -1,5 +1,4 @@
 import type { LocationMessageEventContent } from "@vector-im/matrix-bot-sdk";
-
 import {
   formatLocationText,
   toLocationContext,
@@ -20,25 +19,37 @@ type GeoUriParams = {
 
 function parseGeoUri(value: string): GeoUriParams | null {
   const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (!trimmed.toLowerCase().startsWith("geo:")) return null;
+  if (!trimmed) {
+    return null;
+  }
+  if (!trimmed.toLowerCase().startsWith("geo:")) {
+    return null;
+  }
   const payload = trimmed.slice(4);
   const [coordsPart, ...paramParts] = payload.split(";");
   const coords = coordsPart.split(",");
-  if (coords.length < 2) return null;
+  if (coords.length < 2) {
+    return null;
+  }
   const latitude = Number.parseFloat(coords[0] ?? "");
   const longitude = Number.parseFloat(coords[1] ?? "");
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
 
   const params = new Map<string, string>();
   for (const part of paramParts) {
     const segment = part.trim();
-    if (!segment) continue;
+    if (!segment) {
+      continue;
+    }
     const eqIndex = segment.indexOf("=");
     const rawKey = eqIndex === -1 ? segment : segment.slice(0, eqIndex);
     const rawValue = eqIndex === -1 ? "" : segment.slice(eqIndex + 1);
     const key = rawKey.trim().toLowerCase();
-    if (!key) continue;
+    if (!key) {
+      continue;
+    }
     const valuePart = rawValue.trim();
     params.set(key, valuePart ? decodeURIComponent(valuePart) : "");
   }
@@ -61,11 +72,17 @@ export function resolveMatrixLocation(params: {
   const isLocation =
     eventType === EventType.Location ||
     (eventType === EventType.RoomMessage && content.msgtype === EventType.Location);
-  if (!isLocation) return null;
+  if (!isLocation) {
+    return null;
+  }
   const geoUri = typeof content.geo_uri === "string" ? content.geo_uri.trim() : "";
-  if (!geoUri) return null;
+  if (!geoUri) {
+    return null;
+  }
   const parsed = parseGeoUri(geoUri);
-  if (!parsed) return null;
+  if (!parsed) {
+    return null;
+  }
   const caption = typeof content.body === "string" ? content.body.trim() : "";
   const location: NormalizedLocation = {
     latitude: parsed.latitude,

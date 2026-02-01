@@ -1,10 +1,11 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
   MediaUnderstandingScopeConfig,
 } from "../config/types.tools.js";
+import type { MediaUnderstandingCapability } from "./types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import {
   DEFAULT_MAX_BYTES,
@@ -14,7 +15,6 @@ import {
 } from "./defaults.js";
 import { normalizeMediaProviderId } from "./providers/index.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
-import type { MediaUnderstandingCapability } from "./types.js";
 
 export function resolveTimeoutMs(seconds: number | undefined, fallbackSeconds: number): number {
   const value = typeof seconds === "number" && Number.isFinite(seconds) ? seconds : fallbackSeconds;

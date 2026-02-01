@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
-
 import { mattermostPlugin } from "./channel.js";
 
 describe("mattermostPlugin", () => {
   describe("messaging", () => {
     it("keeps @username targets", () => {
       const normalize = mattermostPlugin.messaging?.normalizeTarget;
-      if (!normalize) return;
+      if (!normalize) {
+        return;
+      }
 
       expect(normalize("@Alice")).toBe("@Alice");
       expect(normalize("@alice")).toBe("@alice");
@@ -14,7 +15,9 @@ describe("mattermostPlugin", () => {
 
     it("normalizes mattermost: prefix to user:", () => {
       const normalize = mattermostPlugin.messaging?.normalizeTarget;
-      if (!normalize) return;
+      if (!normalize) {
+        return;
+      }
 
       expect(normalize("mattermost:USER123")).toBe("user:USER123");
     });
@@ -23,7 +26,9 @@ describe("mattermostPlugin", () => {
   describe("pairing", () => {
     it("normalizes allowlist entries", () => {
       const normalize = mattermostPlugin.pairing?.normalizeAllowEntry;
-      if (!normalize) return;
+      if (!normalize) {
+        return;
+      }
 
       expect(normalize("@Alice")).toBe("alice");
       expect(normalize("user:USER123")).toBe("user123");

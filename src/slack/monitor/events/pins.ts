@@ -1,11 +1,9 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-
-import { danger } from "../../../globals.js";
-import { enqueueSystemEvent } from "../../../infra/system-events.js";
-
-import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackPinEvent } from "../types.js";
+import { danger } from "../../../globals.js";
+import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { resolveSlackChannelLabel } from "../channel-config.js";
 
 export function registerSlackPinEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;

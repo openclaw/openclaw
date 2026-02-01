@@ -1,8 +1,7 @@
 import { Type } from "@sinclair/typebox";
-
 import type { OpenClawConfig } from "../../config/config.js";
-import { formatCliCommand } from "../../cli/command-format.js";
 import type { AnyAgentTool } from "./common.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   CacheEntry,

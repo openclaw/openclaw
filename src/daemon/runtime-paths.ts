@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
 
 const VERSION_MANAGER_MARKERS = [

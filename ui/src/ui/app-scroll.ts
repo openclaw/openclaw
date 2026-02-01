@@ -35,8 +35,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false) {
       host.chatScrollFrame = null;
       const target = pickScrollTarget();
       if (!target) return;
-      const distanceFromBottom =
-        target.scrollHeight - target.scrollTop - target.clientHeight;
+      const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
       const shouldStick = force || host.chatUserNearBottom || distanceFromBottom < 200;
       if (!shouldStick) return;
       if (force) host.chatHasAutoScrolled = true;
@@ -49,8 +48,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false) {
         if (!latest) return;
         const latestDistanceFromBottom =
           latest.scrollHeight - latest.scrollTop - latest.clientHeight;
-        const shouldStickRetry =
-          force || host.chatUserNearBottom || latestDistanceFromBottom < 200;
+        const shouldStickRetry = force || host.chatUserNearBottom || latestDistanceFromBottom < 200;
         if (!shouldStickRetry) return;
         latest.scrollTop = latest.scrollHeight;
         host.chatUserNearBottom = true;
@@ -78,16 +76,14 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
 export function handleChatScroll(host: ScrollHost, event: Event) {
   const container = event.currentTarget as HTMLElement | null;
   if (!container) return;
-  const distanceFromBottom =
-    container.scrollHeight - container.scrollTop - container.clientHeight;
+  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   host.chatUserNearBottom = distanceFromBottom < 200;
 }
 
 export function handleLogsScroll(host: ScrollHost, event: Event) {
   const container = event.currentTarget as HTMLElement | null;
   if (!container) return;
-  const distanceFromBottom =
-    container.scrollHeight - container.scrollTop - container.clientHeight;
+  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   host.logsAtBottom = distanceFromBottom < 80;
 }
 

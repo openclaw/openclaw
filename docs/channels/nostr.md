@@ -3,7 +3,9 @@ summary: "Nostr DM channel via NIP-04 encrypted messages"
 read_when:
   - You want OpenClaw to receive DMs via Nostr
   - You're setting up decentralized messaging
+title: "Nostr"
 ---
+
 # Nostr
 
 **Status:** Optional plugin (disabled by default).
@@ -40,14 +42,14 @@ Restart the Gateway after installing or enabling plugins.
 
 ## Quick setup
 
-1) Generate a Nostr keypair (if needed):
+1. Generate a Nostr keypair (if needed):
 
 ```bash
 # Using nak
 nak key generate
 ```
 
-2) Add to config:
+2. Add to config:
 
 ```json
 {
@@ -59,25 +61,25 @@ nak key generate
 }
 ```
 
-3) Export the key:
+3. Export the key:
 
 ```bash
 export NOSTR_PRIVATE_KEY="nsec1..."
 ```
 
-4) Restart the Gateway.
+4. Restart the Gateway.
 
 ## Configuration reference
 
-| Key | Type | Default | Description |
-| --- | --- | --- | --- |
-| `privateKey` | string | required | Private key in `nsec` or hex format |
-| `relays` | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay URLs (WebSocket) |
-| `dmPolicy` | string | `pairing` | DM access policy |
-| `allowFrom` | string[] | `[]` | Allowed sender pubkeys |
-| `enabled` | boolean | `true` | Enable/disable channel |
-| `name` | string | - | Display name |
-| `profile` | object | - | NIP-01 profile metadata |
+| Key          | Type     | Default                                     | Description                         |
+| ------------ | -------- | ------------------------------------------- | ----------------------------------- |
+| `privateKey` | string   | required                                    | Private key in `nsec` or hex format |
+| `relays`     | string[] | `['wss://relay.damus.io', 'wss://nos.lol']` | Relay URLs (WebSocket)              |
+| `dmPolicy`   | string   | `pairing`                                   | DM access policy                    |
+| `allowFrom`  | string[] | `[]`                                        | Allowed sender pubkeys              |
+| `enabled`    | boolean  | `true`                                      | Enable/disable channel              |
+| `name`       | string   | -                                           | Display name                        |
+| `profile`    | object   | -                                           | NIP-01 profile metadata             |
 
 ## Profile metadata
 
@@ -149,11 +151,7 @@ Defaults: `relay.damus.io` and `nos.lol`.
   "channels": {
     "nostr": {
       "privateKey": "${NOSTR_PRIVATE_KEY}",
-      "relays": [
-        "wss://relay.damus.io",
-        "wss://relay.primal.net",
-        "wss://nostr.wine"
-      ]
+      "relays": ["wss://relay.damus.io", "wss://relay.primal.net", "wss://nostr.wine"]
     }
   }
 }
@@ -168,12 +166,12 @@ Tips:
 
 ## Protocol support
 
-| NIP | Status | Description |
-| --- | --- | --- |
+| NIP    | Status    | Description                           |
+| ------ | --------- | ------------------------------------- |
 | NIP-01 | Supported | Basic event format + profile metadata |
-| NIP-04 | Supported | Encrypted DMs (`kind:4`) |
-| NIP-17 | Planned | Gift-wrapped DMs |
-| NIP-44 | Planned | Versioned encryption |
+| NIP-04 | Supported | Encrypted DMs (`kind:4`)              |
+| NIP-17 | Planned   | Gift-wrapped DMs                      |
+| NIP-44 | Planned   | Versioned encryption                  |
 
 ## Testing
 
@@ -197,10 +195,10 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 
 ### Manual test
 
-1) Note the bot pubkey (npub) from logs.
-2) Open a Nostr client (Damus, Amethyst, etc.).
-3) DM the bot pubkey.
-4) Verify the response.
+1. Note the bot pubkey (npub) from logs.
+2. Open a Nostr client (Damus, Amethyst, etc.).
+3. DM the bot pubkey.
+4. Verify the response.
 
 ## Troubleshooting
 

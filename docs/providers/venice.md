@@ -3,7 +3,9 @@ summary: "Use Venice AI privacy-focused models in OpenClaw"
 read_when:
   - You want privacy-focused inference in OpenClaw
   - You want Venice AI setup guidance
+title: "Venice AI"
 ---
+
 # Venice AI (Venice highlight)
 
 **Venice** is our highlight Venice setup for privacy-first inference with optional anonymized access to proprietary models.
@@ -21,10 +23,10 @@ Venice AI provides privacy-focused AI inference with support for uncensored mode
 
 Venice offers two privacy levels — understanding this is key to choosing your model:
 
-| Mode | Description | Models |
-|------|-------------|--------|
-| **Private** | Fully private. Prompts/responses are **never stored or logged**. Ephemeral. | Llama, Qwen, DeepSeek, Venice Uncensored, etc. |
-| **Anonymized** | Proxied through Venice with metadata stripped. The underlying provider (OpenAI, Anthropic) sees anonymized requests. | Claude, GPT, Gemini, Grok, Kimi, MiniMax |
+| Mode           | Description                                                                                                          | Models                                         |
+| -------------- | -------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| **Private**    | Fully private. Prompts/responses are **never stored or logged**. Ephemeral.                                          | Llama, Qwen, DeepSeek, Venice Uncensored, etc. |
+| **Anonymized** | Proxied through Venice with metadata stripped. The underlying provider (OpenAI, Anthropic) sees anonymized requests. | Claude, GPT, Gemini, Grok, Kimi, MiniMax       |
 
 ## Features
 
@@ -60,6 +62,7 @@ openclaw onboard --auth-choice venice-api-key
 ```
 
 This will:
+
 1. Prompt for your API key (or use existing `VENICE_API_KEY`)
 2. Show all available Venice models
 3. Let you pick your default model
@@ -109,53 +112,53 @@ openclaw models list | grep venice
 
 ## Which Model Should I Use?
 
-| Use Case | Recommended Model | Why |
-|----------|-------------------|-----|
-| **General chat** | `llama-3.3-70b` | Good all-around, fully private |
-| **Best overall quality** | `claude-opus-45` | Opus remains the strongest for hard tasks |
-| **Privacy + Claude quality** | `claude-opus-45` | Best reasoning via anonymized proxy |
-| **Coding** | `qwen3-coder-480b-a35b-instruct` | Code-optimized, 262k context |
-| **Vision tasks** | `qwen3-vl-235b-a22b` | Best private vision model |
-| **Uncensored** | `venice-uncensored` | No content restrictions |
-| **Fast + cheap** | `qwen3-4b` | Lightweight, still capable |
-| **Complex reasoning** | `deepseek-v3.2` | Strong reasoning, private |
+| Use Case                     | Recommended Model                | Why                                       |
+| ---------------------------- | -------------------------------- | ----------------------------------------- |
+| **General chat**             | `llama-3.3-70b`                  | Good all-around, fully private            |
+| **Best overall quality**     | `claude-opus-45`                 | Opus remains the strongest for hard tasks |
+| **Privacy + Claude quality** | `claude-opus-45`                 | Best reasoning via anonymized proxy       |
+| **Coding**                   | `qwen3-coder-480b-a35b-instruct` | Code-optimized, 262k context              |
+| **Vision tasks**             | `qwen3-vl-235b-a22b`             | Best private vision model                 |
+| **Uncensored**               | `venice-uncensored`              | No content restrictions                   |
+| **Fast + cheap**             | `qwen3-4b`                       | Lightweight, still capable                |
+| **Complex reasoning**        | `deepseek-v3.2`                  | Strong reasoning, private                 |
 
 ## Available Models (25 Total)
 
 ### Private Models (15) — Fully Private, No Logging
 
-| Model ID | Name | Context (tokens) | Features |
-|----------|------|------------------|----------|
-| `llama-3.3-70b` | Llama 3.3 70B | 131k | General |
-| `llama-3.2-3b` | Llama 3.2 3B | 131k | Fast, lightweight |
-| `hermes-3-llama-3.1-405b` | Hermes 3 Llama 3.1 405B | 131k | Complex tasks |
-| `qwen3-235b-a22b-thinking-2507` | Qwen3 235B Thinking | 131k | Reasoning |
-| `qwen3-235b-a22b-instruct-2507` | Qwen3 235B Instruct | 131k | General |
-| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B | 262k | Code |
-| `qwen3-next-80b` | Qwen3 Next 80B | 262k | General |
-| `qwen3-vl-235b-a22b` | Qwen3 VL 235B | 262k | Vision |
-| `qwen3-4b` | Venice Small (Qwen3 4B) | 32k | Fast, reasoning |
-| `deepseek-v3.2` | DeepSeek V3.2 | 163k | Reasoning |
-| `venice-uncensored` | Venice Uncensored | 32k | Uncensored |
-| `mistral-31-24b` | Venice Medium (Mistral) | 131k | Vision |
-| `google-gemma-3-27b-it` | Gemma 3 27B Instruct | 202k | Vision |
-| `openai-gpt-oss-120b` | OpenAI GPT OSS 120B | 131k | General |
-| `zai-org-glm-4.7` | GLM 4.7 | 202k | Reasoning, multilingual |
+| Model ID                         | Name                    | Context (tokens) | Features                |
+| -------------------------------- | ----------------------- | ---------------- | ----------------------- |
+| `llama-3.3-70b`                  | Llama 3.3 70B           | 131k             | General                 |
+| `llama-3.2-3b`                   | Llama 3.2 3B            | 131k             | Fast, lightweight       |
+| `hermes-3-llama-3.1-405b`        | Hermes 3 Llama 3.1 405B | 131k             | Complex tasks           |
+| `qwen3-235b-a22b-thinking-2507`  | Qwen3 235B Thinking     | 131k             | Reasoning               |
+| `qwen3-235b-a22b-instruct-2507`  | Qwen3 235B Instruct     | 131k             | General                 |
+| `qwen3-coder-480b-a35b-instruct` | Qwen3 Coder 480B        | 262k             | Code                    |
+| `qwen3-next-80b`                 | Qwen3 Next 80B          | 262k             | General                 |
+| `qwen3-vl-235b-a22b`             | Qwen3 VL 235B           | 262k             | Vision                  |
+| `qwen3-4b`                       | Venice Small (Qwen3 4B) | 32k              | Fast, reasoning         |
+| `deepseek-v3.2`                  | DeepSeek V3.2           | 163k             | Reasoning               |
+| `venice-uncensored`              | Venice Uncensored       | 32k              | Uncensored              |
+| `mistral-31-24b`                 | Venice Medium (Mistral) | 131k             | Vision                  |
+| `google-gemma-3-27b-it`          | Gemma 3 27B Instruct    | 202k             | Vision                  |
+| `openai-gpt-oss-120b`            | OpenAI GPT OSS 120B     | 131k             | General                 |
+| `zai-org-glm-4.7`                | GLM 4.7                 | 202k             | Reasoning, multilingual |
 
 ### Anonymized Models (10) — Via Venice Proxy
 
-| Model ID | Original | Context (tokens) | Features |
-|----------|----------|------------------|----------|
-| `claude-opus-45` | Claude Opus 4.5 | 202k | Reasoning, vision |
-| `claude-sonnet-45` | Claude Sonnet 4.5 | 202k | Reasoning, vision |
-| `openai-gpt-52` | GPT-5.2 | 262k | Reasoning |
-| `openai-gpt-52-codex` | GPT-5.2 Codex | 262k | Reasoning, vision |
-| `gemini-3-pro-preview` | Gemini 3 Pro | 202k | Reasoning, vision |
-| `gemini-3-flash-preview` | Gemini 3 Flash | 262k | Reasoning, vision |
-| `grok-41-fast` | Grok 4.1 Fast | 262k | Reasoning, vision |
-| `grok-code-fast-1` | Grok Code Fast 1 | 262k | Reasoning, code |
-| `kimi-k2-thinking` | Kimi K2 Thinking | 262k | Reasoning |
-| `minimax-m21` | MiniMax M2.1 | 202k | Reasoning |
+| Model ID                 | Original          | Context (tokens) | Features          |
+| ------------------------ | ----------------- | ---------------- | ----------------- |
+| `claude-opus-45`         | Claude Opus 4.5   | 202k             | Reasoning, vision |
+| `claude-sonnet-45`       | Claude Sonnet 4.5 | 202k             | Reasoning, vision |
+| `openai-gpt-52`          | GPT-5.2           | 262k             | Reasoning         |
+| `openai-gpt-52-codex`    | GPT-5.2 Codex     | 262k             | Reasoning, vision |
+| `gemini-3-pro-preview`   | Gemini 3 Pro      | 202k             | Reasoning, vision |
+| `gemini-3-flash-preview` | Gemini 3 Flash    | 262k             | Reasoning, vision |
+| `grok-41-fast`           | Grok 4.1 Fast     | 262k             | Reasoning, vision |
+| `grok-code-fast-1`       | Grok Code Fast 1  | 262k             | Reasoning, code   |
+| `kimi-k2-thinking`       | Kimi K2 Thinking  | 262k             | Reasoning         |
+| `minimax-m21`            | MiniMax M2.1      | 202k             | Reasoning         |
 
 ## Model Discovery
 
@@ -165,12 +168,12 @@ The `/models` endpoint is public (no auth needed for listing), but inference req
 
 ## Streaming & Tool Support
 
-| Feature | Support |
-|---------|---------|
-| **Streaming** | ✅ All models |
+| Feature              | Support                                                 |
+| -------------------- | ------------------------------------------------------- |
+| **Streaming**        | ✅ All models                                           |
 | **Function calling** | ✅ Most models (check `supportsFunctionCalling` in API) |
-| **Vision/Images** | ✅ Models marked with "Vision" feature |
-| **JSON mode** | ✅ Supported via `response_format` |
+| **Vision/Images**    | ✅ Models marked with "Vision" feature                  |
+| **JSON mode**        | ✅ Supported via `response_format`                      |
 
 ## Pricing
 
@@ -181,12 +184,12 @@ Venice uses a credit-based system. Check [venice.ai/pricing](https://venice.ai/p
 
 ## Comparison: Venice vs Direct API
 
-| Aspect | Venice (Anonymized) | Direct API |
-|--------|---------------------|------------|
-| **Privacy** | Metadata stripped, anonymized | Your account linked |
-| **Latency** | +10-50ms (proxy) | Direct |
-| **Features** | Most features supported | Full features |
-| **Billing** | Venice credits | Provider billing |
+| Aspect       | Venice (Anonymized)           | Direct API          |
+| ------------ | ----------------------------- | ------------------- |
+| **Privacy**  | Metadata stripped, anonymized | Your account linked |
+| **Latency**  | +10-50ms (proxy)              | Direct              |
+| **Features** | Most features supported       | Full features       |
+| **Billing**  | Venice credits                | Provider billing    |
 
 ## Usage Examples
 
@@ -247,12 +250,12 @@ Venice API is at `https://api.venice.ai/api/v1`. Ensure your network allows HTTP
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 131072,
-            maxTokens: 8192
-          }
-        ]
-      }
-    }
-  }
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
 }
 ```
 

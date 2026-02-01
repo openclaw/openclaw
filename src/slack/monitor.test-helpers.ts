@@ -1,8 +1,16 @@
-import { vi } from "vitest";
+import { Mock, vi } from "vitest";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 
-const slackTestState = vi.hoisted(() => ({
+const slackTestState: {
+  config: Record<string, unknown>;
+  sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  replyMock: Mock<(...args: unknown[]) => unknown>;
+  updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
+  reactMock: Mock<(...args: unknown[]) => unknown>;
+  readAllowFromStoreMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  upsertPairingRequestMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+} = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
   sendMock: vi.fn(),
   replyMock: vi.fn(),
@@ -12,7 +20,7 @@ const slackTestState = vi.hoisted(() => ({
   upsertPairingRequestMock: vi.fn(),
 }));
 
-export const getSlackTestState = () => slackTestState;
+export const getSlackTestState: () => void = () => slackTestState;
 
 export const getSlackHandlers = () =>
   (

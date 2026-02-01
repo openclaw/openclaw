@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 
 describe("media understanding scope", () => {

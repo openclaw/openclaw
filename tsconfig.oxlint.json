@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "openclaw": ["./src/index.ts"],
+      "openclaw/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*", "extensions/**/*", "packages/**/*"]
+}

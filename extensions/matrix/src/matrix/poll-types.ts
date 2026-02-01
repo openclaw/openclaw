@@ -77,18 +77,25 @@ export function isPollStartType(eventType: string): boolean {
 }
 
 export function getTextContent(text?: TextContent): string {
-  if (!text) return "";
+  if (!text) {
+    return "";
+  }
   return text["m.text"] ?? text["org.matrix.msc1767.text"] ?? text.body ?? "";
 }
 
 export function parsePollStartContent(content: PollStartContent): PollSummary | null {
-  const poll = (content as Record<string, PollStartSubtype | undefined>)[M_POLL_START]
-    ?? (content as Record<string, PollStartSubtype | undefined>)[ORG_POLL_START]
-    ?? (content as Record<string, PollStartSubtype | undefined>)["m.poll"];
-  if (!poll) return null;
+  const poll =
+    (content as Record<string, PollStartSubtype | undefined>)[M_POLL_START] ??
+    (content as Record<string, PollStartSubtype | undefined>)[ORG_POLL_START] ??
+    (content as Record<string, PollStartSubtype | undefined>)["m.poll"];
+  if (!poll) {
+    return null;
+  }
 
   const question = getTextContent(poll.question);
-  if (!question) return null;
+  if (!question) {
+    return null;
+  }
 
   const answers = poll.answers
     .map((answer) => getTextContent(answer))
@@ -124,7 +131,9 @@ function buildTextContent(body: string): TextContent {
 }
 
 function buildPollFallbackText(question: string, answers: string[]): string {
-  if (answers.length === 0) return question;
+  if (answers.length === 0) {
+    return question;
+  }
   return `${question}\n${answers.map((answer, idx) => `${idx + 1}. ${answer}`).join("\n")}`;
 }
 

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { resolveConfigDir } from "../utils.js";
 
 function escapeRegExp(value: string): string {

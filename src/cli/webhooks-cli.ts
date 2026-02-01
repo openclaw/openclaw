@@ -1,6 +1,11 @@
 import type { Command } from "commander";
-
 import { danger } from "../globals.js";
+import {
+  type GmailRunOptions,
+  type GmailSetupOptions,
+  runGmailService,
+  runGmailSetup,
+} from "../hooks/gmail-ops.js";
 import {
   DEFAULT_GMAIL_LABEL,
   DEFAULT_GMAIL_MAX_BYTES,
@@ -11,12 +16,6 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
-import {
-  type GmailRunOptions,
-  type GmailSetupOptions,
-  runGmailService,
-  runGmailSetup,
-} from "../hooks/gmail-ops.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";

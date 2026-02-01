@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-
 import type { PlivoConfig } from "../config.js";
 import type {
   HangupCallInput,
@@ -13,9 +12,9 @@ import type {
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
+import type { VoiceCallProvider } from "./base.js";
 import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
-import type { VoiceCallProvider } from "./base.js";
 
 export interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */
@@ -103,8 +102,7 @@ export class PlivoProvider implements VoiceCallProvider {
   }
 
   parseWebhookEvent(ctx: WebhookContext): ProviderWebhookParseResult {
-    const flow =
-      typeof ctx.query?.flow === "string" ? ctx.query.flow.trim() : "";
+    const flow = typeof ctx.query?.flow === "string" ? ctx.query.flow.trim() : "";
 
     const parsed = this.parseBody(ctx.rawBody);
     if (!parsed) {
@@ -124,7 +122,9 @@ export class PlivoProvider implements VoiceCallProvider {
     if (flow === "xml-speak") {
       const callId = this.getCallIdFromQuery(ctx);
       const pending = callId ? this.pendingSpeakByCallId.get(callId) : undefined;
-      if (callId) this.pendingSpeakByCallId.delete(callId);
+      if (callId) {
+        this.pendingSpeakByCallId.delete(callId);
+      }
 
       const xml = pending
         ? PlivoProvider.xmlSpeak(pending.text, pending.locale)
@@ -139,10 +139,10 @@ export class PlivoProvider implements VoiceCallProvider {
 
     if (flow === "xml-listen") {
       const callId = this.getCallIdFromQuery(ctx);
-      const pending = callId
-        ? this.pendingListenByCallId.get(callId)
-        : undefined;
-      if (callId) this.pendingListenByCallId.delete(callId);
+      const pending = callId ? this.pendingListenByCallId.get(callId) : undefined;
+      if (callId) {
+        this.pendingListenByCallId.delete(callId);
+      }
 
       const actionUrl = this.buildActionUrl(ctx, {
         flow: "getinput",
@@ -180,10 +180,7 @@ export class PlivoProvider implements VoiceCallProvider {
     };
   }
 
-  private normalizeEvent(
-    params: URLSearchParams,
-    callIdOverride?: string,
-  ): NormalizedEvent | null {
+  private normalizeEvent(params: URLSearchParams, callIdOverride?: string): NormalizedEvent | null {
     const callUuid = params.get("CallUUID") || "";
     const requestUuid = params.get("RequestUUID") || "";
 
@@ -329,11 +326,9 @@ export class PlivoProvider implements VoiceCallProvider {
   }
 
   async playTts(input: PlayTtsInput): Promise<void> {
-    const callUuid = this.requestUuidToCallUuid.get(input.providerCallId) ??
-      input.providerCallId;
+    const callUuid = this.requestUuidToCallUuid.get(input.providerCallId) ?? input.providerCallId;
     const webhookBase =
-      this.callUuidToWebhookUrl.get(callUuid) ||
-      this.callIdToWebhookUrl.get(input.callId);
+      this.callUuidToWebhookUrl.get(callUuid) || this.callIdToWebhookUrl.get(input.callId);
     if (!webhookBase) {
       throw new Error("Missing webhook URL for this call (provider state missing)");
     }
@@ -364,11 +359,9 @@ export class PlivoProvider implements VoiceCallProvider {
   }
 
   async startListening(input: StartListeningInput): Promise<void> {
-    const callUuid = this.requestUuidToCallUuid.get(input.providerCallId) ??
-      input.providerCallId;
+    const callUuid = this.requestUuidToCallUuid.get(input.providerCallId) ?? input.providerCallId;
     const webhookBase =
-      this.callUuidToWebhookUrl.get(callUuid) ||
-      this.callIdToWebhookUrl.get(input.callId);
+      this.callUuidToWebhookUrl.get(callUuid) || this.callIdToWebhookUrl.get(input.callId);
     if (!webhookBase) {
       throw new Error("Missing webhook URL for this call (provider state missing)");
     }
@@ -403,7 +396,9 @@ export class PlivoProvider implements VoiceCallProvider {
 
   private static normalizeNumber(numberOrSip: string): string {
     const trimmed = numberOrSip.trim();
-    if (trimmed.toLowerCase().startsWith("sip:")) return trimmed;
+    if (trimmed.toLowerCase().startsWith("sip:")) {
+      return trimmed;
+    }
     return trimmed.replace(/[^\d+]/g, "");
   }
 
@@ -427,10 +422,7 @@ export class PlivoProvider implements VoiceCallProvider {
 </Response>`;
   }
 
-  private static xmlGetInputSpeech(params: {
-    actionUrl: string;
-    language?: string;
-  }): string {
+  private static xmlGetInputSpeech(params: { actionUrl: string; language?: string }): string {
     const language = params.language || "en-US";
     return `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -453,12 +445,16 @@ export class PlivoProvider implements VoiceCallProvider {
     opts: { flow: string; callId?: string },
   ): string | null {
     const base = PlivoProvider.baseWebhookUrlFromCtx(ctx);
-    if (!base) return null;
+    if (!base) {
+      return null;
+    }
 
     const u = new URL(base);
     u.searchParams.set("provider", "plivo");
     u.searchParams.set("flow", opts.flow);
-    if (opts.callId) u.searchParams.set("callId", opts.callId);
+    if (opts.callId) {
+      u.searchParams.set("callId", opts.callId);
+    }
     return u.toString();
   }
 
@@ -491,7 +487,9 @@ export class PlivoProvider implements VoiceCallProvider {
 
     for (const key of candidates) {
       const value = params.get(key);
-      if (value && value.trim()) return value.trim();
+      if (value && value.trim()) {
+        return value.trim();
+      }
     }
     return null;
   }

@@ -3,7 +3,9 @@ summary: "OpenClaw macOS companion app (menu bar + gateway broker)"
 read_when:
   - Implementing macOS app features
   - Changing gateway lifecycle or node bridging on macOS
+title: "macOS App"
 ---
+
 # OpenClaw macOS Companion (menu bar + gateway broker)
 
 The macOS app is the **menu‑bar companion** for OpenClaw. It owns permissions,
@@ -28,7 +30,7 @@ capabilities to the agent as a node.
 - **Remote**: the app connects to a Gateway over SSH/Tailscale and never starts
   a local process.
   The app starts the local **node host service** so the remote Gateway can reach this Mac.
-The app does not spawn the Gateway as a child process.
+  The app does not spawn the Gateway as a child process.
 
 ## Launchd control
 
@@ -57,10 +59,12 @@ The macOS app presents itself as a node. Common commands:
 The node reports a `permissions` map so agents can decide what’s allowed.
 
 Node service + app IPC:
+
 - When the headless node host service is running (remote mode), it connects to the Gateway WS as a node.
 - `system.run` executes in the macOS app (UI/TCC context) over a local Unix socket; prompts + output stay in-app.
 
 Diagram (SCI):
+
 ```
 Gateway -> Node Service (WS)
                  |  IPC (UDS + token + HMAC + TTL)
@@ -90,15 +94,14 @@ Example:
     "main": {
       "security": "allowlist",
       "ask": "on-miss",
-      "allowlist": [
-        { "pattern": "/opt/homebrew/bin/rg" }
-      ]
+      "allowlist": [{ "pattern": "/opt/homebrew/bin/rg" }]
     }
   }
 }
 ```
 
 Notes:
+
 - `allowlist` entries are glob patterns for resolved binary paths.
 - Choosing “Always Allow” in the prompt adds that command to the allowlist.
 - `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `PERL*`, `RUBYOPT`) and then merged with the app’s environment.
@@ -116,6 +119,7 @@ open 'openclaw://agent?message=Hello%20from%20deep%20link'
 ```
 
 Query parameters:
+
 - `message` (required)
 - `sessionKey` (optional)
 - `thinking` (optional)
@@ -124,15 +128,16 @@ Query parameters:
 - `key` (optional unattended mode key)
 
 Safety:
+
 - Without `key`, the app prompts for confirmation.
 - With a valid `key`, the run is unattended (intended for personal automations).
 
 ## Onboarding flow (typical)
 
-1) Install and launch **OpenClaw.app**.
-2) Complete the permissions checklist (TCC prompts).
-3) Ensure **Local** mode is active and the Gateway is running.
-4) Install the CLI if you want terminal access.
+1. Install and launch **OpenClaw.app**.
+2. Complete the permissions checklist (TCC prompts).
+3. Ensure **Local** mode is active and the Gateway is running.
+4. Install the CLI if you want terminal access.
 
 ## Build & dev workflow (native)
 
@@ -152,6 +157,7 @@ swift run openclaw-mac discover --timeout 3000 --json
 ```
 
 Connect options:
+
 - `--url <ws://host:port>`: override config
 - `--mode <local|remote>`: resolve from config (default: config or local)
 - `--probe`: force a fresh health probe
@@ -159,6 +165,7 @@ Connect options:
 - `--json`: structured output for diffing
 
 Discovery options:
+
 - `--include-local`: include gateways that would be filtered as “local”
 - `--timeout <ms>`: overall discovery window (default: `2000`)
 - `--json`: structured output for diffing
@@ -173,6 +180,7 @@ When the macOS app runs in **Remote** mode, it opens an SSH tunnel so local UI
 components can talk to a remote Gateway as if it were on localhost.
 
 ### Control tunnel (Gateway WebSocket port)
+
 - **Purpose:** health checks, status, Web Chat, config, and other control-plane calls.
 - **Local port:** the Gateway port (default `18789`), always stable.
 - **Remote port:** the same Gateway port on the remote host.

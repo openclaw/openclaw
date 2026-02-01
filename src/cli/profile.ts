@@ -1,6 +1,5 @@
 import os from "node:os";
 import path from "node:path";
-
 import { isValidProfileName } from "./profile-utils.js";
 
 export type CliProfileParseResult =

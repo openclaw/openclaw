@@ -1,9 +1,8 @@
-import { EventEmitter } from "node:events";
-
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@sinclair/typebox";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-
+import type { TSchema } from "@sinclair/typebox";
+import { EventEmitter } from "node:events";
+import type { TranscriptPolicy } from "../transcript-policy.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
   downgradeOpenAIReasoningBlocks,
@@ -12,12 +11,11 @@ import {
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "../pi-embedded-helpers.js";
+import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
-import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
-import type { TranscriptPolicy } from "../transcript-policy.js";
-import { resolveTranscriptPolicy } from "../transcript-policy.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
 const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([

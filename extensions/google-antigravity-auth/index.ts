@@ -49,7 +49,9 @@ function generatePkce(): { verifier: string; challenge: string } {
 }
 
 function isWSL(): boolean {
-  if (process.platform !== "linux") return false;
+  if (process.platform !== "linux") {
+    return false;
+  }
   try {
     const release = readFileSync("/proc/version", "utf8").toLowerCase();
     return release.includes("microsoft") || release.includes("wsl");
@@ -59,7 +61,9 @@ function isWSL(): boolean {
 }
 
 function isWSL2(): boolean {
-  if (!isWSL()) return false;
+  if (!isWSL()) {
+    return false;
+  }
   try {
     const version = readFileSync("/proc/version", "utf8").toLowerCase();
     return version.includes("wsl2") || version.includes("microsoft-standard");
@@ -86,18 +90,22 @@ function buildAuthUrl(params: { challenge: string; state: string }): string {
   return url.toString();
 }
 
-function parseCallbackInput(
-  input: string,
-): { code: string; state: string } | { error: string } {
+function parseCallbackInput(input: string): { code: string; state: string } | { error: string } {
   const trimmed = input.trim();
-  if (!trimmed) return { error: "No input provided" };
+  if (!trimmed) {
+    return { error: "No input provided" };
+  }
 
   try {
     const url = new URL(trimmed);
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
-    if (!code) return { error: "Missing 'code' parameter in URL" };
-    if (!state) return { error: "Missing 'state' parameter in URL" };
+    if (!code) {
+      return { error: "Missing 'code' parameter in URL" };
+    }
+    if (!state) {
+      return { error: "Missing 'state' parameter in URL" };
+    }
     return { code, state };
   } catch {
     return { error: "Paste the full redirect URL (not just the code)." };
@@ -114,12 +122,16 @@ async function startCallbackServer(params: { timeoutMs: number }) {
 
   const callbackPromise = new Promise<URL>((resolve, reject) => {
     resolveCallback = (url) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       resolve(url);
     };
     rejectCallback = (err) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       reject(err);
     };
@@ -206,8 +218,12 @@ async function exchangeCode(params: {
   const refresh = data.refresh_token?.trim();
   const expiresIn = data.expires_in ?? 0;
 
-  if (!access) throw new Error("Token exchange returned no access_token");
-  if (!refresh) throw new Error("Token exchange returned no refresh_token");
+  if (!access) {
+    throw new Error("Token exchange returned no access_token");
+  }
+  if (!refresh) {
+    throw new Error("Token exchange returned no refresh_token");
+  }
 
   const expires = Date.now() + expiresIn * 1000 - 5 * 60 * 1000;
   return { access, refresh, expires };
@@ -218,7 +234,9 @@ async function fetchUserEmail(accessToken: string): Promise<string | undefined> 
     const response = await fetch("https://www.googleapis.com/oauth2/v1/userinfo?alt=json", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (!response.ok) return undefined;
+    if (!response.ok) {
+      return undefined;
+    }
     const data = (await response.json()) as { email?: string };
     return data.email;
   } catch {
@@ -253,7 +271,9 @@ async function fetchProjectId(accessToken: string): Promise<string> {
         }),
       });
 
-      if (!response.ok) continue;
+      if (!response.ok) {
+        continue;
+      }
       const data = (await response.json()) as {
         cloudaicompanionProject?: string | { id?: string };
       };
@@ -344,12 +364,16 @@ async function loginAntigravity(params: {
     params.progress.update("Waiting for redirect URL…");
     const input = await params.prompt("Paste the redirect URL: ");
     const parsed = parseCallbackInput(input);
-    if ("error" in parsed) throw new Error(parsed.error);
+    if ("error" in parsed) {
+      throw new Error(parsed.error);
+    }
     code = parsed.code;
     returnedState = parsed.state;
   }
 
-  if (!code) throw new Error("Missing OAuth code");
+  if (!code) {
+    throw new Error("Missing OAuth code");
+  }
   if (returnedState !== state) {
     throw new Error("OAuth state mismatch. Please try again.");
   }

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { detectAndLoadPromptImages, detectImageReferences, modelSupportsImages } from "./images.js";
 
 describe("detectImageReferences", () => {

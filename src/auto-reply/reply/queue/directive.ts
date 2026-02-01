@@ -1,6 +1,6 @@
+import type { QueueDropPolicy, QueueMode } from "./types.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
-import type { QueueDropPolicy, QueueMode } from "./types.js";
 
 function parseQueueDebounce(raw?: string): number | undefined {
   if (!raw) {

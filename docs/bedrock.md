@@ -3,7 +3,9 @@ summary: "Use Amazon Bedrock (Converse API) models with OpenClaw"
 read_when:
   - You want to use Amazon Bedrock models with OpenClaw
   - You need AWS credential/region setup for model calls
+title: "Amazon Bedrock"
 ---
+
 # Amazon Bedrock
 
 OpenClaw can use **Amazon Bedrock** models via pi‑ai’s **Bedrock Converse**
@@ -34,13 +36,14 @@ Config options live under `models.bedrockDiscovery`:
       providerFilter: ["anthropic", "amazon"],
       refreshInterval: 3600,
       defaultContextWindow: 32000,
-      defaultMaxTokens: 4096
-    }
-  }
+      defaultMaxTokens: 4096,
+    },
+  },
 }
 ```
 
 Notes:
+
 - `enabled` defaults to `true` when AWS credentials are present.
 - `region` defaults to `AWS_REGION` or `AWS_DEFAULT_REGION`, then `us-east-1`.
 - `providerFilter` matches Bedrock provider names (for example `anthropic`).
@@ -50,7 +53,7 @@ Notes:
 
 ## Setup (manual)
 
-1) Ensure AWS credentials are available on the **gateway host**:
+1. Ensure AWS credentials are available on the **gateway host**:
 
 ```bash
 export AWS_ACCESS_KEY_ID="AKIA..."
@@ -63,7 +66,7 @@ export AWS_PROFILE="your-profile"
 export AWS_BEARER_TOKEN_BEDROCK="..."
 ```
 
-2) Add a Bedrock provider and model to your config (no `apiKey` required):
+2. Add a Bedrock provider and model to your config (no `apiKey` required):
 
 ```json5
 {
@@ -81,17 +84,17 @@ export AWS_BEARER_TOKEN_BEDROCK="..."
             input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 200000,
-            maxTokens: 8192
-          }
-        ]
-      }
-    }
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
   },
   agents: {
     defaults: {
-      model: { primary: "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0" }
-    }
-  }
+      model: { primary: "amazon-bedrock/anthropic.claude-opus-4-5-20251101-v1:0" },
+    },
+  },
 }
 ```
 
@@ -112,6 +115,7 @@ export AWS_REGION=us-east-1
 ```
 
 **Required IAM permissions** for the EC2 instance role:
+
 - `bedrock:InvokeModel`
 - `bedrock:InvokeModelWithResponseStream`
 - `bedrock:ListFoundationModels` (for automatic discovery)

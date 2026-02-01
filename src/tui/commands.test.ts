@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { getSlashCommands, parseCommand } from "./commands.js";
 
 describe("tui slash commands", () => {
