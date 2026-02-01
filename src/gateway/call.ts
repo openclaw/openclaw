@@ -248,7 +248,10 @@ export async function callGateway<T = Record<string, unknown>>(
         }
         ignoreClose = true;
         client.stop();
-        stop(new Error(`gateway connection failed: ${err.message}\n${connectionDetails.message}`));
+        stop(
+          new Error(`gateway connection failed: ${err.message}
+${connectionDetails.message}`),
+        );
       },
     });
 
