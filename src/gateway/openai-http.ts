@@ -1,3 +1,16 @@
+/**
+ * OpenAI-compatible Chat Completions HTTP Handler
+ *
+ * SECURITY NOTE: Streaming responses (stream: true) bypass the http_response_sending hook.
+ * This is a known limitation - implementing output scanning for streaming would require
+ * buffering the entire response, which defeats the purpose of streaming.
+ *
+ * Plugins that need output scanning should:
+ * 1. For non-streaming: Use http_response_sending hook (fully supported)
+ * 2. For streaming: Consider using message_sending hook at the messaging layer,
+ *    or accept that streaming responses cannot be scanned for output leaks.
+ */
+
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import type { PluginHookHttpContext } from "../plugins/types.js";
@@ -427,6 +440,11 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
 
+  // ==========================================================================
+  // STREAMING PATH - Note: http_response_sending hook is NOT invoked here.
+  // Streaming responses cannot be scanned without buffering, which breaks UX.
+  // See module-level security note for details.
+  // ==========================================================================
   setSseHeaders(res);
 
   let wroteRole = false;

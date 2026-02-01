@@ -131,6 +131,8 @@ function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
 
 /**
  * Extract all user-provided content from input for security scanning.
+ * Note: function_call_output (tool results) are excluded here to avoid false positives.
+ * Tool results should be scanned via the http_tool_result hook instead.
  */
 function extractUserContentForScanning(input: string | ItemParam[]): string {
   if (typeof input === "string") {
@@ -147,9 +149,8 @@ function extractUserContentForScanning(input: string | ItemParam[]): string {
       ) {
         parts.push(content);
       }
-    } else if (item.type === "function_call_output") {
-      parts.push(item.output);
     }
+    // Note: function_call_output intentionally excluded - scan via http_tool_result hook
   }
   return parts.join("\n\n");
 }

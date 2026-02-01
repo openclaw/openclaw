@@ -37,6 +37,19 @@ import { getBearerToken, getHeader } from "./http-utils.js";
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
+/**
+ * Safe JSON stringify that handles BigInt and circular references.
+ * Falls back to "[unserializable]" if serialization fails.
+ */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, (_, v) => (typeof v === "bigint" ? v.toString() : v));
+  } catch {
+    // Circular reference or other serialization error
+    return "[unserializable]";
+  }
+}
+
 type ToolsInvokeBody = {
   tool?: unknown;
   action?: unknown;
@@ -344,7 +357,7 @@ export async function handleToolsInvokeHttpRequest(
         {
           toolName,
           toolParams: toolArgs,
-          content: JSON.stringify(toolArgs),
+          content: safeStringify(toolArgs),
         },
         httpCtx,
       );
@@ -391,7 +404,7 @@ export async function handleToolsInvokeHttpRequest(
             toolName,
             toolParams: toolArgs,
             toolResult: result,
-            content: JSON.stringify(result),
+            content: safeStringify(result),
             durationMs,
             success: true,
           },
