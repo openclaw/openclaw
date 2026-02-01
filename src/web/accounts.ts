@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
+  ConfirmingConfig,
   DmPolicy,
   GroupPolicy,
   WhatsAppAccountConfig,
@@ -26,6 +27,7 @@ export type ResolvedWhatsAppAccount = {
   groupPolicy?: GroupPolicy;
   dmPolicy?: DmPolicy;
   pairing?: WhatsAppPairingConfig;
+  confirming?: ConfirmingConfig;
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
   mediaMaxMb?: number;
@@ -163,6 +165,7 @@ export function resolveWhatsAppAccount(params: {
     selfChatMode: accountCfg?.selfChatMode ?? rootCfg?.selfChatMode,
     dmPolicy: accountCfg?.dmPolicy ?? rootCfg?.dmPolicy,
     pairing: accountCfg?.pairing ?? rootCfg?.pairing,
+    confirming: accountCfg?.confirming ?? rootCfg?.confirming,
     allowFrom: accountCfg?.allowFrom ?? rootCfg?.allowFrom,
     groupAllowFrom: accountCfg?.groupAllowFrom ?? rootCfg?.groupAllowFrom,
     groupPolicy: accountCfg?.groupPolicy ?? rootCfg?.groupPolicy,

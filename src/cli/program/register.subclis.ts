@@ -182,6 +182,14 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "confirming",
+    description: "Owner-approved responses (dmPolicy: confirming)",
+    register: async (program) => {
+      const mod = await import("../confirming-cli.js");
+      mod.registerConfirmingCli(program);
+    },
+  },
+  {
     name: "plugins",
     description: "Plugin management",
     register: async (program) => {

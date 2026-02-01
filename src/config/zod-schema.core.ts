@@ -126,7 +126,18 @@ export const ReplyToModeSchema = z.union([z.literal("off"), z.literal("first"), 
 //   - .default("allowlist") ensures runtime always resolves to "allowlist" if not provided
 export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
-export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
+export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled", "confirming"]);
+
+export const ConfirmingTimeoutActionSchema = z.enum(["queue", "reject", "auto-approve"]);
+
+export const ConfirmingConfigSchema = z
+  .object({
+    ownerChat: z.string().min(1),
+    timeout: z.number().int().positive().optional().default(3600),
+    onTimeout: ConfirmingTimeoutActionSchema.optional().default("queue"),
+    includeMessage: z.boolean().optional().default(true),
+  })
+  .strict();
 
 export const BlockStreamingCoalesceSchema = z
   .object({

@@ -1,5 +1,6 @@
 import type {
   BlockStreamingCoalesceConfig,
+  ConfirmingConfig,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -52,6 +53,8 @@ export type WhatsAppConfig = {
   dmPolicy?: DmPolicy;
   /** Pairing mode configuration (owner notifications). */
   pairing?: WhatsAppPairingConfig;
+  /** Confirming mode configuration (owner-approved responses). */
+  confirming?: ConfirmingConfig;
   /**
    * Same-phone setup (bot uses your personal WhatsApp number).
    */
@@ -135,6 +138,8 @@ export type WhatsAppAccountConfig = {
   dmPolicy?: DmPolicy;
   /** Pairing mode configuration (owner notifications). */
   pairing?: WhatsAppPairingConfig;
+  /** Confirming mode configuration (owner-approved responses). */
+  confirming?: ConfirmingConfig;
   /** Same-phone setup for this account (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
   allowFrom?: string[];

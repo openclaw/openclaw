@@ -1,3 +1,4 @@
+import type { ConfirmingConfig } from "../../config/types.js";
 import { loadConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -13,6 +14,10 @@ export type InboundAccessControlResult = {
   shouldMarkRead: boolean;
   isSelfChat: boolean;
   resolvedAccountId: string;
+  /** When true, responses should be sent to owner for approval instead of directly to sender. */
+  confirmingMode?: boolean;
+  /** Confirming config when in confirming mode. */
+  confirmingConfig?: ConfirmingConfig;
 };
 
 const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
@@ -143,6 +148,29 @@ export async function checkInboundAccessControl(params: {
         dmHasWildcard ||
         (normalizedAllowFrom.length > 0 && normalizedAllowFrom.includes(candidate));
       if (!allowed) {
+        // Confirming mode: allow message processing but mark for owner approval
+        if (dmPolicy === "confirming") {
+          const confirmingConfig = account.confirming ?? cfg.channels?.whatsapp?.confirming;
+          if (confirmingConfig?.ownerChat) {
+            logVerbose(`Confirming mode: allowing DM from ${candidate} for owner approval`);
+            return {
+              allowed: true,
+              shouldMarkRead: true,
+              isSelfChat,
+              resolvedAccountId: account.accountId,
+              confirmingMode: true,
+              confirmingConfig,
+            };
+          } else {
+            logVerbose(`Confirming mode misconfigured: missing ownerChat, blocking ${candidate}`);
+            return {
+              allowed: false,
+              shouldMarkRead: false,
+              isSelfChat,
+              resolvedAccountId: account.accountId,
+            };
+          }
+        }
         if (dmPolicy === "pairing") {
           if (suppressPairingReply) {
             logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
