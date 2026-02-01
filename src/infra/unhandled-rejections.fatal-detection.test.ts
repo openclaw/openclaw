@@ -113,6 +113,32 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       );
     });
 
+    it("does NOT exit on undici fetch failures with unrecognized cause", () => {
+      const fetchErr = Object.assign(new TypeError("fetch failed"), {
+        cause: new Error("some unknown undici error"),
+      });
+
+      process.emit("unhandledRejection", fetchErr, Promise.resolve());
+
+      expect(exitCalls).toEqual([]);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        expect.stringContaining("fetch failed"),
+      );
+    });
+
+    it("does NOT exit on undici fetch failures without cause", () => {
+      const fetchErr = new TypeError("fetch failed");
+
+      process.emit("unhandledRejection", fetchErr, Promise.resolve());
+
+      expect(exitCalls).toEqual([]);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        expect.stringContaining("fetch failed"),
+      );
+    });
+
     it("does NOT exit on DNS resolution failures", () => {
       const dnsErr = Object.assign(new Error("DNS resolve failed"), {
         code: "UND_ERR_DNS_RESOLVE_FAILED",
