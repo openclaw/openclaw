@@ -283,6 +283,7 @@ export function createOpenClawCodingTools(options?: {
     approvalRunningNoticeMs:
       options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
     notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
+    allowGatewayRestart: options?.config?.commands?.restart === true,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,

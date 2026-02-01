@@ -128,6 +128,7 @@ export type ExecToolDefaults = {
   sandbox?: BashSandboxConfig;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
+  allowGatewayRestart?: boolean;
   scopeKey?: string;
   sessionKey?: string;
   messageProvider?: string;
@@ -798,6 +799,16 @@ export function createExecTool(
 
       if (!params.command) {
         throw new Error("Provide a command to start.");
+      }
+
+      // Block gateway restart commands when not allowed
+      if (defaults?.allowGatewayRestart !== true) {
+        const gatewayRestartPattern = /\b(openclaw|clawdbot|moltbot)\s+gateway\s+restart\b/i;
+        if (gatewayRestartPattern.test(params.command)) {
+          throw new Error(
+            "Gateway restart via exec is disabled. Set commands.restart=true to enable.",
+          );
+        }
       }
 
       const maxOutput = DEFAULT_MAX_OUTPUT;

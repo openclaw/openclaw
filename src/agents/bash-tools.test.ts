@@ -423,3 +423,41 @@ describe("buildDockerExecArgs", () => {
     expect(args).toContain("-t");
   });
 });
+
+describe("exec tool gateway restart blocking", () => {
+  it("blocks gateway restart when allowGatewayRestart is not set", async () => {
+    const tool = createExecTool({ allowGatewayRestart: false });
+    await expect(tool.execute("call", { command: "openclaw gateway restart" })).rejects.toThrow(
+      "Gateway restart via exec is disabled",
+    );
+  });
+
+  it("blocks gateway restart with clawdbot alias", async () => {
+    const tool = createExecTool({ allowGatewayRestart: false });
+    await expect(tool.execute("call", { command: "clawdbot gateway restart" })).rejects.toThrow(
+      "Gateway restart via exec is disabled",
+    );
+  });
+
+  it("blocks gateway restart with moltbot alias", async () => {
+    const tool = createExecTool({ allowGatewayRestart: false });
+    await expect(tool.execute("call", { command: "moltbot gateway restart" })).rejects.toThrow(
+      "Gateway restart via exec is disabled",
+    );
+  });
+
+  it("allows gateway restart when allowGatewayRestart is true", async () => {
+    const tool = createExecTool({ allowGatewayRestart: true });
+    // This should not throw - the command will fail because openclaw is not installed,
+    // but it won't be blocked by the guard
+    const result = await tool.execute("call", { command: "echo 'openclaw gateway restart'" });
+    expect(result.content[0]).toHaveProperty("text");
+  });
+
+  it("allows other commands when allowGatewayRestart is false", async () => {
+    const tool = createExecTool({ allowGatewayRestart: false });
+    const result = await tool.execute("call", { command: "echo hello" });
+    expect(result.content[0]).toHaveProperty("text");
+    expect((result.content[0] as { text: string }).text).toContain("hello");
+  });
+});
