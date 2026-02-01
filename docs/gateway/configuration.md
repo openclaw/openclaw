@@ -1091,7 +1091,7 @@ Set `channels.telegram.configWrites: false` to block Telegram-initiated config w
         autoSelectFamily: false,
       },
       proxy: "socks5://localhost:9050",
-      webhookUrl: "https://example.com/telegram-webhook",
+      webhookUrl: "https://example.com/telegram-webhook", // requires webhookSecret
       webhookSecret: "secret",
       webhookPath: "/telegram-webhook",
     },
