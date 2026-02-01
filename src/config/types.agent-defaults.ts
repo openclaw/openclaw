@@ -204,6 +204,8 @@ export type AgentDefaultsConfig = {
     archiveAfterMinutes?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
+    /** Startup delay (ms) before subagent makes first API call (default: 500). */
+    startupDelayMs?: number;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {

@@ -352,6 +352,14 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
+    // Apply startup delay for subagent spawns to avoid auth race conditions (#5488).
+    const subagentStartupDelayMs = spawnedByValue
+      ? (cfg.agents?.defaults?.subagents?.startupDelayMs ?? 500)
+      : 0;
+    if (subagentStartupDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, subagentStartupDelayMs));
+    }
+
     void agentCommand(
       {
         message,
