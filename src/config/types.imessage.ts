@@ -31,6 +31,12 @@ export type IMessageAccountConfig = {
   region?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
+  /**
+   * Filter to only process messages sent TO these phone numbers.
+   * Useful when the Mac has multiple iMessage numbers (e.g., dual-SIM).
+   * Messages with destination_caller_id not matching any of these are ignored.
+   */
+  myNumbers?: string[];
   /** Optional allowlist for inbound handles or chat_id targets. */
   allowFrom?: Array<string | number>;
   /** Optional allowlist for group senders or chat_id targets. */

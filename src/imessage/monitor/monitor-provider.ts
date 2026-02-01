@@ -141,6 +141,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
   const dbPath = opts.dbPath ?? imessageCfg.dbPath;
 
+  // Precompute normalized myNumbers set for efficient filtering
+  const myNumbersNormalized: Set<string> | null =
+    imessageCfg.myNumbers && imessageCfg.myNumbers.length > 0
+      ? new Set(imessageCfg.myNumbers.map((n) => normalizeIMessageHandle(n)))
+      : null;
+
   // Resolve remoteHost: explicit config, or auto-detect from SSH wrapper script
   let remoteHost = imessageCfg.remoteHost;
   if (!remoteHost && cliPath && cliPath !== "imsg") {
@@ -208,6 +214,26 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const senderNormalized = normalizeIMessageHandle(sender);
     if (message.is_from_me) {
       return;
+    }
+
+    // Filter by destination phone number if myNumbers is configured.
+    // This is useful when the Mac receives messages for multiple iMessage numbers
+    // (e.g., dual-SIM setup) and you only want to respond to one of them.
+    if (myNumbersNormalized) {
+      const destinationCallerId = message.destination_caller_id;
+      if (!destinationCallerId) {
+        // If myNumbers is configured but destination_caller_id is missing (e.g., older imsg version),
+        // block the message to prevent unintended responses on other numbers.
+        logVerbose(
+          `imessage: skipping message without destination_caller_id (myNumbers filter active)`,
+        );
+        return;
+      }
+      const normalizedDest = normalizeIMessageHandle(destinationCallerId);
+      if (!myNumbersNormalized.has(normalizedDest)) {
+        logVerbose(`imessage: skipping message to ${destinationCallerId} (not in myNumbers)`);
+        return;
+      }
     }
 
     const chatId = message.chat_id ?? undefined;

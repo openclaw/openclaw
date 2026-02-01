@@ -192,8 +192,23 @@ export function registerGatewayCli(program: Command) {
   gateway
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option("--safe", "Enable automatic rollback if gateway crashes within timeout", false)
+    .option("--timeout <ms>", "Rollback timeout in ms (default: 30000, requires --safe)", "30000")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
+      if (opts.safe) {
+        const { writePendingMarker } = await import("../../config/config-pending.js");
+        const timeoutMs = Number(opts.timeout) || 30000;
+        await writePendingMarker({
+          reason: "cli: openclaw gateway restart --safe",
+          timeoutMs,
+        });
+        if (!opts.json) {
+          defaultRuntime.log(
+            `Safe restart enabled: will auto-rollback if crash within ${timeoutMs}ms`,
+          );
+        }
+      }
       await runDaemonRestart(opts);
     });
 

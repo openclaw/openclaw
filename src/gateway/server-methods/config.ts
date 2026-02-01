@@ -8,6 +8,7 @@ import {
   validateConfigObjectWithPlugins,
   writeConfigFile,
 } from "../../config/config.js";
+import { writePendingMarker } from "../../config/config-pending.js";
 import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { buildConfigSchema } from "../../config/schema.js";
@@ -263,12 +264,31 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await writeConfigFile(validated.config);
+
+    // Handle transactional config change with rollback support
+    const rollbackOnFail = (params as { rollbackOnFail?: unknown }).rollbackOnFail === true;
+    const rollbackTimeoutMsRaw = (params as { rollbackTimeoutMs?: unknown }).rollbackTimeoutMs;
+    const rollbackTimeoutMs =
+      typeof rollbackTimeoutMsRaw === "number" && Number.isFinite(rollbackTimeoutMsRaw)
+        ? Math.max(5000, Math.floor(rollbackTimeoutMsRaw))
+        : 30000;
 
     const sessionKey =
       typeof (params as { sessionKey?: unknown }).sessionKey === "string"
         ? (params as { sessionKey?: string }).sessionKey?.trim() || undefined
         : undefined;
+
+    // Write pending marker before applying config (for rollback on crash)
+    if (rollbackOnFail) {
+      await writePendingMarker({
+        timeoutMs: rollbackTimeoutMs,
+        reason: "config.patch",
+        sessionKey,
+      });
+    }
+
+    await writeConfigFile(validated.config);
+
     const note =
       typeof (params as { note?: unknown }).note === "string"
         ? (params as { note?: string }).note?.trim() || undefined
