@@ -82,6 +82,7 @@ describe("cron tool", () => {
     expect(call.method).toBe("cron.add");
     expect(call.params).toEqual({
       name: "wake-up",
+      enabled: true,
       schedule: { kind: "at", atMs: 123 },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
