@@ -6,15 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Docs: add direct BotFather link and verification reminder in Telegram setup. (#4064) Thanks @shatner.
-- Docs: add Mintlify language navigation for zh-Hans. (#6416) Thanks @joshp123.
-- Docs: add device pairing section to Control UI docs. (#5003) Thanks @baccula.
-- Docs: improve exe.dev setup instructions. (#4675) Thanks @itsjling.
-- Docs: add pnpm approve-builds step for global installs. (#5663) Thanks @sfo2001.
-- Docs: add zh-CN entrypoint translations. (#6300) Thanks @joshp123.
-- Docs: document cacheRetention parameter. (#6270) Thanks @kimitaka.
-- Docs: clarify Discord exec approvals UI. (#6550) Thanks @sebslight.
-- Docs: navigation polish + cron quick start/formatting + Moonshot markers/typos + URL/anchor fixes.
+- Docs: onboarding/install/i18n/exec-approvals/Control UI/exe.dev/cacheRetention updates + misc nav/typos.
 - Telegram: use shared pairing store. (#6127) Thanks @obviyus.
 - Agents: add OpenRouter app attribution headers. (#5050) Thanks @alexanderatallah.
 - Agents: add system prompt safety guardrails. (#5445) Thanks @joshp123.
@@ -23,10 +15,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Docs: run oxfmt to fix format checks. (#6513) Thanks @app/clawdinator.
 - Auto-reply: avoid referencing workspace files in /new greeting prompt. (#5706) Thanks @bravostation.
 - Process: resolve Windows `spawn()` failures for npm-family CLIs by appending `.cmd` when needed. (#5815) Thanks @thejhinvirtuoso.
-- Docs: update MiniMax OAuth setup commands; Extensions: use OpenClaw plugin SDK for MiniMax OAuth. (#5402) Thanks @Maosghoul.
 - Discord: resolve PluralKit proxied senders for allowlists and labels. (#5838) Thanks @thewilloftheshadow.
 - Agents: ensure OpenRouter attribution headers apply in the embedded runner.
 - Agents: cap context window resolution for compaction safeguard. (#6187) Thanks @iamEvanYT.
@@ -36,8 +26,6 @@ Docs: https://docs.openclaw.ai
 - TUI: prevent crash when searching with digits in the model selector.
 - Browser: secure Chrome extension relay CDP sessions.
 - Docker: use container port for gateway command instead of host port. (#5110) Thanks @mise42.
-- Docs: add zh-CN frontmatter titles for localized metadata. (#6487) Thanks @joshp123.
-- Docs: clarify Moonshot endpoints. (#4763) Thanks @hansbbans.
 - fix(lobster): block arbitrary exec via lobsterPath/cwd injection (GHSA-4mhr-g7xj-cg8j). (#5335) Thanks @vignesh07.
 
 ## 2026.1.30
