@@ -210,7 +210,9 @@ function resolveFallbackCandidates(params: {
     if (!resolved) {
       continue;
     }
-    addCandidate(resolved.ref, true);
+    // Fallbacks explicitly configured in agents.defaults.model.fallbacks should not
+    // be filtered by the models allowlist - they are intentional user configuration.
+    addCandidate(resolved.ref, false);
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {

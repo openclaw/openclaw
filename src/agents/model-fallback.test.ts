@@ -541,4 +541,50 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
   });
+
+  it("does not filter fallbacks by models allowlist (regression #5763)", async () => {
+    // When agents.defaults.models has entries, it creates an allowlist.
+    // Fallbacks configured in agents.defaults.model.fallbacks should NOT be
+    // filtered by this allowlist - they are explicitly configured by the user.
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-sonnet-4",
+            fallbacks: ["openai/gpt-4o", "ollama/glm-4.7:cloud"],
+          },
+          models: {
+            // This creates an allowlist that does NOT include the fallbacks
+            "anthropic/claude-opus-4-5": { alias: "opus" },
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+    const run = vi.fn().mockImplementation(async (provider, model) => {
+      calls.push({ provider, model });
+      if (provider === "anthropic") {
+        throw Object.assign(new Error("rate limited"), { status: 429 });
+      }
+      if (provider === "openai") {
+        return "ok";
+      }
+      throw new Error(`unexpected: ${provider}/${model}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    // Should try anthropic first, then fall back to openai (not filtered out)
+    expect(calls).toEqual([
+      { provider: "anthropic", model: "claude-sonnet-4" },
+      { provider: "openai", model: "gpt-4o" },
+    ]);
+  });
 });
