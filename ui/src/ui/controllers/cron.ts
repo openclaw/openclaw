@@ -92,7 +92,7 @@ export async function addCronJob(state: CronState) {
   try {
     const schedule = buildCronSchedule(state.cronForm);
     const payload = buildCronPayload(state.cronForm);
-    const agentId = state.cronForm.agentId.trim();
+    const agentId = (state.cronForm.agentId ?? "").trim();
     const job = {
       name: state.cronForm.name.trim(),
       description: state.cronForm.description.trim() || undefined,
@@ -183,5 +183,39 @@ export async function loadCronRuns(state: CronState, jobId: string) {
     state.cronRuns = Array.isArray(res.entries) ? res.entries : [];
   } catch (err) {
     state.cronError = String(err);
+  }
+}
+
+export async function updateCronJob(state: CronState, jobId: string) {
+  if (!state.client || !state.connected || state.cronBusy) return;
+  state.cronBusy = true;
+  state.cronError = null;
+  try {
+    const schedule = buildCronSchedule(state.cronForm);
+    const payload = buildCronPayload(state.cronForm);
+    const agentId = (state.cronForm.agentId ?? "").trim();
+    const patch = {
+      name: state.cronForm.name.trim(),
+      description: state.cronForm.description.trim() || undefined,
+      agentId: agentId || undefined,
+      enabled: state.cronForm.enabled,
+      schedule,
+      sessionTarget: state.cronForm.sessionTarget,
+      wakeMode: state.cronForm.wakeMode,
+      payload,
+      isolation:
+        state.cronForm.postToMainPrefix.trim() &&
+        state.cronForm.sessionTarget === "isolated"
+          ? { postToMainPrefix: state.cronForm.postToMainPrefix.trim() }
+          : undefined,
+    };
+    if (!patch.name) throw new Error("Name required.");
+    await state.client.request("cron.update", { id: jobId, patch });
+    await loadCronJobs(state);
+    await loadCronStatus(state);
+  } catch (err) {
+    state.cronError = String(err);
+  } finally {
+    state.cronBusy = false;
   }
 }
