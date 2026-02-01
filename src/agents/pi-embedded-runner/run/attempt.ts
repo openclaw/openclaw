@@ -1,12 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  SessionManager,
-  SettingsManager,
-} from "@mariozechner/pi-coding-agent";
+import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -390,7 +385,7 @@ export async function runEmbeddedAttempt(
       skillsPrompt,
       tools,
     });
-    const systemPrompt = createSystemPromptOverride(appendPrompt);
+    const _systemPrompt = createSystemPromptOverride(appendPrompt);
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -432,7 +427,7 @@ export async function runEmbeddedAttempt(
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
       });
 
-      const additionalExtensionPaths = buildEmbeddedExtensionPaths({
+      const _additionalExtensionPaths = buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
@@ -455,17 +450,6 @@ export async function runEmbeddedAttempt(
 
       const allCustomTools = [...customTools, ...clientToolDefs];
 
-      const resourceLoader = new DefaultResourceLoader({
-        cwd: resolvedWorkspace,
-        agentDir,
-        settingsManager,
-        additionalExtensionPaths,
-        noSkills: true,
-        systemPromptOverride: systemPrompt,
-        agentsFilesOverride: () => ({ agentsFiles: [] }),
-      });
-      await resourceLoader.reload();
-
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
@@ -477,7 +461,6 @@ export async function runEmbeddedAttempt(
         customTools: allCustomTools,
         sessionManager,
         settingsManager,
-        resourceLoader,
       }));
       if (!session) {
         throw new Error("Embedded agent session missing");
@@ -519,7 +502,7 @@ export async function runEmbeddedAttempt(
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
           messages: activeSession.messages,
-          system: systemPrompt,
+          system: _systemPrompt,
           note: "after session create",
         });
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);

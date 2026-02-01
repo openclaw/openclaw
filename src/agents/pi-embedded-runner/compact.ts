@@ -1,6 +1,5 @@
 import {
   createAgentSession,
-  DefaultResourceLoader,
   estimateTokens,
   SessionManager,
   SettingsManager,
@@ -348,7 +347,7 @@ export async function compactEmbeddedPiSessionDirect(
       userTimeFormat,
       contextFiles,
     });
-    const systemPrompt = createSystemPromptOverride(appendPrompt);
+    const _systemPrompt = createSystemPromptOverride(appendPrompt);
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -371,7 +370,7 @@ export async function compactEmbeddedPiSessionDirect(
         settingsManager,
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
       });
-      const additionalExtensionPaths = buildEmbeddedExtensionPaths({
+      const _additionalExtensionPaths = buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider,
@@ -384,17 +383,6 @@ export async function compactEmbeddedPiSessionDirect(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
-      const resourceLoader = new DefaultResourceLoader({
-        cwd: resolvedWorkspace,
-        agentDir,
-        settingsManager,
-        additionalExtensionPaths,
-        noSkills: true,
-        systemPromptOverride: systemPrompt,
-        agentsFilesOverride: () => ({ agentsFiles: [] }),
-      });
-      await resourceLoader.reload();
-
       const { session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
@@ -406,7 +394,6 @@ export async function compactEmbeddedPiSessionDirect(
         customTools,
         sessionManager,
         settingsManager,
-        resourceLoader,
       });
 
       try {
