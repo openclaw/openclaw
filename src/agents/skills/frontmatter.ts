@@ -95,6 +95,35 @@ function getFrontmatterValue(frontmatter: ParsedSkillFrontmatter, key: string): 
   return typeof raw === "string" ? raw : undefined;
 }
 
+/**
+ * Get metadata from frontmatter, handling both JSON5 string and YAML object formats.
+ */
+function getMetadataObject(
+  frontmatter: ParsedSkillFrontmatter,
+): Record<string, unknown> | undefined {
+  const raw = frontmatter.metadata;
+  if (!raw) return undefined;
+
+  // Handle YAML-style object metadata (preferred)
+  if (typeof raw === "object" && raw !== null) {
+    return raw as Record<string, unknown>;
+  }
+
+  // Handle legacy JSON5 string metadata
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON5.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
 function parseFrontmatterBool(value: string | undefined, fallback: boolean): boolean {
   const parsed = parseBooleanValue(value);
   return parsed === undefined ? fallback : parsed;
@@ -103,15 +132,11 @@ function parseFrontmatterBool(value: string | undefined, fallback: boolean): boo
 export function resolveOpenClawMetadata(
   frontmatter: ParsedSkillFrontmatter,
 ): OpenClawSkillMetadata | undefined {
-  const raw = getFrontmatterValue(frontmatter, "metadata");
-  if (!raw) {
+  const parsed = getMetadataObject(frontmatter);
+  if (!parsed) {
     return undefined;
   }
   try {
-    const parsed = JSON5.parse(raw);
-    if (!parsed || typeof parsed !== "object") {
-      return undefined;
-    }
     const metadataRawCandidates = [MANIFEST_KEY, ...LEGACY_MANIFEST_KEYS];
     let metadataRaw: unknown;
     for (const key of metadataRawCandidates) {
@@ -193,11 +218,10 @@ function parseSensitiveDataFlags(
 export function parsePermissionManifest(
   frontmatter: ParsedSkillFrontmatter,
 ): SkillPermissionManifest | undefined {
-  const raw = getFrontmatterValue(frontmatter, "metadata");
-  if (!raw) return undefined;
+  const parsed = getMetadataObject(frontmatter);
+  if (!parsed) return undefined;
 
   try {
-    const parsed = JSON5.parse(raw) as Record<string, unknown>;
     const metadataRawCandidates = [MANIFEST_KEY, ...LEGACY_MANIFEST_KEYS];
     let openclawMeta: Record<string, unknown> | undefined;
 

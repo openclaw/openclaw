@@ -8,7 +8,7 @@ import type {
  * High-risk patterns that warrant warnings.
  */
 const HIGH_RISK_FILESYSTEM_PATTERNS = [
-  /^(read|write|readwrite):~?\/?\./, // Dotfiles
+  /^(read|write|readwrite):(?:.*\/)?\.[a-zA-Z]/, // Dotfiles (e.g., .env, ~/.ssh, but not ./data)
   /^(read|write|readwrite):~?\/?(\.ssh|\.gnupg|\.aws)/, // Credential dirs
   /^(read|write|readwrite):~?\/?\.env/, // Env files
   /^(read|write|readwrite):\*\*/, // Recursive wildcards

@@ -950,17 +950,22 @@ export function registerSkillsCli(program: Command) {
 
         if (opts.output) {
           // Security: Validate output path is within skill directory or current working directory
-          const outputPath = path.resolve(opts.output);
+          let outputPath = path.resolve(opts.output);
           const skillDir = path.dirname(skill.filePath);
           const cwd = process.cwd();
+
+          // If output path is a directory, append default filename
+          if (fs.existsSync(outputPath) && fs.statSync(outputPath).isDirectory()) {
+            outputPath = path.join(outputPath, "manifest.yaml");
+          }
 
           // Check if output path is within allowed directories
           const isInSkillDir = outputPath.startsWith(path.resolve(skillDir) + path.sep);
           const isInCwd = outputPath.startsWith(path.resolve(cwd) + path.sep);
-          const isSkillDirItself = outputPath === path.resolve(skillDir);
-          const isCwdItself = outputPath === path.resolve(cwd);
+          const isSkillDirExact = outputPath === path.resolve(skillDir);
+          const isCwdExact = outputPath === path.resolve(cwd);
 
-          if (!isInSkillDir && !isInCwd && !isSkillDirItself && !isCwdItself) {
+          if (!isInSkillDir && !isInCwd && !isSkillDirExact && !isCwdExact) {
             defaultRuntime.error(
               `Output path must be within the skill directory (${shortenHomePath(skillDir)}) or current working directory.`,
             );
