@@ -8,8 +8,9 @@ read_when:
 
 Moltbot on Windows is recommended **via WSL2** (Ubuntu recommended). The
 CLI + Gateway run inside Linux, which keeps the runtime consistent and makes
-tooling far more compatible (Node/Bun/pnpm, Linux binaries, skills). WSL2 gives
-you the full Linux experience on Windows — one command to install: `wsl --install`.
+tooling far more compatible (Node/Bun/pnpm, Linux binaries, skills). Native Windows
+might be trickier. WSL2 gives you the full Linux experience on Windows — one command
+to install: `wsl --install`.
 
 Native Windows companion apps are planned.
 
