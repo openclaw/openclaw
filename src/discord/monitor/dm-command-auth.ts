@@ -8,7 +8,7 @@ import { normalizeDiscordAllowList, resolveDiscordAllowListMatch } from "./allow
 
 const DISCORD_ALLOW_LIST_PREFIXES = ["discord:", "user:", "pk:"];
 
-export type DiscordDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
+export type DiscordDmPolicy = "open" | "pairing" | "allowlist" | "disabled" | "confirming";
 
 export type DiscordDmCommandAccess = {
   decision: DmGroupAccessDecision;

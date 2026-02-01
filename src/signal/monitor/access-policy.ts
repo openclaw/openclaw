@@ -6,7 +6,7 @@ import {
 } from "../../security/dm-policy-shared.js";
 import { isSignalSenderAllowed, type SignalSender } from "../identity.js";
 
-type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
+type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled" | "confirming";
 type SignalGroupPolicy = "open" | "allowlist" | "disabled";
 
 export async function resolveSignalAccessState(params: {

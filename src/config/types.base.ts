@@ -6,7 +6,20 @@ export type SessionScope = "per-sender" | "global";
 export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
 export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
-export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
+export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled" | "confirming";
+
+export type ConfirmingTimeoutAction = "queue" | "reject" | "auto-approve";
+
+export type ConfirmingConfig = {
+  /** Chat ID where approval requests are sent (required when dmPolicy is "confirming"). */
+  ownerChat: string;
+  /** Timeout in seconds before onTimeout action is triggered (default: 3600 = 1 hour). */
+  timeout?: number;
+  /** Action when timeout is reached (default: "queue"). */
+  onTimeout?: ConfirmingTimeoutAction;
+  /** Include the original message in the approval request (default: true). */
+  includeMessage?: boolean;
+};
 
 export type OutboundRetryConfig = {
   /** Max retry attempts for outbound requests (default: 3). */

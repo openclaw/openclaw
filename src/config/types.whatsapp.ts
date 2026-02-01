@@ -1,5 +1,6 @@
 import type {
   BlockStreamingCoalesceConfig,
+  ConfirmingConfig,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -12,6 +13,12 @@ export type WhatsAppActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
   polls?: boolean;
+};
+
+export type WhatsAppPairingConfig = {
+  notifyOwner?: boolean;
+  ownerChat?: string;
+  includeMessage?: boolean;
 };
 
 export type WhatsAppGroupConfig = {
@@ -40,6 +47,10 @@ type WhatsAppSharedConfig = {
   enabled?: boolean;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
+  /** Pairing mode configuration (owner notifications). */
+  pairing?: WhatsAppPairingConfig;
+  /** Confirming mode configuration (owner-approved responses). */
+  confirming?: ConfirmingConfig;
   /** Same-phone setup (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
   /** Optional allowlist for WhatsApp direct chats (E.164). */

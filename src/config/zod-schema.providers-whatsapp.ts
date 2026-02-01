@@ -3,6 +3,7 @@ import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import {
   BlockStreamingCoalesceSchema,
+  ConfirmingConfigSchema,
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
@@ -10,6 +11,23 @@ import {
 } from "./zod-schema.core.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+
+const WhatsAppPairingConfigSchema = z
+  .object({
+    notifyOwner: z.boolean().optional().default(false),
+    ownerChat: z.string().optional(),
+    includeMessage: z.boolean().optional().default(true),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.notifyOwner && !value.ownerChat) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownerChat"],
+        message: "ownerChat is required when notifyOwner is true",
+      });
+    }
+  });
 
 const WhatsAppGroupEntrySchema = z
   .object({
@@ -40,6 +58,8 @@ const WhatsAppSharedSchema = z.object({
   messagePrefix: z.string().optional(),
   responsePrefix: z.string().optional(),
   dmPolicy: DmPolicySchema.optional().default("pairing"),
+  pairing: WhatsAppPairingConfigSchema.optional(),
+  confirming: ConfirmingConfigSchema.optional(),
   selfChatMode: z.boolean().optional(),
   allowFrom: z.array(z.string()).optional(),
   defaultTo: z.string().optional(),
@@ -141,6 +161,14 @@ export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
       message:
         'channels.whatsapp.dmPolicy="allowlist" requires channels.whatsapp.allowFrom to contain at least one sender ID',
     });
+    // Validate dmPolicy="confirming" requires confirming.ownerChat
+    if (value.dmPolicy === "confirming" && !value.confirming?.ownerChat) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["confirming", "ownerChat"],
+        message: 'dmPolicy="confirming" requires confirming.ownerChat to be set',
+      });
+    }
     if (!value.accounts) {
       return;
     }
@@ -166,5 +194,16 @@ export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
         message:
           'channels.whatsapp.accounts.*.dmPolicy="allowlist" requires channels.whatsapp.accounts.*.allowFrom (or channels.whatsapp.allowFrom) to contain at least one sender ID',
       });
+      // Per-account confirming validation
+      if (effectivePolicy === "confirming") {
+        const effectiveConfirming = account.confirming ?? value.confirming;
+        if (!effectiveConfirming?.ownerChat) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["accounts", accountId, "confirming", "ownerChat"],
+            message: 'dmPolicy="confirming" requires confirming.ownerChat to be set',
+          });
+        }
+      }
     }
   });
