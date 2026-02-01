@@ -596,14 +596,20 @@ export async function startGatewayServer(
     );
 
     // Inject wake event to notify the session
+    // TODO: Support session-targeted notifications when sessionKey is available
+    const sessionNote = rollbackResult.sessionKey
+      ? `**Triggered by session:** ${rollbackResult.sessionKey}\n`
+      : "";
     const wakeText =
       `⚠️ **Config Rollback Triggered**\n\n` +
       `A config change caused the gateway to crash on startup.\n` +
       `**Reason:** ${rollbackResult.reason ?? "config.patch"}\n` +
-      `**Previous config restored from:** ~/.openclaw/openclaw.json.bak\n` +
+      sessionNote +
+      `**Previous config restored from:** ~/.openclaw/openclaw.json.verified\n` +
       (rollbackResult.failedConfigPath
         ? `**Failed config saved to:** ${rollbackResult.failedConfigPath}\n`
         : "") +
+      (rollbackResult.distRolledBack ? `**Code (dist/) also rolled back**\n` : "") +
       `\nTo investigate, check the failed config and logs.`;
 
     try {

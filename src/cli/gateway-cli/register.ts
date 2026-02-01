@@ -194,10 +194,50 @@ export function registerGatewayCli(program: Command) {
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
     .option("--safe", "Enable automatic rollback if gateway crashes within timeout", false)
     .option("--timeout <ms>", "Rollback timeout in ms (default: 30000, requires --safe)", "30000")
+    .option("--no-wait-idle", "Skip waiting for active sessions to finish (not recommended)")
+    .option(
+      "--wait-timeout <ms>",
+      "Max time to wait for sessions to idle (default: 60000)",
+      "60000",
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       if (opts.safe) {
+        const { getActiveSessionCount, getActiveSessionIds, waitForAllSessionsIdle } =
+          await import("../../agents/pi-embedded.js");
         const { writePendingMarker } = await import("../../config/config-pending.js");
+
+        // Wait for all sessions to be idle before restarting (default behavior)
+        if (opts.waitIdle !== false) {
+          const activeCount = getActiveSessionCount();
+          if (activeCount > 0) {
+            const activeIds = getActiveSessionIds();
+            if (!opts.json) {
+              defaultRuntime.log(
+                `Waiting for ${activeCount} active session(s) to finish: ${activeIds.slice(0, 3).join(", ")}${activeIds.length > 3 ? "..." : ""}`,
+              );
+            }
+            const waitTimeoutMs = Number(opts.waitTimeout) || 60000;
+            const allIdle = await waitForAllSessionsIdle(waitTimeoutMs);
+            if (!allIdle) {
+              const remaining = getActiveSessionIds();
+              if (!opts.json) {
+                defaultRuntime.error(
+                  `Timeout waiting for sessions to idle. ${remaining.length} still active: ${remaining.slice(0, 3).join(", ")}`,
+                );
+                defaultRuntime.log(
+                  "Use --no-wait-idle to force restart (may interrupt active work)",
+                );
+              }
+              defaultRuntime.exit(1);
+              return;
+            }
+            if (!opts.json) {
+              defaultRuntime.log("All sessions idle, proceeding with restart...");
+            }
+          }
+        }
+
         const timeoutMs = Number(opts.timeout) || 30000;
         await writePendingMarker({
           reason: "cli: openclaw gateway restart --safe",

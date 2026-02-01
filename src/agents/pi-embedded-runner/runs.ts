@@ -137,4 +137,41 @@ export function clearActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueu
   }
 }
 
+/**
+ * Get the count of currently active sessions.
+ */
+export function getActiveSessionCount(): number {
+  return ACTIVE_EMBEDDED_RUNS.size;
+}
+
+/**
+ * Get the IDs of all currently active sessions.
+ */
+export function getActiveSessionIds(): string[] {
+  return Array.from(ACTIVE_EMBEDDED_RUNS.keys());
+}
+
+/**
+ * Wait for all sessions to become idle.
+ * @returns true if all sessions are idle, false if timeout reached
+ */
+export async function waitForAllSessionsIdle(timeoutMs = 30000): Promise<boolean> {
+  const startTime = Date.now();
+  const pollIntervalMs = 250;
+
+  while (Date.now() - startTime < timeoutMs) {
+    const activeCount = ACTIVE_EMBEDDED_RUNS.size;
+    if (activeCount === 0) {
+      diag.debug("all sessions idle");
+      return true;
+    }
+    diag.debug(`waiting for idle: activeCount=${activeCount} elapsed=${Date.now() - startTime}ms`);
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  const remaining = getActiveSessionIds();
+  diag.warn(`wait for idle timeout: remaining=${remaining.length} sessions=${remaining.join(",")}`);
+  return false;
+}
+
 export type { EmbeddedPiQueueHandle };
