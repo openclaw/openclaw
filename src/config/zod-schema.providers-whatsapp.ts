@@ -11,6 +11,26 @@ import {
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
+const WhatsAppPairingConfigSchema = z
+  .object({
+    /** Notify the owner when a new pairing request is received. Default: false. */
+    notifyOwner: z.boolean().optional().default(false),
+    /** Chat JID to send pairing notifications to (e.g., "554788703000@s.whatsapp.net"). */
+    ownerChat: z.string().optional(),
+    /** Include the original message content in the notification. Default: true. */
+    includeMessage: z.boolean().optional().default(true),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.notifyOwner && !value.ownerChat) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ownerChat"],
+        message: "ownerChat is required when notifyOwner is true",
+      });
+    }
+  });
+
 const WhatsAppGroupEntrySchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -40,6 +60,7 @@ const WhatsAppSharedSchema = z.object({
   messagePrefix: z.string().optional(),
   responsePrefix: z.string().optional(),
   dmPolicy: DmPolicySchema.optional().default("pairing"),
+  pairing: WhatsAppPairingConfigSchema.optional(),
   selfChatMode: z.boolean().optional(),
   allowFrom: z.array(z.string()).optional(),
   defaultTo: z.string().optional(),
