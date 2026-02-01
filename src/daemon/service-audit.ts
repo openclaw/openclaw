@@ -216,9 +216,9 @@ function getPathModule(platform: NodeJS.Platform) {
 
 function normalizePathEntry(entry: string, platform: NodeJS.Platform): string {
   const pathModule = getPathModule(platform);
-  const normalized = pathModule.normalize(entry).replaceAll("\\", "/");
+  const normalized = pathModule.normalize(entry);
   if (platform === "win32") {
-    return normalized.toLowerCase();
+    return normalized.replaceAll("\\", "/").toLowerCase();
   }
   return normalized;
 }
