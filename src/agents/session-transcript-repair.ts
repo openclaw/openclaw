@@ -128,6 +128,16 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     }
 
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+
+    // Skip error/aborted assistant messages - do not extract tool calls from them
+    // as they may contain incomplete/invalid tool_use blocks that would cause
+    // orphan tool_result entries after transformMessages() drops the errored assistant
+    const stopReason = (assistant as { stopReason?: string }).stopReason;
+    if (stopReason === "error" || stopReason === "aborted") {
+      out.push(msg);
+      continue;
+    }
+
     const toolCalls = extractToolCallsFromAssistant(assistant);
     if (toolCalls.length === 0) {
       out.push(msg);

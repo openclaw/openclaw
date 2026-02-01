@@ -109,4 +109,75 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out.some((m) => m.role === "toolResult")).toBe(false);
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
+
+  it("skips tool call extraction for error assistant messages", () => {
+    const input = [
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "Request terminated",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      { role: "user", content: "retry" },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    // Should not insert synthetic tool_result for errored assistant
+    expect(out.filter((m) => m.role === "toolResult")).toHaveLength(0);
+    expect(out.map((m) => m.role)).toEqual(["assistant", "user"]);
+  });
+
+  it("skips tool call extraction for aborted assistant messages", () => {
+    const input = [
+      {
+        role: "assistant",
+        stopReason: "aborted",
+        content: [{ type: "toolCall", id: "call_1", name: "exec", arguments: {} }],
+      },
+      { role: "user", content: "continue" },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out.filter((m) => m.role === "toolResult")).toHaveLength(0);
+    expect(out.map((m) => m.role)).toEqual(["assistant", "user"]);
+  });
+
+  it("still repairs normal assistant messages with tool calls", () => {
+    const input = [
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      { role: "user", content: "ok" },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    // Should insert synthetic tool_result for normal assistant
+    expect(out.filter((m) => m.role === "toolResult")).toHaveLength(1);
+  });
+
+  it("handles mixed error and normal assistant messages", () => {
+    const input = [
+      {
+        role: "assistant",
+        stopReason: "error",
+        content: [{ type: "toolCall", id: "call_error", name: "read", arguments: {} }],
+      },
+      { role: "user", content: "retry" },
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [{ type: "toolCall", id: "call_ok", name: "read", arguments: {} }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    const results = out.filter((m) => m.role === "toolResult") as Array<{
+      toolCallId?: string;
+    }>;
+    // Only the normal assistant should get a synthetic tool_result
+    expect(results).toHaveLength(1);
+    expect(results[0]?.toolCallId).toBe("call_ok");
+  });
 });
