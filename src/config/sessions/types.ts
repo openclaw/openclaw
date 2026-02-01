@@ -80,6 +80,8 @@ export type SessionEntry = {
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
+  /** Thread starter body preserved for thread sessions (for context on subsequent messages). */
+  threadStarterBody?: string;
   channel?: string;
   groupId?: string;
   subject?: string;

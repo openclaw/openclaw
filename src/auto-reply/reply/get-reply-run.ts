@@ -226,11 +226,12 @@ export async function runPreparedReply(
     isNewSession,
     prefixedBodyBase,
   });
-  const threadStarterBody = ctx.ThreadStarterBody?.trim();
-  const threadStarterNote =
-    isNewSession && threadStarterBody
-      ? `[Thread starter - for context]\n${threadStarterBody}`
-      : undefined;
+  // Use persisted threadStarterBody from session entry (survives across messages),
+  // falling back to ctx for the first message before session is updated.
+  const threadStarterBody = sessionEntry?.threadStarterBody ?? ctx.ThreadStarterBody?.trim();
+  const threadStarterNote = threadStarterBody
+    ? `[Thread starter - for context]\n${threadStarterBody}`
+    : undefined;
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,

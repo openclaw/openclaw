@@ -306,6 +306,14 @@ export async function initSessionState(params: {
   if (threadLabel) {
     sessionEntry.displayName = threadLabel;
   }
+  // Persist thread starter body for subsequent messages in the thread.
+  // On new session: store from ctx. On existing session: preserve from baseEntry.
+  const threadStarterBody = ctx.ThreadStarterBody?.trim();
+  if (isNewSession && threadStarterBody) {
+    sessionEntry.threadStarterBody = threadStarterBody;
+  } else if (baseEntry?.threadStarterBody) {
+    sessionEntry.threadStarterBody = baseEntry.threadStarterBody;
+  }
   const parentSessionKey = ctx.ParentSessionKey?.trim();
   if (
     isNewSession &&
