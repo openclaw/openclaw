@@ -121,6 +121,25 @@ describe("web_search country and language parameters", () => {
     expect(mockFetch).not.toHaveBeenCalled();
     expect(result?.details).toMatchObject({ error: "invalid_freshness" });
   });
+
+  it("should include Cache-Control: no-cache header in Brave API requests", async () => {
+    const mockFetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ web: { results: [] } }),
+      } as Response),
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+    await tool?.execute?.(1, { query: "test" });
+
+    expect(mockFetch).toHaveBeenCalled();
+    const fetchOptions = mockFetch.mock.calls[0][1] as RequestInit;
+    expect(fetchOptions.headers).toBeDefined();
+    expect((fetchOptions.headers as Record<string, string>)["Cache-Control"]).toBe("no-cache");
+  });
 });
 
 describe("web_search perplexity baseUrl defaults", () => {
