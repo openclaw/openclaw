@@ -178,7 +178,7 @@ export function buildAuthChoiceOptions(params: {
   options.push({
     value: "minimax-portal",
     label: "MiniMax OAuth",
-    hint: "OAuth new users enjoy a 3-day free trial of the MiniMax Coding Plan!",
+    hint: "Oauth plugin for MiniMax",
   });
   options.push({ value: "qwen-portal", label: "Qwen OAuth" });
   options.push({
