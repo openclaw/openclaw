@@ -162,6 +162,16 @@ export function resolveOutboundTarget(params: {
 
   const trimmed = params.to?.trim();
   if (trimmed) {
+    const mode = params.mode ?? "explicit";
+    if (allowFrom && allowFrom.length > 0 && !allowFrom.includes("*")) {
+      const list = allowFrom.map((e) => String(e).trim()).filter(Boolean);
+      if (list.includes(trimmed)) return { ok: true, to: trimmed };
+      if (mode === "implicit" || mode === "heartbeat") {
+        const fallback = list[0];
+        if (fallback) return { ok: true, to: fallback };
+      }
+      return { ok: false, error: new Error(`Target ${trimmed} is not in the allowFrom list.`) };
+    }
     return { ok: true, to: trimmed };
   }
   const hint = plugin.messaging?.targetResolver?.hint;

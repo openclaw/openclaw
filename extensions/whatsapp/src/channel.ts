@@ -314,18 +314,24 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
           };
         }
         if (isWhatsAppGroupJid(normalizedTo)) {
+          if (hasWildcard || allowList.length === 0 || allowList.includes(normalizedTo)) {
+            return { ok: true, to: normalizedTo };
+          }
+          return {
+            ok: false,
+            error: new Error(`WhatsApp group ${trimmed} is not in the allowFrom list.`),
+          };
+        }
+        if (hasWildcard || allowList.length === 0 || allowList.includes(normalizedTo)) {
           return { ok: true, to: normalizedTo };
         }
         if (mode === "implicit" || mode === "heartbeat") {
-          if (hasWildcard || allowList.length === 0) {
-            return { ok: true, to: normalizedTo };
-          }
-          if (allowList.includes(normalizedTo)) {
-            return { ok: true, to: normalizedTo };
-          }
           return { ok: true, to: allowList[0] };
         }
-        return { ok: true, to: normalizedTo };
+        return {
+          ok: false,
+          error: new Error(`WhatsApp target ${trimmed} is not in the allowFrom list.`),
+        };
       }
 
       if (allowList.length > 0) {

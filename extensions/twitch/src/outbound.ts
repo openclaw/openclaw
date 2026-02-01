@@ -51,25 +51,19 @@ export const twitchOutbound: ChannelOutboundAdapter = {
       .map((entry: string) => normalizeTwitchChannel(entry))
       .filter((entry): entry is string => entry.length > 0);
 
-    // If target is provided, normalize and validate it
     if (trimmed) {
       const normalizedTo = normalizeTwitchChannel(trimmed);
-
-      // For implicit/heartbeat modes with allowList, check against allowlist
+      if (hasWildcard || allowList.length === 0 || allowList.includes(normalizedTo)) {
+        return { ok: true, to: normalizedTo };
+      }
       if (mode === "implicit" || mode === "heartbeat") {
-        if (hasWildcard || allowList.length === 0) {
-          return { ok: true, to: normalizedTo };
-        }
-        if (allowList.includes(normalizedTo)) {
-          return { ok: true, to: normalizedTo };
-        }
-        // Fallback to first allowFrom entry
         // biome-ignore lint/style/noNonNullAssertion: length > 0 check ensures element exists
         return { ok: true, to: allowList[0] };
       }
-
-      // For explicit mode, accept any valid channel name
-      return { ok: true, to: normalizedTo };
+      return {
+        ok: false,
+        error: new Error(`Twitch target ${trimmed} is not in the allowFrom list.`),
+      };
     }
 
     // No target provided, use allowFrom fallback

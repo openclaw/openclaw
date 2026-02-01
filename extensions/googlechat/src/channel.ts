@@ -396,7 +396,17 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
             ),
           };
         }
-        return { ok: true, to: normalized };
+        const hasWildcard = allowListRaw.includes("*");
+        if (hasWildcard || allowList.length === 0 || allowList.includes(normalized)) {
+          return { ok: true, to: normalized };
+        }
+        if (mode === "implicit" || mode === "heartbeat") {
+          return { ok: true, to: allowList[0] };
+        }
+        return {
+          ok: false,
+          error: new Error(`Google Chat target ${trimmed} is not in the allowFrom list.`),
+        };
       }
 
       if (allowList.length > 0) {

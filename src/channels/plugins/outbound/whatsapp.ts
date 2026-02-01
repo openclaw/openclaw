@@ -35,18 +35,31 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
         };
       }
       if (isWhatsAppGroupJid(normalizedTo)) {
+        // Groups also restricted to allowlist when configured
+        if (hasWildcard || allowList.length === 0 || allowList.includes(normalizedTo)) {
+          return { ok: true, to: normalizedTo };
+        }
+        return {
+          ok: false,
+          error: new Error(`WhatsApp group ${trimmed} is not in the allowFrom list.`),
+        };
+      }
+      if (hasWildcard || allowList.length === 0) {
         return { ok: true, to: normalizedTo };
       }
+      if (allowList.includes(normalizedTo)) {
+        return { ok: true, to: normalizedTo };
+      }
+      // Target not in allowlist — fallback for implicit, reject for explicit
       if (mode === "implicit" || mode === "heartbeat") {
-        if (hasWildcard || allowList.length === 0) {
-          return { ok: true, to: normalizedTo };
-        }
-        if (allowList.includes(normalizedTo)) {
-          return { ok: true, to: normalizedTo };
-        }
         return { ok: true, to: allowList[0] };
       }
-      return { ok: true, to: normalizedTo };
+      return {
+        ok: false,
+        error: new Error(
+          `WhatsApp target ${trimmed} is not in the allowFrom list. Allowed: ${allowListRaw.join(", ")}`,
+        ),
+      };
     }
 
     if (allowList.length > 0) {
