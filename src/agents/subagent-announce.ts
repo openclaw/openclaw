@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-
+import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -8,9 +8,8 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
-import { normalizeMainKey } from "../routing/session-key.js";
-import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { callGateway } from "../gateway/call.js";
+import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   type DeliveryContext,
@@ -23,27 +22,45 @@ import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-que
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 
 function formatDurationShort(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) return undefined;
+  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
+    return undefined;
+  }
   const totalSeconds = Math.round(valueMs / 1000);
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h${minutes}m`;
-  if (minutes > 0) return `${minutes}m${seconds}s`;
+  if (hours > 0) {
+    return `${hours}h${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m${seconds}s`;
+  }
   return `${seconds}s`;
 }
 
 function formatTokenCount(value?: number) {
-  if (!value || !Number.isFinite(value)) return "0";
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  if (!value || !Number.isFinite(value)) {
+    return "0";
+  }
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1)}m`;
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(1)}k`;
+  }
   return String(Math.round(value));
 }
 
 function formatUsd(value?: number) {
-  if (value === undefined || !Number.isFinite(value)) return undefined;
-  if (value >= 1) return `$${value.toFixed(2)}`;
-  if (value >= 0.01) return `$${value.toFixed(2)}`;
+  if (value === undefined || !Number.isFinite(value)) {
+    return undefined;
+  }
+  if (value >= 1) {
+    return `$${value.toFixed(2)}`;
+  }
+  if (value >= 0.01) {
+    return `$${value.toFixed(2)}`;
+  }
   return `$${value.toFixed(4)}`;
 }
 
@@ -61,7 +78,9 @@ function resolveModelCost(params: {
   | undefined {
   const provider = params.provider?.trim();
   const model = params.model?.trim();
-  if (!provider || !model) return undefined;
+  if (!provider || !model) {
+    return undefined;
+  }
   const models = params.config.models?.providers?.[provider]?.models ?? [];
   const entry = models.find((candidate) => candidate.id === model);
   return entry?.cost;
@@ -72,17 +91,23 @@ async function waitForSessionUsage(params: { sessionKey: string }) {
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   let entry = loadSessionStore(storePath)[params.sessionKey];
-  if (!entry) return { entry, storePath };
+  if (!entry) {
+    return { entry, storePath };
+  }
   const hasTokens = () =>
     entry &&
     (typeof entry.totalTokens === "number" ||
       typeof entry.inputTokens === "number" ||
       typeof entry.outputTokens === "number");
-  if (hasTokens()) return { entry, storePath };
+  if (hasTokens()) {
+    return { entry, storePath };
+  }
   for (let attempt = 0; attempt < 4; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 200));
     entry = loadSessionStore(storePath)[params.sessionKey];
-    if (hasTokens()) break;
+    if (hasTokens()) {
+      break;
+    }
   }
   return { entry, storePath };
 }
@@ -93,7 +118,10 @@ function resolveAnnounceOrigin(
   entry?: DeliveryContextSource,
   requesterOrigin?: DeliveryContext,
 ): DeliveryContext | undefined {
-  return mergeDeliveryContext(deliveryContextFromSession(entry), requesterOrigin);
+  // requesterOrigin (captured at spawn time) reflects the channel the user is
+  // actually on and must take priority over the session entry, which may carry
+  // stale lastChannel / lastTo values from a previous channel interaction.
+  return mergeDeliveryContext(requesterOrigin, deliveryContextFromSession(entry));
 }
 
 async function sendAnnounce(item: AnnounceQueueItem) {
@@ -122,9 +150,15 @@ function resolveRequesterStoreKey(
   requesterSessionKey: string,
 ): string {
   const raw = requesterSessionKey.trim();
-  if (!raw) return raw;
-  if (raw === "global" || raw === "unknown") return raw;
-  if (raw.startsWith("agent:")) return raw;
+  if (!raw) {
+    return raw;
+  }
+  if (raw === "global" || raw === "unknown") {
+    return raw;
+  }
+  if (raw.startsWith("agent:")) {
+    return raw;
+  }
   const mainKey = normalizeMainKey(cfg.session?.mainKey);
   if (raw === "main" || raw === mainKey) {
     return resolveMainSessionKey(cfg);
@@ -152,7 +186,9 @@ async function maybeQueueSubagentAnnounce(params: {
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
   const sessionId = entry?.sessionId;
-  if (!sessionId) return "none";
+  if (!sessionId) {
+    return "none";
+  }
 
   const queueSettings = resolveQueueSettings({
     cfg,
@@ -164,7 +200,9 @@ async function maybeQueueSubagentAnnounce(params: {
   const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
   if (shouldSteer) {
     const steered = queueEmbeddedPiMessage(sessionId, params.triggerMessage);
-    if (steered) return "steered";
+    if (steered) {
+      return "steered";
+    }
   }
 
   const shouldFollowup =
@@ -236,10 +274,16 @@ async function buildSubagentStatsLine(params: {
     parts.push("tokens n/a");
   }
   const costText = formatUsd(cost);
-  if (costText) parts.push(`est ${costText}`);
+  if (costText) {
+    parts.push(`est ${costText}`);
+  }
   parts.push(`sessionKey ${params.sessionKey}`);
-  if (sessionId) parts.push(`sessionId ${sessionId}`);
-  if (transcriptPath) parts.push(`transcript ${transcriptPath}`);
+  if (sessionId) {
+    parts.push(`sessionId ${sessionId}`);
+  }
+  if (transcriptPath) {
+    parts.push(`transcript ${transcriptPath}`);
+  }
 
   return `Stats: ${parts.join(" \u2022 ")}`;
 }
@@ -324,23 +368,24 @@ export async function runSubagentAnnounceFlow(params: {
     let outcome: SubagentRunOutcome | undefined = params.outcome;
     if (!reply && params.waitForCompletion !== false) {
       const waitMs = Math.min(params.timeoutMs, 60_000);
-      const wait = (await callGateway({
+      const wait = await callGateway<{
+        status?: string;
+        startedAt?: number;
+        endedAt?: number;
+        error?: string;
+      }>({
         method: "agent.wait",
         params: {
           runId: params.childRunId,
           timeoutMs: waitMs,
         },
         timeoutMs: waitMs + 2000,
-      })) as {
-        status?: string;
-        error?: string;
-        startedAt?: number;
-        endedAt?: number;
-      };
+      });
+      const waitError = typeof wait?.error === "string" ? wait.error : undefined;
       if (wait?.status === "timeout") {
         outcome = { status: "timeout" };
       } else if (wait?.status === "error") {
-        outcome = { status: "error", error: wait.error };
+        outcome = { status: "error", error: waitError };
       } else if (wait?.status === "ok") {
         outcome = { status: "ok" };
       }
@@ -351,7 +396,9 @@ export async function runSubagentAnnounceFlow(params: {
         params.endedAt = wait.endedAt;
       }
       if (wait?.status === "timeout") {
-        if (!outcome) outcome = { status: "timeout" };
+        if (!outcome) {
+          outcome = { status: "timeout" };
+        }
       }
       reply = await readLatestAssistantReply({
         sessionKey: params.childSessionKey,
@@ -364,7 +411,9 @@ export async function runSubagentAnnounceFlow(params: {
       });
     }
 
-    if (!outcome) outcome = { status: "unknown" };
+    if (!outcome) {
+      outcome = { status: "unknown" };
+    }
 
     // Build stats
     const statsLine = await buildSubagentStatsLine({

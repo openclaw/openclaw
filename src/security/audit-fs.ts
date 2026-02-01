@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-
 import {
   formatIcaclsResetCommand,
   formatWindowsAclSummary,
@@ -153,31 +152,43 @@ export function formatPermissionRemediation(params: {
 }
 
 export function modeBits(mode: number | null): number | null {
-  if (mode == null) return null;
+  if (mode == null) {
+    return null;
+  }
   return mode & 0o777;
 }
 
 export function formatOctal(bits: number | null): string {
-  if (bits == null) return "unknown";
+  if (bits == null) {
+    return "unknown";
+  }
   return bits.toString(8).padStart(3, "0");
 }
 
 export function isWorldWritable(bits: number | null): boolean {
-  if (bits == null) return false;
+  if (bits == null) {
+    return false;
+  }
   return (bits & 0o002) !== 0;
 }
 
 export function isGroupWritable(bits: number | null): boolean {
-  if (bits == null) return false;
+  if (bits == null) {
+    return false;
+  }
   return (bits & 0o020) !== 0;
 }
 
 export function isWorldReadable(bits: number | null): boolean {
-  if (bits == null) return false;
+  if (bits == null) {
+    return false;
+  }
   return (bits & 0o004) !== 0;
 }
 
 export function isGroupReadable(bits: number | null): boolean {
-  if (bits == null) return false;
+  if (bits == null) {
+    return false;
+  }
   return (bits & 0o040) !== 0;
 }

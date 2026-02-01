@@ -1,7 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import * as readline from "node:readline";
-import { Readable, Writable } from "node:stream";
-
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
@@ -9,7 +5,9 @@ import {
   type RequestPermissionRequest,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
-
+import { spawn, type ChildProcess } from "node:child_process";
+import * as readline from "node:readline";
+import { Readable, Writable } from "node:stream";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 
 export type AcpClientOptions = {
@@ -27,7 +25,9 @@ export type AcpClientHandle = {
 };
 
 function toArgs(value: string[] | string | undefined): string[] {
-  if (!value) return [];
+  if (!value) {
+    return [];
+  }
   return Array.isArray(value) ? value : [value];
 }
 
@@ -41,7 +41,9 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
 
 function printSessionUpdate(notification: SessionNotification): void {
   const update = notification.update;
-  if (!("sessionUpdate" in update)) return;
+  if (!("sessionUpdate" in update)) {
+    return;
+  }
 
   switch (update.sessionUpdate) {
     case "agent_message_chunk": {
@@ -62,7 +64,9 @@ function printSessionUpdate(notification: SessionNotification): void {
     }
     case "available_commands_update": {
       const names = update.availableCommands?.map((cmd) => `/${cmd.name}`).join(" ");
-      if (names) console.log(`\n[commands] ${names}`);
+      if (names) {
+        console.log(`\n[commands] ${names}`);
+      }
       return;
     }
     default:

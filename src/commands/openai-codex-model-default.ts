@@ -5,15 +5,23 @@ export const OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.2";
 
 function shouldSetOpenAICodexModel(model?: string): boolean {
   const trimmed = model?.trim();
-  if (!trimmed) return true;
+  if (!trimmed) {
+    return true;
+  }
   const normalized = trimmed.toLowerCase();
-  if (normalized.startsWith("openai-codex/")) return false;
-  if (normalized.startsWith("openai/")) return true;
+  if (normalized.startsWith("openai-codex/")) {
+    return false;
+  }
+  if (normalized.startsWith("openai/")) {
+    return true;
+  }
   return normalized === "gpt" || normalized === "gpt-mini";
 }
 
 function resolvePrimaryModel(model?: AgentModelListConfig | string): string | undefined {
-  if (typeof model === "string") return model;
+  if (typeof model === "string") {
+    return model;
+  }
   if (model && typeof model === "object" && typeof model.primary === "string") {
     return model.primary;
   }

@@ -3,6 +3,7 @@ summary: "CLI onboarding wizard: guided setup for gateway, workspace, channels, 
 read_when:
   - Running or configuring the onboarding wizard
   - Setting up a new machine
+title: "Onboarding Wizard"
 ---
 
 # Onboarding Wizard (CLI)
@@ -36,6 +37,7 @@ which stores `tools.web.search.apiKey`. Docs: [Web tools](/tools/web).
 The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 
 **QuickStart** keeps the defaults:
+
 - Local gateway (loopback)
 - Workspace default (or existing workspace)
 - Gateway port **18789**
@@ -48,7 +50,8 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 ## What the wizard does
 
 **Local mode (default)** walks you through:
-  - Model/auth (OpenAI Code (Codex) subscription OAuth, Anthropic API key (recommended) or setup-token (paste), plus MiniMax/GLM/Moonshot/AI Gateway options)
+
+- Model/auth (OpenAI Code (Codex) subscription OAuth, Anthropic API key (recommended) or setup-token (paste), plus MiniMax/GLM/Moonshot/AI Gateway options)
 - Workspace location + bootstrap files
 - Gateway settings (port/bind/auth/tailscale)
 - Providers (Telegram, WhatsApp, Discord, Google Chat, Mattermost (plugin), Signal)
@@ -69,7 +72,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 
 ## Flow details (local)
 
-1) **Existing config detection**
+1. **Existing config detection**
    - If `~/.openclaw/openclaw.json` exists, choose **Keep / Modify / Reset**.
    - Re-running the wizard does **not** wipe anything unless you explicitly choose **Reset**
      (or pass `--reset`).
@@ -80,7 +83,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
      - Config + credentials + sessions
      - Full reset (also removes workspace)
 
-2) **Model/Auth**
+2. **Model/Auth**
    - **Anthropic API key (recommended)**: uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
    - **Anthropic OAuth (Claude Code CLI)**: on macOS the wizard checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present.
    - **Anthropic token (paste setup-token)**: run `claude setup-token` on any machine, then paste the token (you can name it; blank = default).
@@ -97,36 +100,37 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
    - More detail: [Synthetic](/providers/synthetic)
    - **Moonshot (Kimi K2)**: config is auto-written.
-   - **Kimi Code**: config is auto-written.
-   - More detail: [Moonshot AI (Kimi + Kimi Code)](/providers/moonshot)
+   - **Kimi Coding**: config is auto-written.
+   - More detail: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
    - **Skip**: no auth configured yet.
    - Pick a default model from detected options (or enter provider/model manually).
    - Wizard runs a model check and warns if the configured model is unknown or missing auth.
-  - OAuth credentials live in `~/.openclaw/credentials/oauth.json`; auth profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth).
-   - More detail: [/concepts/oauth](/concepts/oauth)
 
-3) **Workspace**
+- OAuth credentials live in `~/.openclaw/credentials/oauth.json`; auth profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth).
+- More detail: [/concepts/oauth](/concepts/oauth)
+
+3. **Workspace**
    - Default `~/.openclaw/workspace` (configurable).
    - Seeds the workspace files needed for the agent bootstrap ritual.
    - Full workspace layout + backup guide: [Agent workspace](/concepts/agent-workspace)
 
-4) **Gateway**
+4. **Gateway**
    - Port, bind, auth mode, tailscale exposure.
    - Auth recommendation: keep **Token** even for loopback so local WS clients must authenticate.
    - Disable auth only if you fully trust every local process.
    - Non‑loopback binds still require auth.
 
-5) **Channels**
-  - WhatsApp: optional QR login.
-  - Telegram: bot token.
-  - Discord: bot token.
-  - Google Chat: service account JSON + webhook audience.
-  - Mattermost (plugin): bot token + base URL.
-   - Signal: optional `signal-cli` install + account config.
-   - iMessage: local `imsg` CLI path + DB access.
-  - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
+5. **Channels**
+   - [WhatsApp](/channels/whatsapp): optional QR login.
+   - [Telegram](/channels/telegram): bot token.
+   - [Discord](/channels/discord): bot token.
+   - [Google Chat](/channels/googlechat): service account JSON + webhook audience.
+   - [Mattermost](/channels/mattermost) (plugin): bot token + base URL.
+   - [Signal](/channels/signal): optional `signal-cli` install + account config.
+   - [iMessage](/channels/imessage): local `imsg` CLI path + DB access.
+   - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
 
-6) **Daemon install**
+6. **Daemon install**
    - macOS: LaunchAgent
      - Requires a logged-in user session; for headless, use a custom LaunchDaemon (not shipped).
    - Linux (and Windows via WSL2): systemd user unit
@@ -134,29 +138,32 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
      - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
    - **Runtime selection:** Node (recommended; required for WhatsApp/Telegram). Bun is **not recommended**.
 
-7) **Health check**
+7. **Health check**
    - Starts the Gateway (if needed) and runs `openclaw health`.
    - Tip: `openclaw status --deep` adds gateway health probes to status output (requires a reachable gateway).
 
-8) **Skills (recommended)**
+8. **Skills (recommended)**
    - Reads the available skills and checks requirements.
    - Lets you choose a node manager: **npm / pnpm** (bun not recommended).
    - Installs optional dependencies (some use Homebrew on macOS).
 
-9) **Finish**
+9. **Finish**
    - Summary + next steps, including iOS/Android/macOS apps for extra features.
-  - If no GUI is detected, the wizard prints SSH port-forward instructions for the Control UI instead of opening a browser.
-  - If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:build` (auto-installs UI deps).
+
+- If no GUI is detected, the wizard prints SSH port-forward instructions for the Control UI instead of opening a browser.
+- If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:build` (auto-installs UI deps).
 
 ## Remote mode
 
 Remote mode configures a local client to connect to a Gateway elsewhere.
 
 What you’ll set:
+
 - Remote Gateway URL (`ws://...`)
 - Token if the remote Gateway requires auth (recommended)
 
 Notes:
+
 - No remote installs or daemon changes are performed.
 - If the Gateway is loopback‑only, use SSH tunneling or a tailnet.
 - Discovery hints:
@@ -169,11 +176,13 @@ Use `openclaw agents add <name>` to create a separate agent with its own workspa
 sessions, and auth profiles. Running without `--workspace` launches the wizard.
 
 What it sets:
+
 - `agents.list[].name`
 - `agents.list[].workspace`
 - `agents.list[].agentDir`
 
 Notes:
+
 - Default workspaces follow `~/.openclaw/workspace-<agentId>`.
 - Add `bindings` to route inbound messages (the wizard can do this).
 - Non-interactive flags: `--model`, `--agent-dir`, `--bind`, `--non-interactive`.
@@ -281,11 +290,13 @@ Clients (macOS app, Control UI) can render steps without re‑implementing onboa
 ## Signal setup (signal-cli)
 
 The wizard can install `signal-cli` from GitHub releases:
+
 - Downloads the appropriate release asset.
 - Stores it under `~/.openclaw/tools/signal-cli/<version>/`.
 - Writes `channels.signal.cliPath` to your config.
 
 Notes:
+
 - JVM builds require **Java 21**.
 - Native builds are used when available.
 - Windows uses WSL2; signal-cli install follows the Linux flow inside WSL.
@@ -293,6 +304,7 @@ Notes:
 ## What the wizard writes
 
 Typical fields in `~/.openclaw/openclaw.json`:
+
 - `agents.defaults.workspace`
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `gateway.*` (mode, bind, auth, tailscale)

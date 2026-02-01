@@ -1,8 +1,8 @@
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
+import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
@@ -24,12 +24,16 @@ const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
 /** Generate a random delay within the configured range. */
 function getHumanDelay(config: HumanDelayConfig | undefined): number {
   const mode = config?.mode ?? "off";
-  if (mode === "off") return 0;
+  if (mode === "off") {
+    return 0;
+  }
   const min =
     mode === "custom" ? (config?.minMs ?? DEFAULT_HUMAN_DELAY_MIN_MS) : DEFAULT_HUMAN_DELAY_MIN_MS;
   const max =
     mode === "custom" ? (config?.maxMs ?? DEFAULT_HUMAN_DELAY_MAX_MS) : DEFAULT_HUMAN_DELAY_MAX_MS;
-  if (max <= min) return min;
+  if (max <= min) {
+    return min;
+  }
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
@@ -115,20 +119,26 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       onHeartbeatStrip: options.onHeartbeatStrip,
       onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
     });
-    if (!normalized) return false;
+    if (!normalized) {
+      return false;
+    }
     queuedCounts[kind] += 1;
     pending += 1;
 
     // Determine if we should add human-like delay (only for block replies after the first).
     const shouldDelay = kind === "block" && sentFirstBlock;
-    if (kind === "block") sentFirstBlock = true;
+    if (kind === "block") {
+      sentFirstBlock = true;
+    }
 
     sendChain = sendChain
       .then(async () => {
         // Add human-like delay between block replies for natural rhythm.
         if (shouldDelay) {
           const delayMs = getHumanDelay(options.humanDelay);
-          if (delayMs > 0) await sleep(delayMs);
+          if (delayMs > 0) {
+            await sleep(delayMs);
+          }
         }
         await options.deliver(normalized, { kind });
       })

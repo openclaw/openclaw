@@ -1,13 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-
-import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
-import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CONFIG_PATH } from "../config/config.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
+import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -19,19 +17,21 @@ beforeEach(() => {
 
 const resolveGatewayToken = (): string => {
   const token = (testState.gatewayAuth as { token?: string } | undefined)?.token;
-  if (!token) throw new Error("test gateway token missing");
+  if (!token) {
+    throw new Error("test gateway token missing");
+  }
   return token;
 };
 
 describe("POST /tools/invoke", () => {
   it("invokes a tool and returns {ok:true,result}", async () => {
-    // Allow the sessions_list tool for main agent.
+    // Allow the agents_list tool for main agent.
     testState.agentsConfig = {
       list: [
         {
           id: "main",
           tools: {
-            allow: ["sessions_list"],
+            allow: ["agents_list"],
           },
         },
       ],
@@ -46,7 +46,7 @@ describe("POST /tools/invoke", () => {
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
+      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
     });
 
     expect(res.status).toBe(200);
@@ -63,10 +63,10 @@ describe("POST /tools/invoke", () => {
       list: [{ id: "main" }],
     } as any;
 
-    // minimal profile does NOT include sessions_list, but alsoAllow should.
+    // minimal profile does NOT include agents_list, but alsoAllow should.
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
-      tools: { profile: "minimal", alsoAllow: ["sessions_list"] },
+      tools: { profile: "minimal", alsoAllow: ["agents_list"] },
     } as any);
 
     const port = await getFreePort();
@@ -76,7 +76,7 @@ describe("POST /tools/invoke", () => {
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
+      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
     });
 
     expect(res.status).toBe(200);
@@ -94,7 +94,7 @@ describe("POST /tools/invoke", () => {
     await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
     await fs.writeFile(
       CONFIG_PATH,
-      JSON.stringify({ tools: { alsoAllow: ["sessions_list"] } }, null, 2),
+      JSON.stringify({ tools: { alsoAllow: ["agents_list"] } }, null, 2),
       "utf-8",
     );
 
@@ -105,7 +105,7 @@ describe("POST /tools/invoke", () => {
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
+      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
     });
 
     expect(res.status).toBe(200);
@@ -121,7 +121,7 @@ describe("POST /tools/invoke", () => {
         {
           id: "main",
           tools: {
-            allow: ["sessions_list"],
+            allow: ["agents_list"],
           },
         },
       ],
@@ -139,7 +139,7 @@ describe("POST /tools/invoke", () => {
         "content-type": "application/json",
         authorization: "Bearer secret",
       },
-      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
+      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
     });
 
     expect(res.status).toBe(200);
@@ -171,7 +171,7 @@ describe("POST /tools/invoke", () => {
         {
           id: "main",
           tools: {
-            allow: ["sessions_list"],
+            allow: ["agents_list"],
           },
         },
       ],
@@ -185,7 +185,7 @@ describe("POST /tools/invoke", () => {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
         body: JSON.stringify({
-          tool: "sessions_list",
+          tool: "agents_list",
           action: "json",
           args: {},
           sessionKey: "main",
@@ -206,7 +206,7 @@ describe("POST /tools/invoke", () => {
         {
           id: "main",
           tools: {
-            allow: ["sessions_list"],
+            allow: ["agents_list"],
           },
         },
       ],
@@ -221,7 +221,7 @@ describe("POST /tools/invoke", () => {
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
+      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
     });
 
     expect(res.status).toBe(401);
@@ -235,7 +235,7 @@ describe("POST /tools/invoke", () => {
         {
           id: "main",
           tools: {
-            deny: ["sessions_list"],
+            deny: ["agents_list"],
           },
         },
       ],
@@ -248,7 +248,7 @@ describe("POST /tools/invoke", () => {
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
+      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
     });
 
     expect(res.status).toBe(404);
@@ -262,7 +262,7 @@ describe("POST /tools/invoke", () => {
         {
           id: "main",
           tools: {
-            allow: ["sessions_list"],
+            allow: ["agents_list"],
           },
         },
       ],
@@ -280,7 +280,7 @@ describe("POST /tools/invoke", () => {
     const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-      body: JSON.stringify({ tool: "sessions_list", action: "json", args: {}, sessionKey: "main" }),
+      body: JSON.stringify({ tool: "agents_list", action: "json", args: {}, sessionKey: "main" }),
     });
 
     expect(res.status).toBe(404);
@@ -294,14 +294,14 @@ describe("POST /tools/invoke", () => {
         {
           id: "main",
           tools: {
-            deny: ["sessions_list"],
+            deny: ["agents_list"],
           },
         },
         {
           id: "ops",
           default: true,
           tools: {
-            allow: ["sessions_list"],
+            allow: ["agents_list"],
           },
         },
       ],
@@ -311,7 +311,7 @@ describe("POST /tools/invoke", () => {
     const port = await getFreePort();
     const server = await startGatewayServer(port, { bind: "loopback" });
 
-    const payload = { tool: "sessions_list", action: "json", args: {} };
+    const payload = { tool: "agents_list", action: "json", args: {} };
     const token = resolveGatewayToken();
 
     const resDefault = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {

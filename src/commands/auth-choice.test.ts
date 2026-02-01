@@ -1,13 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import type { AuthChoice } from "./onboard-types.js";
+import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 
 vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
@@ -23,7 +21,9 @@ const noop = () => {};
 const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
 const requireAgentDir = () => {
   const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) throw new Error("OPENCLAW_AGENT_DIR not set");
+  if (!agentDir) {
+    throw new Error("OPENCLAW_AGENT_DIR not set");
+  }
   return agentDir;
 };
 
@@ -582,6 +582,101 @@ describe("applyAuthChoice", () => {
     };
     expect(parsed.profiles?.["qwen-portal:default"]).toMatchObject({
       provider: "qwen-portal",
+      access: "access",
+      refresh: "refresh",
+    });
+  });
+
+  it("writes MiniMax credentials when selecting minimax-portal", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "minimax-portal",
+        label: "MiniMax",
+        auth: [
+          {
+            id: "oauth",
+            label: "MiniMax OAuth (Global)",
+            kind: "device_code",
+            run: vi.fn(async () => ({
+              profiles: [
+                {
+                  profileId: "minimax-portal:default",
+                  credential: {
+                    type: "oauth",
+                    provider: "minimax-portal",
+                    access: "access",
+                    refresh: "refresh",
+                    expires: Date.now() + 60 * 60 * 1000,
+                  },
+                },
+              ],
+              configPatch: {
+                models: {
+                  providers: {
+                    "minimax-portal": {
+                      baseUrl: "https://api.minimax.io/anthropic",
+                      apiKey: "minimax-oauth",
+                      api: "anthropic-messages",
+                      models: [],
+                    },
+                  },
+                },
+              },
+              defaultModel: "minimax-portal/MiniMax-M2.1",
+            })),
+          },
+        ],
+      },
+    ]);
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select: vi.fn(async () => "oauth" as never),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "minimax-portal",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result.config.auth?.profiles?.["minimax-portal:default"]).toMatchObject({
+      provider: "minimax-portal",
+      mode: "oauth",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toBe("minimax-portal/MiniMax-M2.1");
+    expect(result.config.models?.providers?.["minimax-portal"]).toMatchObject({
+      baseUrl: "https://api.minimax.io/anthropic",
+      apiKey: "minimax-oauth",
+    });
+
+    const authProfilePath = authProfilePathFor(requireAgentDir());
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { access?: string; refresh?: string; provider?: string }>;
+    };
+    expect(parsed.profiles?.["minimax-portal:default"]).toMatchObject({
+      provider: "minimax-portal",
       access: "access",
       refresh: "refresh",
     });

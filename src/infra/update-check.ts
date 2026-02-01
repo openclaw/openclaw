@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { runCommandWithTimeout } from "../process/exec.js";
 import { parseSemver } from "./runtime-guard.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
@@ -62,15 +61,23 @@ async function detectPackageManager(root: string): Promise<PackageManager> {
     const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
     const parsed = JSON.parse(raw) as { packageManager?: string };
     const pm = parsed?.packageManager?.split("@")[0]?.trim();
-    if (pm === "pnpm" || pm === "bun" || pm === "npm") return pm;
+    if (pm === "pnpm" || pm === "bun" || pm === "npm") {
+      return pm;
+    }
   } catch {
     // ignore
   }
 
   const files = await fs.readdir(root).catch((): string[] => []);
-  if (files.includes("pnpm-lock.yaml")) return "pnpm";
-  if (files.includes("bun.lockb")) return "bun";
-  if (files.includes("package-lock.json")) return "npm";
+  if (files.includes("pnpm-lock.yaml")) {
+    return "pnpm";
+  }
+  if (files.includes("bun.lockb")) {
+    return "bun";
+  }
+  if (files.includes("package-lock.json")) {
+    return "npm";
+  }
   return "unknown";
 }
 
@@ -78,7 +85,9 @@ async function detectGitRoot(root: string): Promise<string | null> {
   const res = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     timeoutMs: 4000,
   }).catch(() => null);
-  if (!res || res.code !== 0) return null;
+  if (!res || res.code !== 0) {
+    return null;
+  }
   const top = res.stdout.trim();
   return top ? path.resolve(top) : null;
 }
@@ -151,10 +160,14 @@ export async function checkGitUpdateStatus(params: {
 
   const parseCounts = (raw: string): { ahead: number; behind: number } | null => {
     const parts = raw.trim().split(/\s+/);
-    if (parts.length < 2) return null;
+    if (parts.length < 2) {
+      return null;
+    }
     const ahead = Number.parseInt(parts[0] ?? "", 10);
     const behind = Number.parseInt(parts[1] ?? "", 10);
-    if (!Number.isFinite(ahead) || !Number.isFinite(behind)) return null;
+    if (!Number.isFinite(ahead) || !Number.isFinite(behind)) {
+      return null;
+    }
     return { ahead, behind };
   };
   const parsed = counts && counts.code === 0 ? parseCounts(counts.stdout) : null;
@@ -344,10 +357,18 @@ export async function resolveNpmChannelTag(params: {
 export function compareSemverStrings(a: string | null, b: string | null): number | null {
   const pa = parseSemver(a);
   const pb = parseSemver(b);
-  if (!pa || !pb) return null;
-  if (pa.major !== pb.major) return pa.major < pb.major ? -1 : 1;
-  if (pa.minor !== pb.minor) return pa.minor < pb.minor ? -1 : 1;
-  if (pa.patch !== pb.patch) return pa.patch < pb.patch ? -1 : 1;
+  if (!pa || !pb) {
+    return null;
+  }
+  if (pa.major !== pb.major) {
+    return pa.major < pb.major ? -1 : 1;
+  }
+  if (pa.minor !== pb.minor) {
+    return pa.minor < pb.minor ? -1 : 1;
+  }
+  if (pa.patch !== pb.patch) {
+    return pa.patch < pb.patch ? -1 : 1;
+  }
   return 0;
 }
 

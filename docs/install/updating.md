@@ -3,6 +3,7 @@ summary: "Updating OpenClaw safely (global install or source), plus rollback str
 read_when:
   - Updating OpenClaw
   - Something breaks after an update
+title: "Updating"
 ---
 
 # Updating
@@ -16,14 +17,15 @@ detects existing installs, upgrades in place, and runs `openclaw doctor` when
 needed.
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 Notes:
+
 - Add `--no-onboard` if you don’t want the onboarding wizard to run again.
 - For **source installs**, use:
   ```bash
-  curl -fsSL https://openclaw.bot/install.sh | bash -s -- --install-method git --no-onboard
+  curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
   ```
   The installer will `git pull --rebase` **only** if the repo is clean.
 - For **global installs**, the script uses `npm install -g openclaw@latest` under the hood.
@@ -49,6 +51,7 @@ npm i -g openclaw@latest
 ```bash
 pnpm add -g openclaw@latest
 ```
+
 We do **not** recommend Bun for the Gateway runtime (WhatsApp/Telegram bugs).
 
 To switch update channels (git + npm installs):
@@ -74,6 +77,7 @@ openclaw health
 ```
 
 Notes:
+
 - If your Gateway runs as a service, `openclaw gateway restart` is preferred over killing PIDs.
 - If you’re pinned to a specific version, see “Rollback / pinning” below.
 
@@ -86,6 +90,7 @@ openclaw update
 ```
 
 It runs a safe-ish update flow:
+
 - Requires a clean worktree.
 - Switches to the selected channel (tag or branch).
 - Fetches + rebases against the configured upstream (dev channel).
@@ -97,9 +102,10 @@ If you installed via **npm/pnpm** (no git metadata), `openclaw update` will try 
 ## Update (Control UI / RPC)
 
 The Control UI has **Update & Restart** (RPC: `update.run`). It:
-1) Runs the same source-update flow as `openclaw update` (git checkout only).
-2) Writes a restart sentinel with a structured report (stdout/stderr tail).
-3) Restarts the gateway and pings the last active session with the report.
+
+1. Runs the same source-update flow as `openclaw update` (git checkout only).
+2. Writes a restart sentinel with a structured report (stdout/stderr tail).
+3. Restarts the gateway and pings the last active session with the report.
 
 If the rebase fails, the gateway aborts and restarts without applying the update.
 
@@ -125,6 +131,7 @@ openclaw health
 ```
 
 Notes:
+
 - `pnpm build` matters when you run the packaged `openclaw` binary ([`openclaw.mjs`](https://github.com/openclaw/openclaw/blob/main/openclaw.mjs)) or use Node to run `dist/`.
 - If you run from a repo checkout without a global install, use `pnpm openclaw ...` for CLI commands.
 - If you run directly from TypeScript (`pnpm openclaw ...`), a rebuild is usually unnecessary, but **config migrations still apply** → run doctor.
@@ -137,6 +144,7 @@ Doctor is the “safe update” command. It’s intentionally boring: repair + m
 Note: if you’re on a **source install** (git checkout), `openclaw doctor` will offer to run `openclaw update` first.
 
 Typical things it does:
+
 - Migrate deprecated config keys / legacy config file locations.
 - Audit DM policies and warn on risky “open” settings.
 - Check Gateway health and can offer to restart.
@@ -158,6 +166,7 @@ openclaw logs --follow
 ```
 
 If you’re supervised:
+
 - macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/bot.molt.gateway` (use `bot.molt.<profile>`; legacy `com.openclaw.*` still works)
 - Linux systemd user service: `systemctl --user restart openclaw-gateway[-<profile>].service`
 - Windows (WSL2): `systemctl --user restart openclaw-gateway[-<profile>].service`
@@ -216,4 +225,4 @@ git pull
 
 - Run `openclaw doctor` again and read the output carefully (it often tells you the fix).
 - Check: [Troubleshooting](/gateway/troubleshooting)
-- Ask in Discord: https://channels.discord.gg/clawd
+- Ask in Discord: https://discord.gg/clawd

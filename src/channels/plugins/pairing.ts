@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { ChannelPairingAdapter } from "./types.js";
 import {
   type ChannelId,
   getChannelPlugin,
   listChannelPlugins,
   normalizeChannelId,
 } from "./index.js";
-import type { ChannelPairingAdapter } from "./types.js";
 
 export function listPairingChannels(): ChannelId[] {
   // Channel docking: pairing support is declared via plugin.pairing.
@@ -58,7 +58,9 @@ export async function notifyPairingApproved(params: {
 }): Promise<void> {
   // Extensions may provide adapter directly to bypass ESM module isolation
   const adapter = params.pairingAdapter ?? requirePairingAdapter(params.channelId);
-  if (!adapter.notifyApproval) return;
+  if (!adapter.notifyApproval) {
+    return;
+  }
   await adapter.notifyApproval({
     cfg: params.cfg,
     id: params.id,

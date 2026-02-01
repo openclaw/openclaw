@@ -1,3 +1,4 @@
+import type { MSTeamsTurnContext } from "../sdk-types.js";
 import {
   buildMSTeamsGraphMessageUrls,
   downloadMSTeamsAttachments,
@@ -7,7 +8,6 @@ import {
   type MSTeamsHtmlAttachmentSummary,
   type MSTeamsInboundMedia,
 } from "../attachments.js";
-import type { MSTeamsTurnContext } from "../sdk-types.js";
 
 type MSTeamsLogger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;
@@ -99,7 +99,9 @@ export async function resolveMSTeamsInboundMedia(params: {
             mediaList = graphMedia.media;
             break;
           }
-          if (graphMedia.tokenError) break;
+          if (graphMedia.tokenError) {
+            break;
+          }
         }
         if (mediaList.length === 0) {
           log.debug("graph media fetch empty", { attempts });

@@ -98,12 +98,12 @@ Execution scope:
 
 **What this tells you:**
 
-| Field | Meaning |
-|-------|---------|
-| `execution_id` | Unique ID for this specific block invocation |
-| `block` | Name of the block you're executing within |
-| `depth` | How deep in the call stack (1 = first level) |
-| `parent_execution_id` | The invoking frame's ID (for scope chain) |
+| Field                 | Meaning                                      |
+| --------------------- | -------------------------------------------- |
+| `execution_id`        | Unique ID for this specific block invocation |
+| `block`               | Name of the block you're executing within    |
+| `depth`               | How deep in the call stack (1 = first level) |
+| `parent_execution_id` | The invoking frame's ID (for scope chain)    |
 
 **How to use it:**
 
@@ -125,10 +125,10 @@ If you're a persistent agent, you maintain state across sessions via a memory fi
 
 Persistent agents have **two separate outputs** that must not be confused:
 
-| Output | What It Is | Where It Goes | Purpose |
-|--------|------------|---------------|---------|
-| **Binding** | The result of THIS task | `bindings/{name}.md` or database | Passed to other sessions via `context:` |
-| **Memory** | Your accumulated knowledge | `agents/{name}/memory.md` or database | Carried forward to YOUR future invocations |
+| Output      | What It Is                 | Where It Goes                         | Purpose                                    |
+| ----------- | -------------------------- | ------------------------------------- | ------------------------------------------ |
+| **Binding** | The result of THIS task    | `bindings/{name}.md` or database      | Passed to other sessions via `context:`    |
+| **Memory**  | Your accumulated knowledge | `agents/{name}/memory.md` or database | Carried forward to YOUR future invocations |
 
 **The binding is task-specific.** If you're asked to "review the plan," the binding contains your review.
 
@@ -358,7 +358,7 @@ For regular sessions with output capture (`let x = session "..."`), write to the
 # {name}
 
 kind: {let|const|output|input}
-execution_id: {id}  # Include if inside a block invocation (omit for root scope)
+execution_id: {id} # Include if inside a block invocation (omit for root scope)
 
 source:
 
@@ -498,6 +498,7 @@ Summary: {1-2 sentence summary of what's in the binding}
 ```
 
 **Example (filesystem state, root scope):**
+
 ```
 Binding written: research
 Location: .prose/runs/20260116-143052-a7b3c9/bindings/research.md
@@ -505,6 +506,7 @@ Summary: Comprehensive AI safety research covering alignment, robustness, and in
 ```
 
 **Example (filesystem state, inside block invocation):**
+
 ```
 Binding written: result
 Location: .prose/runs/20260116-143052-a7b3c9/bindings/result__43.md
@@ -513,6 +515,7 @@ Summary: Processed chunk into 3 sub-parts for recursive processing.
 ```
 
 **Example (PostgreSQL state):**
+
 ```
 Binding written: research
 Location: openprose.bindings WHERE name='research' AND run_id='20260116-143052-a7b3c9'
@@ -520,6 +523,7 @@ Summary: Comprehensive AI safety research covering alignment, robustness, and in
 ```
 
 **Example (PostgreSQL state, inside block invocation):**
+
 ```
 Binding written: result
 Location: openprose.bindings WHERE name='result' AND run_id='20260116-143052-a7b3c9' AND execution_id=43
@@ -541,6 +545,7 @@ The VM never holds full binding values in its working memory. This is intentiona
 Do NOT return your full output in the Task tool response. The VM will ignore it.
 
 **Bad:**
+
 ```
 Here's my research:
 
@@ -549,6 +554,7 @@ AI safety is a field that studies how to create artificial intelligence systems 
 ```
 
 **Good:**
+
 ```
 Binding written: research
 Location: .prose/runs/20260116-143052-a7b3c9/bindings/research.md

@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-
 import { resolveGatewayLogPaths } from "./launchd.js";
 
 const GATEWAY_LOG_ERROR_PATTERNS = [
@@ -15,7 +14,9 @@ async function readLastLogLine(filePath: string): Promise<string | null> {
     const raw = await fs.readFile(filePath, "utf8");
     const lines = raw.split(/\r?\n/).map((line) => line.trim());
     for (let i = lines.length - 1; i >= 0; i -= 1) {
-      if (lines[i]) return lines[i];
+      if (lines[i]) {
+        return lines[i];
+      }
     }
     return null;
   } catch {
@@ -32,7 +33,9 @@ export async function readLastGatewayErrorLine(env: NodeJS.ProcessEnv): Promise<
   );
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
-    if (!line) continue;
+    if (!line) {
+      continue;
+    }
     if (GATEWAY_LOG_ERROR_PATTERNS.some((pattern) => pattern.test(line))) {
       return line;
     }

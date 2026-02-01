@@ -1,6 +1,6 @@
-import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
+import { resolveGatewayPort } from "../../config/config.js";
 import { pickPrimaryTailnetIPv4 } from "../../infra/tailnet.js";
 import { colorize, theme } from "../../terminal/theme.js";
 
@@ -52,7 +52,9 @@ function parseIntOrNull(value: unknown): number | null {
       : typeof value === "number" || typeof value === "bigint"
         ? String(value)
         : "";
-  if (!s) return null;
+  if (!s) {
+    return null;
+  }
   const n = Number.parseInt(s, 10);
   return Number.isFinite(n) ? n : null;
 }
@@ -64,7 +66,9 @@ export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {
       : typeof raw === "number" || typeof raw === "bigint"
         ? String(raw)
         : "";
-  if (!value) return fallbackMs;
+  if (!value) {
+    return fallbackMs;
+  }
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`invalid --timeout: ${value}`);
@@ -74,19 +78,27 @@ export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {
 
 function normalizeWsUrl(value: string): string | null {
   const trimmed = value.trim();
-  if (!trimmed) return null;
-  if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) return null;
+  if (!trimmed) {
+    return null;
+  }
+  if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
+    return null;
+  }
   return trimmed;
 }
 
 export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): GatewayStatusTarget[] {
   const targets: GatewayStatusTarget[] = [];
   const add = (t: GatewayStatusTarget) => {
-    if (!targets.some((x) => x.url === t.url)) targets.push(t);
+    if (!targets.some((x) => x.url === t.url)) {
+      targets.push(t);
+    }
   };
 
   const explicit = typeof explicitUrl === "string" ? normalizeWsUrl(explicitUrl) : null;
-  if (explicit) add({ id: "explicit", kind: "explicit", url: explicit, active: true });
+  if (explicit) {
+    add({ id: "explicit", kind: "explicit", url: explicit, active: true });
+  }
 
   const remoteUrl =
     typeof cfg.gateway?.remote?.url === "string" ? normalizeWsUrl(cfg.gateway.remote.url) : null;
@@ -111,15 +123,23 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
 }
 
 export function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
-  if (kind === "localLoopback") return Math.min(800, overallMs);
-  if (kind === "sshTunnel") return Math.min(2000, overallMs);
+  if (kind === "localLoopback") {
+    return Math.min(800, overallMs);
+  }
+  if (kind === "sshTunnel") {
+    return Math.min(2000, overallMs);
+  }
   return Math.min(1500, overallMs);
 }
 
 export function sanitizeSshTarget(value: unknown): string | null {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string") {
+    return null;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   return trimmed.replace(/^ssh\\s+/, "");
 }
 
@@ -161,13 +181,17 @@ export function resolveAuthForTarget(
 export function pickGatewaySelfPresence(
   presence: unknown,
 ): { host?: string; ip?: string; version?: string; platform?: string } | null {
-  if (!Array.isArray(presence)) return null;
+  if (!Array.isArray(presence)) {
+    return null;
+  }
   const entries = presence as Array<Record<string, unknown>>;
   const self =
     entries.find((e) => e.mode === "gateway" && e.reason === "self") ??
     entries.find((e) => typeof e.text === "string" && String(e.text).startsWith("Gateway:")) ??
     null;
-  if (!self) return null;
+  if (!self) {
+    return null;
+  }
   return {
     host: typeof self.host === "string" ? self.host : undefined,
     ip: typeof self.ip === "string" ? self.ip : undefined,

@@ -6,15 +6,15 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../config/config.js";
-import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { GatewayClient } from "./client.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
@@ -109,7 +109,9 @@ export function buildGatewayConnectionDetails(
   };
 }
 
-export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promise<T> {
+export async function callGateway<T = Record<string, unknown>>(
+  opts: CallGatewayOptions,
+): Promise<T> {
   const timeoutMs = opts.timeoutMs ?? 10_000;
   const config = opts.config ?? loadConfig();
   const isRemoteMode = config.gateway?.mode === "remote";
@@ -190,11 +192,16 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
     let settled = false;
     let ignoreClose = false;
     const stop = (err?: Error, value?: T) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
-      if (err) reject(err);
-      else resolve(value as T);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(value as T);
+      }
     };
 
     const client = new GatewayClient({
@@ -228,7 +235,9 @@ export async function callGateway<T = unknown>(opts: CallGatewayOptions): Promis
         }
       },
       onClose: (code, reason) => {
-        if (settled || ignoreClose) return;
+        if (settled || ignoreClose) {
+          return;
+        }
         ignoreClose = true;
         client.stop();
         stop(new Error(formatCloseError(code, reason)));

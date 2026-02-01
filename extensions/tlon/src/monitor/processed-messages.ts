@@ -10,15 +10,21 @@ export function createProcessedMessageTracker(limit = 2000): ProcessedMessageTra
 
   const mark = (id?: string | null) => {
     const trimmed = id?.trim();
-    if (!trimmed) return true;
-    if (seen.has(trimmed)) return false;
+    if (!trimmed) {
+      return true;
+    }
+    if (seen.has(trimmed)) {
+      return false;
+    }
     seen.add(trimmed);
     order.push(trimmed);
     if (order.length > limit) {
       const overflow = order.length - limit;
       for (let i = 0; i < overflow; i += 1) {
         const oldest = order.shift();
-        if (oldest) seen.delete(oldest);
+        if (oldest) {
+          seen.delete(oldest);
+        }
       }
     }
     return true;
@@ -26,7 +32,9 @@ export function createProcessedMessageTracker(limit = 2000): ProcessedMessageTra
 
   const has = (id?: string | null) => {
     const trimmed = id?.trim();
-    if (!trimmed) return false;
+    if (!trimmed) {
+      return false;
+    }
     return seen.has(trimmed);
   };
 

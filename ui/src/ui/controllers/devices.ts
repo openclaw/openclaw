@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../gateway";
-import { loadOrCreateDeviceIdentity } from "../device-identity";
 import { clearDeviceAuthToken, storeDeviceAuthToken } from "../device-auth";
+import { loadOrCreateDeviceIdentity } from "../device-identity";
 
 export type DeviceTokenSummary = {
   role: string;
@@ -118,9 +118,7 @@ export async function revokeDeviceToken(
   params: { deviceId: string; role: string },
 ) {
   if (!state.client || !state.connected) return;
-  const confirmed = window.confirm(
-    `Revoke token for ${params.deviceId} (${params.role})?`,
-  );
+  const confirmed = window.confirm(`Revoke token for ${params.deviceId} (${params.role})?`);
   if (!confirmed) return;
   try {
     await state.client.request("device.token.revoke", params);

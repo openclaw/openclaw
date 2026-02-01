@@ -1,22 +1,34 @@
+import type { OpenClawApp } from "./app";
+import { refreshChat } from "./app-chat";
+import {
+  startLogsPolling,
+  stopLogsPolling,
+  startDebugPolling,
+  stopDebugPolling,
+} from "./app-polling";
+import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll";
+import { loadChannels } from "./controllers/channels";
 import { loadConfig, loadConfigSchema } from "./controllers/config";
 import { loadCronJobs, loadCronStatus } from "./controllers/cron";
-import { loadChannels } from "./controllers/channels";
 import { loadDebug } from "./controllers/debug";
-import { loadLogs } from "./controllers/logs";
 import { loadDevices } from "./controllers/devices";
-import { loadNodes } from "./controllers/nodes";
 import { loadExecApprovals } from "./controllers/exec-approvals";
+import { loadLogs } from "./controllers/logs";
+import { loadNodes } from "./controllers/nodes";
 import { loadPresence } from "./controllers/presence";
 import { loadSessions } from "./controllers/sessions";
 import { loadSkills } from "./controllers/skills";
-import { inferBasePathFromPathname, normalizeBasePath, normalizePath, pathForTab, tabFromPath, type Tab } from "./navigation";
+import {
+  inferBasePathFromPathname,
+  normalizeBasePath,
+  normalizePath,
+  pathForTab,
+  tabFromPath,
+  type Tab,
+} from "./navigation";
 import { saveSettings, type UiSettings } from "./storage";
 import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition";
-import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll";
-import { startLogsPolling, stopLogsPolling, startDebugPolling, stopDebugPolling } from "./app-polling";
-import { refreshChat } from "./app-chat";
-import type { OpenClawApp } from "./app";
 
 type SettingsHost = {
   settings: UiSettings;
@@ -114,8 +126,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
 export function setTab(host: SettingsHost, next: Tab) {
   if (host.tab !== next) host.tab = next;
   if (next === "chat") host.chatHasAutoScrolled = false;
-  if (next === "logs")
-    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
+  if (next === "logs") startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   else stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   if (next === "debug")
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
@@ -124,11 +135,7 @@ export function setTab(host: SettingsHost, next: Tab) {
   syncUrlWithTab(host, next, false);
 }
 
-export function setTheme(
-  host: SettingsHost,
-  next: ThemeMode,
-  context?: ThemeTransitionContext,
-) {
+export function setTheme(host: SettingsHost, next: ThemeMode, context?: ThemeTransitionContext) {
   const applyTheme = () => {
     host.theme = next;
     applySettings(host, { ...host.settings, theme: next });
@@ -173,10 +180,7 @@ export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "logs") {
     host.logsAtBottom = true;
     await loadLogs(host as unknown as OpenClawApp, { reset: true });
-    scheduleLogsScroll(
-      host as unknown as Parameters<typeof scheduleLogsScroll>[0],
-      true,
-    );
+    scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
   }
 }
 
@@ -262,8 +266,7 @@ export function onPopState(host: SettingsHost) {
 export function setTabFromRoute(host: SettingsHost, next: Tab) {
   if (host.tab !== next) host.tab = next;
   if (next === "chat") host.chatHasAutoScrolled = false;
-  if (next === "logs")
-    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
+  if (next === "logs") startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   else stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   if (next === "debug")
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
@@ -294,11 +297,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   }
 }
 
-export function syncUrlWithSessionKey(
-  host: SettingsHost,
-  sessionKey: string,
-  replace: boolean,
-) {
+export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
   url.searchParams.set("session", sessionKey);

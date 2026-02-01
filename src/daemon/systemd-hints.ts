@@ -1,7 +1,9 @@
 import { formatCliCommand } from "../cli/command-format.js";
 
 export function isSystemdUnavailableDetail(detail?: string): boolean {
-  if (!detail) return false;
+  if (!detail) {
+    return false;
+  }
   const normalized = detail.toLowerCase();
   return (
     normalized.includes("systemctl --user unavailable") ||

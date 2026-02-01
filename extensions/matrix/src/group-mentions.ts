@@ -1,7 +1,6 @@
 import type { ChannelGroupContext, GroupToolPolicyConfig } from "openclaw/plugin-sdk";
-
-import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
 import type { CoreConfig } from "./types.js";
+import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
 
 export function resolveMatrixGroupRequireMention(params: ChannelGroupContext): boolean {
   const rawGroupId = params.groupId?.trim() ?? "";
@@ -26,9 +25,15 @@ export function resolveMatrixGroupRequireMention(params: ChannelGroupContext): b
     name: groupChannel || undefined,
   }).config;
   if (resolved) {
-    if (resolved.autoReply === true) return false;
-    if (resolved.autoReply === false) return true;
-    if (typeof resolved.requireMention === "boolean") return resolved.requireMention;
+    if (resolved.autoReply === true) {
+      return false;
+    }
+    if (resolved.autoReply === false) {
+      return true;
+    }
+    if (typeof resolved.requireMention === "boolean") {
+      return resolved.requireMention;
+    }
   }
   return true;
 }

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 describe("isRecoverableTelegramNetworkError", () => {

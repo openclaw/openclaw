@@ -370,8 +370,16 @@
       "destination": "/start/openclaw"
     },
     {
+      "source": "/clawhub",
+      "destination": "/tools/clawhub"
+    },
+    {
       "source": "/clawdhub",
-      "destination": "/tools/clawdhub"
+      "destination": "/tools/clawhub"
+    },
+    {
+      "source": "/tools/clawdhub",
+      "destination": "/tools/clawhub"
     },
     {
       "source": "/configuration",
@@ -849,11 +857,7 @@
       },
       {
         "group": "Help",
-        "pages": [
-          "help/index",
-          "help/troubleshooting",
-          "help/faq"
-        ]
+        "pages": ["help/index", "help/troubleshooting", "help/faq"]
       },
       {
         "group": "Install & Updates",
@@ -952,7 +956,7 @@
       {
         "group": "Gateway & Ops",
         "pages": [
-          "gateway",
+          "gateway/index",
           "gateway/protocol",
           "gateway/bridge-protocol",
           "gateway/pairing",
@@ -971,7 +975,7 @@
           "gateway/heartbeat",
           "gateway/doctor",
           "gateway/logging",
-          "gateway/security",
+          "gateway/security/index",
           "security/formal-verification",
           "gateway/sandbox-vs-tool-policy-vs-elevated",
           "gateway/sandboxing",
@@ -986,13 +990,7 @@
       },
       {
         "group": "Web & Interfaces",
-        "pages": [
-          "web",
-          "web/control-ui",
-          "web/dashboard",
-          "web/webchat",
-          "tui"
-        ]
+        "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "tui"]
       },
       {
         "group": "Channels",
@@ -1051,7 +1049,7 @@
       {
         "group": "Tools & Skills",
         "pages": [
-          "tools",
+          "tools/index",
           "tools/lobster",
           "tools/llm-task",
           "plugin",
@@ -1073,13 +1071,13 @@
           "tools/reactions",
           "tools/skills",
           "tools/skills-config",
-          "tools/clawdhub"
+          "tools/clawhub"
         ]
       },
       {
         "group": "Nodes & Media",
         "pages": [
-          "nodes",
+          "nodes/index",
           "nodes/camera",
           "nodes/images",
           "nodes/audio",
@@ -1091,7 +1089,7 @@
       {
         "group": "Platforms",
         "pages": [
-          "platforms",
+          "platforms/index",
           "platforms/macos",
           "platforms/macos-vm",
           "platforms/ios",

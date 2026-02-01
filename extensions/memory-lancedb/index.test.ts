@@ -8,11 +8,10 @@
  * - Auto-capture filtering
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
+import { describe, test, expect, beforeEach, afterEach } from "vitest";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
 const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);
@@ -42,6 +41,7 @@ describe("memory plugin e2e", () => {
     expect(memoryPlugin.name).toBe("Memory (LanceDB)");
     expect(memoryPlugin.kind).toBe("memory");
     expect(memoryPlugin.configSchema).toBeDefined();
+    // oxlint-disable-next-line typescript/unbound-method
     expect(memoryPlugin.register).toBeInstanceOf(Function);
   });
 
@@ -217,14 +217,16 @@ describeLive("memory plugin live tests", () => {
         registeredServices.push(service);
       },
       on: (hookName: string, handler: any) => {
-        if (!registeredHooks[hookName]) registeredHooks[hookName] = [];
+        if (!registeredHooks[hookName]) {
+          registeredHooks[hookName] = [];
+        }
         registeredHooks[hookName].push(handler);
       },
       resolvePath: (p: string) => p,
     };
 
     // Register plugin
-    await memoryPlugin.register(mockApi as any);
+    memoryPlugin.register(mockApi as any);
 
     // Check registration
     expect(registeredTools.length).toBe(3);

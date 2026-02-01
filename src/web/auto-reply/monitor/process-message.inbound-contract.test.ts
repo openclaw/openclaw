@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
 
 let capturedCtx: unknown;

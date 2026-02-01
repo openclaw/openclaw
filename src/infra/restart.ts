@@ -19,8 +19,12 @@ let sigusr1AuthorizedUntil = 0;
 let sigusr1ExternalAllowed = false;
 
 function resetSigusr1AuthorizationIfExpired(now = Date.now()) {
-  if (sigusr1AuthorizedCount <= 0) return;
-  if (now <= sigusr1AuthorizedUntil) return;
+  if (sigusr1AuthorizedCount <= 0) {
+    return;
+  }
+  if (now <= sigusr1AuthorizedUntil) {
+    return;
+  }
   sigusr1AuthorizedCount = 0;
   sigusr1AuthorizedUntil = 0;
 }
@@ -44,7 +48,9 @@ export function authorizeGatewaySigusr1Restart(delayMs = 0) {
 
 export function consumeGatewaySigusr1RestartAuthorization(): boolean {
   resetSigusr1AuthorizationIfExpired();
-  if (sigusr1AuthorizedCount <= 0) return false;
+  if (sigusr1AuthorizedCount <= 0) {
+    return false;
+  }
   sigusr1AuthorizedCount -= 1;
   if (sigusr1AuthorizedCount <= 0) {
     sigusr1AuthorizedUntil = 0;
@@ -63,8 +69,12 @@ function formatSpawnDetail(result: {
     return text.replace(/\s+/g, " ").trim();
   };
   if (result.error) {
-    if (result.error instanceof Error) return result.error.message;
-    if (typeof result.error === "string") return result.error;
+    if (result.error instanceof Error) {
+      return result.error.message;
+    }
+    if (typeof result.error === "string") {
+      return result.error;
+    }
     try {
       return JSON.stringify(result.error);
     } catch {
@@ -72,10 +82,16 @@ function formatSpawnDetail(result: {
     }
   }
   const stderr = clean(result.stderr);
-  if (stderr) return stderr;
+  if (stderr) {
+    return stderr;
+  }
   const stdout = clean(result.stdout);
-  if (stdout) return stdout;
-  if (typeof result.status === "number") return `exit ${result.status}`;
+  if (stdout) {
+    return stdout;
+  }
+  if (typeof result.status === "number") {
+    return `exit ${result.status}`;
+  }
   return "unknown error";
 }
 

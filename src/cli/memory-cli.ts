@@ -1,23 +1,21 @@
+import type { Command } from "commander";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import type { Command } from "commander";
-
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { setVerbose } from "../globals.js";
-import { withProgress, withProgressTotals } from "./progress.js";
-import { formatErrorMessage, withManager } from "./cli-utils.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
-import { resolveStateDir } from "../config/paths.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
+import { formatErrorMessage, withManager } from "./cli-utils.js";
+import { withProgress, withProgressTotals } from "./progress.js";
 
 type MemoryCommandOptions = {
   agent?: string;
@@ -60,13 +58,17 @@ function formatSourceLabel(source: string, workspaceDir: string, agentId: string
 
 function resolveAgent(cfg: ReturnType<typeof loadConfig>, agent?: string) {
   const trimmed = agent?.trim();
-  if (trimmed) return trimmed;
+  if (trimmed) {
+    return trimmed;
+  }
   return resolveDefaultAgentId(cfg);
 }
 
 function resolveAgentIds(cfg: ReturnType<typeof loadConfig>, agent?: string): string[] {
   const trimmed = agent?.trim();
-  if (trimmed) return [trimmed];
+  if (trimmed) {
+    return [trimmed];
+  }
   const list = cfg.agents?.list ?? [];
   if (list.length > 0) {
     return list.map((entry) => entry.id).filter(Boolean);
@@ -84,7 +86,9 @@ async function checkReadableFile(pathname: string): Promise<{ exists: boolean; i
     return { exists: true };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return { exists: false };
+    if (code === "ENOENT") {
+      return { exists: false };
+    }
     return {
       exists: true,
       issue: `${shortenHomePath(pathname)} not readable (${code ?? "error"})`,
@@ -125,16 +129,24 @@ async function scanMemoryFiles(
 
   const primary = await checkReadableFile(memoryFile);
   const alt = await checkReadableFile(altMemoryFile);
-  if (primary.issue) issues.push(primary.issue);
-  if (alt.issue) issues.push(alt.issue);
+  if (primary.issue) {
+    issues.push(primary.issue);
+  }
+  if (alt.issue) {
+    issues.push(alt.issue);
+  }
 
   const resolvedExtraPaths = normalizeExtraMemoryPaths(workspaceDir, extraPaths);
   for (const extraPath of resolvedExtraPaths) {
     try {
       const stat = await fs.lstat(extraPath);
-      if (stat.isSymbolicLink()) continue;
+      if (stat.isSymbolicLink()) {
+        continue;
+      }
       const extraCheck = await checkReadableFile(extraPath);
-      if (extraCheck.issue) issues.push(extraCheck.issue);
+      if (extraCheck.issue) {
+        issues.push(extraCheck.issue);
+      }
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
@@ -185,8 +197,12 @@ async function scanMemoryFiles(
   } else {
     const files = new Set<string>(listedOk ? listed : []);
     if (!listedOk) {
-      if (primary.exists) files.add(memoryFile);
-      if (alt.exists) files.add(altMemoryFile);
+      if (primary.exists) {
+        files.add(memoryFile);
+      }
+      if (alt.exists) {
+        files.add(altMemoryFile);
+      }
     }
     totalFiles = files.size;
   }
@@ -274,7 +290,9 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
                         total: syncUpdate.total,
                         label: syncUpdate.label,
                       });
-                      if (syncUpdate.label) progress.setLabel(syncUpdate.label);
+                      if (syncUpdate.label) {
+                        progress.setLabel(syncUpdate.label);
+                      }
                     },
                   });
                 } catch (err) {
@@ -532,10 +550,14 @@ export function registerMemoryCli(program: Command) {
                 return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
               };
               const formatEta = () => {
-                if (lastTotal <= 0 || lastCompleted <= 0) return null;
+                if (lastTotal <= 0 || lastCompleted <= 0) {
+                  return null;
+                }
                 const elapsedMs = Math.max(1, Date.now() - startedAt);
                 const rate = lastCompleted / elapsedMs;
-                if (!Number.isFinite(rate) || rate <= 0) return null;
+                if (!Number.isFinite(rate) || rate <= 0) {
+                  return null;
+                }
                 const remainingMs = Math.max(0, (lastTotal - lastCompleted) / rate);
                 const seconds = Math.floor(remainingMs / 1000);
                 const minutes = Math.floor(seconds / 60);
@@ -564,7 +586,9 @@ export function registerMemoryCli(program: Command) {
                       reason: "cli",
                       force: opts.force,
                       progress: (syncUpdate) => {
-                        if (syncUpdate.label) lastLabel = syncUpdate.label;
+                        if (syncUpdate.label) {
+                          lastLabel = syncUpdate.label;
+                        }
                         lastCompleted = syncUpdate.completed;
                         lastTotal = syncUpdate.total;
                         update({

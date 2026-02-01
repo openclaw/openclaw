@@ -1,6 +1,6 @@
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 import { fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type CodexUsageResponse = {
   rate_limit?: {
@@ -30,7 +30,9 @@ export async function fetchCodexUsage(
     "User-Agent": "CodexBar",
     Accept: "application/json",
   };
-  if (accountId) headers["ChatGPT-Account-Id"] = accountId;
+  if (accountId) {
+    headers["ChatGPT-Account-Id"] = accountId;
+  }
 
   const res = await fetchJson(
     "https://chatgpt.com/backend-api/wham/usage",
