@@ -274,6 +274,21 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "spawn",
+      nativeName: "spawn",
+      description: "Spawn a subagent immediately (fire-and-forget).",
+      textAliases: ["/spawn", "/subagent"],
+      category: "management",
+      args: [
+        {
+          name: "task",
+          description: "Task for the subagent",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "config",
       nativeName: "config",
       description: "Show or set config values.",
