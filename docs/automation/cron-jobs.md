@@ -286,13 +286,14 @@ When calling the cron tool directly (e.g., via `message` or sub-agent), use the 
 }
 ```
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | string | Yes | Human-readable job name |
-| `schedule` | object | Yes | See schedule kinds below |
-| `sessionTarget` | string | No | `"main"` (default) or `"isolated"` |
-| `agentId` | string | No | Pin to specific agent (falls back to default) |
-| `deleteAfterRun` | boolean | No | Auto-delete successful one-shot jobs |
+| Field           | Type    | Required | Description                             |
+|-----------------|---------|----------|-----------------------------------------|
+| `name`          | string  | Yes      | Human-readable job name                 |
+| `schedule`      | object  | Yes      | See schedule kinds below                |
+| `sessionTarget` | string  | No       | `"main"` (default) or `"isolated"`      |  
+| `agentId`       | string  | No       | Pin to specific agent                   |
+| `deleteAfterRun`| boolean | No       | Auto-delete successful one-shot jobs    |
+
 
 ### Schedule Kinds
 
@@ -398,11 +399,7 @@ When calling the cron tool directly (e.g., via `message` or sub-agent), use the 
 
 ## JSON Schema / API Usage
 
-
-
 When calling the cron tool directly (e.g., via `message` or sub-agent), use the following JSON schema. This applies to both `systemEvent` and `agentTurn` payloads.
-
-
 
 ### Common Fields (All Jobs)
 
@@ -440,11 +437,7 @@ When calling the cron tool directly (e.g., via `message` or sub-agent), use the 
 
 ### Schedule Kinds
 
-
-
 #### One-shot (at)
-
-
 
 ```json5
 {
@@ -454,16 +447,9 @@ When calling the cron tool directly (e.g., via `message` or sub-agent), use the 
   }
 }
 ```
-
-
-
 **Note**: `atMs` is epoch milliseconds, not an ISO string. Use `Date.now()` or convert with `new Date("2026-01-30T18:00:00Z").getTime()`.
 
-
-
 #### Interval (every)
-
-
 
 ```json5
 {
@@ -474,11 +460,7 @@ When calling the cron tool directly (e.g., via `message` or sub-agent), use the 
 }
 ```
 
-
-
 #### Cron expression
-
-
 
 ```json5
 {
@@ -490,15 +472,9 @@ When calling the cron tool directly (e.g., via `message` or sub-agent), use the 
 }
 ```
 
-
-
 ### Payloads
 
-
-
 #### SystemEvent (main session only)
-
-
 
 ```json5
 {
@@ -513,11 +489,7 @@ When calling the cron tool directly (e.g., via `message` or sub-agent), use the 
 }
 ```
 
-
-
 #### AgentTurn (isolated session)
-
-
 
 ```json5
 {
@@ -539,11 +511,7 @@ When calling the cron tool directly (e.g., via `message` or sub-agent), use the 
 }
 ```
 
-
-
 ### Delivery Options (isolated only)
-
-
 
 ```json5
 {
@@ -556,11 +524,7 @@ When calling the cron tool directly (e.g., via `message` or sub-agent), use the 
 }
 ```
 
-
-
 ### Telegram Topics
-
-
 
 ```json5
 {
@@ -571,12 +535,11 @@ When calling the cron tool directly (e.g., via `message` or sub-agent), use the 
 }
 ```
 
-
-
-
 ## Gateway API surface
+
 - `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`
 - `cron.run` (force or due), `cron.runs`
+
 For immediate system events without a job, use [`openclaw system event`](/cli/system).
 
 ## Troubleshooting
