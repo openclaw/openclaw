@@ -132,3 +132,54 @@ function substituteAny(value: unknown, env: NodeJS.ProcessEnv, path: string): un
 export function resolveConfigEnvVars(obj: unknown, env: NodeJS.ProcessEnv = process.env): unknown {
   return substituteAny(obj, env, "");
 }
+
+/**
+ * Restores `${VAR_NAME}` placeholders in a resolved config object by comparing it
+ * with an original template that still contains the placeholders.
+ *
+ * This is used to preserve placeholders when writing a modified config back to disk.
+ * If a value in the resolved config matches the resolved value of a placeholder in
+ * the template, the placeholder is restored.
+ */
+export function restoreConfigEnvVars(
+  resolved: unknown,
+  template: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): unknown {
+  if (typeof resolved === "string" && typeof template === "string") {
+    // If they are exactly the same, literal matches or placeholders
+    if (resolved === template) {
+      return resolved;
+    }
+
+    // If the template has a $, it might be a placeholder
+    if (template.includes("$")) {
+      try {
+        const resolvedTemplate = substituteString(template, env, "");
+        // If the resolved version of the template matches the new config value,
+        // it means the value hasn't changed (it's still the "resolved" version of the placeholder),
+        // so we should put the placeholder back.
+        if (resolved === resolvedTemplate) {
+          return template;
+        }
+      } catch {
+        // If substitution fails (e.g. missing var), we can't reliably restore it
+      }
+    }
+    return resolved;
+  }
+
+  if (Array.isArray(resolved) && Array.isArray(template)) {
+    return resolved.map((item, index) => restoreConfigEnvVars(item, template[index], env));
+  }
+
+  if (isPlainObject(resolved) && isPlainObject(template)) {
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(resolved)) {
+      result[key] = restoreConfigEnvVars(val, template[key], env);
+    }
+    return result;
+  }
+
+  return resolved;
+}

@@ -492,7 +492,7 @@ export async function fixSecurityFootguns(opts?: {
 
     if (changes.length > 0) {
       try {
-        await io.writeConfigFile(fixed.cfg);
+        await io.writeConfigFile(fixed.cfg, snap.template);
         configWritten = true;
       } catch (err) {
         errors.push(`writeConfigFile failed: ${String(err)}`);

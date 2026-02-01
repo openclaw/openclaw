@@ -180,6 +180,45 @@ describe("security fix", () => {
     expect(channels.whatsapp.groupAllowFrom).toBeUndefined();
   });
 
+  it("should preserve env var placeholders when fixing security issues", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-fix-"));
+    const stateDir = path.join(tmp, "state");
+    await fs.mkdir(stateDir, { recursive: true });
+
+    const configPath = path.join(stateDir, "openclaw.json");
+    // Config with a placeholder and a security issue (logging.redactSensitive = off)
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          gateway: { auth: { mode: "token", token: "${TEST_TOKEN}" } },
+          logging: { redactSensitive: "off" },
+          env: { TEST_TOKEN: "secret-value" },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: "",
+      TEST_TOKEN: "secret-value",
+    };
+
+    const res = await fixSecurityFootguns({ env });
+    expect(res.ok).toBe(true);
+    expect(res.configWritten).toBe(true);
+
+    const written = JSON.parse(await fs.readFile(configPath, "utf-8"));
+    // Verify the placeholder is preserved
+    expect(written.gateway.auth.token).toBe("${TEST_TOKEN}");
+    // Verify the security fix was also applied
+    expect(written.logging.redactSensitive).toBe("tools");
+  });
+
   it("returns ok=false for invalid config but still tightens perms", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-fix-"));
     const stateDir = path.join(tmp, "state");

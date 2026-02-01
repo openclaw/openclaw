@@ -113,7 +113,10 @@ export type ConfigFileSnapshot = {
   raw: string | null;
   parsed: unknown;
   valid: boolean;
+  /** Substituted and fully normalized config. Use for connectivity checks/runtime. */
   config: OpenClawConfig;
+  /** Fully normalized config but WITH environment variable placeholders preserved. Use for write-backs. */
+  template: OpenClawConfig;
   hash?: string;
   issues: ConfigValidationIssue[];
   warnings: ConfigValidationIssue[];
