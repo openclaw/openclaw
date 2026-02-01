@@ -56,6 +56,28 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+function applyBaselineSecurityHeaders(res: ServerResponse) {
+  // Additive, conservative headers that should be safe for both the Control UI and API responses.
+  // (Avoid CSP here; it can break the UI if the policy isn't matched to the build.)
+  if (!res.hasHeader("X-Content-Type-Options")) res.setHeader("X-Content-Type-Options", "nosniff");
+  if (!res.hasHeader("Referrer-Policy"))
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  if (!res.hasHeader("X-Frame-Options")) res.setHeader("X-Frame-Options", "DENY");
+  if (!res.hasHeader("Permissions-Policy")) {
+    res.setHeader(
+      "Permissions-Policy",
+      [
+        "camera=()",
+        "microphone=()",
+        "geolocation=()",
+        "payment=()",
+        "usb=()",
+        "interest-cohort=()",
+      ].join(", "),
+    );
+  }
+}
+
 export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 
 export function createHooksRequestHandler(
@@ -238,6 +260,8 @@ export function createGatewayHttpServer(opts: {
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") {
       return;
     }
+
+    applyBaselineSecurityHeaders(res);
 
     try {
       const configSnapshot = loadConfig();
