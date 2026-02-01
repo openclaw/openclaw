@@ -164,24 +164,50 @@ export async function createWaSocket(
   return sock;
 }
 
-export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {
+export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>, timeoutMs = 0) {
   return new Promise<void>((resolve, reject) => {
     type OffCapable = {
       off?: (event: string, listener: (...args: unknown[]) => void) => void;
+      removeListener?: (event: string, listener: (...args: unknown[]) => void) => void;
     };
     const evWithOff = sock.ev as unknown as OffCapable;
+
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    const removeHandler = () => {
+      if (evWithOff.off) {
+        evWithOff.off("connection.update", handler);
+      } else if (evWithOff.removeListener) {
+        evWithOff.removeListener("connection.update", handler);
+      }
+    };
+
+    const cleanup = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+      removeHandler();
+    };
 
     const handler = (...args: unknown[]) => {
       const update = (args[0] ?? {}) as Partial<import("@whiskeysockets/baileys").ConnectionState>;
       if (update.connection === "open") {
-        evWithOff.off?.("connection.update", handler);
+        cleanup();
         resolve();
       }
       if (update.connection === "close") {
-        evWithOff.off?.("connection.update", handler);
+        cleanup();
         reject(update.lastDisconnect ?? new Error("Connection closed"));
       }
     };
+
+    if (timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        cleanup();
+        reject(new Error(`WhatsApp connection timeout after ${timeoutMs}ms`));
+      }, timeoutMs);
+    }
 
     sock.ev.on("connection.update", handler);
   });
