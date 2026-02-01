@@ -202,12 +202,7 @@ export function verifyTwilioWebhook(
     // Try again with the URL without the authority port (path/query preserved)
     const urlWithoutPort = new URL(verificationUrl);
     urlWithoutPort.port = "";
-    isValid = validateTwilioSignature(
-      authToken,
-      signature,
-      urlWithoutPort.toString(),
-      params,
-    );
+    isValid = validateTwilioSignature(authToken, signature, urlWithoutPort.toString(), params);
   }
 
   if (isValid) {
