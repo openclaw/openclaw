@@ -1705,7 +1705,8 @@ export class MemoryIndexManager {
         currentTokens = 0;
       }
       if (current.length === 0 && estimate > EMBEDDING_BATCH_MAX_TOKENS) {
-        batches.push([chunk]);
+        const maxChars = EMBEDDING_BATCH_MAX_TOKENS * EMBEDDING_APPROX_CHARS_PER_TOKEN;
+        batches.push([{ ...chunk, text: chunk.text.slice(0, maxChars) }]);
         continue;
       }
       current.push(chunk);
