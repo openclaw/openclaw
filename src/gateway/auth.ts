@@ -3,6 +3,8 @@ import type { IncomingMessage } from "node:http";
 import type { GatewayAuthConfig, GatewayTailscaleMode } from "../config/config.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
 import { isTrustedProxyAddress, parseForwardedForClientIp, resolveGatewayClientIp } from "./net.js";
+import { checkRateLimit, recordAuthFailure, recordAuthSuccess } from "./auth-rate-limit.js";
+import { verifyPassword, isHashedPassword } from "./auth-password.js";
 export type ResolvedGatewayAuthMode = "token" | "password";
 
 export type ResolvedGatewayAuth = {
@@ -246,12 +248,23 @@ export async function authorizeGatewayConnect(params: {
   const tailscaleWhois = params.tailscaleWhois ?? readTailscaleWhoisIdentity;
   const localDirect = isLocalDirectRequest(req, trustedProxies);
 
+  // Rate limiting: Check if IP is blocked before processing auth
+  const clientIp = resolveRequestClientIp(req, trustedProxies) ?? "unknown";
+  const rateCheck = checkRateLimit(clientIp);
+  if (!rateCheck.allowed) {
+    return {
+      ok: false,
+      reason: rateCheck.reason || "rate_limited",
+    };
+  }
+
   if (auth.allowTailscale && !localDirect) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,
     });
     if (tailscaleCheck.ok) {
+      recordAuthSuccess(clientIp);
       return {
         ok: true,
         method: "tailscale",
@@ -265,11 +278,14 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "token_missing_config" };
     }
     if (!connectAuth?.token) {
+      recordAuthFailure(clientIp);
       return { ok: false, reason: "token_missing" };
     }
     if (!safeEqual(connectAuth.token, auth.token)) {
+      recordAuthFailure(clientIp);
       return { ok: false, reason: "token_mismatch" };
     }
+    recordAuthSuccess(clientIp);
     return { ok: true, method: "token" };
   }
 
@@ -279,11 +295,38 @@ export async function authorizeGatewayConnect(params: {
       return { ok: false, reason: "password_missing_config" };
     }
     if (!password) {
+      recordAuthFailure(clientIp);
       return { ok: false, reason: "password_missing" };
     }
-    if (!safeEqual(password, auth.password)) {
+
+    // Support both hashed and plain text passwords
+    let passwordMatches = false;
+
+    if (isHashedPassword(auth.password)) {
+      // Password is hashed → verify with scrypt
+      passwordMatches = await verifyPassword(password, auth.password);
+    } else {
+      // Password is plain text → legacy comparison (backward compatibility)
+      passwordMatches = safeEqual(password, auth.password);
+
+      // Log deprecation warning (only once per process)
+      const g = global as typeof global & { __openclaw_password_plaintext_warning?: boolean };
+      if (!g.__openclaw_password_plaintext_warning) {
+        console.warn(
+          "\n⚠️  SECURITY WARNING: gateway.auth.password is stored in plain text.\n" +
+            "   For better security, update your config to use a hashed password.\n" +
+            "   The password will be automatically hashed on next config save.\n",
+        );
+        g.__openclaw_password_plaintext_warning = true;
+      }
+    }
+
+    if (!passwordMatches) {
+      recordAuthFailure(clientIp);
       return { ok: false, reason: "password_mismatch" };
     }
+
+    recordAuthSuccess(clientIp);
     return { ok: true, method: "password" };
   }
 

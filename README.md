@@ -25,6 +25,31 @@ If you want a personal, single-user assistant that feels local, fast, and always
 
 [Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/start/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-clawdbot) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
 
+## 🛡️ Security Enhancements (Fork)
+
+
+
+This fork of OpenClaw provides **hardened security** for self-hosters. Key improvements include:
+
+- **🔒 Rate Limiting**: Built-in protection against brute-force attacks on the Gateway.
+- **🔑 Secure Authentication**: Mandatory password hashing (Argon2) and secure session handling.
+- **📦 Hardened Dependencies**:
+    - **0 Vulnerabilities**: All critical, high, and moderate vulnerabilities patched.
+    - Updated critical packages: `hono`, `form-data`, `qs`, `fast-xml-parser`, `request`, `tough-cookie`.
+- **✅ Security Verification**: Includes `security-verification.sh` to validate system integrity on startup.
+    ```bash
+    # Run the verification suite
+    ./security-verification.sh
+    ```
+- **📝 Audited**: Comprehensive security audit focusing on dependency risks and configuration safety.
+
+### 📚 Security Documentation
+For deep technical details, see the `docs/security/` directory:
+- [`docs/security/README.md`](docs/security/README.md): Security Hub Index.
+- [`docs/security/ARCHITECTURE.md`](docs/security/ARCHITECTURE.md): Deep dive into Rate Limiting, Hashing, and Warnings.
+- [`docs/security/VERIFICATION.md`](docs/security/VERIFICATION.md): Validation guide and test suite usage.
+- [`docs/security/DEPENDENCY_AUDIT.md`](docs/security/DEPENDENCY_AUDIT.md): 2026 Audit Report (0 Vulnerabilities).
+
 Preferred setup: run the onboarding wizard (`openclaw onboard`). It walks through gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
 Works with npm, pnpm, or bun.
 New install? Start here: [Getting started](https://docs.openclaw.ai/start/getting-started)
