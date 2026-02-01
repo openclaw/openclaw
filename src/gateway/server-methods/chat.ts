@@ -144,6 +144,56 @@ function appendAssistantTranscriptMessage(params: {
   return { ok: true, messageId, message: transcriptEntry.message };
 }
 
+function appendUserTranscriptMessage(params: {
+  message: string;
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  senderId?: string;
+  senderName?: string;
+}): TranscriptAppendResult {
+  const transcriptPath = resolveTranscriptPath({
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.sessionFile,
+  });
+  if (!transcriptPath) {
+    return { ok: false, error: "transcript path not resolved" };
+  }
+
+  if (!fs.existsSync(transcriptPath)) {
+    return { ok: false, error: "transcript file not found" };
+  }
+
+  const now = Date.now();
+  const messageId = randomUUID().slice(0, 8);
+  const messageBody: Record<string, unknown> = {
+    role: "user",
+    content: [{ type: "text", text: params.message }],
+    timestamp: now,
+  };
+  if (params.senderId) {
+    messageBody.senderId = params.senderId;
+  }
+  if (params.senderName) {
+    messageBody.senderName = params.senderName;
+  }
+  const transcriptEntry = {
+    type: "message",
+    id: messageId,
+    timestamp: new Date(now).toISOString(),
+    message: messageBody,
+  };
+
+  try {
+    fs.appendFileSync(transcriptPath, `${JSON.stringify(transcriptEntry)}\n`, "utf-8");
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+
+  return { ok: true, messageId, message: transcriptEntry.message };
+}
+
 function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: string) {
   const next = (context.agentRunSeq.get(runId) ?? 0) + 1;
   context.agentRunSeq.set(runId, next);
@@ -368,7 +418,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const { cfg, entry } = loadSessionEntry(p.sessionKey);
+    const { cfg, storePath, entry } = loadSessionEntry(p.sessionKey);
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -443,12 +493,29 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
 
+      // Persist user message to transcript before dispatching (fixes #5735)
+      const clientInfo = client?.connect?.client;
+      if (entry?.sessionId && parsedMessage.trim()) {
+        const userAppended = appendUserTranscriptMessage({
+          message: parsedMessage,
+          sessionId: entry.sessionId,
+          storePath,
+          sessionFile: entry.sessionFile,
+          senderId: clientInfo?.id,
+          senderName: clientInfo?.displayName,
+        });
+        if (!userAppended.ok) {
+          context.logGateway.debug?.(
+            `webchat user transcript append skipped: ${userAppended.error ?? "unknown"}`,
+          );
+        }
+      }
+
       const trimmedMessage = parsedMessage.trim();
       const injectThinking = Boolean(
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
-      const clientInfo = client?.connect?.client;
       // Inject timestamp so agents know the current date/time.
       // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
       // See: https://github.com/moltbot/moltbot/issues/3658
