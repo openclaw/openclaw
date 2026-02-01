@@ -44,6 +44,7 @@ import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-de
 import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { logWarn } from "../../logger.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
@@ -78,7 +79,10 @@ function matchesMessagingToolDeliveryTarget(
   if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
-  return target.to === delivery.to;
+  // Normalize both sides to prevent case-sensitivity mismatches (e.g. "User@Example.com" vs "user@example.com").
+  const normalizedTargetTo = normalizeTargetForProvider(channel, target.to);
+  const normalizedDeliveryTo = normalizeTargetForProvider(channel, delivery.to);
+  return normalizedTargetTo === normalizedDeliveryTo;
 }
 
 export type RunCronAgentTurnResult = {

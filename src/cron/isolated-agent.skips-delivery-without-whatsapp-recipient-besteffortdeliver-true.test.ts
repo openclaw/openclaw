@@ -533,6 +533,64 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("skips auto-delivery when messaging tool target differs only by case", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn().mockResolvedValue({
+          messageId: "t1",
+          chatId: "123",
+        }),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      // Agent sent to "User@Example.com" (mixed case) via messaging tool.
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "sent" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "User@Example.com" },
+        ],
+      });
+
+      const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+      process.env.TELEGRAM_BOT_TOKEN = "";
+      try {
+        const res = await runCronIsolatedAgentTurn({
+          cfg: makeCfg(home, storePath, {
+            channels: { telegram: { botToken: "t-1" } },
+          }),
+          deps,
+          job: makeJob({
+            kind: "agentTurn",
+            message: "do it",
+            channel: "telegram",
+            to: "user@example.com",
+          }),
+          message: "do it",
+          sessionKey: "cron:job-1",
+          lane: "cron",
+        });
+
+        // Delivery should be skipped — targets match after case normalization.
+        expect(res.status).toBe("ok");
+        expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      } finally {
+        if (prevTelegramToken === undefined) {
+          delete process.env.TELEGRAM_BOT_TOKEN;
+        } else {
+          process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+        }
+      }
+    });
+  });
+
   it("delivers when response has HEARTBEAT_OK but also substantial content", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);
