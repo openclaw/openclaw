@@ -166,12 +166,52 @@ function buildDiscordAttachmentPlaceholder(attachments?: APIAttachment[]): strin
   return `${tag} (${count} ${suffix})`;
 }
 
+/**
+ * Check if string contains binary/non-printable characters
+ * indicating it's likely misidentified binary data.
+ *
+ * Detection strategy:
+ * 1. Null bytes (\x00) - instant binary indicator (valid text never has these)
+ * 2. Control chars (code < 32) except tab/newline/CR - suspicious if >10%
+ *
+ * Note: OGG binary decoded as UTF-8 produces lots of null bytes and control chars
+ * (see issue #4580: "杏卧Ȁ    阭" contains embedded nulls shown as spaces)
+ */
+function looksLikeBinaryData(text: string): boolean {
+  if (!text) return false;
+  // Check first 100 chars for binary indicators
+  const sample = text.slice(0, 100);
+
+  let nullCount = 0;
+  let controlCount = 0;
+
+  for (const char of sample) {
+    const code = char.charCodeAt(0);
+    if (code === 0) {
+      nullCount++;
+    } else if (code < 32 && code !== 9 && code !== 10 && code !== 13) {
+      controlCount++;
+    }
+  }
+
+  // Any null byte = definitely binary
+  if (nullCount > 0) return true;
+
+  // >10% control chars = likely binary
+  return controlCount > sample.length * 0.1;
+}
+
 export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
+  const rawContent = message.content?.trim();
+  // Skip content if it looks like binary data (misidentified MIME)
+  const hasAttachments = message.attachments && message.attachments.length > 0;
+  const contentIsBinary = hasAttachments && rawContent && looksLikeBinaryData(rawContent);
+
   const baseText =
-    message.content?.trim() ||
+    (!contentIsBinary && rawContent) ||
     buildDiscordAttachmentPlaceholder(message.attachments) ||
     message.embeds?.[0]?.description ||
     options?.fallbackText?.trim() ||
@@ -233,10 +273,14 @@ function resolveDiscordMessageSnapshots(message: Message): DiscordMessageSnapsho
 
 function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): string {
   const content = snapshot.content?.trim() ?? "";
+  const hasAttachments = snapshot.attachments && snapshot.attachments.length > 0;
+  const contentIsBinary = hasAttachments && content && looksLikeBinaryData(content);
+
   const attachmentText = buildDiscordAttachmentPlaceholder(snapshot.attachments ?? undefined);
   const embed = snapshot.embeds?.[0];
   const embedText = embed?.description?.trim() || embed?.title?.trim() || "";
-  return content || attachmentText || embedText || "";
+
+  return (!contentIsBinary && content) || attachmentText || embedText || "";
 }
 
 function formatDiscordSnapshotAuthor(
