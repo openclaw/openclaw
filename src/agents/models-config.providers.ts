@@ -109,20 +109,22 @@ async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
       console.warn("No Ollama models found on local instance");
       return [];
     }
-    return data.models.map((model) => {
-      const modelId = model.name;
-      const isReasoning =
-        modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
-      return {
-        id: modelId,
-        name: modelId,
-        reasoning: isReasoning,
-        input: ["text"],
-        cost: OLLAMA_DEFAULT_COST,
-        contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-      };
-    });
+    return data.models
+      .filter((model) => model.name)
+      .map((model) => {
+        const modelId = model.name;
+        const isReasoning =
+          modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
+        return {
+          id: modelId,
+          name: modelId,
+          reasoning: isReasoning,
+          input: ["text"],
+          cost: OLLAMA_DEFAULT_COST,
+          contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+        };
+      });
   } catch (error) {
     console.warn(`Failed to discover Ollama models: ${String(error)}`);
     return [];
