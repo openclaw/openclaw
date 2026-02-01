@@ -406,9 +406,14 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (!reply) {
-      reply = await readLatestAssistantReply({
-        sessionKey: params.childSessionKey,
-      });
+      // Retry with exponential backoff — transcript may not be flushed yet
+      // (NFS + parallel sub-agents can delay flushes well beyond 2.5s)
+      for (let attempt = 0; attempt < 10 && !reply; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(500 * 2 ** attempt, 5000)));
+        reply = await readLatestAssistantReply({
+          sessionKey: params.childSessionKey,
+        });
+      }
     }
 
     if (!outcome) {
