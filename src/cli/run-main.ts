@@ -42,7 +42,7 @@ export async function runCli(argv: string[] = process.argv) {
   enableConsoleCapture();
 
   const { buildProgram } = await import("./program.js");
-  const program = buildProgram();
+  const program = await buildProgram();
 
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
