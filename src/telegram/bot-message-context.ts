@@ -123,7 +123,7 @@ type BuildTelegramMessageContextParams = {
 type TelegramDynamicAgentsMode = "off" | "dm" | "group" | "dm+group";
 
 /**
- * 解析 Telegram 动态 agent 模式（off/dm/group/dm+group）。
+ * Resolve Telegram dynamic agent mode (off/dm/group/dm+group).
  */
 function resolveTelegramDynamicAgentsMode(telegramCfg?: {
   dynamicAgents?: TelegramDynamicAgentsMode | string;
@@ -137,7 +137,7 @@ function resolveTelegramDynamicAgentsMode(telegramCfg?: {
 }
 
 /**
- * 基于 DM/群聊生成稳定的 agentId；返回 null 表示使用默认路由。
+ * Derive a stable agentId for DMs/groups; returns null to use the default route.
  */
 function resolveTelegramDynamicAgentId(params: {
   mode: TelegramDynamicAgentsMode;
@@ -218,7 +218,14 @@ export const buildTelegramMessageContext = async ({
   const replyThreadId = isGroup ? resolvedThreadId : messageThreadId;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
-  // 动态 agent 路由：启用时优先按 DM 用户或群聊生成 agentId。
+  const peer = { kind: isGroup ? "group" : "dm", id: peerId } as const;
+  const baseRoute = resolveAgentRoute({
+    cfg,
+    channel: "telegram",
+    accountId: account.accountId,
+    peer,
+  });
+  // Dynamic agent routing: derive per-user/group agent IDs when enabled.
   const dynamicAgentId = resolveTelegramDynamicAgentId({
     mode: resolveTelegramDynamicAgentsMode(telegramCfg),
     isGroup,
@@ -228,29 +235,19 @@ export const buildTelegramMessageContext = async ({
   });
   const route = dynamicAgentId
     ? {
+        ...baseRoute,
         agentId: dynamicAgentId,
-        channel: "telegram",
-        accountId: account.accountId,
         sessionKey: buildAgentSessionKey({
           agentId: dynamicAgentId,
-          channel: "telegram",
-          accountId: account.accountId,
-          peer: { kind: isGroup ? "group" : "dm", id: peerId },
+          channel: baseRoute.channel,
+          accountId: baseRoute.accountId,
+          peer,
           dmScope: cfg.session?.dmScope,
           identityLinks: cfg.session?.identityLinks,
         }).toLowerCase(),
         mainSessionKey: buildAgentMainSessionKey({ agentId: dynamicAgentId }).toLowerCase(),
-        matchedBy: "binding.peer",
       }
-    : resolveAgentRoute({
-        cfg,
-        channel: "telegram",
-        accountId: account.accountId,
-        peer: {
-          kind: isGroup ? "group" : "dm",
-          id: peerId,
-        },
-      });
+    : baseRoute;
   const baseSessionKey = route.sessionKey;
   // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
   const dmThreadId = !isGroup ? messageThreadId : undefined;
