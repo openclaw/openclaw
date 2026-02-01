@@ -1,4 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
+import type { PluginHookHttpContext } from "../plugins/types.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   filterToolsByPolicy,
@@ -18,6 +20,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -304,13 +307,108 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
 
+  const requestId = `tool_${randomUUID()}`;
+  const toolArgs = mergeActionIntoArgsIfSupported({
+    toolSchema: (tool as any).parameters,
+    action,
+    args,
+  });
+
+  // Build HTTP context for hooks
+  const safeHeaders: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey === "authorization" || lowerKey === "cookie" || lowerKey === "x-api-key") {
+      safeHeaders[key] = "[REDACTED]";
+    } else if (typeof value === "string") {
+      safeHeaders[key] = value;
+    }
+  }
+  const httpCtx: PluginHookHttpContext = {
+    httpMethod: req.method || "POST",
+    httpPath: "/tools/invoke",
+    httpHeaders: safeHeaders,
+    clientIp: req.socket?.remoteAddress,
+    requestId,
+  };
+
+  // ==========================================================================
+  // SECURITY: Run http_tool_invoke hook before execution
+  // ==========================================================================
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner) {
+    try {
+      const preHook = await hookRunner.runHttpToolInvoke(
+        {
+          toolName,
+          toolParams: toolArgs,
+          content: JSON.stringify(toolArgs),
+        },
+        httpCtx,
+      );
+
+      if (preHook?.block) {
+        sendJson(res, 400, {
+          ok: false,
+          error: {
+            type: "security_block",
+            message: preHook.blockReason || "Tool invocation blocked by security plugin",
+          },
+        });
+        return true;
+      }
+    } catch (hookError) {
+      console.error("[tools-invoke-http] http_tool_invoke hook error:", hookError);
+      sendJson(res, 500, {
+        ok: false,
+        error: { type: "security_error", message: "Security check failed" },
+      });
+      return true;
+    }
+  }
+
+  const startTime = Date.now();
   try {
-    const toolArgs = mergeActionIntoArgsIfSupported({
-      toolSchema: (tool as any).parameters,
-      action,
-      args,
-    });
     const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
+    const durationMs = Date.now() - startTime;
+
+    // ==========================================================================
+    // SECURITY: Run http_tool_result hook after execution
+    // ==========================================================================
+    if (hookRunner) {
+      try {
+        const postHook = await hookRunner.runHttpToolResult(
+          {
+            toolName,
+            toolParams: toolArgs,
+            toolResult: result,
+            content: JSON.stringify(result),
+            durationMs,
+            success: true,
+          },
+          httpCtx,
+        );
+
+        if (postHook?.block) {
+          sendJson(res, 400, {
+            ok: false,
+            error: {
+              type: "security_block",
+              message: postHook.blockReason || "Tool result blocked by security plugin",
+            },
+          });
+          return true;
+        }
+      } catch (hookError) {
+        console.error("[tools-invoke-http] http_tool_result hook error:", hookError);
+        sendJson(res, 500, {
+          ok: false,
+          error: { type: "security_error", message: "Security check failed" },
+        });
+        return true;
+      }
+    }
+
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
     sendJson(res, 400, {

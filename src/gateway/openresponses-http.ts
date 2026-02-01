@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import type { ImageContent } from "../commands/agent/types.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
+import type { PluginHookHttpContext } from "../plugins/types.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
@@ -33,6 +34,7 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -125,6 +127,54 @@ function resolveResponsesLimits(
 
 function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
   return (body.tools ?? []) as ClientToolDefinition[];
+}
+
+/**
+ * Extract all user-provided content from input for security scanning.
+ */
+function extractUserContentForScanning(input: string | ItemParam[]): string {
+  if (typeof input === "string") {
+    return input;
+  }
+
+  const parts: string[] = [];
+  for (const item of input) {
+    if (item.type === "message") {
+      const content = extractTextContent(item.content).trim();
+      if (
+        content &&
+        (item.role === "user" || item.role === "system" || item.role === "developer")
+      ) {
+        parts.push(content);
+      }
+    } else if (item.type === "function_call_output") {
+      parts.push(item.output);
+    }
+  }
+  return parts.join("\n\n");
+}
+
+/**
+ * Build HTTP context for hook invocation.
+ */
+function buildHttpContext(req: IncomingMessage, requestId: string): PluginHookHttpContext {
+  const safeHeaders: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey === "authorization" || lowerKey === "cookie" || lowerKey === "x-api-key") {
+      safeHeaders[key] = "[REDACTED]";
+    } else if (typeof value === "string") {
+      safeHeaders[key] = value;
+    }
+  }
+
+  return {
+    httpMethod: req.method || "POST",
+    httpPath: "/v1/responses",
+    httpHeaders: safeHeaders,
+    clientIp: req.socket?.remoteAddress,
+    requestId,
+  };
 }
 
 function applyToolChoice(params: {
@@ -380,6 +430,58 @@ export async function handleOpenResponsesHttpRequest(
   const stream = Boolean(payload.stream);
   const model = payload.model;
   const user = payload.user;
+  const responseId = `resp_${randomUUID()}`;
+
+  // ==========================================================================
+  // SECURITY: Run http_request_received hook before processing
+  // ==========================================================================
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner) {
+    const httpCtx = buildHttpContext(req, responseId);
+    const userContent = extractUserContentForScanning(payload.input);
+
+    try {
+      const hookResult = await hookRunner.runHttpRequestReceived(
+        {
+          content: userContent,
+          requestBody: payload as unknown as Record<string, unknown>,
+          metadata: {
+            model,
+            messageCount: Array.isArray(payload.input) ? payload.input.length : 1,
+            hasTools: Array.isArray(payload.tools) && payload.tools.length > 0,
+            hasImages: false,
+          },
+        },
+        httpCtx,
+      );
+
+      if (hookResult?.block) {
+        const response = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: {
+            code: "security_block",
+            message: hookResult.blockReason || "Request blocked by security plugin",
+          },
+        });
+        sendJson(res, hookResult.blockStatusCode ?? 400, response);
+        return true;
+      }
+    } catch (hookError) {
+      console.error("[openresponses-http] http_request_received hook error:", hookError);
+      const response = createResponseResource({
+        id: responseId,
+        model,
+        status: "failed",
+        output: [],
+        error: { code: "security_error", message: "Security check failed" },
+      });
+      sendJson(res, 500, response);
+      return true;
+    }
+  }
 
   // Extract images + files from input (Phase 2)
   let images: ImageContent[] = [];
@@ -502,7 +604,6 @@ export async function handleOpenResponsesHttpRequest(
     return true;
   }
 
-  const responseId = `resp_${randomUUID()}`;
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
   const streamParams =

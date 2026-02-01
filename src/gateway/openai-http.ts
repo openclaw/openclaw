@@ -1,9 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import type { PluginHookHttpContext } from "../plugins/types.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../runtime.js";
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -168,6 +170,55 @@ function coerceRequest(val: unknown): OpenAiChatCompletionRequest {
   return val as OpenAiChatCompletionRequest;
 }
 
+/**
+ * Extract all user-provided content from messages for security scanning.
+ */
+function extractUserContentForScanning(messagesUnknown: unknown): string {
+  const messages = asMessages(messagesUnknown);
+  const parts: string[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const role = typeof msg.role === "string" ? msg.role.trim() : "";
+    const content = extractTextContent(msg.content).trim();
+    if (!content) {
+      continue;
+    }
+    // Include user, system, and developer messages for scanning
+    if (role === "user" || role === "system" || role === "developer") {
+      parts.push(content);
+    }
+  }
+
+  return parts.join("\n\n");
+}
+
+/**
+ * Build HTTP context for hook invocation.
+ */
+function buildHttpContext(req: IncomingMessage, requestId: string): PluginHookHttpContext {
+  // Redact sensitive headers
+  const safeHeaders: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey === "authorization" || lowerKey === "cookie" || lowerKey === "x-api-key") {
+      safeHeaders[key] = "[REDACTED]";
+    } else if (typeof value === "string") {
+      safeHeaders[key] = value;
+    }
+  }
+
+  return {
+    httpMethod: req.method || "POST",
+    httpPath: "/v1/chat/completions",
+    httpHeaders: safeHeaders,
+    clientIp: req.socket?.remoteAddress,
+    requestId,
+  };
+}
+
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -204,6 +255,55 @@ export async function handleOpenAiHttpRequest(
   const stream = Boolean(payload.stream);
   const model = typeof payload.model === "string" ? payload.model : "openclaw";
   const user = typeof payload.user === "string" ? payload.user : undefined;
+  const runId = `chatcmpl_${randomUUID()}`;
+
+  // ==========================================================================
+  // SECURITY: Run http_request_received hook before processing
+  // This allows security plugins to scan and block malicious requests
+  // ==========================================================================
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner) {
+    const httpCtx = buildHttpContext(req, runId);
+    const userContent = extractUserContentForScanning(payload.messages);
+
+    try {
+      const hookResult = await hookRunner.runHttpRequestReceived(
+        {
+          content: userContent,
+          requestBody: payload as Record<string, unknown>,
+          metadata: {
+            model,
+            messageCount: Array.isArray(payload.messages) ? payload.messages.length : 0,
+            hasTools: Array.isArray((payload as { tools?: unknown[] }).tools),
+            hasImages: false, // TODO: Detect image content parts
+          },
+        },
+        httpCtx,
+      );
+
+      if (hookResult?.block) {
+        sendJson(res, hookResult.blockStatusCode ?? 400, {
+          error: {
+            message: hookResult.blockReason || "Request blocked by security plugin",
+            type: "security_block",
+            code: "injection_detected",
+          },
+        });
+        return true;
+      }
+    } catch (hookError) {
+      // FAIL-CLOSED: On hook error, block the request for security
+      console.error("[openai-http] http_request_received hook error:", hookError);
+      sendJson(res, 500, {
+        error: {
+          message: "Security check failed",
+          type: "security_error",
+          code: "hook_failure",
+        },
+      });
+      return true;
+    }
+  }
 
   const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
@@ -218,7 +318,6 @@ export async function handleOpenAiHttpRequest(
     return true;
   }
 
-  const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
 
   if (!stream) {
@@ -238,13 +337,73 @@ export async function handleOpenAiHttpRequest(
       );
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
-      const content =
+      let content =
         Array.isArray(payloads) && payloads.length > 0
           ? payloads
               .map((p) => (typeof p.text === "string" ? p.text : ""))
               .filter(Boolean)
               .join("\n\n")
           : "No response from OpenClaw.";
+
+      // ======================================================================
+      // SECURITY: Run http_response_sending hook before returning response
+      // This allows security plugins to scan for data exfiltration/leaks
+      // ======================================================================
+      if (hookRunner) {
+        const httpCtx = buildHttpContext(req, runId);
+        const responseBody = {
+          id: runId,
+          object: "chat.completion",
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content },
+              finish_reason: "stop",
+            },
+          ],
+        };
+
+        try {
+          const responseHook = await hookRunner.runHttpResponseSending(
+            {
+              content,
+              responseBody,
+              requestBody: payload as Record<string, unknown>,
+              isStreaming: false,
+            },
+            httpCtx,
+          );
+
+          if (responseHook?.block) {
+            sendJson(res, 400, {
+              error: {
+                message: responseHook.blockReason || "Response blocked for security reasons",
+                type: "security_block",
+                code: "exfiltration_detected",
+              },
+            });
+            return true;
+          }
+
+          // Allow content modification (e.g., for redaction)
+          if (responseHook?.modifiedContent) {
+            content = responseHook.modifiedContent;
+          }
+        } catch (hookError) {
+          // FAIL-CLOSED: On hook error, block the response
+          console.error("[openai-http] http_response_sending hook error:", hookError);
+          sendJson(res, 500, {
+            error: {
+              message: "Security check failed",
+              type: "security_error",
+              code: "hook_failure",
+            },
+          });
+          return true;
+        }
+      }
 
       sendJson(res, 200, {
         id: runId,
