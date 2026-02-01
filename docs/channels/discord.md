@@ -223,6 +223,16 @@ Notes:
 - **Permission audits** (`channels status --probe`) only check numeric channel IDs. If you use slugs/names as `channels.discord.guilds.*.channels` keys, the audit can’t verify permissions.
 - **DMs don’t work**: `channels.discord.dm.enabled=false`, `channels.discord.dm.policy="disabled"`, or you haven’t been approved yet (`channels.discord.dm.policy="pairing"`).
 
+### Exec approvals in Discord
+Discord supports a **button UI** for exec approvals in DMs (Allow once / Always allow / Deny). Other chat surfaces resolve forwarded approvals with the `/approve` [slash command](/tools/slash-commands#command-list).
+
+If you see `❌ Failed to submit approval: Error: unknown approval id` or the UI never shows up, check:
+- `channels.discord.execApprovals.enabled: true` in your config.
+- Your Discord user ID is listed in `channels.discord.execApprovals.approvers` (the UI is only sent to approvers).
+- Use the buttons in the DM prompt (**Allow once**, **Always allow**, **Deny**). `/approve <id> ...` is only for forwarded approvals and won’t resolve Discord’s button prompts.
+
+See [Exec approvals](/tools/exec-approvals) and [Slash commands](/tools/slash-commands) for the broader approvals and command flow.
+
 ## Capabilities & limits
 
 - DMs and guild text channels (threads are treated as separate channels; voice not supported).
