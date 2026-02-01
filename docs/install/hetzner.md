@@ -85,6 +85,30 @@ ssh root@YOUR_VPS_IP
 This guide assumes the VPS is stateful.
 Do not treat it as disposable infrastructure.
 
+### Option: Create the server via hcloud CLI
+
+If you prefer the Hetzner Cloud CLI, create and SSH into the server like this:
+
+```bash
+# 1) Create or select a context (paste your API token when prompted)
+hcloud context create OpenClaw
+
+# 2) Ensure your SSH key is registered in Hetzner (use an existing key name or add one)
+hcloud ssh-key list
+# hcloud ssh-key create --name default --public-key "$(cat ~/.ssh/id_ed25519.pub)"
+
+# 3) Create the server (Ubuntu 24.04, CX22/CX23 are good baselines)
+hcloud server create \
+  --image ubuntu-24.04 \
+  --type cx22 \
+  --name openclaw \
+  --ssh-key default
+
+# 4) SSH into the server (or use the IPv4 shown in the create output)
+hcloud server ssh openclaw
+# …or: ssh root@YOUR_VPS_IP
+```
+
 ---
 
 ## 2) Install Docker (on the VPS)
