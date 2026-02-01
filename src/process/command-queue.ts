@@ -26,7 +26,7 @@ type LaneState = {
 function shouldAutoRemoveLane(lane: string) {
   // Dynamic lanes derived from session keys should not live forever.
   // Main lane is process-wide and intentionally persistent.
-  return lane !== CommandLane.Main && lane.startsWith("session:");
+  return lane.trim() !== CommandLane.Main && lane.startsWith("session:");
 }
 
 function maybeRemoveIdleLane(state: LaneState) {
