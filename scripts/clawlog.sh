@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Configuration
-SUBSYSTEM="bot.molt"
+SUBSYSTEM="ai.openclaw"
 DEFAULT_LEVEL="info"
 
 # Colors for output
@@ -48,17 +48,17 @@ SHOW_HELP=false
 # Function to show usage
 show_usage() {
     cat << EOF
-clawlog - Moltbot Logging Utility
+clawlog - OpenClaw Logging Utility
 
 USAGE:
     clawlog [OPTIONS]
 
 DESCRIPTION:
-    View Moltbot logs with full details (bypasses Apple's privacy redaction).
+    View OpenClaw logs with full details (bypasses Apple's privacy redaction).
     Requires sudo access configured for /usr/bin/log command.
 
 LOG FLOW ARCHITECTURE:
-    Moltbot logs flow through the macOS unified log (subsystem: bot.molt).
+    OpenClaw logs flow through the macOS unified log (subsystem: ai.openclaw).
 
 LOG CATEGORIES (examples):
     • voicewake           - Voice wake detection/test harness

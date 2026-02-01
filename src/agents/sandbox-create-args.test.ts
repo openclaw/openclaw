@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-
 import { buildSandboxCreateArgs, type SandboxDockerConfig } from "./sandbox.js";
 
 describe("buildSandboxCreateArgs", () => {
   it("includes hardening and resource flags", () => {
     const cfg: SandboxDockerConfig = {
-      image: "moltbot-sandbox:bookworm-slim",
-      containerPrefix: "moltbot-sbx-",
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
       workdir: "/workspace",
       readOnlyRoot: true,
       tmpfs: ["/tmp"],
@@ -24,32 +23,32 @@ describe("buildSandboxCreateArgs", () => {
         core: "0",
       },
       seccompProfile: "/tmp/seccomp.json",
-      apparmorProfile: "moltbot-sandbox",
+      apparmorProfile: "openclaw-sandbox",
       dns: ["1.1.1.1"],
       extraHosts: ["internal.service:10.0.0.5"],
     };
 
     const args = buildSandboxCreateArgs({
-      name: "moltbot-sbx-test",
+      name: "openclaw-sbx-test",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
-      labels: { "moltbot.sandboxBrowser": "1" },
+      labels: { "openclaw.sandboxBrowser": "1" },
     });
 
     expect(args).toEqual(
       expect.arrayContaining([
         "create",
         "--name",
-        "moltbot-sbx-test",
+        "openclaw-sbx-test",
         "--label",
-        "moltbot.sandbox=1",
+        "openclaw.sandbox=1",
         "--label",
-        "moltbot.sessionKey=main",
+        "openclaw.sessionKey=main",
         "--label",
-        "moltbot.createdAtMs=1700000000000",
+        "openclaw.createdAtMs=1700000000000",
         "--label",
-        "moltbot.sandboxBrowser=1",
+        "openclaw.sandboxBrowser=1",
         "--read-only",
         "--tmpfs",
         "/tmp",
@@ -64,7 +63,7 @@ describe("buildSandboxCreateArgs", () => {
         "--security-opt",
         "seccomp=/tmp/seccomp.json",
         "--security-opt",
-        "apparmor=moltbot-sandbox",
+        "apparmor=openclaw-sandbox",
         "--dns",
         "1.1.1.1",
         "--add-host",
@@ -84,7 +83,9 @@ describe("buildSandboxCreateArgs", () => {
     for (let i = 0; i < args.length; i += 1) {
       if (args[i] === "--ulimit") {
         const value = args[i + 1];
-        if (value) ulimitValues.push(value);
+        if (value) {
+          ulimitValues.push(value);
+        }
       }
     }
     expect(ulimitValues).toEqual(
@@ -94,8 +95,8 @@ describe("buildSandboxCreateArgs", () => {
 
   it("emits -v flags for custom binds", () => {
     const cfg: SandboxDockerConfig = {
-      image: "moltbot-sandbox:bookworm-slim",
-      containerPrefix: "moltbot-sbx-",
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
       workdir: "/workspace",
       readOnlyRoot: false,
       tmpfs: [],
@@ -105,7 +106,7 @@ describe("buildSandboxCreateArgs", () => {
     };
 
     const args = buildSandboxCreateArgs({
-      name: "moltbot-sbx-binds",
+      name: "openclaw-sbx-binds",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
@@ -116,7 +117,9 @@ describe("buildSandboxCreateArgs", () => {
     for (let i = 0; i < args.length; i++) {
       if (args[i] === "-v") {
         const value = args[i + 1];
-        if (value) vFlags.push(value);
+        if (value) {
+          vFlags.push(value);
+        }
       }
     }
     expect(vFlags).toContain("/home/user/source:/source:rw");
@@ -125,8 +128,8 @@ describe("buildSandboxCreateArgs", () => {
 
   it("omits -v flags when binds is empty or undefined", () => {
     const cfg: SandboxDockerConfig = {
-      image: "moltbot-sandbox:bookworm-slim",
-      containerPrefix: "moltbot-sbx-",
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
       workdir: "/workspace",
       readOnlyRoot: false,
       tmpfs: [],
@@ -136,7 +139,7 @@ describe("buildSandboxCreateArgs", () => {
     };
 
     const args = buildSandboxCreateArgs({
-      name: "moltbot-sbx-no-binds",
+      name: "openclaw-sbx-no-binds",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,

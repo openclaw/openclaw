@@ -46,7 +46,9 @@ export const createTelegramMessageProcessor = (deps) => {
       resolveGroupRequireMention,
       resolveTelegramGroupConfig,
     });
-    if (!context) return;
+    if (!context) {
+      return;
+    }
     await dispatchTelegramMessage({
       context,
       bot,

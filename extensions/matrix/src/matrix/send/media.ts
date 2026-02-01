@@ -7,8 +7,8 @@ import type {
   VideoFileInfo,
 } from "@vector-im/matrix-bot-sdk";
 import { parseBuffer, type IFileInfo } from "music-metadata";
-
 import { getMatrixRuntime } from "../../runtime.js";
+import { applyMatrixFormatting } from "./formatting.js";
 import {
   type MatrixMediaContent,
   type MatrixMediaInfo,
@@ -16,7 +16,6 @@ import {
   type MatrixRelation,
   type MediaKind,
 } from "./types.js";
-import { applyMatrixFormatting } from "./formatting.js";
 
 const getCore = () => getMatrixRuntime();
 
@@ -54,7 +53,9 @@ export function buildMatrixMediaInfo(params: {
     };
     return timedInfo;
   }
-  if (Object.keys(base).length === 0) return undefined;
+  if (Object.keys(base).length === 0) {
+    return undefined;
+  }
   return base;
 }
 
@@ -113,8 +114,12 @@ export async function prepareImageInfo(params: {
   buffer: Buffer;
   client: MatrixClient;
 }): Promise<DimensionalFileInfo | undefined> {
-  const meta = await getCore().media.getImageMetadata(params.buffer).catch(() => null);
-  if (!meta) return undefined;
+  const meta = await getCore()
+    .media.getImageMetadata(params.buffer)
+    .catch(() => null);
+  if (!meta) {
+    return undefined;
+  }
   const imageInfo: DimensionalFileInfo = { w: meta.width, h: meta.height };
   const maxDim = Math.max(meta.width, meta.height);
   if (maxDim > THUMBNAIL_MAX_SIDE) {
@@ -125,7 +130,9 @@ export async function prepareImageInfo(params: {
         quality: THUMBNAIL_QUALITY,
         withoutEnlargement: true,
       });
-      const thumbMeta = await getCore().media.getImageMetadata(thumbBuffer).catch(() => null);
+      const thumbMeta = await getCore()
+        .media.getImageMetadata(thumbBuffer)
+        .catch(() => null);
       const thumbUri = await params.client.uploadContent(
         thumbBuffer,
         "image/jpeg",
@@ -153,7 +160,9 @@ export async function resolveMediaDurationMs(params: {
   fileName?: string;
   kind: MediaKind;
 }): Promise<number | undefined> {
-  if (params.kind !== "audio" && params.kind !== "video") return undefined;
+  if (params.kind !== "audio" && params.kind !== "video") {
+    return undefined;
+  }
   try {
     const fileInfo: IFileInfo | string | undefined =
       params.contentType || params.fileName
@@ -201,7 +210,7 @@ export async function uploadMediaMaybeEncrypted(
   },
 ): Promise<{ url: string; file?: EncryptedFile }> {
   // Check if room is encrypted and crypto is available
-  const isEncrypted = client.crypto && await client.crypto.isRoomEncrypted(roomId);
+  const isEncrypted = client.crypto && (await client.crypto.isRoomEncrypted(roomId));
 
   if (isEncrypted && client.crypto) {
     // Encrypt the media before uploading

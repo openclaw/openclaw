@@ -1,7 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-
-import type { MoltbotConfig, MemorySearchConfig } from "../config/config.js";
+import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -9,6 +8,7 @@ import { resolveAgentConfig } from "./agent-scope.js";
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
+  extraPaths: string[];
   provider: "openai" | "local" | "gemini" | "auto";
   remote?: {
     baseUrl?: string;
@@ -93,17 +93,25 @@ function normalizeSources(
   const normalized = new Set<"memory" | "sessions">();
   const input = sources?.length ? sources : DEFAULT_SOURCES;
   for (const source of input) {
-    if (source === "memory") normalized.add("memory");
-    if (source === "sessions" && sessionMemoryEnabled) normalized.add("sessions");
+    if (source === "memory") {
+      normalized.add("memory");
+    }
+    if (source === "sessions" && sessionMemoryEnabled) {
+      normalized.add("sessions");
+    }
   }
-  if (normalized.size === 0) normalized.add("memory");
+  if (normalized.size === 0) {
+    normalized.add("memory");
+  }
   return Array.from(normalized);
 }
 
 function resolveStorePath(agentId: string, raw?: string): string {
   const stateDir = resolveStateDir(process.env, os.homedir);
   const fallback = path.join(stateDir, "memory", `${agentId}.sqlite`);
-  if (!raw) return fallback;
+  if (!raw) {
+    return fallback;
+  }
   const withToken = raw.includes("{agentId}") ? raw.replaceAll("{agentId}", agentId) : raw;
   return resolveUserPath(withToken);
 }
@@ -162,6 +170,10 @@ function mergeConfig(
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
   };
   const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
+  const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const extraPaths = Array.from(new Set(rawPaths));
   const vector = {
     enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
     extensionPath:
@@ -236,6 +248,7 @@ function mergeConfig(
   return {
     enabled,
     sources,
+    extraPaths,
     provider,
     remote,
     experimental: {
@@ -274,12 +287,14 @@ function mergeConfig(
 }
 
 export function resolveMemorySearchConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedMemorySearchConfig | null {
   const defaults = cfg.agents?.defaults?.memorySearch;
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
   const resolved = mergeConfig(defaults, overrides, agentId);
-  if (!resolved.enabled) return null;
+  if (!resolved.enabled) {
+    return null;
+  }
   return resolved;
 }

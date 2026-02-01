@@ -17,7 +17,9 @@ function fakeApi(overrides: any = {}) {
     id: "llm-task",
     name: "llm-task",
     source: "test",
-    config: { agents: { defaults: { workspace: "/tmp", model: { primary: "openai-codex/gpt-5.2" } } } },
+    config: {
+      agents: { defaults: { workspace: "/tmp", model: { primary: "openai-codex/gpt-5.2" } } },
+    },
     pluginConfig: {},
     runtime: { version: "test" },
     logger: { debug() {}, info() {}, warn() {}, error() {} },
@@ -34,7 +36,7 @@ describe("llm-task tool (json-only)", () => {
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
     });
-    const tool = createLlmTaskTool(fakeApi() as any);
+    const tool = createLlmTaskTool(fakeApi());
     const res = await tool.execute("id", { prompt: "return foo" });
     expect((res as any).details.json).toEqual({ foo: "bar" });
   });
@@ -42,9 +44,9 @@ describe("llm-task tool (json-only)", () => {
   it("strips fenced json", async () => {
     (runEmbeddedPiAgent as any).mockResolvedValueOnce({
       meta: {},
-      payloads: [{ text: "```json\n{\"ok\":true}\n```" }],
+      payloads: [{ text: '```json\n{"ok":true}\n```' }],
     });
-    const tool = createLlmTaskTool(fakeApi() as any);
+    const tool = createLlmTaskTool(fakeApi());
     const res = await tool.execute("id", { prompt: "return ok" });
     expect((res as any).details.json).toEqual({ ok: true });
   });
@@ -54,7 +56,7 @@ describe("llm-task tool (json-only)", () => {
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
     });
-    const tool = createLlmTaskTool(fakeApi() as any);
+    const tool = createLlmTaskTool(fakeApi());
     const schema = {
       type: "object",
       properties: { foo: { type: "string" } },
@@ -66,8 +68,11 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("throws on invalid json", async () => {
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({ meta: {}, payloads: [{ text: "not-json" }] });
-    const tool = createLlmTaskTool(fakeApi() as any);
+    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+      meta: {},
+      payloads: [{ text: "not-json" }],
+    });
+    const tool = createLlmTaskTool(fakeApi());
     await expect(tool.execute("id", { prompt: "x" })).rejects.toThrow(/invalid json/i);
   });
 
@@ -76,7 +81,7 @@ describe("llm-task tool (json-only)", () => {
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: 1 }) }],
     });
-    const tool = createLlmTaskTool(fakeApi() as any);
+    const tool = createLlmTaskTool(fakeApi());
     const schema = { type: "object", properties: { foo: { type: "string" } }, required: ["foo"] };
     await expect(tool.execute("id", { prompt: "x", schema })).rejects.toThrow(/match schema/i);
   });
@@ -86,7 +91,7 @@ describe("llm-task tool (json-only)", () => {
       meta: {},
       payloads: [{ text: JSON.stringify({ ok: true }) }],
     });
-    const tool = createLlmTaskTool(fakeApi() as any);
+    const tool = createLlmTaskTool(fakeApi());
     await tool.execute("id", { prompt: "x", provider: "anthropic", model: "claude-4-sonnet" });
     const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
     expect(call.provider).toBe("anthropic");
@@ -98,10 +103,12 @@ describe("llm-task tool (json-only)", () => {
       meta: {},
       payloads: [{ text: JSON.stringify({ ok: true }) }],
     });
-    const tool = createLlmTaskTool(fakeApi({ pluginConfig: { allowedModels: ["openai-codex/gpt-5.2"] } }) as any);
-    await expect(tool.execute("id", { prompt: "x", provider: "anthropic", model: "claude-4-sonnet" })).rejects.toThrow(
-      /not allowed/i,
+    const tool = createLlmTaskTool(
+      fakeApi({ pluginConfig: { allowedModels: ["openai-codex/gpt-5.2"] } }),
     );
+    await expect(
+      tool.execute("id", { prompt: "x", provider: "anthropic", model: "claude-4-sonnet" }),
+    ).rejects.toThrow(/not allowed/i);
   });
 
   it("disables tools for embedded run", async () => {
@@ -109,7 +116,7 @@ describe("llm-task tool (json-only)", () => {
       meta: {},
       payloads: [{ text: JSON.stringify({ ok: true }) }],
     });
-    const tool = createLlmTaskTool(fakeApi() as any);
+    const tool = createLlmTaskTool(fakeApi());
     await tool.execute("id", { prompt: "x" });
     const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
     expect(call.disableTools).toBe(true);

@@ -1,8 +1,10 @@
-import { type AddressInfo, createServer } from "node:net";
+import { createServer } from "node:net";
 import { isMainThread, threadId } from "node:worker_threads";
 
 async function isPortFree(port: number): Promise<boolean> {
-  if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+    return false;
+  }
   return await new Promise((resolve) => {
     const server = createServer();
     server.once("error", () => resolve(false));
@@ -23,7 +25,7 @@ async function getOsFreePort(): Promise<number> {
         reject(new Error("failed to acquire free port"));
         return;
       }
-      const port = (addr as AddressInfo).port;
+      const port = addr.port;
       server.close((err) => (err ? reject(err) : resolve(port)));
     });
   });
@@ -66,7 +68,9 @@ export async function getDeterministicFreePortBlock(params?: {
     const ok = (await Promise.all(offsets.map((offset) => isPortFree(start + offset)))).every(
       Boolean,
     );
-    if (!ok) continue;
+    if (!ok) {
+      continue;
+    }
     nextTestPortOffset = (nextTestPortOffset + attempt + blockSize) % usable;
     return start;
   }
@@ -79,7 +83,9 @@ export async function getDeterministicFreePortBlock(params?: {
     const ok = (await Promise.all(offsets.map((offset) => isPortFree(port + offset)))).every(
       Boolean,
     );
-    if (ok) return port;
+    if (ok) {
+      return port;
+    }
   }
 
   throw new Error("failed to acquire a free port block");

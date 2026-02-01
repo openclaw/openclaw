@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { createProcessedMessageTracker } from "./processed-messages.js";
 
 describe("createProcessedMessageTracker", () => {

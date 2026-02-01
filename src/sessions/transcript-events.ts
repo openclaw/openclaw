@@ -15,7 +15,9 @@ export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): 
 
 export function emitSessionTranscriptUpdate(sessionFile: string): void {
   const trimmed = sessionFile.trim();
-  if (!trimmed) return;
+  if (!trimmed) {
+    return;
+  }
   const update = { sessionFile: trimmed };
   for (const listener of SESSION_TRANSCRIPT_LISTENERS) {
     listener(update);

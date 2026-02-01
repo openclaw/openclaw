@@ -24,7 +24,9 @@ export async function waitForDiscordGatewayStop(params: {
       emitter?.removeListener("error", onGatewayErrorEvent);
     };
     const finishResolve = () => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       cleanup();
       try {
@@ -34,7 +36,9 @@ export async function waitForDiscordGatewayStop(params: {
       }
     };
     const finishReject = (err: unknown) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       cleanup();
       try {

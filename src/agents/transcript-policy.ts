@@ -1,6 +1,6 @@
-import { isAntigravityClaude, isGoogleModelApi } from "./pi-embedded-helpers/google.js";
-import { normalizeProviderId } from "./model-selection.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
+import { normalizeProviderId } from "./model-selection.js";
+import { isAntigravityClaude, isGoogleModelApi } from "./pi-embedded-helpers/google.js";
 
 export type TranscriptSanitizeMode = "full" | "images-only";
 
@@ -39,17 +39,23 @@ const OPENAI_MODEL_APIS = new Set([
 const OPENAI_PROVIDERS = new Set(["openai", "openai-codex"]);
 
 function isOpenAiApi(modelApi?: string | null): boolean {
-  if (!modelApi) return false;
+  if (!modelApi) {
+    return false;
+  }
   return OPENAI_MODEL_APIS.has(modelApi);
 }
 
 function isOpenAiProvider(provider?: string | null): boolean {
-  if (!provider) return false;
+  if (!provider) {
+    return false;
+  }
   return OPENAI_PROVIDERS.has(normalizeProviderId(provider));
 }
 
 function isAnthropicApi(modelApi?: string | null, provider?: string | null): boolean {
-  if (modelApi === "anthropic-messages") return true;
+  if (modelApi === "anthropic-messages") {
+    return true;
+  }
   const normalized = normalizeProviderId(provider ?? "");
   // MiniMax now uses openai-completions API, not anthropic-messages
   return normalized === "anthropic";
@@ -57,9 +63,13 @@ function isAnthropicApi(modelApi?: string | null, provider?: string | null): boo
 
 function isMistralModel(params: { provider?: string | null; modelId?: string | null }): boolean {
   const provider = normalizeProviderId(params.provider ?? "");
-  if (provider === "mistral") return true;
+  if (provider === "mistral") {
+    return true;
+  }
   const modelId = (params.modelId ?? "").toLowerCase();
-  if (!modelId) return false;
+  if (!modelId) {
+    return false;
+  }
   return MISTRAL_MODEL_HINTS.some((hint) => modelId.includes(hint));
 }
 

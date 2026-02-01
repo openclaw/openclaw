@@ -1,6 +1,5 @@
-import crypto from "node:crypto";
-
 import type { Skill } from "@mariozechner/pi-coding-agent";
+import crypto from "node:crypto";
 import type { NormalizedChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
@@ -102,7 +101,9 @@ export function mergeSessionEntry(
 ): SessionEntry {
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
-  if (!existing) return { ...patch, sessionId, updatedAt };
+  if (!existing) {
+    return { ...patch, sessionId, updatedAt };
+  }
   return { ...existing, ...patch, sessionId, updatedAt };
 }
 

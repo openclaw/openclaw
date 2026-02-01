@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  listNostrAccountIds,
-  resolveDefaultNostrAccountId,
-  resolveNostrAccount,
-} from "./types.js";
+import { listNostrAccountIds, resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
 
 const TEST_PRIVATE_KEY = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 

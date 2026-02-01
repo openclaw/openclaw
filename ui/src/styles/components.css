@@ -1,4 +1,4 @@
-@import './chat.css';
+@import "./chat.css";
 
 /* ===========================================
    Cards - Refined with depth
@@ -14,12 +14,16 @@
     border-color var(--duration-normal) var(--ease-out),
     box-shadow var(--duration-normal) var(--ease-out),
     transform var(--duration-normal) var(--ease-out);
-  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--card-highlight);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 1px 0 var(--card-highlight);
 }
 
 .card:hover {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-md), inset 0 1px 0 var(--card-highlight);
+  box-shadow:
+    var(--shadow-md),
+    inset 0 1px 0 var(--card-highlight);
 }
 
 .card-title {
@@ -53,7 +57,9 @@
 
 .stat:hover {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--card-highlight);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 1px 0 var(--card-highlight);
 }
 
 .stat-label {
@@ -351,7 +357,9 @@
 .btn.primary:hover {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
-  box-shadow: var(--shadow-md), 0 0 20px var(--accent-glow);
+  box-shadow:
+    var(--shadow-md),
+    0 0 20px var(--accent-glow);
 }
 
 /* Keyboard shortcut badge (shadcn style) */
@@ -571,7 +579,8 @@
 }
 
 @keyframes compaction-pulse {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 0.7;
   }
   50% {
@@ -1050,7 +1059,8 @@
 }
 
 @keyframes chatStreamPulse {
-  0%, 100% {
+  0%,
+  100% {
     border-color: var(--border);
   }
   50% {
@@ -1103,7 +1113,9 @@
 }
 
 @keyframes chatReadingDot {
-  0%, 80%, 100% {
+  0%,
+  80%,
+  100% {
     opacity: 0.4;
     transform: translateY(0);
   }

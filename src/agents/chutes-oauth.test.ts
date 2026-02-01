@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   CHUTES_TOKEN_ENDPOINT,
   CHUTES_USERINFO_ENDPOINT,
@@ -61,7 +60,9 @@ describe("chutes-oauth", () => {
   it("refreshes tokens using stored client id and falls back to old refresh token", async () => {
     const fetchFn: typeof fetch = async (input, init) => {
       const url = String(input);
-      if (url !== CHUTES_TOKEN_ENDPOINT) return new Response("not found", { status: 404 });
+      if (url !== CHUTES_TOKEN_ENDPOINT) {
+        return new Response("not found", { status: 404 });
+      }
       expect(init?.method).toBe("POST");
       const body = init?.body as URLSearchParams;
       expect(String(body.get("grant_type"))).toBe("refresh_token");

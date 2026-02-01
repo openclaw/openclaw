@@ -12,7 +12,9 @@ function resolvePowerShellPath(): string {
       "v1.0",
       "powershell.exe",
     );
-    if (fs.existsSync(candidate)) return candidate;
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
   }
   return "powershell.exe";
 }
@@ -35,9 +37,13 @@ export function getShellConfig(): { shell: string; args: string[] } {
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
   if (shellName === "fish") {
     const bash = resolveShellFromPath("bash");
-    if (bash) return { shell: bash, args: ["-c"] };
+    if (bash) {
+      return { shell: bash, args: ["-c"] };
+    }
     const sh = resolveShellFromPath("sh");
-    if (sh) return { shell: sh, args: ["-c"] };
+    if (sh) {
+      return { shell: sh, args: ["-c"] };
+    }
   }
   const shell = envShell && envShell.length > 0 ? envShell : "sh";
   return { shell, args: ["-c"] };
@@ -45,7 +51,9 @@ export function getShellConfig(): { shell: string; args: string[] } {
 
 function resolveShellFromPath(name: string): string | undefined {
   const envPath = process.env.PATH ?? "";
-  if (!envPath) return undefined;
+  if (!envPath) {
+    return undefined;
+  }
   const entries = envPath.split(path.delimiter).filter(Boolean);
   for (const entry of entries) {
     const candidate = path.join(entry, name);
@@ -61,16 +69,22 @@ function resolveShellFromPath(name: string): string | undefined {
 
 export function sanitizeBinaryOutput(text: string): string {
   const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
-  if (!scrubbed) return scrubbed;
+  if (!scrubbed) {
+    return scrubbed;
+  }
   const chunks: string[] = [];
   for (const char of scrubbed) {
     const code = char.codePointAt(0);
-    if (code == null) continue;
+    if (code == null) {
+      continue;
+    }
     if (code === 0x09 || code === 0x0a || code === 0x0d) {
       chunks.push(char);
       continue;
     }
-    if (code < 0x20) continue;
+    if (code < 0x20) {
+      continue;
+    }
     chunks.push(char);
   }
   return chunks.join("");

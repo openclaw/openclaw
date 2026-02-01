@@ -1,5 +1,4 @@
 import { spawn, type SpawnOptions } from "node:child_process";
-
 import type { ZcaResult, ZcaRunOptions } from "./types.js";
 
 const ZCA_BINARY = "zca";
@@ -16,10 +15,7 @@ function buildArgs(args: string[], options?: ZcaRunOptions): string[] {
   return result;
 }
 
-export async function runZca(
-  args: string[],
-  options?: ZcaRunOptions,
-): Promise<ZcaResult> {
+export async function runZca(args: string[], options?: ZcaRunOptions): Promise<ZcaResult> {
   const fullArgs = buildArgs(args, options);
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
 
@@ -79,10 +75,7 @@ export async function runZca(
   });
 }
 
-export function runZcaInteractive(
-  args: string[],
-  options?: ZcaRunOptions,
-): Promise<ZcaResult> {
+export function runZcaInteractive(args: string[], options?: ZcaRunOptions): Promise<ZcaResult> {
   const fullArgs = buildArgs(args, options);
 
   return new Promise((resolve) => {
@@ -115,6 +108,7 @@ export function runZcaInteractive(
 }
 
 function stripAnsi(str: string): string {
+  // oxlint-disable-next-line no-control-regex
   return str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, "");
 }
 

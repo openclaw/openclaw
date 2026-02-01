@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveDiscordToken } from "./token.js";
 
 describe("resolveDiscordToken", () => {
@@ -12,7 +11,7 @@ describe("resolveDiscordToken", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
     const cfg = {
       channels: { discord: { token: "cfg-token" } },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
     const res = resolveDiscordToken(cfg);
     expect(res.token).toBe("cfg-token");
     expect(res.source).toBe("config");
@@ -22,7 +21,7 @@ describe("resolveDiscordToken", () => {
     vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
     const cfg = {
       channels: { discord: {} },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
     const res = resolveDiscordToken(cfg);
     expect(res.token).toBe("env-token");
     expect(res.source).toBe("env");
@@ -39,7 +38,7 @@ describe("resolveDiscordToken", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
     const res = resolveDiscordToken(cfg, { accountId: "work" });
     expect(res.token).toBe("acct-token");
     expect(res.source).toBe("config");

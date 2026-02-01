@@ -1,10 +1,10 @@
 import type { BrowserActionPathResult, BrowserActionTargetOk } from "./client-actions-types.js";
-import { fetchBrowserJson } from "./client-fetch.js";
 import type {
   BrowserConsoleMessage,
   BrowserNetworkRequest,
   BrowserPageError,
 } from "./pw-session.js";
+import { fetchBrowserJson } from "./client-fetch.js";
 
 function buildProfileQuery(profile?: string): string {
   return profile ? `?profile=${encodeURIComponent(profile)}` : "";
@@ -12,7 +12,9 @@ function buildProfileQuery(profile?: string): string {
 
 function withBaseUrl(baseUrl: string | undefined, path: string): string {
   const trimmed = baseUrl?.trim();
-  if (!trimmed) return path;
+  if (!trimmed) {
+    return path;
+  }
   return `${trimmed.replace(/\/$/, "")}${path}`;
 }
 
@@ -21,9 +23,15 @@ export async function browserConsoleMessages(
   opts: { level?: string; targetId?: string; profile?: string } = {},
 ): Promise<{ ok: true; messages: BrowserConsoleMessage[]; targetId: string }> {
   const q = new URLSearchParams();
-  if (opts.level) q.set("level", opts.level);
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (opts.profile) q.set("profile", opts.profile);
+  if (opts.level) {
+    q.set("level", opts.level);
+  }
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return await fetchBrowserJson<{
     ok: true;
@@ -50,9 +58,15 @@ export async function browserPageErrors(
   opts: { targetId?: string; clear?: boolean; profile?: string } = {},
 ): Promise<{ ok: true; targetId: string; errors: BrowserPageError[] }> {
   const q = new URLSearchParams();
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (typeof opts.clear === "boolean") q.set("clear", String(opts.clear));
-  if (opts.profile) q.set("profile", opts.profile);
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (typeof opts.clear === "boolean") {
+    q.set("clear", String(opts.clear));
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return await fetchBrowserJson<{
     ok: true;
@@ -71,10 +85,18 @@ export async function browserRequests(
   } = {},
 ): Promise<{ ok: true; targetId: string; requests: BrowserNetworkRequest[] }> {
   const q = new URLSearchParams();
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (opts.filter) q.set("filter", opts.filter);
-  if (typeof opts.clear === "boolean") q.set("clear", String(opts.clear));
-  if (opts.profile) q.set("profile", opts.profile);
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (opts.filter) {
+    q.set("filter", opts.filter);
+  }
+  if (typeof opts.clear === "boolean") {
+    q.set("clear", String(opts.clear));
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return await fetchBrowserJson<{
     ok: true;

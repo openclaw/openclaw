@@ -23,7 +23,7 @@ describe("Session Store Cache", () => {
     clearSessionStoreCacheForTest();
 
     // Reset environment variable
-    delete process.env.CLAWDBOT_SESSION_CACHE_TTL_MS;
+    delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
   });
 
   afterEach(() => {
@@ -32,7 +32,7 @@ describe("Session Store Cache", () => {
       fs.rmSync(testDir, { recursive: true, force: true });
     }
     clearSessionStoreCacheForTest();
-    delete process.env.CLAWDBOT_SESSION_CACHE_TTL_MS;
+    delete process.env.OPENCLAW_SESSION_CACHE_TTL_MS;
   });
 
   it("should load session store from disk on first call", async () => {
@@ -94,7 +94,7 @@ describe("Session Store Cache", () => {
     const loaded1 = loadSessionStore(storePath);
     loaded1["session:1"].cliSessionIds = { openai: "mutated" };
     if (loaded1["session:1"].skillsSnapshot?.skills?.length) {
-      loaded1["session:1"].skillsSnapshot!.skills[0].name = "mutated";
+      loaded1["session:1"].skillsSnapshot.skills[0].name = "mutated";
     }
 
     const loaded2 = loadSessionStore(storePath);
@@ -161,8 +161,8 @@ describe("Session Store Cache", () => {
     expect(loaded2["session:1"].displayName).toBe("Updated Session 1");
   });
 
-  it("should respect CLAWDBOT_SESSION_CACHE_TTL_MS=0 to disable cache", async () => {
-    process.env.CLAWDBOT_SESSION_CACHE_TTL_MS = "0";
+  it("should respect OPENCLAW_SESSION_CACHE_TTL_MS=0 to disable cache", async () => {
+    process.env.OPENCLAW_SESSION_CACHE_TTL_MS = "0";
     clearSessionStoreCacheForTest();
 
     const testStore: Record<string, SessionEntry> = {

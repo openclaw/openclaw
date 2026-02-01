@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { parseImageSizeError } from "./pi-embedded-helpers.js";
 
 describe("parseImageSizeError", () => {

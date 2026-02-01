@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import type { ResolvedBrowserConfig } from "./config.js";
 
 export type BrowserExecutable = {
@@ -115,10 +114,18 @@ function execText(
 
 function inferKindFromIdentifier(identifier: string): BrowserExecutable["kind"] {
   const id = identifier.toLowerCase();
-  if (id.includes("brave")) return "brave";
-  if (id.includes("edge")) return "edge";
-  if (id.includes("chromium")) return "chromium";
-  if (id.includes("canary")) return "canary";
+  if (id.includes("brave")) {
+    return "brave";
+  }
+  if (id.includes("edge")) {
+    return "edge";
+  }
+  if (id.includes("chromium")) {
+    return "chromium";
+  }
+  if (id.includes("canary")) {
+    return "canary";
+  }
   if (
     id.includes("opera") ||
     id.includes("vivaldi") ||
@@ -132,40 +139,63 @@ function inferKindFromIdentifier(identifier: string): BrowserExecutable["kind"] 
 
 function inferKindFromExecutableName(name: string): BrowserExecutable["kind"] {
   const lower = name.toLowerCase();
-  if (lower.includes("brave")) return "brave";
-  if (lower.includes("edge") || lower.includes("msedge")) return "edge";
-  if (lower.includes("chromium")) return "chromium";
-  if (lower.includes("canary") || lower.includes("sxs")) return "canary";
-  if (lower.includes("opera") || lower.includes("vivaldi") || lower.includes("yandex"))
+  if (lower.includes("brave")) {
+    return "brave";
+  }
+  if (lower.includes("edge") || lower.includes("msedge")) {
+    return "edge";
+  }
+  if (lower.includes("chromium")) {
     return "chromium";
+  }
+  if (lower.includes("canary") || lower.includes("sxs")) {
+    return "canary";
+  }
+  if (lower.includes("opera") || lower.includes("vivaldi") || lower.includes("yandex")) {
+    return "chromium";
+  }
   return "chrome";
 }
 
 function detectDefaultChromiumExecutable(platform: NodeJS.Platform): BrowserExecutable | null {
-  if (platform === "darwin") return detectDefaultChromiumExecutableMac();
-  if (platform === "linux") return detectDefaultChromiumExecutableLinux();
-  if (platform === "win32") return detectDefaultChromiumExecutableWindows();
+  if (platform === "darwin") {
+    return detectDefaultChromiumExecutableMac();
+  }
+  if (platform === "linux") {
+    return detectDefaultChromiumExecutableLinux();
+  }
+  if (platform === "win32") {
+    return detectDefaultChromiumExecutableWindows();
+  }
   return null;
 }
 
 function detectDefaultChromiumExecutableMac(): BrowserExecutable | null {
   const bundleId = detectDefaultBrowserBundleIdMac();
-  if (!bundleId || !CHROMIUM_BUNDLE_IDS.has(bundleId)) return null;
+  if (!bundleId || !CHROMIUM_BUNDLE_IDS.has(bundleId)) {
+    return null;
+  }
 
   const appPathRaw = execText("/usr/bin/osascript", [
     "-e",
     `POSIX path of (path to application id "${bundleId}")`,
   ]);
-  if (!appPathRaw) return null;
+  if (!appPathRaw) {
+    return null;
+  }
   const appPath = appPathRaw.trim().replace(/\/$/, "");
   const exeName = execText("/usr/bin/defaults", [
     "read",
     path.join(appPath, "Contents", "Info"),
     "CFBundleExecutable",
   ]);
-  if (!exeName) return null;
+  if (!exeName) {
+    return null;
+  }
   const exePath = path.join(appPath, "Contents", "MacOS", exeName.trim());
-  if (!exists(exePath)) return null;
+  if (!exists(exePath)) {
+    return null;
+  }
   return { kind: inferKindFromIdentifier(bundleId), path: exePath };
 }
 
@@ -174,33 +204,45 @@ function detectDefaultBrowserBundleIdMac(): string | null {
     os.homedir(),
     "Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist",
   );
-  if (!exists(plistPath)) return null;
+  if (!exists(plistPath)) {
+    return null;
+  }
   const handlersRaw = execText(
     "/usr/bin/plutil",
     ["-extract", "LSHandlers", "json", "-o", "-", "--", plistPath],
     2000,
     5 * 1024 * 1024,
   );
-  if (!handlersRaw) return null;
+  if (!handlersRaw) {
+    return null;
+  }
   let handlers: unknown;
   try {
     handlers = JSON.parse(handlersRaw);
   } catch {
     return null;
   }
-  if (!Array.isArray(handlers)) return null;
+  if (!Array.isArray(handlers)) {
+    return null;
+  }
 
   const resolveScheme = (scheme: string) => {
     let candidate: string | null = null;
     for (const entry of handlers) {
-      if (!entry || typeof entry !== "object") continue;
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
       const record = entry as Record<string, unknown>;
-      if (record.LSHandlerURLScheme !== scheme) continue;
+      if (record.LSHandlerURLScheme !== scheme) {
+        continue;
+      }
       const role =
         (typeof record.LSHandlerRoleAll === "string" && record.LSHandlerRoleAll) ||
         (typeof record.LSHandlerRoleViewer === "string" && record.LSHandlerRoleViewer) ||
         null;
-      if (role) candidate = role;
+      if (role) {
+        candidate = role;
+      }
     }
     return candidate;
   };
@@ -212,19 +254,33 @@ function detectDefaultChromiumExecutableLinux(): BrowserExecutable | null {
   const desktopId =
     execText("xdg-settings", ["get", "default-web-browser"]) ||
     execText("xdg-mime", ["query", "default", "x-scheme-handler/http"]);
-  if (!desktopId) return null;
+  if (!desktopId) {
+    return null;
+  }
   const trimmed = desktopId.trim();
-  if (!CHROMIUM_DESKTOP_IDS.has(trimmed)) return null;
+  if (!CHROMIUM_DESKTOP_IDS.has(trimmed)) {
+    return null;
+  }
   const desktopPath = findDesktopFilePath(trimmed);
-  if (!desktopPath) return null;
+  if (!desktopPath) {
+    return null;
+  }
   const execLine = readDesktopExecLine(desktopPath);
-  if (!execLine) return null;
+  if (!execLine) {
+    return null;
+  }
   const command = extractExecutableFromExecLine(execLine);
-  if (!command) return null;
+  if (!command) {
+    return null;
+  }
   const resolved = resolveLinuxExecutablePath(command);
-  if (!resolved) return null;
+  if (!resolved) {
+    return null;
+  }
   const exeName = path.posix.basename(resolved).toLowerCase();
-  if (!CHROMIUM_EXE_NAMES.has(exeName)) return null;
+  if (!CHROMIUM_EXE_NAMES.has(exeName)) {
+    return null;
+  }
   return { kind: inferKindFromExecutableName(exeName), path: resolved };
 }
 
@@ -232,13 +288,21 @@ function detectDefaultChromiumExecutableWindows(): BrowserExecutable | null {
   const progId = readWindowsProgId();
   const command =
     (progId ? readWindowsCommandForProgId(progId) : null) || readWindowsCommandForProgId("http");
-  if (!command) return null;
+  if (!command) {
+    return null;
+  }
   const expanded = expandWindowsEnvVars(command);
   const exePath = extractWindowsExecutablePath(expanded);
-  if (!exePath) return null;
-  if (!exists(exePath)) return null;
+  if (!exePath) {
+    return null;
+  }
+  if (!exists(exePath)) {
+    return null;
+  }
   const exeName = path.win32.basename(exePath).toLowerCase();
-  if (!CHROMIUM_EXE_NAMES.has(exeName)) return null;
+  if (!CHROMIUM_EXE_NAMES.has(exeName)) {
+    return null;
+  }
   return { kind: inferKindFromExecutableName(exeName), path: exePath };
 }
 
@@ -250,7 +314,9 @@ function findDesktopFilePath(desktopId: string): string | null {
     path.join("/var/lib/snapd/desktop/applications", desktopId),
   ];
   for (const candidate of candidates) {
-    if (exists(candidate)) return candidate;
+    if (exists(candidate)) {
+      return candidate;
+    }
   }
   return null;
 }
@@ -273,9 +339,15 @@ function readDesktopExecLine(desktopPath: string): string | null {
 function extractExecutableFromExecLine(execLine: string): string | null {
   const tokens = splitExecLine(execLine);
   for (const token of tokens) {
-    if (!token) continue;
-    if (token === "env") continue;
-    if (token.includes("=") && !token.startsWith("/") && !token.includes("\\")) continue;
+    if (!token) {
+      continue;
+    }
+    if (token === "env") {
+      continue;
+    }
+    if (token.includes("=") && !token.startsWith("/") && !token.includes("\\")) {
+      continue;
+    }
     return token.replace(/^["']|["']$/g, "");
   }
   return null;
@@ -307,14 +379,20 @@ function splitExecLine(line: string): string[] {
     }
     current += ch;
   }
-  if (current) tokens.push(current);
+  if (current) {
+    tokens.push(current);
+  }
   return tokens;
 }
 
 function resolveLinuxExecutablePath(command: string): string | null {
   const cleaned = command.trim().replace(/%[a-zA-Z]/g, "");
-  if (!cleaned) return null;
-  if (cleaned.startsWith("/")) return cleaned;
+  if (!cleaned) {
+    return null;
+  }
+  if (cleaned.startsWith("/")) {
+    return cleaned;
+  }
   const resolved = execText("which", [cleaned], 800);
   return resolved ? resolved.trim() : null;
 }
@@ -326,7 +404,9 @@ function readWindowsProgId(): string | null {
     "/v",
     "ProgId",
   ]);
-  if (!output) return null;
+  if (!output) {
+    return null;
+  }
   const match = output.match(/ProgId\s+REG_\w+\s+(.+)$/im);
   return match?.[1]?.trim() || null;
 }
@@ -337,7 +417,9 @@ function readWindowsCommandForProgId(progId: string): string | null {
       ? "HKCR\\http\\shell\\open\\command"
       : `HKCR\\${progId}\\shell\\open\\command`;
   const output = execText("reg", ["query", key, "/ve"]);
-  if (!output) return null;
+  if (!output) {
+    return null;
+  }
   const match = output.match(/REG_\w+\s+(.+)$/im);
   return match?.[1]?.trim() || null;
 }
@@ -351,15 +433,21 @@ function expandWindowsEnvVars(value: string): string {
 
 function extractWindowsExecutablePath(command: string): string | null {
   const quoted = command.match(/"([^"]+\\.exe)"/i);
-  if (quoted?.[1]) return quoted[1];
+  if (quoted?.[1]) {
+    return quoted[1];
+  }
   const unquoted = command.match(/([^\\s]+\\.exe)/i);
-  if (unquoted?.[1]) return unquoted[1];
+  if (unquoted?.[1]) {
+    return unquoted[1];
+  }
   return null;
 }
 
 function findFirstExecutable(candidates: Array<BrowserExecutable>): BrowserExecutable | null {
   for (const candidate of candidates) {
-    if (exists(candidate.path)) return candidate;
+    if (exists(candidate.path)) {
+      return candidate;
+    }
   }
 
   return null;
@@ -520,10 +608,18 @@ export function resolveBrowserExecutableForPlatform(
   }
 
   const detected = detectDefaultChromiumExecutable(platform);
-  if (detected) return detected;
+  if (detected) {
+    return detected;
+  }
 
-  if (platform === "darwin") return findChromeExecutableMac();
-  if (platform === "linux") return findChromeExecutableLinux();
-  if (platform === "win32") return findChromeExecutableWindows();
+  if (platform === "darwin") {
+    return findChromeExecutableMac();
+  }
+  if (platform === "linux") {
+    return findChromeExecutableLinux();
+  }
+  if (platform === "win32") {
+    return findChromeExecutableWindows();
+  }
   return null;
 }

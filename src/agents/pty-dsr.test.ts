@@ -1,5 +1,4 @@
 import { expect, test } from "vitest";
-
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 
 test("stripDsrRequests removes cursor queries and counts them", () => {

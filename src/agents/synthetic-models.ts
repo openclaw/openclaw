@@ -100,6 +100,14 @@ export const SYNTHETIC_MODEL_CATALOG = [
     maxTokens: 8192,
   },
   {
+    id: "hf:moonshotai/Kimi-K2.5",
+    name: "Kimi K2.5",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 256000,
+    maxTokens: 8192,
+  },
+  {
     id: "hf:openai/gpt-oss-120b",
     name: "GPT OSS 120B",
     reasoning: false,

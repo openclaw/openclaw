@@ -1,9 +1,9 @@
+import type { ReplyPayload } from "../types.js";
+import type { TypingSignaler } from "./typing-mode.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import { isAudioFileName } from "../../media/mime.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
-import type { ReplyPayload } from "../types.js";
 import { scheduleFollowupDrain } from "./queue.js";
-import type { TypingSignaler } from "./typing-mode.js";
 
 const hasAudioMedia = (urls?: string[]): boolean =>
   Boolean(urls?.some((url) => isAudioFileName(url)));
@@ -26,7 +26,9 @@ export const createShouldEmitToolResult = (params: {
       const store = loadSessionStore(params.storePath);
       const entry = store[params.sessionKey];
       const current = normalizeVerboseLevel(String(entry?.verboseLevel ?? ""));
-      if (current) return current !== "off";
+      if (current) {
+        return current !== "off";
+      }
     } catch {
       // ignore store read failures
     }
@@ -49,7 +51,9 @@ export const createShouldEmitToolOutput = (params: {
       const store = loadSessionStore(params.storePath);
       const entry = store[params.sessionKey];
       const current = normalizeVerboseLevel(String(entry?.verboseLevel ?? ""));
-      if (current) return current === "full";
+      if (current) {
+        return current === "full";
+      }
     } catch {
       // ignore store read failures
     }
@@ -72,9 +76,15 @@ export const signalTypingIfNeeded = async (
 ): Promise<void> => {
   const shouldSignalTyping = payloads.some((payload) => {
     const trimmed = payload.text?.trim();
-    if (trimmed) return true;
-    if (payload.mediaUrl) return true;
-    if (payload.mediaUrls && payload.mediaUrls.length > 0) return true;
+    if (trimmed) {
+      return true;
+    }
+    if (payload.mediaUrl) {
+      return true;
+    }
+    if (payload.mediaUrls && payload.mediaUrls.length > 0) {
+      return true;
+    }
     return false;
   });
   if (shouldSignalTyping) {

@@ -16,7 +16,9 @@ const lineHttpRoutes = new Map<string, LineHttpRequestHandler>();
 
 export function normalizeLineWebhookPath(path?: string | null): string {
   const trimmed = path?.trim();
-  if (!trimmed) return "/line/webhook";
+  if (!trimmed) {
+    return "/line/webhook";
+  }
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
@@ -39,7 +41,9 @@ export async function handleLineHttpRequest(
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const handler = lineHttpRoutes.get(url.pathname);
-  if (!handler) return false;
+  if (!handler) {
+    return false;
+  }
   await handler(req, res);
   return true;
 }

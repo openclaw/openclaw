@@ -55,7 +55,9 @@ export async function probeTwitch(
       let authFailListener: ReturnType<ChatClient["onAuthenticationFailure"]> | undefined;
 
       const cleanup = () => {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
         settled = true;
         connectListener?.unbind();
         disconnectListener?.unbind();

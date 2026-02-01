@@ -1,12 +1,11 @@
-import { z } from "zod";
-
 import {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   requireOpenAllowFrom,
-} from "clawdbot/plugin-sdk";
+} from "openclaw/plugin-sdk";
+import { z } from "zod";
 
 const MattermostAccountSchemaBase = z
   .object({

@@ -2,16 +2,16 @@
 set -euo pipefail
 
 # Render the macOS .icon bundle to a padded .icns like Trimmy's pipeline.
-# Defaults target the Moltbot assets so you can just run the script from repo root.
+# Defaults target the OpenClaw assets so you can just run the script from repo root.
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 ICON_FILE=${1:-"$ROOT_DIR/apps/macos/Icon.icon"}
-BASENAME=${2:-Moltbot}
+BASENAME=${2:-OpenClaw}
 OUT_ROOT=${3:-"$ROOT_DIR/apps/macos/build/icon"}
 XCODE_APP=${XCODE_APP:-/Applications/Xcode.app}
 # Where the final .icns should live; override DEST_ICNS to change.
-DEST_ICNS=${DEST_ICNS:-"$ROOT_DIR/apps/macos/Sources/Moltbot/Resources/Moltbot.icns"}
+DEST_ICNS=${DEST_ICNS:-"$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns"}
 
 ICTOOL="$XCODE_APP/Contents/Applications/Icon Composer.app/Contents/Executables/ictool"
 if [[ ! -x "$ICTOOL" ]]; then

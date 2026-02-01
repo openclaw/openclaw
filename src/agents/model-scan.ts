@@ -85,9 +85,15 @@ export type OpenRouterScanOptions = {
 type OpenAIModel = Model<"openai-completions">;
 
 function normalizeCreatedAtMs(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
-  if (value <= 0) return null;
-  if (value > 1e12) return Math.round(value);
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  if (value <= 0) {
+    return null;
+  }
+  if (value > 1e12) {
+    return Math.round(value);
+  }
   return Math.round(value * 1000);
 }
 
@@ -97,16 +103,24 @@ function inferParamBFromIdOrName(text: string): number | null {
   let best: number | null = null;
   for (const match of matches) {
     const numRaw = match[1];
-    if (!numRaw) continue;
+    if (!numRaw) {
+      continue;
+    }
     const value = Number(numRaw);
-    if (!Number.isFinite(value) || value <= 0) continue;
-    if (best === null || value > best) best = value;
+    if (!Number.isFinite(value) || value <= 0) {
+      continue;
+    }
+    if (best === null || value > best) {
+      best = value;
+    }
   }
   return best;
 }
 
 function parseModality(modality: string | null): Array<"text" | "image"> {
-  if (!modality) return ["text"];
+  if (!modality) {
+    return ["text"];
+  }
   const normalized = modality.toLowerCase();
   const parts = normalized.split(/[^a-z]+/).filter(Boolean);
   const hasImage = parts.includes("image");
@@ -114,17 +128,27 @@ function parseModality(modality: string | null): Array<"text" | "image"> {
 }
 
 function parseNumberString(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "string") return null;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   const num = Number(trimmed);
-  if (!Number.isFinite(num)) return null;
+  if (!Number.isFinite(num)) {
+    return null;
+  }
   return num;
 }
 
 function parseOpenRouterPricing(value: unknown): OpenRouterModelPricing | null {
-  if (!value || typeof value !== "object") return null;
+  if (!value || typeof value !== "object") {
+    return null;
+  }
   const obj = value as Record<string, unknown>;
   const prompt = parseNumberString(obj.prompt);
   const completion = parseNumberString(obj.completion);
@@ -133,7 +157,9 @@ function parseOpenRouterPricing(value: unknown): OpenRouterModelPricing | null {
   const webSearch = parseNumberString(obj.web_search) ?? 0;
   const internalReasoning = parseNumberString(obj.internal_reasoning) ?? 0;
 
-  if (prompt === null || completion === null) return null;
+  if (prompt === null || completion === null) {
+    return null;
+  }
   return {
     prompt,
     completion,
@@ -145,8 +171,12 @@ function parseOpenRouterPricing(value: unknown): OpenRouterModelPricing | null {
 }
 
 function isFreeOpenRouterModel(entry: OpenRouterModelMeta): boolean {
-  if (entry.id.endsWith(":free")) return true;
-  if (!entry.pricing) return false;
+  if (entry.id.endsWith(":free")) {
+    return true;
+  }
+  if (!entry.pricing) {
+    return false;
+  }
   return entry.pricing.prompt === 0 && entry.pricing.completion === 0;
 }
 
@@ -175,10 +205,14 @@ async function fetchOpenRouterModels(fetchImpl: typeof fetch): Promise<OpenRoute
 
   return entries
     .map((entry) => {
-      if (!entry || typeof entry !== "object") return null;
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
       const obj = entry as Record<string, unknown>;
       const id = typeof obj.id === "string" ? obj.id.trim() : "";
-      if (!id) return null;
+      if (!id) {
+        return null;
+      }
       const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
 
       const contextLength =
@@ -311,7 +345,9 @@ async function probeImage(
 }
 
 function ensureImageInput(model: OpenAIModel): OpenAIModel {
-  if (model.input.includes("image")) return model;
+  if (model.input.includes("image")) {
+    return model;
+  }
   return {
     ...model,
     input: Array.from(new Set([...model.input, "image"])),
@@ -325,7 +361,7 @@ async function mapWithConcurrency<T, R>(
   opts?: { onProgress?: (completed: number, total: number) => void },
 ): Promise<R[]> {
   const limit = Math.max(1, Math.floor(concurrency));
-  const results = Array.from({ length: items.length }) as R[];
+  const results: R[] = Array.from({ length: items.length }, () => undefined as R);
   let nextIndex = 0;
   let completed = 0;
 
@@ -333,8 +369,10 @@ async function mapWithConcurrency<T, R>(
     while (true) {
       const current = nextIndex;
       nextIndex += 1;
-      if (current >= items.length) return;
-      results[current] = await fn(items[current] as T, current);
+      if (current >= items.length) {
+        return;
+      }
+      results[current] = await fn(items[current], current);
       completed += 1;
       opts?.onProgress?.(completed, items.length);
     }
@@ -369,19 +407,27 @@ export async function scanOpenRouterModels(
   const now = Date.now();
 
   const filtered = catalog.filter((entry) => {
-    if (!isFreeOpenRouterModel(entry)) return false;
+    if (!isFreeOpenRouterModel(entry)) {
+      return false;
+    }
     if (providerFilter) {
       const prefix = entry.id.split("/")[0]?.toLowerCase() ?? "";
-      if (prefix !== providerFilter) return false;
+      if (prefix !== providerFilter) {
+        return false;
+      }
     }
     if (minParamB > 0) {
       const params = entry.inferredParamB ?? 0;
-      if (params < minParamB) return false;
+      if (params < minParamB) {
+        return false;
+      }
     }
     if (maxAgeDays > 0 && entry.createdAtMs) {
       const ageMs = now - entry.createdAtMs;
       const ageDays = ageMs / (24 * 60 * 60 * 1000);
-      if (ageDays > maxAgeDays) return false;
+      if (ageDays > maxAgeDays) {
+        return false;
+      }
     }
     return true;
   });

@@ -1,5 +1,3 @@
-import type { Page } from "playwright-core";
-
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
   buildRoleSnapshotFromAiSnapshot,
@@ -162,7 +160,9 @@ export async function navigateViaPlaywright(opts: {
   timeoutMs?: number;
 }): Promise<{ url: string }> {
   const url = String(opts.url ?? "").trim();
-  if (!url) throw new Error("url is required");
+  if (!url) {
+    throw new Error("url is required");
+  }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   await page.goto(url, {
@@ -200,6 +200,6 @@ export async function pdfViaPlaywright(opts: {
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  const buffer = await (page as Page).pdf({ printBackground: true });
+  const buffer = await page.pdf({ printBackground: true });
   return { buffer };
 }

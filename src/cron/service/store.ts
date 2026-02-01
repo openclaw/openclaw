@@ -1,13 +1,15 @@
+import type { CronJob } from "../types.js";
+import type { CronServiceState } from "./state.js";
 import { migrateLegacyCronPayload } from "../payload-migration.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import type { CronJob } from "../types.js";
 import { inferLegacyName, normalizeOptionalText } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
 
 const storeCache = new Map<string, { version: 1; jobs: CronJob[] }>();
 
 export async function ensureLoaded(state: CronServiceState) {
-  if (state.store) return;
+  if (state.store) {
+    return;
+  }
   const cached = storeCache.get(state.deps.storePath);
   if (cached) {
     state.store = cached;
@@ -43,12 +45,18 @@ export async function ensureLoaded(state: CronServiceState) {
   }
   state.store = { version: 1, jobs: jobs as unknown as CronJob[] };
   storeCache.set(state.deps.storePath, state.store);
-  if (mutated) await persist(state);
+  if (mutated) {
+    await persist(state);
+  }
 }
 
 export function warnIfDisabled(state: CronServiceState, action: string) {
-  if (state.deps.cronEnabled) return;
-  if (state.warnedDisabled) return;
+  if (state.deps.cronEnabled) {
+    return;
+  }
+  if (state.warnedDisabled) {
+    return;
+  }
   state.warnedDisabled = true;
   state.deps.log.warn(
     { enabled: false, action, storePath: state.deps.storePath },
@@ -57,6 +65,8 @@ export function warnIfDisabled(state: CronServiceState, action: string) {
 }
 
 export async function persist(state: CronServiceState) {
-  if (!state.store) return;
+  if (!state.store) {
+    return;
+  }
   await saveCronStore(state.deps.storePath, state.store);
 }

@@ -1,8 +1,7 @@
 import { html, nothing } from "lit";
-
-import { formatAgo } from "../format";
 import type { IMessageStatus } from "../types";
 import type { ChannelsProps } from "./channels.types";
+import { formatAgo } from "../format";
 import { renderChannelConfigSection } from "./channels.config";
 
 export function renderIMessageCard(params: {
@@ -37,18 +36,22 @@ export function renderIMessageCard(params: {
         </div>
       </div>
 
-      ${imessage?.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">
+      ${
+        imessage?.lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">
             ${imessage.lastError}
           </div>`
-        : nothing}
+          : nothing
+      }
 
-      ${imessage?.probe
-        ? html`<div class="callout" style="margin-top: 12px;">
+      ${
+        imessage?.probe
+          ? html`<div class="callout" style="margin-top: 12px;">
             Probe ${imessage.probe.ok ? "ok" : "failed"} ·
             ${imessage.probe.error ?? ""}
           </div>`
-        : nothing}
+          : nothing
+      }
 
       ${renderChannelConfigSection({ channelId: "imessage", props })}
 

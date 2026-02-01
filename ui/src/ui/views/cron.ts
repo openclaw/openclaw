@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
-
+import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types";
+import type { CronFormState } from "../ui-types";
 import { formatMs } from "../format";
 import {
   formatCronPayload,
@@ -7,8 +8,6 @@ import {
   formatCronState,
   formatNextRun,
 } from "../presenter";
-import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types";
-import type { CronFormState } from "../ui-types";
 
 export type CronProps = {
   loading: boolean;
@@ -63,11 +62,7 @@ export function renderCron(props: CronProps) {
           <div class="stat">
             <div class="stat-label">Enabled</div>
             <div class="stat-value">
-              ${props.status
-                ? props.status.enabled
-                  ? "Yes"
-                  : "No"
-                : "n/a"}
+              ${props.status ? (props.status.enabled ? "Yes" : "No") : "n/a"}
             </div>
           </div>
           <div class="stat">
@@ -131,7 +126,8 @@ export function renderCron(props: CronProps) {
               .value=${props.form.scheduleKind}
               @change=${(e: Event) =>
                 props.onFormChange({
-                  scheduleKind: (e.target as HTMLSelectElement).value as CronFormState["scheduleKind"],
+                  scheduleKind: (e.target as HTMLSelectElement)
+                    .value as CronFormState["scheduleKind"],
                 })}
             >
               <option value="every">Every</option>
@@ -148,7 +144,8 @@ export function renderCron(props: CronProps) {
               .value=${props.form.sessionTarget}
               @change=${(e: Event) =>
                 props.onFormChange({
-                  sessionTarget: (e.target as HTMLSelectElement).value as CronFormState["sessionTarget"],
+                  sessionTarget: (e.target as HTMLSelectElement)
+                    .value as CronFormState["sessionTarget"],
                 })}
             >
               <option value="main">Main</option>
@@ -174,7 +171,8 @@ export function renderCron(props: CronProps) {
               .value=${props.form.payloadKind}
               @change=${(e: Event) =>
                 props.onFormChange({
-                  payloadKind: (e.target as HTMLSelectElement).value as CronFormState["payloadKind"],
+                  payloadKind: (e.target as HTMLSelectElement)
+                    .value as CronFormState["payloadKind"],
                 })}
             >
               <option value="systemEvent">System event</option>
@@ -193,8 +191,9 @@ export function renderCron(props: CronProps) {
             rows="4"
           ></textarea>
         </label>
-	          ${props.form.payloadKind === "agentTurn"
-	          ? html`
+	          ${
+              props.form.payloadKind === "agentTurn"
+                ? html`
 	              <div class="form-grid" style="margin-top: 12px;">
                 <label class="field checkbox">
                   <span>Deliver</span>
@@ -212,9 +211,10 @@ export function renderCron(props: CronProps) {
 	                  <select
 	                    .value=${props.form.channel || "last"}
 	                    @change=${(e: Event) =>
-	                      props.onFormChange({
-	                        channel: (e.target as HTMLSelectElement).value as CronFormState["channel"],
-	                      })}
+                        props.onFormChange({
+                          channel: (e.target as HTMLSelectElement)
+                            .value as CronFormState["channel"],
+                        })}
 	                  >
 	                    ${channelOptions.map(
                         (channel) =>
@@ -243,8 +243,9 @@ export function renderCron(props: CronProps) {
                       })}
                   />
                 </label>
-                ${props.form.sessionTarget === "isolated"
-                  ? html`
+                ${
+                  props.form.sessionTarget === "isolated"
+                    ? html`
                       <label class="field">
                         <span>Post to main prefix</span>
                         <input
@@ -256,10 +257,12 @@ export function renderCron(props: CronProps) {
                         />
                       </label>
                     `
-                  : nothing}
+                    : nothing
+                }
               </div>
             `
-          : nothing}
+                : nothing
+            }
         <div class="row" style="margin-top: 14px;">
           <button class="btn primary" ?disabled=${props.busy} @click=${props.onAdd}>
             ${props.busy ? "Saving…" : "Add job"}
@@ -271,31 +274,37 @@ export function renderCron(props: CronProps) {
     <section class="card" style="margin-top: 18px;">
       <div class="card-title">Jobs</div>
       <div class="card-sub">All scheduled jobs stored in the gateway.</div>
-      ${props.jobs.length === 0
-        ? html`<div class="muted" style="margin-top: 12px;">No jobs yet.</div>`
-        : html`
+      ${
+        props.jobs.length === 0
+          ? html`
+              <div class="muted" style="margin-top: 12px">No jobs yet.</div>
+            `
+          : html`
             <div class="list" style="margin-top: 12px;">
               ${props.jobs.map((job) => renderJob(job, props))}
             </div>
-          `}
+          `
+      }
     </section>
 
     <section class="card" style="margin-top: 18px;">
       <div class="card-title">Run history</div>
       <div class="card-sub">Latest runs for ${props.runsJobId ?? "(select a job)"}.</div>
-      ${props.runsJobId == null
-        ? html`
-            <div class="muted" style="margin-top: 12px;">
-              Select a job to inspect run history.
-            </div>
-          `
-        : props.runs.length === 0
-          ? html`<div class="muted" style="margin-top: 12px;">No runs yet.</div>`
-          : html`
+      ${
+        props.runsJobId == null
+          ? html`
+              <div class="muted" style="margin-top: 12px">Select a job to inspect run history.</div>
+            `
+          : props.runs.length === 0
+            ? html`
+                <div class="muted" style="margin-top: 12px">No runs yet.</div>
+              `
+            : html`
               <div class="list" style="margin-top: 12px;">
                 ${props.runs.map((entry) => renderRun(entry))}
               </div>
-            `}
+            `
+      }
     </section>
   `;
 }

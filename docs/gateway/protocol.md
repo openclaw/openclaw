@@ -4,12 +4,13 @@ read_when:
   - Implementing or updating gateway WS clients
   - Debugging protocol mismatches or connect failures
   - Regenerating protocol schema/models
+title: "Gateway Protocol"
 ---
 
 # Gateway protocol (WebSocket)
 
 The Gateway WS protocol is the **single control plane + node transport** for
-Moltbot. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
+OpenClaw. All clients (CLI, web UI, macOS app, iOS/Android nodes, headless
 nodes) connect over WebSocket and declare their **role** + **scope** at
 handshake time.
 
@@ -53,7 +54,7 @@ Client → Gateway:
     "permissions": {},
     "auth": { "token": "…" },
     "locale": "en-US",
-    "userAgent": "moltbot-cli/1.2.3",
+    "userAgent": "openclaw-cli/1.2.3",
     "device": {
       "id": "device_fingerprint",
       "publicKey": "…",
@@ -111,7 +112,7 @@ When a device token is issued, `hello-ok` also includes:
     "permissions": { "camera.capture": true, "screen.record": false },
     "auth": { "token": "…" },
     "locale": "en-US",
-    "userAgent": "moltbot-ios/1.2.3",
+    "userAgent": "openclaw-ios/1.2.3",
     "device": {
       "id": "device_fingerprint",
       "publicKey": "…",
@@ -125,8 +126,8 @@ When a device token is issued, `hello-ok` also includes:
 
 ## Framing
 
-- **Request**: `{type:"req", id, method, params}`  
-- **Response**: `{type:"res", id, ok, payload|error}`  
+- **Request**: `{type:"req", id, method, params}`
+- **Response**: `{type:"res", id, ok, payload|error}`
 - **Event**: `{type:"event", event, payload, seq?, stateVersion?}`
 
 Side-effecting methods require **idempotency keys** (see schema).
@@ -134,11 +135,14 @@ Side-effecting methods require **idempotency keys** (see schema).
 ## Roles + scopes
 
 ### Roles
+
 - `operator` = control plane client (CLI/UI/automation).
 - `node` = capability host (camera/screen/canvas/system.run).
 
 ### Scopes (operator)
+
 Common scopes:
+
 - `operator.read`
 - `operator.write`
 - `operator.admin`
@@ -146,7 +150,9 @@ Common scopes:
 - `operator.pairing`
 
 ### Caps/commands/permissions (node)
+
 Nodes declare capability claims at connect time:
+
 - `caps`: high-level capability categories.
 - `commands`: command allowlist for invoke.
 - `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).
@@ -180,7 +186,7 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 
 ## Auth
 
-- If `CLAWDBOT_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
+- If `OPENCLAW_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
   must match or the socket is closed.
 - After pairing, the Gateway issues a **device token** scoped to the connection
   role + scopes. It is returned in `hello-ok.auth.deviceToken` and should be

@@ -8,12 +8,18 @@ export type ConfigCommand =
 
 export function parseConfigCommand(raw: string): ConfigCommand | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("/config")) return null;
+  if (!trimmed.toLowerCase().startsWith("/config")) {
+    return null;
+  }
   const rest = trimmed.slice("/config".length).trim();
-  if (!rest) return { action: "show" };
+  if (!rest) {
+    return { action: "show" };
+  }
 
   const match = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
-  if (!match) return { action: "error", message: "Invalid /config syntax." };
+  if (!match) {
+    return { action: "error", message: "Invalid /config syntax." };
+  }
   const action = match[1].toLowerCase();
   const args = (match[2] ?? "").trim();
 
@@ -23,7 +29,9 @@ export function parseConfigCommand(raw: string): ConfigCommand | null {
     case "get":
       return { action: "show", path: args || undefined };
     case "unset": {
-      if (!args) return { action: "error", message: "Usage: /config unset path" };
+      if (!args) {
+        return { action: "error", message: "Usage: /config unset path" };
+      }
       return { action: "unset", path: args };
     }
     case "set": {

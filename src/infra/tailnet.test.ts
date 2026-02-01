@@ -1,7 +1,5 @@
 import os from "node:os";
-
 import { describe, expect, it, vi } from "vitest";
-
 import { listTailnetAddresses } from "./tailnet.js";
 
 describe("tailnet address detection", () => {

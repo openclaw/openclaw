@@ -1,8 +1,8 @@
-import { loadConfig } from "../../config/config.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
-import { loadCostUsageSummary } from "../../infra/session-cost-usage.js";
-import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { loadConfig } from "../../config/config.js";
+import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
+import { loadCostUsageSummary } from "../../infra/session-cost-usage.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 
@@ -15,10 +15,14 @@ type CostUsageCacheEntry = {
 const costUsageCache = new Map<number, CostUsageCacheEntry>();
 
 const parseDays = (raw: unknown): number => {
-  if (typeof raw === "number" && Number.isFinite(raw)) return Math.floor(raw);
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.floor(raw);
+  }
   if (typeof raw === "string" && raw.trim() !== "") {
     const parsed = Number(raw);
-    if (Number.isFinite(parsed)) return Math.floor(parsed);
+    if (Number.isFinite(parsed)) {
+      return Math.floor(parsed);
+    }
   }
   return 30;
 };
@@ -35,7 +39,9 @@ async function loadCostUsageSummaryCached(params: {
   }
 
   if (cached?.inFlight) {
-    if (cached.summary) return cached.summary;
+    if (cached.summary) {
+      return cached.summary;
+    }
     return await cached.inFlight;
   }
 
@@ -46,7 +52,9 @@ async function loadCostUsageSummaryCached(params: {
       return summary;
     })
     .catch((err) => {
-      if (entry.summary) return entry.summary;
+      if (entry.summary) {
+        return entry.summary;
+      }
       throw err;
     })
     .finally(() => {
@@ -60,7 +68,9 @@ async function loadCostUsageSummaryCached(params: {
   entry.inFlight = inFlight;
   costUsageCache.set(days, entry);
 
-  if (entry.summary) return entry.summary;
+  if (entry.summary) {
+    return entry.summary;
+  }
   return await inFlight;
 }
 

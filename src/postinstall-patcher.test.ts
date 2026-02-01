@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
 import {
   applyPatchSet,
   detectPackageManager,
@@ -10,7 +9,7 @@ import {
 } from "../scripts/postinstall.js";
 
 function makeTempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-patch-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-patch-"));
 }
 
 describe("postinstall patcher", () => {

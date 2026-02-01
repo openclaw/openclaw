@@ -1,19 +1,23 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 
 export function resolveControlUiRepoRoot(
   argv1: string | undefined = process.argv[1],
 ): string | null {
-  if (!argv1) return null;
+  if (!argv1) {
+    return null;
+  }
   const normalized = path.resolve(argv1);
   const parts = normalized.split(path.sep);
   const srcIndex = parts.lastIndexOf("src");
   if (srcIndex !== -1) {
     const root = parts.slice(0, srcIndex).join(path.sep);
-    if (fs.existsSync(path.join(root, "ui", "vite.config.ts"))) return root;
+    if (fs.existsSync(path.join(root, "ui", "vite.config.ts"))) {
+      return root;
+    }
   }
 
   let dir = path.dirname(normalized);
@@ -25,21 +29,34 @@ export function resolveControlUiRepoRoot(
       return dir;
     }
     const parent = path.dirname(dir);
-    if (parent === dir) break;
+    if (parent === dir) {
+      break;
+    }
     dir = parent;
   }
 
   return null;
 }
 
-export function resolveControlUiDistIndexPath(
+export async function resolveControlUiDistIndexPath(
   argv1: string | undefined = process.argv[1],
-): string | null {
-  if (!argv1) return null;
+): Promise<string | null> {
+  if (!argv1) {
+    return null;
+  }
   const normalized = path.resolve(argv1);
+
+  // Case 1: entrypoint is directly inside dist/ (e.g., dist/entry.js)
   const distDir = path.dirname(normalized);
-  if (path.basename(distDir) !== "dist") return null;
-  return path.join(distDir, "control-ui", "index.html");
+  if (path.basename(distDir) === "dist") {
+    return path.join(distDir, "control-ui", "index.html");
+  }
+
+  const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized });
+  if (!packageRoot) {
+    return null;
+  }
+  return path.join(packageRoot, "dist", "control-ui", "index.html");
 }
 
 export type EnsureControlUiAssetsResult = {
@@ -53,9 +70,13 @@ function summarizeCommandOutput(text: string): string | undefined {
     .split(/\r?\n/g)
     .map((l) => l.trim())
     .filter(Boolean);
-  if (!lines.length) return undefined;
+  if (!lines.length) {
+    return undefined;
+  }
   const last = lines.at(-1);
-  if (!last) return undefined;
+  if (!last) {
+    return undefined;
+  }
   return last.length > 240 ? `${last.slice(0, 239)}…` : last;
 }
 
@@ -63,7 +84,7 @@ export async function ensureControlUiAssetsBuilt(
   runtime: RuntimeEnv = defaultRuntime,
   opts?: { timeoutMs?: number },
 ): Promise<EnsureControlUiAssetsResult> {
-  const indexFromDist = resolveControlUiDistIndexPath(process.argv[1]);
+  const indexFromDist = await resolveControlUiDistIndexPath(process.argv[1]);
   if (indexFromDist && fs.existsSync(indexFromDist)) {
     return { ok: true, built: false };
   }

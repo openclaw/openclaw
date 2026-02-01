@@ -38,9 +38,7 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
       aria-label=${idleLabel}
       @click=${async (e: Event) => {
         const btn = e.currentTarget as HTMLButtonElement | null;
-        const iconContainer = btn?.querySelector(
-          ".chat-copy-btn__icon",
-        ) as HTMLElement | null;
+        const iconContainer = btn?.querySelector(".chat-copy-btn__icon") as HTMLElement | null;
 
         if (!btn || btn.dataset.copying === "1") return;
 

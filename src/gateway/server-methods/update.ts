@@ -1,10 +1,11 @@
-import { resolveMoltbotPackageRoot } from "../../infra/moltbot-root.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import type { GatewayRequestHandlers } from "./types.js";
+import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
+import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { runGatewayUpdate } from "../../infra/update-runner.js";
 import {
   ErrorCodes,
@@ -12,7 +13,6 @@ import {
   formatValidationErrors,
   validateUpdateRunParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
   "update.run": async ({ params, respond }) => {
@@ -49,7 +49,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
       const root =
-        (await resolveMoltbotPackageRoot({
+        (await resolveOpenClawPackageRoot({
           moduleUrl: import.meta.url,
           argv1: process.argv[1],
           cwd: process.cwd(),

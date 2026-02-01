@@ -23,18 +23,24 @@ type AttachmentLog = {
 };
 
 function normalizeMime(mime?: string): string | undefined {
-  if (!mime) return undefined;
+  if (!mime) {
+    return undefined;
+  }
   const cleaned = mime.split(";")[0]?.trim().toLowerCase();
   return cleaned || undefined;
 }
 
 async function sniffMimeFromBase64(base64: string): Promise<string | undefined> {
   const trimmed = base64.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
 
   const take = Math.min(256, trimmed.length);
   const sliceLen = take - (take % 4);
-  if (sliceLen < 8) return undefined;
+  if (sliceLen < 8) {
+    return undefined;
+  }
 
   try {
     const head = Buffer.from(trimmed.slice(0, sliceLen), "base64");
@@ -67,7 +73,9 @@ export async function parseMessageWithAttachments(
   const images: ChatImageContent[] = [];
 
   for (const [idx, att] of attachments.entries()) {
-    if (!att) continue;
+    if (!att) {
+      continue;
+    }
     const mime = att.mimeType ?? "";
     const content = att.content;
     const label = att.fileName || att.type || `attachment-${idx + 1}`;
@@ -132,12 +140,16 @@ export function buildMessageWithAttachments(
   opts?: { maxBytes?: number },
 ): string {
   const maxBytes = opts?.maxBytes ?? 2_000_000; // 2 MB
-  if (!attachments || attachments.length === 0) return message;
+  if (!attachments || attachments.length === 0) {
+    return message;
+  }
 
   const blocks: string[] = [];
 
   for (const [idx, att] of attachments.entries()) {
-    if (!att) continue;
+    if (!att) {
+      continue;
+    }
     const mime = att.mimeType ?? "";
     const content = att.content;
     const label = att.fileName || att.type || `attachment-${idx + 1}`;
@@ -169,7 +181,9 @@ export function buildMessageWithAttachments(
     blocks.push(dataUrl);
   }
 
-  if (blocks.length === 0) return message;
+  if (blocks.length === 0) {
+    return message;
+  }
   const separator = message.trim().length > 0 ? "\n\n" : "";
   return `${message}${separator}${blocks.join("\n\n")}`;
 }

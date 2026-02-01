@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import * as sessions from "../../config/sessions.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -126,9 +126,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("retries after compaction failure by resetting the session", async () => {
-    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
-    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "moltbot-session-compaction-reset-"));
-    process.env.CLAWDBOT_STATE_DIR = stateDir;
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-session-compaction-reset-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
       const sessionId = "session";
       const storePath = path.join(stateDir, "sessions", "sessions.json");
@@ -167,17 +167,17 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
     } finally {
       if (prevStateDir) {
-        process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
       } else {
-        delete process.env.CLAWDBOT_STATE_DIR;
+        delete process.env.OPENCLAW_STATE_DIR;
       }
     }
   });
 
   it("retries after context overflow payload by resetting the session", async () => {
-    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
-    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "moltbot-session-overflow-reset-"));
-    process.env.CLAWDBOT_STATE_DIR = stateDir;
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-session-overflow-reset-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
       const sessionId = "session";
       const storePath = path.join(stateDir, "sessions", "sessions.json");
@@ -221,17 +221,17 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
     } finally {
       if (prevStateDir) {
-        process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
       } else {
-        delete process.env.CLAWDBOT_STATE_DIR;
+        delete process.env.OPENCLAW_STATE_DIR;
       }
     }
   });
 
   it("resets the session after role ordering payloads", async () => {
-    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
-    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "moltbot-session-role-ordering-"));
-    process.env.CLAWDBOT_STATE_DIR = stateDir;
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-session-role-ordering-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
       const sessionId = "session";
       const storePath = path.join(stateDir, "sessions", "sessions.json");
@@ -275,9 +275,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
     } finally {
       if (prevStateDir) {
-        process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
       } else {
-        delete process.env.CLAWDBOT_STATE_DIR;
+        delete process.env.OPENCLAW_STATE_DIR;
       }
     }
   });

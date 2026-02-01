@@ -23,7 +23,9 @@ async function runFetch(url: string, readability: boolean) {
     },
     sandboxed: false,
   });
-  if (!tool) throw new Error("web_fetch tool is disabled");
+  if (!tool) {
+    throw new Error("web_fetch tool is disabled");
+  }
   const result = await tool.execute("test", { url, extractMode: "markdown" });
   return result.details as {
     text?: string;
@@ -35,7 +37,9 @@ async function runFetch(url: string, readability: boolean) {
 }
 
 function truncate(value: string, max = 160): string {
-  if (!value) return "";
+  if (!value) {
+    return "";
+  }
   return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
@@ -50,7 +54,9 @@ async function run() {
         80,
       )}`,
     );
-    if (readable.text) console.log(`readability sample: ${truncate(readable.text)}`);
+    if (readable.text) {
+      console.log(`readability sample: ${truncate(readable.text)}`);
+    }
   }
 }
 

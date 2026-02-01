@@ -14,7 +14,9 @@ export async function copyToClipboard(value: string): Promise<boolean> {
         timeoutMs: 3_000,
         input: value,
       });
-      if (result.code === 0 && !result.killed) return true;
+      if (result.code === 0 && !result.killed) {
+        return true;
+      }
     } catch {
       // keep trying the next fallback
     }

@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import type { NodeSession } from "../node-registry.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
@@ -7,10 +9,8 @@ import { createBrowserRouteDispatcher } from "../../browser/routes/dispatcher.js
 import { loadConfig } from "../../config/config.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import type { NodeSession } from "../node-registry.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { safeParseJson } from "./nodes.helpers.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 type BrowserRequestParams = {
   method?: string;
@@ -46,18 +46,32 @@ function normalizeNodeKey(value: string) {
 
 function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | null {
   const q = query.trim();
-  if (!q) return null;
+  if (!q) {
+    return null;
+  }
   const qNorm = normalizeNodeKey(q);
   const matches = nodes.filter((node) => {
-    if (node.nodeId === q) return true;
-    if (typeof node.remoteIp === "string" && node.remoteIp === q) return true;
+    if (node.nodeId === q) {
+      return true;
+    }
+    if (typeof node.remoteIp === "string" && node.remoteIp === q) {
+      return true;
+    }
     const name = typeof node.displayName === "string" ? node.displayName : "";
-    if (name && normalizeNodeKey(name) === qNorm) return true;
-    if (q.length >= 6 && node.nodeId.startsWith(q)) return true;
+    if (name && normalizeNodeKey(name) === qNorm) {
+      return true;
+    }
+    if (q.length >= 6 && node.nodeId.startsWith(q)) {
+      return true;
+    }
     return false;
   });
-  if (matches.length === 1) return matches[0] ?? null;
-  if (matches.length === 0) return null;
+  if (matches.length === 1) {
+    return matches[0] ?? null;
+  }
+  if (matches.length === 0) {
+    return null;
+  }
   throw new Error(
     `ambiguous node: ${q} (matches: ${matches
       .map((node) => node.displayName || node.remoteIp || node.nodeId)
@@ -71,7 +85,9 @@ function resolveBrowserNodeTarget(params: {
 }): NodeSession | null {
   const policy = params.cfg.gateway?.nodes?.browser;
   const mode = policy?.mode ?? "auto";
-  if (mode === "off") return null;
+  if (mode === "off") {
+    return null;
+  }
   const browserNodes = params.nodes.filter((node) => isBrowserNode(node));
   if (browserNodes.length === 0) {
     if (policy?.node?.trim()) {
@@ -87,13 +103,19 @@ function resolveBrowserNodeTarget(params: {
     }
     return resolved;
   }
-  if (mode === "manual") return null;
-  if (browserNodes.length === 1) return browserNodes[0] ?? null;
+  if (mode === "manual") {
+    return null;
+  }
+  if (browserNodes.length === 1) {
+    return browserNodes[0] ?? null;
+  }
   return null;
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
-  if (!files || files.length === 0) return new Map<string, string>();
+  if (!files || files.length === 0) {
+    return new Map<string, string>();
+  }
   const mapping = new Map<string, string>();
   for (const file of files) {
     const buffer = Buffer.from(file.base64, "base64");
@@ -104,7 +126,9 @@ async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
 }
 
 function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
-  if (!result || typeof result !== "object") return;
+  if (!result || typeof result !== "object") {
+    return;
+  }
   const obj = result as Record<string, unknown>;
   if (typeof obj.path === "string" && mapping.has(obj.path)) {
     obj.path = mapping.get(obj.path);

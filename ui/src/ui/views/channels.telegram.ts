@@ -1,8 +1,7 @@
 import { html, nothing } from "lit";
-
-import { formatAgo } from "../format";
 import type { ChannelAccountSnapshot, TelegramStatus } from "../types";
 import type { ChannelsProps } from "./channels.types";
+import { formatAgo } from "../format";
 import { renderChannelConfigSection } from "./channels.config";
 
 export function renderTelegramCard(params: {
@@ -39,13 +38,15 @@ export function renderTelegramCard(params: {
             <span class="label">Last inbound</span>
             <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : "n/a"}</span>
           </div>
-          ${account.lastError
-            ? html`
+          ${
+            account.lastError
+              ? html`
                 <div class="account-card-error">
                   ${account.lastError}
                 </div>
               `
-            : nothing}
+              : nothing
+          }
         </div>
       </div>
     `;
@@ -57,13 +58,14 @@ export function renderTelegramCard(params: {
       <div class="card-sub">Bot status and channel configuration.</div>
       ${accountCountLabel}
 
-      ${hasMultipleAccounts
-        ? html`
+      ${
+        hasMultipleAccounts
+          ? html`
             <div class="account-card-list">
               ${telegramAccounts.map((account) => renderAccountCard(account))}
             </div>
           `
-        : html`
+          : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
                 <span class="label">Configured</span>
@@ -86,20 +88,25 @@ export function renderTelegramCard(params: {
                 <span>${telegram?.lastProbeAt ? formatAgo(telegram.lastProbeAt) : "n/a"}</span>
               </div>
             </div>
-          `}
+          `
+      }
 
-      ${telegram?.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">
+      ${
+        telegram?.lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">
             ${telegram.lastError}
           </div>`
-        : nothing}
+          : nothing
+      }
 
-      ${telegram?.probe
-        ? html`<div class="callout" style="margin-top: 12px;">
+      ${
+        telegram?.probe
+          ? html`<div class="callout" style="margin-top: 12px;">
             Probe ${telegram.probe.ok ? "ok" : "failed"} ·
             ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
           </div>`
-        : nothing}
+          : nothing
+      }
 
       ${renderChannelConfigSection({ channelId: "telegram", props })}
 

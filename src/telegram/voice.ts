@@ -12,8 +12,12 @@ export function resolveTelegramVoiceDecision(opts: {
   contentType?: string | null;
   fileName?: string | null;
 }): { useVoice: boolean; reason?: string } {
-  if (!opts.wantsVoice) return { useVoice: false };
-  if (isTelegramVoiceCompatible(opts)) return { useVoice: true };
+  if (!opts.wantsVoice) {
+    return { useVoice: false };
+  }
+  if (isTelegramVoiceCompatible(opts)) {
+    return { useVoice: true };
+  }
   const contentType = opts.contentType ?? "unknown";
   const fileName = opts.fileName ?? "unknown";
   return {

@@ -23,7 +23,9 @@ export function requireRef(value: unknown): string {
   const raw = typeof value === "string" ? value.trim() : "";
   const roleRef = raw ? parseRoleRef(raw) : null;
   const ref = roleRef ?? (raw.startsWith("@") ? raw.slice(1) : raw);
-  if (!ref) throw new Error("ref is required");
+  if (!ref) {
+    throw new Error("ref is required");
+  }
   return ref;
 }
 

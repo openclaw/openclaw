@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { describe, expect, it } from "vitest";
 import {
   buildWorkspaceSkillStatus,
@@ -58,7 +57,7 @@ describe("skills-cli", () => {
       const report = createMockReport([]);
       const output = formatSkillsList(report, {});
       expect(output).toContain("No skills found");
-      expect(output).toContain("npx clawdhub");
+      expect(output).toContain("npx clawhub");
     });
 
     it("formats skills list with eligible skill", () => {
@@ -138,7 +137,7 @@ describe("skills-cli", () => {
       const report = createMockReport([]);
       const output = formatSkillInfo(report, "unknown-skill", {});
       expect(output).toContain("not found");
-      expect(output).toContain("npx clawdhub");
+      expect(output).toContain("npx clawhub");
     });
 
     it("shows detailed info for a skill", () => {
@@ -198,7 +197,7 @@ describe("skills-cli", () => {
       expect(output).toContain("ready-2");
       expect(output).toContain("not-ready");
       expect(output).toContain("go"); // missing binary
-      expect(output).toContain("npx clawdhub");
+      expect(output).toContain("npx clawhub");
     });
 
     it("outputs JSON with --json flag", () => {
@@ -218,7 +217,9 @@ describe("skills-cli", () => {
       const moduleDir = path.dirname(fileURLToPath(import.meta.url));
       const root = path.resolve(moduleDir, "..", "..");
       const candidate = path.join(root, "skills");
-      if (fs.existsSync(candidate)) return candidate;
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
       return undefined;
     }
 
@@ -251,7 +252,9 @@ describe("skills-cli", () => {
 
     it("formats info for a real bundled skill (peekaboo)", () => {
       const bundledDir = resolveBundledSkillsDir();
-      if (!bundledDir) return;
+      if (!bundledDir) {
+        return;
+      }
 
       const report = buildWorkspaceSkillStatus("/tmp", {
         managedSkillsDir: "/nonexistent",

@@ -3,14 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { runWithModelFallback } from "./model-fallback.js";
 
-function makeCfg(overrides: Partial<MoltbotConfig> = {}): MoltbotConfig {
+function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
   return {
     agents: {
       defaults: {
@@ -21,7 +20,7 @@ function makeCfg(overrides: Partial<MoltbotConfig> = {}): MoltbotConfig {
       },
     },
     ...overrides,
-  } as MoltbotConfig;
+  } as OpenClawConfig;
 }
 
 describe("runWithModelFallback", () => {
@@ -125,7 +124,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("skips providers when all profiles are in cooldown", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
     const provider = `cooldown-test-${crypto.randomUUID()}`;
     const profileId = `${provider}:default`;
 
@@ -158,7 +157,9 @@ describe("runWithModelFallback", () => {
       },
     });
     const run = vi.fn().mockImplementation(async (providerId, modelId) => {
-      if (providerId === "fallback") return "ok";
+      if (providerId === "fallback") {
+        return "ok";
+      }
       throw new Error(`unexpected provider: ${providerId}/${modelId}`);
     });
 
@@ -180,7 +181,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("does not skip when any profile is available", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
     const provider = `cooldown-mixed-${crypto.randomUUID()}`;
     const profileA = `${provider}:a`;
     const profileB = `${provider}:b`;
@@ -219,7 +220,9 @@ describe("runWithModelFallback", () => {
       },
     });
     const run = vi.fn().mockImplementation(async (providerId) => {
-      if (providerId === provider) return "ok";
+      if (providerId === provider) {
+        return "ok";
+      }
       return "unexpected";
     });
 
@@ -279,7 +282,7 @@ describe("runWithModelFallback", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const calls: Array<{ provider: string; model: string }> = [];
 
@@ -316,7 +319,7 @@ describe("runWithModelFallback", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const calls: Array<{ provider: string; model: string }> = [];
 

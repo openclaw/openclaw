@@ -1,7 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it } from "vitest";
-
-import type { MoltbotConfig } from "clawdbot/plugin-sdk";
-
 import { zaloPlugin } from "./channel.js";
 
 describe("zalo directory", () => {
@@ -12,14 +10,19 @@ describe("zalo directory", () => {
           allowFrom: ["zalo:123", "zl:234", "345"],
         },
       },
-    } as unknown as MoltbotConfig;
+    } as unknown as OpenClawConfig;
 
     expect(zaloPlugin.directory).toBeTruthy();
     expect(zaloPlugin.directory?.listPeers).toBeTruthy();
     expect(zaloPlugin.directory?.listGroups).toBeTruthy();
 
     await expect(
-      zaloPlugin.directory!.listPeers({ cfg, accountId: undefined, query: undefined, limit: undefined }),
+      zaloPlugin.directory!.listPeers({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+      }),
     ).resolves.toEqual(
       expect.arrayContaining([
         { kind: "user", id: "123" },
@@ -28,8 +31,13 @@ describe("zalo directory", () => {
       ]),
     );
 
-    await expect(zaloPlugin.directory!.listGroups({ cfg, accountId: undefined, query: undefined, limit: undefined })).resolves.toEqual(
-      [],
-    );
+    await expect(
+      zaloPlugin.directory!.listGroups({
+        cfg,
+        accountId: undefined,
+        query: undefined,
+        limit: undefined,
+      }),
+    ).resolves.toEqual([]);
   });
 });

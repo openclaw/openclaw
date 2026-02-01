@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 

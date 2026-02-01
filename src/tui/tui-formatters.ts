@@ -1,14 +1,18 @@
-import { formatTokenCount } from "../utils/usage-format.js";
 import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
+import { formatTokenCount } from "../utils/usage-format.js";
 
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
   streamedText?: string | null;
 }) {
   const finalText = params.finalText ?? "";
-  if (finalText.trim()) return finalText;
+  if (finalText.trim()) {
+    return finalText;
+  }
   const streamedText = params.streamedText ?? "";
-  if (streamedText.trim()) return streamedText;
+  if (streamedText.trim()) {
+    return streamedText;
+  }
   return "(no output)";
 }
 
@@ -36,15 +40,23 @@ export function composeThinkingAndContent(params: {
  * Model-agnostic: returns empty string if no thinking blocks exist.
  */
 export function extractThinkingFromMessage(message: unknown): string {
-  if (!message || typeof message !== "object") return "";
+  if (!message || typeof message !== "object") {
+    return "";
+  }
   const record = message as Record<string, unknown>;
   const content = record.content;
-  if (typeof content === "string") return "";
-  if (!Array.isArray(content)) return "";
+  if (typeof content === "string") {
+    return "";
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
 
   const parts: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") continue;
+    if (!block || typeof block !== "object") {
+      continue;
+    }
     const rec = block as Record<string, unknown>;
     if (rec.type === "thinking" && typeof rec.thinking === "string") {
       parts.push(rec.thinking);
@@ -58,11 +70,15 @@ export function extractThinkingFromMessage(message: unknown): string {
  * Model-agnostic: works for any model with text content blocks.
  */
 export function extractContentFromMessage(message: unknown): string {
-  if (!message || typeof message !== "object") return "";
+  if (!message || typeof message !== "object") {
+    return "";
+  }
   const record = message as Record<string, unknown>;
   const content = record.content;
 
-  if (typeof content === "string") return content.trim();
+  if (typeof content === "string") {
+    return content.trim();
+  }
 
   // Check for error BEFORE returning empty for non-array content
   if (!Array.isArray(content)) {
@@ -76,7 +92,9 @@ export function extractContentFromMessage(message: unknown): string {
 
   const parts: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") continue;
+    if (!block || typeof block !== "object") {
+      continue;
+    }
     const rec = block as Record<string, unknown>;
     if (rec.type === "text" && typeof rec.text === "string") {
       parts.push(rec.text);
@@ -96,14 +114,20 @@ export function extractContentFromMessage(message: unknown): string {
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
-  if (typeof content === "string") return content.trim();
-  if (!Array.isArray(content)) return "";
+  if (typeof content === "string") {
+    return content.trim();
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
 
   const thinkingParts: string[] = [];
   const textParts: string[] = [];
 
   for (const block of content) {
-    if (!block || typeof block !== "object") continue;
+    if (!block || typeof block !== "object") {
+      continue;
+    }
     const record = block as Record<string, unknown>;
     if (record.type === "text" && typeof record.text === "string") {
       textParts.push(record.text);
@@ -128,27 +152,39 @@ export function extractTextFromMessage(
   message: unknown,
   opts?: { includeThinking?: boolean },
 ): string {
-  if (!message || typeof message !== "object") return "";
+  if (!message || typeof message !== "object") {
+    return "";
+  }
   const record = message as Record<string, unknown>;
   const text = extractTextBlocks(record.content, opts);
-  if (text) return text;
+  if (text) {
+    return text;
+  }
 
   const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
-  if (stopReason !== "error") return "";
+  if (stopReason !== "error") {
+    return "";
+  }
 
   const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
   return formatRawAssistantErrorForUi(errorMessage);
 }
 
 export function isCommandMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object") return false;
+  if (!message || typeof message !== "object") {
+    return false;
+  }
   return (message as Record<string, unknown>).command === true;
 }
 
 export function formatTokens(total?: number | null, context?: number | null) {
-  if (total == null && context == null) return "tokens ?";
+  if (total == null && context == null) {
+    return "tokens ?";
+  }
   const totalLabel = total == null ? "?" : formatTokenCount(total);
-  if (context == null) return `tokens ${totalLabel}`;
+  if (context == null) {
+    return `tokens ${totalLabel}`;
+  }
   const pct =
     typeof total === "number" && context > 0
       ? Math.min(999, Math.round((total / context) * 100))
@@ -173,7 +209,9 @@ export function formatContextUsageLine(params: {
 }
 
 export function asString(value: unknown, fallback = ""): string {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") {
+    return value;
+  }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }

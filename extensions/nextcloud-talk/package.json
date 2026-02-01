@@ -1,9 +1,12 @@
 {
-  "name": "@moltbot/nextcloud-talk",
-  "version": "2026.1.27-beta.1",
+  "name": "@openclaw/nextcloud-talk",
+  "version": "2026.1.30",
+  "description": "OpenClaw Nextcloud Talk channel plugin",
   "type": "module",
-  "description": "Moltbot Nextcloud Talk channel plugin",
-  "moltbot": {
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ],
@@ -22,7 +25,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@moltbot/nextcloud-talk",
+      "npmSpec": "@openclaw/nextcloud-talk",
       "localPath": "extensions/nextcloud-talk",
       "defaultChoice": "npm"
     }

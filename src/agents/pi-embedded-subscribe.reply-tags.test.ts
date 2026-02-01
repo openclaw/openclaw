@@ -103,4 +103,50 @@ describe("subscribeEmbeddedPiSession reply tags", () => {
     expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Hello");
     expect(onBlockReply.mock.calls[1]?.[0]?.text).toBe("[[");
   });
+
+  it("streams partial replies past reply_to tags split across chunks", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"],
+      runId: "run",
+      onPartialReply,
+    });
+
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "[[reply_to:1897" },
+    });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: "]] Hello" },
+    });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_delta", delta: " world" },
+    });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_end" },
+    });
+
+    const lastPayload = onPartialReply.mock.calls.at(-1)?.[0];
+    expect(lastPayload?.text).toBe("Hello world");
+    for (const call of onPartialReply.mock.calls) {
+      expect(call[0]?.text?.includes("[[reply_to")).toBe(false);
+    }
+  });
 });

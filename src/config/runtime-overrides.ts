@@ -1,15 +1,19 @@
+import type { OpenClawConfig } from "./types.js";
 import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
-import type { MoltbotConfig } from "./types.js";
 
 type OverrideTree = Record<string, unknown>;
 
 let overrides: OverrideTree = {};
 
 function mergeOverrides(base: unknown, override: unknown): unknown {
-  if (!isPlainObject(base) || !isPlainObject(override)) return override;
+  if (!isPlainObject(base) || !isPlainObject(override)) {
+    return override;
+  }
   const next: OverrideTree = { ...base };
   for (const [key, value] of Object.entries(override)) {
-    if (value === undefined) continue;
+    if (value === undefined) {
+      continue;
+    }
     next[key] = mergeOverrides((base as OverrideTree)[key], value);
   }
   return next;
@@ -64,7 +68,9 @@ export function unsetConfigOverride(pathRaw: string): {
   return { ok: true, removed };
 }
 
-export function applyConfigOverrides(cfg: MoltbotConfig): MoltbotConfig {
-  if (!overrides || Object.keys(overrides).length === 0) return cfg;
-  return mergeOverrides(cfg, overrides) as MoltbotConfig;
+export function applyConfigOverrides(cfg: OpenClawConfig): OpenClawConfig {
+  if (!overrides || Object.keys(overrides).length === 0) {
+    return cfg;
+  }
+  return mergeOverrides(cfg, overrides) as OpenClawConfig;
 }

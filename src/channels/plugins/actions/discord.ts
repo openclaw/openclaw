@@ -1,6 +1,6 @@
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { createActionGate } from "../../../agents/tools/common.js";
 import { listEnabledDiscordAccounts } from "../../../discord/accounts.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { handleDiscordMessageAction } from "./discord/handle-action.js";
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
@@ -8,10 +8,14 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     const accounts = listEnabledDiscordAccounts(cfg).filter(
       (account) => account.tokenSource !== "none",
     );
-    if (accounts.length === 0) return [];
+    if (accounts.length === 0) {
+      return [];
+    }
     const gate = createActionGate(cfg.channels?.discord?.actions);
     const actions = new Set<ChannelMessageActionName>(["send"]);
-    if (gate("polls")) actions.add("poll");
+    if (gate("polls")) {
+      actions.add("poll");
+    }
     if (gate("reactions")) {
       actions.add("react");
       actions.add("reactions");
@@ -26,19 +30,35 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       actions.add("unpin");
       actions.add("list-pins");
     }
-    if (gate("permissions")) actions.add("permissions");
+    if (gate("permissions")) {
+      actions.add("permissions");
+    }
     if (gate("threads")) {
       actions.add("thread-create");
       actions.add("thread-list");
       actions.add("thread-reply");
     }
-    if (gate("search")) actions.add("search");
-    if (gate("stickers")) actions.add("sticker");
-    if (gate("memberInfo")) actions.add("member-info");
-    if (gate("roleInfo")) actions.add("role-info");
-    if (gate("reactions")) actions.add("emoji-list");
-    if (gate("emojiUploads")) actions.add("emoji-upload");
-    if (gate("stickerUploads")) actions.add("sticker-upload");
+    if (gate("search")) {
+      actions.add("search");
+    }
+    if (gate("stickers")) {
+      actions.add("sticker");
+    }
+    if (gate("memberInfo")) {
+      actions.add("member-info");
+    }
+    if (gate("roleInfo")) {
+      actions.add("role-info");
+    }
+    if (gate("reactions")) {
+      actions.add("emoji-list");
+    }
+    if (gate("emojiUploads")) {
+      actions.add("emoji-upload");
+    }
+    if (gate("stickerUploads")) {
+      actions.add("sticker-upload");
+    }
     if (gate("roles", false)) {
       actions.add("role-add");
       actions.add("role-remove");
@@ -56,7 +76,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       actions.add("category-edit");
       actions.add("category-delete");
     }
-    if (gate("voiceStatus")) actions.add("voice-status");
+    if (gate("voiceStatus")) {
+      actions.add("voice-status");
+    }
     if (gate("events")) {
       actions.add("event-list");
       actions.add("event-create");

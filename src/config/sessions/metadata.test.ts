@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { deriveSessionMetaPatch } from "./metadata.js";
 
 describe("deriveSessionMetaPatch", () => {

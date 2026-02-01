@@ -1,16 +1,16 @@
 export const GATEWAY_CLIENT_IDS = {
   WEBCHAT_UI: "webchat-ui",
-  CONTROL_UI: "moltbot-control-ui",
+  CONTROL_UI: "openclaw-control-ui",
   WEBCHAT: "webchat",
   CLI: "cli",
   GATEWAY_CLIENT: "gateway-client",
-  MACOS_APP: "moltbot-macos",
-  IOS_APP: "moltbot-ios",
-  ANDROID_APP: "moltbot-android",
+  MACOS_APP: "openclaw-macos",
+  IOS_APP: "openclaw-ios",
+  ANDROID_APP: "openclaw-android",
   NODE_HOST: "node-host",
   TEST: "test",
   FINGERPRINT: "fingerprint",
-  PROBE: "moltbot-probe",
+  PROBE: "openclaw-probe",
 } as const;
 
 export type GatewayClientId = (typeof GATEWAY_CLIENT_IDS)[keyof typeof GATEWAY_CLIENT_IDS];
@@ -47,7 +47,9 @@ const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(Object.values(GATEWAY
 
 export function normalizeGatewayClientId(raw?: string | null): GatewayClientId | undefined {
   const normalized = raw?.trim().toLowerCase();
-  if (!normalized) return undefined;
+  if (!normalized) {
+    return undefined;
+  }
   return GATEWAY_CLIENT_ID_SET.has(normalized as GatewayClientId)
     ? (normalized as GatewayClientId)
     : undefined;
@@ -59,7 +61,9 @@ export function normalizeGatewayClientName(raw?: string | null): GatewayClientNa
 
 export function normalizeGatewayClientMode(raw?: string | null): GatewayClientMode | undefined {
   const normalized = raw?.trim().toLowerCase();
-  if (!normalized) return undefined;
+  if (!normalized) {
+    return undefined;
+  }
   return GATEWAY_CLIENT_MODE_SET.has(normalized as GatewayClientMode)
     ? (normalized as GatewayClientMode)
     : undefined;

@@ -1,7 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { Bot } from "grammy";
-
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deliverReplies } from "./delivery.js";
 
 const loadWebMedia = vi.fn();

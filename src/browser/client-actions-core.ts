@@ -11,7 +11,9 @@ function buildProfileQuery(profile?: string): string {
 
 function withBaseUrl(baseUrl: string | undefined, path: string): string {
   const trimmed = baseUrl?.trim();
-  if (!trimmed) return path;
+  if (!trimmed) {
+    return path;
+  }
   return `${trimmed.replace(/\/$/, "")}${path}`;
 }
 

@@ -1,14 +1,9 @@
-import path from "node:path";
 import type { Command } from "commander";
-import { randomIdempotencyKey } from "../../gateway/call.js";
-import { defaultRuntime } from "../../runtime.js";
-import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
-import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { parseNodeList } from "./format.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId, unauthorizedHintForMessage } from "./rpc.js";
+import path from "node:path";
 import type { NodesRpcOpts } from "./types.js";
-import { loadConfig } from "../../config/config.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { loadConfig } from "../../config/config.js";
+import { randomIdempotencyKey } from "../../gateway/call.js";
 import {
   type ExecApprovalsFile,
   type ExecAsk,
@@ -18,6 +13,11 @@ import {
   resolveExecApprovalsFromFile,
 } from "../../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
+import { defaultRuntime } from "../../runtime.js";
+import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
+import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { parseNodeList } from "./format.js";
+import { callGatewayCli, nodesCallOpts, resolveNodeId, unauthorizedHintForMessage } from "./rpc.js";
 
 type NodesRunOpts = NodesRpcOpts & {
   node?: string;
@@ -58,7 +58,9 @@ function normalizeExecAsk(value?: string | null): ExecAsk | null {
 }
 
 function mergePathPrepend(existing: string | undefined, prepend: string[]) {
-  if (prepend.length === 0) return existing;
+  if (prepend.length === 0) {
+    return existing;
+  }
   const partsExisting = (existing ?? "")
     .split(path.delimiter)
     .map((part) => part.trim())
@@ -66,7 +68,9 @@ function mergePathPrepend(existing: string | undefined, prepend: string[]) {
   const merged: string[] = [];
   const seen = new Set<string>();
   for (const part of [...prepend, ...partsExisting]) {
-    if (seen.has(part)) continue;
+    if (seen.has(part)) {
+      continue;
+    }
     seen.add(part);
     merged.push(part);
   }
@@ -78,10 +82,16 @@ function applyPathPrepend(
   prepend: string[] | undefined,
   options?: { requireExisting?: boolean },
 ) {
-  if (!Array.isArray(prepend) || prepend.length === 0) return;
-  if (options?.requireExisting && !env.PATH) return;
+  if (!Array.isArray(prepend) || prepend.length === 0) {
+    return;
+  }
+  if (options?.requireExisting && !env.PATH) {
+    return;
+  }
   const merged = mergePathPrepend(env.PATH, prepend);
-  if (merged) env.PATH = merged;
+  if (merged) {
+    env.PATH = merged;
+  }
 }
 
 function resolveExecDefaults(
@@ -112,7 +122,7 @@ function resolveExecDefaults(
 
 async function resolveNodePlatform(opts: NodesRpcOpts, nodeId: string): Promise<string | null> {
   try {
-    const res = (await callGatewayCli("node.list", opts, {})) as unknown;
+    const res = await callGatewayCli("node.list", opts, {});
     const nodes = parseNodeList(res);
     const match = nodes.find((node) => node.nodeId === nodeId);
     return typeof match?.platform === "string" ? match.platform : null;
@@ -324,7 +334,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             invokeParams.timeoutMs = invokeTimeout;
           }
 
-          const result = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+          const result = await callGatewayCli("node.invoke", opts, invokeParams);
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
@@ -341,8 +351,12 @@ export function registerNodesInvokeCommands(nodes: Command) {
           const timedOut = payload?.timedOut === true;
           const success = payload?.success === true;
 
-          if (stdout) process.stdout.write(stdout);
-          if (stderr) process.stderr.write(stderr);
+          if (stdout) {
+            process.stdout.write(stdout);
+          }
+          if (stderr) {
+            process.stderr.write(stderr);
+          }
           if (timedOut) {
             const { error } = getNodesTheme();
             defaultRuntime.error(error("run timed out"));

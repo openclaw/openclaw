@@ -38,16 +38,24 @@ function parseDiscordUserInput(raw: string): {
   userName?: string;
 } {
   const trimmed = raw.trim();
-  if (!trimmed) return {};
+  if (!trimmed) {
+    return {};
+  }
   const mention = trimmed.match(/^<@!?(\d+)>$/);
-  if (mention) return { userId: mention[1] };
+  if (mention) {
+    return { userId: mention[1] };
+  }
   const prefixed = trimmed.match(/^(?:user:|discord:)?(\d+)$/i);
-  if (prefixed) return { userId: prefixed[1] };
+  if (prefixed) {
+    return { userId: prefixed[1] };
+  }
   const split = trimmed.includes("/") ? trimmed.split("/") : trimmed.split("#");
   if (split.length >= 2) {
     const guild = split[0]?.trim();
     const user = split.slice(1).join("#").trim();
-    if (guild && /^\d+$/.test(guild)) return { guildId: guild, userName: user };
+    if (guild && /^\d+$/.test(guild)) {
+      return { guildId: guild, userName: user };
+    }
     return { guildName: guild, userName: user };
   }
   return { userName: trimmed.replace(/^@/, "") };
@@ -73,9 +81,15 @@ function scoreDiscordMember(member: DiscordMember, query: string): number {
     .map((value) => value?.toLowerCase())
     .filter(Boolean) as string[];
   let score = 0;
-  if (candidates.some((value) => value === q)) score += 3;
-  if (candidates.some((value) => value?.includes(q))) score += 1;
-  if (!user.bot) score += 1;
+  if (candidates.some((value) => value === q)) {
+    score += 3;
+  }
+  if (candidates.some((value) => value?.includes(q))) {
+    score += 1;
+  }
+  if (!user.bot) {
+    score += 1;
+  }
   return score;
 }
 
@@ -85,11 +99,12 @@ export async function resolveDiscordUserAllowlist(params: {
   fetcher?: typeof fetch;
 }): Promise<DiscordUserResolution[]> {
   const token = normalizeDiscordToken(params.token);
-  if (!token)
+  if (!token) {
     return params.entries.map((input) => ({
       input,
       resolved: false,
     }));
+  }
   const fetcher = params.fetcher ?? fetch;
   const guilds = await listGuilds(token, fetcher);
   const results: DiscordUserResolution[] = [];
@@ -133,7 +148,9 @@ export async function resolveDiscordUserAllowlist(params: {
       );
       for (const member of members) {
         const score = scoreDiscordMember(member, query);
-        if (score === 0) continue;
+        if (score === 0) {
+          continue;
+        }
         matches += 1;
         if (!best || score > best.score) {
           best = { member, guild, score };

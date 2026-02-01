@@ -1,9 +1,9 @@
 import type { Command } from "commander";
 import { danger } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
+import { shortenHomePath } from "../../utils.js";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import { resolveBrowserActionContext } from "./shared.js";
-import { shortenHomePath } from "../../utils.js";
 
 export function registerBrowserFilesAndDownloadsCommands(
   browser: Command,
@@ -57,7 +57,7 @@ export function registerBrowserFilesAndDownloadsCommands(
   browser
     .command("waitfordownload")
     .description("Wait for the next download (and save it)")
-    .argument("[path]", "Save path (default: /tmp/moltbot/downloads/...)")
+    .argument("[path]", "Save path (default: /tmp/openclaw/downloads/...)")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option(
       "--timeout-ms <ms>",

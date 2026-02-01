@@ -1,6 +1,5 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-
 import type { SessionsListResult } from "../types";
 import { renderChat, type ChatProps } from "./chat";
 
@@ -37,7 +36,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     error: null,
     sessions: createSessions(),
     focusMode: false,
-    assistantName: "Moltbot",
+    assistantName: "OpenClaw",
     assistantAvatar: null,
     onRefresh: () => undefined,
     onToggleFocusMode: () => undefined,

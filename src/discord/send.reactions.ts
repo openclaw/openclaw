@@ -1,5 +1,5 @@
 import { Routes } from "discord-api-types/v10";
-
+import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
 import { loadConfig } from "../config/config.js";
 import {
   buildReactionIdentifier,
@@ -8,7 +8,6 @@ import {
   normalizeReactionEmoji,
   resolveDiscordRest,
 } from "./send.shared.js";
-import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
 
 export async function reactMessageDiscord(
   channelId: string,
@@ -50,9 +49,13 @@ export async function removeOwnReactionsDiscord(
   const identifiers = new Set<string>();
   for (const reaction of message.reactions ?? []) {
     const identifier = buildReactionIdentifier(reaction.emoji);
-    if (identifier) identifiers.add(identifier);
+    if (identifier) {
+      identifiers.add(identifier);
+    }
   }
-  if (identifiers.size === 0) return { ok: true, removed: [] };
+  if (identifiers.size === 0) {
+    return { ok: true, removed: [] };
+  }
   const removed: string[] = [];
   await Promise.allSettled(
     Array.from(identifiers, (identifier) => {
@@ -78,7 +81,9 @@ export async function fetchReactionsDiscord(
     }>;
   };
   const reactions = message.reactions ?? [];
-  if (reactions.length === 0) return [];
+  if (reactions.length === 0) {
+    return [];
+  }
   const limit =
     typeof opts.limit === "number" && Number.isFinite(opts.limit)
       ? Math.min(Math.max(Math.floor(opts.limit), 1), 100)
@@ -87,7 +92,9 @@ export async function fetchReactionsDiscord(
   const summaries: DiscordReactionSummary[] = [];
   for (const reaction of reactions) {
     const identifier = buildReactionIdentifier(reaction.emoji);
-    if (!identifier) continue;
+    if (!identifier) {
+      continue;
+    }
     const encoded = encodeURIComponent(identifier);
     const users = (await rest.get(Routes.channelMessageReaction(channelId, messageId, encoded), {
       limit,

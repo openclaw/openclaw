@@ -77,7 +77,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+  transition:
+    background 150ms ease-out,
+    color 150ms ease-out,
+    border-color 150ms ease-out;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 

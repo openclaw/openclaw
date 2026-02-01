@@ -1,18 +1,9 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const OXFMT_EXTENSIONS = new Set([
-  ".cjs",
-  ".js",
-  ".json",
-  ".jsonc",
-  ".jsx",
-  ".mjs",
-  ".ts",
-  ".tsx",
-]);
+const OXFMT_EXTENSIONS = new Set([".cjs", ".js", ".json", ".jsonc", ".jsx", ".mjs", ".ts", ".tsx"]);
 
 function getRepoRoot() {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -28,7 +19,9 @@ function runGitCommand(args, options = {}) {
 }
 
 function splitNullDelimited(value) {
-  if (!value) return [];
+  if (!value) {
+    return [];
+  }
   const text = String(value);
   return text.split("\0").filter(Boolean);
 }
@@ -40,9 +33,10 @@ function normalizeGitPath(filePath) {
 function filterOxfmtTargets(paths) {
   return paths
     .map(normalizeGitPath)
-    .filter((filePath) =>
-      (filePath.startsWith("src/") || filePath.startsWith("test/")) &&
-      OXFMT_EXTENSIONS.has(path.posix.extname(filePath)),
+    .filter(
+      (filePath) =>
+        (filePath.startsWith("src/") || filePath.startsWith("test/")) &&
+        OXFMT_EXTENSIONS.has(path.posix.extname(filePath)),
     );
 }
 
@@ -52,7 +46,9 @@ function findPartiallyStagedFiles(stagedFiles, unstagedFiles) {
 }
 
 function filterOutPartialTargets(targets, partialTargets) {
-  if (partialTargets.length === 0) return targets;
+  if (partialTargets.length === 0) {
+    return targets;
+  }
   const partial = new Set(partialTargets.map(normalizeGitPath));
   return targets.filter((filePath) => !partial.has(normalizeGitPath(filePath)));
 }
@@ -74,7 +70,9 @@ function resolveOxfmtCommand(repoRoot) {
 
 function getGitPaths(args, repoRoot) {
   const result = runGitCommand(args, { cwd: repoRoot });
-  if (result.status !== 0) return [];
+  if (result.status !== 0) {
+    return [];
+  }
   return splitNullDelimited(result.stdout ?? "");
 }
 
@@ -87,22 +85,23 @@ function formatFiles(repoRoot, oxfmt, files) {
 }
 
 function stageFiles(repoRoot, files) {
-  if (files.length === 0) return true;
+  if (files.length === 0) {
+    return true;
+  }
   const result = runGitCommand(["add", "--", ...files], { cwd: repoRoot, stdio: "inherit" });
   return result.status === 0;
 }
 
 function main() {
   const repoRoot = getRepoRoot();
-  const staged = getGitPaths([
-    "diff",
-    "--cached",
-    "--name-only",
-    "-z",
-    "--diff-filter=ACMR",
-  ], repoRoot);
+  const staged = getGitPaths(
+    ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"],
+    repoRoot,
+  );
   const targets = filterOxfmtTargets(staged);
-  if (targets.length === 0) return;
+  if (targets.length === 0) {
+    return;
+  }
 
   const unstaged = getGitPaths(["diff", "--name-only", "-z"], repoRoot);
   const partial = findPartiallyStagedFiles(targets, unstaged);
@@ -115,7 +114,9 @@ function main() {
   }
 
   const filteredTargets = filterOutPartialTargets(targets, partial);
-  if (filteredTargets.length === 0) return;
+  if (filteredTargets.length === 0) {
+    return;
+  }
 
   const oxfmt = resolveOxfmtCommand(repoRoot);
   if (!oxfmt) {

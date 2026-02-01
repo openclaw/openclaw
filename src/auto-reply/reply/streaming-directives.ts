@@ -1,7 +1,7 @@
+import type { ReplyDirectiveParseResult } from "./reply-directives.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { ReplyDirectiveParseResult } from "./reply-directives.js";
 
 type PendingReplyState = {
   explicitId?: string;
@@ -20,9 +20,13 @@ type ConsumeOptions = {
 
 const splitTrailingDirective = (text: string): { text: string; tail: string } => {
   const openIndex = text.lastIndexOf("[[");
-  if (openIndex < 0) return { text, tail: "" };
+  if (openIndex < 0) {
+    return { text, tail: "" };
+  }
   const closeIndex = text.indexOf("]]", openIndex + 2);
-  if (closeIndex >= 0) return { text, tail: "" };
+  if (closeIndex >= 0) {
+    return { text, tail: "" };
+  }
   return {
     text: text.slice(0, openIndex),
     tail: text.slice(openIndex),

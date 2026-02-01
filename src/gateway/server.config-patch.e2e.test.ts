@@ -2,9 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
 import { resolveConfigSnapshotHash } from "../config/config.js";
-
 import {
   connectOk,
   installGatewayTestHooks,
@@ -190,7 +188,7 @@ describe("gateway config.patch", () => {
     );
     expect(patchRes.ok).toBe(true);
 
-    const sentinelPath = path.join(os.homedir(), ".clawdbot", "restart-sentinel.json");
+    const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
     await new Promise((resolve) => setTimeout(resolve, 100));
 
     try {
@@ -288,7 +286,7 @@ describe("gateway config.patch", () => {
 
 describe("gateway server sessions", () => {
   it("filters sessions by agentId", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sessions-agents-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-agents-"));
     testState.sessionConfig = {
       store: path.join(dir, "{agentId}", "sessions.json"),
     };
@@ -332,7 +330,7 @@ describe("gateway server sessions", () => {
       agentId: "home",
     });
     expect(homeSessions.ok).toBe(true);
-    expect(homeSessions.payload?.sessions.map((s) => s.key).sort()).toEqual([
+    expect(homeSessions.payload?.sessions.map((s) => s.key).toSorted()).toEqual([
       "agent:home:discord:group:dev",
       "agent:home:main",
     ]);
@@ -349,7 +347,7 @@ describe("gateway server sessions", () => {
   });
 
   it("resolves and patches main alias to default agent main key", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-sessions-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };

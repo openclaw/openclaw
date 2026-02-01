@@ -1,8 +1,6 @@
-import {
-  readConfigFileSnapshot,
-  validateConfigObjectWithPlugins,
-  writeConfigFile,
-} from "../../config/config.js";
+import type { CommandHandler } from "./commands-types.js";
+import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes.js";
+import { normalizeChannelId } from "../../channels/registry.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -10,22 +8,28 @@ import {
   unsetConfigValueAtPath,
 } from "../../config/config-paths.js";
 import {
+  readConfigFileSnapshot,
+  validateConfigObjectWithPlugins,
+  writeConfigFile,
+} from "../../config/config.js";
+import {
   getConfigOverrides,
   resetConfigOverrides,
   setConfigOverride,
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
-import { resolveChannelConfigWrites } from "../../channels/plugins/config-writes.js";
-import { normalizeChannelId } from "../../channels/registry.js";
 import { logVerbose } from "../../globals.js";
-import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
 
 export const handleConfigCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
   const configCommand = parseConfigCommand(params.command.commandBodyNormalized);
-  if (!configCommand) return null;
+  if (!configCommand) {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /config from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -173,9 +177,13 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
 };
 
 export const handleDebugCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) return null;
+  if (!allowTextCommands) {
+    return null;
+  }
   const debugCommand = parseDebugCommand(params.command.commandBodyNormalized);
-  if (!debugCommand) return null;
+  if (!debugCommand) {
+    return null;
+  }
   if (!params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /debug from unauthorized sender: ${params.command.senderId || "<unknown>"}`,

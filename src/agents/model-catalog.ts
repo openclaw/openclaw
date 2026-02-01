@@ -1,6 +1,6 @@
-import { type MoltbotConfig, loadConfig } from "../config/config.js";
-import { resolveMoltbotAgentDir } from "./agent-paths.js";
-import { ensureMoltbotModelsJson } from "./models-config.js";
+import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 
 export type ModelCatalogEntry = {
   id: string;
@@ -20,11 +20,11 @@ type DiscoveredModel = {
   input?: Array<"text" | "image">;
 };
 
-type PiSdkModule = typeof import("@mariozechner/pi-coding-agent");
+type PiSdkModule = typeof import("./pi-model-discovery.js");
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
-const defaultImportPiSdk = () => import("@mariozechner/pi-coding-agent");
+const defaultImportPiSdk = () => import("./pi-model-discovery.js");
 let importPiSdk = defaultImportPiSdk;
 
 export function resetModelCatalogCacheForTest() {
@@ -39,33 +39,38 @@ export function __setModelCatalogImportForTest(loader?: () => Promise<PiSdkModul
 }
 
 export async function loadModelCatalog(params?: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   useCache?: boolean;
 }): Promise<ModelCatalogEntry[]> {
   if (params?.useCache === false) {
     modelCatalogPromise = null;
   }
-  if (modelCatalogPromise) return modelCatalogPromise;
+  if (modelCatalogPromise) {
+    return modelCatalogPromise;
+  }
 
   modelCatalogPromise = (async () => {
     const models: ModelCatalogEntry[] = [];
     const sortModels = (entries: ModelCatalogEntry[]) =>
       entries.sort((a, b) => {
         const p = a.provider.localeCompare(b.provider);
-        if (p !== 0) return p;
+        if (p !== 0) {
+          return p;
+        }
         return a.name.localeCompare(b.name);
       });
     try {
       const cfg = params?.config ?? loadConfig();
-      await ensureMoltbotModelsJson(cfg);
+      await ensureOpenClawModelsJson(cfg);
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
       // will keep failing until restart).
       const piSdk = await importPiSdk();
-      const agentDir = resolveMoltbotAgentDir();
-      const authStorage = piSdk.discoverAuthStorage(agentDir);
-      const registry = piSdk.discoverModels(authStorage, agentDir) as
+      const agentDir = resolveOpenClawAgentDir();
+      const { join } = await import("node:path");
+      const authStorage = new piSdk.AuthStorage(join(agentDir, "auth.json"));
+      const registry = new piSdk.ModelRegistry(authStorage, join(agentDir, "models.json")) as
         | {
             getAll: () => Array<DiscoveredModel>;
           }
@@ -73,18 +78,20 @@ export async function loadModelCatalog(params?: {
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       for (const entry of entries) {
         const id = String(entry?.id ?? "").trim();
-        if (!id) continue;
+        if (!id) {
+          continue;
+        }
         const provider = String(entry?.provider ?? "").trim();
-        if (!provider) continue;
+        if (!provider) {
+          continue;
+        }
         const name = String(entry?.name ?? id).trim() || id;
         const contextWindow =
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
             : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
-        const input = Array.isArray(entry?.input)
-          ? (entry.input as Array<"text" | "image">)
-          : undefined;
+        const input = Array.isArray(entry?.input) ? entry.input : undefined;
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
 

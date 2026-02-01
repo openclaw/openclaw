@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { SessionFileEntry } from "./session-files.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
@@ -105,7 +104,9 @@ export async function syncSessionFiles(params: {
     .prepare(`SELECT path FROM files WHERE source = ?`)
     .all("sessions") as Array<{ path: string }>;
   for (const stale of staleRows) {
-    if (activePaths.has(stale.path)) continue;
+    if (activePaths.has(stale.path)) {
+      continue;
+    }
     params.db
       .prepare(`DELETE FROM files WHERE path = ? AND source = ?`)
       .run(stale.path, "sessions");

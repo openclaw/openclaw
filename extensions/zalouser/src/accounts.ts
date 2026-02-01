@@ -1,42 +1,48 @@
-import type { MoltbotConfig } from "clawdbot/plugin-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "clawdbot/plugin-sdk";
-
-import { runZca, parseJsonOutput } from "./zca.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
+import { runZca, parseJsonOutput } from "./zca.js";
 
-function listConfiguredAccountIds(cfg: MoltbotConfig): string[] {
+function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
-  if (!accounts || typeof accounts !== "object") return [];
+  if (!accounts || typeof accounts !== "object") {
+    return [];
+  }
   return Object.keys(accounts).filter(Boolean);
 }
 
-export function listZalouserAccountIds(cfg: MoltbotConfig): string[] {
+export function listZalouserAccountIds(cfg: OpenClawConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
-  return ids.sort((a, b) => a.localeCompare(b));
+  if (ids.length === 0) {
+    return [DEFAULT_ACCOUNT_ID];
+  }
+  return ids.toSorted((a, b) => a.localeCompare(b));
 }
 
-export function resolveDefaultZalouserAccountId(cfg: MoltbotConfig): string {
+export function resolveDefaultZalouserAccountId(cfg: OpenClawConfig): string {
   const zalouserConfig = cfg.channels?.zalouser as ZalouserConfig | undefined;
-  if (zalouserConfig?.defaultAccount?.trim()) return zalouserConfig.defaultAccount.trim();
+  if (zalouserConfig?.defaultAccount?.trim()) {
+    return zalouserConfig.defaultAccount.trim();
+  }
   const ids = listZalouserAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;
+  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
+    return DEFAULT_ACCOUNT_ID;
+  }
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
 function resolveAccountConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   accountId: string,
 ): ZalouserAccountConfig | undefined {
   const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;
-  if (!accounts || typeof accounts !== "object") return undefined;
+  if (!accounts || typeof accounts !== "object") {
+    return undefined;
+  }
   return accounts[accountId] as ZalouserAccountConfig | undefined;
 }
 
-function mergeZalouserAccountConfig(
-  cfg: MoltbotConfig,
-  accountId: string,
-): ZalouserAccountConfig {
+function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {
   const raw = (cfg.channels?.zalouser ?? {}) as ZalouserConfig;
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -44,9 +50,15 @@ function mergeZalouserAccountConfig(
 }
 
 function resolveZcaProfile(config: ZalouserAccountConfig, accountId: string): string {
-  if (config.profile?.trim()) return config.profile.trim();
-  if (process.env.ZCA_PROFILE?.trim()) return process.env.ZCA_PROFILE.trim();
-  if (accountId !== DEFAULT_ACCOUNT_ID) return accountId;
+  if (config.profile?.trim()) {
+    return config.profile.trim();
+  }
+  if (process.env.ZCA_PROFILE?.trim()) {
+    return process.env.ZCA_PROFILE.trim();
+  }
+  if (accountId !== DEFAULT_ACCOUNT_ID) {
+    return accountId;
+  }
   return "default";
 }
 
@@ -56,11 +68,12 @@ export async function checkZcaAuthenticated(profile: string): Promise<boolean> {
 }
 
 export async function resolveZalouserAccount(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   accountId?: string | null;
 }): Promise<ResolvedZalouserAccount> {
   const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
+  const baseEnabled =
+    (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
@@ -78,11 +91,12 @@ export async function resolveZalouserAccount(params: {
 }
 
 export function resolveZalouserAccountSync(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   accountId?: string | null;
 }): ResolvedZalouserAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
+  const baseEnabled =
+    (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
@@ -99,18 +113,22 @@ export function resolveZalouserAccountSync(params: {
 }
 
 export async function listEnabledZalouserAccounts(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
 ): Promise<ResolvedZalouserAccount[]> {
   const ids = listZalouserAccountIds(cfg);
   const accounts = await Promise.all(
-    ids.map((accountId) => resolveZalouserAccount({ cfg, accountId }))
+    ids.map((accountId) => resolveZalouserAccount({ cfg, accountId })),
   );
   return accounts.filter((account) => account.enabled);
 }
 
-export async function getZcaUserInfo(profile: string): Promise<{ userId?: string; displayName?: string } | null> {
+export async function getZcaUserInfo(
+  profile: string,
+): Promise<{ userId?: string; displayName?: string } | null> {
   const result = await runZca(["me", "info", "-j"], { profile, timeout: 10000 });
-  if (!result.ok) return null;
+  if (!result.ok) {
+    return null;
+  }
   return parseJsonOutput<{ userId?: string; displayName?: string }>(result.stdout);
 }
 
