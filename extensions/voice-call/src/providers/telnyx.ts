@@ -153,6 +153,19 @@ export class TelnyxProvider implements VoiceCallProvider {
   }
 
   /**
+   * Parse Telnyx direction to normalized format.
+   */
+  private static parseDirection(direction: string | undefined): "inbound" | "outbound" | undefined {
+    if (direction === "incoming") {
+      return "inbound";
+    }
+    if (direction === "outgoing") {
+      return "outbound";
+    }
+    return undefined;
+  }
+
+  /**
    * Convert Telnyx event to normalized event format.
    */
   private normalizeEvent(data: TelnyxEvent): NormalizedEvent | null {
@@ -175,6 +188,9 @@ export class TelnyxProvider implements VoiceCallProvider {
       callId,
       providerCallId: data.payload?.call_control_id,
       timestamp: Date.now(),
+      direction: TelnyxProvider.parseDirection(data.payload?.direction),
+      from: data.payload?.from ?? undefined,
+      to: data.payload?.to ?? undefined,
     };
 
     switch (data.event_type) {
@@ -337,6 +353,9 @@ interface TelnyxEvent {
   payload?: {
     call_control_id?: string;
     client_state?: string;
+    direction?: string;
+    from?: string;
+    to?: string;
     text?: string;
     transcription?: string;
     is_final?: boolean;
