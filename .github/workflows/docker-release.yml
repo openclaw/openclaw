@@ -41,12 +41,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
             type=semver,pattern={{version}},suffix=-amd64
-            type=semver,pattern={{version}},suffix=-arm64
             type=ref,event=branch,suffix=-amd64
-            type=ref,event=branch,suffix=-arm64
 
       - name: Build and push amd64 image
         id: build
@@ -90,11 +86,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{version}},suffix=-amd64
             type=semver,pattern={{version}},suffix=-arm64
-            type=ref,event=branch,suffix=-amd64
             type=ref,event=branch,suffix=-arm64
 
       - name: Build and push arm64 image
