@@ -181,10 +181,15 @@ function pickLatestLegacyDirectEntry(
 }
 
 function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
-  const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : null;
-  if (!sessionId) {
+  const rawSessionId = typeof entry.sessionId === "string" ? entry.sessionId : null;
+  if (!rawSessionId) {
     return null;
   }
+  // Only strip .jsonl extension if the rawSessionId is actually a file path (contains directory separators)
+  // Otherwise, preserve bare IDs unchanged to avoid breaking legacy stores that used bare IDs
+  const sessionId = rawSessionId.includes('/') || rawSessionId.includes('\\') 
+    ? path.basename(rawSessionId, ".jsonl")
+    : rawSessionId;
   const updatedAt =
     typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
       ? entry.updatedAt
@@ -195,6 +200,7 @@ function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
     rec.groupChannel = rec.room;
   }
   delete rec.room;
+  delete rec.sessionFile;
   return normalized;
 }
 

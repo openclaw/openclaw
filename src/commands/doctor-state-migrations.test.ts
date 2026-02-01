@@ -327,6 +327,35 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:main"]?.sessionId).toBe("legacy");
   });
 
+  it("strips absolute paths from sessionId and sessionFile during migration", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    const legacySessionsDir = path.join(root, "sessions");
+    fs.mkdirSync(legacySessionsDir, { recursive: true });
+
+    writeJson5(path.join(legacySessionsDir, "sessions.json"), {
+      user1: {
+        sessionId: "/Users/olduser/.clawdbot/sessions/a.jsonl",
+        sessionFile: "/Users/olduser/.clawdbot/sessions/a.jsonl",
+        updatedAt: 10,
+      },
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    await runLegacyStateMigrations({ detected, now: () => 123 });
+
+    const targetDir = path.join(root, "agents", "main", "sessions");
+    const store = JSON.parse(
+      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
+    ) as Record<string, { sessionId: string; sessionFile?: string }>;
+
+    expect(store["agent:main:user1"]?.sessionId).toBe("a");
+    expect(store["agent:main:user1"]?.sessionFile).toBeUndefined();
+  });
+
   it("does nothing when no legacy state dir exists", async () => {
     const root = await makeTempRoot();
     const result = await autoMigrateLegacyStateDir({
