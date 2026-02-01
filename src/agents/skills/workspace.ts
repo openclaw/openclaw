@@ -161,9 +161,8 @@ function filterBySecurityPolicy(
       // Show deprecation notice once per session
       if (!shownDeprecationNotice) {
         shownDeprecationNotice = true;
-        skillsLogger.info(
           "Note: A future version of OpenClaw will require explicit approval for skills without " +
-            "permission manifests. Run `openclaw skill audit` to review your skills.",
+            "permission manifests. Run `openclaw skills audit` to review your skills.",
         );
       }
     }
