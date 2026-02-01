@@ -49,6 +49,7 @@ import {
   buildSenderName,
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
+  buildTelegramThreadParams,
   resolveTelegramForumThreadId,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
@@ -155,6 +156,10 @@ async function resolveTelegramCommandAuth(params: {
     isForum,
     messageThreadId,
   });
+
+  // Preserve forum topic routing for auth/diagnostic responses.
+  // For General topic (id=1), Telegram rejects message_thread_id=1, so helper omits it.
+  const threadParams = buildTelegramThreadParams(isGroup ? resolvedThreadId : messageThreadId);
   const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
@@ -170,14 +175,14 @@ async function resolveTelegramCommandAuth(params: {
   if (isGroup && groupConfig?.enabled === false) {
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
-      fn: () => bot.api.sendMessage(chatId, "This group is disabled."),
+      fn: () => bot.api.sendMessage(chatId, "This group is disabled.", threadParams),
     });
     return null;
   }
   if (isGroup && topicConfig?.enabled === false) {
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
-      fn: () => bot.api.sendMessage(chatId, "This topic is disabled."),
+      fn: () => bot.api.sendMessage(chatId, "This topic is disabled.", threadParams),
     });
     return null;
   }
@@ -192,7 +197,8 @@ async function resolveTelegramCommandAuth(params: {
     ) {
       await withTelegramApiErrorLogging({
         operation: "sendMessage",
-        fn: () => bot.api.sendMessage(chatId, "You are not authorized to use this command."),
+        fn: () =>
+          bot.api.sendMessage(chatId, "You are not authorized to use this command.", threadParams),
       });
       return null;
     }
@@ -204,7 +210,8 @@ async function resolveTelegramCommandAuth(params: {
     if (groupPolicy === "disabled") {
       await withTelegramApiErrorLogging({
         operation: "sendMessage",
-        fn: () => bot.api.sendMessage(chatId, "Telegram group commands are disabled."),
+        fn: () =>
+          bot.api.sendMessage(chatId, "Telegram group commands are disabled.", threadParams),
       });
       return null;
     }
@@ -219,7 +226,12 @@ async function resolveTelegramCommandAuth(params: {
       ) {
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
-          fn: () => bot.api.sendMessage(chatId, "You are not authorized to use this command."),
+          fn: () =>
+            bot.api.sendMessage(
+              chatId,
+              "You are not authorized to use this command.",
+              threadParams,
+            ),
         });
         return null;
       }
@@ -228,7 +240,7 @@ async function resolveTelegramCommandAuth(params: {
     if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
       await withTelegramApiErrorLogging({
         operation: "sendMessage",
-        fn: () => bot.api.sendMessage(chatId, "This group is not allowed."),
+        fn: () => bot.api.sendMessage(chatId, "This group is not allowed.", threadParams),
       });
       return null;
     }
@@ -251,7 +263,8 @@ async function resolveTelegramCommandAuth(params: {
   if (requireAuth && !commandAuthorized) {
     await withTelegramApiErrorLogging({
       operation: "sendMessage",
-      fn: () => bot.api.sendMessage(chatId, "You are not authorized to use this command."),
+      fn: () =>
+        bot.api.sendMessage(chatId, "You are not authorized to use this command.", threadParams),
     });
     return null;
   }
@@ -366,10 +379,22 @@ export const registerTelegramNativeCommands = ({
   ];
 
   if (allCommands.length > 0) {
+    // Register commands for both default scope and group scope.
+    // Some Telegram clients show "This command is not available" in forum topics unless
+    // commands are also set for the all_group_chats scope.
     withTelegramApiErrorLogging({
       operation: "setMyCommands",
       runtime,
       fn: () => bot.api.setMyCommands(allCommands),
+    }).catch(() => {});
+
+    withTelegramApiErrorLogging({
+      operation: "setMyCommands(all_group_chats)",
+      runtime,
+      fn: () =>
+        bot.api.setMyCommands(allCommands, {
+          scope: { type: "all_group_chats" },
+        }),
     }).catch(() => {});
 
     if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
@@ -611,6 +636,14 @@ export const registerTelegramNativeCommands = ({
             return;
           }
           const chatId = msg.chat.id;
+          const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+          const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+          const resolvedThreadId = resolveTelegramForumThreadId({
+            isForum,
+            messageThreadId,
+          });
+          const threadParams = buildTelegramThreadParams(resolvedThreadId);
+
           const rawText = ctx.match?.trim() ?? "";
           const commandBody = `/${pluginCommand.command}${rawText ? ` ${rawText}` : ""}`;
           const match = matchPluginCommand(commandBody);
@@ -618,7 +651,7 @@ export const registerTelegramNativeCommands = ({
             await withTelegramApiErrorLogging({
               operation: "sendMessage",
               runtime,
-              fn: () => bot.api.sendMessage(chatId, "Command not found."),
+              fn: () => bot.api.sendMessage(chatId, "Command not found.", threadParams),
             });
             return;
           }

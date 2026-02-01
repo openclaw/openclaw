@@ -17,34 +17,38 @@ describe("registerTelegramNativeCommands", () => {
     listSkillCommandsForAgents.mockReset();
   });
 
-  const buildParams = (cfg: OpenClawConfig, accountId = "default") => ({
-    bot: {
+  const buildParams = (cfg: OpenClawConfig, accountId = "default") => {
+    const bot = {
       api: {
         setMyCommands: vi.fn().mockResolvedValue(undefined),
         sendMessage: vi.fn().mockResolvedValue(undefined),
       },
       command: vi.fn(),
-    } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-    cfg,
-    runtime: {} as RuntimeEnv,
-    accountId,
-    telegramCfg: {} as TelegramAccountConfig,
-    allowFrom: [],
-    groupAllowFrom: [],
-    replyToMode: "off" as const,
-    textLimit: 4096,
-    useAccessGroups: false,
-    nativeEnabled: true,
-    nativeSkillsEnabled: true,
-    nativeDisabledExplicit: false,
-    resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
-    resolveTelegramGroupConfig: () => ({
-      groupConfig: undefined,
-      topicConfig: undefined,
-    }),
-    shouldSkipUpdate: () => false,
-    opts: { token: "token" },
-  });
+    } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"];
+
+    return {
+      bot,
+      cfg,
+      runtime: {} as RuntimeEnv,
+      accountId,
+      telegramCfg: {} as TelegramAccountConfig,
+      allowFrom: [],
+      groupAllowFrom: [],
+      replyToMode: "off" as const,
+      textLimit: 4096,
+      useAccessGroups: false,
+      nativeEnabled: true,
+      nativeSkillsEnabled: true,
+      nativeDisabledExplicit: false,
+      resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: undefined,
+        topicConfig: undefined,
+      }),
+      shouldSkipUpdate: () => false,
+      opts: { token: "token" },
+    };
+  };
 
   it("scopes skill commands when account binding exists", () => {
     const cfg: OpenClawConfig = {
@@ -77,5 +81,23 @@ describe("registerTelegramNativeCommands", () => {
     registerTelegramNativeCommands(buildParams(cfg, "bot-a"));
 
     expect(listSkillCommandsForAgents).toHaveBeenCalledWith({ cfg });
+  });
+
+  it("registers bot commands for all_group_chats scope as well as default", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const params = buildParams(cfg, "bot-a");
+    registerTelegramNativeCommands(params);
+
+    const setMyCommands = (params.bot as any).api.setMyCommands as ReturnType<typeof vi.fn>;
+    // Called at least twice: default scope + all_group_chats scope.
+    expect(setMyCommands).toHaveBeenCalled();
+    expect(
+      setMyCommands.mock.calls.some((call) => call[1]?.scope?.type === "all_group_chats"),
+    ).toBe(true);
   });
 });
