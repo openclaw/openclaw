@@ -290,12 +290,12 @@ private struct ChatMessageBody: View {
 
     private var bubbleBorderColor: Color {
         if self.isUser {
-            return Color.white.opacity(0.12)
+            return Color.white.opacity(0.20)
         }
         if self.style == .onboarding {
             return OpenClawChatTheme.onboardingAssistantBorder
         }
-        return Color.white.opacity(0.08)
+        return Color.primary.opacity(0.06)
     }
 
     private var bubbleBorderWidth: CGFloat {

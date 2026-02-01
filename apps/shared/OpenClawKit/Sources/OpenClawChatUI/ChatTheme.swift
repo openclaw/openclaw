@@ -20,8 +20,8 @@ enum OpenClawChatTheme {
         // NSColor semantic colors don't reliably resolve for arbitrary NSAppearance in SwiftPM.
         // Use explicit light/dark values so the bubble updates when the system appearance flips.
         appearance.isDarkAqua
-            ? NSColor(calibratedWhite: 0.18, alpha: 0.88)
-            : NSColor(calibratedWhite: 0.94, alpha: 0.92)
+            ? NSColor(calibratedWhite: 0.20, alpha: 0.92)
+            : NSColor(calibratedWhite: 0.96, alpha: 0.95)
     }
 
     static func resolvedOnboardingAssistantBubbleColor(for appearance: NSAppearance) -> NSColor {
@@ -50,35 +50,7 @@ enum OpenClawChatTheme {
     @ViewBuilder
     static var background: some View {
         #if os(macOS)
-        ZStack {
-            Rectangle()
-                .fill(.ultraThinMaterial)
-            LinearGradient(
-                colors: [
-                    Color.white.opacity(0.12),
-                    Color(nsColor: .windowBackgroundColor).opacity(0.35),
-                    Color.black.opacity(0.35),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing)
-            RadialGradient(
-                colors: [
-                    Color(nsColor: .systemOrange).opacity(0.14),
-                    .clear,
-                ],
-                center: .topLeading,
-                startRadius: 40,
-                endRadius: 320)
-            RadialGradient(
-                colors: [
-                    Color(nsColor: .systemTeal).opacity(0.12),
-                    .clear,
-                ],
-                center: .topTrailing,
-                startRadius: 40,
-                endRadius: 280)
-            Color.black.opacity(0.08)
-        }
+        Color(nsColor: .textBackgroundColor)
         #else
         Color(uiColor: .systemBackground)
         #endif
@@ -101,7 +73,7 @@ enum OpenClawChatTheme {
     }
 
     static var userBubble: Color {
-        Color(red: 127 / 255.0, green: 184 / 255.0, blue: 212 / 255.0)
+        Color.accentColor
     }
 
     static var assistantBubble: Color {
@@ -140,7 +112,7 @@ enum OpenClawChatTheme {
 
     static var composerBackground: AnyShapeStyle {
         #if os(macOS)
-        AnyShapeStyle(.ultraThinMaterial)
+        AnyShapeStyle(Color(nsColor: .controlBackgroundColor))
         #else
         AnyShapeStyle(Color(uiColor: .systemBackground))
         #endif
@@ -148,14 +120,18 @@ enum OpenClawChatTheme {
 
     static var composerField: AnyShapeStyle {
         #if os(macOS)
-        AnyShapeStyle(.thinMaterial)
+        AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
         #else
         AnyShapeStyle(Color(uiColor: .secondarySystemBackground))
         #endif
     }
 
     static var composerBorder: Color {
+        #if os(macOS)
+        Color(nsColor: .separatorColor)
+        #else
         Color.white.opacity(0.12)
+        #endif
     }
 
     static var divider: Color {
