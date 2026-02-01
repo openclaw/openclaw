@@ -17,6 +17,8 @@ vi.mock("../../agents/model-fallback.js", () => ({
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  getActiveRunThreadContext: vi.fn().mockReturnValue(undefined),
+  hasActiveRunThreadContext: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
 }));
 
