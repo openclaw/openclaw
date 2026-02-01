@@ -711,6 +711,12 @@ export async function runEmbeddedAttempt(
               {
                 prompt: params.prompt,
                 messages: activeSession.messages,
+                systemPrompt: appendPrompt,
+                tools: tools.map((t) => ({
+                  name: t.name,
+                  description: t.description,
+                  parameters: t.parameters,
+                })),
               },
               {
                 agentId: params.sessionKey?.split(":")[0] ?? "main",
