@@ -355,6 +355,8 @@ final class GatewayConnectionController {
             OpenClawSystemCommand.notify.rawValue,
             OpenClawTalkCommand.pttStart.rawValue,
             OpenClawTalkCommand.pttStop.rawValue,
+            OpenClawTalkCommand.pttCancel.rawValue,
+            OpenClawTalkCommand.pttOnce.rawValue,
         ]
 
         let caps = Set(self.currentCaps())

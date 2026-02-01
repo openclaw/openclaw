@@ -34,7 +34,7 @@ const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
 const SYSTEM_NOTIFY_COMMANDS = ["system.notify"];
 
-const TALK_COMMANDS = ["talk.ptt.start", "talk.ptt.stop"];
+const TALK_COMMANDS = ["talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once"];
 
 const SYSTEM_COMMANDS = [
   "system.run",
