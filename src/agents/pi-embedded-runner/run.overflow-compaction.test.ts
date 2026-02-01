@@ -142,6 +142,13 @@ vi.mock("../pi-embedded-helpers.js", async () => {
     pickFallbackThinkingLevel: vi.fn(() => null),
     isTimeoutErrorMessage: vi.fn(() => false),
     parseImageDimensionError: vi.fn(() => null),
+    isOverloadedErrorMessage: (msg?: string) => {
+      if (!msg) {
+        return false;
+      }
+      const lower = msg.toLowerCase();
+      return lower.includes("overloaded_error") || lower.includes("503");
+    },
   };
 });
 
@@ -282,5 +289,59 @@ describe("overflow compaction in run loop", () => {
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.meta.error?.kind).toBe("compaction_failure");
+  });
+
+  it("retries after successful compaction on 503/overloaded error", async () => {
+    // 503 Service Unavailable can indicate context window pressure
+    const overloadedError = new Error("503 Service Unavailable: overloaded_error");
+
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: overloadedError }))
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      },
+    });
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("503/overloaded error detected; attempting auto-compaction"),
+    );
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("auto-compaction succeeded after 503/overloaded"),
+    );
+    // Should not be an error result
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("returns error if compaction fails on 503/overloaded error", async () => {
+    const overloadedError = new Error("503 Service Unavailable: overloaded_error");
+
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({ promptError: overloadedError }),
+    );
+
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
+    });
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    // Should still have processed the error (503 is treated as overloaded, not context_overflow)
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("auto-compaction failed"));
   });
 });
