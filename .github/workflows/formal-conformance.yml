@@ -6,7 +6,7 @@ on:
 jobs:
   formal_conformance:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write
@@ -35,6 +35,40 @@ jobs:
           export OPENCLAW_REPO_DIR="${GITHUB_WORKSPACE}/openclaw"
           node scripts/extract-tool-groups.mjs
           node scripts/check-tool-group-alias.mjs
+
+      - name: Model check (green suite)
+        run: |
+          set -euo pipefail
+          cd clawdbot-formal-models
+          make \
+            precedence groups elevated nodes-policy \
+            attacker approvals approvals-token nodes-pipeline \
+            gateway-exposure gateway-exposure-v2 gateway-exposure-v2-protected \
+            gateway-auth-conformance gateway-auth-tailscale gateway-auth-proxy \
+            pairing pairing-cap pairing-idempotency pairing-refresh pairing-refresh-race \
+            ingress-gating ingress-idempotency ingress-dedupe-fallback ingress-trace ingress-trace2 \
+            routing-isolation routing-precedence routing-identitylinks routing-identity-transitive routing-identity-symmetry routing-identity-channel-override \
+            routing-thread-parent discord-pluralkit \
+            ingress-retry session-key-stability session-explosion-bound config-normalization \
+            group-alias-check
+
+      - name: Model check (negative suite, expected violations)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd clawdbot-formal-models
+          make -k \
+            precedence-negative groups-negative elevated-negative nodes-policy-negative \
+            attacker-negative attacker-nodes-negative attacker-nodes-allowlist-negative attacker-nodes-allowlist-negative \
+            approvals-negative approvals-token-negative nodes-pipeline-negative \
+            gateway-exposure-negative gateway-exposure-v2-negative gateway-exposure-v2-protected-negative \
+            gateway-exposure-v2-unsafe-custom gateway-exposure-v2-unsafe-tailnet gateway-exposure-v2-unsafe-auto \
+            gateway-auth-conformance-negative gateway-auth-tailscale-negative gateway-auth-proxy-negative \
+            pairing-negative pairing-cap-negative pairing-idempotency-negative pairing-refresh-negative pairing-refresh-race-negative \
+            ingress-gating-negative ingress-idempotency-negative ingress-dedupe-fallback-negative ingress-trace-negative ingress-trace2-negative \
+            routing-isolation-negative routing-precedence-negative routing-identitylinks-negative routing-identity-transitive-negative routing-identity-symmetry-negative routing-identity-channel-override-negative \
+            routing-thread-parent-negative discord-pluralkit-negative \
+            ingress-retry-negative session-key-stability-negative config-normalization-negative
 
       - name: Compute drift
         id: drift
