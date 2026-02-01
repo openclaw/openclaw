@@ -36,4 +36,4 @@ ENV NODE_ENV=production
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
 
-CMD ["node", "dist/index.js"]
+CMD ["sh", "-c", "OPENCLAW_GATEWAY_PORT=${PORT:-18789} exec node dist/index.js gateway run --bind lan --allow-unconfigured"]
