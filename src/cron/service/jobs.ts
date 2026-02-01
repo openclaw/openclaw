@@ -64,11 +64,21 @@ export function recomputeNextRuns(state: CronServiceState) {
     }
     const runningAt = job.state.runningAtMs;
     if (typeof runningAt === "number" && now - runningAt > STUCK_RUN_MS) {
+      const durationMs = Math.max(0, now - runningAt);
       state.deps.log.warn(
-        { jobId: job.id, runningAtMs: runningAt },
-        "cron: clearing stuck running marker",
+        { jobId: job.id, runningAtMs: runningAt, durationMs },
+        "cron: clearing stale running marker (previous run likely interrupted)",
       );
       job.state.runningAtMs = undefined;
+      // Record the interrupted run so operators can see what happened.
+      // NOTE: lastRunAtMs is treated as the *start time* of the last run (see timer.ts).
+      job.state.lastRunAtMs = runningAt;
+      job.state.lastDurationMs = durationMs;
+      job.state.lastStatus = "error";
+      if (!job.state.lastError?.trim()) {
+        job.state.lastError =
+          "Recovered from stale running state (previous cron run likely interrupted by restart/crash)";
+      }
     }
     job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   }
