@@ -2,6 +2,7 @@
 read_when:
   - 向新用户介绍 OpenClaw
 summary: OpenClaw 的顶层概述、功能特性与用途
+title: OpenClaw
 x-i18n:
   generated_at: "2026-02-01T13:34:09Z"
   model: claude-opus-4-5

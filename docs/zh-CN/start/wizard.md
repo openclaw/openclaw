@@ -3,6 +3,7 @@ read_when:
   - 运行或配置上手引导向导
   - 设置新机器
 summary: CLI 上手引导向导：Gateway、工作区、渠道和技能的引导式设置
+title: 上手引导向导
 x-i18n:
   generated_at: "2026-02-01T13:49:20Z"
   model: claude-opus-4-5
