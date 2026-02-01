@@ -7,6 +7,13 @@ import {
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
+import { buildNvidiaProvider } from "./nvidia-models.js";
+import {
+  fetchOpencodeZenModels,
+  getOpencodeZenStaticFallbackModels,
+  OPENCODE_ZEN_API_BASE_URL,
+} from "./opencode-zen-models.js";
+import { buildSiliconFlowProvider } from "./siliconflow-models.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -385,6 +392,18 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
+async function buildOpencodeZenProvider(apiKey?: string): Promise<ProviderConfig> {
+  // Try to fetch models dynamically, fall back to static list if unavailable
+  const models = await fetchOpencodeZenModels(apiKey).catch(() =>
+    getOpencodeZenStaticFallbackModels(),
+  );
+  return {
+    baseUrl: OPENCODE_ZEN_API_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 async function buildOllamaProvider(): Promise<ProviderConfig> {
   const models = await discoverOllamaModels();
   return {
@@ -451,6 +470,30 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "xiaomi", store: authStore });
   if (xiaomiKey) {
     providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
+  }
+
+  // OpenCode Zen provider
+  const opencodeKey =
+    resolveEnvApiKeyVarName("opencode") ??
+    resolveApiKeyFromProfiles({ provider: "opencode", store: authStore });
+  if (opencodeKey) {
+    providers.opencode = { ...(await buildOpencodeZenProvider(opencodeKey)), apiKey: opencodeKey };
+  }
+
+  // NVIDIA NIM provider
+  const nvidiaKey =
+    resolveEnvApiKeyVarName("nvidia") ??
+    resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
+  if (nvidiaKey) {
+    providers.nvidia = { ...buildNvidiaProvider(nvidiaKey), apiKey: nvidiaKey };
+  }
+
+  // SiliconFlow provider
+  const siliconflowKey =
+    resolveEnvApiKeyVarName("siliconflow") ??
+    resolveApiKeyFromProfiles({ provider: "siliconflow", store: authStore });
+  if (siliconflowKey) {
+    providers.siliconflow = { ...buildSiliconFlowProvider(siliconflowKey), apiKey: siliconflowKey };
   }
 
   // Ollama provider - only add if explicitly configured

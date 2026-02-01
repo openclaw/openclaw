@@ -34,6 +34,18 @@ export {
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
 } from "./onboard-auth.config-opencode.js";
+
+export {
+  applyNvidiaConfig,
+  applyNvidiaProviderConfig,
+  NVIDIA_DEFAULT_MODEL_REF,
+} from "./onboard-auth.config-nvidia.js";
+
+export {
+  applySiliconFlowConfig,
+  applySiliconFlowProviderConfig,
+  SILICONFLOW_DEFAULT_MODEL_REF,
+} from "./onboard-auth.config-siliconflow.js";
 export {
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
@@ -41,8 +53,10 @@ export {
   setKimiCodingApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
+  setNvidiaApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setSiliconflowApiKey,
   setSyntheticApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,

@@ -178,3 +178,27 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
+
+export async function setNvidiaApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "nvidia:default",
+    credential: {
+      type: "api_key",
+      provider: "nvidia",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export async function setSiliconflowApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "siliconflow:default",
+    credential: {
+      type: "api_key",
+      provider: "siliconflow",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}

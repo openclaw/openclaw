@@ -17,10 +17,14 @@ import {
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
+  applyNvidiaConfig,
+  applyNvidiaProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
+  applySiliconFlowConfig,
+  applySiliconFlowProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyVeniceConfig,
@@ -32,7 +36,9 @@ import {
   applyZaiConfig,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
+  NVIDIA_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  SILICONFLOW_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
@@ -40,8 +46,10 @@ import {
   setGeminiApiKey,
   setKimiCodingApiKey,
   setMoonshotApiKey,
+  setNvidiaApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setSiliconflowApiKey,
   setSyntheticApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
@@ -96,6 +104,10 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "venice-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
+    } else if (params.opts.tokenProvider === "nvidia") {
+      authChoice = "nvidia-api-key";
+    } else if (params.opts.tokenProvider === "siliconflow") {
+      authChoice = "siliconflow-api-key";
     }
   }
 
@@ -596,9 +608,11 @@ export async function applyAuthChoiceApiProviders(
     if (!hasCredential) {
       await params.prompter.note(
         [
-          "OpenCode Zen provides access to Claude, GPT, Gemini, and more models.",
+          "OpenCode Zen provides access to multiple AI models:",
+          "  Free: GLM-4.7, GPT-5 Nano, Kimi K2.5, Trinity, Big Pickle",
+          "  Paid: Claude Opus/Sonnet/Haiku, GPT-5.x, Gemini 3, Qwen3 Coder",
+          "",
           "Get your API key at: https://opencode.ai/auth",
-          "Requires an active OpenCode Zen subscription.",
         ].join("\n"),
         "OpenCode Zen",
       );
@@ -634,6 +648,124 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyOpencodeZenConfig,
         applyProviderConfig: applyOpencodeZenProviderConfig,
         noteDefault: OPENCODE_ZEN_DEFAULT_MODEL,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "nvidia-api-key") {
+    let hasCredential = false;
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "nvidia") {
+      await setNvidiaApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "NVIDIA NIM provides access to multiple AI models:",
+          "  Llama 3.3 70B, Llama 3.1 405B, DeepSeek R1, QwQ 32B",
+          "  Qwen 2.5 72B, Mistral Large, GLM-4.7, Gemma 2",
+          "",
+          "Get your API key at: https://build.nvidia.com/",
+        ].join("\n"),
+        "NVIDIA NIM",
+      );
+    }
+    const envKey = resolveEnvApiKey("nvidia");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing NVIDIA_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setNvidiaApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter NVIDIA API key",
+        validate: validateApiKeyInput,
+      });
+      await setNvidiaApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "nvidia:default",
+      provider: "nvidia",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: NVIDIA_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyNvidiaConfig,
+        applyProviderConfig: applyNvidiaProviderConfig,
+        noteDefault: NVIDIA_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "siliconflow-api-key") {
+    let hasCredential = false;
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "siliconflow") {
+      await setSiliconflowApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "SiliconFlow 硅基流动 provides access to multiple AI models:",
+          "  Pro: DeepSeek R1/V3, GLM-4.7, Qwen 72B, Llama 70B, Yi, InternLM",
+          "  Free: DeepSeek R1 Distill 7B, Qwen 7B, GLM-4 9B",
+          "",
+          "Get your API key at: https://cloud.siliconflow.cn/",
+        ].join("\n"),
+        "SiliconFlow 硅基流动",
+      );
+    }
+    const envKey = resolveEnvApiKey("siliconflow");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing SILICONFLOW_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setSiliconflowApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter SiliconFlow API key",
+        validate: validateApiKeyInput,
+      });
+      await setSiliconflowApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "siliconflow:default",
+      provider: "siliconflow",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: SILICONFLOW_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applySiliconFlowConfig,
+        applyProviderConfig: applySiliconFlowProviderConfig,
+        noteDefault: SILICONFLOW_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

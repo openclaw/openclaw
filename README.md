@@ -1,6 +1,10 @@
 # 🦞 OpenClaw — Personal AI Assistant
 
 <p align="center">
+  <a href="README_zh.md">🇨🇳 中文文档</a>
+</p>
+
+<p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
         <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" width="500">
@@ -26,6 +30,9 @@ If you want a personal, single-user assistant that feels local, fast, and always
 [Website](https://openclaw.ai) · [Docs](https://docs.openclaw.ai) · [DeepWiki](https://deepwiki.com/openclaw/openclaw) · [Getting Started](https://docs.openclaw.ai/start/getting-started) · [Updating](https://docs.openclaw.ai/install/updating) · [Showcase](https://docs.openclaw.ai/start/showcase) · [FAQ](https://docs.openclaw.ai/start/faq) · [Wizard](https://docs.openclaw.ai/start/wizard) · [Nix](https://github.com/openclaw/nix-clawdbot) · [Docker](https://docs.openclaw.ai/install/docker) · [Discord](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`openclaw onboard`). It walks through gateway, workspace, channels, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
+
+**New: Web-based onboarding UI** - For a graphical setup experience, use `openclaw onboard --web`. This launches a bilingual (English/中文) web interface on port 9887.
+
 Works with npm, pnpm, or bun.
 New install? Start here: [Getting started](https://docs.openclaw.ai/start/getting-started)
 
@@ -53,6 +60,25 @@ openclaw onboard --install-daemon
 ```
 
 The wizard installs the Gateway daemon (launchd/systemd user service) so it stays running.
+
+### Web-based onboarding (alternative)
+
+For a graphical setup experience with bilingual support (English/中文):
+
+```bash
+openclaw onboard --web
+# Or specify a custom port:
+openclaw onboard --web --web-port 9887
+```
+
+This launches a modern web UI at `http://127.0.0.1:9887` that guides you through:
+
+- Model provider selection (Anthropic, OpenAI, Google, SiliconFlow, OpenCode Zen, etc.)
+- API key configuration
+- Gateway settings
+- Channel setup
+
+The web UI automatically opens in your browser. All configuration is saved locally.
 
 ## Quick start (TL;DR)
 

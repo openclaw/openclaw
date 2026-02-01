@@ -30,6 +30,8 @@ export type AuthChoice =
   | "minimax-api-lightning"
   | "minimax-portal"
   | "opencode-zen"
+  | "nvidia-api-key"
+  | "siliconflow-api-key"
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
@@ -52,6 +54,12 @@ export type OnboardOptions = {
   /** Required for non-interactive onboarding; skips the interactive risk prompt when true. */
   acceptRisk?: boolean;
   reset?: boolean;
+  /** Launch web-based onboarding UI instead of CLI wizard. */
+  web?: boolean;
+  /** Port for web-based onboarding UI (default: 9887). */
+  webPort?: number;
+  /** Open browser automatically when using web mode. */
+  webOpen?: boolean;
   authChoice?: AuthChoice;
   /** Used when `authChoice=token` in non-interactive mode. */
   tokenProvider?: string;
@@ -74,6 +82,8 @@ export type OnboardOptions = {
   syntheticApiKey?: string;
   veniceApiKey?: string;
   opencodeZenApiKey?: string;
+  nvidiaApiKey?: string;
+  siliconflowApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;
