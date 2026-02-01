@@ -58,7 +58,13 @@ function resolveProviderAuthOverride(
 ): ModelProviderAuthMode | undefined {
   const entry = resolveProviderConfig(cfg, provider);
   const auth = entry?.auth;
-  if (auth === "api-key" || auth === "aws-sdk" || auth === "oauth" || auth === "token") {
+  if (
+    auth === "api-key" ||
+    auth === "aws-sdk" ||
+    auth === "oauth" ||
+    auth === "token" ||
+    auth === "none"
+  ) {
     return auth;
   }
   return undefined;
@@ -162,6 +168,12 @@ export async function resolveApiKeyForProvider(params: {
   const authOverride = resolveProviderAuthOverride(cfg, provider);
   if (authOverride === "aws-sdk") {
     return resolveAwsSdkAuthInfo();
+  }
+
+  // Providers with auth: "none" don't require an API key (e.g., local Ollama).
+  // Return a placeholder key so the OpenAI client doesn't reject the request.
+  if (authOverride === "none") {
+    return { apiKey: "no-key", source: "auth:none", mode: "api-key" };
   }
 
   const order = resolveAuthProfileOrder({

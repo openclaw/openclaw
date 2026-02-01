@@ -49,6 +49,11 @@ export type EmbeddedPiSubscribeState = {
   suppressBlockChunks: boolean;
   lastReasoningSent?: string;
 
+  /** Set to true when the provider sends native thinking blocks (via API-level reasoning field).
+   *  When detected, enforceFinalTag is dynamically disabled since the provider handles
+   *  reasoning separation natively and tag-based enforcement is unnecessary. */
+  nativeReasoningDetected: boolean;
+
   compactionInFlight: boolean;
   pendingCompactionRetry: number;
   compactionRetryResolve?: () => void;

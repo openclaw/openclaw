@@ -200,19 +200,29 @@ export function handleMessageEnd(
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);
+
+  // Detect native reasoning early (before stripBlockTags): if the provider sent
+  // thinking blocks via the API (not via <think> tags in content), mark it so
+  // enforceFinalTag is dynamically bypassed. This prevents discarding valid content
+  // from providers that handle reasoning natively (e.g. Ollama, Anthropic).
+  const nativeThinking = extractAssistantThinking(assistantMessage);
+  if (nativeThinking && !ctx.state.nativeReasoningDetected) {
+    ctx.state.nativeReasoningDetected = true;
+  }
+
   appendRawStream({
     ts: Date.now(),
     event: "assistant_message_end",
     runId: ctx.params.runId,
     sessionId: (ctx.params.session as { id?: string }).id,
     rawText,
-    rawThinking: extractAssistantThinking(assistantMessage),
+    rawThinking: nativeThinking,
   });
 
   const text = ctx.stripBlockTags(rawText, { thinking: false, final: false });
   const rawThinking =
     ctx.state.includeReasoning || ctx.state.streamReasoning
-      ? extractAssistantThinking(assistantMessage) || extractThinkingFromTaggedText(rawText)
+      ? nativeThinking || extractThinkingFromTaggedText(rawText)
       : "";
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
 

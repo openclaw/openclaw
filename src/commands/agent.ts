@@ -266,6 +266,7 @@ export async function agentCommand(
     let allowedModelKeys = new Set<string>();
     let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
     let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
+    let allowAnyModel = false;
 
     if (needsModelCatalog) {
       modelCatalog = await loadModelCatalog({ config: cfg });
@@ -277,6 +278,7 @@ export async function agentCommand(
       });
       allowedModelKeys = allowed.allowedKeys;
       allowedModelCatalog = allowed.allowedCatalog;
+      allowAnyModel = allowed.allowAny;
     }
 
     if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
@@ -287,6 +289,7 @@ export async function agentCommand(
         const key = modelKey(overrideProvider, overrideModel);
         if (
           !isCliProvider(overrideProvider, cfg) &&
+          !allowAnyModel &&
           allowedModelKeys.size > 0 &&
           !allowedModelKeys.has(key)
         ) {
@@ -311,6 +314,7 @@ export async function agentCommand(
       const key = modelKey(candidateProvider, storedModelOverride);
       if (
         isCliProvider(candidateProvider, cfg) ||
+        allowAnyModel ||
         allowedModelKeys.size === 0 ||
         allowedModelKeys.has(key)
       ) {
