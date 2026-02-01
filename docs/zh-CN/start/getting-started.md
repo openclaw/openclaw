@@ -1,15 +1,15 @@
 ---
 read_when:
-    - 从零开始的首次设置
-    - 您希望找到从安装 → 上手引导 → 发送第一条消息的最快路径
+  - 从零开始的首次设置
+  - 您希望找到从安装 → 上手引导 → 发送第一条消息的最快路径
 summary: 新手指南：从零开始到发送第一条消息（向导、认证、渠道、配对）
 x-i18n:
-    generated_at: "2026-02-01T13:38:44Z"
-    model: claude-opus-4-5
-    provider: pi
-    source_hash: d0ebc83c10efc569eaf6fb32368a29ef75a373f15da61f3499621462f08aff63
-    source_path: start/getting-started.md
-    workflow: 9
+  generated_at: "2026-02-01T13:38:44Z"
+  model: claude-opus-4-5
+  provider: pi
+  source_hash: d0ebc83c10efc569eaf6fb32368a29ef75a373f15da61f3499621462f08aff63
+  source_path: start/getting-started.md
+  workflow: 9
 ---
 
 # 快速入门
