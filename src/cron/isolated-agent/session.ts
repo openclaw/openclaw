@@ -7,6 +7,8 @@ export function resolveCronSession(params: {
   sessionKey: string;
   nowMs: number;
   agentId: string;
+  /** Optional label for the session (e.g., cron job name). */
+  label?: string;
 }) {
   const sessionCfg = params.cfg.session;
   const storePath = resolveStorePath(sessionCfg?.store, {
@@ -29,6 +31,8 @@ export function resolveCronSession(params: {
     lastTo: entry?.lastTo,
     lastAccountId: entry?.lastAccountId,
     skillsSnapshot: entry?.skillsSnapshot,
+    // Use provided label, or preserve existing label if session already exists
+    label: params.label || entry?.label,
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession: true };
 }

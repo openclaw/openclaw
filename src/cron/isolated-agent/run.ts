@@ -200,6 +200,7 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
+    label: params.job.name?.trim() || undefined,
   });
 
   // Resolve thinking level - job thinking > hooks.gmail.thinking > agent default

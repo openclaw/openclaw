@@ -126,7 +126,8 @@ export async function executeJob(
     }
 
     if (job.sessionTarget === "isolated") {
-      const prefix = job.isolation?.postToMainPrefix?.trim() || "Cron";
+      // Use job name as prefix if available, otherwise fall back to configured prefix or "Cron"
+      const prefix = job.isolation?.postToMainPrefix?.trim() || job.name?.trim() || "Cron";
       const mode = job.isolation?.postToMainMode ?? "summary";
 
       let body = (summary ?? err ?? status).trim();

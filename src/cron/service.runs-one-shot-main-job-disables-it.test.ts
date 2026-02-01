@@ -362,7 +362,7 @@ describe("CronService", () => {
     await vi.runOnlyPendingTimersAsync();
     await cron.list({ includeDisabled: true });
 
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Cron (error): last output", {
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("isolated error test (error): last output", {
       agentId: undefined,
     });
     expect(requestHeartbeatNow).toHaveBeenCalled();
