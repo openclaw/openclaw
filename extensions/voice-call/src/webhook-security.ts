@@ -57,6 +57,13 @@ function timingSafeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+/** Returns the URL as a string with the authority port removed (for Twilio legacy signature check). */
+function removePort(url: URL): string {
+  const u = new URL(url.href);
+  u.port = "";
+  return u.toString();
+}
+
 /**
  * Reconstruct the public webhook URL from request headers.
  *
@@ -181,16 +188,16 @@ export function verifyTwilioWebhook(
     return { ok: false, reason: "Missing X-Twilio-Signature header" };
   }
 
-  // Reconstruct the URL Twilio used
+  // Reconstruct the URL Twilio used and parse body params once
   const verificationUrl = buildTwilioVerificationUrl(ctx, options?.publicUrl);
-
-  // Parse the body as URL-encoded params
   const params = new URLSearchParams(ctx.rawBody);
 
-  // Validate signature
-  const isValid = validateTwilioSignature(authToken, signature, verificationUrl, params);
+  const urlObject = new URL(verificationUrl);
 
-  if (isValid) {
+  if (
+    validateTwilioSignature(authToken, signature, removePort(urlObject), params) ||
+    validateTwilioSignature(authToken, signature, verificationUrl, params)
+  ) {
     return { ok: true, verificationUrl };
   }
 
