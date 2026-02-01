@@ -85,6 +85,12 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.reloadHooks).toBe(true);
   });
 
+  it("restarts heartbeat when agents.list changes", () => {
+    const plan = buildGatewayReloadPlan(["agents.list"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+  });
+
   it("restarts providers when provider config prefixes change", () => {
     const changedPaths = ["web.enabled", "channels.telegram.botToken"];
     const plan = buildGatewayReloadPlan(changedPaths);
