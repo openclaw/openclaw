@@ -150,6 +150,14 @@
       "destination": "/providers/zai"
     },
     {
+      "source": "/tinfoil",
+      "destination": "/providers/tinfoil"
+    },
+    {
+      "source": "/tinfoil/",
+      "destination": "/providers/tinfoil"
+    },
+    {
       "source": "/message",
       "destination": "/cli/message"
     },
@@ -1030,7 +1038,8 @@
           "providers/synthetic",
           "providers/opencode",
           "providers/glm",
-          "providers/zai"
+          "providers/zai",
+          "providers/tinfoil"
         ]
       },
       {

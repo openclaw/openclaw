@@ -65,6 +65,16 @@ const QWEN_PORTAL_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const TINFOIL_BASE_URL = "https://inference.tinfoil.sh/v1";
+const TINFOIL_DEFAULT_CONTEXT_WINDOW = 128000;
+const TINFOIL_DEFAULT_MAX_TOKENS = 8192;
+const TINFOIL_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const OLLAMA_API_BASE_URL = "http://127.0.0.1:11434";
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -385,6 +395,69 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
+function buildTinfoilProvider(): ProviderConfig {
+  return {
+    baseUrl: TINFOIL_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "deepseek-r1-0528",
+        name: "DeepSeek R1",
+        reasoning: true,
+        input: ["text"],
+        cost: TINFOIL_DEFAULT_COST,
+        contextWindow: TINFOIL_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: TINFOIL_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "kimi-k2-thinking",
+        name: "Kimi K2 Thinking",
+        reasoning: true,
+        input: ["text"],
+        cost: TINFOIL_DEFAULT_COST,
+        contextWindow: 256000,
+        maxTokens: TINFOIL_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gpt-oss-120b",
+        name: "GPT-OSS 120B",
+        reasoning: true,
+        input: ["text"],
+        cost: TINFOIL_DEFAULT_COST,
+        contextWindow: TINFOIL_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: TINFOIL_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "llama3-3-70b",
+        name: "Llama 3.3 70B",
+        reasoning: false,
+        input: ["text"],
+        cost: TINFOIL_DEFAULT_COST,
+        contextWindow: TINFOIL_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: TINFOIL_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "qwen3-coder-480b",
+        name: "Qwen3 Coder 480B",
+        reasoning: false,
+        input: ["text"],
+        cost: TINFOIL_DEFAULT_COST,
+        contextWindow: TINFOIL_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: TINFOIL_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "qwen3-vl-30b",
+        name: "Qwen3-VL 30B",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: TINFOIL_DEFAULT_COST,
+        contextWindow: 256000,
+        maxTokens: TINFOIL_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 async function buildOllamaProvider(): Promise<ProviderConfig> {
   const models = await discoverOllamaModels();
   return {
@@ -459,6 +532,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+  }
+
+  const tinfoilKey =
+    resolveEnvApiKeyVarName("tinfoil") ??
+    resolveApiKeyFromProfiles({ provider: "tinfoil", store: authStore });
+  if (tinfoilKey) {
+    providers.tinfoil = { ...buildTinfoilProvider(), apiKey: tinfoilKey };
   }
 
   return providers;
