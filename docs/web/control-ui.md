@@ -34,7 +34,7 @@ requires a **one-time pairing approval** — even if you're on the same Tailnet
 with `gateway.auth.allowTailscale: true`. This is a security measure to prevent
 unauthorized access.
 
-**What you'll see:** "Gateway disconnected — pairing required"
+**What you'll see:** "disconnected (1008): pairing required"
 
 **To approve the device:**
 
