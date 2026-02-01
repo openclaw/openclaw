@@ -264,14 +264,17 @@ export async function runWithModelFallback<T>(params: {
       const isAnyProfileAvailable = profileIds.some((id) => !isProfileInCooldown(authStore, id));
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
-        // All profiles for this provider are in cooldown; skip without attempting
-        attempts.push({
-          provider: candidate.provider,
-          model: candidate.model,
-          error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-          reason: "rate_limit",
-        });
-        continue;
+        // Only skip if this provider is the same as the original one to ensure fallbacks to other providers are still tried
+        const originalProvider = candidates[0]?.provider;
+        if (candidate.provider === originalProvider) {
+          attempts.push({
+            provider: candidate.provider,
+            model: candidate.model,
+            error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
+            reason: "rate_limit",
+          });
+          continue;
+        }
       }
     }
     try {
