@@ -1,6 +1,7 @@
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
+import { auditHandlers } from "./server-methods/audit.js";
 import { automationsHandlers } from "./server-methods/automations.js";
 import { browserHandlers } from "./server-methods/browser.js";
 import { channelsHandlers } from "./server-methods/channels.js";
@@ -16,11 +17,13 @@ import { logsHandlers } from "./server-methods/logs.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { overseerHandlers } from "./server-methods/overseer.js";
+import { securityHandlers } from "./server-methods/security.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
+import { tokenHandlers } from "./server-methods/tokens.js";
 import { ttsHandlers } from "./server-methods/tts.js";
 import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { updateHandlers } from "./server-methods/update.js";
@@ -81,6 +84,10 @@ const READ_METHODS = new Set([
   "overseer.goal.status",
   "decision.list",
   "decision.get",
+  "security.getState",
+  "security.getHistory",
+  "tokens.list",
+  "audit.query",
 ]);
 const WRITE_METHODS = new Set([
   "send",
@@ -104,6 +111,16 @@ const WRITE_METHODS = new Set([
   "decision.create",
   "decision.respond",
   "browser.request",
+  "security.unlock",
+  "security.lock",
+  "security.setupPassword",
+  "security.changePassword",
+  "security.disable",
+  "security.setup2fa",
+  "security.verify2fa",
+  "security.disable2fa",
+  "tokens.create",
+  "tokens.revoke",
 ]);
 
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
@@ -195,6 +212,9 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...overseerHandlers,
   ...decisionHandlers,
   ...browserHandlers,
+  ...securityHandlers,
+  ...tokenHandlers,
+  ...auditHandlers,
 };
 
 export async function handleGatewayRequest(

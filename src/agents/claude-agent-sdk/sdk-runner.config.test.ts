@@ -516,3 +516,152 @@ describe("mainCcsdkProvider resolution", () => {
     expect(provider?.key).toBe("anthropic");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-agent runtime and provider overrides
+// ---------------------------------------------------------------------------
+
+describe("Per-agent runtime overrides", () => {
+  it("per-agent runtime=ccsdk overrides global runtime=pi", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { runtime: "pi" },
+        list: [{ id: "worker1", runtime: "ccsdk" }],
+      },
+    };
+    expect(isSdkRunnerEnabled(config, "worker1")).toBe(true);
+  });
+
+  it("per-agent runtime=pi overrides global runtime=ccsdk", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { runtime: "ccsdk" },
+        list: [{ id: "worker1", runtime: "pi" }],
+      },
+    };
+    expect(isSdkRunnerEnabled(config, "worker1")).toBe(false);
+  });
+
+  it("per-agent runtime overrides mainRuntime for main agent", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { mainRuntime: "pi", runtime: "ccsdk" },
+        list: [{ id: "main", runtime: "ccsdk" }],
+      },
+    };
+    expect(isSdkRunnerEnabled(config, "main")).toBe(true);
+  });
+
+  it("agents without per-agent runtime fall back to mainRuntime (main)", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { mainRuntime: "ccsdk" },
+        list: [{ id: "main" }],
+      },
+    };
+    expect(isSdkRunnerEnabled(config, "main")).toBe(true);
+  });
+
+  it("agents without per-agent runtime fall back to global runtime (worker)", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { runtime: "ccsdk" },
+        list: [{ id: "worker1" }],
+      },
+    };
+    expect(isSdkRunnerEnabled(config, "worker1")).toBe(true);
+  });
+
+  it("per-agent runtime for non-existent agent falls back gracefully", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { runtime: "pi" },
+        list: [{ id: "worker1", runtime: "ccsdk" }],
+      },
+    };
+    expect(isSdkRunnerEnabled(config, "worker2")).toBe(false);
+  });
+});
+
+describe("Per-agent provider overrides", () => {
+  it("per-agent ccsdkProvider overrides global ccsdkProvider", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { ccsdkProvider: "anthropic" },
+        list: [{ id: "worker1", ccsdkProvider: "zai" }],
+      },
+    };
+    const provider = resolveDefaultSdkProvider({ config, agentId: "worker1" });
+    expect(provider?.key).toBe("zai");
+  });
+
+  it("per-agent ccsdkProvider overrides mainCcsdkProvider for main agent", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { mainCcsdkProvider: "anthropic" },
+        list: [{ id: "main", ccsdkProvider: "openrouter" }],
+      },
+    };
+    const provider = resolveDefaultSdkProvider({ config, agentId: "main" });
+    expect(provider?.key).toBe("openrouter");
+  });
+
+  it("agents without per-agent provider fall back to mainCcsdkProvider (main)", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { mainCcsdkProvider: "zai" },
+        list: [{ id: "main" }],
+      },
+    };
+    const provider = resolveDefaultSdkProvider({ config, agentId: "main" });
+    expect(provider?.key).toBe("zai");
+  });
+
+  it("agents without per-agent provider fall back to ccsdkProvider (worker)", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { ccsdkProvider: "openrouter" },
+        list: [{ id: "worker1" }],
+      },
+    };
+    const provider = resolveDefaultSdkProvider({ config, agentId: "worker1" });
+    expect(provider?.key).toBe("openrouter");
+  });
+
+  it("per-agent provider for non-existent agent falls back gracefully", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { ccsdkProvider: "anthropic" },
+        list: [{ id: "worker1", ccsdkProvider: "zai" }],
+      },
+    };
+    const provider = resolveDefaultSdkProvider({ config, agentId: "worker2" });
+    expect(provider?.key).toBe("anthropic");
+  });
+
+  it("mixed per-agent overrides work independently", () => {
+    const config: ClawdbrainConfig = {
+      agents: {
+        defaults: { runtime: "pi", ccsdkProvider: "anthropic" },
+        list: [
+          { id: "main", runtime: "ccsdk", ccsdkProvider: "zai" },
+          { id: "worker1", runtime: "ccsdk", ccsdkProvider: "openrouter" },
+          { id: "worker2", runtime: "pi" },
+        ],
+      },
+    };
+
+    // Main agent
+    expect(isSdkRunnerEnabled(config, "main")).toBe(true);
+    const mainProvider = resolveDefaultSdkProvider({ config, agentId: "main" });
+    expect(mainProvider?.key).toBe("zai");
+
+    // Worker1
+    expect(isSdkRunnerEnabled(config, "worker1")).toBe(true);
+    const worker1Provider = resolveDefaultSdkProvider({ config, agentId: "worker1" });
+    expect(worker1Provider?.key).toBe("openrouter");
+
+    // Worker2
+    expect(isSdkRunnerEnabled(config, "worker2")).toBe(false);
+  });
+});

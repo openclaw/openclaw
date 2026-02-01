@@ -73,3 +73,6 @@ USER.md
 # local tooling
 .serena/
 /.archon-python-reference
+
+
+**/.tanstack/

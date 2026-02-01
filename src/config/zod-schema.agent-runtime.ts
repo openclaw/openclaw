@@ -421,6 +421,8 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+    runtime: z.enum(["pi", "ccsdk"]).optional(),
+    ccsdkProvider: z.enum(["anthropic", "zai", "openrouter"]).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
