@@ -145,11 +145,18 @@ export function createAgentEventHandler({
   resolveSessionKeyForRun,
   clearAgentRunContext,
 }: AgentEventHandlerOptions) {
-  const emitChatDelta = (sessionKey: string, clientRunId: string, seq: number, text: string) => {
+  const emitChatDelta = (
+    sessionKey: string,
+    clientRunId: string,
+    seq: number,
+    text: string,
+    force = false,
+  ) => {
     chatRunState.buffers.set(clientRunId, text);
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
-    if (now - last < 150) {
+    // Skip throttle when force=true (e.g., flushing before tool events)
+    if (!force && now - last < 150) {
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
@@ -261,6 +268,20 @@ export function createAgentEventHandler({
         },
       });
     }
+    // Flush buffered text before tool events to prevent text truncation.
+    // Tool events broadcast immediately, but text deltas are throttled (150ms).
+    // Without this flush, clients may receive tool events before preceding text.
+    if (evt.stream === "tool" && evt.data?.phase === "start" && sessionKey && !isAborted) {
+      const bufferedText = chatRunState.buffers.get(clientRunId);
+      if (bufferedText) {
+        // Use last seq (before this tool event) to maintain monotonic chat delta ordering
+        const lastSeq = agentRunSeq.get(evt.runId) ?? evt.seq;
+        emitChatDelta(sessionKey, clientRunId, lastSeq, bufferedText, true);
+        // Clear buffer to prevent emitChatFinal from resending the same text
+        chatRunState.buffers.delete(clientRunId);
+      }
+    }
+
     agentRunSeq.set(evt.runId, evt.seq);
     broadcast("agent", agentPayload);
 
