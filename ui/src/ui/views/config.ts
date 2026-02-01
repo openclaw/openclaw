@@ -324,6 +324,40 @@ function resolveSubsections(params: {
   return entries;
 }
 
+function applySchemaDefaults(value: unknown, schema: JsonSchema | undefined): unknown {
+  if (!schema) return value;
+  const type = schemaType(schema);
+  if (value === undefined && schema.default !== undefined) {
+    return schema.default;
+  }
+  if (type === "object" && schema.properties && value && typeof value === "object") {
+    if (Array.isArray(value)) return value;
+    const record = value as Record<string, unknown>;
+    let mutated = false;
+    const next: Record<string, unknown> = { ...record };
+    for (const [key, childSchema] of Object.entries(schema.properties)) {
+      const before = record[key];
+      const after = applySchemaDefaults(before, childSchema as JsonSchema);
+      if (after !== before) {
+        next[key] = after;
+        mutated = true;
+      }
+    }
+    return mutated ? next : value;
+  }
+  if (type === "array" && Array.isArray(value) && schema.items) {
+    const itemSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
+    let mutated = false;
+    const next = value.map((entry) => {
+      const normalized = applySchemaDefaults(entry, itemSchema as JsonSchema);
+      if (normalized !== entry) mutated = true;
+      return normalized;
+    });
+    return mutated ? next : value;
+  }
+  return value;
+}
+
 function computeDiff(
   original: Record<string, unknown> | null,
   current: Record<string, unknown> | null,
@@ -414,7 +448,18 @@ export function renderConfig(props: ConfigProps) {
       : (props.activeSubsection ?? subsections[0]?.key ?? null);
 
   // Compute diff for showing changes (works for both form and raw modes)
-  const diff = props.formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
+  const normalizedOriginal =
+    props.formMode === "form"
+      ? (applySchemaDefaults(props.originalValue, analysis.schema) as Record<
+          string,
+          unknown
+        > | null)
+      : props.originalValue;
+  const normalizedCurrent =
+    props.formMode === "form"
+      ? (applySchemaDefaults(props.formValue, analysis.schema) as Record<string, unknown> | null)
+      : props.formValue;
+  const diff = props.formMode === "form" ? computeDiff(normalizedOriginal, normalizedCurrent) : [];
   const hasRawChanges = props.formMode === "raw" && props.raw !== props.originalRaw;
   const hasChanges = props.formMode === "form" ? diff.length > 0 : hasRawChanges;
 

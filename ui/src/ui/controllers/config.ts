@@ -34,8 +34,19 @@ export type ConfigState = {
   lastError: string | null;
 };
 
-export async function loadConfig(state: ConfigState) {
+export async function loadConfig(state: ConfigState, opts: { resetDirty?: boolean } = {}) {
   if (!state.client || !state.connected) return;
+  if (opts.resetDirty) {
+    state.configFormDirty = false;
+    if (state.configFormMode === "form") {
+      if (state.configFormOriginal) {
+        state.configForm = cloneConfigObject(state.configFormOriginal);
+        state.configRaw = serializeConfigForm(state.configForm);
+      }
+    } else {
+      state.configRaw = state.configRawOriginal || state.configRaw;
+    }
+  }
   state.configLoading = true;
   state.lastError = null;
   try {
