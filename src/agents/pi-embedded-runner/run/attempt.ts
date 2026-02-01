@@ -52,6 +52,7 @@ import { createOpenClawCodingTools } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { repairToolUseResultPairing } from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import {
   applySkillEnvOverrides,
@@ -531,8 +532,11 @@ export async function runEmbeddedAttempt(
       }
 
       try {
+        // Snapshot original messages before sanitization to detect tool-use repairs.
+        const originalMessages = activeSession.messages;
+
         const prior = await sanitizeSessionHistory({
-          messages: activeSession.messages,
+          messages: originalMessages,
           modelApi: params.model.api,
           modelId: params.modelId,
           provider: params.provider,
@@ -554,6 +558,29 @@ export async function runEmbeddedAttempt(
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
           activeSession.agent.replaceMessages(limited);
+        }
+
+        // If tool-use pairing was repaired, persist the fix to disk so corrupted
+        // sessions don't re-trigger the same API rejection on every future request.
+        // This follows the same SessionManager reset pattern as session-manager-init.ts.
+        const toolRepairReport = repairToolUseResultPairing(originalMessages);
+        const didRepairTools =
+          toolRepairReport.moved ||
+          toolRepairReport.droppedOrphanCount > 0 ||
+          toolRepairReport.droppedDuplicateCount > 0 ||
+          toolRepairReport.added.length > 0;
+        if (didRepairTools) {
+          log.warn("Tool-use pairing repair detected — persisting fix to session file");
+          const sm = sessionManager as unknown as {
+            flushed: boolean;
+            fileEntries: Array<{ type: string }>;
+          };
+          const header = sm.fileEntries.find((e) => e.type === "session");
+          if (header) {
+            await fs.writeFile(params.sessionFile, "", "utf-8");
+            sm.fileEntries = [header];
+            sm.flushed = false;
+          }
         }
       } catch (err) {
         sessionManager.flushPendingToolResults?.();
