@@ -1,0 +1,94 @@
+diff --git a/index.js b/index.js
+index 020b8893194bc185ec9ad4f5fd0558f148aee4d5..5ebf0beb60cc043c71092bd39d50f9f17d31e5bc 100644
+--- a/index.js
++++ b/index.js
+@@ -288,30 +288,66 @@ switch (platform) {
+     throw new Error(`Unsupported OS: ${platform}, architecture: ${arch}`)
+ }
+ 
++// Provide stub implementations if native binding is not available
++// This allows the module to be required on unsupported platforms without crashing
+ if (!nativeBinding) {
+-  if (loadError) {
+-    throw loadError
++  const unsupportedPlatformError = new Error(
++    `Clipboard native bindings not available for ${platform}-${arch}. ` +
++    `Clipboard operations will not work. ` +
++    `Original error: ${loadError ? loadError.message : 'Unknown'}`
++  )
++  
++  // Log warning but don't throw - allow the module to load
++  if (typeof process !== 'undefined' && process.emitWarning) {
++    process.emitWarning(unsupportedPlatformError.message, 'ClipboardUnsupportedPlatform')
++  } else {
++    console.warn('[clipboard]', unsupportedPlatformError.message)
++  }
++
++  // Provide stub implementations that throw informative errors when called
++  const notAvailable = (fnName) => {
++    return function() {
++      throw new Error(`Clipboard.${fnName} is not available on ${platform}-${arch}`)
++    }
+   }
+-  throw new Error(`Failed to load native binding`)
+-}
+ 
+-const { availableFormats, getText, setText, hasText, getImageBinary, getImageBase64, setImageBinary, setImageBase64, hasImage, getHtml, setHtml, hasHtml, getRtf, setRtf, hasRtf, clear, watch, callThreadsafeFunction } = nativeBinding
++  module.exports.availableFormats = notAvailable('availableFormats')
++  module.exports.getText = notAvailable('getText')
++  module.exports.setText = notAvailable('setText')
++  module.exports.hasText = notAvailable('hasText')
++  module.exports.getImageBinary = notAvailable('getImageBinary')
++  module.exports.getImageBase64 = notAvailable('getImageBase64')
++  module.exports.setImageBinary = notAvailable('setImageBinary')
++  module.exports.setImageBase64 = notAvailable('setImageBase64')
++  module.exports.hasImage = notAvailable('hasImage')
++  module.exports.getHtml = notAvailable('getHtml')
++  module.exports.setHtml = notAvailable('setHtml')
++  module.exports.hasHtml = notAvailable('hasHtml')
++  module.exports.getRtf = notAvailable('getRtf')
++  module.exports.setRtf = notAvailable('setRtf')
++  module.exports.hasRtf = notAvailable('hasRtf')
++  module.exports.clear = notAvailable('clear')
++  module.exports.watch = notAvailable('watch')
++  module.exports.callThreadsafeFunction = notAvailable('callThreadsafeFunction')
++} else {
++  const { availableFormats, getText, setText, hasText, getImageBinary, getImageBase64, setImageBinary, setImageBase64, hasImage, getHtml, setHtml, hasHtml, getRtf, setRtf, hasRtf, clear, watch, callThreadsafeFunction } = nativeBinding
+ 
+-module.exports.availableFormats = availableFormats
+-module.exports.getText = getText
+-module.exports.setText = setText
+-module.exports.hasText = hasText
+-module.exports.getImageBinary = getImageBinary
+-module.exports.getImageBase64 = getImageBase64
+-module.exports.setImageBinary = setImageBinary
+-module.exports.setImageBase64 = setImageBase64
+-module.exports.hasImage = hasImage
+-module.exports.getHtml = getHtml
+-module.exports.setHtml = setHtml
+-module.exports.hasHtml = hasHtml
+-module.exports.getRtf = getRtf
+-module.exports.setRtf = setRtf
+-module.exports.hasRtf = hasRtf
+-module.exports.clear = clear
+-module.exports.watch = watch
+-module.exports.callThreadsafeFunction = callThreadsafeFunction
++  module.exports.availableFormats = availableFormats
++  module.exports.getText = getText
++  module.exports.setText = setText
++  module.exports.hasText = hasText
++  module.exports.getImageBinary = getImageBinary
++  module.exports.getImageBase64 = getImageBase64
++  module.exports.setImageBinary = setImageBinary
++  module.exports.setImageBase64 = setImageBase64
++  module.exports.hasImage = hasImage
++  module.exports.getHtml = getHtml
++  module.exports.setHtml = setHtml
++  module.exports.hasHtml = hasHtml
++  module.exports.getRtf = getRtf
++  module.exports.setRtf = setRtf
++  module.exports.hasRtf = hasRtf
++  module.exports.clear = clear
++  module.exports.watch = watch
++  module.exports.callThreadsafeFunction = callThreadsafeFunction
++}
