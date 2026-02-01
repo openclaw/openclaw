@@ -23,6 +23,12 @@ export type IMessagePayload = {
   chat_name?: string | null;
   participants?: string[] | null;
   is_group?: boolean | null;
+  /**
+   * The destination phone number for this message (from imsg).
+   * Useful for distinguishing which iMessage number received the message
+   * on a dual-SIM or multi-number setup.
+   */
+  destination_caller_id?: string | null;
 };
 
 export type MonitorIMessageOpts = {
