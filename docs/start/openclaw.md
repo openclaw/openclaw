@@ -215,7 +215,10 @@ Here’s the screenshot.
 MEDIA:https://example.com/screenshot.png
 ```
 
-OpenClaw extracts these and sends them as media alongside the text.
+OpenClaw extracts these and sends them as media alongside the text. Local paths are limited to
+the agent workspace and `~/.openclaw/media` (plus sandbox workspaces when enabled). Use a relative
+path like `MEDIA:./image.png` for files in the workspace. Private/loopback URLs are blocked by
+default.
 
 ## Operations checklist
 

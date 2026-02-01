@@ -14,6 +14,21 @@ function cleanCandidate(raw: string) {
   return raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
 }
 
+const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
+const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+
+function isLikelyLocalPath(candidate: string): boolean {
+  return (
+    candidate.startsWith("/") ||
+    candidate.startsWith("./") ||
+    candidate.startsWith("../") ||
+    candidate.startsWith("~") ||
+    WINDOWS_DRIVE_RE.test(candidate) ||
+    candidate.startsWith("\\\\") ||
+    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
+  );
+}
+
 function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
   if (!candidate) {
     return false;
@@ -28,8 +43,7 @@ function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
     return true;
   }
 
-  // Local paths: only allow safe relative paths starting with ./ that do not traverse upwards.
-  return candidate.startsWith("./") && !candidate.includes("..");
+  return isLikelyLocalPath(candidate);
 }
 
 function unwrapQuoted(value: string): string | undefined {
@@ -128,11 +142,7 @@ export function splitMediaFromOutput(raw: string): {
 
       const trimmedPayload = payloadValue.trim();
       const looksLikeLocalPath =
-        trimmedPayload.startsWith("/") ||
-        trimmedPayload.startsWith("./") ||
-        trimmedPayload.startsWith("../") ||
-        trimmedPayload.startsWith("~") ||
-        trimmedPayload.startsWith("file://");
+        isLikelyLocalPath(trimmedPayload) || trimmedPayload.startsWith("file://");
       if (
         !unwrapped &&
         validCount === 1 &&

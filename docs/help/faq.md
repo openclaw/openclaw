@@ -2634,6 +2634,8 @@ Also check:
 
 - The target channel supports outbound media and isn’t blocked by allowlists.
 - The file is within the provider’s size limits (images are resized to max 2048px).
+- For agent replies, local paths must live under the agent workspace or `~/.openclaw/media` (plus sandbox workspaces when enabled).
+- Private/loopback URLs are blocked by default.
 
 See [Images](/nodes/images).
 

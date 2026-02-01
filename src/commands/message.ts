@@ -39,6 +39,7 @@ export async function messageCommand(
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       },
+      mediaLoadOptions: { allowAnyLocal: true },
     });
 
   const json = opts.json === true;

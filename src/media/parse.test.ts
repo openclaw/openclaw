@@ -8,33 +8,39 @@ describe("splitMediaFromOutput", () => {
     expect(result.text).toBe("Hello world");
   });
 
-  it("rejects absolute media paths to prevent LFI", () => {
+  it("accepts absolute media paths", () => {
     const result = splitMediaFromOutput("MEDIA:/Users/pete/My File.png");
-    expect(result.mediaUrls).toBeUndefined();
-    expect(result.text).toBe("MEDIA:/Users/pete/My File.png");
+    expect(result.mediaUrls).toEqual(["/Users/pete/My File.png"]);
+    expect(result.text).toBe("");
   });
 
-  it("rejects quoted absolute media paths to prevent LFI", () => {
+  it("accepts quoted absolute media paths", () => {
     const result = splitMediaFromOutput('MEDIA:"/Users/pete/My File.png"');
-    expect(result.mediaUrls).toBeUndefined();
-    expect(result.text).toBe('MEDIA:"/Users/pete/My File.png"');
+    expect(result.mediaUrls).toEqual(["/Users/pete/My File.png"]);
+    expect(result.text).toBe("");
   });
 
-  it("rejects tilde media paths to prevent LFI", () => {
+  it("accepts tilde media paths", () => {
     const result = splitMediaFromOutput("MEDIA:~/Pictures/My File.png");
-    expect(result.mediaUrls).toBeUndefined();
-    expect(result.text).toBe("MEDIA:~/Pictures/My File.png");
+    expect(result.mediaUrls).toEqual(["~/Pictures/My File.png"]);
+    expect(result.text).toBe("");
   });
 
-  it("rejects directory traversal media paths to prevent LFI", () => {
+  it("accepts traversal-like media paths (filtered at load)", () => {
     const result = splitMediaFromOutput("MEDIA:../../etc/passwd");
-    expect(result.mediaUrls).toBeUndefined();
-    expect(result.text).toBe("MEDIA:../../etc/passwd");
+    expect(result.mediaUrls).toEqual(["../../etc/passwd"]);
+    expect(result.text).toBe("");
   });
 
   it("captures safe relative media paths", () => {
     const result = splitMediaFromOutput("MEDIA:./screenshots/image.png");
     expect(result.mediaUrls).toEqual(["./screenshots/image.png"]);
+    expect(result.text).toBe("");
+  });
+
+  it("accepts sandbox-relative media paths", () => {
+    const result = splitMediaFromOutput("MEDIA:media/inbound/image.png");
+    expect(result.mediaUrls).toEqual(["media/inbound/image.png"]);
     expect(result.text).toBe("");
   });
 
@@ -56,6 +62,12 @@ describe("splitMediaFromOutput", () => {
   it("parses MEDIA tags with leading whitespace", () => {
     const result = splitMediaFromOutput("  MEDIA:./screenshot.png");
     expect(result.mediaUrls).toEqual(["./screenshot.png"]);
+    expect(result.text).toBe("");
+  });
+
+  it("accepts Windows-style paths", () => {
+    const result = splitMediaFromOutput("MEDIA:C:\\Users\\pete\\Pictures\\snap.png");
+    expect(result.mediaUrls).toEqual(["C:\\Users\\pete\\Pictures\\snap.png"]);
     expect(result.text).toBe("");
   });
 });

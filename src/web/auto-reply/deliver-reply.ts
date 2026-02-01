@@ -23,6 +23,7 @@ export async function deliverWebReply(params: {
   connectionId?: string;
   skipLog?: boolean;
   tableMode?: MarkdownTableMode;
+  agentId?: string;
 }) {
   const { replyResult, msg, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } = params;
   const replyStarted = Date.now();
@@ -97,7 +98,7 @@ export async function deliverWebReply(params: {
   for (const [index, mediaUrl] of mediaList.entries()) {
     const caption = index === 0 ? remainingText.shift() || undefined : undefined;
     try {
-      const media = await loadWebMedia(mediaUrl, maxMediaBytes);
+      const media = await loadWebMedia(mediaUrl, maxMediaBytes, { agentId: params.agentId });
       if (shouldLogVerbose()) {
         logVerbose(
           `Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,

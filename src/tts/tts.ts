@@ -33,6 +33,8 @@ import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { logVerbose } from "../globals.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { maxBytesForKind } from "../media/constants.js";
+import { saveMediaBuffer } from "../media/store.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -486,6 +488,36 @@ function resolveChannelId(channel: string | undefined): ChannelId | null {
 
 function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
   return config.edge.outputFormat;
+}
+
+function contentTypeForAudioExt(ext: string): string | undefined {
+  switch (ext.toLowerCase()) {
+    case ".mp3":
+      return "audio/mpeg";
+    case ".opus":
+    case ".ogg":
+      return "audio/ogg";
+    case ".wav":
+      return "audio/wav";
+    case ".m4a":
+      return "audio/mp4";
+    default:
+      return undefined;
+  }
+}
+
+async function persistTtsOutput(audioPath: string): Promise<string> {
+  const buffer = readFileSync(audioPath);
+  const ext = path.extname(audioPath);
+  const contentType = contentTypeForAudioExt(ext);
+  const saved = await saveMediaBuffer(
+    buffer,
+    contentType,
+    "tts",
+    maxBytesForKind("audio"),
+    path.basename(audioPath),
+  );
+  return saved.path;
 }
 
 export function resolveTtsApiKey(
@@ -1243,11 +1275,12 @@ export async function textToSpeech(params: {
         }
 
         scheduleCleanup(tempDir);
+        const storedPath = await persistTtsOutput(edgeResult.audioPath);
         const voiceCompatible = isVoiceCompatibleAudio({ fileName: edgeResult.audioPath });
 
         return {
           success: true,
-          audioPath: edgeResult.audioPath,
+          audioPath: storedPath,
           latencyMs: Date.now() - providerStart,
           provider,
           outputFormat: edgeResult.outputFormat,
@@ -1304,10 +1337,11 @@ export async function textToSpeech(params: {
       const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
+      const storedPath = await persistTtsOutput(audioPath);
 
       return {
         success: true,
-        audioPath,
+        audioPath: storedPath,
         latencyMs,
         provider,
         outputFormat: provider === "openai" ? output.openai : output.elevenlabs,

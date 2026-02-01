@@ -359,6 +359,7 @@ export async function processMessage(params: {
           // Tool + block updates are noisy; skip their log lines.
           skipLog: info.kind !== "final",
           tableMode,
+          agentId: params.route.agentId,
         });
         didSendReply = true;
         if (info.kind === "tool") {

@@ -24,6 +24,8 @@ The WhatsApp channel runs via **Baileys Web**. This document captures the curren
 ## WhatsApp Web channel behavior
 
 - Input: local file path **or** HTTP(S) URL.
+- Local paths in agent replies must live under the agent workspace or `~/.openclaw/media` (plus sandbox workspaces when enabled). CLI `openclaw message send --media` accepts any local path since it runs as the operator.
+- Private/loopback URLs are blocked by default.
 - Flow: load into a Buffer, detect media kind, and build the correct payload:
   - **Images:** resize & recompress to JPEG (max side 2048px) targeting `agents.defaults.mediaMaxMb` (default 5 MB), capped at 6 MB.
   - **Audio/Voice/Video:** pass-through up to 16 MB; audio is sent as a voice note (`ptt: true`).

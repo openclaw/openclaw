@@ -52,6 +52,8 @@ export type MessageActionRunnerGateway = {
   mode: GatewayClientMode;
 };
 
+type MediaLoadOptions = Parameters<typeof loadWebMedia>[2];
+
 export type RunMessageActionParams = {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
@@ -62,6 +64,7 @@ export type RunMessageActionParams = {
   deps?: OutboundSendDeps;
   sessionKey?: string;
   agentId?: string;
+  mediaLoadOptions?: MediaLoadOptions;
   dryRun?: boolean;
   abortSignal?: AbortSignal;
 };
@@ -333,6 +336,7 @@ async function hydrateSetGroupIconParams(params: {
   args: Record<string, unknown>;
   action: ChannelMessageActionName;
   dryRun?: boolean;
+  mediaLoadOptions?: MediaLoadOptions;
 }): Promise<void> {
   if (params.action !== "setGroupIcon") {
     return;
@@ -366,7 +370,7 @@ async function hydrateSetGroupIconParams(params: {
       channel: params.channel,
       accountId: params.accountId,
     });
-    const media = await loadWebMedia(mediaSource, maxBytes);
+    const media = await loadWebMedia(mediaSource, maxBytes, params.mediaLoadOptions);
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;
@@ -392,6 +396,7 @@ async function hydrateSendAttachmentParams(params: {
   args: Record<string, unknown>;
   action: ChannelMessageActionName;
   dryRun?: boolean;
+  mediaLoadOptions?: MediaLoadOptions;
 }): Promise<void> {
   if (params.action !== "sendAttachment") {
     return;
@@ -430,7 +435,7 @@ async function hydrateSendAttachmentParams(params: {
       channel: params.channel,
       accountId: params.accountId,
     });
-    const media = await loadWebMedia(mediaSource, maxBytes);
+    const media = await loadWebMedia(mediaSource, maxBytes, params.mediaLoadOptions);
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;
@@ -908,6 +913,10 @@ export async function runMessageAction(
     (input.sessionKey
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
       : undefined);
+  const mediaLoadOptions =
+    resolvedAgentId && !input.mediaLoadOptions?.agentId
+      ? { ...input.mediaLoadOptions, agentId: resolvedAgentId }
+      : input.mediaLoadOptions;
   parseButtonsParam(params);
   parseCardParam(params);
 
@@ -974,6 +983,7 @@ export async function runMessageAction(
     args: params,
     action,
     dryRun,
+    mediaLoadOptions,
   });
 
   await hydrateSetGroupIconParams({
@@ -983,6 +993,7 @@ export async function runMessageAction(
     args: params,
     action,
     dryRun,
+    mediaLoadOptions,
   });
 
   const resolvedTarget = await resolveActionTarget({

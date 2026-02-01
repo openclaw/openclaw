@@ -1,22 +1,19 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   type CameraFacing,
-  cameraTempPath,
   parseCameraClipPayload,
   parseCameraSnapPayload,
-  writeBase64ToFile,
 } from "../../cli/nodes-camera.js";
 import { parseEnvPairs, parseTimeoutMs } from "../../cli/nodes-run.js";
-import {
-  parseScreenRecordPayload,
-  screenRecordTempPath,
-  writeScreenRecordToFile,
-} from "../../cli/nodes-screen.js";
+import { parseScreenRecordPayload } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import { maxBytesForKind } from "../../media/constants.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
@@ -43,6 +40,20 @@ const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
 const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
+
+function videoMimeFromFormat(format: string): string | undefined {
+  const normalized = format.toLowerCase();
+  if (normalized === "mp4") {
+    return "video/mp4";
+  }
+  if (normalized === "mov") {
+    return "video/quicktime";
+  }
+  if (normalized === "webm") {
+    return "video/webm";
+  }
+  return undefined;
+}
 
 // Flattened schema: runtime validates per-action requirements.
 const NodesToolSchema = Type.Object({
@@ -221,22 +232,25 @@ export function createNodesTool(options?: {
               }
 
               const isJpeg = normalizedFormat === "jpg" || normalizedFormat === "jpeg";
-              const filePath = cameraTempPath({
-                kind: "snap",
-                facing,
-                ext: isJpeg ? "jpg" : "png",
-              });
-              await writeBase64ToFile(filePath, payload.base64);
-              content.push({ type: "text", text: `MEDIA:${filePath}` });
+              const buffer = Buffer.from(payload.base64, "base64");
+              const mimeType =
+                imageMimeFromFormat(payload.format) ?? (isJpeg ? "image/jpeg" : "image/png");
+              const saved = await saveMediaBuffer(
+                buffer,
+                mimeType,
+                "nodes",
+                maxBytesForKind("image"),
+                `camera-${facing}.${isJpeg ? "jpg" : "png"}`,
+              );
+              content.push({ type: "text", text: `MEDIA:${saved.path}` });
               content.push({
                 type: "image",
                 data: payload.base64,
-                mimeType:
-                  imageMimeFromFormat(payload.format) ?? (isJpeg ? "image/jpeg" : "image/png"),
+                mimeType,
               });
               details.push({
                 facing,
-                path: filePath,
+                path: saved.path,
                 width: payload.width,
                 height: payload.height,
               });
@@ -291,17 +305,19 @@ export function createNodesTool(options?: {
               idempotencyKey: crypto.randomUUID(),
             });
             const payload = parseCameraClipPayload(raw?.payload);
-            const filePath = cameraTempPath({
-              kind: "clip",
-              facing,
-              ext: payload.format,
-            });
-            await writeBase64ToFile(filePath, payload.base64);
+            const buffer = Buffer.from(payload.base64, "base64");
+            const saved = await saveMediaBuffer(
+              buffer,
+              videoMimeFromFormat(payload.format),
+              "nodes",
+              maxBytesForKind("video"),
+              `camera-${facing}.${payload.format}`,
+            );
             return {
-              content: [{ type: "text", text: `FILE:${filePath}` }],
+              content: [{ type: "text", text: `FILE:${saved.path}` }],
               details: {
                 facing,
-                path: filePath,
+                path: saved.path,
                 durationMs: payload.durationMs,
                 hasAudio: payload.hasAudio,
               },
@@ -337,15 +353,22 @@ export function createNodesTool(options?: {
               idempotencyKey: crypto.randomUUID(),
             });
             const payload = parseScreenRecordPayload(raw?.payload);
-            const filePath =
+            const outPath =
               typeof params.outPath === "string" && params.outPath.trim()
                 ? params.outPath.trim()
-                : screenRecordTempPath({ ext: payload.format || "mp4" });
-            const written = await writeScreenRecordToFile(filePath, payload.base64);
+                : "";
+            const buffer = Buffer.from(payload.base64, "base64");
+            const saved = await saveMediaBuffer(
+              buffer,
+              videoMimeFromFormat(payload.format || "mp4"),
+              "nodes",
+              maxBytesForKind("video"),
+              outPath ? path.basename(outPath) : `screen-record.${payload.format || "mp4"}`,
+            );
             return {
-              content: [{ type: "text", text: `FILE:${written.path}` }],
+              content: [{ type: "text", text: `FILE:${saved.path}` }],
               details: {
-                path: written.path,
+                path: saved.path,
                 durationMs: payload.durationMs,
                 fps: payload.fps,
                 screenIndex: payload.screenIndex,

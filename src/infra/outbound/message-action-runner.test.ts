@@ -433,6 +433,7 @@ describe("runMessageAction sendAttachment hydration", () => {
         media: "https://example.com/pic.png",
         message: "caption",
       },
+      agentId: "agent-test",
     });
 
     expect(result.kind).toBe("action");
@@ -444,6 +445,11 @@ describe("runMessageAction sendAttachment hydration", () => {
     });
     expect((result.payload as { buffer?: string }).buffer).toBe(
       Buffer.from("hello").toString("base64"),
+    );
+    expect(loadWebMedia).toHaveBeenCalledWith(
+      "https://example.com/pic.png",
+      undefined,
+      expect.objectContaining({ agentId: "agent-test" }),
     );
   });
 });
