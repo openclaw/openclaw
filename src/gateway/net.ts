@@ -155,6 +155,10 @@ export async function resolveGatewayBindHost(
     return "0.0.0.0";
   }
 
+  if (mode === "dualstack") {
+    return "::";
+  }
+
   if (mode === "custom") {
     const host = customHost?.trim();
     if (!host) {
