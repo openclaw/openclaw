@@ -41,6 +41,8 @@ export type ModelProviderConfig = {
   headers?: Record<string, string>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];
+  /** Arbitrary vendor-specific parameters to pass through to API requests (e.g., metadata, venice_parameters) */
+  providerParams?: Record<string, unknown>;
 };
 
 export type BedrockDiscoveryConfig = {

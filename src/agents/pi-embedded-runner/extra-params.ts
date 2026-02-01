@@ -8,6 +8,10 @@ import { log } from "./logger.js";
  * Resolve provider-specific extra params from model config.
  * Used to pass through stream params like temperature/maxTokens.
  *
+ * Also checks for providerParams in models.providers config, which allows
+ * passing arbitrary vendor-specific parameters (e.g., metadata for third-party
+ * API caching, venice_parameters for Venice.ai features).
+ *
  * @internal Exported for testing only
  */
 export function resolveExtraParams(params: {
@@ -17,7 +21,15 @@ export function resolveExtraParams(params: {
 }): Record<string, unknown> | undefined {
   const modelKey = `${params.provider}/${params.modelId}`;
   const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
-  return modelConfig?.params ? { ...modelConfig.params } : undefined;
+  const modelParams = modelConfig?.params ? { ...modelConfig.params } : {};
+
+  // Also check provider-level providerParams from models.providers config
+  const providerConfig = params.cfg?.models?.providers?.[params.provider];
+  if (providerConfig?.providerParams && typeof providerConfig.providerParams === "object") {
+    Object.assign(modelParams, providerConfig.providerParams);
+  }
+
+  return Object.keys(modelParams).length > 0 ? modelParams : undefined;
 }
 
 type CacheRetention = "none" | "short" | "long";
@@ -75,6 +87,15 @@ function createStreamFnWithExtraParams(
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
+  }
+
+  // Pass through any additional provider-specific params (e.g., metadata, venice_parameters)
+  // These are spread into the stream options and passed to the underlying provider
+  const knownParams = new Set(["temperature", "maxTokens", "cacheControlTtl"]);
+  for (const [key, value] of Object.entries(extraParams)) {
+    if (!knownParams.has(key) && value !== undefined) {
+      (streamParams as Record<string, unknown>)[key] = value;
+    }
   }
 
   if (Object.keys(streamParams).length === 0) {
