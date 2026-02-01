@@ -312,6 +312,9 @@ export const VoiceCallConfigSchema = z
     /** Greeting message for inbound calls */
     inboundGreeting: z.string().optional(),
 
+    /** Hang up rejected inbound calls immediately (default: false, let carrier timeout) */
+    rejectHangup: z.boolean().default(false),
+
     /** Outbound call configuration */
     outbound: OutboundConfigSchema,
 

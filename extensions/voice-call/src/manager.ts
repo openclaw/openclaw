@@ -551,7 +551,13 @@ export class CallManager {
     if (!call && event.direction === "inbound" && event.providerCallId) {
       // Check if we should accept this inbound call
       if (!this.shouldAcceptInbound(event.from)) {
-        // TODO: Could hang up the call here
+        if (this.config.rejectHangup && this.provider) {
+          this.provider
+            .hangupCall({ providerCallId: event.providerCallId, reason: "hangup-bot" })
+            .catch((err) => {
+              console.warn("[voice-call] Failed to hang up rejected inbound call:", err);
+            });
+        }
         return;
       }
 

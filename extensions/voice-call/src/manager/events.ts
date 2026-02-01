@@ -92,7 +92,13 @@ export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): v
 
   if (!call && event.direction === "inbound" && event.providerCallId) {
     if (!shouldAcceptInbound(ctx.config, event.from)) {
-      // TODO: Could hang up the call here.
+      if (ctx.config.rejectHangup && ctx.provider) {
+        ctx.provider
+          .hangupCall({ providerCallId: event.providerCallId, reason: "hangup-bot" })
+          .catch((err) => {
+            console.warn("[voice-call] Failed to hang up rejected inbound call:", err);
+          });
+      }
       return;
     }
 
