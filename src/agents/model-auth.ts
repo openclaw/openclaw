@@ -192,10 +192,17 @@ export async function resolveApiKeyForProvider(params: {
 
   const envResolved = resolveEnvApiKey(provider);
   if (envResolved) {
+    // Determine mode: oauth for *_OAUTH_TOKEN, token for gcloud ADC, otherwise api-key
+    let mode: ModelAuthMode = "api-key";
+    if (envResolved.source.includes("OAUTH_TOKEN")) {
+      mode = "oauth";
+    } else if (envResolved.source === "gcloud adc") {
+      mode = "token";
+    }
     return {
       apiKey: envResolved.apiKey,
       source: envResolved.source,
-      mode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+      mode,
     };
   }
 
@@ -262,6 +269,14 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
 
   if (normalized === "google-vertex") {
     const envKey = getEnvApiKey(normalized);
+    if (!envKey) {
+      return null;
+    }
+    return { apiKey: envKey, source: "gcloud adc" };
+  }
+
+  if (normalized === "vertex-anthropic") {
+    const envKey = getEnvApiKey("google-vertex"); // Uses same gcloud ADC
     if (!envKey) {
       return null;
     }
