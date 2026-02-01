@@ -76,6 +76,7 @@ const DANGEROUS_HOST_ENV_VARS = new Set([
   "IFS",
   "SSLKEYLOGFILE",
 ]);
+const DANGEROUS_HOST_ENV_PREFIXES = ["DYLD_", "LD_"];
 
 // Centralized sanitization helper.
 // Throws an error if dangerous variables or PATH modifications are detected on the host.
@@ -84,6 +85,11 @@ function validateHostEnv(env: Record<string, string>): void {
     const upperKey = key.toUpperCase();
 
     // 1. Block known dangerous variables (Fail Closed)
+    if (DANGEROUS_HOST_ENV_PREFIXES.some((prefix) => upperKey.startsWith(prefix))) {
+      throw new Error(
+        `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
+      );
+    }
     if (DANGEROUS_HOST_ENV_VARS.has(upperKey)) {
       throw new Error(
         `Security Violation: Environment variable '${key}' is forbidden during host execution.`,

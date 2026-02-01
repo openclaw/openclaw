@@ -109,3 +109,17 @@ describe("exec PATH login shell merge", () => {
     expect(shellPathMock).not.toHaveBeenCalled();
   });
 });
+
+describe("exec host env validation", () => {
+  it("blocks LD_/DYLD_ env vars on host execution", async () => {
+    const { createExecTool } = await import("./bash-tools.exec.js");
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call1", {
+        command: "echo ok",
+        env: { LD_DEBUG: "1" },
+      }),
+    ).rejects.toThrow(/Security Violation: Environment variable 'LD_DEBUG' is forbidden/);
+  });
+});
