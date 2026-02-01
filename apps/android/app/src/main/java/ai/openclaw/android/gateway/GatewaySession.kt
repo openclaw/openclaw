@@ -178,6 +178,7 @@ class GatewaySession(
     private val connectDeferred = CompletableDeferred<Unit>()
     private val closedDeferred = CompletableDeferred<Unit>()
     private val isClosed = AtomicBoolean(false)
+    private val connectSent = AtomicBoolean(false)
     private val connectNonceDeferred = CompletableDeferred<String?>()
     private val client: OkHttpClient = buildClient()
     private var socket: WebSocket? = null
@@ -253,13 +254,18 @@ class GatewaySession(
 
     private inner class Listener : WebSocketListener() {
       override fun onOpen(webSocket: WebSocket, response: Response) {
-        scope.launch {
-          try {
-            val nonce = awaitConnectNonce()
-            sendConnect(nonce)
-          } catch (err: Throwable) {
-            connectDeferred.completeExceptionally(err)
-            closeQuietly()
+        Log.d(loggerTag, "WebSocket opened to $remoteAddress")
+        // Connect flow is triggered when connect.challenge arrives in onMessage.
+        // For loopback connections that skip the challenge, connect immediately.
+        if (isLoopbackHost(endpoint.host) && connectSent.compareAndSet(false, true)) {
+          scope.launch(Dispatchers.IO) {
+            try {
+              sendConnect(null)
+            } catch (err: Throwable) {
+              Log.w(loggerTag, "connect failed (loopback): ${err.message ?: err::class.java.simpleName}")
+              connectDeferred.completeExceptionally(err)
+              closeQuietly()
+            }
           }
         }
       }
@@ -442,8 +448,21 @@ class GatewaySession(
         frame["payload"]?.let { it.toString() } ?: frame["payloadJSON"].asStringOrNull()
       if (event == "connect.challenge") {
         val nonce = extractConnectNonce(payloadJson)
-        if (!connectNonceDeferred.isCompleted) {
-          connectNonceDeferred.complete(nonce)
+        connectNonceDeferred.complete(nonce)
+        // Drive the connect flow directly from the challenge event.
+        // This avoids the race between onOpen and onMessage coroutine dispatch
+        // that caused "closed before connect" on some devices (see #1922).
+        // connectSent guard prevents duplicate sends if loopback already connected.
+        if (connectSent.compareAndSet(false, true)) {
+          scope.launch(Dispatchers.IO) {
+            try {
+              sendConnect(nonce)
+            } catch (err: Throwable) {
+              Log.w(loggerTag, "connect failed: ${err.message ?: err::class.java.simpleName}")
+              connectDeferred.completeExceptionally(err)
+              closeQuietly()
+            }
+          }
         }
         return
       }
@@ -452,15 +471,6 @@ class GatewaySession(
         return
       }
       onEvent(event, payloadJson)
-    }
-
-    private suspend fun awaitConnectNonce(): String? {
-      if (isLoopbackHost(endpoint.host)) return null
-      return try {
-        withTimeout(2_000) { connectNonceDeferred.await() }
-      } catch (_: Throwable) {
-        null
-      }
     }
 
     private fun extractConnectNonce(payloadJson: String?): String? {
