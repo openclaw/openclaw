@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "gemini";
 
 export type TtsMode = "final" | "all";
 
@@ -58,6 +58,12 @@ export type TtsConfig = {
     apiKey?: string;
     model?: string;
     voice?: string;
+  };
+  /** Gemini configuration. */
+  gemini?: {
+    apiKey?: string;
+    model?: string;
+    voiceName?: string;
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {

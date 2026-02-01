@@ -46,6 +46,9 @@ const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_OPENAI_MODEL = "gpt-4o-mini-tts";
 const DEFAULT_OPENAI_VOICE = "alloy";
+const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-preview-tts";
+const DEFAULT_GEMINI_VOICE = "Kore";
+const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
@@ -108,6 +111,11 @@ export type ResolvedTtsConfig = {
     apiKey?: string;
     model: string;
     voice: string;
+  };
+  gemini: {
+    apiKey?: string;
+    model: string;
+    voiceName: string;
   };
   edge: {
     enabled: boolean;
@@ -283,6 +291,11 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       model: raw.openai?.model ?? DEFAULT_OPENAI_MODEL,
       voice: raw.openai?.voice ?? DEFAULT_OPENAI_VOICE,
     },
+    gemini: {
+      apiKey: raw.gemini?.apiKey,
+      model: raw.gemini?.model ?? DEFAULT_GEMINI_MODEL,
+      voiceName: raw.gemini?.voiceName ?? DEFAULT_GEMINI_VOICE,
+    },
     edge: {
       enabled: raw.edge?.enabled ?? true,
       voice: raw.edge?.voice?.trim() || DEFAULT_EDGE_VOICE,
@@ -434,6 +447,9 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
   if (resolveTtsApiKey(config, "elevenlabs")) {
     return "elevenlabs";
   }
+  if (resolveTtsApiKey(config, "gemini")) {
+    return "gemini";
+  }
   return "edge";
 }
 
@@ -498,10 +514,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "gemini") {
+    return config.gemini.apiKey || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "gemini", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -633,7 +652,12 @@ function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (
+              rawValue === "openai" ||
+              rawValue === "elevenlabs" ||
+              rawValue === "gemini" ||
+              rawValue === "edge"
+            ) {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -1120,6 +1144,184 @@ async function openaiTTS(params: {
   }
 }
 
+export const GEMINI_TTS_VOICES = [
+  "Zephyr",
+  "Puck",
+  "Charon",
+  "Kore",
+  "Fenrir",
+  "Leda",
+  "Orus",
+  "Aoede",
+  "Callirhoe",
+  "Autonoe",
+  "Enceladus",
+  "Iapetus",
+  "Umbriel",
+  "Algieba",
+  "Despina",
+  "Erinome",
+  "Algenib",
+  "Rasalgethi",
+  "Laomedeia",
+  "Achernar",
+  "Alnilam",
+  "Schedar",
+  "Gacrux",
+  "Pulcherrima",
+  "Achird",
+  "Zubenelgenubi",
+  "Vindemiatrix",
+  "Sadachbia",
+  "Sadaltager",
+  "Sulafar",
+] as const;
+
+export const GEMINI_TTS_MODELS = [
+  "gemini-2.5-flash-preview-tts",
+  "gemini-2.5-pro-preview-tts",
+] as const;
+
+type GeminiTtsVoice = (typeof GEMINI_TTS_VOICES)[number];
+
+function isValidGeminiVoice(voice: string): voice is GeminiTtsVoice {
+  return GEMINI_TTS_VOICES.some((v) => v.toLowerCase() === voice.toLowerCase());
+}
+
+function isValidGeminiModel(model: string): boolean {
+  // Allow any model string that looks like a Gemini model (relaxed validation)
+  // This permits custom/future models and region-specific variants
+  return typeof model === "string" && model.length > 0 && model.startsWith("gemini-");
+}
+
+/**
+ * Wrap raw PCM audio data in a WAV container.
+ * Gemini TTS returns audio/L16 at 24kHz mono (16-bit signed little-endian).
+ */
+function wrapPcmInWav(
+  pcmData: Buffer,
+  sampleRate: number = 24000,
+  channels: number = 1,
+  bitsPerSample: number = 16,
+): Buffer {
+  const byteRate = sampleRate * channels * (bitsPerSample / 8);
+  const blockAlign = channels * (bitsPerSample / 8);
+  const dataSize = pcmData.length;
+  const headerSize = 44;
+  const fileSize = headerSize + dataSize - 8;
+
+  const header = Buffer.alloc(headerSize);
+  let offset = 0;
+
+  // RIFF header
+  header.write("RIFF", offset);
+  offset += 4;
+  header.writeUInt32LE(fileSize, offset);
+  offset += 4;
+  header.write("WAVE", offset);
+  offset += 4;
+
+  // fmt sub-chunk
+  header.write("fmt ", offset);
+  offset += 4;
+  header.writeUInt32LE(16, offset);
+  offset += 4; // Subchunk1Size (16 for PCM)
+  header.writeUInt16LE(1, offset);
+  offset += 2; // AudioFormat (1 = PCM)
+  header.writeUInt16LE(channels, offset);
+  offset += 2;
+  header.writeUInt32LE(sampleRate, offset);
+  offset += 4;
+  header.writeUInt32LE(byteRate, offset);
+  offset += 4;
+  header.writeUInt16LE(blockAlign, offset);
+  offset += 2;
+  header.writeUInt16LE(bitsPerSample, offset);
+  offset += 2;
+
+  // data sub-chunk
+  header.write("data", offset);
+  offset += 4;
+  header.writeUInt32LE(dataSize, offset);
+
+  return Buffer.concat([header, pcmData]);
+}
+
+async function geminiTTS(params: {
+  text: string;
+  apiKey: string;
+  model: string;
+  voiceName: string;
+  timeoutMs: number;
+  wrapInWav?: boolean;
+}): Promise<Buffer> {
+  const { text, apiKey, model, voiceName, timeoutMs, wrapInWav = true } = params;
+
+  if (!isValidGeminiModel(model)) {
+    throw new Error(`Invalid Gemini TTS model: ${model}`);
+  }
+  if (!isValidGeminiVoice(voiceName)) {
+    throw new Error(`Invalid Gemini voice: ${voiceName}`);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const url = `${DEFAULT_GEMINI_BASE_URL}/models/${model}:generateContent`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text }] }],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName },
+            },
+          },
+        },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(`Gemini TTS API error (${response.status}): ${errorText}`);
+    }
+
+    const json = (await response.json()) as {
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{
+            inlineData?: {
+              data?: string;
+              mimeType?: string;
+            };
+          }>;
+        };
+      }>;
+    };
+
+    const inlineData = json.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+    if (!inlineData?.data) {
+      throw new Error("No audio data in Gemini TTS response");
+    }
+
+    // Gemini returns base64-encoded audio (audio/L16 PCM at 24kHz mono)
+    const pcmBuffer = Buffer.from(inlineData.data, "base64");
+
+    // Wrap PCM data in WAV container for compatibility (unless raw PCM requested)
+    return wrapInWav ? wrapPcmInWav(pcmBuffer, 24000, 1, 16) : pcmBuffer;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function inferEdgeExtension(outputFormat: string): string {
   const normalized = outputFormat.toLowerCase();
   if (normalized.includes("webm")) {
@@ -1262,6 +1464,7 @@ export async function textToSpeech(params: {
       }
 
       let audioBuffer: Buffer;
+      let outputExtension = output.extension;
       if (provider === "elevenlabs") {
         const voiceIdOverride = params.overrides?.elevenlabs?.voiceId;
         const modelIdOverride = params.overrides?.elevenlabs?.modelId;
@@ -1285,6 +1488,16 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+      } else if (provider === "gemini") {
+        audioBuffer = await geminiTTS({
+          text: params.text,
+          apiKey,
+          model: config.gemini.model,
+          voiceName: config.gemini.voiceName,
+          timeoutMs: config.timeoutMs,
+        });
+        // Gemini returns PCM audio (audio/L16), save as .wav
+        outputExtension = ".wav";
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -1301,7 +1514,7 @@ export async function textToSpeech(params: {
       const latencyMs = Date.now() - providerStart;
 
       const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
+      const audioPath = path.join(tempDir, `voice-${Date.now()}${outputExtension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
 
@@ -1310,8 +1523,13 @@ export async function textToSpeech(params: {
         audioPath,
         latencyMs,
         provider,
-        outputFormat: provider === "openai" ? output.openai : output.elevenlabs,
-        voiceCompatible: output.voiceCompatible,
+        outputFormat:
+          provider === "openai"
+            ? output.openai
+            : provider === "gemini"
+              ? "pcm_24000"
+              : output.elevenlabs,
+        voiceCompatible: provider === "gemini" ? false : output.voiceCompatible,
       };
     } catch (err) {
       const error = err as Error;
@@ -1386,6 +1604,26 @@ export async function textToSpeechTelephony(params: {
           provider,
           outputFormat: output.format,
           sampleRate: output.sampleRate,
+        };
+      }
+
+      if (provider === "gemini") {
+        const audioBuffer = await geminiTTS({
+          text: params.text,
+          apiKey,
+          model: config.gemini.model,
+          voiceName: config.gemini.voiceName,
+          timeoutMs: config.timeoutMs,
+          wrapInWav: false, // Telephony needs raw PCM
+        });
+
+        return {
+          success: true,
+          audioBuffer,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: "pcm_24000",
+          sampleRate: 24000,
         };
       }
 
@@ -1571,6 +1809,10 @@ export const _test = {
   isValidOpenAIModel,
   OPENAI_TTS_MODELS,
   OPENAI_TTS_VOICES,
+  isValidGeminiVoice,
+  isValidGeminiModel,
+  GEMINI_TTS_MODELS,
+  GEMINI_TTS_VOICES,
   parseTtsDirectives,
   resolveModelOverridePolicy,
   summarizeText,
