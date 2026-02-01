@@ -4,36 +4,25 @@
 
 ---
 
-**PR**: https://github.com/openclaw/openclaw/pull/[NUMBER]
-**Branch**: `web4-governance-complete`
+**PR**: `web4-governance-complete`
 
-**What it fixes**: Zero accountability for agent actions. Currently no audit trail, no policy gates, no way to answer "what did the agent do and why?"
+30k agents on Moltbook and no way to answer "what did it do and why?"
 
-**Who it helps**:
-- Enterprise users who can't deploy without audit trails (healthcare, finance, gov)
-- Teams debugging "what changed and why?"
-- Anyone wanting to block destructive commands before execution
-- Moltbook — 30k agents creating religions and memecoins with zero governance
+This adds audit + policy gates using your existing hooks. No core changes.
 
-**Why ship now**: Moltbook just went viral. Agents are acting autonomously at scale. The governance gap is no longer theoretical — it's happening live. This is the missing infrastructure.
+- `before_tool_call` → log intent, check policy, block if needed
+- `after_tool_call` → log result, update chain
 
-**What it is**:
-- Hook-based plugin (uses existing `pre_tool_use`/`post_tool_use`)
-- R6 audit trail with hash-linked provenance
-- Policy engine: allow/deny/warn with presets (permissive, safety, strict)
-- Zero core changes, opt-in, observational by default
+You get: searchable audit trail, tamper-evident hash chain, configurable policy presets (permissive/strict/audit-only).
 
-**Tests**: 75+ passing
-**Docs**: Full README, ARCHITECTURE.md
-**Prior art**: Same framework running in production elsewhere
-
-**Not claiming**: This doesn't make agents "safe" — just inspectable, accountable, governable. Honest scope.
+75+ tests passing. Opt-in. Already running on another fork.
 
 ---
 
 ## Notes
 
-- Adjust PR number once we open/reopen upstream PR
-- Keep it under 200 words for thunderdome scanning
-- Lead with the Moltbook angle — that's the hook right now
-- "Honest scope" line preempts skepticism
+- ~50 words. Scannable in 10 seconds.
+- Leads with their pain (agents acting, no visibility)
+- Shows it uses THEIR hooks (not invasive)
+- "Already running" = proven, not theoretical
+
