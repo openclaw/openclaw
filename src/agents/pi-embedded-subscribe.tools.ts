@@ -1,6 +1,7 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
 import { truncateUtf16Safe } from "../utils.js";
+import { decodeToon } from "../utils/toon.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
@@ -159,7 +160,15 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
       return fromJson;
     }
   } catch {
-    // Fall through to first-line text fallback.
+    try {
+      const parsed = decodeToon(text);
+      const fromToon = extractErrorField(parsed);
+      if (fromToon) {
+        return fromToon;
+      }
+    } catch {
+      // Fall through to first-line text fallback.
+    }
   }
   return normalizeToolErrorText(text);
 }

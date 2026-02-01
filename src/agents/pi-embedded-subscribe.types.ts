@@ -2,7 +2,7 @@ import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 
-export type ToolResultFormat = "markdown" | "plain";
+export type ToolResultFormat = "markdown" | "plain" | "toon";
 
 export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;

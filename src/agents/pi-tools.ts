@@ -50,6 +50,7 @@ import {
   resolveToolProfilePolicy,
   stripPluginOnlyAllowlist,
 } from "./tool-policy.js";
+import { wrapToolsWithToonEncoding } from "./tool-result-wrapper.js";
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
@@ -427,8 +428,11 @@ export function createOpenClawCodingTools(options?: {
     ? normalized.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : normalized;
 
+  // Apply TOON encoding to all tool results for token efficiency
+  const withToon = wrapToolsWithToonEncoding(withAbort);
+
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.
-  return withAbort;
+  return withToon;
 }
