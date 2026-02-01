@@ -321,8 +321,10 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
+          // Clean up routing prefixes (e.g. !kimi) so the model doesn't see them
+          const cleanedPrompt = smartRouter.cleanupPrompt(params.prompt);
           const prompt =
-            provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+            provider === "anthropic" ? scrubAnthropicRefusalMagic(cleanedPrompt) : cleanedPrompt;
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,

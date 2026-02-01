@@ -64,8 +64,47 @@ export class SmartRouter {
         return usage >= GEMINI_PRO_LIMIT;
     }
 
+    public cleanupPrompt(prompt: string): string {
+        const lower = prompt.trim().toLowerCase();
+        // Standardize prefixes to remove: both !prefix and prefix:
+        const prefixes = [
+            "!kimi", "kimi:", "kimi：",
+            "!flash", "flash:", "flash：",
+            "!pro", "pro:", "pro：",
+            "!deepseek", "deepseek:", "deepseek：",
+            "!gemini", "gemini:", "gemini："
+        ];
+
+        for (const prefix of prefixes) {
+            if (lower.startsWith(prefix)) {
+                // Remove prefix
+                let cleaned = prompt.trim().slice(prefix.length);
+                // Remove optional following colon (En/Cn) or whitespace if not already consumed by prefix
+                cleaned = cleaned.replace(/^[:：\s]+/, "");
+                return cleaned.trim();
+            }
+        }
+        return prompt;
+    }
+
     public selectModel(taskDescription: string, defaultModelId?: string): string {
         const lowerTask = taskDescription.toLowerCase();
+
+        // --- 0. Explicit Override (User Force Selection) ---
+        // Supports prefixes like !kimi, kimi:, !flash, flash:
+        if (lowerTask.startsWith("!kimi") || lowerTask.startsWith("kimi:") || lowerTask.startsWith("kimi：")) {
+            return "moonshot/kimi-k2-thinking";
+        }
+        if (lowerTask.startsWith("!flash") || lowerTask.startsWith("flash:") || lowerTask.startsWith("flash：")) {
+            return "google/gemini-3-flash-preview";
+        }
+        if (lowerTask.startsWith("!pro") || lowerTask.startsWith("pro:") || lowerTask.startsWith("pro：")) {
+            return "google/gemini-3-pro-preview";
+        }
+        if (lowerTask.startsWith("!deepseek") || lowerTask.startsWith("deepseek:") || lowerTask.startsWith("deepseek：")) {
+            return "deepseek/deepseek-chat";
+        }
+
         const category = this.experience.detectCategory(taskDescription);
         const conservePro = this.shouldConservePro();
 

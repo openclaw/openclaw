@@ -134,23 +134,38 @@ export class ModelExperienceEngine {
     public detectCategory(taskType: string): string {
         const lower = taskType.toLowerCase();
 
+        // Helper to check for whole words or strong indicators (English)
+        const has = (word: string) => {
+            const regex = new RegExp(`\\b${word}\\b`, 'i');
+            return regex.test(lower);
+        };
+
+        // Helper for Chinese keywords (no word boundary check needed)
+        const hasCN = (word: string) => lower.includes(word);
+
         // Frontend
-        if (lower.includes("css") || lower.includes("html") || lower.includes("react") || lower.includes("vue") || lower.includes("ui") || lower.includes("frontend")) return "frontend";
+        if (has("css") || has("html") || has("react") || has("vue") || has("ui") || has("frontend") || has("dom") ||
+            hasCN("前端") || hasCN("界面") || hasCN("样式") || hasCN("网页")) return "frontend";
 
         // Backend
-        if (lower.includes("python") || lower.includes("node") || lower.includes("express") || lower.includes("api") || lower.includes("sql") || lower.includes("db") || lower.includes("backend")) return "backend";
+        if (has("python") || has("node") || has("express") || has("api") || has("sql") || has("db") || has("backend") || has("server") || has("database") ||
+            hasCN("后端") || hasCN("服务端") || hasCN("数据库") || hasCN("接口")) return "backend";
 
         // Architecture / Complex
-        if (lower.includes("architecture") || lower.includes("design") || lower.includes("system") || lower.includes("complex") || lower.includes("plan")) return "architecture";
+        if (has("architecture") || has("design") || has("system") || has("complex") || has("plan") || lower.includes("structure") ||
+            hasCN("架构") || hasCN("设计") || hasCN("方案") || hasCN("系统")) return "architecture";
 
         // Debugging
-        if (lower.includes("debug") || lower.includes("fix") || lower.includes("error") || lower.includes("bug") || lower.includes("log")) return "debugging";
+        if (has("debug") || has("fix") || has("bug") || has("issue") || has("crash") || has("exception") || has("error") || has("trace") || has("stack") ||
+            hasCN("调试") || hasCN("报错") || hasCN("错误") || hasCN("修复") || hasCN("异常") || hasCN("崩溃") || hasCN("排查")) return "debugging";
 
         // Creative / Writing
-        if (lower.includes("write") || lower.includes("story") || lower.includes("creative") || lower.includes("generate")) return "creative";
+        if (has("write") || has("story") || has("creative") || has("generate") || has("draft") || has("novel") ||
+            hasCN("写作") || hasCN("故事") || hasCN("小说") || hasCN("文案") || hasCN("扩写") || hasCN("创作")) return "creative";
 
         // General Coding (fallback)
-        if (lower.includes("code") || lower.includes("function") || lower.includes("ts") || lower.includes("js")) return "coding";
+        if (has("code") || has("function") || has("ts") || has("js") || has("script") ||
+            hasCN("代码") || hasCN("脚本") || hasCN("编程") || hasCN("写一段") || hasCN("实现")) return "coding";
 
         return "general";
     }
