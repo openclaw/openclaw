@@ -119,6 +119,9 @@ export function normalizeCronJobInput(
   }
 
   if (options.applyDefaults) {
+    if (next.enabled === undefined) {
+      next.enabled = true;
+    }
     if (!next.wakeMode) {
       next.wakeMode = "next-heartbeat";
     }
