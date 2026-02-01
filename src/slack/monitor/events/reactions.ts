@@ -27,7 +27,8 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
       }
 
       // For "own" mode, only process reactions on messages sent by the bot
-      if (reactionMode === "own" && event.item_user !== ctx.botUserId) {
+      // Skip this check if botUserId is unavailable (fallback to processing all)
+      if (reactionMode === "own" && ctx.botUserId && event.item_user !== ctx.botUserId) {
         return;
       }
 
