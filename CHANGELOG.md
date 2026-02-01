@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 - Docs: add zh-CN entrypoint translations. (#6300) Thanks @joshp123.
 - Docs: document cacheRetention parameter. (#6270) Thanks @kimitaka.
 - Docs: clarify Discord exec approvals UI. (#6550) Thanks @sebslight.
+- Docs: navigation polish + cron quick start/formatting + Moonshot markers/typos + URL/anchor fixes.
 - Telegram: use shared pairing store. (#6127) Thanks @obviyus.
 - Agents: add OpenRouter app attribution headers. (#5050) Thanks @alexanderatallah.
 - Agents: add system prompt safety guardrails. (#5445) Thanks @joshp123.
@@ -28,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Docs: update MiniMax OAuth setup commands; Extensions: use OpenClaw plugin SDK for MiniMax OAuth. (#5402) Thanks @Maosghoul.
 - Discord: resolve PluralKit proxied senders for allowlists and labels. (#5838) Thanks @thewilloftheshadow.
 - Agents: ensure OpenRouter attribution headers apply in the embedded runner.
+- Agents: cap context window resolution for compaction safeguard. (#6187) Thanks @iamEvanYT.
 - System prompt: hint using session_status for current date/time. (#1897, #1928, #2108)
 - Telegram: restore draft streaming partials. (#5543) Thanks @obviyus.
 - Onboarding: friendlier Windows onboarding message. (#6242) Thanks @shanselman.
@@ -151,7 +153,6 @@ Docs: https://docs.openclaw.ai
 - Mentions: honor mentionPatterns even when explicit mentions are present. (#3303) Thanks @HirokiKobayashi-R.
 - Discord: restore username directory lookup in target resolution. (#3131) Thanks @bonald.
 - Agents: align MiniMax base URL test expectation with default provider config. (#3131) Thanks @bonald.
-- Agents: respect configured context window cap for compaction safeguard. (#6187) Thanks @iamEvanYT.
 - Agents: prevent retries on oversized image errors and surface size limits. (#2871) Thanks @Suksham-sharma.
 - Agents: inherit provider baseUrl/api for inline models. (#2740) Thanks @lploc94.
 - Memory Search: keep auto provider model defaults and only include remote when configured. (#2576) Thanks @papago2355.
