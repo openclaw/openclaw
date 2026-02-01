@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { buildAuthChoiceOptions } from "./auth-choice-options.js";
 
@@ -31,6 +30,16 @@ describe("buildAuthChoiceOptions", () => {
     });
 
     expect(options.some((opt) => opt.value === "zai-api-key")).toBe(true);
+  });
+
+  it("includes Xiaomi auth choice", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+    });
+
+    expect(options.some((opt) => opt.value === "xiaomi-api-key")).toBe(true);
   });
 
   it("includes MiniMax auth choice", () => {

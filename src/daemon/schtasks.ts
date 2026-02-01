@@ -2,12 +2,11 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { formatGatewayServiceDescription, resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -17,30 +16,42 @@ const formatLine = (label: string, value: string) => {
 };
 
 function resolveTaskName(env: Record<string, string | undefined>): string {
-  const override = env.CLAWDBOT_WINDOWS_TASK_NAME?.trim();
-  if (override) return override;
-  return resolveGatewayWindowsTaskName(env.CLAWDBOT_PROFILE);
+  const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
+  if (override) {
+    return override;
+  }
+  return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
 }
 
 export function resolveTaskScriptPath(env: Record<string, string | undefined>): string {
-  const override = env.CLAWDBOT_TASK_SCRIPT?.trim();
-  if (override) return override;
-  const scriptName = env.CLAWDBOT_TASK_SCRIPT_NAME?.trim() || "gateway.cmd";
+  const override = env.OPENCLAW_TASK_SCRIPT?.trim();
+  if (override) {
+    return override;
+  }
+  const scriptName = env.OPENCLAW_TASK_SCRIPT_NAME?.trim() || "gateway.cmd";
   const stateDir = resolveGatewayStateDir(env);
   return path.join(stateDir, scriptName);
 }
 
 function quoteCmdArg(value: string): string {
-  if (!/[ \t"]/g.test(value)) return value;
+  if (!/[ \t"]/g.test(value)) {
+    return value;
+  }
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
 function resolveTaskUser(env: Record<string, string | undefined>): string | null {
   const username = env.USERNAME || env.USER || env.LOGNAME;
-  if (!username) return null;
-  if (username.includes("\\")) return username;
+  if (!username) {
+    return null;
+  }
+  if (username.includes("\\")) {
+    return username;
+  }
   const domain = env.USERDOMAIN;
-  if (domain) return `${domain}\\${username}`;
+  if (domain) {
+    return `${domain}\\${username}`;
+  }
   return username;
 }
 
@@ -73,7 +84,9 @@ function parseCommandLine(value: string): string[] {
     }
     current += char;
   }
-  if (current) args.push(current);
+  if (current) {
+    args.push(current);
+  }
   return args;
 }
 
@@ -90,16 +103,24 @@ export async function readScheduledTaskCommand(env: Record<string, string | unde
     const environment: Record<string, string> = {};
     for (const rawLine of content.split(/\r?\n/)) {
       const line = rawLine.trim();
-      if (!line) continue;
-      if (line.startsWith("@echo")) continue;
-      if (line.toLowerCase().startsWith("rem ")) continue;
+      if (!line) {
+        continue;
+      }
+      if (line.startsWith("@echo")) {
+        continue;
+      }
+      if (line.toLowerCase().startsWith("rem ")) {
+        continue;
+      }
       if (line.toLowerCase().startsWith("set ")) {
         const assignment = line.slice(4).trim();
         const index = assignment.indexOf("=");
         if (index > 0) {
           const key = assignment.slice(0, index).trim();
           const value = assignment.slice(index + 1).trim();
-          if (key) environment[key] = value;
+          if (key) {
+            environment[key] = value;
+          }
         }
         continue;
       }
@@ -110,7 +131,9 @@ export async function readScheduledTaskCommand(env: Record<string, string | unde
       commandLine = line;
       break;
     }
-    if (!commandLine) return null;
+    if (!commandLine) {
+      return null;
+    }
     return {
       programArguments: parseCommandLine(commandLine),
       ...(workingDirectory ? { workingDirectory } : {}),
@@ -131,11 +154,17 @@ export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
   const entries = parseKeyValueOutput(output, ":");
   const info: ScheduledTaskInfo = {};
   const status = entries.status;
-  if (status) info.status = status;
+  if (status) {
+    info.status = status;
+  }
   const lastRunTime = entries["last run time"];
-  if (lastRunTime) info.lastRunTime = lastRunTime;
+  if (lastRunTime) {
+    info.lastRunTime = lastRunTime;
+  }
   const lastRunResult = entries["last run result"];
-  if (lastRunResult) info.lastRunResult = lastRunResult;
+  if (lastRunResult) {
+    info.lastRunResult = lastRunResult;
+  }
   return info;
 }
 
@@ -159,7 +188,9 @@ function buildTaskScript({
   }
   if (environment) {
     for (const [key, value] of Object.entries(environment)) {
-      if (!value) continue;
+      if (!value) {
+        continue;
+      }
       lines.push(`set ${key}=${value}`);
     }
   }
@@ -199,7 +230,9 @@ async function execSchtasks(
 
 async function assertSchtasksAvailable() {
   const res = await execSchtasks(["/Query"]);
-  if (res.code === 0) return;
+  if (res.code === 0) {
+    return;
+  }
   const detail = res.stderr || res.stdout;
   throw new Error(`schtasks unavailable: ${detail || "unknown error"}`.trim());
 }
@@ -225,8 +258,8 @@ export async function installScheduledTask({
   const taskDescription =
     description ??
     formatGatewayServiceDescription({
-      profile: env.CLAWDBOT_PROFILE,
-      version: environment?.CLAWDBOT_SERVICE_VERSION ?? env.CLAWDBOT_SERVICE_VERSION,
+      profile: env.OPENCLAW_PROFILE,
+      version: environment?.OPENCLAW_SERVICE_VERSION ?? env.OPENCLAW_SERVICE_VERSION,
     });
   const script = buildTaskScript({
     description: taskDescription,

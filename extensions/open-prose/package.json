@@ -1,9 +1,12 @@
 {
-  "name": "@moltbot/open-prose",
-  "version": "2026.1.27-beta.1",
-  "type": "module",
+  "name": "@openclaw/open-prose",
+  "version": "2026.1.30",
   "description": "OpenProse VM skill pack plugin (slash command + telemetry).",
-  "moltbot": {
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ]

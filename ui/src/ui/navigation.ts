@@ -37,9 +37,7 @@ const TAB_PATHS: Record<Tab, string> = {
   logs: "/logs",
 };
 
-const PATH_TO_TAB = new Map(
-  Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]),
-);
+const PATH_TO_TAB = new Map(Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]));
 
 export function normalizeBasePath(basePath: string): string {
   if (!basePath) return "";
@@ -177,7 +175,7 @@ export function subtitleForTab(tab: Tab) {
     case "chat":
       return "Direct gateway chat session for quick interventions.";
     case "config":
-      return "Edit ~/.clawdbot/moltbot.json safely.";
+      return "Edit ~/.openclaw/openclaw.json safely.";
     case "debug":
       return "Gateway snapshots, events, and manual RPC calls.";
     case "logs":

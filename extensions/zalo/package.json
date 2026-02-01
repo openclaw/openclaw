@@ -1,9 +1,16 @@
 {
-  "name": "@moltbot/zalo",
-  "version": "2026.1.27-beta.1",
+  "name": "@openclaw/zalo",
+  "version": "2026.1.30",
+  "description": "OpenClaw Zalo channel plugin",
   "type": "module",
-  "description": "Moltbot Zalo channel plugin",
-  "moltbot": {
+  "dependencies": {
+    "openclaw": "workspace:*",
+    "undici": "7.19.2"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ],
@@ -21,13 +28,9 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@moltbot/zalo",
+      "npmSpec": "@openclaw/zalo",
       "localPath": "extensions/zalo",
       "defaultChoice": "npm"
     }
-  },
-  "dependencies": {
-    "moltbot": "workspace:*",
-    "undici": "7.19.0"
   }
 }

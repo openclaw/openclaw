@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-import type { MoltbotConfig } from "../config/config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 
@@ -16,7 +14,9 @@ vi.mock("../agents/model-auth.js", () => ({
     mode: "api-key",
   })),
   requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
-    if (auth?.apiKey) return auth.apiKey;
+    if (auth?.apiKey) {
+      return auth.apiKey;
+    }
     throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
   },
 }));
@@ -41,7 +41,7 @@ describe("applyMediaUnderstanding", () => {
     mockedResolveApiKey.mockClear();
     mockedFetchRemoteMedia.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.from("audio-bytes"),
+      buffer: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
       contentType: "audio/ogg",
       fileName: "note.ogg",
     });
@@ -49,16 +49,16 @@ describe("applyMediaUnderstanding", () => {
 
   it("sets Transcript and replaces Body when audio transcription succeeds", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPath = path.join(dir, "note.ogg");
-    await fs.writeFile(audioPath, "hello");
+    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
       MediaPath: audioPath,
       MediaType: "audio/ogg",
     };
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           audio: {
@@ -92,16 +92,16 @@ describe("applyMediaUnderstanding", () => {
 
   it("keeps caption for command parsing when audio has user text", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPath = path.join(dir, "note.ogg");
-    await fs.writeFile(audioPath, "hello");
+    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]));
 
     const ctx: MsgContext = {
       Body: "<media:audio> /capture status",
       MediaPath: audioPath,
       MediaType: "audio/ogg",
     };
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           audio: {
@@ -140,7 +140,7 @@ describe("applyMediaUnderstanding", () => {
       MediaType: "audio/ogg",
       ChatType: "dm",
     };
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           audio: {
@@ -174,9 +174,9 @@ describe("applyMediaUnderstanding", () => {
 
   it("skips audio transcription when attachment exceeds maxBytes", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPath = path.join(dir, "large.wav");
-    await fs.writeFile(audioPath, "0123456789");
+    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -184,7 +184,7 @@ describe("applyMediaUnderstanding", () => {
       MediaType: "audio/wav",
     };
     const transcribeAudio = vi.fn(async () => ({ text: "should-not-run" }));
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           audio: {
@@ -209,16 +209,16 @@ describe("applyMediaUnderstanding", () => {
 
   it("falls back to CLI model when provider fails", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPath = path.join(dir, "note.ogg");
-    await fs.writeFile(audioPath, "hello");
+    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
       MediaPath: audioPath,
       MediaType: "audio/ogg",
     };
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           audio: {
@@ -262,7 +262,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("uses CLI image understanding and preserves caption for commands", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const imagePath = path.join(dir, "photo.jpg");
     await fs.writeFile(imagePath, "image-bytes");
 
@@ -271,7 +271,7 @@ describe("applyMediaUnderstanding", () => {
       MediaPath: imagePath,
       MediaType: "image/jpeg",
     };
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           image: {
@@ -309,7 +309,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("uses shared media models list when capability config is missing", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const imagePath = path.join(dir, "shared.jpg");
     await fs.writeFile(imagePath, "image-bytes");
 
@@ -318,7 +318,7 @@ describe("applyMediaUnderstanding", () => {
       MediaPath: imagePath,
       MediaType: "image/jpeg",
     };
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           models: [
@@ -350,16 +350,16 @@ describe("applyMediaUnderstanding", () => {
 
   it("uses active model when enabled and models are missing", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPath = path.join(dir, "fallback.ogg");
-    await fs.writeFile(audioPath, "hello");
+    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6]));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
       MediaPath: audioPath,
       MediaType: "audio/ogg",
     };
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           audio: {
@@ -387,18 +387,18 @@ describe("applyMediaUnderstanding", () => {
 
   it("handles multiple audio attachments when attachment mode is all", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPathA = path.join(dir, "note-a.ogg");
     const audioPathB = path.join(dir, "note-b.ogg");
-    await fs.writeFile(audioPathA, "hello");
-    await fs.writeFile(audioPathB, "world");
+    await fs.writeFile(audioPathA, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
+    await fs.writeFile(audioPathB, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
       MediaPaths: [audioPathA, audioPathB],
       MediaTypes: ["audio/ogg", "audio/ogg"],
     };
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           audio: {
@@ -430,12 +430,12 @@ describe("applyMediaUnderstanding", () => {
 
   it("orders mixed media outputs as image, audio, video", async () => {
     const { applyMediaUnderstanding } = await loadApply();
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-media-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const imagePath = path.join(dir, "photo.jpg");
     const audioPath = path.join(dir, "note.ogg");
     const videoPath = path.join(dir, "clip.mp4");
     await fs.writeFile(imagePath, "image-bytes");
-    await fs.writeFile(audioPath, "audio-bytes");
+    await fs.writeFile(audioPath, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
     await fs.writeFile(videoPath, "video-bytes");
 
     const ctx: MsgContext = {
@@ -443,7 +443,7 @@ describe("applyMediaUnderstanding", () => {
       MediaPaths: [imagePath, audioPath, videoPath],
       MediaTypes: ["image/jpeg", "audio/ogg", "video/mp4"],
     };
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       tools: {
         media: {
           image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.2" }] },
@@ -486,5 +486,188 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Transcript).toBe("audio ok");
     expect(ctx.CommandBody).toBe("audio ok");
     expect(ctx.BodyForCommands).toBe("audio ok");
+  });
+
+  it("treats text-like audio attachments as CSV (comma wins over tabs)", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const csvPath = path.join(dir, "data.mp3");
+    const csvText = '"a","b"\t"c"\n"1","2"\t"3"';
+    const csvBuffer = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(csvText, "utf16le")]);
+    await fs.writeFile(csvPath, csvBuffer);
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPath: csvPath,
+      MediaType: "audio/mpeg",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain('<file name="data.mp3" mime="text/csv">');
+    expect(ctx.Body).toContain('"a","b"\t"c"');
+  });
+
+  it("infers TSV when tabs are present without commas", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const tsvPath = path.join(dir, "report.mp3");
+    const tsvText = "a\tb\tc\n1\t2\t3";
+    await fs.writeFile(tsvPath, tsvText);
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPath: tsvPath,
+      MediaType: "audio/mpeg",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain('<file name="report.mp3" mime="text/tab-separated-values">');
+    expect(ctx.Body).toContain("a\tb\tc");
+  });
+
+  it("escapes XML special characters in filenames to prevent injection", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    // Use & in filename — valid on all platforms (including Windows, which
+    // forbids < and > in NTFS filenames) and still requires XML escaping.
+    // Note: The sanitizeFilename in store.ts would strip most dangerous chars,
+    // but we test that even if some slip through, they get escaped in output
+    const filePath = path.join(dir, "file&test.txt");
+    await fs.writeFile(filePath, "safe content");
+
+    const ctx: MsgContext = {
+      Body: "<media:document>",
+      MediaPath: filePath,
+      MediaType: "text/plain",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    // Verify XML special chars are escaped in the output
+    expect(ctx.Body).toContain("&amp;");
+    // The name attribute should contain the escaped form, not a raw unescaped &
+    expect(ctx.Body).toMatch(/name="file&amp;test\.txt"/);
+  });
+
+  it("normalizes MIME types to prevent attribute injection", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const filePath = path.join(dir, "data.txt");
+    await fs.writeFile(filePath, "test content");
+
+    const ctx: MsgContext = {
+      Body: "<media:document>",
+      MediaPath: filePath,
+      // Attempt to inject via MIME type with quotes - normalization should strip this
+      MediaType: 'text/plain" onclick="alert(1)',
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    // MIME normalization strips everything after first ; or " - verify injection is blocked
+    expect(ctx.Body).not.toContain("onclick=");
+    expect(ctx.Body).not.toContain("alert(1)");
+    // Verify the MIME type is normalized to just "text/plain"
+    expect(ctx.Body).toContain('mime="text/plain"');
+  });
+
+  it("handles path traversal attempts in filenames safely", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    // Even if a file somehow got a path-like name, it should be handled safely
+    const filePath = path.join(dir, "normal.txt");
+    await fs.writeFile(filePath, "legitimate content");
+
+    const ctx: MsgContext = {
+      Body: "<media:document>",
+      MediaPath: filePath,
+      MediaType: "text/plain",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    // Verify the file was processed and output contains expected structure
+    expect(ctx.Body).toContain('<file name="');
+    expect(ctx.Body).toContain('mime="text/plain"');
+    expect(ctx.Body).toContain("legitimate content");
+  });
+
+  it("handles files with non-ASCII Unicode filenames", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const filePath = path.join(dir, "文档.txt");
+    await fs.writeFile(filePath, "中文内容");
+
+    const ctx: MsgContext = {
+      Body: "<media:document>",
+      MediaPath: filePath,
+      MediaType: "text/plain",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain("中文内容");
   });
 });

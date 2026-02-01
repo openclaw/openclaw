@@ -1,13 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import type { AuthChoice } from "./onboard-types.js";
+import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 
 vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
@@ -22,14 +20,16 @@ const noopAsync = async () => {};
 const noop = () => {};
 const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
 const requireAgentDir = () => {
-  const agentDir = process.env.CLAWDBOT_AGENT_DIR;
-  if (!agentDir) throw new Error("CLAWDBOT_AGENT_DIR not set");
+  const agentDir = process.env.OPENCLAW_AGENT_DIR;
+  if (!agentDir) {
+    throw new Error("OPENCLAW_AGENT_DIR not set");
+  }
   return agentDir;
 };
 
 describe("applyAuthChoice", () => {
-  const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
-  const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
   const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
   const previousOpenrouterKey = process.env.OPENROUTER_API_KEY;
   const previousAiGatewayKey = process.env.AI_GATEWAY_API_KEY;
@@ -45,14 +45,14 @@ describe("applyAuthChoice", () => {
       tempStateDir = null;
     }
     if (previousStateDir === undefined) {
-      delete process.env.CLAWDBOT_STATE_DIR;
+      delete process.env.OPENCLAW_STATE_DIR;
     } else {
-      process.env.CLAWDBOT_STATE_DIR = previousStateDir;
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
     if (previousAgentDir === undefined) {
-      delete process.env.CLAWDBOT_AGENT_DIR;
+      delete process.env.OPENCLAW_AGENT_DIR;
     } else {
-      process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
+      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
     }
     if (previousPiAgentDir === undefined) {
       delete process.env.PI_CODING_AGENT_DIR;
@@ -82,10 +82,10 @@ describe("applyAuthChoice", () => {
   });
 
   it("prompts and writes MiniMax API key when selecting minimax-api", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
-    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
-    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
 
     const text = vi.fn().mockResolvedValue("sk-minimax-test");
     const select: WizardPrompter["select"] = vi.fn(
@@ -135,10 +135,10 @@ describe("applyAuthChoice", () => {
   });
 
   it("prompts and writes Synthetic API key when selecting synthetic-api-key", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
-    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
-    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
 
     const text = vi.fn().mockResolvedValue("sk-synthetic-test");
     const select: WizardPrompter["select"] = vi.fn(
@@ -188,10 +188,10 @@ describe("applyAuthChoice", () => {
   });
 
   it("sets default model when selecting github-copilot", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
-    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
-    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
 
     const prompter: WizardPrompter = {
       intro: vi.fn(noopAsync),
@@ -231,10 +231,10 @@ describe("applyAuthChoice", () => {
   });
 
   it("does not override the default model when selecting opencode-zen without setDefaultModel", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
-    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
-    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
 
     const text = vi.fn().mockResolvedValue("sk-opencode-zen-test");
     const select: WizardPrompter["select"] = vi.fn(
@@ -282,10 +282,10 @@ describe("applyAuthChoice", () => {
   });
 
   it("uses existing OPENROUTER_API_KEY when selecting openrouter-api-key", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
-    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
-    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
     process.env.OPENROUTER_API_KEY = "sk-openrouter-test";
 
     const text = vi.fn();
@@ -343,10 +343,10 @@ describe("applyAuthChoice", () => {
   });
 
   it("uses existing AI_GATEWAY_API_KEY when selecting ai-gateway-api-key", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
-    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
-    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
     process.env.AI_GATEWAY_API_KEY = "gateway-test-key";
 
     const text = vi.fn();
@@ -406,10 +406,10 @@ describe("applyAuthChoice", () => {
   });
 
   it("writes Chutes OAuth credentials when selecting chutes (remote/manual)", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
-    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
-    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
     process.env.SSH_TTY = "1";
     process.env.CHUTES_CLIENT_ID = "cid_test";
 
@@ -493,10 +493,10 @@ describe("applyAuthChoice", () => {
   });
 
   it("writes Qwen credentials when selecting qwen-portal", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-auth-"));
-    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
-    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
 
     resolvePluginProviders.mockReturnValue([
       {
@@ -582,6 +582,101 @@ describe("applyAuthChoice", () => {
     };
     expect(parsed.profiles?.["qwen-portal:default"]).toMatchObject({
       provider: "qwen-portal",
+      access: "access",
+      refresh: "refresh",
+    });
+  });
+
+  it("writes MiniMax credentials when selecting minimax-portal", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+
+    resolvePluginProviders.mockReturnValue([
+      {
+        id: "minimax-portal",
+        label: "MiniMax",
+        auth: [
+          {
+            id: "oauth",
+            label: "MiniMax OAuth (Global)",
+            kind: "device_code",
+            run: vi.fn(async () => ({
+              profiles: [
+                {
+                  profileId: "minimax-portal:default",
+                  credential: {
+                    type: "oauth",
+                    provider: "minimax-portal",
+                    access: "access",
+                    refresh: "refresh",
+                    expires: Date.now() + 60 * 60 * 1000,
+                  },
+                },
+              ],
+              configPatch: {
+                models: {
+                  providers: {
+                    "minimax-portal": {
+                      baseUrl: "https://api.minimax.io/anthropic",
+                      apiKey: "minimax-oauth",
+                      api: "anthropic-messages",
+                      models: [],
+                    },
+                  },
+                },
+              },
+              defaultModel: "minimax-portal/MiniMax-M2.1",
+            })),
+          },
+        ],
+      },
+    ]);
+
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select: vi.fn(async () => "oauth" as never),
+      multiselect: vi.fn(async () => []),
+      text: vi.fn(async () => ""),
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "minimax-portal",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result.config.auth?.profiles?.["minimax-portal:default"]).toMatchObject({
+      provider: "minimax-portal",
+      mode: "oauth",
+    });
+    expect(result.config.agents?.defaults?.model?.primary).toBe("minimax-portal/MiniMax-M2.1");
+    expect(result.config.models?.providers?.["minimax-portal"]).toMatchObject({
+      baseUrl: "https://api.minimax.io/anthropic",
+      apiKey: "minimax-oauth",
+    });
+
+    const authProfilePath = authProfilePathFor(requireAgentDir());
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { access?: string; refresh?: string; provider?: string }>;
+    };
+    expect(parsed.profiles?.["minimax-portal:default"]).toMatchObject({
+      provider: "minimax-portal",
       access: "access",
       refresh: "refresh",
     });

@@ -72,14 +72,14 @@ jobs:
       matrix:
         include:
           - runtime: node
+            task: tsgo
+            command: pnpm tsgo
+          - runtime: node
             task: lint
-            command: pnpm lint
+            command: pnpm build && pnpm lint
           - runtime: node
             task: test
             command: pnpm canvas:a2ui:bundle && pnpm test
-          - runtime: node
-            task: build
-            command: pnpm build
           - runtime: node
             task: protocol
             command: pnpm protocol:check
@@ -91,7 +91,7 @@ jobs:
             command: pnpm canvas:a2ui:bundle && bunx vitest run
           - runtime: bun
             task: build
-            command: bunx tsc -p tsconfig.json
+            command: bunx tsc -p tsconfig.json --noEmit false
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -197,14 +197,11 @@ jobs:
       matrix:
         include:
           - runtime: node
-            task: lint
-            command: pnpm lint
+            task: build & lint
+            command: pnpm build && pnpm lint
           - runtime: node
             task: test
             command: pnpm canvas:a2ui:bundle && pnpm test
-          - runtime: node
-            task: build
-            command: pnpm build
           - runtime: node
             task: protocol
             command: pnpm protocol:check

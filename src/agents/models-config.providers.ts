@@ -1,12 +1,12 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
-import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
+import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -14,14 +14,16 @@ import {
 } from "./synthetic-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 
-type ModelsConfig = NonNullable<MoltbotConfig["models"]>;
+type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const MINIMAX_API_BASE_URL = "https://api.minimax.chat/v1";
+const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
 const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.1";
 const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
 const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
+const MINIMAX_OAUTH_PLACEHOLDER = "minimax-oauth";
 // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
 const MINIMAX_API_COST = {
   input: 15,
@@ -30,23 +32,22 @@ const MINIMAX_API_COST = {
   cacheWrite: 10,
 };
 
-const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
-const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
-const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
-const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
-const MOONSHOT_DEFAULT_COST = {
+const XIAOMI_BASE_URL = "https://api.xiaomimimo.com/anthropic";
+export const XIAOMI_DEFAULT_MODEL_ID = "mimo-v2-flash";
+const XIAOMI_DEFAULT_CONTEXT_WINDOW = 262144;
+const XIAOMI_DEFAULT_MAX_TOKENS = 8192;
+const XIAOMI_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
   cacheWrite: 0,
 };
-const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
-const KIMI_CODE_MODEL_ID = "kimi-for-coding";
-const KIMI_CODE_CONTEXT_WINDOW = 262144;
-const KIMI_CODE_MAX_TOKENS = 32768;
-const KIMI_CODE_HEADERS = { "User-Agent": "KimiCLI/0.77" } as const;
-const KIMI_CODE_COMPAT = { supportsDeveloperRole: false } as const;
-const KIMI_CODE_DEFAULT_COST = {
+
+const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
+const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
+const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
+const MOONSHOT_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -147,7 +148,9 @@ function normalizeApiKeyConfig(value: string): string {
 
 function resolveEnvApiKeyVarName(provider: string): string | undefined {
   const resolved = resolveEnvApiKey(provider);
-  if (!resolved) return undefined;
+  if (!resolved) {
+    return undefined;
+  }
   const match = /^(?:env: |shell env: )([A-Z0-9_]+)$/.exec(resolved.source);
   return match ? match[1] : undefined;
 }
@@ -163,16 +166,26 @@ function resolveApiKeyFromProfiles(params: {
   const ids = listProfilesForProvider(params.store, params.provider);
   for (const id of ids) {
     const cred = params.store.profiles[id];
-    if (!cred) continue;
-    if (cred.type === "api_key") return cred.key;
-    if (cred.type === "token") return cred.token;
+    if (!cred) {
+      continue;
+    }
+    if (cred.type === "api_key") {
+      return cred.key;
+    }
+    if (cred.type === "token") {
+      return cred.token;
+    }
   }
   return undefined;
 }
 
 export function normalizeGoogleModelId(id: string): string {
-  if (id === "gemini-3-pro") return "gemini-3-pro-preview";
-  if (id === "gemini-3-flash") return "gemini-3-flash-preview";
+  if (id === "gemini-3-pro") {
+    return "gemini-3-pro-preview";
+  }
+  if (id === "gemini-3-flash") {
+    return "gemini-3-flash-preview";
+  }
   return id;
 }
 
@@ -180,7 +193,9 @@ function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
   let mutated = false;
   const models = provider.models.map((model) => {
     const nextId = normalizeGoogleModelId(model.id);
-    if (nextId === model.id) return model;
+    if (nextId === model.id) {
+      return model;
+    }
     mutated = true;
     return { ...model, id: nextId };
   });
@@ -192,7 +207,9 @@ export function normalizeProviders(params: {
   agentDir: string;
 }): ModelsConfig["providers"] {
   const { providers } = params;
-  if (!providers) return providers;
+  if (!providers) {
+    return providers;
+  }
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -242,7 +259,9 @@ export function normalizeProviders(params: {
 
     if (normalizedKey === "google") {
       const googleNormalized = normalizeGoogleProvider(normalizedProvider);
-      if (googleNormalized !== normalizedProvider) mutated = true;
+      if (googleNormalized !== normalizedProvider) {
+        mutated = true;
+      }
       normalizedProvider = googleNormalized;
     }
 
@@ -279,6 +298,24 @@ function buildMinimaxProvider(): ProviderConfig {
   };
 }
 
+function buildMinimaxPortalProvider(): ProviderConfig {
+  return {
+    baseUrl: MINIMAX_PORTAL_BASE_URL,
+    api: "anthropic-messages",
+    models: [
+      {
+        id: MINIMAX_DEFAULT_MODEL_ID,
+        name: "MiniMax M2.1",
+        reasoning: false,
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 function buildMoonshotProvider(): ProviderConfig {
   return {
     baseUrl: MOONSHOT_BASE_URL,
@@ -292,26 +329,6 @@ function buildMoonshotProvider(): ProviderConfig {
         cost: MOONSHOT_DEFAULT_COST,
         contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
         maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
-      },
-    ],
-  };
-}
-
-function buildKimiCodeProvider(): ProviderConfig {
-  return {
-    baseUrl: KIMI_CODE_BASE_URL,
-    api: "openai-completions",
-    models: [
-      {
-        id: KIMI_CODE_MODEL_ID,
-        name: "Kimi For Coding",
-        reasoning: true,
-        input: ["text"],
-        cost: KIMI_CODE_DEFAULT_COST,
-        contextWindow: KIMI_CODE_CONTEXT_WINDOW,
-        maxTokens: KIMI_CODE_MAX_TOKENS,
-        headers: KIMI_CODE_HEADERS,
-        compat: KIMI_CODE_COMPAT,
       },
     ],
   };
@@ -349,6 +366,24 @@ function buildSyntheticProvider(): ProviderConfig {
     baseUrl: SYNTHETIC_BASE_URL,
     api: "anthropic-messages",
     models: SYNTHETIC_MODEL_CATALOG.map(buildSyntheticModelDefinition),
+  };
+}
+
+export function buildXiaomiProvider(): ProviderConfig {
+  return {
+    baseUrl: XIAOMI_BASE_URL,
+    api: "anthropic-messages",
+    models: [
+      {
+        id: XIAOMI_DEFAULT_MODEL_ID,
+        name: "Xiaomi MiMo V2 Flash",
+        reasoning: false,
+        input: ["text"],
+        cost: XIAOMI_DEFAULT_COST,
+        contextWindow: XIAOMI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: XIAOMI_DEFAULT_MAX_TOKENS,
+      },
+    ],
   };
 }
 
@@ -391,18 +426,19 @@ export async function resolveImplicitProviders(params: {
     providers.minimax = { ...buildMinimaxProvider(), apiKey: minimaxKey };
   }
 
+  const minimaxOauthProfile = listProfilesForProvider(authStore, "minimax-portal");
+  if (minimaxOauthProfile.length > 0) {
+    providers["minimax-portal"] = {
+      ...buildMinimaxPortalProvider(),
+      apiKey: MINIMAX_OAUTH_PLACEHOLDER,
+    };
+  }
+
   const moonshotKey =
     resolveEnvApiKeyVarName("moonshot") ??
     resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
   if (moonshotKey) {
     providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
-  }
-
-  const kimiCodeKey =
-    resolveEnvApiKeyVarName("kimi-code") ??
-    resolveApiKeyFromProfiles({ provider: "kimi-code", store: authStore });
-  if (kimiCodeKey) {
-    providers["kimi-code"] = { ...buildKimiCodeProvider(), apiKey: kimiCodeKey };
   }
 
   const syntheticKey =
@@ -427,6 +463,13 @@ export async function resolveImplicitProviders(params: {
     };
   }
 
+  const xiaomiKey =
+    resolveEnvApiKeyVarName("xiaomi") ??
+    resolveApiKeyFromProfiles({ provider: "xiaomi", store: authStore });
+  if (xiaomiKey) {
+    providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
+  }
+
   // Ollama provider - only add if explicitly configured
   const ollamaKey =
     resolveEnvApiKeyVarName("ollama") ??
@@ -448,7 +491,9 @@ export async function resolveImplicitCopilotProvider(params: {
   const envToken = env.COPILOT_GITHUB_TOKEN ?? env.GH_TOKEN ?? env.GITHUB_TOKEN;
   const githubToken = (envToken ?? "").trim();
 
-  if (!hasProfile && !githubToken) return null;
+  if (!hasProfile && !githubToken) {
+    return null;
+  }
 
   let selectedGithubToken = githubToken;
   if (!selectedGithubToken && hasProfile) {
@@ -476,15 +521,15 @@ export async function resolveImplicitCopilotProvider(params: {
 
   // pi-coding-agent's ModelRegistry marks a model "available" only if its
   // `AuthStorage` has auth configured for that provider (via auth.json/env/etc).
-  // Our Copilot auth lives in Moltbot's auth-profiles store instead, so we also
+  // Our Copilot auth lives in OpenClaw's auth-profiles store instead, so we also
   // write a runtime-only auth.json entry for pi-coding-agent to pick up.
   //
-  // This is safe because it's (1) within Moltbot's agent dir, (2) contains the
+  // This is safe because it's (1) within OpenClaw's agent dir, (2) contains the
   // GitHub token (not the exchanged Copilot token), and (3) matches existing
   // patterns for OAuth-like providers in pi-coding-agent.
   // Note: we deliberately do not write pi-coding-agent's `auth.json` here.
-  // Moltbot uses its own auth store and exchanges tokens at runtime.
-  // `models list` uses Moltbot's auth heuristics for availability.
+  // OpenClaw uses its own auth store and exchanges tokens at runtime.
+  // `models list` uses OpenClaw's auth heuristics for availability.
 
   // We intentionally do NOT define custom models for Copilot in models.json.
   // pi-coding-agent treats providers with models as replacements requiring apiKey.
@@ -497,19 +542,25 @@ export async function resolveImplicitCopilotProvider(params: {
 
 export async function resolveImplicitBedrockProvider(params: {
   agentDir: string;
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderConfig | null> {
   const env = params.env ?? process.env;
   const discoveryConfig = params.config?.models?.bedrockDiscovery;
   const enabled = discoveryConfig?.enabled;
   const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
-  if (enabled === false) return null;
-  if (enabled !== true && !hasAwsCreds) return null;
+  if (enabled === false) {
+    return null;
+  }
+  if (enabled !== true && !hasAwsCreds) {
+    return null;
+  }
 
   const region = discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
   const models = await discoverBedrockModels({ region, config: discoveryConfig });
-  if (models.length === 0) return null;
+  if (models.length === 0) {
+    return null;
+  }
 
   return {
     baseUrl: `https://bedrock-runtime.${region}.amazonaws.com`,

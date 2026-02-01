@@ -1,7 +1,10 @@
+import type { OpenClawConfig } from "../../../config/config.js";
+import type { DmPolicy } from "../../../config/types.js";
+import type { WizardPrompter } from "../../../wizard/prompts.js";
+import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
 import { detectBinary } from "../../../commands/onboard-helpers.js";
 import { installSignalCli } from "../../../commands/signal-install.js";
-import type { MoltbotConfig } from "../../../config/config.js";
-import type { DmPolicy } from "../../../config/types.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import {
   listSignalAccountIds,
@@ -9,15 +12,12 @@ import {
   resolveSignalAccount,
 } from "../../../signal/accounts.js";
 import { formatDocsLink } from "../../../terminal/links.js";
-import { formatCliCommand } from "../../../cli/command-format.js";
 import { normalizeE164 } from "../../../utils.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
 import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
 
 const channel = "signal" as const;
 
-function setSignalDmPolicy(cfg: MoltbotConfig, dmPolicy: DmPolicy) {
+function setSignalDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
   const allowFrom =
     dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.signal?.allowFrom) : undefined;
   return {
@@ -34,10 +34,10 @@ function setSignalDmPolicy(cfg: MoltbotConfig, dmPolicy: DmPolicy) {
 }
 
 function setSignalAllowFrom(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   accountId: string,
   allowFrom: string[],
-): MoltbotConfig {
+): OpenClawConfig {
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
       ...cfg,
@@ -80,10 +80,10 @@ function isUuidLike(value: string): boolean {
 }
 
 async function promptSignalAllowFrom(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId?: string;
-}): Promise<MoltbotConfig> {
+}): Promise<OpenClawConfig> {
   const accountId =
     params.accountId && normalizeAccountId(params.accountId)
       ? (normalizeAccountId(params.accountId) ?? DEFAULT_ACCOUNT_ID)
@@ -107,16 +107,26 @@ async function promptSignalAllowFrom(params: {
     initialValue: existing[0] ? String(existing[0]) : undefined,
     validate: (value) => {
       const raw = String(value ?? "").trim();
-      if (!raw) return "Required";
+      if (!raw) {
+        return "Required";
+      }
       const parts = parseSignalAllowFromInput(raw);
       for (const part of parts) {
-        if (part === "*") continue;
-        if (part.toLowerCase().startsWith("uuid:")) {
-          if (!part.slice("uuid:".length).trim()) return "Invalid uuid entry";
+        if (part === "*") {
           continue;
         }
-        if (isUuidLike(part)) continue;
-        if (!normalizeE164(part)) return `Invalid entry: ${part}`;
+        if (part.toLowerCase().startsWith("uuid:")) {
+          if (!part.slice("uuid:".length).trim()) {
+            return "Invalid uuid entry";
+          }
+          continue;
+        }
+        if (isUuidLike(part)) {
+          continue;
+        }
+        if (!normalizeE164(part)) {
+          return `Invalid entry: ${part}`;
+        }
       }
       return undefined;
     },
@@ -124,9 +134,15 @@ async function promptSignalAllowFrom(params: {
   const parts = parseSignalAllowFromInput(String(entry));
   const normalized = parts
     .map((part) => {
-      if (part === "*") return "*";
-      if (part.toLowerCase().startsWith("uuid:")) return `uuid:${part.slice(5).trim()}`;
-      if (isUuidLike(part)) return `uuid:${part}`;
+      if (part === "*") {
+        return "*";
+      }
+      if (part.toLowerCase().startsWith("uuid:")) {
+        return `uuid:${part.slice(5).trim()}`;
+      }
+      if (isUuidLike(part)) {
+        return `uuid:${part}`;
+      }
       return normalizeE164(part);
     })
     .filter(Boolean);
@@ -231,7 +247,9 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
         message: `Signal account set (${account}). Keep it?`,
         initialValue: true,
       });
-      if (!keep) account = "";
+      if (!keep) {
+        account = "";
+      }
     }
 
     if (!account) {
@@ -282,9 +300,9 @@ export const signalOnboardingAdapter: ChannelOnboardingAdapter = {
 
     await prompter.note(
       [
-        'Link device with: signal-cli link -n "Moltbot"',
+        'Link device with: signal-cli link -n "OpenClaw"',
         "Scan QR in Signal → Linked Devices",
-        `Then run: ${formatCliCommand("moltbot gateway call channels.status --params '{\"probe\":true}'")}`,
+        `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
         `Docs: ${formatDocsLink("/signal", "signal")}`,
       ].join("\n"),
       "Signal next steps",

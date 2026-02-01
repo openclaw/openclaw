@@ -4,6 +4,9 @@ import type { ReplyToMode } from "../../config/config.js";
 import type { resolveAgentRoute } from "../../routing/resolve-route.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordChannelInfo } from "./message-utils.js";
+import type { DiscordSenderIdentity } from "./sender-identity.js";
+
+export type { DiscordSenderIdentity } from "./sender-identity.js";
 import type { DiscordThreadChannel } from "./threading.js";
 
 export type LoadedConfig = ReturnType<typeof import("../../config/config.js").loadConfig>;
@@ -13,7 +16,9 @@ export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 
 export type DiscordMessagePreflightContext = {
   cfg: LoadedConfig;
-  discordConfig: NonNullable<import("../../config/config.js").MoltbotConfig["channels"]>["discord"];
+  discordConfig: NonNullable<
+    import("../../config/config.js").OpenClawConfig["channels"]
+  >["discord"];
   accountId: string;
   token: string;
   runtime: RuntimeEnv;
@@ -30,6 +35,7 @@ export type DiscordMessagePreflightContext = {
   client: Client;
   message: DiscordMessageEvent["message"];
   author: User;
+  sender: DiscordSenderIdentity;
 
   channelInfo: DiscordChannelInfo | null;
   channelName?: string;

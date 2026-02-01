@@ -13,10 +13,10 @@ vi.mock("../agents/pi-embedded.js", () => ({
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
+import type { OpenClawConfig } from "../config/config.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
-import type { MoltbotConfig } from "../config/config.js";
+import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { monitorWebChannel } from "./auto-reply.js";
 import { resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 
@@ -48,7 +48,7 @@ const rmDirWithRetries = async (dir: string): Promise<void> => {
 beforeEach(async () => {
   resetInboundDedupe();
   previousHome = process.env.HOME;
-  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-web-home-"));
+  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-"));
   process.env.HOME = tempHome;
 });
 
@@ -63,7 +63,7 @@ afterEach(async () => {
 const makeSessionStore = async (
   entries: Record<string, unknown> = {},
 ): Promise<{ storePath: string; cleanup: () => Promise<void> }> => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-session-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
   const storePath = path.join(dir, "sessions.json");
   await fs.writeFile(storePath, JSON.stringify(entries));
   const cleanup = async () => {
@@ -102,7 +102,7 @@ describe("partial reply gating", () => {
 
     const replyResolver = vi.fn().mockResolvedValue({ text: "final reply" });
 
-    const mockConfig: MoltbotConfig = {
+    const mockConfig: OpenClawConfig = {
       channels: { whatsapp: { allowFrom: ["*"] } },
     };
 
@@ -145,7 +145,7 @@ describe("partial reply gating", () => {
 
     const replyResolver = vi.fn().mockResolvedValue({ text: "final reply" });
 
-    const mockConfig: MoltbotConfig = {
+    const mockConfig: OpenClawConfig = {
       channels: {
         whatsapp: {
           allowFrom: ["*"],
@@ -195,7 +195,7 @@ describe("partial reply gating", () => {
 
     const replyResolver = vi.fn().mockResolvedValue(undefined);
 
-    const mockConfig: MoltbotConfig = {
+    const mockConfig: OpenClawConfig = {
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: store.storePath },
     };
@@ -230,10 +230,14 @@ describe("partial reply gating", () => {
         string,
         { lastChannel?: string; lastTo?: string }
       >;
-      if (stored[mainSessionKey]?.lastChannel && stored[mainSessionKey]?.lastTo) break;
+      if (stored[mainSessionKey]?.lastChannel && stored[mainSessionKey]?.lastTo) {
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    if (!stored) throw new Error("store not loaded");
+    if (!stored) {
+      throw new Error("store not loaded");
+    }
     expect(stored[mainSessionKey]?.lastChannel).toBe("whatsapp");
     expect(stored[mainSessionKey]?.lastTo).toBe("+1000");
 
@@ -249,7 +253,7 @@ describe("partial reply gating", () => {
 
     const replyResolver = vi.fn().mockResolvedValue(undefined);
 
-    const mockConfig: MoltbotConfig = {
+    const mockConfig: OpenClawConfig = {
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: store.storePath },
     };
@@ -295,11 +299,14 @@ describe("partial reply gating", () => {
         stored[groupSessionKey]?.lastChannel &&
         stored[groupSessionKey]?.lastTo &&
         stored[groupSessionKey]?.lastAccountId
-      )
+      ) {
         break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    if (!stored) throw new Error("store not loaded");
+    if (!stored) {
+      throw new Error("store not loaded");
+    }
     expect(stored[groupSessionKey]?.lastChannel).toBe("whatsapp");
     expect(stored[groupSessionKey]?.lastTo).toBe("123@g.us");
     expect(stored[groupSessionKey]?.lastAccountId).toBe("work");

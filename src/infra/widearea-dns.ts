@@ -1,14 +1,31 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { CONFIG_DIR, ensureDir } from "../utils.js";
 
-export const WIDE_AREA_DISCOVERY_DOMAIN = "moltbot.internal.";
-export const WIDE_AREA_ZONE_FILENAME = "moltbot.internal.db";
+export function normalizeWideAreaDomain(raw?: string | null): string | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  return trimmed.endsWith(".") ? trimmed : `${trimmed}.`;
+}
 
-export function getWideAreaZonePath(): string {
-  return path.join(CONFIG_DIR, "dns", WIDE_AREA_ZONE_FILENAME);
+export function resolveWideAreaDiscoveryDomain(params?: {
+  env?: NodeJS.ProcessEnv;
+  configDomain?: string | null;
+}): string | null {
+  const env = params?.env ?? process.env;
+  const candidate = params?.configDomain ?? env.OPENCLAW_WIDE_AREA_DOMAIN ?? null;
+  return normalizeWideAreaDomain(candidate);
+}
+
+function zoneFilenameForDomain(domain: string): string {
+  return `${domain.replace(/\.$/, "")}.db`;
+}
+
+export function getWideAreaZonePath(domain: string): string {
+  return path.join(CONFIG_DIR, "dns", zoneFilenameForDomain(domain));
 }
 
 function dnsLabel(raw: string, fallback: string): string {
@@ -37,21 +54,27 @@ function formatYyyyMmDd(date: Date): string {
 function nextSerial(existingSerial: number | null, now: Date): number {
   const today = formatYyyyMmDd(now);
   const base = Number.parseInt(`${today}01`, 10);
-  if (!existingSerial || !Number.isFinite(existingSerial)) return base;
+  if (!existingSerial || !Number.isFinite(existingSerial)) {
+    return base;
+  }
   const existing = String(existingSerial);
-  if (existing.startsWith(today)) return existingSerial + 1;
+  if (existing.startsWith(today)) {
+    return existingSerial + 1;
+  }
   return base;
 }
 
 function extractSerial(zoneText: string): number | null {
   const match = zoneText.match(/^\s*@\s+IN\s+SOA\s+\S+\s+\S+\s+(\d+)\s+/m);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const parsed = Number.parseInt(match[1], 10);
   return Number.isFinite(parsed) ? parsed : null;
 }
 
 function extractContentHash(zoneText: string): string | null {
-  const match = zoneText.match(/^\s*;\s*moltbot-content-hash:\s*(\S+)\s*$/m);
+  const match = zoneText.match(/^\s*;\s*openclaw-content-hash:\s*(\S+)\s*$/m);
   return match?.[1] ?? null;
 }
 
@@ -66,6 +89,7 @@ function computeContentHash(body: string): string {
 }
 
 export type WideAreaGatewayZoneOpts = {
+  domain: string;
   gatewayPort: number;
   displayName: string;
   tailnetIPv4: string;
@@ -80,9 +104,10 @@ export type WideAreaGatewayZoneOpts = {
 };
 
 function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string {
-  const hostname = os.hostname().split(".")[0] ?? "moltbot";
-  const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "moltbot");
-  const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-gateway`, "moltbot-gw");
+  const hostname = os.hostname().split(".")[0] ?? "openclaw";
+  const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "openclaw");
+  const instanceLabel = dnsLabel(opts.instanceLabel ?? `${hostname}-gateway`, "openclaw-gw");
+  const domain = normalizeWideAreaDomain(opts.domain) ?? "local.";
 
   const txt = [
     `displayName=${opts.displayName.trim() || hostname}`,
@@ -108,7 +133,7 @@ function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string 
 
   const records: string[] = [];
 
-  records.push(`$ORIGIN ${WIDE_AREA_DISCOVERY_DOMAIN}`);
+  records.push(`$ORIGIN ${domain}`);
   records.push(`$TTL 60`);
   const soaLine = `@ IN SOA ns1 hostmaster ${opts.serial} 7200 3600 1209600 60`;
   records.push(soaLine);
@@ -119,9 +144,9 @@ function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string 
     records.push(`${hostLabel} IN AAAA ${opts.tailnetIPv6}`);
   }
 
-  records.push(`_moltbot-gw._tcp IN PTR ${instanceLabel}._moltbot-gw._tcp`);
-  records.push(`${instanceLabel}._moltbot-gw._tcp IN SRV 0 0 ${opts.gatewayPort} ${hostLabel}`);
-  records.push(`${instanceLabel}._moltbot-gw._tcp IN TXT ${txt.map(txtQuote).join(" ")}`);
+  records.push(`_openclaw-gw._tcp IN PTR ${instanceLabel}._openclaw-gw._tcp`);
+  records.push(`${instanceLabel}._openclaw-gw._tcp IN SRV 0 0 ${opts.gatewayPort} ${hostLabel}`);
+  records.push(`${instanceLabel}._openclaw-gw._tcp IN TXT ${txt.map(txtQuote).join(" ")}`);
 
   const contentBody = `${records.join("\n")}\n`;
   const hashBody = `${records
@@ -131,7 +156,7 @@ function renderZone(opts: WideAreaGatewayZoneOpts & { serial: number }): string 
     .join("\n")}\n`;
   const contentHash = computeContentHash(hashBody);
 
-  return `; moltbot-content-hash: ${contentHash}\n${contentBody}`;
+  return `; openclaw-content-hash: ${contentHash}\n${contentBody}`;
 }
 
 export function renderWideAreaGatewayZoneText(
@@ -143,7 +168,11 @@ export function renderWideAreaGatewayZoneText(
 export async function writeWideAreaGatewayZone(
   opts: WideAreaGatewayZoneOpts,
 ): Promise<{ zonePath: string; changed: boolean }> {
-  const zonePath = getWideAreaZonePath();
+  const domain = normalizeWideAreaDomain(opts.domain);
+  if (!domain) {
+    throw new Error("wide-area discovery domain is required");
+  }
+  const zonePath = getWideAreaZonePath(domain);
   await ensureDir(path.dirname(zonePath));
 
   const existing = (() => {

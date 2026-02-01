@@ -28,10 +28,14 @@ export async function transcribeDeepgramAudio(
 
   const url = new URL(`${baseUrl}/listen`);
   url.searchParams.set("model", model);
-  if (params.language?.trim()) url.searchParams.set("language", params.language.trim());
+  if (params.language?.trim()) {
+    url.searchParams.set("language", params.language.trim());
+  }
   if (params.query) {
     for (const [key, value] of Object.entries(params.query)) {
-      if (value === undefined) continue;
+      if (value === undefined) {
+        continue;
+      }
       url.searchParams.set(key, String(value));
     }
   }

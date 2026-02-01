@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   GroupChatSchema,
@@ -30,7 +29,9 @@ export const HeartbeatSchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    if (!val.every) return;
+    if (!val.every) {
+      return;
+    }
     try {
       parseDurationMs(val.every, { defaultUnit: "m" });
     } catch {
@@ -42,10 +43,14 @@ export const HeartbeatSchema = z
     }
 
     const active = val.activeHours;
-    if (!active) return;
+    if (!active) {
+      return;
+    }
     const timePattern = /^([01]\d|2[0-3]|24):([0-5]\d)$/;
     const validateTime = (raw: string | undefined, opts: { allow24: boolean }, path: string) => {
-      if (!raw) return;
+      if (!raw) {
+        return;
+      }
       if (!timePattern.test(raw)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -304,6 +309,7 @@ export const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
+    extraPaths: z.array(z.string()).optional(),
     experimental: z
       .object({
         sessionMemory: z.boolean().optional(),

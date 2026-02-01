@@ -1,8 +1,8 @@
 import type { TUI } from "@mariozechner/pi-tui";
 import type { ChatLog } from "./components/chat-log.js";
+import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
-import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
 type EventHandlerContext = {
   chatLog: ChatLog;
@@ -20,22 +20,32 @@ export function createEventHandlers(context: EventHandlerContext) {
   let lastSessionKey = state.currentSessionKey;
 
   const pruneRunMap = (runs: Map<string, number>) => {
-    if (runs.size <= 200) return;
+    if (runs.size <= 200) {
+      return;
+    }
     const keepUntil = Date.now() - 10 * 60 * 1000;
     for (const [key, ts] of runs) {
-      if (runs.size <= 150) break;
-      if (ts < keepUntil) runs.delete(key);
+      if (runs.size <= 150) {
+        break;
+      }
+      if (ts < keepUntil) {
+        runs.delete(key);
+      }
     }
     if (runs.size > 200) {
       for (const key of runs.keys()) {
         runs.delete(key);
-        if (runs.size <= 150) break;
+        if (runs.size <= 150) {
+          break;
+        }
       }
     }
   };
 
   const syncSessionKey = () => {
-    if (state.currentSessionKey === lastSessionKey) return;
+    if (state.currentSessionKey === lastSessionKey) {
+      return;
+    }
     lastSessionKey = state.currentSessionKey;
     finalizedRuns.clear();
     sessionRuns.clear();
@@ -55,13 +65,21 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const handleChatEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") return;
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
     const evt = payload as ChatEvent;
     syncSessionKey();
-    if (evt.sessionKey !== state.currentSessionKey) return;
+    if (evt.sessionKey !== state.currentSessionKey) {
+      return;
+    }
     if (finalizedRuns.has(evt.runId)) {
-      if (evt.state === "delta") return;
-      if (evt.state === "final") return;
+      if (evt.state === "delta") {
+        return;
+      }
+      if (evt.state === "final") {
+        return;
+      }
     }
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId) {
@@ -69,14 +87,18 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "delta") {
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
-      if (!displayText) return;
+      if (!displayText) {
+        return;
+      }
       chatLog.updateAssistant(displayText, evt.runId);
       setActivityStatus("streaming");
     }
     if (evt.state === "final") {
       if (isCommandMessage(evt.message)) {
         const text = extractTextFromMessage(evt.message);
-        if (text) chatLog.addSystem(text);
+        if (text) {
+          chatLog.addSystem(text);
+        }
         streamAssembler.drop(evt.runId);
         noteFinalizedRun(evt.runId);
         state.activeChatRunId = null;
@@ -120,19 +142,25 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const handleAgentEvent = (payload: unknown) => {
-    if (!payload || typeof payload !== "object") return;
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
     const evt = payload as AgentEvent;
     syncSessionKey();
     // Agent events (tool streaming, lifecycle) are emitted per-run. Filter against the
     // active chat run id, not the session id.
     const isActiveRun = evt.runId === state.activeChatRunId;
-    if (!isActiveRun && !sessionRuns.has(evt.runId)) return;
+    if (!isActiveRun && !sessionRuns.has(evt.runId)) {
+      return;
+    }
     if (evt.stream === "tool") {
       const data = evt.data ?? {};
       const phase = asString(data.phase, "");
       const toolCallId = asString(data.toolCallId, "");
       const toolName = asString(data.name, "tool");
-      if (!toolCallId) return;
+      if (!toolCallId) {
+        return;
+      }
       if (phase === "start") {
         chatLog.startTool(toolCallId, toolName, data.args);
       } else if (phase === "update") {
@@ -148,11 +176,19 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.stream === "lifecycle") {
-      if (!isActiveRun) return;
+      if (!isActiveRun) {
+        return;
+      }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
-      if (phase === "start") setActivityStatus("running");
-      if (phase === "end") setActivityStatus("idle");
-      if (phase === "error") setActivityStatus("error");
+      if (phase === "start") {
+        setActivityStatus("running");
+      }
+      if (phase === "end") {
+        setActivityStatus("idle");
+      }
+      if (phase === "error") {
+        setActivityStatus("error");
+      }
       tui.requestRender();
     }
   };

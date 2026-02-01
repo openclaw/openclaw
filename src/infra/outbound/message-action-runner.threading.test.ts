@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 
 const mocks = vi.hoisted(() => ({
   executeSendAction: vi.fn(),
@@ -39,7 +38,7 @@ const slackConfig = {
       appToken: "xapp-test",
     },
   },
-} as MoltbotConfig;
+} as OpenClawConfig;
 
 describe("runMessageAction Slack threading", () => {
   beforeEach(async () => {

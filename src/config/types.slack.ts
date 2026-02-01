@@ -60,7 +60,7 @@ export type SlackActionConfig = {
 export type SlackSlashCommandConfig = {
   /** Enable handling for the configured slash command (default: false). */
   enabled?: boolean;
-  /** Slash command name (default: "clawd"). */
+  /** Slash command name (default: "openclaw"). */
   name?: string;
   /** Session key prefix for slash commands (default: "slack:slash"). */
   sessionPrefix?: string;

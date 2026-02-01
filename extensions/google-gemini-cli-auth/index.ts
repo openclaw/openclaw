@@ -1,13 +1,12 @@
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
-
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { loginGeminiCliOAuth } from "./oauth.js";
 
 const PROVIDER_ID = "google-gemini-cli";
 const PROVIDER_LABEL = "Gemini CLI OAuth";
 const DEFAULT_MODEL = "google-gemini-cli/gemini-3-pro-preview";
 const ENV_VARS = [
-  "CLAWDBOT_GEMINI_OAUTH_CLIENT_ID",
-  "CLAWDBOT_GEMINI_OAUTH_CLIENT_SECRET",
+  "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
+  "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
   "GEMINI_CLI_OAUTH_CLIENT_ID",
   "GEMINI_CLI_OAUTH_CLIENT_SECRET",
 ];
@@ -69,9 +68,7 @@ const geminiCliPlugin = {
                   },
                 },
                 defaultModel: DEFAULT_MODEL,
-                notes: [
-                  "If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID.",
-                ],
+                notes: ["If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID."],
               };
             } catch (err) {
               spin.stop("Gemini CLI OAuth failed");

@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
@@ -43,7 +42,7 @@ vi.mock("../media/store.js", async (importOriginal) => {
   };
 });
 
-const HOME = path.join(os.tmpdir(), `moltbot-inbound-media-${crypto.randomUUID()}`);
+const HOME = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}`);
 process.env.HOME = HOME;
 
 vi.mock("@whiskeysockets/baileys", async () => {
@@ -128,7 +127,9 @@ describe("web inbound media saves with extension", () => {
 
     // Allow a brief window for the async handler to fire on slower hosts.
     for (let i = 0; i < 50; i++) {
-      if (onMessage.mock.calls.length > 0) break;
+      if (onMessage.mock.calls.length > 0) {
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
@@ -179,7 +180,9 @@ describe("web inbound media saves with extension", () => {
     realSock.ev.emit("messages.upsert", upsert);
 
     for (let i = 0; i < 50; i++) {
-      if (onMessage.mock.calls.length > 0) break;
+      if (onMessage.mock.calls.length > 0) {
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
@@ -219,7 +222,9 @@ describe("web inbound media saves with extension", () => {
     realSock.ev.emit("messages.upsert", upsert);
 
     for (let i = 0; i < 50; i++) {
-      if (onMessage.mock.calls.length > 0) break;
+      if (onMessage.mock.calls.length > 0) {
+        break;
+      }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 

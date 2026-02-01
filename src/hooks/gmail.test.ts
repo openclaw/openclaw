@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type MoltbotConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
+import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
   buildDefaultHookUrl,
   buildTopicPath,
@@ -11,12 +11,12 @@ const baseConfig = {
   hooks: {
     token: "hook-token",
     gmail: {
-      account: "moltbot@gmail.com",
+      account: "openclaw@gmail.com",
       topic: "projects/demo/topics/gog-gmail-watch",
       pushToken: "push-token",
     },
   },
-} satisfies MoltbotConfig;
+} satisfies OpenClawConfig;
 
 describe("gmail hook config", () => {
   it("builds default hook url", () => {
@@ -37,7 +37,7 @@ describe("gmail hook config", () => {
     const result = resolveGmailHookRuntimeConfig(baseConfig, {});
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.account).toBe("moltbot@gmail.com");
+      expect(result.value.account).toBe("openclaw@gmail.com");
       expect(result.value.label).toBe("INBOX");
       expect(result.value.includeBody).toBe(true);
       expect(result.value.serve.port).toBe(8788);
@@ -50,7 +50,7 @@ describe("gmail hook config", () => {
       {
         hooks: {
           gmail: {
-            account: "moltbot@gmail.com",
+            account: "openclaw@gmail.com",
             topic: "projects/demo/topics/gog-gmail-watch",
             pushToken: "push-token",
           },
@@ -67,7 +67,7 @@ describe("gmail hook config", () => {
         hooks: {
           token: "hook-token",
           gmail: {
-            account: "moltbot@gmail.com",
+            account: "openclaw@gmail.com",
             topic: "projects/demo/topics/gog-gmail-watch",
             pushToken: "push-token",
             tailscale: { mode: "funnel" },
@@ -89,7 +89,7 @@ describe("gmail hook config", () => {
         hooks: {
           token: "hook-token",
           gmail: {
-            account: "moltbot@gmail.com",
+            account: "openclaw@gmail.com",
             topic: "projects/demo/topics/gog-gmail-watch",
             pushToken: "push-token",
             serve: { path: "/gmail-pubsub" },
@@ -112,7 +112,7 @@ describe("gmail hook config", () => {
         hooks: {
           token: "hook-token",
           gmail: {
-            account: "moltbot@gmail.com",
+            account: "openclaw@gmail.com",
             topic: "projects/demo/topics/gog-gmail-watch",
             pushToken: "push-token",
             serve: { path: "/custom" },
@@ -135,7 +135,7 @@ describe("gmail hook config", () => {
         hooks: {
           token: "hook-token",
           gmail: {
-            account: "moltbot@gmail.com",
+            account: "openclaw@gmail.com",
             topic: "projects/demo/topics/gog-gmail-watch",
             pushToken: "push-token",
             serve: { path: "/custom" },

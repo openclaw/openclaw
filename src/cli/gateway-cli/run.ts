@@ -1,7 +1,7 @@
-import fs from "node:fs";
-
 import type { Command } from "commander";
+import fs from "node:fs";
 import type { GatewayAuthMode } from "../../config/config.js";
+import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import {
   CONFIG_PATH,
   loadConfig,
@@ -10,7 +10,6 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
-import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
@@ -53,7 +52,7 @@ type GatewayRunOpts = {
 const gatewayLog = createSubsystemLogger("gateway");
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
-  const isDevProfile = process.env.CLAWDBOT_PROFILE?.trim().toLowerCase() === "dev";
+  const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {
     defaultRuntime.error("Use --reset with --dev.");
@@ -65,7 +64,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   setVerbose(Boolean(opts.verbose));
   if (opts.claudeCliLogs) {
     setConsoleSubsystemFilter(["agent/claude-cli"]);
-    process.env.CLAWDBOT_CLAUDE_CLI_LOG_OUTPUT = "1";
+    process.env.OPENCLAW_CLAUDE_CLI_LOG_OUTPUT = "1";
   }
   const wsLogRaw = (opts.compact ? "compact" : opts.wsLog) as string | undefined;
   const wsLogStyle: GatewayWsLogStyle =
@@ -82,11 +81,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   setGatewayWsLogStyle(wsLogStyle);
 
   if (opts.rawStream) {
-    process.env.CLAWDBOT_RAW_STREAM = "1";
+    process.env.OPENCLAW_RAW_STREAM = "1";
   }
   const rawStreamPath = toOptionString(opts.rawStreamPath);
   if (rawStreamPath) {
-    process.env.CLAWDBOT_RAW_STREAM_PATH = rawStreamPath;
+    process.env.OPENCLAW_RAW_STREAM_PATH = rawStreamPath;
   }
 
   if (devMode) {
@@ -134,7 +133,9 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
   if (opts.token) {
     const token = toOptionString(opts.token);
-    if (token) process.env.CLAWDBOT_GATEWAY_TOKEN = token;
+    if (token) {
+      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+    }
   }
   const authModeRaw = toOptionString(opts.auth);
   const authMode: GatewayAuthMode | null =
@@ -163,7 +164,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
       defaultRuntime.error(
-        `Missing config. Run \`${formatCliCommand("moltbot setup")}\` or set gateway.mode=local (or pass --allow-unconfigured).`,
+        `Missing config. Run \`${formatCliCommand("openclaw setup")}\` or set gateway.mode=local (or pass --allow-unconfigured).`,
       );
     } else {
       defaultRuntime.error(
@@ -220,7 +221,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.error(
       [
         "Gateway auth is set to token, but no token is configured.",
-        "Set gateway.auth.token (or CLAWDBOT_GATEWAY_TOKEN), or pass --token.",
+        "Set gateway.auth.token (or OPENCLAW_GATEWAY_TOKEN), or pass --token.",
         ...authHints,
       ]
         .filter(Boolean)
@@ -233,7 +234,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.error(
       [
         "Gateway auth is set to password, but no password is configured.",
-        "Set gateway.auth.password (or CLAWDBOT_GATEWAY_PASSWORD), or pass --password.",
+        "Set gateway.auth.password (or OPENCLAW_GATEWAY_PASSWORD), or pass --password.",
         ...authHints,
       ]
         .filter(Boolean)
@@ -246,7 +247,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.error(
       [
         `Refusing to bind gateway to ${bind} without auth.`,
-        "Set gateway.auth.token/password (or CLAWDBOT_GATEWAY_TOKEN/CLAWDBOT_GATEWAY_PASSWORD) or pass --token/--password.",
+        "Set gateway.auth.token/password (or OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD) or pass --token/--password.",
         ...authHints,
       ]
         .filter(Boolean)
@@ -286,7 +287,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     ) {
       const errMessage = describeUnknownError(err);
       defaultRuntime.error(
-        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("moltbot gateway stop")}`,
+        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
       );
       try {
         const diagnostics = await inspectPortUsage(port);
@@ -316,7 +317,7 @@ export function addGatewayRunCommand(cmd: Command): Command {
     )
     .option(
       "--token <token>",
-      "Shared token required in connect.params.auth.token (default: CLAWDBOT_GATEWAY_TOKEN env if set)",
+      "Shared token required in connect.params.auth.token (default: OPENCLAW_GATEWAY_TOKEN env if set)",
     )
     .option("--auth <mode>", 'Gateway auth mode ("token"|"password")')
     .option("--password <password>", "Password for auth mode=password")

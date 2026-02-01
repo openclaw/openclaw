@@ -1,0 +1,9 @@
+{
+  "id": "nostr",
+  "channels": ["nostr"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

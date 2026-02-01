@@ -1,6 +1,11 @@
 import type { Command } from "commander";
-
 import { danger } from "../globals.js";
+import {
+  type GmailRunOptions,
+  type GmailSetupOptions,
+  runGmailService,
+  runGmailSetup,
+} from "../hooks/gmail-ops.js";
 import {
   DEFAULT_GMAIL_LABEL,
   DEFAULT_GMAIL_MAX_BYTES,
@@ -11,12 +16,6 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
-import {
-  type GmailRunOptions,
-  type GmailSetupOptions,
-  runGmailService,
-  runGmailSetup,
-} from "../hooks/gmail-ops.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -28,21 +27,21 @@ export function registerWebhooksCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/webhooks", "docs.molt.bot/cli/webhooks")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/webhooks", "docs.openclaw.ai/cli/webhooks")}\n`,
     );
 
   const gmail = webhooks.command("gmail").description("Gmail Pub/Sub hooks (via gogcli)");
 
   gmail
     .command("setup")
-    .description("Configure Gmail watch + Pub/Sub + Moltbot hooks")
+    .description("Configure Gmail watch + Pub/Sub + OpenClaw hooks")
     .requiredOption("--account <email>", "Gmail account to watch")
     .option("--project <id>", "GCP project id (OAuth client owner)")
     .option("--topic <name>", "Pub/Sub topic name", DEFAULT_GMAIL_TOPIC)
     .option("--subscription <name>", "Pub/Sub subscription name", DEFAULT_GMAIL_SUBSCRIPTION)
     .option("--label <label>", "Gmail label to watch", DEFAULT_GMAIL_LABEL)
-    .option("--hook-url <url>", "Moltbot hook URL")
-    .option("--hook-token <token>", "Moltbot hook token")
+    .option("--hook-url <url>", "OpenClaw hook URL")
+    .option("--hook-token <token>", "OpenClaw hook token")
     .option("--push-token <token>", "Push token for gog watch serve")
     .option("--bind <host>", "gog watch serve bind host", DEFAULT_GMAIL_SERVE_BIND)
     .option("--port <port>", "gog watch serve port", String(DEFAULT_GMAIL_SERVE_PORT))
@@ -79,8 +78,8 @@ export function registerWebhooksCli(program: Command) {
     .option("--topic <topic>", "Pub/Sub topic path (projects/.../topics/..)")
     .option("--subscription <name>", "Pub/Sub subscription name")
     .option("--label <label>", "Gmail label to watch")
-    .option("--hook-url <url>", "Moltbot hook URL")
-    .option("--hook-token <token>", "Moltbot hook token")
+    .option("--hook-url <url>", "OpenClaw hook URL")
+    .option("--hook-token <token>", "OpenClaw hook token")
     .option("--push-token <token>", "Push token for gog watch serve")
     .option("--bind <host>", "gog watch serve bind host")
     .option("--port <port>", "gog watch serve port")
@@ -108,7 +107,9 @@ export function registerWebhooksCli(program: Command) {
 function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions {
   const accountRaw = raw.account;
   const account = typeof accountRaw === "string" ? accountRaw.trim() : "";
-  if (!account) throw new Error("--account is required");
+  if (!account) {
+    throw new Error("--account is required");
+  }
   return {
     account,
     project: stringOption(raw.project),
@@ -154,19 +155,27 @@ function parseGmailRunOptions(raw: Record<string, unknown>): GmailRunOptions {
 }
 
 function stringOption(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+  if (typeof value !== "string") {
+    return undefined;
+  }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
 }
 
 function numberOption(value: unknown): number | undefined {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
   const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n) || n <= 0) return undefined;
+  if (!Number.isFinite(n) || n <= 0) {
+    return undefined;
+  }
   return Math.floor(n);
 }
 
 function booleanOption(value: unknown): boolean | undefined {
-  if (value === undefined || value === null) return undefined;
+  if (value === undefined || value === null) {
+    return undefined;
+  }
   return Boolean(value);
 }

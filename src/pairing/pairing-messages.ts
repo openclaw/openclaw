@@ -1,5 +1,5 @@
-import { formatCliCommand } from "../cli/command-format.js";
 import type { PairingChannel } from "./pairing-store.js";
+import { formatCliCommand } from "../cli/command-format.js";
 
 export function buildPairingReply(params: {
   channel: PairingChannel;
@@ -8,13 +8,13 @@ export function buildPairingReply(params: {
 }): string {
   const { channel, idLine, code } = params;
   return [
-    "Moltbot: access not configured.",
+    "OpenClaw: access not configured.",
     "",
     idLine,
     "",
     `Pairing code: ${code}`,
     "",
     "Ask the bot owner to approve with:",
-    formatCliCommand(`moltbot pairing approve ${channel} <code>`),
+    formatCliCommand(`openclaw pairing approve ${channel} <code>`),
   ].join("\n");
 }

@@ -1,13 +1,15 @@
 ---
 summary: "Plugin manifest + JSON schema requirements (strict config validation)"
 read_when:
-  - You are building a Moltbot plugin
+  - You are building a OpenClaw plugin
   - You need to ship a plugin config schema or debug plugin validation errors
+title: "Plugin Manifest"
 ---
-# Plugin manifest (moltbot.plugin.json)
 
-Every plugin **must** ship a `moltbot.plugin.json` file in the **plugin root**.
-Moltbot uses this manifest to validate configuration **without executing plugin
+# Plugin manifest (openclaw.plugin.json)
+
+Every plugin **must** ship a `openclaw.plugin.json` file in the **plugin root**.
+OpenClaw uses this manifest to validate configuration **without executing plugin
 code**. Missing or invalid manifests are treated as plugin errors and block
 config validation.
 
@@ -27,10 +29,12 @@ See the full plugin system guide: [Plugins](/plugin).
 ```
 
 Required keys:
+
 - `id` (string): canonical plugin id.
 - `configSchema` (object): JSON Schema for plugin config (inline).
 
 Optional keys:
+
 - `kind` (string): plugin kind (example: `"memory"`).
 - `channels` (array): channel ids registered by this plugin (example: `["matrix"]`).
 - `providers` (array): provider ids registered by this plugin.
@@ -64,4 +68,4 @@ Optional keys:
   discovery + validation.
 - If your plugin depends on native modules, document the build steps and any
   package-manager allowlist requirements (for example, pnpm `allow-build-scripts`
-  + `pnpm rebuild <package>`).
+  - `pnpm rebuild <package>`).

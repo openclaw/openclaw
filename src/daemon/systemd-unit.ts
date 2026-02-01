@@ -1,14 +1,20 @@
 function systemdEscapeArg(value: string): string {
-  if (!/[\\s"\\\\]/.test(value)) return value;
+  if (!/[\\s"\\\\]/.test(value)) {
+    return value;
+  }
   return `"${value.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"')}"`;
 }
 
 function renderEnvLines(env: Record<string, string | undefined> | undefined): string[] {
-  if (!env) return [];
+  if (!env) {
+    return [];
+  }
   const entries = Object.entries(env).filter(
     ([, value]) => typeof value === "string" && value.trim(),
   );
-  if (entries.length === 0) return [];
+  if (entries.length === 0) {
+    return [];
+  }
   return entries.map(
     ([key, value]) => `Environment=${systemdEscapeArg(`${key}=${value?.trim() ?? ""}`)}`,
   );
@@ -26,7 +32,7 @@ export function buildSystemdUnit({
   environment?: Record<string, string | undefined>;
 }): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
-  const descriptionLine = `Description=${description?.trim() || "Moltbot Gateway"}`;
+  const descriptionLine = `Description=${description?.trim() || "OpenClaw Gateway"}`;
   const workingDirLine = workingDirectory
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
@@ -85,16 +91,22 @@ export function parseSystemdExecStart(value: string): string[] {
     }
     current += char;
   }
-  if (current) args.push(current);
+  if (current) {
+    args.push(current);
+  }
   return args;
 }
 
 export function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {
   const trimmed = raw.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
 
   const unquoted = (() => {
-    if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) return trimmed;
+    if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) {
+      return trimmed;
+    }
     let out = "";
     let escapeNext = false;
     for (const ch of trimmed.slice(1, -1)) {
@@ -113,9 +125,13 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
   })();
 
   const eq = unquoted.indexOf("=");
-  if (eq <= 0) return null;
+  if (eq <= 0) {
+    return null;
+  }
   const key = unquoted.slice(0, eq).trim();
-  if (!key) return null;
+  if (!key) {
+    return null;
+  }
   const value = unquoted.slice(eq + 1);
   return { key, value };
 }

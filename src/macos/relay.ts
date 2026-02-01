@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import process from "node:process";
 
-declare const __CLAWDBOT_VERSION__: string | undefined;
+declare const __OPENCLAW_VERSION__: string | undefined;
 
 const BUNDLED_VERSION =
-  (typeof __CLAWDBOT_VERSION__ === "string" && __CLAWDBOT_VERSION__) ||
-  process.env.CLAWDBOT_BUNDLED_VERSION ||
+  (typeof __OPENCLAW_VERSION__ === "string" && __OPENCLAW_VERSION__) ||
+  process.env.OPENCLAW_BUNDLED_VERSION ||
   "0.0.0";
 
 function hasFlag(args: string[], flag: string): boolean {
@@ -15,7 +15,9 @@ function hasFlag(args: string[], flag: string): boolean {
 async function patchBunLongForProtobuf(): Promise<void> {
   // Bun ships a global `Long` that protobufjs detects, but it is not long.js and
   // misses critical APIs (fromBits, ...). Baileys WAProto expects long.js.
-  if (typeof process.versions.bun !== "string") return;
+  if (typeof process.versions.bun !== "string") {
+    return;
+  }
   const mod = await import("long");
   const Long = (mod as unknown as { default?: unknown }).default ?? mod;
   (globalThis as unknown as { Long?: unknown }).Long = Long;
@@ -47,8 +49,8 @@ async function main() {
   const { loadDotEnv } = await import("../infra/dotenv.js");
   loadDotEnv({ quiet: true });
 
-  const { ensureMoltbotCliOnPath } = await import("../infra/path-env.js");
-  ensureMoltbotCliOnPath();
+  const { ensureOpenClawCliOnPath } = await import("../infra/path-env.js");
+  ensureOpenClawCliOnPath();
 
   const { enableConsoleCapture } = await import("../logging.js");
   enableConsoleCapture();
@@ -64,7 +66,7 @@ async function main() {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
-    console.error("[moltbot] Uncaught exception:", formatUncaughtError(error));
+    console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });
 
@@ -72,6 +74,9 @@ async function main() {
 }
 
 void main().catch((err) => {
-  console.error("[moltbot] Relay failed:", err instanceof Error ? (err.stack ?? err.message) : err);
+  console.error(
+    "[openclaw] Relay failed:",
+    err instanceof Error ? (err.stack ?? err.message) : err,
+  );
   process.exit(1);
 });
