@@ -65,6 +65,19 @@ const QWEN_PORTAL_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const AIHUBMIX_BASE_URL = "https://aihubmix.com/v1";
+export const AIHUBMIX_DEFAULT_MODEL_ID = "gpt-5.2";
+const AIHUBMIX_DEFAULT_CONTEXT_WINDOW = 400000;
+const AIHUBMIX_DEFAULT_MAX_TOKENS = 128000;
+const AIHUBMIX_GENERIC_CONTEXT_WINDOW = 128000;
+const AIHUBMIX_GENERIC_MAX_TOKENS = 8192;
+const AIHUBMIX_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const OLLAMA_API_BASE_URL = "http://127.0.0.1:11434";
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -350,6 +363,69 @@ function buildQwenPortalProvider(): ProviderConfig {
   };
 }
 
+export function buildAihubmixProvider(): ProviderConfig {
+  return {
+    baseUrl: AIHUBMIX_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: AIHUBMIX_DEFAULT_MODEL_ID,
+        name: "GPT-5.2",
+        reasoning: true,
+        input: ["text"],
+        cost: AIHUBMIX_DEFAULT_COST,
+        contextWindow: AIHUBMIX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AIHUBMIX_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "claude-opus-4-5",
+        name: "Claude Opus 4.5",
+        reasoning: false,
+        input: ["text"],
+        cost: AIHUBMIX_DEFAULT_COST,
+        contextWindow: AIHUBMIX_GENERIC_CONTEXT_WINDOW,
+        maxTokens: AIHUBMIX_GENERIC_MAX_TOKENS,
+      },
+      {
+        id: "claude-sonnet-4-5",
+        name: "Claude Sonnet 4.5",
+        reasoning: false,
+        input: ["text"],
+        cost: AIHUBMIX_DEFAULT_COST,
+        contextWindow: AIHUBMIX_GENERIC_CONTEXT_WINDOW,
+        maxTokens: AIHUBMIX_GENERIC_MAX_TOKENS,
+      },
+      {
+        id: "gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        reasoning: false,
+        input: ["text"],
+        cost: AIHUBMIX_DEFAULT_COST,
+        contextWindow: AIHUBMIX_GENERIC_CONTEXT_WINDOW,
+        maxTokens: AIHUBMIX_GENERIC_MAX_TOKENS,
+      },
+      {
+        id: "glm-4.7-flash-free",
+        name: "GLM-4.7 Flash Free",
+        reasoning: false,
+        input: ["text"],
+        cost: AIHUBMIX_DEFAULT_COST,
+        contextWindow: AIHUBMIX_GENERIC_CONTEXT_WINDOW,
+        maxTokens: AIHUBMIX_GENERIC_MAX_TOKENS,
+      },
+      {
+        id: "coding-minimax-m2.1-free",
+        name: "Coding MiniMax M2.1 Free",
+        reasoning: false,
+        input: ["text"],
+        cost: AIHUBMIX_DEFAULT_COST,
+        contextWindow: AIHUBMIX_GENERIC_CONTEXT_WINDOW,
+        maxTokens: AIHUBMIX_GENERIC_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 function buildSyntheticProvider(): ProviderConfig {
   return {
     baseUrl: SYNTHETIC_BASE_URL,
@@ -451,6 +527,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "xiaomi", store: authStore });
   if (xiaomiKey) {
     providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
+  }
+
+  const aihubmixKey =
+    resolveEnvApiKeyVarName("aihubmix") ??
+    resolveApiKeyFromProfiles({ provider: "aihubmix", store: authStore });
+  if (aihubmixKey) {
+    providers.aihubmix = { ...buildAihubmixProvider(), apiKey: aihubmixKey };
   }
 
   // Ollama provider - only add if explicitly configured

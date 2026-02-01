@@ -9,6 +9,7 @@ export type AuthChoiceOption = {
 
 export type AuthChoiceGroupId =
   | "openai"
+  | "aihubmix"
   | "anthropic"
   | "google"
   | "copilot"
@@ -41,6 +42,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "OpenAI",
     hint: "Codex OAuth + API key",
     choices: ["openai-codex", "openai-api-key"],
+  },
+  {
+    value: "aihubmix",
+    label: "AIHubMix",
+    hint: "OpenAI-compatible API key",
+    choices: ["aihubmix-api-key"],
   },
   {
     value: "anthropic",
@@ -141,6 +148,7 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "chutes", label: "Chutes (OAuth)" });
   options.push({ value: "openai-api-key", label: "OpenAI API key" });
+  options.push({ value: "aihubmix-api-key", label: "AIHubMix API key" });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
   options.push({
     value: "ai-gateway-api-key",

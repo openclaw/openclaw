@@ -11,6 +11,7 @@ import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default
 import {
   applyAuthProfileConfig,
   applyKimiCodeConfig,
+  applyAihubmixConfig,
   applyMinimaxApiConfig,
   applyMinimaxConfig,
   applyMoonshotConfig,
@@ -24,6 +25,7 @@ import {
   setAnthropicApiKey,
   setGeminiApiKey,
   setKimiCodingApiKey,
+  setAihubmixApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
@@ -212,6 +214,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXiaomiConfig(nextConfig);
+  }
+
+  if (authChoice === "aihubmix-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "aihubmix",
+      cfg: baseConfig,
+      flagValue: opts.aihubmixApiKey,
+      flagName: "--aihubmix-api-key",
+      envVar: "AIHUBMIX_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setAihubmixApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "aihubmix:default",
+      provider: "aihubmix",
+      mode: "api_key",
+    });
+    return applyAihubmixConfig(nextConfig);
   }
 
   if (authChoice === "openai-api-key") {

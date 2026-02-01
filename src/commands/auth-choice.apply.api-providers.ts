@@ -15,6 +15,8 @@ import {
   applyAuthProfileConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
+  applyAihubmixConfig,
+  applyAihubmixProviderConfig,
   applyMoonshotConfig,
   applyMoonshotProviderConfig,
   applyOpencodeZenConfig,
@@ -33,12 +35,14 @@ import {
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  AIHUBMIX_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   setGeminiApiKey,
   setKimiCodingApiKey,
+  setAihubmixApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
@@ -86,6 +90,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "kimi-code-api-key";
     } else if (params.opts.tokenProvider === "google") {
       authChoice = "gemini-api-key";
+    } else if (params.opts.tokenProvider === "aihubmix") {
+      authChoice = "aihubmix-api-key";
     } else if (params.opts.tokenProvider === "zai") {
       authChoice = "zai-api-key";
     } else if (params.opts.tokenProvider === "xiaomi") {
@@ -486,6 +492,56 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyXiaomiConfig,
         applyProviderConfig: applyXiaomiProviderConfig,
         noteDefault: XIAOMI_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "aihubmix-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "aihubmix") {
+      await setAihubmixApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    const envKey = resolveEnvApiKey("aihubmix");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing AIHUBMIX_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setAihubmixApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter AIHubMix API key",
+        validate: validateApiKeyInput,
+      });
+      await setAihubmixApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "aihubmix:default",
+      provider: "aihubmix",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: AIHUBMIX_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyAihubmixConfig,
+        applyProviderConfig: applyAihubmixProviderConfig,
+        noteDefault: AIHUBMIX_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });
