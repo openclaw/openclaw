@@ -51,6 +51,9 @@ jobs:
             routing-isolation routing-precedence routing-identitylinks routing-identity-transitive routing-identity-symmetry routing-identity-channel-override \
             routing-thread-parent discord-pluralkit \
             ingress-retry session-key-stability session-explosion-bound config-normalization \
+            queue-drain delivery-route-stability delivery-pipeline retry-termination retry-eventual-success \
+            no-cross-stream multi-event-eventual-emission \
+            dedupe-collision-fallback crash-restart-dedupe two-worker-dedupe openclaw-session-key-conformance \
             group-alias-check
 
       - name: Model check (negative suite, expected violations)
@@ -69,7 +72,10 @@ jobs:
             ingress-gating-negative ingress-idempotency-negative ingress-dedupe-fallback-negative ingress-trace-negative ingress-trace2-negative \
             routing-isolation-negative routing-precedence-negative routing-identitylinks-negative routing-identity-transitive-negative routing-identity-symmetry-negative routing-identity-channel-override-negative \
             routing-thread-parent-negative discord-pluralkit-negative \
-            ingress-retry-negative session-key-stability-negative config-normalization-negative
+            ingress-retry-negative session-key-stability-negative config-normalization-negative \
+            queue-drain delivery-route-stability-negative delivery-pipeline-negative retry-termination-negative retry-eventual-success-negative \
+            no-cross-stream-negative multi-event-eventual-emission-negative \
+            dedupe-collision-fallback-negative crash-restart-dedupe-negative two-worker-dedupe-negative openclaw-session-key-conformance-negative
 
       - name: Compute drift
         id: drift
