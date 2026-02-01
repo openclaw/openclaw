@@ -1,11 +1,17 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ChannelMessageActionContext } from "../../types.js";
 import {
+  jsonResult,
   readNumberParam,
   readStringArrayParam,
   readStringParam,
 } from "../../../../agents/tools/common.js";
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
+import {
+  updatePresenceDiscord,
+  type DiscordActivityType,
+  type DiscordPresenceStatus,
+} from "../../../../discord/send.presence.js";
 import { resolveDiscordChannelId } from "../../../../discord/targets.js";
 import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 
@@ -216,6 +222,29 @@ export async function handleDiscordMessageAction(
       },
       cfg,
     );
+  }
+
+  if (action === "set-presence") {
+    const status = readStringParam(params, "status") as DiscordPresenceStatus | undefined;
+    const activityType = readStringParam(params, "type") as DiscordActivityType | undefined;
+    const activityName = readStringParam(params, "name");
+    const activityUrl = readStringParam(params, "url");
+    const afk = typeof params.afk === "boolean" ? params.afk : undefined;
+
+    const result = updatePresenceDiscord({
+      accountId: accountId ?? undefined,
+      status,
+      activityType,
+      activityName: activityName ?? undefined,
+      activityUrl: activityUrl ?? undefined,
+      afk,
+    });
+
+    if (!result.success) {
+      throw new Error(result.error ?? "Failed to update presence");
+    }
+
+    return jsonResult(result);
   }
 
   const adminResult = await tryHandleDiscordMessageActionGuildAdmin({

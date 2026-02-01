@@ -20,6 +20,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveDiscordAccount } from "../accounts.js";
+import { registerDiscordClient, unregisterDiscordClient } from "../client-registry.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import { fetchDiscordApplicationId } from "../probe.js";
@@ -591,6 +592,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   }
 
   const gateway = client.getPlugin<GatewayPlugin>("gateway");
+  if (gateway) {
+    registerDiscordClient(account.accountId, client, gateway);
+  }
   const gatewayEmitter = getDiscordGatewayEmitter(gateway);
   const stopGatewayLogging = attachDiscordGatewayLogging({
     emitter: gatewayEmitter,
@@ -666,6 +670,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     if (execApprovalsHandler) {
       await execApprovalsHandler.stop();
     }
+    unregisterDiscordClient(account.accountId);
   }
 }
 
