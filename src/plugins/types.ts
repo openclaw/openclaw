@@ -360,7 +360,14 @@ export type PluginHookBeforePromptBuildResult = {
 export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
   /** Optional because legacy hook can run in pre-session phase. */
-  messages?: unknown[];
+  messages?: AgentMessage[];
+  // Expose full context for monitoring/capture plugins
+  systemPrompt?: string;
+  tools?: Array<{
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  }>;
 };
 
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
