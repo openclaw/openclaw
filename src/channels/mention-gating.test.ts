@@ -34,6 +34,18 @@ describe("resolveMentionGating", () => {
     });
     expect(res.shouldSkip).toBe(false);
   });
+
+  it("does not skip when implicitMention is true (thread auto-follow)", () => {
+    const res = resolveMentionGating({
+      requireMention: true,
+      canDetectMention: true,
+      wasMentioned: false,
+      implicitMention: true,
+      shouldBypassMention: false,
+    });
+    expect(res.effectiveWasMentioned).toBe(true);
+    expect(res.shouldSkip).toBe(false);
+  });
 });
 
 describe("resolveMentionGatingWithBypass", () => {
