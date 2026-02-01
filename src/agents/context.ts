@@ -36,5 +36,39 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   }
   // Best-effort: kick off loading, but don't block.
   void loadPromise;
-  return MODEL_CACHE.get(modelId);
+
+  // Try exact match first (only if it contains a slash, i.e., already has provider prefix)
+  if (modelId.includes("/")) {
+    const exact = MODEL_CACHE.get(modelId);
+    if (exact !== undefined) {
+      return exact;
+    }
+  }
+
+  // For bare model names (no slash), try common provider prefixes first
+  // to prefer our custom config over built-in defaults.
+  // Priority order: prefer anthropic, then openai, then google
+  const prefixes = ["anthropic", "openai", "google"];
+  for (const prefix of prefixes) {
+    const prefixedKey = `${prefix}/${modelId}`;
+    const prefixed = MODEL_CACHE.get(prefixedKey);
+    if (prefixed !== undefined) {
+      return prefixed;
+    }
+  }
+
+  // Fallback to exact match for bare model names (built-in defaults)
+  const exact = MODEL_CACHE.get(modelId);
+  if (exact !== undefined) {
+    return exact;
+  }
+
+  // Final fallback: any matching suffix
+  for (const [key, value] of MODEL_CACHE) {
+    if (key.endsWith(`/${modelId}`)) {
+      return value;
+    }
+  }
+
+  return undefined;
 }
