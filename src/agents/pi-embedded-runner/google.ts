@@ -350,6 +350,10 @@ export async function sanitizeSessionHistory(params: {
     ? sanitizeToolUseResultPairing(sanitizedThinking)
     : sanitizedThinking;
 
+  // Ensure every toolCall/toolUse block has an arguments/input field (default {}).
+  // Some models omit the field for optional-args tools, which causes API rejections.
+  const normalizedToolArgs = normalizeToolCallArguments(repairedTools);
+
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
@@ -364,8 +368,8 @@ export async function sanitizeSessionHistory(params: {
     : false;
   const sanitizedOpenAI =
     isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(repairedTools)
-      : repairedTools;
+      ? downgradeOpenAIReasoningBlocks(normalizedToolArgs)
+      : normalizedToolArgs;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
@@ -386,4 +390,49 @@ export async function sanitizeSessionHistory(params: {
     sessionManager: params.sessionManager,
     sessionId: params.sessionId,
   }).messages;
+}
+
+/**
+ * Ensure every toolCall/toolUse block has its arguments/input field.
+ * Some models omit the field entirely for tools with only optional parameters,
+ * which causes API rejections ("input: Field required").
+ */
+function normalizeToolCallArguments(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const out: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "assistant") {
+      out.push(msg);
+      continue;
+    }
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    const content = assistant.content;
+    if (!Array.isArray(content)) {
+      out.push(msg);
+      continue;
+    }
+    let blockChanged = false;
+    const nextContent = content.map((block) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const rec = block as unknown as Record<string, unknown>;
+      if (rec.type === "toolCall" && rec.arguments === undefined) {
+        blockChanged = true;
+        return { ...rec, arguments: {} };
+      }
+      if (rec.type === "toolUse" && rec.input === undefined) {
+        blockChanged = true;
+        return { ...rec, input: {} };
+      }
+      return block;
+    });
+    if (blockChanged) {
+      changed = true;
+      out.push({ ...assistant, content: nextContent } as AgentMessage);
+    } else {
+      out.push(msg);
+    }
+  }
+  return changed ? out : messages;
 }

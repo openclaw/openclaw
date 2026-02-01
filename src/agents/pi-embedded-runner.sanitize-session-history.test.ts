@@ -206,6 +206,52 @@ describe("sanitizeSessionHistory", () => {
     expect(result).toEqual(messages);
   });
 
+  it("normalizes toolCall blocks missing arguments to have empty object", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          // Missing arguments field entirely (the bug in #4345)
+          { type: "toolCall", id: "call_1", name: "session_status" } as never,
+          { type: "toolCall", id: "call_2", name: "sessions_list", arguments: { limit: 10 } },
+        ],
+      },
+      // Include matching tool results so repair doesn't add synthetic ones
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "session_status",
+        content: [{ type: "text", text: "ok" }],
+      } as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "sessions_list",
+        content: [{ type: "text", text: "ok" }],
+      } as AgentMessage,
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result).toHaveLength(3);
+    const assistant = result[0] as {
+      role: string;
+      content: Array<{ type: string; arguments?: unknown }>;
+    };
+    // The first tool call should now have arguments: {}
+    expect(assistant.content[0]).toHaveProperty("arguments", {});
+    // The second tool call should keep its original arguments
+    expect(assistant.content[1]).toHaveProperty("arguments", { limit: 10 });
+  });
+
   it("downgrades openai reasoning only when the model changes", async () => {
     const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [
       {
