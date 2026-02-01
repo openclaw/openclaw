@@ -126,7 +126,7 @@ type TelegramDynamicAgentsMode = "off" | "dm" | "group" | "dm+group";
  * Resolve Telegram dynamic agent mode (off/dm/group/dm+group).
  */
 function resolveTelegramDynamicAgentsMode(telegramCfg?: {
-  dynamicAgents?: TelegramDynamicAgentsMode | string;
+  dynamicAgents?: string | undefined;
 }): TelegramDynamicAgentsMode {
   const raw = telegramCfg?.dynamicAgents;
   const normalized = typeof raw === "string" ? raw.trim().toLowerCase() : "";
