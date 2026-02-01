@@ -108,7 +108,10 @@ Jobs can optionally auto-delete after a successful one-shot run via `deleteAfter
 
 Cron supports three schedule kinds:
 
-- `at`: one-shot timestamp (ms since epoch). Gateway accepts ISO 8601 and coerces to UTC.
+- `at`: one-shot at an absolute time. Prefer human-readable `at` (with optional `tz`) so agents and tools do not compute Unix timestamps:
+  - `at`: ISO 8601 string (e.g. `2026-02-01T23:00:00+08:00`) or local datetime without offset (e.g. `2026-02-01 23:00:00`).
+  - `tz`: optional IANA timezone (e.g. `Asia/Shanghai`); used only when `at` has no trailing `Z` or offset.
+  - Legacy: `atMs` (number) epoch milliseconds.
 - `every`: fixed interval (ms).
 - `cron`: 5-field cron expression with optional IANA timezone.
 
@@ -220,23 +223,24 @@ Prefixed targets like `telegram:...` / `telegram:group:...` are also accepted:
 ## JSON schema for tool calls
 
 Use these shapes when calling Gateway `cron.*` tools directly (agent tool calls or RPC).
-CLI flags accept human durations like `20m`, but tool calls use epoch milliseconds for
-`atMs` and `everyMs` (ISO timestamps are accepted for `at` times).
+CLI flags accept human durations like `20m`. For one-shot tool calls, prefer human-readable `at` (ISO or `YYYY-MM-DD HH:mm:ss`) with optional `tz` (IANA); legacy `atMs` is epoch milliseconds.
 
 ### cron.add params
 
-One-shot, main session job (system event):
+One-shot, main session job (system event). Prefer human-readable `at` so agents do not compute Unix timestamps:
 
 ```json
 {
   "name": "Reminder",
-  "schedule": { "kind": "at", "atMs": 1738262400000 },
+  "schedule": { "kind": "at", "at": "2026-02-01T23:00:00+08:00" },
   "sessionTarget": "main",
   "wakeMode": "now",
   "payload": { "kind": "systemEvent", "text": "Reminder text" },
   "deleteAfterRun": true
 }
 ```
+
+Or with explicit timezone: `"schedule": { "kind": "at", "at": "2026-02-01 23:00:00", "tz": "Asia/Shanghai" }`.
 
 Recurring, isolated job with delivery:
 
@@ -260,8 +264,9 @@ Recurring, isolated job with delivery:
 
 Notes:
 
-- `schedule.kind`: `at` (`atMs`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
-- `atMs` and `everyMs` are epoch milliseconds.
+- `schedule.kind`: `at` (human-readable `at` + optional `tz`, or legacy `atMs`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
+- For one-shot: prefer `at` (ISO or `YYYY-MM-DD HH:mm:ss`) with optional `tz` (IANA); legacy `atMs` is epoch milliseconds.
+- `everyMs` is epoch milliseconds.
 - `sessionTarget` must be `"main"` or `"isolated"` and must match `payload.kind`.
 - Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun`, `isolation`.
 - `wakeMode` defaults to `"next-heartbeat"` when omitted.
