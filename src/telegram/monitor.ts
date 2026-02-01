@@ -82,6 +82,7 @@ const NETWORK_ERROR_SNIPPETS = [
   "fetch failed",
   "network",
   "timeout",
+  "timed out",
   "socket",
   "econnreset",
   "econnrefused",

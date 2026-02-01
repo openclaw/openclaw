@@ -35,6 +35,7 @@ const RECOVERABLE_MESSAGE_SNIPPETS = [
   "network request",
   "client network socket disconnected",
   "socket hang up",
+  "timed out",
   "getaddrinfo",
 ];
 
