@@ -488,7 +488,7 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("audio ok");
   });
 
-  it("treats text-like audio attachments as CSV (comma wins over tabs)", async () => {
+  it("skips audio attachments with text-like content instead of leaking as file blocks", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const csvPath = path.join(dir, "data.mp3");
@@ -513,22 +513,26 @@ describe("applyMediaUnderstanding", () => {
 
     const result = await applyMediaUnderstanding({ ctx, cfg });
 
-    expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain('<file name="data.mp3" mime="text/csv">');
-    expect(ctx.Body).toContain('"a","b"\t"c"');
+    // Audio files should be skipped entirely, not leaked as text/csv file blocks
+    expect(result.appliedFile).toBeFalsy();
+    expect(ctx.Body).not.toContain("<file");
   });
 
-  it("infers TSV when tabs are present without commas", async () => {
+  it("skips OGG audio with high null-byte density instead of leaking as text/plain", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
-    const tsvPath = path.join(dir, "report.mp3");
-    const tsvText = "a\tb\tc\n1\t2\t3";
-    await fs.writeFile(tsvPath, tsvText);
+    const oggPath = path.join(dir, "voice.ogg");
+    // Create a buffer with >20% null bytes to trigger the UTF-16 heuristic false positive
+    const buf = Buffer.alloc(2048);
+    for (let i = 0; i < buf.length; i++) {
+      buf[i] = i % 3 === 0 ? 0x00 : 0x41 + (i % 26);
+    }
+    await fs.writeFile(oggPath, buf);
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
-      MediaPath: tsvPath,
-      MediaType: "audio/mpeg",
+      MediaPath: oggPath,
+      MediaType: "audio/ogg",
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -542,9 +546,10 @@ describe("applyMediaUnderstanding", () => {
 
     const result = await applyMediaUnderstanding({ ctx, cfg });
 
-    expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain('<file name="report.mp3" mime="text/tab-separated-values">');
-    expect(ctx.Body).toContain("a\tb\tc");
+    // Audio must not leak into context as a text/plain file block
+    expect(result.appliedFile).toBeFalsy();
+    expect(ctx.Body).not.toContain("<file");
+    expect(ctx.Body).not.toContain("text/plain");
   });
 
   it("escapes XML special characters in filenames to prevent injection", async () => {

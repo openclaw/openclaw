@@ -232,6 +232,9 @@ async function extractFileBlocks(params: {
     if (!forcedTextMime && (kind === "image" || kind === "video")) {
       continue;
     }
+    if (!forcedTextMime && kind === "audio") {
+      continue;
+    }
     if (!limits.allowUrl && attachment.url && !attachment.path) {
       if (shouldLogVerbose()) {
         logVerbose(`media: file attachment skipped (url disabled) index=${attachment.index}`);
