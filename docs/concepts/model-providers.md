@@ -256,6 +256,31 @@ ollama pull llama3.3
 
 Ollama is automatically detected when running locally at `http://127.0.0.1:11434/v1`. See [/providers/ollama](/providers/ollama) for model recommendations and custom configuration.
 
+### LLMProxy (zero-buffer streaming)
+
+[LLMProxy](https://github.com/aiyuekuang/LLMProxy) is a high-performance reverse proxy built specifically for LLM workloads, offering zero-buffer SSE streaming (< 1ms TTFT overhead), native token metering, and load balancing:
+
+```json5
+{
+  models: {
+    providers: {
+      llmproxy: {
+        baseUrl: "http://localhost:8000/v1",
+        api: "openai-completions",
+        models: [
+          { id: "qwen-coder", name: "Qwen Coder" }
+        ]
+      }
+    }
+  },
+  agents: {
+    defaults: { model: { primary: "llmproxy/qwen-coder" } }
+  }
+}
+```
+
+See [/providers/llmproxy](/providers/llmproxy) for full setup, load balancing, and monitoring configuration.
+
 ### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
 
 Example (OpenAI‑compatible):
