@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Docs: add direct BotFather link and verification reminder in Telegram setup. (#4064) Thanks @shatner.
 - Telegram: use shared pairing store. (#6127) Thanks @obviyus.
 
 ### Fixes
