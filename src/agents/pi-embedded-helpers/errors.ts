@@ -576,6 +576,26 @@ export function isCloudCodeAssistFormatError(raw: string): boolean {
   return !isImageDimensionErrorMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
 
+export function isModelNotFoundErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const msg = raw.toLowerCase();
+  if (/\b404\b/.test(msg) && /not[_-]?found/i.test(msg)) {
+    return true;
+  }
+  if (msg.includes("not_found_error")) {
+    return true;
+  }
+  if (/is not found for api version/i.test(raw)) {
+    return true;
+  }
+  if (/model[:\s]+\S+/i.test(raw) && /not[_-]?\s*found/i.test(raw)) {
+    return true;
+  }
+  return false;
+}
+
 export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
   if (!msg || msg.stopReason !== "error") {
     return false;
@@ -607,6 +627,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";
+  }
+  if (isModelNotFoundErrorMessage(raw)) {
+    return "model_not_found";
   }
   return null;
 }

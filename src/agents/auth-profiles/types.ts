@@ -36,6 +36,7 @@ export type AuthProfileFailureReason =
   | "rate_limit"
   | "billing"
   | "timeout"
+  | "model_not_found"
   | "unknown";
 
 /** Per-profile usage statistics for round-robin and cooldown tracking */

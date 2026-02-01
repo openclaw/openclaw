@@ -50,6 +50,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 408;
     case "format":
       return 400;
+    case "model_not_found":
+      return 404;
     default:
       return undefined;
   }
