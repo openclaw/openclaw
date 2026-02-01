@@ -319,6 +319,62 @@ export function applyGoogleTurnOrderingFix(params: {
   return { messages: sanitized, didPrepend };
 }
 
+/**
+ * Normalizes tool call content blocks in assistant messages so they always use
+ * the canonical shape: `{ type: "toolCall", arguments: ... }`.
+ *
+ * Different providers persist tool calls in different shapes:
+ *   - Anthropic / pi-ai:  `{ type: "toolCall", arguments: {} }`
+ *   - Google Antigravity:  `{ type: "toolUse",  input: {} }`
+ *
+ * When a user switches providers mid-session the old shape can reach the new
+ * provider's serializer unchanged, causing validation failures (e.g. Anthropic
+ * rejects requests when the `input` field is missing on a `tool_use` block).
+ */
+function normalizeToolCallBlocks(messages: AgentMessage[]): AgentMessage[] {
+  let changed = false;
+  const out: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "assistant") {
+      out.push(msg);
+      continue;
+    }
+
+    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    const content = assistant.content;
+    if (!Array.isArray(content)) {
+      out.push(msg);
+      continue;
+    }
+
+    let contentChanged = false;
+    const nextContent = content.map((block) => {
+      if (!block || typeof block !== "object") return block;
+      const rec = block as unknown as Record<string, unknown>;
+      const type = rec.type;
+
+      if (type !== "toolCall" && type !== "toolUse" && type !== "functionCall") return block;
+
+      // Ensure `arguments` is populated — prefer existing `arguments`, fall back to `input`, default to {}.
+      const args = rec.arguments ?? rec.input ?? {};
+      if (type === "toolCall" && rec.arguments !== undefined) return block; // already canonical
+
+      contentChanged = true;
+      return { ...rec, type: "toolCall", arguments: args };
+    });
+
+    if (contentChanged) {
+      changed = true;
+      out.push({ ...assistant, content: nextContent } as typeof assistant);
+    } else {
+      out.push(msg);
+    }
+  }
+
+  return changed ? out : messages;
+}
+
 export async function sanitizeSessionHistory(params: {
   messages: AgentMessage[];
   modelApi?: string | null;
@@ -350,6 +406,12 @@ export async function sanitizeSessionHistory(params: {
     ? sanitizeToolUseResultPairing(sanitizedThinking)
     : sanitizedThinking;
 
+  // Normalize tool call content blocks so every provider serializer sees a consistent shape.
+  // Session history may contain blocks from different providers (e.g. Google Antigravity uses
+  // { type: "toolUse", input: {} } while Anthropic expects { type: "toolCall", arguments: {} }).
+  // Without this, switching providers mid-session causes "input: Field required" API rejections.
+  const normalizedTools = normalizeToolCallBlocks(repairedTools);
+
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
@@ -364,8 +426,8 @@ export async function sanitizeSessionHistory(params: {
     : false;
   const sanitizedOpenAI =
     isOpenAIResponsesApi && modelChanged
-      ? downgradeOpenAIReasoningBlocks(repairedTools)
-      : repairedTools;
+      ? downgradeOpenAIReasoningBlocks(normalizedTools)
+      : normalizedTools;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {
