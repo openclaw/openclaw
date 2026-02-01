@@ -76,6 +76,16 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+// Azure AI Foundry provider - uses OpenAI-compatible API with custom deployments
+const AZURE_FOUNDRY_DEFAULT_CONTEXT_WINDOW = 128000;
+const AZURE_FOUNDRY_DEFAULT_MAX_TOKENS = 16384;
+const AZURE_FOUNDRY_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -394,6 +404,38 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+/**
+ * Build an Azure AI Foundry provider with a placeholder model.
+ * Users should configure their actual models via models.json.
+ * This enables auto-detection when AZURE_FOUNDRY_API_KEY is set.
+ */
+export function buildAzureFoundryProvider(params: {
+  baseUrl: string;
+  models?: Array<{
+    id: string;
+    name?: string;
+    contextWindow?: number;
+    maxTokens?: number;
+    reasoning?: boolean;
+    input?: Array<"text" | "image">;
+  }>;
+}): ProviderConfig {
+  const models: ModelDefinitionConfig[] = (params.models ?? []).map((model) => ({
+    id: model.id,
+    name: model.name ?? model.id,
+    reasoning: model.reasoning ?? false,
+    input: model.input ?? ["text"],
+    cost: AZURE_FOUNDRY_DEFAULT_COST,
+    contextWindow: model.contextWindow ?? AZURE_FOUNDRY_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: model.maxTokens ?? AZURE_FOUNDRY_DEFAULT_MAX_TOKENS,
+  }));
+  return {
+    baseUrl: params.baseUrl,
+    api: "openai-completions",
+    models,
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -459,6 +501,18 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+  }
+
+  // Azure AI Foundry provider - requires both API key and base URL
+  const azureFoundryKey =
+    resolveEnvApiKeyVarName("azure-foundry") ??
+    resolveApiKeyFromProfiles({ provider: "azure-foundry", store: authStore });
+  const azureFoundryBaseUrl = process.env.AZURE_FOUNDRY_BASE_URL?.trim();
+  if (azureFoundryKey && azureFoundryBaseUrl) {
+    providers["azure-foundry"] = {
+      ...buildAzureFoundryProvider({ baseUrl: azureFoundryBaseUrl }),
+      apiKey: azureFoundryKey,
+    };
   }
 
   return providers;
