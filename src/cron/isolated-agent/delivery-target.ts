@@ -7,6 +7,7 @@ import {
   resolveAgentMainSessionKey,
   resolveStorePath,
 } from "../../config/sessions.js";
+import { listDiscordAccountIds } from "../../discord/accounts.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import {
   resolveOutboundTarget,
@@ -68,21 +69,31 @@ export async function resolveDeliveryTarget(
   const mode = resolved.mode as "explicit" | "implicit";
   const toCandidate = resolved.to;
 
+  // Auto-map agentId to accountId if not resolved from session and agentId matches a Discord account.
+  // This allows cron jobs with agentId="agent-b" to automatically use the matching Discord account.
+  let accountId = resolved.accountId;
+  if (!accountId && channel === "discord" && agentId) {
+    const discordAccountIds = listDiscordAccountIds(cfg);
+    if (discordAccountIds.includes(agentId)) {
+      accountId = agentId;
+    }
+  }
+
   if (!toCandidate) {
-    return { channel, to: undefined, accountId: resolved.accountId, mode };
+    return { channel, to: undefined, accountId, mode };
   }
 
   const docked = resolveOutboundTarget({
     channel,
     to: toCandidate,
     cfg,
-    accountId: resolved.accountId,
+    accountId,
     mode,
   });
   return {
     channel,
     to: docked.ok ? docked.to : undefined,
-    accountId: resolved.accountId,
+    accountId,
     mode,
     error: docked.ok ? undefined : docked.error,
   };
