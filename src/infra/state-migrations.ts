@@ -189,7 +189,11 @@ function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
     typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
       ? entry.updatedAt
       : Date.now();
-  const normalized = { ...(entry as unknown as SessionEntry), sessionId, updatedAt };
+  const normalized = {
+    ...(entry as unknown as SessionEntry),
+    sessionId,
+    updatedAt,
+  };
   const rec = normalized as unknown as Record<string, unknown>;
   if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
     rec.groupChannel = rec.room;
@@ -250,7 +254,10 @@ function canonicalizeSessionStore(params: {
     const existing = canonical[canonicalKey];
     if (!existing) {
       canonical[canonicalKey] = entry;
-      meta.set(canonicalKey, { isCanonical, updatedAt: resolveUpdatedAt(entry) });
+      meta.set(canonicalKey, {
+        isCanonical,
+        updatedAt: resolveUpdatedAt(entry),
+      });
       continue;
     }
 
@@ -338,6 +345,49 @@ type StateDirMigrationResult = {
   changes: string[];
   warnings: string[];
 };
+
+/**
+ * Error thrown when both legacy (~/.clawdbot) and new (~/.moltbot) state directories
+ * exist simultaneously, creating a split-brain condition where different parts of
+ * the system may read/write to different directories.
+ */
+export class StateDirConflictError extends Error {
+  constructor(
+    message: string,
+    public readonly legacyDir: string,
+    public readonly targetDir: string,
+  ) {
+    super(message);
+    this.name = "StateDirConflictError";
+  }
+}
+
+export function formatStateDirConflictMessage(legacyDir: string, targetDir: string): string {
+  return [
+    `State directory conflict: both legacy and new directories exist.`,
+    ``,
+    `  Legacy: ${legacyDir}`,
+    `  New:    ${targetDir}`,
+    ``,
+    `This creates a split-brain condition where different parts of the system`,
+    `may read/write to different directories, causing pairing and auth failures.`,
+    ``,
+    `To fix, choose ONE of these options:`,
+    ``,
+    `  1. Keep the legacy directory (recommended if you have existing data):`,
+    `     Remove or rename ${targetDir}`,
+    ``,
+    `  2. Use the new directory:`,
+    `     Remove or rename ${legacyDir}`,
+    ``,
+    `  3. Merge manually, then remove the legacy directory`,
+    ``,
+    `  4. Set an explicit state directory:`,
+    `     export MOLTBOT_STATE_DIR="${targetDir}"`,
+    ``,
+    `After resolving, restart Moltbot.`,
+  ].join("\n");
+}
 
 function resolveSymlinkTarget(linkPath: string): string | null {
   try {
@@ -443,10 +493,13 @@ export async function autoMigrateLegacyStateDir(params: {
   }
 
   if (isDirPath(targetDir)) {
-    warnings.push(
-      `State dir migration skipped: target already exists (${targetDir}). Remove or merge manually.`,
+    // Both directories exist - this creates a split-brain condition.
+    // Refuse to continue to prevent inconsistent state across the system.
+    throw new StateDirConflictError(
+      formatStateDirConflictMessage(legacyDir, targetDir),
+      legacyDir,
+      targetDir,
     );
-    return { migrated: false, skipped: false, changes, warnings };
   }
 
   try {
@@ -628,7 +681,9 @@ async function migrateLegacySessions(
     scope: detected.targetScope,
   });
 
-  const merged: Record<string, SessionEntryLike> = { ...canonicalizedTarget.store };
+  const merged: Record<string, SessionEntryLike> = {
+    ...canonicalizedTarget.store,
+  };
   for (const [key, entry] of Object.entries(canonicalizedLegacy.store)) {
     merged[key] = mergeSessionEntry({
       existing: merged[key],
