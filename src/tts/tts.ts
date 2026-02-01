@@ -367,7 +367,9 @@ export function buildTtsSystemPromptHint(cfg: OpenClawConfig): string | undefine
 
 function safeParseTtsPrefs(raw: string): TtsUserPrefs {
   const parsed: unknown = JSON.parse(raw);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {};
+  }
   const obj = parsed as Record<string, unknown>;
   const tts = obj.tts;
   if (tts !== undefined && (typeof tts !== "object" || tts === null || Array.isArray(tts))) {
