@@ -5,8 +5,27 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { computeBackoff } from "../infra/backoff.js";
+import { formatDurationMs } from "../infra/format-duration.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+
+/**
+ * Auto-restart policy for channels that exit unexpectedly.
+ * Uses exponential backoff starting at 2s, capping at 60s.
+ */
+const CHANNEL_RESTART_POLICY = {
+  initialMs: 2000,
+  maxMs: 60_000,
+  factor: 2,
+  jitter: 0.2,
+};
+
+/** Maximum consecutive restart attempts before giving up. */
+const MAX_RESTART_ATTEMPTS = 10;
+
+/** Reset restart attempts after this many ms of successful running. */
+const RESTART_ATTEMPT_RESET_MS = 5 * 60 * 1000; // 5 minutes
 
 export type ChannelRuntimeSnapshot = {
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
@@ -19,6 +38,12 @@ type ChannelRuntimeStore = {
   aborts: Map<string, AbortController>;
   tasks: Map<string, Promise<unknown>>;
   runtimes: Map<string, ChannelAccountSnapshot>;
+  /** Track restart attempts per account for backoff/giving up. */
+  restartAttempts: Map<string, number>;
+  /** Track when the channel started (for measuring run duration). */
+  channelStartTime: Map<string, number>;
+  /** Track pending restart timers so they can be cancelled. */
+  restartTimers: Map<string, ReturnType<typeof setTimeout>>;
 };
 
 function createRuntimeStore(): ChannelRuntimeStore {
@@ -26,6 +51,9 @@ function createRuntimeStore(): ChannelRuntimeStore {
     aborts: new Map(),
     tasks: new Map(),
     runtimes: new Map(),
+    restartAttempts: new Map(),
+    channelStartTime: new Map(),
+    restartTimers: new Map(),
   };
 }
 
@@ -148,6 +176,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         });
 
         const log = channelLogs[channelId];
+        // Record start time for measuring run duration
+        store.channelStartTime.set(id, Date.now());
+
+        // Cancel any pending restart timer (prevents race conditions)
+        const existingTimer = store.restartTimers.get(id);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+          store.restartTimers.delete(id);
+        }
+
         const task = startAccount({
           cfg,
           accountId: id,
@@ -158,13 +196,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           getStatus: () => getRuntime(channelId, id),
           setStatus: (next) => setRuntime(channelId, id, next),
         });
+
+        let exitedWithError = false;
         const tracked = Promise.resolve(task)
           .catch((err) => {
+            exitedWithError = true;
             const message = formatErrorMessage(err);
             setRuntime(channelId, id, { accountId: id, lastError: message });
             log.error?.(`[${id}] channel exited: ${message}`);
           })
           .finally(() => {
+            const wasAborted = abort.signal.aborted;
             store.aborts.delete(id);
             store.tasks.delete(id);
             setRuntime(channelId, id, {
@@ -172,6 +214,57 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               running: false,
               lastStopAt: Date.now(),
             });
+
+            // Auto-restart logic: restart if not deliberately stopped
+            if (!wasAborted) {
+              const startTime = store.channelStartTime.get(id) ?? 0;
+              const runDuration = Date.now() - startTime;
+              store.channelStartTime.delete(id);
+
+              // Reset attempt counter if ran without error for a while
+              // Only reset if we didn't exit with an error (indicates healthy operation)
+              if (!exitedWithError && runDuration >= RESTART_ATTEMPT_RESET_MS) {
+                store.restartAttempts.set(id, 0);
+              }
+
+              const attempts = (store.restartAttempts.get(id) ?? 0) + 1;
+              store.restartAttempts.set(id, attempts);
+
+              if (attempts <= MAX_RESTART_ATTEMPTS) {
+                const delayMs = computeBackoff(CHANNEL_RESTART_POLICY, attempts);
+                const reason = exitedWithError ? "error" : "unexpected exit";
+                log.warn?.(
+                  `[${id}] channel ${reason}; scheduling restart in ${formatDurationMs(delayMs)} (attempt ${attempts}/${MAX_RESTART_ATTEMPTS})`,
+                );
+
+                // Cancel any existing restart timer before scheduling new one
+                const existingTimer = store.restartTimers.get(id);
+                if (existingTimer) {
+                  clearTimeout(existingTimer);
+                }
+
+                // Schedule restart
+                const timer = setTimeout(() => {
+                  store.restartTimers.delete(id);
+                  // Re-check if channel should still restart
+                  // Skip if already running, has a pending task, or timer was orphaned
+                  if (store.aborts.has(id) || store.tasks.has(id)) {
+                    log.debug?.(`[${id}] skipping scheduled restart; channel already running`);
+                    return;
+                  }
+                  void startChannel(channelId, id);
+                }, delayMs);
+                store.restartTimers.set(id, timer);
+              } else {
+                log.error?.(
+                  `[${id}] channel exceeded max restart attempts (${MAX_RESTART_ATTEMPTS}); giving up. Manual restart required.`,
+                );
+                setRuntime(channelId, id, {
+                  accountId: id,
+                  lastError: `exceeded max restart attempts (${MAX_RESTART_ATTEMPTS})`,
+                });
+              }
+            }
           });
         store.tasks.set(id, tracked);
       }),
@@ -194,6 +287,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
     await Promise.all(
       Array.from(knownIds.values()).map(async (id) => {
+        // Cancel any pending restart timer
+        const restartTimer = store.restartTimers.get(id);
+        if (restartTimer) {
+          clearTimeout(restartTimer);
+          store.restartTimers.delete(id);
+        }
+        // Reset restart attempts and clear start time on deliberate stop
+        store.restartAttempts.delete(id);
+        store.channelStartTime.delete(id);
+
         const abort = store.aborts.get(id);
         const task = store.tasks.get(id);
         if (!abort && !task && !plugin?.gateway?.stopAccount) {

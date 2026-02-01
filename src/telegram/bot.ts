@@ -128,31 +128,27 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     network: telegramCfg.network,
   });
   const shouldProvideFetch = Boolean(fetchImpl);
+  // Default to 60s timeout (grammY defaults to 500s which is too long for recovery).
+  // This timeout applies to API calls like sendMessage, getMe, etc.
+  // Note: The long-polling getUpdates timeout is controlled separately in monitor.ts runner options.
+  const DEFAULT_API_TIMEOUT_SECONDS = 60;
   const timeoutSeconds =
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
-      : undefined;
-  const client: ApiClientOptions | undefined =
-    shouldProvideFetch || timeoutSeconds
-      ? {
-          ...(shouldProvideFetch && fetchImpl
-            ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
-            : {}),
-          ...(timeoutSeconds ? { timeoutSeconds } : {}),
-        }
-      : undefined;
+      : DEFAULT_API_TIMEOUT_SECONDS;
+  const client: ApiClientOptions = {
+    ...(shouldProvideFetch && fetchImpl
+      ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+      : {}),
+    timeoutSeconds,
+  };
 
-  const bot = new Bot(opts.token, client ? { client } : undefined);
+  const bot = new Bot(opts.token, { client });
   bot.api.config.use(apiThrottler());
   bot.use(sequentialize(getTelegramSequentialKey));
-  bot.catch((err) => {
-    runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
-  });
-
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
-    const message = err instanceof Error ? err.message : String(err);
-    runtime.error?.(danger(`telegram bot error: ${message}`));
+    runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
   });
 
   const recentUpdates = createTelegramUpdateDedupe();
