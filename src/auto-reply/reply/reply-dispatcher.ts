@@ -3,6 +3,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 import { sleep } from "../../utils.js";
+import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 
@@ -150,20 +151,17 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         await options.deliver(normalized, { kind });
 
         // Trigger message:sent hook after successful delivery
-        if (options.sessionKey) {
-          const hookEvent = createInternalHookEvent("message", "sent", options.sessionKey, {
-            text: normalized.text,
-            channel: options.channel,
-            chatType: options.chatType,
-            kind,
-            mediaUrl: normalized.mediaUrl,
-            mediaUrls: normalized.mediaUrls,
-            timestamp: Date.now(),
-          });
-          void triggerInternalHook(hookEvent).catch(() => {
-            // Silently ignore hook errors to not disrupt message delivery
-          });
-        }
+        const hookEvent = createInternalHookEvent("message", "sent", options.sessionKey ?? "", {
+          text: normalized.text,
+          channel: options.channel,
+          chatType: options.chatType,
+          kind,
+          mediaUrl: normalized.mediaUrl,
+          mediaUrls: normalized.mediaUrls,
+        });
+        void triggerInternalHook(hookEvent).catch((err) => {
+          logVerbose(`reply-dispatcher: message:sent hook failed: ${String(err)}`);
+        });
       })
       .catch((err) => {
         options.onError?.(err, { kind });
