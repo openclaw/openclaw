@@ -202,12 +202,22 @@ export function createAgentEventHandler({
       nodeSendToSession(sessionKey, "chat", payload);
       return;
     }
+    // Include a renderable message so WebChat clients that only display the
+    // `message` field still show the error instead of an empty bubble.
+    const errorText = text || (error ? formatForLog(error) : undefined);
     const payload = {
       runId: clientRunId,
       sessionKey,
       seq,
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
+      message: errorText
+        ? {
+            role: "assistant" as const,
+            content: [{ type: "text" as const, text: errorText }],
+            timestamp: Date.now(),
+          }
+        : undefined,
     };
     broadcast("chat", payload);
     nodeSendToSession(sessionKey, "chat", payload);
