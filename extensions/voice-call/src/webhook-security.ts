@@ -194,23 +194,10 @@ export function verifyTwilioWebhook(
 
   const urlObject = new URL(verificationUrl);
 
-  const isValidSignatureWithoutPort = validateTwilioSignature(
-    authToken,
-    signature,
-    removePort(urlObject),
-    params,
-  );
-  if (isValidSignatureWithoutPort) {
-    return { ok: true, verificationUrl };
-  }
-
-  const isValidSignatureWithPort = validateTwilioSignature(
-    authToken,
-    signature,
-    verificationUrl,
-    params,
-  );
-  if (isValidSignatureWithPort) {
+  if (
+    validateTwilioSignature(authToken, signature, removePort(urlObject), params) ||
+    validateTwilioSignature(authToken, signature, verificationUrl, params)
+  ) {
     return { ok: true, verificationUrl };
   }
 
