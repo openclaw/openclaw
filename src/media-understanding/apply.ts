@@ -273,7 +273,9 @@ async function extractFileBlocks(params: {
       if (!textLike) {
         // Not text-like at all — definitely binary, skip.
         if (shouldLogVerbose()) {
-          logVerbose(`media: file attachment skipped (binary ${kind}) index=${attachment.index}`);
+          logVerbose(
+            `media: file attachment skipped (binary ${bufferKind ?? kind}) index=${attachment.index}`,
+          );
         }
         continue;
       }
@@ -290,7 +292,7 @@ async function extractFileBlocks(params: {
         if (!isAmbiguousSniff) {
           if (shouldLogVerbose()) {
             logVerbose(
-              `media: file attachment skipped (binary ${kind}, sniffed=${sniffedMime}) index=${attachment.index}`,
+              `media: file attachment skipped (binary ${bufferKind ?? kind}, sniffed=${sniffedMime}) index=${attachment.index}`,
             );
           }
           continue;

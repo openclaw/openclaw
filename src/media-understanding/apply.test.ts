@@ -709,7 +709,7 @@ describe("applyMediaUnderstanding", () => {
     // Pad with mixed binary content
     const binaryPad = Buffer.alloc(4096);
     for (let i = 0; i < binaryPad.length; i++) {
-      binaryPad[i] = Math.floor(Math.random() * 256);
+      binaryPad[i] = (i * 7 + 0x80) & 0xff;
     }
     await fs.writeFile(oggPath, Buffer.concat([oggHeader, binaryPad]));
 
