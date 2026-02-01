@@ -400,13 +400,19 @@ export function sanitizeUserFacingText(text: string): string {
   }
 
   if (ERROR_PREFIX_RE.test(trimmed)) {
-    if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
-      return "The AI service is temporarily overloaded. Please try again in a moment.";
+    // Only rewrite short, single-block text that looks like a raw error dump.
+    // Multi-paragraph replies that happen to start with "Error:" or "Failed:"
+    // are legitimate assistant content and should not be rewritten.
+    const isShortErrorDump = trimmed.length < 300 && !trimmed.includes("\n\n");
+    if (isShortErrorDump) {
+      if (isOverloadedErrorMessage(trimmed) || isRateLimitErrorMessage(trimmed)) {
+        return "The AI service is temporarily overloaded. Please try again in a moment.";
+      }
+      if (isTimeoutErrorMessage(trimmed)) {
+        return "LLM request timed out.";
+      }
+      return formatRawAssistantErrorForUi(trimmed);
     }
-    if (isTimeoutErrorMessage(trimmed)) {
-      return "LLM request timed out.";
-    }
-    return formatRawAssistantErrorForUi(trimmed);
   }
 
   return collapseConsecutiveDuplicateBlocks(stripped);
