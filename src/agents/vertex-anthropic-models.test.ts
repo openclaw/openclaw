@@ -57,14 +57,14 @@ describe("vertex-anthropic-models", () => {
       expect(hasGcloudAdc(env)).toBe(true);
     });
 
-    it("returns true when GOOGLE_CLOUD_PROJECT is set", () => {
+    it("returns false when only GOOGLE_CLOUD_PROJECT is set (not credentials)", () => {
       const env = { GOOGLE_CLOUD_PROJECT: "my-project" };
-      expect(hasGcloudAdc(env)).toBe(true);
+      expect(hasGcloudAdc(env)).toBe(false);
     });
 
-    it("returns true when GCLOUD_PROJECT is set", () => {
+    it("returns false when only GCLOUD_PROJECT is set (not credentials)", () => {
       const env = { GCLOUD_PROJECT: "my-project" };
-      expect(hasGcloudAdc(env)).toBe(true);
+      expect(hasGcloudAdc(env)).toBe(false);
     });
 
     it("returns false when no GCP env is set", () => {
