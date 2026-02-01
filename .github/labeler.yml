@@ -148,6 +148,19 @@
       - any-glob-to-any-file:
           - "scripts/**"
 
+"ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+
+"github":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/ISSUE_TEMPLATE/**"
+          - ".github/*.md"
+          - ".github/*.yml"
+          - ".github/*.yaml"
+
 "docker":
   - changed-files:
       - any-glob-to-any-file:
