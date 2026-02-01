@@ -93,8 +93,11 @@ export async function sendMessageNextcloudTalk(
   }
   const bodyStr = JSON.stringify(body);
 
+  // Nextcloud expects signature on message content only, not the full JSON body.
+  // See: apps/spreed/lib/Controller/BotController.php - validateRequest() uses
+  // the extracted message field, not the raw request body.
   const { random, signature } = generateNextcloudTalkSignature({
-    body: bodyStr,
+    body: message,
     secret,
   });
 
@@ -183,8 +186,9 @@ export async function sendReactionNextcloudTalk(
   const normalizedToken = normalizeRoomToken(roomToken);
 
   const body = JSON.stringify({ reaction });
+  // Nextcloud expects signature on reaction content only, not the full JSON body.
   const { random, signature } = generateNextcloudTalkSignature({
-    body,
+    body: reaction,
     secret,
   });
 
