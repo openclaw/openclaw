@@ -28,7 +28,10 @@ export type MonitorTelegramOpts = {
   webhookUrl?: string;
 };
 
-export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
+export function createTelegramRunnerOptions(
+  cfg: OpenClawConfig,
+  proxyFetch?: typeof fetch,
+): RunOptions<unknown> {
   return {
     sink: {
       concurrency: resolveAgentMaxConcurrent(cfg),
@@ -39,6 +42,8 @@ export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unk
         timeout: 30,
         // Request reactions without dropping default update types.
         allowed_updates: resolveTelegramAllowedUpdates(),
+        // Use proxy fetch if configured
+        ...(proxyFetch ? { fetcher: proxyFetch } : {}),
       },
       // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
       silent: true,
@@ -165,9 +170,13 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
   // Use grammyjs/runner for concurrent update processing
   let restartAttempts = 0;
+  let lastSuccessfulPoll = Date.now();
+
+  // Reset restart attempts after sustained successful operation
+  const RESTART_ATTEMPTS_RESET_MS = 60_000;
 
   while (!opts.abortSignal?.aborted) {
-    const runner = run(bot, createTelegramRunnerOptions(cfg));
+    const runner = run(bot, createTelegramRunnerOptions(cfg, proxyFetch));
     const stopOnAbort = () => {
       if (opts.abortSignal?.aborted) {
         void runner.stop();
@@ -177,7 +186,34 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     try {
       // runner.task() returns a promise that resolves when the runner stops
       await runner.task();
-      return;
+
+      // If we reach here without being aborted, the runner stopped unexpectedly.
+      // This can happen when the polling connection dies silently without throwing.
+      if (opts.abortSignal?.aborted) {
+        return;
+      }
+
+      // Reset attempts if we had a sustained successful period
+      if (Date.now() - lastSuccessfulPoll > RESTART_ATTEMPTS_RESET_MS) {
+        restartAttempts = 0;
+      }
+
+      restartAttempts += 1;
+      const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
+      (opts.runtime?.log ?? console.warn)(
+        `Telegram runner stopped unexpectedly; restarting in ${formatDurationMs(delayMs)}.`,
+      );
+
+      try {
+        await sleepWithAbort(delayMs, opts.abortSignal);
+      } catch (sleepErr) {
+        if (opts.abortSignal?.aborted) {
+          return;
+        }
+        throw sleepErr;
+      }
+      lastSuccessfulPoll = Date.now();
+      continue;
     } catch (err) {
       if (opts.abortSignal?.aborted) {
         throw err;
@@ -188,6 +224,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       if (!isConflict && !isRecoverable && !isNetworkError) {
         throw err;
       }
+
+      // Reset attempts if we had a sustained successful period
+      if (Date.now() - lastSuccessfulPoll > RESTART_ATTEMPTS_RESET_MS) {
+        restartAttempts = 0;
+      }
+
       restartAttempts += 1;
       const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
       const reason = isConflict ? "getUpdates conflict" : "network error";
@@ -203,6 +245,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         }
         throw sleepErr;
       }
+      lastSuccessfulPoll = Date.now();
     } finally {
       opts.abortSignal?.removeEventListener("abort", stopOnAbort);
     }
