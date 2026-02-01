@@ -93,7 +93,50 @@ describe("listSkillCommandsForAgents", () => {
     });
     const names = commands.map((entry) => entry.name);
     expect(names).toContain("demo_skill");
-    expect(names).toContain("demo_skill_2");
+    expect(names).not.toContain("demo_skill_2");
     expect(names).toContain("extra_skill");
+  });
+
+  it("deduplicates bundled skills across multiple agents", async () => {
+    const originalBundledDir = process.env.OPENCLAW_BUNDLED_SKILLS_DIR;
+    try {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dedupe-"));
+
+      // Create a mock bundled skills directory
+      const bundledDir = path.join(tempDir, "bundled-skills");
+      await fs.mkdir(bundledDir);
+      await writeSkill({
+        dir: bundledDir,
+        dirName: "bundled-1",
+        name: "bundled-skill",
+        description: "A bundled skill",
+      });
+
+      // Create workspaces for two agents
+      const agent1Workspace = path.join(tempDir, "agent1");
+      const agent2Workspace = path.join(tempDir, "agent2");
+      await fs.mkdir(path.join(agent1Workspace, "skills"), { recursive: true });
+      await fs.mkdir(path.join(agent2Workspace, "skills"), { recursive: true });
+
+      process.env.OPENCLAW_BUNDLED_SKILLS_DIR = bundledDir;
+
+      const commands = listSkillCommandsForAgents({
+        cfg: {
+          agents: {
+            list: [
+              { id: "agent1", workspace: agent1Workspace },
+              { id: "agent2", workspace: agent2Workspace },
+            ],
+          },
+        },
+      });
+
+      const skillNames = commands.map((entry) => entry.skillName);
+      const bundledSkillCommands = commands.filter((c) => c.skillName === "bundled-skill");
+      expect(bundledSkillCommands.length).toBe(1);
+      expect(skillNames).toContain("bundled-skill");
+    } finally {
+      process.env.OPENCLAW_BUNDLED_SKILLS_DIR = originalBundledDir;
+    }
   });
 });
