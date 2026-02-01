@@ -53,6 +53,10 @@ export function resolveSandboxDockerConfig(params: {
     : globalDocker?.ulimits;
 
   const binds = [...(globalDocker?.binds ?? []), ...(agentDocker?.binds ?? [])];
+  const allowedReadPaths = [
+    ...(globalDocker?.allowedReadPaths ?? []),
+    ...(agentDocker?.allowedReadPaths ?? []),
+  ];
 
   return {
     image: agentDocker?.image ?? globalDocker?.image ?? DEFAULT_SANDBOX_IMAGE,
@@ -78,6 +82,7 @@ export function resolveSandboxDockerConfig(params: {
     dns: agentDocker?.dns ?? globalDocker?.dns,
     extraHosts: agentDocker?.extraHosts ?? globalDocker?.extraHosts,
     binds: binds.length ? binds : undefined,
+    allowedReadPaths: allowedReadPaths.length ? allowedReadPaths : undefined,
   };
 }
 

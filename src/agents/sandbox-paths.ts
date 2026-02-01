@@ -27,25 +27,53 @@ function resolveToCwd(filePath: string, cwd: string): string {
   return path.resolve(cwd, expanded);
 }
 
-export function resolveSandboxPath(params: { filePath: string; cwd: string; root: string }): {
+export function resolveSandboxPath(params: {
+  filePath: string;
+  cwd: string;
+  root: string;
+  allowedPaths?: string[];
+}): {
   resolved: string;
   relative: string;
+  base: string;
 } {
   const resolved = resolveToCwd(params.filePath, params.cwd);
   const rootResolved = path.resolve(params.root);
   const relative = path.relative(rootResolved, resolved);
+
+  // Check if path is within the main root
   if (!relative || relative === "") {
-    return { resolved, relative: "" };
+    return { resolved, relative: "", base: rootResolved };
   }
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
+  if (!relative.startsWith("..") && !path.isAbsolute(relative)) {
+    return { resolved, relative, base: rootResolved };
   }
-  return { resolved, relative };
+
+  // Path escapes main root - check allowedPaths
+  if (params.allowedPaths?.length) {
+    for (const allowedPath of params.allowedPaths) {
+      const allowedResolved = path.resolve(allowedPath);
+      const relativeToAllowed = path.relative(allowedResolved, resolved);
+      if (
+        relativeToAllowed === "" ||
+        (!relativeToAllowed.startsWith("..") && !path.isAbsolute(relativeToAllowed))
+      ) {
+        return { resolved, relative: relativeToAllowed, base: allowedResolved };
+      }
+    }
+  }
+
+  throw new Error(`Path escapes sandbox root (${shortPath(rootResolved)}): ${params.filePath}`);
 }
 
-export async function assertSandboxPath(params: { filePath: string; cwd: string; root: string }) {
+export async function assertSandboxPath(params: {
+  filePath: string;
+  cwd: string;
+  root: string;
+  allowedPaths?: string[];
+}) {
   const resolved = resolveSandboxPath(params);
-  await assertNoSymlink(resolved.relative, path.resolve(params.root));
+  await assertNoSymlink(resolved.relative, resolved.base);
   return resolved;
 }
 

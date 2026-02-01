@@ -19,4 +19,10 @@ export type SandboxDockerConfig = {
   dns?: string[];
   extraHosts?: string[];
   binds?: string[];
+  /**
+   * Additional paths (inside the container) that are allowed for read operations.
+   * Useful for bind-mounted paths outside the workspace root.
+   * Example: ["/workspace/.skills"] to allow reading from bind-mounted skills.
+   */
+  allowedReadPaths?: string[];
 };
