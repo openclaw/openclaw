@@ -3,6 +3,8 @@ import Foundation
 public enum OpenClawTalkCommand: String, Codable, Sendable {
     case pttStart = "talk.ptt.start"
     case pttStop = "talk.ptt.stop"
+    case pttCancel = "talk.ptt.cancel"
+    case pttOnce = "talk.ptt.once"
 }
 
 public struct OpenClawTalkPTTStartPayload: Codable, Sendable, Equatable {
