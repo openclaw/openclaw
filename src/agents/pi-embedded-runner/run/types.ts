@@ -98,6 +98,7 @@ export type EmbeddedRunAttemptResult = {
   didSendViaMessagingTool: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  autoCompactionAttempts: number;
   cloudCodeAssistFormatError: boolean;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
