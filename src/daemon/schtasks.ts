@@ -56,21 +56,14 @@ function resolveTaskUser(env: Record<string, string | undefined>): string | null
 }
 
 function parseCommandLine(value: string): string[] {
+  // This parses a Windows cmd.exe command line where backslash is a path
+  // separator, not an escape character.  Only double-quote toggling and
+  // whitespace splitting are needed.
   const args: string[] = [];
   let current = "";
   let inQuotes = false;
-  let escapeNext = false;
 
   for (const char of value) {
-    if (escapeNext) {
-      current += char;
-      escapeNext = false;
-      continue;
-    }
-    if (char === "\\") {
-      escapeNext = true;
-      continue;
-    }
     if (char === '"') {
       inQuotes = !inQuotes;
       continue;
