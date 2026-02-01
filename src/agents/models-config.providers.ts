@@ -54,6 +54,17 @@ const MOONSHOT_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1";
+const NEBIUS_DEFAULT_MODEL_ID = "zai-org/GLM-4.7-FP8";
+const NEBIUS_DEFAULT_CONTEXT_WINDOW = 131_072;
+const NEBIUS_DEFAULT_MAX_TOKENS = 8192;
+const NEBIUS_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const QWEN_PORTAL_BASE_URL = "https://portal.qwen.ai/v1";
 const QWEN_PORTAL_OAUTH_PLACEHOLDER = "qwen-oauth";
 const QWEN_PORTAL_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -323,6 +334,62 @@ function buildMoonshotProvider(): ProviderConfig {
   };
 }
 
+async function discoverNebiusModels(apiKey?: string): Promise<ModelDefinitionConfig[]> {
+  // Skip discovery without an API key or during tests to avoid noisy failures
+  if (!apiKey || process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+  try {
+    const response = await fetch(`${NEBIUS_BASE_URL}/models`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      console.warn(`Failed to discover Nebius models: ${response.status}`);
+      return [];
+    }
+    const payload = (await response.json()) as { data?: Array<{ id?: string }> };
+    const entries = Array.isArray(payload.data) ? payload.data : [];
+    return entries
+      .map((entry) => entry?.id?.trim())
+      .filter((id): id is string => Boolean(id))
+      .map((id) => ({
+        id,
+        name: id,
+        reasoning: false,
+        input: ["text"],
+        cost: NEBIUS_DEFAULT_COST,
+        contextWindow: NEBIUS_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: NEBIUS_DEFAULT_MAX_TOKENS,
+      }));
+  } catch (error) {
+    console.warn(`Failed to discover Nebius models: ${String(error)}`);
+    return [];
+  }
+}
+
+async function buildNebiusProvider(apiKey?: string): Promise<ProviderConfig> {
+  const discoveredModels = await discoverNebiusModels(apiKey);
+  const defaultModel: ModelDefinitionConfig = {
+    id: NEBIUS_DEFAULT_MODEL_ID,
+    name: NEBIUS_DEFAULT_MODEL_ID,
+    reasoning: false,
+    input: ["text"],
+    cost: NEBIUS_DEFAULT_COST,
+    contextWindow: NEBIUS_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: NEBIUS_DEFAULT_MAX_TOKENS,
+  };
+  const hasDefault = discoveredModels.some((model) => model.id === defaultModel.id);
+  const models = hasDefault ? discoveredModels : [defaultModel, ...discoveredModels];
+  return {
+    baseUrl: NEBIUS_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 function buildQwenPortalProvider(): ProviderConfig {
   return {
     baseUrl: QWEN_PORTAL_BASE_URL,
@@ -422,6 +489,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
   if (moonshotKey) {
     providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
+  }
+
+  const nebiusKey =
+    resolveEnvApiKeyVarName("nebius") ??
+    resolveApiKeyFromProfiles({ provider: "nebius", store: authStore });
+  if (nebiusKey) {
+    providers.nebius = { ...(await buildNebiusProvider(nebiusKey)), apiKey: nebiusKey };
   }
 
   const syntheticKey =

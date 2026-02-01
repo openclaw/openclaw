@@ -14,6 +14,11 @@ export const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
 export const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
 export const KIMI_CODING_MODEL_ID = "k2p5";
 export const KIMI_CODING_MODEL_REF = `kimi-coding/${KIMI_CODING_MODEL_ID}`;
+export const NEBIUS_BASE_URL = "https://api.tokenfactory.nebius.com/v1";
+export const NEBIUS_DEFAULT_MODEL_ID = "zai-org/GLM-4.7-FP8";
+export const NEBIUS_DEFAULT_MODEL_REF = `nebius/${NEBIUS_DEFAULT_MODEL_ID}`;
+export const NEBIUS_DEFAULT_CONTEXT_WINDOW = 131072;
+export const NEBIUS_DEFAULT_MAX_TOKENS = 8192;
 
 // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
 export const MINIMAX_API_COST = {
@@ -35,6 +40,12 @@ export const MINIMAX_LM_STUDIO_COST = {
   cacheWrite: 0,
 };
 export const MOONSHOT_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+export const NEBIUS_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -89,5 +100,17 @@ export function buildMoonshotModelDefinition(): ModelDefinitionConfig {
     cost: MOONSHOT_DEFAULT_COST,
     contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+  };
+}
+
+export function buildNebiusModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: NEBIUS_DEFAULT_MODEL_ID,
+    name: NEBIUS_DEFAULT_MODEL_ID,
+    reasoning: false,
+    input: ["text"],
+    cost: NEBIUS_DEFAULT_COST,
+    contextWindow: NEBIUS_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: NEBIUS_DEFAULT_MAX_TOKENS,
   };
 }

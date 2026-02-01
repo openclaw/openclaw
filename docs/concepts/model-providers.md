@@ -120,6 +120,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
 - Mistral: `mistral` (`MISTRAL_API_KEY`)
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
+- Nebius TokenFactory: `nebius` (`NEBIUS_API_KEY`)
+  - Example model: `nebius/zai-org/GLM-4.7-FP8`
 
 ## Providers via `models.providers` (custom/base URL)
 

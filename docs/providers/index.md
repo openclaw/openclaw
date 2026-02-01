@@ -49,6 +49,7 @@ See [Venice AI](/providers/venice).
 - [MiniMax](/providers/minimax)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
 - [Ollama (local models)](/providers/ollama)
+- [Nebius TokenFactory](/providers/nebius)
 
 ## Transcription providers
 

@@ -21,7 +21,8 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
-  | "qwen";
+  | "qwen"
+  | "nebius";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -120,6 +121,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     hint: "Privacy-focused (uncensored models)",
     choices: ["venice-api-key"],
   },
+  {
+    value: "nebius",
+    label: "Nebius",
+    hint: "OpenAI-compatible",
+    choices: ["nebius-api-key"],
+  },
 ];
 
 export function buildAuthChoiceOptions(params: {
@@ -154,6 +161,7 @@ export function buildAuthChoiceOptions(params: {
     label: "Venice AI API key",
     hint: "Privacy-focused inference (uncensored models)",
   });
+  options.push({ value: "nebius-api-key", label: "Nebius API key" });
   options.push({
     value: "github-copilot",
     label: "GitHub Copilot (GitHub device login)",

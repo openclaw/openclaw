@@ -14,6 +14,7 @@ import {
   applyMinimaxApiConfig,
   applyMinimaxConfig,
   applyMoonshotConfig,
+  applyNebiusConfig,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
@@ -26,6 +27,7 @@ import {
   setKimiCodingApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
+  setNebiusApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
@@ -301,6 +303,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyMoonshotConfig(nextConfig);
+  }
+
+  if (authChoice === "nebius-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "nebius",
+      cfg: baseConfig,
+      flagValue: opts.nebiusApiKey,
+      flagName: "--nebius-api-key",
+      envVar: "NEBIUS_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setNebiusApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "nebius:default",
+      provider: "nebius",
+      mode: "api_key",
+    });
+    return applyNebiusConfig(nextConfig);
   }
 
   if (authChoice === "kimi-code-api-key") {
