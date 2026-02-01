@@ -23,10 +23,29 @@ The best way to help the project right now is by sending PRs.
 For threat model + hardening guidance (including `openclaw security audit --deep` and `--fix`), see:
 
 - `https://docs.openclaw.ai/gateway/security`
+- Agentic Security Assessment: `https://docs.openclaw.ai/security/agentic-security-assessment`
 
 ### Web Interface Safety
 
 OpenClaw's web interface is intended for local use only. Do **not** bind it to the public internet; it is not hardened for public exposure.
+
+## Comprehensive Security Documentation
+
+For a complete security assessment covering the 7 critical agentic-security failure modes, including:
+
+- **Agent/Control Plane Separation** — Ensuring reasoning and tool execution are properly isolated
+- **Internet-Exposed Control Surfaces** — Hardening UI, APIs, WebSockets, and tool endpoints
+- **Prompt Injection Risks** — Defending against untrusted inputs influencing tool execution
+- **Credential Management** — Addressing over-privileged, long-lived credentials and sessions
+- **Runtime Policy Enforcement** — Implementing execution guardrails and policy enforcement
+- **Runtime Isolation** — Strengthening isolation between agent runtime and host system
+- **Security as System Property** — Making security a design-time constraint, not deployment hygiene
+
+See the comprehensive documentation:
+
+- [Agentic Security Assessment](https://docs.openclaw.ai/security/agentic-security-assessment) — Full threat analysis and remediation guidance
+- [Security Epic & Remediation Stories](https://docs.openclaw.ai/security/security-epic) — Project-level remediation initiative with actionable stories
+- [Operational Security Guide](https://docs.openclaw.ai/gateway/security) — Day-to-day security operations and auditing
 
 ## Runtime Requirements
 
