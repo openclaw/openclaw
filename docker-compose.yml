@@ -24,7 +24,7 @@ services:
         "--bind",
         "${OPENCLAW_GATEWAY_BIND:-lan}",
         "--port",
-        "18789"
+        "18789",
       ]
 
   openclaw-cli:
