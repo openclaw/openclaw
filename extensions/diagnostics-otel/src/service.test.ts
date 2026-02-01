@@ -83,10 +83,7 @@ vi.mock("@opentelemetry/sdk-trace-base", () => ({
 }));
 
 vi.mock("@opentelemetry/resources", () => ({
-  Resource: class {
-    // eslint-disable-next-line @typescript-eslint/no-useless-constructor
-    constructor(_value?: unknown) {}
-  },
+  Resource: class {},
 }));
 
 vi.mock("@opentelemetry/semantic-conventions", () => ({
