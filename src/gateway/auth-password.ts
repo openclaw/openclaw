@@ -1,7 +1,12 @@
 import crypto from "node:crypto";
 import { promisify } from "node:util";
 
-const scryptAsync = promisify(crypto.scrypt);
+const scryptAsync = promisify(crypto.scrypt) as (
+  password: crypto.BinaryLike,
+  salt: crypto.BinaryLike,
+  keylen: number,
+  options?: crypto.ScryptOptions,
+) => Promise<Buffer>;
 
 /** Salt length in bytes */
 const SALT_LENGTH = 16;
@@ -27,7 +32,11 @@ const SCRYPT_P = 1;
  */
 export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.randomBytes(SALT_LENGTH);
-  const derivedKey = (await scryptAsync(password, salt, KEY_LENGTH)) as Buffer;
+  const derivedKey = (await scryptAsync(password, salt, KEY_LENGTH, {
+    N: SCRYPT_N,
+    r: SCRYPT_R,
+    p: SCRYPT_P,
+  })) as Buffer;
 
   return `${salt.toString("hex")}:${derivedKey.toString("hex")}`;
 }
@@ -54,7 +63,16 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
   const salt = Buffer.from(saltHex, "hex");
   const storedKey = Buffer.from(keyHex, "hex");
 
-  const derivedKey = (await scryptAsync(password, salt, KEY_LENGTH)) as Buffer;
+  // Prevent crash if hash components are malformed/wrong length
+  if (salt.length !== SALT_LENGTH || storedKey.length !== KEY_LENGTH) {
+    return false;
+  }
+
+  const derivedKey = (await scryptAsync(password, salt, KEY_LENGTH, {
+    N: SCRYPT_N,
+    r: SCRYPT_R,
+    p: SCRYPT_P,
+  })) as Buffer;
 
   return crypto.timingSafeEqual(storedKey, derivedKey);
 }

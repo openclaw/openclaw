@@ -479,14 +479,15 @@ export async function startGatewayServer(
       broadcastVoiceWakeChanged,
     },
   });
-  logGatewayStartup({
+  // SECURITY: Await startup log to ensure 5s delay on insecure config works
+  await logGatewayStartup({
     cfg: cfgAtStart,
     bindHost,
     bindHosts: httpBindHosts,
     port,
     tlsEnabled: gatewayTls.enabled,
     log,
-    isNixMode,
+    isNixMode: !!isNixMode,
   });
   scheduleGatewayUpdateCheck({ cfg: cfgAtStart, log, isNixMode });
   const tailscaleCleanup = await startGatewayTailscaleExposure({

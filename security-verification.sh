@@ -32,10 +32,12 @@ TESTS_FAILED=0
 # Test function
 test_case() {
     local name="$1"
-    local command="$2"
+    shift
+    local cmd=("$@")
     TESTS_RUN=$((TESTS_RUN + 1))
     
-    if eval "$command" > /dev/null 2>&1; then
+    # Run command directly (safe, no eval)
+    if "${cmd[@]}" > /dev/null 2>&1; then
         echo -e "${GREEN}✅${NC} $name"
         TESTS_PASSED=$((TESTS_PASSED + 1))
         return 0
@@ -53,13 +55,13 @@ echo "📁 Verifying file integrity..."
 echo ""
 
 # Test 1: Check that new files exist
-test_case "Rate limiting module exists" "test -f src/gateway/auth-rate-limit.ts"
-test_case "Password hashing module exists" "test -f src/gateway/auth-password.ts"
+test_case "Rate limiting module exists" test -f src/gateway/auth-rate-limit.ts
+test_case "Password hashing module exists" test -f src/gateway/auth-password.ts
 
 # Test 2: Check that modifications were applied
-test_case "auth.ts has password hashing import" "grep -q 'auth-password' src/gateway/auth.ts"
-test_case "auth.ts has rate limiting import" "grep -q 'auth-rate-limit' src/gateway/auth.ts"
-test_case "server-startup-log.ts is async" "grep -q 'export async function logGatewayStartup' src/gateway/server-startup-log.ts"
+test_case "auth.ts has password hashing import" grep -q 'auth-password' src/gateway/auth.ts
+test_case "auth.ts has rate limiting import" grep -q 'auth-rate-limit' src/gateway/auth.ts
+test_case "server-startup-log.ts is async" grep -q 'export async function logGatewayStartup' src/gateway/server-startup-log.ts
 
 echo ""
 echo "🔬 Testing core security functions..."
@@ -68,11 +70,13 @@ echo ""
 # Test 3: Run actual unit tests if available
 if command -v node &> /dev/null; then
     if test -f tests/security-test-suite.test.js; then
-        if node --test tests/security-test-suite.test.js 2>&1 | grep -q "tests passed"; then
+        echo "Running: npx tsx tests/security-test-suite.test.js"
+        # Check EXIT CODE instead of grepping output
+        if npx tsx tests/security-test-suite.test.js > /dev/null 2>&1; then
             echo -e "${GREEN}✅${NC} Unit tests passed"
             TESTS_PASSED=$((TESTS_PASSED + 1))
         else
-            echo -e "${YELLOW}⚠️${NC}  Unit tests found but need fixing"
+            echo -e "${YELLOW}⚠️${NC}  Unit tests failed"
         fi
         TESTS_RUN=$((TESTS_RUN + 1))
     fi

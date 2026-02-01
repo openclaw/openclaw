@@ -232,10 +232,6 @@
   "overrides": {
     "tar": "7.5.7"
   },
-  "resolutions": {
-    "hono": "4.11.7",
-    "@hono/node-server>hono": "4.11.7"
-  },
   "engines": {
     "node": ">=22.12.0"
   },
