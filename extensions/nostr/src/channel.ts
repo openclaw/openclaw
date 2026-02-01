@@ -226,18 +226,105 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
         onMessage: async (senderPubkey, text, reply) => {
           ctx.log?.debug(`[${account.accountId}] DM from ${senderPubkey}: ${text.slice(0, 50)}...`);
 
-          // Forward to OpenClaw's message pipeline
-          await runtime.channel.reply.handleInboundMessage({
+          // Load current config for routing
+          const cfg = runtime.config.loadConfig();
+          
+          // Resolve agent route for this message
+          const route = runtime.channel.routing.resolveAgentRoute({
+            cfg,
             channel: "nostr",
             accountId: account.accountId,
-            senderId: senderPubkey,
             chatType: "direct",
-            chatId: senderPubkey, // For DMs, chatId is the sender's pubkey
-            text,
-            reply: async (responseText: string) => {
-              await reply(responseText);
+            senderId: senderPubkey,
+          });
+
+          // Build session key for this conversation
+          const sessionKey = `nostr:${account.accountId}:direct:${senderPubkey}`;
+          
+          // Format the nostr prefix for sender
+          const from = `nostr:${senderPubkey}`;
+          const to = `nostr:${account.publicKey}`;
+          
+          // Build the message context
+          const msgContext = runtime.channel.reply.finalizeInboundContext({
+            Body: text,
+            RawBody: text,
+            CommandBody: text,
+            From: from,
+            To: to,
+            SessionKey: sessionKey,
+            AccountId: account.accountId,
+            ChatType: "direct" as const,
+            ConversationLabel: `Nostr DM`,
+            SenderName: senderPubkey.slice(0, 8),
+            SenderId: senderPubkey,
+            Provider: "nostr" as const,
+            Surface: "nostr" as const,
+            Timestamp: Date.now(),
+            CommandAuthorized: true,
+            CommandSource: "text" as const,
+            OriginatingChannel: "nostr" as const,
+            OriginatingTo: to,
+          });
+
+          // Record the inbound session
+          const storePath = runtime.channel.session.resolveStorePath(cfg.session?.store, {
+            agentId: route.agentId,
+          });
+          
+          await runtime.channel.session.recordInboundSession({
+            storePath,
+            sessionKey,
+            ctx: msgContext,
+            updateLastRoute: {
+              sessionKey: route.mainSessionKey,
+              channel: "nostr",
+              to: from,
+              accountId: account.accountId,
+            },
+            onRecordError: (err) => {
+              ctx.log?.debug(`[${account.accountId}] Failed updating session meta: ${String(err)}`);
             },
           });
+
+          // Create reply dispatcher with typing
+          const tableMode = runtime.channel.text.resolveMarkdownTableMode({
+            cfg,
+            channel: "nostr",
+            accountId: account.accountId,
+          });
+
+          const { dispatcher, replyOptions, markDispatchIdle } =
+            runtime.channel.reply.createReplyDispatcherWithTyping({
+              responsePrefix: null,
+              responsePrefixContextProvider: null,
+              humanDelay: runtime.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+              deliver: async (payload) => {
+                const replyText = payload.text ?? "";
+                const convertedText = runtime.channel.text.convertMarkdownTables(replyText, tableMode);
+                await reply(convertedText);
+              },
+              onError: (err, info) => {
+                ctx.log?.error(`[${account.accountId}] Nostr ${info.kind} reply failed: ${String(err)}`);
+              },
+            });
+
+          // Dispatch the reply
+          const { queuedFinal, counts } = await runtime.channel.reply.dispatchReplyFromConfig({
+            ctx: msgContext,
+            cfg,
+            dispatcher,
+            replyOptions,
+          });
+
+          markDispatchIdle();
+          
+          if (queuedFinal) {
+            const finalCount = counts.final;
+            ctx.log?.debug(
+              `[${account.accountId}] Delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${senderPubkey.slice(0, 8)}`,
+            );
+          }
         },
         onError: (error, context) => {
           ctx.log?.error(`[${account.accountId}] Nostr error (${context}): ${error.message}`);

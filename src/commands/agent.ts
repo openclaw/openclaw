@@ -270,7 +270,7 @@ export async function agentCommand(
     if (needsModelCatalog) {
       modelCatalog = await loadModelCatalog({ config: cfg });
       const allowed = buildAllowedModelSet({
-        cfg,
+        cfg: cfgForModelSelection,
         catalog: modelCatalog,
         defaultProvider,
         defaultModel,
