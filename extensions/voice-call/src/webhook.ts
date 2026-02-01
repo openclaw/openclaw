@@ -1,16 +1,15 @@
 import { spawn } from "node:child_process";
 import http from "node:http";
 import { URL } from "node:url";
-
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreConfig } from "./core-bridge.js";
 import type { CallManager } from "./manager.js";
 import type { MediaStreamConfig } from "./media-stream.js";
-import { MediaStreamHandler } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
-import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 import type { TwilioProvider } from "./providers/twilio.js";
 import type { NormalizedEvent, WebhookContext } from "./types.js";
+import { MediaStreamHandler } from "./media-stream.js";
+import { OpenAIRealtimeSTTProvider } from "./providers/stt-openai-realtime.js";
 
 /**
  * HTTP server for receiving voice call webhooks from providers.
@@ -54,13 +53,10 @@ export class VoiceCallWebhookServer {
    * Initialize media streaming with OpenAI Realtime STT.
    */
   private initializeMediaStreaming(): void {
-    const apiKey =
-      this.config.streaming?.openaiApiKey || process.env.OPENAI_API_KEY;
+    const apiKey = this.config.streaming?.openaiApiKey || process.env.OPENAI_API_KEY;
 
     if (!apiKey) {
-      console.warn(
-        "[voice-call] Streaming enabled but no OpenAI API key found",
-      );
+      console.warn("[voice-call] Streaming enabled but no OpenAI API key found");
       return;
     }
 
@@ -74,9 +70,7 @@ export class VoiceCallWebhookServer {
     const streamConfig: MediaStreamConfig = {
       sttProvider,
       onTranscript: (providerCallId, transcript) => {
-        console.log(
-          `[voice-call] Transcript for ${providerCallId}: ${transcript}`,
-        );
+        console.log(`[voice-call] Transcript for ${providerCallId}: ${transcript}`);
 
         // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
         if (this.provider.name === "twilio") {
@@ -86,9 +80,7 @@ export class VoiceCallWebhookServer {
         // Look up our internal call ID from the provider call ID
         const call = this.manager.getCallByProviderCallId(providerCallId);
         if (!call) {
-          console.warn(
-            `[voice-call] No active call found for provider ID: ${providerCallId}`,
-          );
+          console.warn(`[voice-call] No active call found for provider ID: ${providerCallId}`);
           return;
         }
 
@@ -106,8 +98,7 @@ export class VoiceCallWebhookServer {
 
         // Auto-respond in conversation mode (inbound always, outbound if mode is conversation)
         const callMode = call.metadata?.mode as string | undefined;
-        const shouldRespond =
-          call.direction === "inbound" || callMode === "conversation";
+        const shouldRespond = call.direction === "inbound" || callMode === "conversation";
         if (shouldRespond) {
           this.handleInboundResponse(call.callId, transcript).catch((err) => {
             console.warn(`[voice-call] Failed to auto-respond:`, err);
@@ -123,15 +114,10 @@ export class VoiceCallWebhookServer {
         console.log(`[voice-call] Partial for ${callId}: ${partial}`);
       },
       onConnect: (callId, streamSid) => {
-        console.log(
-          `[voice-call] Media stream connected: ${callId} -> ${streamSid}`,
-        );
+        console.log(`[voice-call] Media stream connected: ${callId} -> ${streamSid}`);
         // Register stream with provider for TTS routing
         if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).registerCallStream(
-            callId,
-            streamSid,
-          );
+          (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
 
         // Speak initial message if one was provided when call was initiated
@@ -173,10 +159,7 @@ export class VoiceCallWebhookServer {
       // Handle WebSocket upgrades for media streams
       if (this.mediaStreamHandler) {
         this.server.on("upgrade", (request, socket, head) => {
-          const url = new URL(
-            request.url || "/",
-            `http://${request.headers.host}`,
-          );
+          const url = new URL(request.url || "/", `http://${request.headers.host}`);
 
           if (url.pathname === streamPath) {
             console.log("[voice-call] WebSocket upgrade for media stream");
@@ -193,9 +176,7 @@ export class VoiceCallWebhookServer {
         const url = `http://${bind}:${port}${webhookPath}`;
         console.log(`[voice-call] Webhook server listening on ${url}`);
         if (this.mediaStreamHandler) {
-          console.log(
-            `[voice-call] Media stream WebSocket on ws://${bind}:${port}${streamPath}`,
-          );
+          console.log(`[voice-call] Media stream WebSocket on ws://${bind}:${port}${streamPath}`);
         }
         resolve(url);
       });
@@ -258,9 +239,7 @@ export class VoiceCallWebhookServer {
     // Verify signature
     const verification = this.provider.verifyWebhook(ctx);
     if (!verification.ok) {
-      console.warn(
-        `[voice-call] Webhook verification failed: ${verification.reason}`,
-      );
+      console.warn(`[voice-call] Webhook verification failed: ${verification.reason}`);
       res.statusCode = 401;
       res.end("Unauthorized");
       return;
@@ -274,10 +253,7 @@ export class VoiceCallWebhookServer {
       try {
         this.manager.processEvent(event);
       } catch (err) {
-        console.error(
-          `[voice-call] Error processing event ${event.type}:`,
-          err,
-        );
+        console.error(`[voice-call] Error processing event ${event.type}:`, err);
       }
     }
 
@@ -285,9 +261,7 @@ export class VoiceCallWebhookServer {
     res.statusCode = result.statusCode || 200;
 
     if (result.providerResponseHeaders) {
-      for (const [key, value] of Object.entries(
-        result.providerResponseHeaders,
-      )) {
+      for (const [key, value] of Object.entries(result.providerResponseHeaders)) {
         res.setHeader(key, value);
       }
     }
@@ -311,13 +285,8 @@ export class VoiceCallWebhookServer {
    * Handle auto-response for inbound calls using the agent system.
    * Supports tool calling for richer voice interactions.
    */
-  private async handleInboundResponse(
-    callId: string,
-    userMessage: string,
-  ): Promise<void> {
-    console.log(
-      `[voice-call] Auto-responding to inbound call ${callId}: "${userMessage}"`,
-    );
+  private async handleInboundResponse(callId: string, userMessage: string): Promise<void> {
+    console.log(`[voice-call] Auto-responding to inbound call ${callId}: "${userMessage}"`);
 
     // Get call context for conversation history
     const call = this.manager.getCall(callId);
@@ -344,9 +313,7 @@ export class VoiceCallWebhookServer {
       });
 
       if (result.error) {
-        console.error(
-          `[voice-call] Response generation error: ${result.error}`,
-        );
+        console.error(`[voice-call] Response generation error: ${result.error}`);
         return;
       }
 
@@ -399,7 +366,9 @@ function runTailscaleCommand(
 
 export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> {
   const { code, stdout } = await runTailscaleCommand(["status", "--json"]);
-  if (code !== 0) return null;
+  if (code !== 0) {
+    return null;
+  }
 
   try {
     const status = JSON.parse(stdout);
@@ -458,9 +427,7 @@ export async function cleanupTailscaleExposureRoute(opts: {
  * Setup Tailscale serve/funnel for the webhook server.
  * This is a helper that shells out to `tailscale serve` or `tailscale funnel`.
  */
-export async function setupTailscaleExposure(
-  config: VoiceCallConfig,
-): Promise<string | null> {
+export async function setupTailscaleExposure(config: VoiceCallConfig): Promise<string | null> {
   if (config.tailscale.mode === "off") {
     return null;
   }
@@ -479,9 +446,7 @@ export async function setupTailscaleExposure(
 /**
  * Cleanup Tailscale serve/funnel.
  */
-export async function cleanupTailscaleExposure(
-  config: VoiceCallConfig,
-): Promise<void> {
+export async function cleanupTailscaleExposure(config: VoiceCallConfig): Promise<void> {
   if (config.tailscale.mode === "off") {
     return;
   }

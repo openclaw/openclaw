@@ -1,6 +1,9 @@
 import type { Command } from "commander";
+import type { NodesRpcOpts } from "./types.js";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
+import { renderTable } from "../../terminal/table.js";
+import { shortenHomePath } from "../../utils.js";
 import {
   type CameraFacing,
   cameraTempPath,
@@ -11,15 +14,14 @@ import {
 import { parseDurationMs } from "../parse-duration.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
-import type { NodesRpcOpts } from "./types.js";
-import { renderTable } from "../../terminal/table.js";
-import { shortenHomePath } from "../../utils.js";
 
 const parseFacing = (value: string): CameraFacing => {
   const v = String(value ?? "")
     .trim()
     .toLowerCase();
-  if (v === "front" || v === "back") return v;
+  if (v === "front" || v === "back") {
+    return v;
+  }
   throw new Error(`invalid facing: ${value} (expected front|back)`);
 };
 
@@ -34,12 +36,12 @@ export function registerNodesCameraCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("camera list", async () => {
           const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
-          const raw = (await callGatewayCli("node.invoke", opts, {
+          const raw = await callGatewayCli("node.invoke", opts, {
             nodeId,
             command: "camera.list",
             params: {},
             idempotencyKey: randomIdempotencyKey(),
-          })) as unknown;
+          });
 
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload =
@@ -144,7 +146,7 @@ export function registerNodesCameraCommands(nodes: Command) {
               invokeParams.timeoutMs = timeoutMs;
             }
 
-            const raw = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+            const raw = await callGatewayCli("node.invoke", opts, invokeParams);
             const res =
               typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
             const payload = parseCameraSnapPayload(res.payload);
@@ -213,7 +215,7 @@ export function registerNodesCameraCommands(nodes: Command) {
             invokeParams.timeoutMs = timeoutMs;
           }
 
-          const raw = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload = parseCameraClipPayload(res.payload);
           const filePath = cameraTempPath({

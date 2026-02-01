@@ -117,7 +117,9 @@ export function rememberRoleRefsForTarget(opts: {
   mode?: NonNullable<PageState["roleRefsMode"]>;
 }): void {
   const targetId = opts.targetId.trim();
-  if (!targetId) return;
+  if (!targetId) {
+    return;
+  }
   roleRefsByTarget.set(roleRefsKey(opts.cdpUrl, targetId), {
     refs: opts.refs,
     ...(opts.frameSelector ? { frameSelector: opts.frameSelector } : {}),
@@ -125,7 +127,9 @@ export function rememberRoleRefsForTarget(opts: {
   });
   while (roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
     const first = roleRefsByTarget.keys().next();
-    if (first.done) break;
+    if (first.done) {
+      break;
+    }
     roleRefsByTarget.delete(first.value);
   }
 }
@@ -142,7 +146,9 @@ export function storeRoleRefsForTarget(opts: {
   state.roleRefs = opts.refs;
   state.roleRefsFrameSelector = opts.frameSelector;
   state.roleRefsMode = opts.mode;
-  if (!opts.targetId?.trim()) return;
+  if (!opts.targetId?.trim()) {
+    return;
+  }
   rememberRoleRefsForTarget({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
@@ -158,11 +164,17 @@ export function restoreRoleRefsForTarget(opts: {
   page: Page;
 }): void {
   const targetId = opts.targetId?.trim() || "";
-  if (!targetId) return;
+  if (!targetId) {
+    return;
+  }
   const cached = roleRefsByTarget.get(roleRefsKey(opts.cdpUrl, targetId));
-  if (!cached) return;
+  if (!cached) {
+    return;
+  }
   const state = ensurePageState(opts.page);
-  if (state.roleRefs) return;
+  if (state.roleRefs) {
+    return;
+  }
   state.roleRefs = cached.refs;
   state.roleRefsFrameSelector = cached.frameSelector;
   state.roleRefsMode = cached.mode;
@@ -170,7 +182,9 @@ export function restoreRoleRefsForTarget(opts: {
 
 export function ensurePageState(page: Page): PageState {
   const existing = pageStates.get(page);
-  if (existing) return existing;
+  if (existing) {
+    return existing;
+  }
 
   const state: PageState = {
     console: [],
@@ -194,7 +208,9 @@ export function ensurePageState(page: Page): PageState {
         location: msg.location(),
       };
       state.console.push(entry);
-      if (state.console.length > MAX_CONSOLE_MESSAGES) state.console.shift();
+      if (state.console.length > MAX_CONSOLE_MESSAGES) {
+        state.console.shift();
+      }
     });
     page.on("pageerror", (err: Error) => {
       state.errors.push({
@@ -203,7 +219,9 @@ export function ensurePageState(page: Page): PageState {
         stack: err?.stack ? String(err.stack) : undefined,
         timestamp: new Date().toISOString(),
       });
-      if (state.errors.length > MAX_PAGE_ERRORS) state.errors.shift();
+      if (state.errors.length > MAX_PAGE_ERRORS) {
+        state.errors.shift();
+      }
     });
     page.on("request", (req: Request) => {
       state.nextRequestId += 1;
@@ -216,12 +234,16 @@ export function ensurePageState(page: Page): PageState {
         url: req.url(),
         resourceType: req.resourceType(),
       });
-      if (state.requests.length > MAX_NETWORK_REQUESTS) state.requests.shift();
+      if (state.requests.length > MAX_NETWORK_REQUESTS) {
+        state.requests.shift();
+      }
     });
     page.on("response", (resp: Response) => {
       const req = resp.request();
       const id = state.requestIds.get(req);
-      if (!id) return;
+      if (!id) {
+        return;
+      }
       let rec: BrowserNetworkRequest | undefined;
       for (let i = state.requests.length - 1; i >= 0; i -= 1) {
         const candidate = state.requests[i];
@@ -230,13 +252,17 @@ export function ensurePageState(page: Page): PageState {
           break;
         }
       }
-      if (!rec) return;
+      if (!rec) {
+        return;
+      }
       rec.status = resp.status();
       rec.ok = resp.ok();
     });
     page.on("requestfailed", (req: Request) => {
       const id = state.requestIds.get(req);
-      if (!id) return;
+      if (!id) {
+        return;
+      }
       let rec: BrowserNetworkRequest | undefined;
       for (let i = state.requests.length - 1; i >= 0; i -= 1) {
         const candidate = state.requests[i];
@@ -245,7 +271,9 @@ export function ensurePageState(page: Page): PageState {
           break;
         }
       }
-      if (!rec) return;
+      if (!rec) {
+        return;
+      }
       rec.failureText = req.failure()?.errorText;
       rec.ok = false;
     });
@@ -259,30 +287,42 @@ export function ensurePageState(page: Page): PageState {
 }
 
 function observeContext(context: BrowserContext) {
-  if (observedContexts.has(context)) return;
+  if (observedContexts.has(context)) {
+    return;
+  }
   observedContexts.add(context);
   ensureContextState(context);
 
-  for (const page of context.pages()) ensurePageState(page);
+  for (const page of context.pages()) {
+    ensurePageState(page);
+  }
   context.on("page", (page) => ensurePageState(page));
 }
 
 export function ensureContextState(context: BrowserContext): ContextState {
   const existing = contextStates.get(context);
-  if (existing) return existing;
+  if (existing) {
+    return existing;
+  }
   const state: ContextState = { traceActive: false };
   contextStates.set(context, state);
   return state;
 }
 
 function observeBrowser(browser: Browser) {
-  for (const context of browser.contexts()) observeContext(context);
+  for (const context of browser.contexts()) {
+    observeContext(context);
+  }
 }
 
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
-  if (cached?.cdpUrl === normalized) return cached;
-  if (connecting) return await connecting;
+  if (cached?.cdpUrl === normalized) {
+    return cached;
+  }
+  if (connecting) {
+    return await connecting;
+  }
 
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
     let lastErr: unknown;
@@ -297,7 +337,9 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         cached = connected;
         observeBrowser(browser);
         browser.on("disconnected", () => {
-          if (cached?.browser === browser) cached = null;
+          if (cached?.browser === browser) {
+            cached = null;
+          }
         });
         return connected;
       } catch (err) {
@@ -346,7 +388,9 @@ async function findPageByTargetId(
   // First, try the standard CDP session approach
   for (const page of pages) {
     const tid = await pageTargetId(page).catch(() => null);
-    if (tid && tid === targetId) return page;
+    if (tid && tid === targetId) {
+      return page;
+    }
   }
   // If CDP sessions fail (e.g., extension relay blocks Target.attachToBrowserTarget),
   // fall back to URL-based matching using the /json/list endpoint
@@ -396,15 +440,21 @@ export async function getPageForTargetId(opts: {
 }): Promise<Page> {
   const { browser } = await connectBrowser(opts.cdpUrl);
   const pages = await getAllPages(browser);
-  if (!pages.length) throw new Error("No pages available in the connected browser.");
+  if (!pages.length) {
+    throw new Error("No pages available in the connected browser.");
+  }
   const first = pages[0];
-  if (!opts.targetId) return first;
+  if (!opts.targetId) {
+    return first;
+  }
   const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
   if (!found) {
     // Extension relays can block CDP attachment APIs (e.g. Target.attachToBrowserTarget),
     // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
     // only exposes a single Page, use it as a best-effort fallback.
-    if (pages.length === 1) return first;
+    if (pages.length === 1) {
+      return first;
+    }
     throw new Error("tab not found");
   }
   return found;
@@ -452,7 +502,9 @@ export function refLocator(page: Page, ref: string) {
 export async function closePlaywrightBrowserConnection(): Promise<void> {
   const cur = cached;
   cached = null;
-  if (!cur) return;
+  if (!cur) {
+    return;
+  }
   await cur.browser.close().catch(() => {});
 }
 

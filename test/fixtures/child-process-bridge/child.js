@@ -7,7 +7,9 @@ const server = http.createServer((_, res) => {
 
 server.listen(0, "127.0.0.1", () => {
   const addr = server.address();
-  if (!addr || typeof addr === "string") throw new Error("unexpected address");
+  if (!addr || typeof addr === "string") {
+    throw new Error("unexpected address");
+  }
   process.stdout.write(`${addr.port}\n`);
 });
 

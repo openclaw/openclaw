@@ -1,11 +1,15 @@
-import { normalizeVerboseLevel, type VerboseLevel } from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { normalizeVerboseLevel, type VerboseLevel } from "../auto-reply/thinking.js";
 
 export function parseVerboseOverride(
   raw: unknown,
 ): { ok: true; value: VerboseLevel | null | undefined } | { ok: false; error: string } {
-  if (raw === null) return { ok: true, value: null };
-  if (raw === undefined) return { ok: true, value: undefined };
+  if (raw === null) {
+    return { ok: true, value: null };
+  }
+  if (raw === undefined) {
+    return { ok: true, value: undefined };
+  }
   if (typeof raw !== "string") {
     return { ok: false, error: 'invalid verboseLevel (use "on"|"off")' };
   }
@@ -17,7 +21,9 @@ export function parseVerboseOverride(
 }
 
 export function applyVerboseOverride(entry: SessionEntry, level: VerboseLevel | null | undefined) {
-  if (level === undefined) return;
+  if (level === undefined) {
+    return;
+  }
   if (level === null) {
     delete entry.verboseLevel;
     return;

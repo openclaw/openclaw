@@ -65,9 +65,13 @@ export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings =
 };
 
 export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningSettings | null {
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
   const cfg = raw as ContextPruningConfig;
-  if (cfg.mode !== "cache-ttl") return null;
+  if (cfg.mode !== "cache-ttl") {
+    return null;
+  }
 
   const s: EffectiveContextPruningSettings = structuredClone(DEFAULT_CONTEXT_PRUNING_SETTINGS);
   s.mode = cfg.mode;

@@ -58,7 +58,9 @@ export function parseInlineDirectives(
       sawCurrent = true;
     } else {
       const id = idRaw.trim();
-      if (id) lastExplicitId = id;
+      if (id) {
+        lastExplicitId = id;
+      }
     }
     return stripReplyTags ? " " : match;
   });

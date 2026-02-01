@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { createAgentEventHandler, createChatRunState } from "./server-chat.js";
 
 describe("agent event handler", () => {

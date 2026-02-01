@@ -21,7 +21,9 @@ export type SlackChannelConfigResolved = {
 
 function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
-    if (typeof value !== "undefined") return value;
+    if (typeof value !== "undefined") {
+      return value;
+    }
   }
   return undefined;
 }
@@ -36,13 +38,19 @@ export function shouldEmitSlackReactionNotification(params: {
 }) {
   const { mode, botId, messageAuthorId, userId, userName, allowlist } = params;
   const effectiveMode = mode ?? "own";
-  if (effectiveMode === "off") return false;
+  if (effectiveMode === "off") {
+    return false;
+  }
   if (effectiveMode === "own") {
-    if (!botId || !messageAuthorId) return false;
+    if (!botId || !messageAuthorId) {
+      return false;
+    }
     return messageAuthorId === botId;
   }
   if (effectiveMode === "allowlist") {
-    if (!Array.isArray(allowlist) || allowlist.length === 0) return false;
+    if (!Array.isArray(allowlist) || allowlist.length === 0) {
+      return false;
+    }
     const users = normalizeAllowListLower(allowlist);
     return allowListMatches({
       allowList: users,

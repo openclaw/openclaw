@@ -1,9 +1,8 @@
-import { EventEmitter } from "node:events";
-
 import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@sinclair/typebox";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-
+import type { TSchema } from "@sinclair/typebox";
+import { EventEmitter } from "node:events";
+import type { TranscriptPolicy } from "../transcript-policy.js";
 import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejections.js";
 import {
   downgradeOpenAIReasoningBlocks,
@@ -12,12 +11,11 @@ import {
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
 } from "../pi-embedded-helpers.js";
+import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
-import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
-import type { TranscriptPolicy } from "../transcript-policy.js";
-import { resolveTranscriptPolicy } from "../transcript-policy.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
 const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
@@ -45,10 +43,16 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
 const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 function isValidAntigravitySignature(value: unknown): value is string {
-  if (typeof value !== "string") return false;
+  if (typeof value !== "string") {
+    return false;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return false;
-  if (trimmed.length % 4 !== 0) return false;
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.length % 4 !== 0) {
+    return false;
+  }
   return ANTIGRAVITY_SIGNATURE_RE.test(trimmed);
 }
 
@@ -60,7 +64,7 @@ function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessa
       out.push(msg);
       continue;
     }
-    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+    const assistant = msg;
     if (!Array.isArray(assistant.content)) {
       out.push(msg);
       continue;
@@ -113,7 +117,9 @@ function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessa
 }
 
 function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
-  if (!schema || typeof schema !== "object") return [];
+  if (!schema || typeof schema !== "object") {
+    return [];
+  }
   if (Array.isArray(schema)) {
     return schema.flatMap((item, index) =>
       findUnsupportedSchemaKeywords(item, `${path}[${index}]`),
@@ -131,7 +137,9 @@ function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] 
     }
   }
   for (const [key, value] of Object.entries(record)) {
-    if (key === "properties") continue;
+    if (key === "properties") {
+      continue;
+    }
     if (GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS.has(key)) {
       violations.push(`${path}.${key}`);
     }
@@ -153,7 +161,9 @@ export function sanitizeToolsForGoogle<
     return params.tools;
   }
   return params.tools.map((tool) => {
-    if (!tool.parameters || typeof tool.parameters !== "object") return tool;
+    if (!tool.parameters || typeof tool.parameters !== "object") {
+      return tool;
+    }
     return {
       ...tool,
       parameters: cleanToolSchemaForGemini(
@@ -206,7 +216,9 @@ export function onUnhandledCompactionFailure(cb: CompactionFailureListener): () 
 
 registerUnhandledRejectionHandler((reason) => {
   const message = describeUnknownError(reason);
-  if (!isCompactionFailureError(message)) return false;
+  if (!isCompactionFailureError(message)) {
+    return false;
+  }
   log.error(`Auto-compaction failed (unhandled): ${message}`);
   compactionFailureEmitter.emit("failure", message);
   return true;
@@ -228,7 +240,9 @@ function readLastModelSnapshot(sessionManager: SessionManager): ModelSnapshotEnt
     const entries = sessionManager.getEntries();
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i] as CustomEntryLike;
-      if (entry?.type !== "custom" || entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE) continue;
+      if (entry?.type !== "custom" || entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE) {
+        continue;
+      }
       const data = entry?.data as ModelSnapshotEntry | undefined;
       if (data && typeof data === "object") {
         return data;

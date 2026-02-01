@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   buildRoleSnapshotFromAiSnapshot,
   buildRoleSnapshotFromAriaSnapshot,
@@ -84,7 +83,7 @@ describe("pw-role-snapshot", () => {
     expect(res.snapshot).toContain('- button "Save"');
     expect(res.snapshot).not.toContain("navigation");
     expect(res.snapshot).not.toContain("heading");
-    expect(Object.keys(res.refs).sort()).toEqual(["e5", "e7"]);
+    expect(Object.keys(res.refs).toSorted()).toEqual(["e5", "e7"]);
     expect(res.refs.e5).toMatchObject({ role: "link", name: "Home" });
     expect(res.refs.e7).toMatchObject({ role: "button", name: "Save" });
   });

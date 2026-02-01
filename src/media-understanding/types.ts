@@ -97,7 +97,7 @@ export type ImageDescriptionRequest = {
   profile?: string;
   preferredProfile?: string;
   agentDir: string;
-  cfg: import("../config/config.js").MoltbotConfig;
+  cfg: import("../config/config.js").OpenClawConfig;
 };
 
 export type ImageDescriptionResult = {

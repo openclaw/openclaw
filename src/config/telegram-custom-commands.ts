@@ -13,7 +13,9 @@ export type TelegramCustomCommandIssue = {
 
 export function normalizeTelegramCommandName(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) return "";
+  if (!trimmed) {
+    return "";
+  }
   const withoutSlash = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
   return withoutSlash.trim().toLowerCase();
 }

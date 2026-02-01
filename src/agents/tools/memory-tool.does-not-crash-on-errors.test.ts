@@ -34,7 +34,9 @@ describe("memory tools", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     const tool = createMemorySearchTool({ config: cfg });
     expect(tool).not.toBeNull();
-    if (!tool) throw new Error("tool missing");
+    if (!tool) {
+      throw new Error("tool missing");
+    }
 
     const result = await tool.execute("call_1", { query: "hello" });
     expect(result.details).toEqual({
@@ -48,7 +50,9 @@ describe("memory tools", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } };
     const tool = createMemoryGetTool({ config: cfg });
     expect(tool).not.toBeNull();
-    if (!tool) throw new Error("tool missing");
+    if (!tool) {
+      throw new Error("tool missing");
+    }
 
     const result = await tool.execute("call_2", { path: "memory/NOPE.md" });
     expect(result.details).toEqual({

@@ -4,15 +4,17 @@ read_when:
   - Implementing or changing Bonjour discovery/advertising
   - Adjusting remote connection modes (direct vs SSH)
   - Designing node discovery + pairing for remote nodes
+title: "Discovery and Transports"
 ---
+
 # Discovery & transports
 
-Moltbot has two distinct problems that look similar on the surface:
+OpenClaw has two distinct problems that look similar on the surface:
 
-1) **Operator remote control**: the macOS menu bar app controlling a gateway running elsewhere.
-2) **Node pairing**: iOS/Android (and future nodes) finding a gateway and pairing securely.
+1. **Operator remote control**: the macOS menu bar app controlling a gateway running elsewhere.
+2. **Node pairing**: iOS/Android (and future nodes) finding a gateway and pairing securely.
 
-The design goal is to keep all network discovery/advertising in the **Node Gateway** (`clawd` / `moltbot gateway`) and keep clients (mac app, iOS) as consumers.
+The design goal is to keep all network discovery/advertising in the **Node Gateway** (`openclaw gateway`) and keep clients (mac app, iOS) as consumers.
 
 ## Terms
 
@@ -23,6 +25,7 @@ The design goal is to keep all network discovery/advertising in the **Node Gatew
 - **Legacy TCP bridge (deprecated/removed)**: older node transport (see [Bridge protocol](/gateway/bridge-protocol)); no longer advertised for discovery.
 
 Protocol details:
+
 - [Gateway protocol](/gateway/protocol)
 - [Bridge protocol (legacy)](/gateway/bridge-protocol)
 
@@ -44,6 +47,7 @@ Protocol details:
 Bonjour is best-effort and does not cross networks. It is only used for “same LAN” convenience.
 
 Target direction:
+
 - The **gateway** advertises its WS endpoint via Bonjour.
 - Clients browse and show a “pick a gateway” list, then store the chosen endpoint.
 
@@ -52,7 +56,7 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
 #### Service beacon details
 
 - Service types:
-  - `_moltbot-gw._tcp` (gateway transport beacon)
+  - `_openclaw-gw._tcp` (gateway transport beacon)
 - TXT keys (non-secret):
   - `role=gateway`
   - `lanHost=<hostname>.local`
@@ -60,20 +64,22 @@ Troubleshooting and beacon details: [Bonjour](/gateway/bonjour).
   - `gatewayPort=18789` (Gateway WS + HTTP)
   - `gatewayTls=1` (only when TLS is enabled)
   - `gatewayTlsSha256=<sha256>` (only when TLS is enabled and fingerprint is available)
-  - `canvasPort=18793` (default canvas host port; serves `/__moltbot__/canvas/`)
-  - `cliPath=<path>` (optional; absolute path to a runnable `moltbot` entrypoint or binary)
+  - `canvasPort=18793` (default canvas host port; serves `/__openclaw__/canvas/`)
+  - `cliPath=<path>` (optional; absolute path to a runnable `openclaw` entrypoint or binary)
   - `tailnetDns=<magicdns>` (optional hint; auto-detected when Tailscale is available)
 
 Disable/override:
-- `CLAWDBOT_DISABLE_BONJOUR=1` disables advertising.
-- `gateway.bind` in `~/.clawdbot/moltbot.json` controls the Gateway bind mode.
-- `CLAWDBOT_SSH_PORT` overrides the SSH port advertised in TXT (defaults to 22).
-- `CLAWDBOT_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS).
-- `CLAWDBOT_CLI_PATH` overrides the advertised CLI path.
+
+- `OPENCLAW_DISABLE_BONJOUR=1` disables advertising.
+- `gateway.bind` in `~/.openclaw/openclaw.json` controls the Gateway bind mode.
+- `OPENCLAW_SSH_PORT` overrides the SSH port advertised in TXT (defaults to 22).
+- `OPENCLAW_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS).
+- `OPENCLAW_CLI_PATH` overrides the advertised CLI path.
 
 ### 2) Tailnet (cross-network)
 
 For London/Vienna style setups, Bonjour won’t help. The recommended “direct” target is:
+
 - Tailscale MagicDNS name (preferred) or a stable tailnet IP.
 
 If the gateway can detect it is running under Tailscale, it publishes `tailnetDns` as an optional hint for clients (including wide-area beacons).
@@ -88,10 +94,10 @@ See [Remote access](/gateway/remote).
 
 Recommended client behavior:
 
-1) If a paired direct endpoint is configured and reachable, use it.
-2) Else, if Bonjour finds a gateway on LAN, offer a one-tap “Use this gateway” choice and save it as the direct endpoint.
-3) Else, if a tailnet DNS/IP is configured, try direct.
-4) Else, fall back to SSH.
+1. If a paired direct endpoint is configured and reachable, use it.
+2. Else, if Bonjour finds a gateway on LAN, offer a one-tap “Use this gateway” choice and save it as the direct endpoint.
+3. Else, if a tailnet DNS/IP is configured, try direct.
+4. Else, fall back to SSH.
 
 ## Pairing + auth (direct transport)
 

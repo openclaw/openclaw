@@ -1,10 +1,10 @@
-import { fetchJson } from "./provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
   UsageProviderId,
   UsageWindow,
 } from "./provider-usage.types.js";
+import { fetchJson } from "./provider-usage.fetch.shared.js";
+import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 
 type GeminiUsageResponse = {
   buckets?: Array<{ modelId?: string; remainingFraction?: number }>;
@@ -45,7 +45,9 @@ export async function fetchGeminiUsage(
   for (const bucket of data.buckets || []) {
     const model = bucket.modelId || "unknown";
     const frac = bucket.remainingFraction ?? 1;
-    if (!quotas[model] || frac < quotas[model]) quotas[model] = frac;
+    if (!quotas[model] || frac < quotas[model]) {
+      quotas[model] = frac;
+    }
   }
 
   const windows: UsageWindow[] = [];
@@ -58,24 +60,30 @@ export async function fetchGeminiUsage(
     const lower = model.toLowerCase();
     if (lower.includes("pro")) {
       hasPro = true;
-      if (frac < proMin) proMin = frac;
+      if (frac < proMin) {
+        proMin = frac;
+      }
     }
     if (lower.includes("flash")) {
       hasFlash = true;
-      if (frac < flashMin) flashMin = frac;
+      if (frac < flashMin) {
+        flashMin = frac;
+      }
     }
   }
 
-  if (hasPro)
+  if (hasPro) {
     windows.push({
       label: "Pro",
       usedPercent: clampPercent((1 - proMin) * 100),
     });
-  if (hasFlash)
+  }
+  if (hasFlash) {
     windows.push({
       label: "Flash",
       usedPercent: clampPercent((1 - flashMin) * 100),
     });
+  }
 
   return { provider, displayName: PROVIDER_LABELS[provider], windows };
 }

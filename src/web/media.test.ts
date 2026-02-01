@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { optimizeImageToPng } from "../media/image-ops.js";
 import { loadWebMedia, optimizeImageToJpeg } from "./media.js";
 
@@ -13,7 +11,7 @@ const tmpFiles: string[] = [];
 async function writeTempFile(buffer: Buffer, ext: string): Promise<string> {
   const file = path.join(
     os.tmpdir(),
-    `moltbot-media-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`,
+    `openclaw-media-${Date.now()}-${Math.random().toString(16).slice(2)}${ext}`,
   );
   tmpFiles.push(file);
   await fs.writeFile(file, buffer);
@@ -118,7 +116,9 @@ describe("web media loading", () => {
           if (name === "content-disposition") {
             return 'attachment; filename="report.pdf"';
           }
-          if (name === "content-type") return "application/pdf";
+          if (name === "content-type") {
+            return "application/pdf";
+          }
           return null;
         },
       },

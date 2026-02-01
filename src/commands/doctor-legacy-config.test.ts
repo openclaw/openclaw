@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
 import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
 
 describe("normalizeLegacyConfigValues", () => {
@@ -15,16 +14,16 @@ describe("normalizeLegacyConfigValues", () => {
   };
 
   beforeEach(() => {
-    previousOauthDir = process.env.CLAWDBOT_OAUTH_DIR;
-    tempOauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-oauth-"));
-    process.env.CLAWDBOT_OAUTH_DIR = tempOauthDir;
+    previousOauthDir = process.env.OPENCLAW_OAUTH_DIR;
+    tempOauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-"));
+    process.env.OPENCLAW_OAUTH_DIR = tempOauthDir;
   });
 
   afterEach(() => {
     if (previousOauthDir === undefined) {
-      delete process.env.CLAWDBOT_OAUTH_DIR;
+      delete process.env.OPENCLAW_OAUTH_DIR;
     } else {
-      process.env.CLAWDBOT_OAUTH_DIR = previousOauthDir;
+      process.env.OPENCLAW_OAUTH_DIR = previousOauthDir;
     }
     if (tempOauthDir) {
       fs.rmSync(tempOauthDir, { recursive: true, force: true });
@@ -94,7 +93,7 @@ describe("normalizeLegacyConfigValues", () => {
   });
 
   it("copies legacy ack reaction when authDir override exists", () => {
-    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-wa-auth-"));
+    const customDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-wa-auth-"));
     try {
       writeCreds(customDir);
 

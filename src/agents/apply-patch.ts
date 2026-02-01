@@ -1,8 +1,8 @@
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
@@ -183,22 +183,32 @@ function recordSummary(
   bucket: keyof ApplyPatchSummary,
   value: string,
 ) {
-  if (seen[bucket].has(value)) return;
+  if (seen[bucket].has(value)) {
+    return;
+  }
   seen[bucket].add(value);
   summary[bucket].push(value);
 }
 
 function formatSummary(summary: ApplyPatchSummary): string {
   const lines = ["Success. Updated the following files:"];
-  for (const file of summary.added) lines.push(`A ${file}`);
-  for (const file of summary.modified) lines.push(`M ${file}`);
-  for (const file of summary.deleted) lines.push(`D ${file}`);
+  for (const file of summary.added) {
+    lines.push(`A ${file}`);
+  }
+  for (const file of summary.modified) {
+    lines.push(`M ${file}`);
+  }
+  for (const file of summary.deleted) {
+    lines.push(`D ${file}`);
+  }
   return lines.join("\n");
 }
 
 async function ensureDir(filePath: string) {
   const parent = path.dirname(filePath);
-  if (!parent || parent === ".") return;
+  if (!parent || parent === ".") {
+    return;
+  }
   await fs.mkdir(parent, { recursive: true });
 }
 
@@ -231,21 +241,31 @@ function normalizeUnicodeSpaces(value: string): string {
 
 function expandPath(filePath: string): string {
   const normalized = normalizeUnicodeSpaces(filePath);
-  if (normalized === "~") return os.homedir();
-  if (normalized.startsWith("~/")) return os.homedir() + normalized.slice(1);
+  if (normalized === "~") {
+    return os.homedir();
+  }
+  if (normalized.startsWith("~/")) {
+    return os.homedir() + normalized.slice(1);
+  }
   return normalized;
 }
 
 function resolvePathFromCwd(filePath: string, cwd: string): string {
   const expanded = expandPath(filePath);
-  if (path.isAbsolute(expanded)) return path.normalize(expanded);
+  if (path.isAbsolute(expanded)) {
+    return path.normalize(expanded);
+  }
   return path.resolve(cwd, expanded);
 }
 
 function toDisplayPath(resolved: string, cwd: string): string {
   const relative = path.relative(cwd, resolved);
-  if (!relative || relative === "") return path.basename(resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) return resolved;
+  if (!relative || relative === "") {
+    return path.basename(resolved);
+  }
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return resolved;
+  }
   return relative;
 }
 
@@ -275,7 +295,9 @@ function parsePatchText(input: string): { hunks: Hunk[]; patch: string } {
 
 function checkPatchBoundariesLenient(lines: string[]): string[] {
   const strictError = checkPatchBoundariesStrict(lines);
-  if (!strictError) return lines;
+  if (!strictError) {
+    return lines;
+  }
 
   if (lines.length < 4) {
     throw new Error(strictError);
@@ -285,7 +307,9 @@ function checkPatchBoundariesLenient(lines: string[]): string[] {
   if ((first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') && last.endsWith("EOF")) {
     const inner = lines.slice(1, lines.length - 1);
     const innerError = checkPatchBoundariesStrict(inner);
-    if (!innerError) return inner;
+    if (!innerError) {
+      return inner;
+    }
     throw new Error(innerError);
   }
 

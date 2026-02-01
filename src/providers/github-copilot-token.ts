@@ -1,5 +1,4 @@
 import path from "node:path";
-
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 
@@ -57,18 +56,24 @@ export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilo
 
 export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   const trimmed = token.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
 
   // The token returned from the Copilot token endpoint is a semicolon-delimited
   // set of key/value pairs. One of them is `proxy-ep=...`.
   const match = trimmed.match(/(?:^|;)\s*proxy-ep=([^;\s]+)/i);
   const proxyEp = match?.[1]?.trim();
-  if (!proxyEp) return null;
+  if (!proxyEp) {
+    return null;
+  }
 
   // pi-ai expects converting proxy.* -> api.*
   // (see upstream getGitHubCopilotBaseUrl).
   const host = proxyEp.replace(/^https?:\/\//, "").replace(/^proxy\./i, "api.");
-  if (!host) return null;
+  if (!host) {
+    return null;
+  }
 
   return `https://${host}`;
 }

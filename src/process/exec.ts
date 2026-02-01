@@ -1,7 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-
 import { danger, shouldLogVerbose } from "../globals.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
@@ -25,8 +24,12 @@ export async function runExec(
   try {
     const { stdout, stderr } = await execFileAsync(command, args, options);
     if (shouldLogVerbose()) {
-      if (stdout.trim()) logDebug(stdout.trim());
-      if (stderr.trim()) logError(stderr.trim());
+      if (stdout.trim()) {
+        logDebug(stdout.trim());
+      }
+      if (stderr.trim()) {
+        logError(stderr.trim());
+      }
     }
     return { stdout, stderr };
   } catch (err) {
@@ -65,7 +68,9 @@ export async function runCommandWithTimeout(
 
   const shouldSuppressNpmFund = (() => {
     const cmd = path.basename(argv[0] ?? "");
-    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") return true;
+    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
+      return true;
+    }
     if (cmd === "node" || cmd === "node.exe") {
       const script = argv[1] ?? "";
       return script.includes("npm-cli.js");
@@ -75,8 +80,12 @@ export async function runCommandWithTimeout(
 
   const resolvedEnv = env ? { ...process.env, ...env } : { ...process.env };
   if (shouldSuppressNpmFund) {
-    if (resolvedEnv.NPM_CONFIG_FUND == null) resolvedEnv.NPM_CONFIG_FUND = "false";
-    if (resolvedEnv.npm_config_fund == null) resolvedEnv.npm_config_fund = "false";
+    if (resolvedEnv.NPM_CONFIG_FUND == null) {
+      resolvedEnv.NPM_CONFIG_FUND = "false";
+    }
+    if (resolvedEnv.npm_config_fund == null) {
+      resolvedEnv.npm_config_fund = "false";
+    }
   }
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
@@ -109,13 +118,17 @@ export async function runCommandWithTimeout(
       stderr += d.toString();
     });
     child.on("error", (err) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       reject(err);
     });
     child.on("close", (code, signal) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       resolve({ stdout, stderr, code, signal, killed: child.killed });

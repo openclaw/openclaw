@@ -1,10 +1,10 @@
 import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
+import type { RuntimeEnv } from "../../runtime.js";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { loadConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import {
   stylePromptHint,
   stylePromptMessage,
@@ -27,46 +27,64 @@ const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
 const pad = (value: string, size: number) => value.padEnd(size);
 
 const truncate = (value: string, max: number) => {
-  if (value.length <= max) return value;
-  if (max <= 3) return value.slice(0, max);
+  if (value.length <= max) {
+    return value;
+  }
+  if (max <= 3) {
+    return value.slice(0, max);
+  }
   return `${value.slice(0, max - 3)}...`;
 };
 
 function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().sort((a, b) => {
+  return results.slice().toSorted((a, b) => {
     const aImage = a.image.ok ? 1 : 0;
     const bImage = b.image.ok ? 1 : 0;
-    if (aImage !== bImage) return bImage - aImage;
+    if (aImage !== bImage) {
+      return bImage - aImage;
+    }
 
     const aToolLatency = a.tool.latencyMs ?? Number.POSITIVE_INFINITY;
     const bToolLatency = b.tool.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aToolLatency !== bToolLatency) return aToolLatency - bToolLatency;
+    if (aToolLatency !== bToolLatency) {
+      return aToolLatency - bToolLatency;
+    }
 
     const aCtx = a.contextLength ?? 0;
     const bCtx = b.contextLength ?? 0;
-    if (aCtx !== bCtx) return bCtx - aCtx;
+    if (aCtx !== bCtx) {
+      return bCtx - aCtx;
+    }
 
     const aParams = a.inferredParamB ?? 0;
     const bParams = b.inferredParamB ?? 0;
-    if (aParams !== bParams) return bParams - aParams;
+    if (aParams !== bParams) {
+      return bParams - aParams;
+    }
 
     return a.modelRef.localeCompare(b.modelRef);
   });
 }
 
 function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.slice().sort((a, b) => {
+  return results.slice().toSorted((a, b) => {
     const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
     const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aLatency !== bLatency) return aLatency - bLatency;
+    if (aLatency !== bLatency) {
+      return aLatency - bLatency;
+    }
 
     const aCtx = a.contextLength ?? 0;
     const bCtx = b.contextLength ?? 0;
-    if (aCtx !== bCtx) return bCtx - aCtx;
+    if (aCtx !== bCtx) {
+      return bCtx - aCtx;
+    }
 
     const aParams = a.inferredParamB ?? 0;
     const bParams = b.inferredParamB ?? 0;
-    if (aParams !== bParams) return bParams - aParams;
+    if (aParams !== bParams) {
+      return bParams - aParams;
+    }
 
     return a.modelRef.localeCompare(b.modelRef);
   });
@@ -188,7 +206,9 @@ export async function modelsScanCommand(
         concurrency,
         probe,
         onProgress: ({ phase, completed, total }) => {
-          if (phase !== "probe") return;
+          if (phase !== "probe") {
+            return;
+          }
           const labelBase = probe ? "Probing models" : "Scanning models";
           update({
             completed,
@@ -255,7 +275,7 @@ export async function modelsScanCommand(
       runtime.exit(0);
     }
 
-    selected = selection as string[];
+    selected = selection;
     if (imageSorted.length > 0) {
       const imageSelection = await multiselect({
         message: "Select image fallback models (ordered)",
@@ -272,7 +292,7 @@ export async function modelsScanCommand(
         runtime.exit(0);
       }
 
-      selectedImages = imageSelection as string[];
+      selectedImages = imageSelection;
     }
   } else if (!process.stdin.isTTY && !opts.yes && !noInput && !opts.json) {
     throw new Error("Non-interactive scan: pass --yes to apply defaults.");
@@ -288,10 +308,14 @@ export async function modelsScanCommand(
   const _updated = await updateConfig((cfg) => {
     const nextModels = { ...cfg.agents?.defaults?.models };
     for (const entry of selected) {
-      if (!nextModels[entry]) nextModels[entry] = {};
+      if (!nextModels[entry]) {
+        nextModels[entry] = {};
+      }
     }
     for (const entry of selectedImages) {
-      if (!nextModels[entry]) nextModels[entry] = {};
+      if (!nextModels[entry]) {
+        nextModels[entry] = {};
+      }
     }
     const existingImageModel = cfg.agents?.defaults?.imageModel as
       | { primary?: string; fallbacks?: string[] }

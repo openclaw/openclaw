@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { generateUUID } from "./uuid";
 
 describe("generateUUID", () => {

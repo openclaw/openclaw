@@ -1,12 +1,16 @@
+import type { QueueDropPolicy, QueueMode } from "./types.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
-import type { QueueDropPolicy, QueueMode } from "./types.js";
 
 function parseQueueDebounce(raw?: string): number | undefined {
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   try {
     const parsed = parseDurationMs(raw.trim(), { defaultUnit: "ms" });
-    if (!parsed || parsed < 0) return undefined;
+    if (!parsed || parsed < 0) {
+      return undefined;
+    }
     return Math.round(parsed);
   } catch {
     return undefined;
@@ -14,11 +18,17 @@ function parseQueueDebounce(raw?: string): number | undefined {
 }
 
 function parseQueueCap(raw?: string): number | undefined {
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   const num = Number(raw);
-  if (!Number.isFinite(num)) return undefined;
+  if (!Number.isFinite(num)) {
+    return undefined;
+  }
   const cap = Math.floor(num);
-  if (cap < 1) return undefined;
+  if (cap < 1) {
+    return undefined;
+  }
   return cap;
 }
 
@@ -37,10 +47,14 @@ function parseQueueDirectiveArgs(raw: string): {
 } {
   let i = 0;
   const len = raw.length;
-  while (i < len && /\s/.test(raw[i])) i += 1;
+  while (i < len && /\s/.test(raw[i])) {
+    i += 1;
+  }
   if (raw[i] === ":") {
     i += 1;
-    while (i < len && /\s/.test(raw[i])) i += 1;
+    while (i < len && /\s/.test(raw[i])) {
+      i += 1;
+    }
   }
   let consumed = i;
   let queueMode: QueueMode | undefined;
@@ -54,17 +68,27 @@ function parseQueueDirectiveArgs(raw: string): {
   let rawDrop: string | undefined;
   let hasOptions = false;
   const takeToken = (): string | null => {
-    if (i >= len) return null;
+    if (i >= len) {
+      return null;
+    }
     const start = i;
-    while (i < len && !/\s/.test(raw[i])) i += 1;
-    if (start === i) return null;
+    while (i < len && !/\s/.test(raw[i])) {
+      i += 1;
+    }
+    if (start === i) {
+      return null;
+    }
     const token = raw.slice(start, i);
-    while (i < len && /\s/.test(raw[i])) i += 1;
+    while (i < len && /\s/.test(raw[i])) {
+      i += 1;
+    }
     return token;
   };
   while (i < len) {
     const token = takeToken();
-    if (!token) break;
+    if (!token) {
+      break;
+    }
     const lowered = token.trim().toLowerCase();
     if (lowered === "default" || lowered === "reset" || lowered === "clear") {
       queueReset = true;

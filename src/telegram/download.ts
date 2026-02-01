@@ -27,7 +27,9 @@ export async function downloadTelegramFile(
   info: TelegramFileInfo,
   maxBytes?: number,
 ): Promise<SavedMedia> {
-  if (!info.file_path) throw new Error("file_path missing");
+  if (!info.file_path) {
+    throw new Error("file_path missing");
+  }
   const url = `https://api.telegram.org/file/bot${token}/${info.file_path}`;
   const res = await fetch(url);
   if (!res.ok || !res.body) {
@@ -40,8 +42,10 @@ export async function downloadTelegramFile(
     filePath: info.file_path,
   });
   // save with inbound subdir
-  const saved = await saveMediaBuffer(array, mime, "inbound", maxBytes);
+  const saved = await saveMediaBuffer(array, mime, "inbound", maxBytes, info.file_path);
   // Ensure extension matches mime if possible
-  if (!saved.contentType && mime) saved.contentType = mime;
+  if (!saved.contentType && mime) {
+    saved.contentType = mime;
+  }
   return saved;
 }

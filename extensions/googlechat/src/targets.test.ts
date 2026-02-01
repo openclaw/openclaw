@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
@@ -10,9 +9,7 @@ describe("normalizeGoogleChatTarget", () => {
   it("normalizes provider prefixes", () => {
     expect(normalizeGoogleChatTarget("googlechat:users/123")).toBe("users/123");
     expect(normalizeGoogleChatTarget("google-chat:spaces/AAA")).toBe("spaces/AAA");
-    expect(normalizeGoogleChatTarget("gchat:user:[redacted-email]")).toBe(
-      "users/[redacted-email]",
-    );
+    expect(normalizeGoogleChatTarget("gchat:user:[redacted-email]")).toBe("users/[redacted-email]");
   });
 
   it("normalizes email targets to users/<email>", () => {

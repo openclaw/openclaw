@@ -1,19 +1,19 @@
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, select, text } from "./configure.shared.js";
-import { guardCancel, randomToken } from "./onboard-helpers.js";
+import { guardCancel, normalizeGatewayTokenInput, randomToken } from "./onboard-helpers.js";
 
 type GatewayAuthChoice = "token" | "password";
 
 export async function promptGatewayConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   runtime: RuntimeEnv,
 ): Promise<{
-  config: MoltbotConfig;
+  config: OpenClawConfig;
   port: number;
   token?: string;
 }> {
@@ -59,7 +59,7 @@ export async function promptGatewayConfig(
       ],
     }),
     runtime,
-  ) as "auto" | "lan" | "loopback" | "custom" | "tailnet";
+  );
 
   let customBindHost: string | undefined;
   if (bind === "custom") {
@@ -68,17 +68,22 @@ export async function promptGatewayConfig(
         message: "Custom IP address",
         placeholder: "192.168.1.100",
         validate: (value) => {
-          if (!value) return "IP address is required for custom bind mode";
+          if (!value) {
+            return "IP address is required for custom bind mode";
+          }
           const trimmed = value.trim();
           const parts = trimmed.split(".");
-          if (parts.length !== 4) return "Invalid IPv4 address (e.g., 192.168.1.100)";
+          if (parts.length !== 4) {
+            return "Invalid IPv4 address (e.g., 192.168.1.100)";
+          }
           if (
             parts.every((part) => {
               const n = parseInt(part, 10);
               return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
             })
-          )
+          ) {
             return undefined;
+          }
           return "Invalid IPv4 address (each octet must be 0-255)";
         },
       }),
@@ -117,7 +122,7 @@ export async function promptGatewayConfig(
       ],
     }),
     runtime,
-  ) as "off" | "serve" | "funnel";
+  );
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
   if (tailscaleMode !== "off") {
@@ -139,7 +144,9 @@ export async function promptGatewayConfig(
   let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
     note(
-      ["Docs:", "https://docs.molt.bot/gateway/tailscale", "https://docs.molt.bot/web"].join("\n"),
+      ["Docs:", "https://docs.openclaw.ai/gateway/tailscale", "https://docs.openclaw.ai/web"].join(
+        "\n",
+      ),
       "Tailscale",
     );
     tailscaleResetOnExit = Boolean(
@@ -175,7 +182,7 @@ export async function promptGatewayConfig(
       }),
       runtime,
     );
-    gatewayToken = String(tokenInput).trim() || randomToken();
+    gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
   }
 
   if (authMode === "password") {

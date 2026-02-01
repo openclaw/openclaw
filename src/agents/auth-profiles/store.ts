@@ -1,12 +1,12 @@
-import fs from "node:fs";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import fs from "node:fs";
 import lockfile from "proper-lockfile";
+import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveOAuthPath } from "../../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
-import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
@@ -48,12 +48,18 @@ export async function updateAuthProfileStoreWithLock(params: {
 }
 
 function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
   const record = raw as Record<string, unknown>;
-  if ("profiles" in record) return null;
+  if ("profiles" in record) {
+    return null;
+  }
   const entries: LegacyAuthStore = {};
   for (const [key, value] of Object.entries(record)) {
-    if (!value || typeof value !== "object") continue;
+    if (!value || typeof value !== "object") {
+      continue;
+    }
     const typed = value as Partial<AuthProfileCredential>;
     if (typed.type !== "api_key" && typed.type !== "oauth" && typed.type !== "token") {
       continue;
@@ -67,29 +73,41 @@ function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
 }
 
 function coerceAuthStore(raw: unknown): AuthProfileStore | null {
-  if (!raw || typeof raw !== "object") return null;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
   const record = raw as Record<string, unknown>;
-  if (!record.profiles || typeof record.profiles !== "object") return null;
+  if (!record.profiles || typeof record.profiles !== "object") {
+    return null;
+  }
   const profiles = record.profiles as Record<string, unknown>;
   const normalized: Record<string, AuthProfileCredential> = {};
   for (const [key, value] of Object.entries(profiles)) {
-    if (!value || typeof value !== "object") continue;
+    if (!value || typeof value !== "object") {
+      continue;
+    }
     const typed = value as Partial<AuthProfileCredential>;
     if (typed.type !== "api_key" && typed.type !== "oauth" && typed.type !== "token") {
       continue;
     }
-    if (!typed.provider) continue;
+    if (!typed.provider) {
+      continue;
+    }
     normalized[key] = typed as AuthProfileCredential;
   }
   const order =
     record.order && typeof record.order === "object"
       ? Object.entries(record.order as Record<string, unknown>).reduce(
           (acc, [provider, value]) => {
-            if (!Array.isArray(value)) return acc;
+            if (!Array.isArray(value)) {
+              return acc;
+            }
             const list = value
               .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
               .filter(Boolean);
-            if (list.length === 0) return acc;
+            if (list.length === 0) {
+              return acc;
+            }
             acc[provider] = list;
             return acc;
           },
@@ -115,9 +133,15 @@ function mergeRecord<T>(
   base?: Record<string, T>,
   override?: Record<string, T>,
 ): Record<string, T> | undefined {
-  if (!base && !override) return undefined;
-  if (!base) return { ...override };
-  if (!override) return { ...base };
+  if (!base && !override) {
+    return undefined;
+  }
+  if (!base) {
+    return { ...override };
+  }
+  if (!override) {
+    return { ...base };
+  }
   return { ...base, ...override };
 }
 
@@ -145,13 +169,19 @@ function mergeAuthProfileStores(
 function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
   const oauthPath = resolveOAuthPath();
   const oauthRaw = loadJsonFile(oauthPath);
-  if (!oauthRaw || typeof oauthRaw !== "object") return false;
+  if (!oauthRaw || typeof oauthRaw !== "object") {
+    return false;
+  }
   const oauthEntries = oauthRaw as Record<string, OAuthCredentials>;
   let mutated = false;
   for (const [provider, creds] of Object.entries(oauthEntries)) {
-    if (!creds || typeof creds !== "object") continue;
+    if (!creds || typeof creds !== "object") {
+      continue;
+    }
     const profileId = `${provider}:default`;
-    if (store.profiles[profileId]) continue;
+    if (store.profiles[profileId]) {
+      continue;
+    }
     store.profiles[profileId] = {
       type: "oauth",
       provider,

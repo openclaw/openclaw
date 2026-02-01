@@ -1,5 +1,5 @@
-import { normalizeProviderId } from "../../agents/model-selection.js";
 import type { MediaUnderstandingProvider } from "../types.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
 import { anthropicProvider } from "./anthropic/index.js";
 import { deepgramProvider } from "./deepgram/index.js";
 import { googleProvider } from "./google/index.js";
@@ -18,7 +18,9 @@ const PROVIDERS: MediaUnderstandingProvider[] = [
 
 export function normalizeMediaProviderId(id: string): string {
   const normalized = normalizeProviderId(id);
-  if (normalized === "gemini") return "google";
+  if (normalized === "gemini") {
+    return "google";
+  }
   return normalized;
 }
 

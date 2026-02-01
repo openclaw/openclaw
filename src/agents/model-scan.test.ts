@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { scanOpenRouterModels } from "./model-scan.js";
 
 function createFetchFixture(payload: unknown): typeof fetch {

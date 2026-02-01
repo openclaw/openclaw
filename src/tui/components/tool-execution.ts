@@ -20,8 +20,12 @@ const PREVIEW_LINES = 12;
 function formatArgs(toolName: string, args: unknown): string {
   const display = resolveToolDisplay({ name: toolName, args });
   const detail = formatToolDetail(display);
-  if (detail) return detail;
-  if (!args || typeof args !== "object") return "";
+  if (detail) {
+    return detail;
+  }
+  if (!args || typeof args !== "object") {
+    return "";
+  }
   try {
     return JSON.stringify(args);
   } catch {
@@ -30,7 +34,9 @@ function formatArgs(toolName: string, args: unknown): string {
 }
 
 function extractText(result?: ToolResult): string {
-  if (!result?.content) return "";
+  if (!result?.content) {
+    return "";
+  }
   const lines: string[] = [];
   for (const entry of result.content) {
     if (entry.type === "text" && entry.text) {

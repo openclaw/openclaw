@@ -6,6 +6,7 @@ import type {
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
+import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
@@ -150,6 +151,8 @@ export type DiscordAccountConfig = {
   execApprovals?: DiscordExecApprovalConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
+  /** PluralKit identity resolution for proxied messages. */
+  pluralkit?: DiscordPluralKitConfig;
 };
 
 export type DiscordConfig = {

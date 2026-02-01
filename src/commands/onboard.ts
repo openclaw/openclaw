@@ -1,13 +1,13 @@
+import type { RuntimeEnv } from "../runtime.js";
+import type { OnboardOptions } from "./onboard-types.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { runInteractiveOnboarding } from "./onboard-interactive.js";
 import { runNonInteractiveOnboarding } from "./onboard-non-interactive.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { OnboardOptions } from "./onboard-types.js";
 
 export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv = defaultRuntime) {
   assertSupportedRuntime(runtime);
@@ -44,8 +44,8 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
     runtime.error(
       [
         "Non-interactive onboarding requires explicit risk acknowledgement.",
-        "Read: https://docs.molt.bot/security",
-        `Re-run with: ${formatCliCommand("moltbot onboard --non-interactive --accept-risk ...")}`,
+        "Read: https://docs.openclaw.ai/security",
+        `Re-run with: ${formatCliCommand("openclaw onboard --non-interactive --accept-risk ...")}`,
       ].join("\n"),
     );
     runtime.exit(1);
@@ -65,7 +65,7 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
       [
         "Windows detected.",
         "WSL2 is strongly recommended; native Windows is untested and more problematic.",
-        "Guide: https://docs.molt.bot/windows",
+        "Guide: https://docs.openclaw.ai/windows",
       ].join("\n"),
     );
   }

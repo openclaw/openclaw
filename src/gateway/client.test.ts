@@ -1,5 +1,5 @@
-import { createServer } from "node:net";
 import { createServer as createHttpsServer } from "node:https";
+import { createServer } from "node:net";
 import { afterEach, describe, expect, test } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
@@ -146,7 +146,9 @@ r1USnb+wUdA7Zoj/mQ==
     const error = await new Promise<Error>((resolve) => {
       let settled = false;
       const finish = (err: Error) => {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
         settled = true;
         resolve(err);
       };

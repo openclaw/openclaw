@@ -1,11 +1,10 @@
 import type { App } from "@slack/bolt";
 import { describe, expect, it } from "vitest";
-
-import type { MoltbotConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/config.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
+import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
 import { createSlackMonitorContext } from "../context.js";
 import { prepareSlackMessage } from "./prepare.js";
 
@@ -14,7 +13,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const slackCtx = createSlackMonitorContext({
       cfg: {
         channels: { slack: { enabled: true } },
-      } as MoltbotConfig,
+      } as OpenClawConfig,
       accountId: "default",
       botToken: "token",
       app: { client: {} } as App,
@@ -40,7 +39,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       threadInheritParent: false,
       slashCommand: {
         enabled: false,
-        name: "clawd",
+        name: "openclaw",
         sessionPrefix: "slack:slash",
         ephemeral: true,
       },
@@ -82,7 +81,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const slackCtx = createSlackMonitorContext({
       cfg: {
         channels: { slack: { enabled: true, replyToMode: "all" } },
-      } as MoltbotConfig,
+      } as OpenClawConfig,
       accountId: "default",
       botToken: "token",
       app: { client: {} } as App,
@@ -108,7 +107,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       threadInheritParent: false,
       slashCommand: {
         enabled: false,
-        name: "clawd",
+        name: "openclaw",
         sessionPrefix: "slack:slash",
         ephemeral: true,
       },

@@ -68,10 +68,16 @@ function fillPixel(
   b: number,
   a = 255,
 ) {
-  if (x < 0 || y < 0) return;
-  if (x >= width) return;
+  if (x < 0 || y < 0) {
+    return;
+  }
+  if (x >= width) {
+    return;
+  }
   const idx = (y * width + x) * 4;
-  if (idx < 0 || idx + 3 >= buf.length) return;
+  if (idx < 0 || idx + 3 >= buf.length) {
+    return;
+  }
   buf[idx] = r;
   buf[idx + 1] = g;
   buf[idx + 2] = b;
@@ -109,12 +115,16 @@ function drawGlyph5x7(params: {
   color: { r: number; g: number; b: number; a?: number };
 }) {
   const rows = GLYPH_ROWS_5X7[params.char];
-  if (!rows) return;
+  if (!rows) {
+    return;
+  }
   for (let row = 0; row < 7; row += 1) {
     const bits = rows[row] ?? 0;
     for (let col = 0; col < 5; col += 1) {
       const on = (bits & (1 << (4 - col))) !== 0;
-      if (!on) continue;
+      if (!on) {
+        continue;
+      }
       for (let dy = 0; dy < params.scale; dy += 1) {
         for (let dx = 0; dx < params.scale; dx += 1) {
           fillPixel(

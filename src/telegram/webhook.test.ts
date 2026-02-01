@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { startTelegramWebhook } from "./webhook.js";
 
 const handlerSpy = vi.fn(
@@ -44,7 +43,9 @@ describe("startTelegramWebhook", () => {
       }),
     );
     const address = server.address();
-    if (!address || typeof address === "string") throw new Error("no address");
+    if (!address || typeof address === "string") {
+      throw new Error("no address");
+    }
     const url = `http://127.0.0.1:${address.port}`;
 
     const health = await fetch(`${url}/healthz`);
@@ -74,7 +75,9 @@ describe("startTelegramWebhook", () => {
       }),
     );
     const addr = server.address();
-    if (!addr || typeof addr === "string") throw new Error("no addr");
+    if (!addr || typeof addr === "string") {
+      throw new Error("no addr");
+    }
     await fetch(`http://127.0.0.1:${addr.port}/hook`, { method: "POST" });
     expect(handlerSpy).toHaveBeenCalled();
     abort.abort();

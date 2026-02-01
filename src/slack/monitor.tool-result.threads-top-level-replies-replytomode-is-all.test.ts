@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import { monitorSlackProvider } from "./monitor.js";
 import {
   defaultSlackTestConfig,
   flush,
@@ -10,7 +10,6 @@ import {
   resetSlackTestState,
   waitForSlackEvent,
 } from "./monitor.test-helpers.js";
-import { monitorSlackProvider } from "./monitor.js";
 
 const slackTestState = getSlackTestState();
 const { sendMock, replyMock } = slackTestState;
@@ -46,7 +45,9 @@ describe("monitorSlackProvider tool results", () => {
 
     await waitForSlackEvent("message");
     const handler = getSlackHandlers()?.get("message");
-    if (!handler) throw new Error("Slack message handler not registered");
+    if (!handler) {
+      throw new Error("Slack message handler not registered");
+    }
 
     await handler({
       event: {
@@ -79,7 +80,9 @@ describe("monitorSlackProvider tool results", () => {
 
     await waitForSlackEvent("message");
     const handler = getSlackHandlers()?.get("message");
-    if (!handler) throw new Error("Slack message handler not registered");
+    if (!handler) {
+      throw new Error("Slack message handler not registered");
+    }
 
     await handler({
       event: {
@@ -130,7 +133,9 @@ describe("monitorSlackProvider tool results", () => {
 
     await waitForSlackEvent("message");
     const handler = getSlackHandlers()?.get("message");
-    if (!handler) throw new Error("Slack message handler not registered");
+    if (!handler) {
+      throw new Error("Slack message handler not registered");
+    }
 
     await handler({
       event: {
@@ -191,7 +196,9 @@ describe("monitorSlackProvider tool results", () => {
 
     await waitForSlackEvent("message");
     const handler = getSlackHandlers()?.get("message");
-    if (!handler) throw new Error("Slack message handler not registered");
+    if (!handler) {
+      throw new Error("Slack message handler not registered");
+    }
 
     await handler({
       event: {
@@ -257,7 +264,9 @@ describe("monitorSlackProvider tool results", () => {
 
     await waitForSlackEvent("message");
     const handler = getSlackHandlers()?.get("message");
-    if (!handler) throw new Error("Slack message handler not registered");
+    if (!handler) {
+      throw new Error("Slack message handler not registered");
+    }
 
     await handler({
       event: {
@@ -309,7 +318,9 @@ describe("monitorSlackProvider tool results", () => {
 
     await waitForSlackEvent("message");
     const handler = getSlackHandlers()?.get("message");
-    if (!handler) throw new Error("Slack message handler not registered");
+    if (!handler) {
+      throw new Error("Slack message handler not registered");
+    }
 
     await handler({
       event: {
@@ -355,7 +366,9 @@ describe("monitorSlackProvider tool results", () => {
 
     await waitForSlackEvent("message");
     const handler = getSlackHandlers()?.get("message");
-    if (!handler) throw new Error("Slack message handler not registered");
+    if (!handler) {
+      throw new Error("Slack message handler not registered");
+    }
 
     await handler({
       event: {

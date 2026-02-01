@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type MoltbotConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
+import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
   buildDefaultHookUrl,
   buildTopicPath,
@@ -16,7 +16,7 @@ const baseConfig = {
       pushToken: "push-token",
     },
   },
-} satisfies MoltbotConfig;
+} satisfies OpenClawConfig;
 
 describe("gmail hook config", () => {
   it("builds default hook url", () => {

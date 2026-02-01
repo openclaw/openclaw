@@ -1,5 +1,5 @@
-import { createDedupeCache } from "../infra/dedupe.js";
 import type { TelegramContext, TelegramMessage } from "./bot/types.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 
 const MEDIA_GROUP_TIMEOUT_MS = 500;
 const RECENT_TELEGRAM_UPDATE_TTL_MS = 5 * 60_000;
@@ -29,9 +29,13 @@ export const resolveTelegramUpdateId = (ctx: TelegramUpdateKeyContext) =>
 
 export const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
   const updateId = resolveTelegramUpdateId(ctx);
-  if (typeof updateId === "number") return `update:${updateId}`;
+  if (typeof updateId === "number") {
+    return `update:${updateId}`;
+  }
   const callbackId = ctx.callbackQuery?.id;
-  if (callbackId) return `callback:${callbackId}`;
+  if (callbackId) {
+    return `callback:${callbackId}`;
+  }
   const msg =
     ctx.message ?? ctx.update?.message ?? ctx.update?.edited_message ?? ctx.callbackQuery?.message;
   const chatId = msg?.chat?.id;

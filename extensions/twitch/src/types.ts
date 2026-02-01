@@ -2,9 +2,17 @@
  * Twitch channel plugin types.
  *
  * This file defines Twitch-specific types. Generic channel types are imported
- * from Moltbot core.
+ * from OpenClaw core.
  */
 
+import type {
+  ChannelGatewayContext,
+  ChannelOutboundAdapter,
+  ChannelOutboundContext,
+  ChannelResolveKind,
+  ChannelResolveResult,
+  ChannelStatusAdapter,
+} from "../../../src/channels/plugins/types.adapters.js";
 import type {
   ChannelAccountSnapshot,
   ChannelCapabilities,
@@ -14,15 +22,7 @@ import type {
   ChannelMeta,
 } from "../../../src/channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../../../src/channels/plugins/types.plugin.js";
-import type {
-  ChannelGatewayContext,
-  ChannelOutboundAdapter,
-  ChannelOutboundContext,
-  ChannelResolveKind,
-  ChannelResolveResult,
-  ChannelStatusAdapter,
-} from "../../../src/channels/plugins/types.adapters.js";
-import type { MoltbotConfig } from "../../../src/config/config.js";
+import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { OutboundDeliveryResult } from "../../../src/infra/outbound/deliver.js";
 import type { RuntimeEnv } from "../../../src/runtime.js";
 
@@ -132,10 +132,10 @@ export type {
   OutboundDeliveryResult,
 };
 
+import type { z } from "zod";
 // Import and re-export the schema type
 import type { TwitchConfigSchema } from "./config-schema.js";
-import type { z } from "zod";
 export type TwitchConfig = z.infer<typeof TwitchConfigSchema>;
 
-export type { MoltbotConfig };
+export type { OpenClawConfig };
 export type { RuntimeEnv };

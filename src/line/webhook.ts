@@ -1,7 +1,7 @@
-import type { Request, Response, NextFunction } from "express";
 import type { WebhookRequestBody } from "@line/bot-sdk";
-import { logVerbose, danger } from "../globals.js";
+import type { Request, Response, NextFunction } from "express";
 import type { RuntimeEnv } from "../runtime.js";
+import { logVerbose, danger } from "../globals.js";
 import { validateLineSignature } from "./signature.js";
 
 export interface LineWebhookOptions {
@@ -14,7 +14,9 @@ function readRawBody(req: Request): string | null {
   const rawBody =
     (req as { rawBody?: string | Buffer }).rawBody ??
     (typeof req.body === "string" || Buffer.isBuffer(req.body) ? req.body : null);
-  if (!rawBody) return null;
+  if (!rawBody) {
+    return null;
+  }
   return Buffer.isBuffer(rawBody) ? rawBody.toString("utf-8") : rawBody;
 }
 
@@ -29,7 +31,9 @@ function parseWebhookBody(req: Request, rawBody: string): WebhookRequestBody | n
   }
 }
 
-export function createLineWebhookMiddleware(options: LineWebhookOptions) {
+export function createLineWebhookMiddleware(
+  options: LineWebhookOptions,
+): (req: Request, res: Response, _next: NextFunction) => Promise<void> {
   const { channelSecret, onEvents, runtime } = options;
 
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
@@ -85,7 +89,10 @@ export interface StartLineWebhookOptions {
   path?: string;
 }
 
-export function startLineWebhook(options: StartLineWebhookOptions) {
+export function startLineWebhook(options: StartLineWebhookOptions): {
+  path: string;
+  handler: (req: Request, res: Response, _next: NextFunction) => Promise<void>;
+} {
   const path = options.path ?? "/line/webhook";
   const middleware = createLineWebhookMiddleware({
     channelSecret: options.channelSecret,

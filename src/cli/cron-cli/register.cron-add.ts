@@ -1,9 +1,9 @@
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
-import { danger } from "../../globals.js";
-import { defaultRuntime } from "../../runtime.js";
-import { sanitizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
+import { danger } from "../../globals.js";
+import { sanitizeAgentId } from "../../routing/session-key.js";
+import { defaultRuntime } from "../../runtime.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
@@ -111,12 +111,16 @@ export function registerCronAddCommand(cron: Command) {
             }
             if (at) {
               const atMs = parseAtMs(at);
-              if (!atMs) throw new Error("Invalid --at; use ISO time or duration like 20m");
+              if (!atMs) {
+                throw new Error("Invalid --at; use ISO time or duration like 20m");
+              }
               return { kind: "at" as const, atMs };
             }
             if (every) {
               const everyMs = parseDurationMs(every);
-              if (!everyMs) throw new Error("Invalid --every; use e.g. 10m, 1h, 1d");
+              if (!everyMs) {
+                throw new Error("Invalid --every; use e.g. 10m, 1h, 1d");
+              }
               return { kind: "every" as const, everyMs };
             }
             return {
@@ -150,7 +154,9 @@ export function registerCronAddCommand(cron: Command) {
             if (chosen !== 1) {
               throw new Error("Choose exactly one payload: --system-event or --message");
             }
-            if (systemEvent) return { kind: "systemEvent" as const, text: systemEvent };
+            if (systemEvent) {
+              return { kind: "systemEvent" as const, text: systemEvent };
+            }
             const timeoutSeconds = parsePositiveIntOrUndefined(opts.timeoutSeconds);
             return {
               kind: "agentTurn" as const,
@@ -197,7 +203,9 @@ export function registerCronAddCommand(cron: Command) {
 
           const nameRaw = typeof opts.name === "string" ? opts.name : "";
           const name = nameRaw.trim();
-          if (!name) throw new Error("--name is required");
+          if (!name) {
+            throw new Error("--name is required");
+          }
 
           const description =
             typeof opts.description === "string" && opts.description.trim()

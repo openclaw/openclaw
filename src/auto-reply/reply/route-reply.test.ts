@@ -1,20 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  createIMessageTestPlugin,
-  createOutboundTestPlugin,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
 import { discordOutbound } from "../../channels/plugins/outbound/discord.js";
 import { imessageOutbound } from "../../channels/plugins/outbound/imessage.js";
 import { signalOutbound } from "../../channels/plugins/outbound/signal.js";
 import { slackOutbound } from "../../channels/plugins/outbound/slack.js";
 import { telegramOutbound } from "../../channels/plugins/outbound/telegram.js";
 import { whatsappOutbound } from "../../channels/plugins/outbound/whatsapp.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createIMessageTestPlugin,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 const mocks = vi.hoisted(() => ({
@@ -172,8 +171,8 @@ describe("routeReply", () => {
   it("applies responsePrefix when routing", async () => {
     mocks.sendMessageSlack.mockClear();
     const cfg = {
-      messages: { responsePrefix: "[moltbot]" },
-    } as unknown as MoltbotConfig;
+      messages: { responsePrefix: "[openclaw]" },
+    } as unknown as OpenClawConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "slack",
@@ -182,7 +181,7 @@ describe("routeReply", () => {
     });
     expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
       "channel:C123",
-      "[moltbot] hi",
+      "[openclaw] hi",
       expect.any(Object),
     );
   });
@@ -199,7 +198,7 @@ describe("routeReply", () => {
         ],
       },
       messages: {},
-    } as unknown as MoltbotConfig;
+    } as unknown as OpenClawConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "slack",
@@ -346,7 +345,7 @@ describe("routeReply", () => {
           enabled: true,
         },
       },
-    } as unknown as MoltbotConfig;
+    } as unknown as OpenClawConfig;
     await routeReply({
       payload: { text: "hi" },
       channel: "msteams",

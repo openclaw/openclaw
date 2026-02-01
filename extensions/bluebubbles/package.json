@@ -1,9 +1,12 @@
 {
-  "name": "@moltbot/bluebubbles",
-  "version": "2026.1.27-beta.1",
+  "name": "@openclaw/bluebubbles",
+  "version": "2026.1.30",
+  "description": "OpenClaw BlueBubbles channel plugin",
   "type": "module",
-  "description": "Moltbot BlueBubbles channel plugin",
-  "moltbot": {
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ],
@@ -25,7 +28,7 @@
       "order": 75
     },
     "install": {
-      "npmSpec": "@moltbot/bluebubbles",
+      "npmSpec": "@openclaw/bluebubbles",
       "localPath": "extensions/bluebubbles",
       "defaultChoice": "npm"
     }

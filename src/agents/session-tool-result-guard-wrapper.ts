@@ -1,5 +1,4 @@
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 

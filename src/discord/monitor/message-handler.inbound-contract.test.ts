@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
-
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 
@@ -29,7 +27,7 @@ describe("discord processDiscordMessage inbound contract", () => {
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
     capturedCtx = undefined;
 
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-discord-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-"));
     const storePath = path.join(dir, "sessions.json");
 
     await processDiscordMessage({

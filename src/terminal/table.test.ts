@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { visibleWidth } from "./ansi.js";
 import { renderTable } from "./table.js";
 
@@ -50,14 +49,18 @@ describe("renderTable", () => {
 
     const ESC = "\u001b";
     for (let i = 0; i < out.length; i += 1) {
-      if (out[i] !== ESC) continue;
+      if (out[i] !== ESC) {
+        continue;
+      }
 
       // SGR: ESC [ ... m
       if (out[i + 1] === "[") {
         let j = i + 2;
         while (j < out.length) {
           const ch = out[j];
-          if (ch === "m") break;
+          if (ch === "m") {
+            break;
+          }
           if (ch && ch >= "0" && ch <= "9") {
             j += 1;
             continue;

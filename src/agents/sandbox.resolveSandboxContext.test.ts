@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 
 describe("resolveSandboxContext", () => {
   it("does not sandbox the agent main session in non-main mode", async () => {
@@ -15,7 +15,7 @@ describe("resolveSandboxContext", () => {
 
     const { resolveSandboxContext } = await import("./sandbox.js");
 
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           sandbox: { mode: "non-main", scope: "session" },
@@ -27,7 +27,7 @@ describe("resolveSandboxContext", () => {
     const result = await resolveSandboxContext({
       config: cfg,
       sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/moltbot-test",
+      workspaceDir: "/tmp/openclaw-test",
     });
 
     expect(result).toBeNull();
@@ -49,7 +49,7 @@ describe("resolveSandboxContext", () => {
 
     const { ensureSandboxWorkspaceForSession } = await import("./sandbox.js");
 
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           sandbox: { mode: "non-main", scope: "session" },
@@ -61,7 +61,7 @@ describe("resolveSandboxContext", () => {
     const result = await ensureSandboxWorkspaceForSession({
       config: cfg,
       sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/moltbot-test",
+      workspaceDir: "/tmp/openclaw-test",
     });
 
     expect(result).toBeNull();
@@ -84,7 +84,7 @@ describe("resolveSandboxContext", () => {
     const { ensureSandboxWorkspaceForSession, resolveSandboxContext } =
       await import("./sandbox.js");
 
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       session: { mainKey: "work" },
       agents: {
         defaults: {
@@ -98,7 +98,7 @@ describe("resolveSandboxContext", () => {
       await resolveSandboxContext({
         config: cfg,
         sessionKey: "main",
-        workspaceDir: "/tmp/moltbot-test",
+        workspaceDir: "/tmp/openclaw-test",
       }),
     ).toBeNull();
 
@@ -106,7 +106,7 @@ describe("resolveSandboxContext", () => {
       await resolveSandboxContext({
         config: cfg,
         sessionKey: "agent:main:main",
-        workspaceDir: "/tmp/moltbot-test",
+        workspaceDir: "/tmp/openclaw-test",
       }),
     ).toBeNull();
 
@@ -114,7 +114,7 @@ describe("resolveSandboxContext", () => {
       await ensureSandboxWorkspaceForSession({
         config: cfg,
         sessionKey: "work",
-        workspaceDir: "/tmp/moltbot-test",
+        workspaceDir: "/tmp/openclaw-test",
       }),
     ).toBeNull();
 
@@ -122,7 +122,7 @@ describe("resolveSandboxContext", () => {
       await ensureSandboxWorkspaceForSession({
         config: cfg,
         sessionKey: "agent:main:main",
-        workspaceDir: "/tmp/moltbot-test",
+        workspaceDir: "/tmp/openclaw-test",
       }),
     ).toBeNull();
 

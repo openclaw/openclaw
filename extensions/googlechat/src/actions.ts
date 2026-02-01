@@ -1,16 +1,15 @@
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
-  MoltbotConfig,
-} from "clawdbot/plugin-sdk";
+  OpenClawConfig,
+} from "openclaw/plugin-sdk";
 import {
   createActionGate,
   jsonResult,
   readNumberParam,
   readReactionParams,
   readStringParam,
-} from "clawdbot/plugin-sdk";
-
+} from "openclaw/plugin-sdk";
 import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accounts.js";
 import {
   createGoogleChatReaction,
@@ -24,21 +23,24 @@ import { resolveGoogleChatOutboundSpace } from "./targets.js";
 
 const providerId = "googlechat";
 
-function listEnabledAccounts(cfg: MoltbotConfig) {
+function listEnabledAccounts(cfg: OpenClawConfig) {
   return listEnabledGoogleChatAccounts(cfg).filter(
     (account) => account.enabled && account.credentialSource !== "none",
   );
 }
 
-function isReactionsEnabled(accounts: ReturnType<typeof listEnabledAccounts>, cfg: MoltbotConfig) {
+function isReactionsEnabled(accounts: ReturnType<typeof listEnabledAccounts>, cfg: OpenClawConfig) {
   for (const account of accounts) {
     const gate = createActionGate(
-      (account.config.actions ?? (cfg.channels?.["googlechat"] as { actions?: unknown })?.actions) as Record<
+      (account.config.actions ??
+        (cfg.channels?.["googlechat"] as { actions?: unknown })?.actions) as Record<
         string,
         boolean | undefined
       >,
     );
-    if (gate("reactions")) return true;
+    if (gate("reactions")) {
+      return true;
+    }
   }
   return false;
 }
@@ -49,11 +51,13 @@ function resolveAppUserNames(account: { config: { botUser?: string | null } }) {
 
 export const googlechatMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const accounts = listEnabledAccounts(cfg as MoltbotConfig);
-    if (accounts.length === 0) return [];
+    const accounts = listEnabledAccounts(cfg);
+    if (accounts.length === 0) {
+      return [];
+    }
     const actions = new Set<ChannelMessageActionName>([]);
     actions.add("send");
-    if (isReactionsEnabled(accounts, cfg as MoltbotConfig)) {
+    if (isReactionsEnabled(accounts, cfg)) {
       actions.add("react");
       actions.add("reactions");
     }
@@ -61,15 +65,19 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
   },
   extractToolSend: ({ args }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") return null;
+    if (action !== "sendMessage") {
+      return null;
+    }
     const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) return null;
+    if (!to) {
+      return null;
+    }
     const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
     return { to, accountId };
   },
   handleAction: async ({ action, params, cfg, accountId }) => {
     const account = resolveGoogleChatAccount({
-      cfg: cfg as MoltbotConfig,
+      cfg: cfg,
       accountId,
     });
     if (account.credentialSource === "none") {
@@ -103,7 +111,12 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
           text: content,
           thread: threadId ?? undefined,
           attachments: upload.attachmentUploadToken
-            ? [{ attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.filename }]
+            ? [
+                {
+                  attachmentUploadToken: upload.attachmentUploadToken,
+                  contentName: loaded.filename,
+                },
+              ]
             : undefined,
         });
         return jsonResult({ ok: true, to: space });
@@ -128,12 +141,18 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         const appUsers = resolveAppUserNames(account);
         const toRemove = reactions.filter((reaction) => {
           const userName = reaction.user?.name?.trim();
-          if (appUsers.size > 0 && !appUsers.has(userName ?? "")) return false;
-          if (emoji) return reaction.emoji?.unicode === emoji;
+          if (appUsers.size > 0 && !appUsers.has(userName ?? "")) {
+            return false;
+          }
+          if (emoji) {
+            return reaction.emoji?.unicode === emoji;
+          }
           return true;
         });
         for (const reaction of toRemove) {
-          if (!reaction.name) continue;
+          if (!reaction.name) {
+            continue;
+          }
           await deleteGoogleChatReaction({ account, reactionName: reaction.name });
         }
         return jsonResult({ ok: true, removed: toRemove.length });

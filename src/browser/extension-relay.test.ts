@@ -1,8 +1,7 @@
-import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
-
 import {
   ensureChromeExtensionRelayServer,
   stopChromeExtensionRelayServer,
@@ -18,7 +17,9 @@ async function getFreePort(): Promise<number> {
         s.close((err) => (err ? reject(err) : resolve(assigned)));
       });
     });
-    if (port < 65535) return port;
+    if (port < 65535) {
+      return port;
+    }
   }
 }
 
@@ -36,12 +37,16 @@ function createMessageQueue(ws: WebSocket) {
   let waiterTimer: NodeJS.Timeout | null = null;
 
   const flushWaiter = (value: string) => {
-    if (!waiter) return false;
+    if (!waiter) {
+      return false;
+    }
     const resolve = waiter;
     waiter = null;
     const reject = waiterReject;
     waiterReject = null;
-    if (waiterTimer) clearTimeout(waiterTimer);
+    if (waiterTimer) {
+      clearTimeout(waiterTimer);
+    }
     waiterTimer = null;
     if (reject) {
       // no-op (kept for symmetry)
@@ -59,16 +64,22 @@ function createMessageQueue(ws: WebSocket) {
           : Array.isArray(data)
             ? Buffer.concat(data).toString("utf8")
             : Buffer.from(data).toString("utf8");
-    if (flushWaiter(text)) return;
+    if (flushWaiter(text)) {
+      return;
+    }
     queue.push(text);
   });
 
   ws.on("error", (err) => {
-    if (!waiterReject) return;
+    if (!waiterReject) {
+      return;
+    }
     const reject = waiterReject;
     waiterReject = null;
     waiter = null;
-    if (waiterTimer) clearTimeout(waiterTimer);
+    if (waiterTimer) {
+      clearTimeout(waiterTimer);
+    }
     waiterTimer = null;
     reject(err instanceof Error ? err : new Error(String(err)));
   });
@@ -76,7 +87,9 @@ function createMessageQueue(ws: WebSocket) {
   const next = (timeoutMs = 5000) =>
     new Promise<string>((resolve, reject) => {
       const existing = queue.shift();
-      if (existing !== undefined) return resolve(existing);
+      if (existing !== undefined) {
+        return resolve(existing);
+      }
       waiter = resolve;
       waiterReject = reject;
       waiterTimer = setTimeout(() => {
@@ -99,7 +112,9 @@ async function waitForListMatch<T>(
   const deadline = Date.now() + timeoutMs;
   while (true) {
     const value = await fetchList();
-    if (predicate(value)) return value;
+    if (predicate(value)) {
+      return value;
+    }
     if (Date.now() >= deadline) {
       throw new Error("timeout waiting for list update");
     }

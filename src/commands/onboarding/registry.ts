@@ -1,13 +1,11 @@
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import type { ChannelOnboardingAdapter } from "./types.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
 
 const CHANNEL_ONBOARDING_ADAPTERS = () =>
   new Map<ChannelChoice, ChannelOnboardingAdapter>(
     listChannelPlugins()
-      .map((plugin) =>
-        plugin.onboarding ? ([plugin.id as ChannelChoice, plugin.onboarding] as const) : null,
-      )
+      .map((plugin) => (plugin.onboarding ? ([plugin.id, plugin.onboarding] as const) : null))
       .filter((entry): entry is readonly [ChannelChoice, ChannelOnboardingAdapter] =>
         Boolean(entry),
       ),

@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
-import JSON5 from "json5";
 import type { Command } from "commander";
-
+import JSON5 from "json5";
+import fs from "node:fs/promises";
+import type { NodesRpcOpts } from "./nodes-cli/types.js";
 import {
   readExecApprovalsSnapshot,
   saveExecApprovals,
@@ -10,12 +10,11 @@ import {
 } from "../infra/exec-approvals.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { isRich, theme } from "../terminal/theme.js";
 import { renderTable } from "../terminal/table.js";
-import { callGatewayFromCli } from "./gateway-rpc.js";
+import { isRich, theme } from "../terminal/theme.js";
 import { describeUnknownError } from "./gateway-cli/shared.js";
+import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
-import type { NodesRpcOpts } from "./nodes-cli/types.js";
 
 type ExecApprovalsSnapshot = {
   path: string;
@@ -34,11 +33,17 @@ type ExecApprovalsCliOpts = NodesRpcOpts & {
 
 function formatAge(msAgo: number) {
   const s = Math.max(0, Math.floor(msAgo / 1000));
-  if (s < 60) return `${s}s`;
+  if (s < 60) {
+    return `${s}s`;
+  }
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
+  if (m < 60) {
+    return `${m}m`;
+  }
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
+  if (h < 24) {
+    return `${h}h`;
+  }
   const d = Math.floor(h / 24);
   return `${d}d`;
 }
@@ -52,9 +57,13 @@ async function readStdin(): Promise<string> {
 }
 
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
-  if (opts.gateway) return null;
+  if (opts.gateway) {
+    return null;
+  }
   const raw = opts.node?.trim() ?? "";
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   return await resolveNodeId(opts as NodesRpcOpts, raw);
 }
 
@@ -125,7 +134,9 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
     for (const entry of allowlist) {
       const pattern = entry?.pattern?.trim() ?? "";
-      if (!pattern) continue;
+      if (!pattern) {
+        continue;
+      }
       const lastUsedAt = typeof entry.lastUsedAt === "number" ? entry.lastUsedAt : null;
       allowlistRows.push({
         Target: targetLabel,
@@ -233,7 +244,7 @@ export function registerExecApprovalsCli(program: Command) {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.molt.bot/cli/approvals")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
     );
 
   const getCmd = approvals
@@ -295,7 +306,7 @@ export function registerExecApprovalsCli(program: Command) {
         const raw = opts.stdin ? await readStdin() : await fs.readFile(String(opts.file), "utf8");
         let file: ExecApprovalsFile;
         try {
-          file = JSON5.parse(raw) as ExecApprovalsFile;
+          file = JSON5.parse(raw);
         } catch (err) {
           defaultRuntime.error(`Failed to parse approvals JSON: ${String(err)}`);
           defaultRuntime.exit(1);
@@ -326,18 +337,18 @@ export function registerExecApprovalsCli(program: Command) {
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatExample(
-          'moltbot approvals allowlist add "~/Projects/**/bin/rg"',
+          'openclaw approvals allowlist add "~/Projects/**/bin/rg"',
           "Allowlist a local binary pattern for the main agent.",
         )}\n${formatExample(
-          'moltbot approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"',
+          'openclaw approvals allowlist add --agent main --node <id|name|ip> "/usr/bin/uptime"',
           "Allowlist on a specific node/agent.",
         )}\n${formatExample(
-          'moltbot approvals allowlist add --agent "*" "/usr/bin/uname"',
+          'openclaw approvals allowlist add --agent "*" "/usr/bin/uname"',
           "Allowlist for all agents (wildcard).",
         )}\n${formatExample(
-          'moltbot approvals allowlist remove "~/Projects/**/bin/rg"',
+          'openclaw approvals allowlist remove "~/Projects/**/bin/rg"',
           "Remove an allowlist pattern.",
-        )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.molt.bot/cli/approvals")}\n`,
+        )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
     );
 
   const allowlistAdd = allowlist

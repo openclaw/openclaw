@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-
 import { WizardSession } from "./session.js";
 
 function noteRunner() {
@@ -21,20 +20,26 @@ describe("WizardSession", () => {
     const secondPeek = await session.next();
     expect(secondPeek.step?.id).toBe(first.step?.id);
 
-    if (!first.step) throw new Error("expected first step");
+    if (!first.step) {
+      throw new Error("expected first step");
+    }
     await session.answer(first.step.id, null);
 
     const second = await session.next();
     expect(second.done).toBe(false);
     expect(second.step?.type).toBe("text");
 
-    if (!second.step) throw new Error("expected second step");
+    if (!second.step) {
+      throw new Error("expected second step");
+    }
     await session.answer(second.step.id, "Peter");
 
     const third = await session.next();
     expect(third.step?.type).toBe("note");
 
-    if (!third.step) throw new Error("expected third step");
+    if (!third.step) {
+      throw new Error("expected third step");
+    }
     await session.answer(third.step.id, null);
 
     const done = await session.next();
@@ -46,7 +51,9 @@ describe("WizardSession", () => {
     const session = noteRunner();
     const first = await session.next();
     await expect(session.answer("bad-id", null)).rejects.toThrow(/wizard: no pending step/i);
-    if (!first.step) throw new Error("expected first step");
+    if (!first.step) {
+      throw new Error("expected first step");
+    }
     await session.answer(first.step.id, null);
   });
 

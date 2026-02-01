@@ -1,5 +1,4 @@
 import type { RequestClient } from "@buape/carbon";
-
 import type { RetryConfig } from "../infra/retry.js";
 
 export class DiscordSendError extends Error {
@@ -10,7 +9,9 @@ export class DiscordSendError extends Error {
   constructor(message: string, opts?: Partial<DiscordSendError>) {
     super(message);
     this.name = "DiscordSendError";
-    if (opts) Object.assign(this, opts);
+    if (opts) {
+      Object.assign(this, opts);
+    }
   }
 
   override toString() {

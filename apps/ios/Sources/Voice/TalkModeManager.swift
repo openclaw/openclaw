@@ -1,6 +1,6 @@
 import AVFAudio
-import MoltbotKit
-import MoltbotProtocol
+import OpenClawKit
+import OpenClawProtocol
 import Foundation
 import Observation
 import OSLog

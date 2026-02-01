@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hashText } from "./internal.js";
@@ -46,16 +45,26 @@ export function extractSessionText(content: unknown): string | null {
     const normalized = normalizeSessionText(content);
     return normalized ? normalized : null;
   }
-  if (!Array.isArray(content)) return null;
+  if (!Array.isArray(content)) {
+    return null;
+  }
   const parts: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") continue;
+    if (!block || typeof block !== "object") {
+      continue;
+    }
     const record = block as { type?: unknown; text?: unknown };
-    if (record.type !== "text" || typeof record.text !== "string") continue;
+    if (record.type !== "text" || typeof record.text !== "string") {
+      continue;
+    }
     const normalized = normalizeSessionText(record.text);
-    if (normalized) parts.push(normalized);
+    if (normalized) {
+      parts.push(normalized);
+    }
   }
-  if (parts.length === 0) return null;
+  if (parts.length === 0) {
+    return null;
+  }
   return parts.join(" ");
 }
 
@@ -66,7 +75,9 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
     const lines = raw.split("\n");
     const collected: string[] = [];
     for (const line of lines) {
-      if (!line.trim()) continue;
+      if (!line.trim()) {
+        continue;
+      }
       let record: unknown;
       try {
         record = JSON.parse(line);
@@ -83,10 +94,16 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       const message = (record as { message?: unknown }).message as
         | { role?: unknown; content?: unknown }
         | undefined;
-      if (!message || typeof message.role !== "string") continue;
-      if (message.role !== "user" && message.role !== "assistant") continue;
+      if (!message || typeof message.role !== "string") {
+        continue;
+      }
+      if (message.role !== "user" && message.role !== "assistant") {
+        continue;
+      }
       const text = extractSessionText(message.content);
-      if (!text) continue;
+      if (!text) {
+        continue;
+      }
       const label = message.role === "user" ? "User" : "Assistant";
       collected.push(`${label}: ${text}`);
     }

@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-
 import type { SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 
 type SandboxHashInput = {
@@ -13,25 +12,29 @@ function isPrimitive(value: unknown): value is string | number | boolean | bigin
   return value === null || (typeof value !== "object" && typeof value !== "function");
 }
 function normalizeForHash(value: unknown): unknown {
-  if (value === undefined) return undefined;
+  if (value === undefined) {
+    return undefined;
+  }
   if (Array.isArray(value)) {
     const normalized = value
       .map(normalizeForHash)
       .filter((item): item is unknown => item !== undefined);
     const primitives = normalized.filter(isPrimitive);
     if (primitives.length === normalized.length) {
-      return [...primitives].sort((a, b) =>
+      return [...primitives].toSorted((a, b) =>
         primitiveToString(a).localeCompare(primitiveToString(b)),
       );
     }
     return normalized;
   }
   if (value && typeof value === "object") {
-    const entries = Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
+    const entries = Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b));
     const normalized: Record<string, unknown> = {};
     for (const [key, entryValue] of entries) {
       const next = normalizeForHash(entryValue);
-      if (next !== undefined) normalized[key] = next;
+      if (next !== undefined) {
+        normalized[key] = next;
+      }
     }
     return normalized;
   }
@@ -39,10 +42,18 @@ function normalizeForHash(value: unknown): unknown {
 }
 
 function primitiveToString(value: unknown): string {
-  if (value === null) return "null";
-  if (typeof value === "string") return value;
-  if (typeof value === "number") return String(value);
-  if (typeof value === "boolean") return value ? "true" : "false";
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
   return JSON.stringify(value);
 }
 
