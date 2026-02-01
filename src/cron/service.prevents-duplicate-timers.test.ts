@@ -16,7 +16,9 @@ async function makeStorePath() {
   return {
     storePath: path.join(dir, "cron", "jobs.json"),
     cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
+      // In CI (esp. Windows), cron persistence can briefly keep file handles open.
+      // Use retries to avoid flaky cleanup failures (ENOTEMPTY/EBUSY).
+      await fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     },
   };
 }

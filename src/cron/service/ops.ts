@@ -39,6 +39,18 @@ export function stop(state: CronServiceState) {
 }
 
 export async function status(state: CronServiceState) {
+  // Fast path: if the store is already loaded, avoid waiting behind long-running
+  // cron executions that may hold the cron lock (e.g., isolated agent jobs).
+  // This keeps `cron.status` responsive.
+  if (state.store) {
+    return {
+      enabled: state.deps.cronEnabled,
+      storePath: state.deps.storePath,
+      jobs: state.store.jobs.length ?? 0,
+      nextWakeAtMs: state.deps.cronEnabled === true ? (nextWakeAtMs(state) ?? null) : null,
+    };
+  }
+
   return await locked(state, async () => {
     await ensureLoaded(state);
     return {
@@ -51,9 +63,18 @@ export async function status(state: CronServiceState) {
 }
 
 export async function list(state: CronServiceState, opts?: { includeDisabled?: boolean }) {
+  const includeDisabled = opts?.includeDisabled === true;
+
+  // Fast path: if the store is already loaded, avoid waiting behind long-running
+  // cron executions that may hold the cron lock (e.g., isolated agent jobs).
+  // This keeps `cron.list` responsive.
+  if (state.store) {
+    const jobs = state.store.jobs.filter((j) => includeDisabled || j.enabled);
+    return jobs.slice().sort((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+  }
+
   return await locked(state, async () => {
     await ensureLoaded(state);
-    const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
     return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
   });
