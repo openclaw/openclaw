@@ -12,6 +12,10 @@ const sendStickerTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
+const createForumTopicTelegram = vi.fn(async () => ({
+  threadId: 123,
+  name: "New Topic",
+}));
 const originalToken = process.env.TELEGRAM_BOT_TOKEN;
 
 vi.mock("../../telegram/send.js", () => ({
@@ -19,6 +23,7 @@ vi.mock("../../telegram/send.js", () => ({
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegram(...args),
   sendStickerTelegram: (...args: unknown[]) => sendStickerTelegram(...args),
   deleteMessageTelegram: (...args: unknown[]) => deleteMessageTelegram(...args),
+  createForumTopicTelegram: (...args: unknown[]) => createForumTopicTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -27,6 +32,7 @@ describe("handleTelegramAction", () => {
     sendMessageTelegram.mockClear();
     sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
+    createForumTopicTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -357,6 +363,40 @@ describe("handleTelegramAction", () => {
       456,
       expect.objectContaining({ token: "tok" }),
     );
+  });
+
+  it("creates a forum topic", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { threads: true } } },
+    } as OpenClawConfig;
+    const result = await handleTelegramAction(
+      {
+        action: "createForumTopic",
+        chatId: "123",
+        name: "New Topic",
+        iconColor: 0x6fb9f0,
+      },
+      cfg,
+    );
+    expect(createForumTopicTelegram).toHaveBeenCalledWith(
+      "123",
+      "New Topic",
+      expect.objectContaining({ token: "tok", iconColor: 0x6fb9f0 }),
+    );
+    const payload = {
+      ok: true,
+      threadId: 123,
+      name: "New Topic",
+    };
+    expect(result).toEqual({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(payload, null, 2),
+        },
+      ],
+      details: payload,
+    });
   });
 
   it("respects deleteMessage gating", async () => {

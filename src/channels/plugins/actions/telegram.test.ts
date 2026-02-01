@@ -140,4 +140,68 @@ describe("telegramMessageActions", () => {
     expect(String(call.messageId)).toBe("456");
     expect(call.emoji).toBe("ok");
   });
+
+  it("excludes thread-create when threads action not enabled", () => {
+    const cfg = { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig;
+    const actions = telegramMessageActions.listActions({ cfg });
+    expect(actions).not.toContain("thread-create");
+  });
+
+  it("includes thread-create when threads action is enabled", () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { threads: true } } },
+    } as OpenClawConfig;
+    const actions = telegramMessageActions.listActions({ cfg });
+    expect(actions).toContain("thread-create");
+  });
+
+  it("maps thread-create action params to createForumTopic", async () => {
+    handleTelegramAction.mockClear();
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { threads: true } } },
+    } as OpenClawConfig;
+
+    await telegramMessageActions.handleAction({
+      action: "thread-create",
+      params: {
+        to: "-1001234567890",
+        threadName: "My Topic",
+        iconColor: 0x6fb9f0,
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      {
+        action: "createForumTopic",
+        chatId: "-1001234567890",
+        name: "My Topic",
+        iconColor: 0x6fb9f0,
+        iconCustomEmojiId: undefined,
+        accountId: undefined,
+      },
+      cfg,
+    );
+  });
+
+  it("rejects thread-create without required threadName", async () => {
+    handleTelegramAction.mockClear();
+    const cfg = {
+      channels: { telegram: { botToken: "tok", actions: { threads: true } } },
+    } as OpenClawConfig;
+
+    await expect(
+      telegramMessageActions.handleAction({
+        action: "thread-create",
+        params: {
+          to: "-1001234567890",
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).rejects.toThrow();
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
 });

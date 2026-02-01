@@ -1,4 +1,5 @@
 import type {
+  ForumTopic,
   InlineKeyboardButton,
   InlineKeyboardMarkup,
   ReactionType,
@@ -170,7 +171,7 @@ function normalizeMessageId(raw: string | number): number {
       return parsed;
     }
   }
-  throw new Error("Message id is required for Telegram actions");
+  throw new Error(`Invalid message ID. Expected: finite number, received: "${String(raw)}"`);
 }
 
 export function buildInlineKeyboard(
@@ -747,4 +748,128 @@ export async function sendStickerTelegram(
   });
 
   return { messageId, chatId: resolvedChatId };
+}
+
+type TelegramCreateForumTopicOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: Bot["api"];
+  retry?: RetryConfig;
+  /** Icon color (one of Telegram's predefined colors: 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F) */
+  iconColor?: number;
+  /** Custom emoji ID for the topic icon (requires Premium) */
+  iconCustomEmojiId?: string;
+};
+
+type TelegramCreateForumTopicResult = {
+  threadId: number;
+  name: string;
+  iconColor?: number;
+  iconCustomEmojiId?: string;
+};
+
+/**
+ * Create a forum topic in a Telegram supergroup with topics enabled.
+ * @param chatId - Chat ID of the supergroup (e.g., "-1001234567890")
+ * @param name - Name for the topic (1-128 characters)
+ * @param opts - Optional configuration
+ */
+export async function createForumTopicTelegram(
+  chatId: string | number,
+  name: string,
+  opts: TelegramCreateForumTopicOpts = {},
+): Promise<TelegramCreateForumTopicResult> {
+  if (!name?.trim()) {
+    throw new Error("Forum topic name is required");
+  }
+  const trimmedName = name.trim();
+  if (trimmedName.length > 128) {
+    throw new Error(
+      `Forum topic name must be 128 characters or less (received: ${trimmedName.length})`,
+    );
+  }
+
+  const cfg = loadConfig();
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
+  const normalizedChatId = normalizeChatId(String(chatId));
+  const client = resolveTelegramClientOptions(account);
+  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+
+  const request = createTelegramRetryRunner({
+    retry: opts.retry,
+    configRetry: account.config.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  const logHttpError = createTelegramHttpLogger(cfg);
+  const requestWithDiag = <T>(fn: () => Promise<T>, label?: string) =>
+    withTelegramApiErrorLogging({
+      operation: label ?? "request",
+      fn: () => request(fn, label),
+    }).catch((err) => {
+      logHttpError(label ?? "request", err);
+      throw err;
+    });
+
+  const wrapForumError = (err: unknown) => {
+    const errText = formatErrorMessage(err);
+    if (/400: Bad Request: chat not found/i.test(errText)) {
+      return new Error(
+        [
+          `Telegram createForumTopic failed: chat not found (chat_id=${normalizedChatId}).`,
+          "Verify the chat ID is correct and the bot is a member of the group.",
+        ].join(" "),
+      );
+    }
+    if (/not enough rights/i.test(errText)) {
+      return new Error(
+        `Telegram createForumTopic failed: bot must be an administrator with topic management rights.`,
+      );
+    }
+    if (/FORUM_ENABLED|forum/i.test(errText) && /disabled|not enabled/i.test(errText)) {
+      return new Error(
+        `Telegram createForumTopic failed: forum topics are not enabled in this group.`,
+      );
+    }
+    return err;
+  };
+
+  const topicParams: Record<string, unknown> = {};
+  if (opts.iconCustomEmojiId?.trim()) {
+    topicParams.icon_custom_emoji_id = opts.iconCustomEmojiId.trim();
+  } else if (opts.iconColor != null) {
+    topicParams.icon_color = opts.iconColor;
+  }
+
+  const result: ForumTopic = await requestWithDiag(
+    () =>
+      api.createForumTopic(
+        normalizedChatId,
+        trimmedName,
+        Object.keys(topicParams).length > 0 ? topicParams : undefined,
+      ),
+    "createForumTopic",
+  ).catch((err) => {
+    throw wrapForumError(err);
+  });
+
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+
+  logVerbose(`[telegram] Created forum topic "${trimmedName}" in chat ${normalizedChatId}`);
+
+  return {
+    threadId: result.message_thread_id,
+    name: result.name,
+    ...(result.icon_color != null ? { iconColor: result.icon_color } : {}),
+    ...(result.icon_custom_emoji_id ? { iconCustomEmojiId: result.icon_custom_emoji_id } : {}),
+  };
 }
