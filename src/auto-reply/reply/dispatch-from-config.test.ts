@@ -385,7 +385,7 @@ describe("dispatchReplyFromConfig", () => {
           to: "7504982318",
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "slack",
@@ -422,7 +422,7 @@ describe("dispatchReplyFromConfig", () => {
           to: "7504982318",
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "slack",
@@ -459,7 +459,7 @@ describe("dispatchReplyFromConfig", () => {
           to: "7504982318",
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",

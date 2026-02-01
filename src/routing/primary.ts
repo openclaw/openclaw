@@ -1,5 +1,5 @@
 import type { SessionEntry } from "../config/sessions.js";
-import type { MoltbotConfig, PrimaryRoutingChannel } from "../config/types.js";
+import type { OpenClawConfig, PrimaryRoutingChannel } from "../config/types.js";
 import { applyTemplate, type TemplateContext } from "../auto-reply/templating.js";
 
 export type PrimaryRoutingMode = "primary-only" | "mirror";
@@ -41,9 +41,9 @@ function normalizeChannel(value?: string): PrimaryRoutingChannel | undefined {
 }
 
 /**
- * Resolve primary routing config from the Moltbot config.
+ * Resolve primary routing config from the OpenClaw config.
  */
-export function resolvePrimaryRouting(cfg: MoltbotConfig): ResolvedPrimaryRouting | null {
+export function resolvePrimaryRouting(cfg: OpenClawConfig): ResolvedPrimaryRouting | null {
   const primary = cfg.routing?.primary;
   if (!primary) {
     return null;
@@ -99,7 +99,7 @@ export function isPrimarySurface(
  * Resolve the non-primary routing note to prepend to replies sent to the primary channel.
  */
 export function resolveNonPrimaryRoutingNote(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   ctx: TemplateContext;
 }): string | undefined {
   const routing = resolvePrimaryRouting(params.cfg);
@@ -124,7 +124,7 @@ export function resolveNonPrimaryRoutingNote(params: {
  * Determine where to deliver replies based on primary routing config.
  */
 export function resolvePrimaryDeliveryDecision(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   inboundSurface?: string;
   entry?: SessionEntry;
 }): {

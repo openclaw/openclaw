@@ -114,7 +114,7 @@ const EXEC_EVENT_PROMPT =
 export { isCronSystemEvent };
 
 function resolveHeartbeatRandomIntervalRangeMs(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   heartbeat?: HeartbeatConfig,
 ): { minMs: number; maxMs: number } | null {
   const source = heartbeat ?? cfg.agents?.defaults?.heartbeat;
@@ -202,7 +202,7 @@ function parseClockTimeToMinutes(raw: string): number | null {
 }
 
 function resolveHeartbeatQuietHours(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   heartbeat?: HeartbeatConfig,
 ): HeartbeatQuietHours | null {
   const quietRaw = heartbeat?.quietHours ?? cfg.agents?.defaults?.heartbeat?.quietHours;
