@@ -88,9 +88,9 @@ vi.mock("./sticker-cache.js", () => ({
   describeStickerImage: (...args: unknown[]) => describeStickerImageSpy(...args),
 }));
 
-vi.mock("./pairing-store.js", () => ({
-  readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
-  upsertTelegramPairingRequest: vi.fn(async () => ({
+vi.mock("../pairing/pairing-store.js", () => ({
+  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
+  upsertChannelPairingRequest: vi.fn(async () => ({
     code: "PAIRCODE",
     created: true,
   })),
