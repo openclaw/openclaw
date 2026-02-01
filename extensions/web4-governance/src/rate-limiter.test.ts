@@ -25,14 +25,18 @@ describe("RateLimiter", () => {
     });
 
     it("should deny when at limit", () => {
-      for (let i = 0; i < 5; i++) limiter.record("key1");
+      for (let i = 0; i < 5; i++) {
+        limiter.record("key1");
+      }
       const result = limiter.check("key1", 5, 60_000);
       expect(result.allowed).toBe(false);
       expect(result.current).toBe(5);
     });
 
     it("should deny when over limit", () => {
-      for (let i = 0; i < 10; i++) limiter.record("key1");
+      for (let i = 0; i < 10; i++) {
+        limiter.record("key1");
+      }
       const result = limiter.check("key1", 5, 60_000);
       expect(result.allowed).toBe(false);
       expect(result.current).toBe(10);
@@ -92,7 +96,9 @@ describe("RateLimiter", () => {
 
   describe("concurrent keys", () => {
     it("should track keys independently", () => {
-      for (let i = 0; i < 5; i++) limiter.record("bash");
+      for (let i = 0; i < 5; i++) {
+        limiter.record("bash");
+      }
       limiter.record("read");
 
       expect(limiter.check("bash", 5, 60_000).allowed).toBe(false);

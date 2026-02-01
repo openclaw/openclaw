@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  getPreset,
-  listPresets,
-  isPresetName,
-  resolvePreset,
-  type PresetName,
-} from "./presets.js";
+import { getPreset, listPresets, isPresetName, resolvePreset, type PresetName } from "./presets.js";
 
 describe("Presets", () => {
   const ALL_PRESETS: PresetName[] = ["permissive", "safety", "strict", "audit-only"];

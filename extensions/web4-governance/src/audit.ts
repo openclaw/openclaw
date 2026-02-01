@@ -76,10 +76,14 @@ export class AuditChain {
   }
 
   private loadExisting(): void {
-    if (!existsSync(this.filePath)) return;
+    if (!existsSync(this.filePath)) {
+      return;
+    }
     try {
       const content = readFileSync(this.filePath, "utf-8").trim();
-      if (!content) return;
+      if (!content) {
+        return;
+      }
       const lines = content.split("\n");
       this.recordCount = lines.length;
       const lastLine = lines[lines.length - 1];
@@ -122,7 +126,9 @@ export class AuditChain {
     }
 
     const content = readFileSync(this.filePath, "utf-8").trim();
-    if (!content) return { valid: true, recordCount: 0, errors: [] };
+    if (!content) {
+      return { valid: true, recordCount: 0, errors: [] };
+    }
 
     const lines = content.split("\n");
     let prevHash = "genesis";
@@ -131,7 +137,9 @@ export class AuditChain {
       try {
         const record: AuditRecord = JSON.parse(lines[i]!);
         if (record.provenance.prevRecordHash !== prevHash) {
-          errors.push(`Record ${i}: hash mismatch (expected ${prevHash}, got ${record.provenance.prevRecordHash})`);
+          errors.push(
+            `Record ${i}: hash mismatch (expected ${prevHash}, got ${record.provenance.prevRecordHash})`,
+          );
         }
         prevHash = createHash("sha256").update(lines[i]!).digest("hex").slice(0, 16);
       } catch (e) {
@@ -147,9 +155,13 @@ export class AuditChain {
   }
 
   getLast(n: number): AuditRecord[] {
-    if (!existsSync(this.filePath)) return [];
+    if (!existsSync(this.filePath)) {
+      return [];
+    }
     const content = readFileSync(this.filePath, "utf-8").trim();
-    if (!content) return [];
+    if (!content) {
+      return [];
+    }
     const lines = content.split("\n");
     return lines
       .slice(-n)
@@ -165,9 +177,13 @@ export class AuditChain {
 
   /** Load all records from the JSONL file. */
   getAll(): AuditRecord[] {
-    if (!existsSync(this.filePath)) return [];
+    if (!existsSync(this.filePath)) {
+      return [];
+    }
     const content = readFileSync(this.filePath, "utf-8").trim();
-    if (!content) return [];
+    if (!content) {
+      return [];
+    }
     return content
       .split("\n")
       .map((line) => {

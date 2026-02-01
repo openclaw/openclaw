@@ -65,9 +65,7 @@ export class PolicyEntity {
     this.config = data.config;
 
     // Sort rules by priority (lower = evaluated first)
-    this.sortedRules = [...data.config.rules].sort(
-      (a, b) => a.priority - b.priority
-    );
+    this.sortedRules = [...data.config.rules].toSorted((a, b) => a.priority - b.priority);
   }
 
   /**
@@ -77,7 +75,7 @@ export class PolicyEntity {
     toolName: string,
     category: string,
     target?: string,
-    rateLimiter?: RateLimiter
+    rateLimiter?: RateLimiter,
   ): PolicyEvaluation {
     for (const rule of this.sortedRules) {
       if (this.matchesRule(toolName, category, target, rule.match)) {
@@ -87,7 +85,7 @@ export class PolicyEntity {
           const result = rateLimiter.check(
             key,
             rule.match.rateLimit.maxCount,
-            rule.match.rateLimit.windowMs
+            rule.match.rateLimit.windowMs,
           );
           if (result.allowed) {
             continue; // Under limit, rule doesn't fire
@@ -100,11 +98,7 @@ export class PolicyEntity {
           matchedRule: rule,
           enforced,
           reason: rule.reason ?? `Matched rule: ${rule.name}`,
-          constraints: [
-            `policy:${this.entityId}`,
-            `decision:${rule.decision}`,
-            `rule:${rule.id}`,
-          ],
+          constraints: [`policy:${this.entityId}`, `decision:${rule.decision}`, `rule:${rule.id}`],
         };
       }
     }
@@ -127,7 +121,7 @@ export class PolicyEntity {
     toolName: string,
     category: string,
     target: string | undefined,
-    match: PolicyMatch
+    match: PolicyMatch,
   ): boolean {
     // Tool match
     if (match.tools && !match.tools.includes(toolName)) {
@@ -171,11 +165,7 @@ export class PolicyEntity {
     return true;
   }
 
-  private rateLimitKey(
-    rule: PolicyRule,
-    toolName: string,
-    category: string
-  ): string {
+  private rateLimitKey(rule: PolicyRule, toolName: string, category: string): string {
     if (rule.match.tools) {
       return `ratelimit:${rule.id}:tool:${toolName}`;
     }
@@ -244,14 +234,16 @@ export class PolicyRegistry {
     }
 
     // Generate version if not provided
-    const versionStr = version ?? new Date().toISOString().replace(/[-:T.]/g, "").slice(0, 14);
+    const versionStr =
+      version ??
+      new Date()
+        .toISOString()
+        .replace(/[-:T.]/g, "")
+        .slice(0, 14);
 
     // Compute content hash
     const contentStr = JSON.stringify(config, Object.keys(config).sort());
-    const contentHash = createHash("sha256")
-      .update(contentStr)
-      .digest("hex")
-      .slice(0, 16);
+    const contentHash = createHash("sha256").update(contentStr).digest("hex").slice(0, 16);
 
     // Build entity ID
     const entityId: PolicyEntityId = `policy:${name}:${versionStr}:${contentHash}`;
@@ -335,7 +327,7 @@ export class PolicyRegistry {
     sessionId: string,
     _toolName: string,
     _decision: PolicyDecision,
-    _success: boolean
+    _success: boolean,
   ): void {
     const sessionEntity = `session:${sessionId}`;
 

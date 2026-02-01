@@ -44,12 +44,12 @@ All fields are optional. Defaults shown below.
 }
 ```
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `auditLevel` | `"minimal" \| "standard" \| "verbose"` | `"standard"` | Controls audit detail level. `verbose` logs every R6 to the console. |
-| `showR6Status` | `boolean` | `true` | Show R6 chain status in session output. |
-| `storagePath` | `string` | `~/.moltbot/extensions/web4-governance/` | Directory for audit logs and session state. |
-| `policy` | `object` | see below | Policy engine configuration. |
+| Field          | Type                                   | Default                                  | Description                                                          |
+| -------------- | -------------------------------------- | ---------------------------------------- | -------------------------------------------------------------------- |
+| `auditLevel`   | `"minimal" \| "standard" \| "verbose"` | `"standard"`                             | Controls audit detail level. `verbose` logs every R6 to the console. |
+| `showR6Status` | `boolean`                              | `true`                                   | Show R6 chain status in session output.                              |
+| `storagePath`  | `string`                               | `~/.moltbot/extensions/web4-governance/` | Directory for audit logs and session state.                          |
+| `policy`       | `object`                               | see below                                | Policy engine configuration.                                         |
 
 ## Policy Engine
 
@@ -57,11 +57,11 @@ The policy engine evaluates every tool call against a configurable set of rules 
 
 ### Policy Configuration
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `defaultPolicy` | `"allow" \| "deny" \| "warn"` | `"allow"` | Decision when no rule matches. |
-| `enforce` | `boolean` | `true` | When `false`, deny decisions are logged but not enforced (dry-run mode). |
-| `rules` | `PolicyRule[]` | `[]` | Ordered list of policy rules. |
+| Field           | Type                          | Default   | Description                                                              |
+| --------------- | ----------------------------- | --------- | ------------------------------------------------------------------------ |
+| `defaultPolicy` | `"allow" \| "deny" \| "warn"` | `"allow"` | Decision when no rule matches.                                           |
+| `enforce`       | `boolean`                     | `true`    | When `false`, deny decisions are logged but not enforced (dry-run mode). |
+| `rules`         | `PolicyRule[]`                | `[]`      | Ordered list of policy rules.                                            |
 
 ### Rule Schema
 
@@ -80,54 +80,55 @@ The policy engine evaluates every tool call against a configurable set of rules 
 }
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `id` | yes | Unique rule identifier, used in audit constraints. |
-| `name` | yes | Human-readable rule name. |
-| `priority` | yes | Lower number = evaluated first. First match wins. |
-| `decision` | yes | `"allow"`, `"deny"`, or `"warn"`. |
-| `reason` | no | Reason string recorded in audit and shown on block. |
-| `match` | yes | Match criteria (all specified fields are AND'd). |
+| Field      | Required | Description                                         |
+| ---------- | -------- | --------------------------------------------------- |
+| `id`       | yes      | Unique rule identifier, used in audit constraints.  |
+| `name`     | yes      | Human-readable rule name.                           |
+| `priority` | yes      | Lower number = evaluated first. First match wins.   |
+| `decision` | yes      | `"allow"`, `"deny"`, or `"warn"`.                   |
+| `reason`   | no       | Reason string recorded in audit and shown on block. |
+| `match`    | yes      | Match criteria (all specified fields are AND'd).    |
 
 ### Match Criteria
 
 All specified criteria within a rule must match (AND logic). Omitted criteria are ignored.
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `tools` | `string[]` | Tool names: `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Task`, `NotebookEdit`, `TodoWrite` |
-| `categories` | `string[]` | Tool categories: `file_read`, `file_write`, `command`, `network`, `delegation`, `state`, `mcp`, `unknown` |
-| `targetPatterns` | `string[]` | Patterns to match against the tool's target (file path, command, URL, etc.). Glob by default. |
-| `targetPatternsAreRegex` | `boolean` | Set `true` to treat `targetPatterns` as regex instead of glob. Default: `false`. |
+| Field                    | Type       | Description                                                                                                               |
+| ------------------------ | ---------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `tools`                  | `string[]` | Tool names: `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `WebFetch`, `WebSearch`, `Task`, `NotebookEdit`, `TodoWrite` |
+| `categories`             | `string[]` | Tool categories: `file_read`, `file_write`, `command`, `network`, `delegation`, `state`, `mcp`, `unknown`                 |
+| `targetPatterns`         | `string[]` | Patterns to match against the tool's target (file path, command, URL, etc.). Glob by default.                             |
+| `targetPatternsAreRegex` | `boolean`  | Set `true` to treat `targetPatterns` as regex instead of glob. Default: `false`.                                          |
 
 ### Target Extraction
 
 The target matched against `targetPatterns` is extracted from tool parameters:
 
-| Tool | Target source |
-|------|---------------|
-| Read, Write, Edit, NotebookEdit | `file_path` param |
-| Glob, Grep | `path` or `pattern` param |
-| Bash | `command` param (truncated to 80 chars) |
-| WebFetch, WebSearch | `url` param |
-| Task, TodoWrite | no target extracted |
+| Tool                            | Target source                           |
+| ------------------------------- | --------------------------------------- |
+| Read, Write, Edit, NotebookEdit | `file_path` param                       |
+| Glob, Grep                      | `path` or `pattern` param               |
+| Bash                            | `command` param (truncated to 80 chars) |
+| WebFetch, WebSearch             | `url` param                             |
+| Task, TodoWrite                 | no target extracted                     |
 
 ### Glob Patterns
 
 Glob matching supports `*` (any characters except `/`), `**` (any characters including `/`), and `?` (single character). Special regex characters are escaped.
 
 Examples:
+
 - `**/.env*` matches `/project/.env`, `/project/.env.local`
 - `/src/*.ts` matches `/src/index.ts` but not `/src/sub/index.ts`
 - `/src/**/*.ts` matches any `.ts` file under `/src/` at any depth
 
 ### Decisions
 
-| Decision | Behavior (enforce=true) | Behavior (enforce=false) |
-|----------|------------------------|--------------------------|
-| `allow` | Tool executes normally | Tool executes normally |
-| `deny` | Tool is **blocked**, returns `[blocked] [web4-policy] <reason>` | Logged as warning, tool executes |
-| `warn` | Tool executes, warning logged | Tool executes, warning logged |
+| Decision | Behavior (enforce=true)                                         | Behavior (enforce=false)         |
+| -------- | --------------------------------------------------------------- | -------------------------------- |
+| `allow`  | Tool executes normally                                          | Tool executes normally           |
+| `deny`   | Tool is **blocked**, returns `[blocked] [web4-policy] <reason>` | Logged as warning, tool executes |
+| `warn`   | Tool executes, warning logged                                   | Tool executes, warning logged    |
 
 ### Audit Integration
 
@@ -308,14 +309,14 @@ Internal hooks handle session lifecycle (bootstrap, start, end) and command-leve
 
 Each tool call produces an R6 record with six fields:
 
-| Field | Content |
-|-------|---------|
-| **Rules** | Audit level + policy constraints |
-| **Role** | Session ID, agent ID, action index, binding type |
-| **Request** | Tool name, category, target, input hash |
-| **Reference** | Session ID, previous R6 ID, chain position |
-| **Resource** | Approval requirement flag |
-| **Result** | Status (success/error/blocked), output hash, duration |
+| Field         | Content                                               |
+| ------------- | ----------------------------------------------------- |
+| **Rules**     | Audit level + policy constraints                      |
+| **Role**      | Session ID, agent ID, action index, binding type      |
+| **Request**   | Tool name, category, target, input hash               |
+| **Reference** | Session ID, previous R6 ID, chain position            |
+| **Resource**  | Approval requirement flag                             |
+| **Result**    | Status (success/error/blocked), output hash, duration |
 
 ### Session Identity
 
@@ -323,10 +324,10 @@ Each session gets a Soft LCT (software-bound Linked Context Token) derived from 
 
 ## Implementation Tiers
 
-| Tier | Scope | Status |
-|------|-------|--------|
-| 1 - Observational | R6 audit, hash chain, soft LCT, tool classification | Done |
-| 1.5 - Policy | Configurable rules, before_tool_call gating, allow/deny/warn | Done |
+| Tier              | Scope                                                             | Status              |
+| ----------------- | ----------------------------------------------------------------- | ------------------- |
+| 1 - Observational | R6 audit, hash chain, soft LCT, tool classification               | Done                |
+| 1.5 - Policy      | Configurable rules, before_tool_call gating, allow/deny/warn      | Done                |
 | 2 - Authorization | T3 trust tensors, ATP economics, hardware LCT, full policy engine | Planned (Hardbound) |
 
 ## Development

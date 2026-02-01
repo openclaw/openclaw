@@ -96,15 +96,26 @@ export function hashOutput(output: unknown): string {
   return createHash("sha256").update(str).digest("hex").slice(0, 16);
 }
 
-export function extractTarget(toolName: string, params: Record<string, unknown>): string | undefined {
-  if (params.file_path) return String(params.file_path);
-  if (params.path) return String(params.path);
-  if (params.pattern) return String(params.pattern);
-  if (params.command) {
-    const cmd = String(params.command);
+export function extractTarget(
+  toolName: string,
+  params: Record<string, unknown>,
+): string | undefined {
+  if (typeof params.file_path === "string") {
+    return params.file_path;
+  }
+  if (typeof params.path === "string") {
+    return params.path;
+  }
+  if (typeof params.pattern === "string") {
+    return params.pattern;
+  }
+  if (typeof params.command === "string") {
+    const cmd = params.command;
     return cmd.length > 80 ? cmd.slice(0, 80) + "..." : cmd;
   }
-  if (params.url) return String(params.url);
+  if (typeof params.url === "string") {
+    return params.url;
+  }
   return undefined;
 }
 

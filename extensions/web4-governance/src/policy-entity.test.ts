@@ -45,9 +45,9 @@ describe("PolicyEntity", () => {
     });
 
     it("throws when neither config nor preset provided", () => {
-      expect(() =>
-        registry.registerPolicy({ name: "invalid" })
-      ).toThrow("Must provide either config or preset");
+      expect(() => registry.registerPolicy({ name: "invalid" })).toThrow(
+        "Must provide either config or preset",
+      );
     });
 
     it("throws when both config and preset provided", () => {
@@ -56,7 +56,7 @@ describe("PolicyEntity", () => {
           name: "invalid",
           config: { defaultPolicy: "allow", enforce: true, rules: [] },
           preset: "safety",
-        })
+        }),
       ).toThrow("Cannot provide both config and preset");
     });
   });
@@ -377,13 +377,7 @@ describe("PolicyRegistry witnessing", () => {
       preset: "safety",
     });
 
-    registry.witnessDecision(
-      entity.entityId,
-      "session-123",
-      "Read",
-      "allow",
-      true
-    );
+    registry.witnessDecision(entity.entityId, "session-123", "Read", "allow", true);
 
     const hasWitnessed = registry.getHasWitnessed(entity.entityId);
     expect(hasWitnessed).toContain("session:session-123");

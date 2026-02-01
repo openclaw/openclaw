@@ -115,6 +115,8 @@ describe("matchesRule", () => {
   });
 
   it("should match with only categories specified", () => {
-    expect(matchesRule("WebFetch", "network", "https://x.com", { categories: ["network"] })).toBe(true);
+    expect(matchesRule("WebFetch", "network", "https://x.com", { categories: ["network"] })).toBe(
+      true,
+    );
   });
 });

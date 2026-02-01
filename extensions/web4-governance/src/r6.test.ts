@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  classifyTool,
-  hashInput,
-  hashOutput,
-  extractTarget,
-  createR6Request,
-} from "./r6.js";
+import { classifyTool, hashInput, hashOutput, extractTarget, createR6Request } from "./r6.js";
 
 describe("classifyTool", () => {
   it("should classify file read tools", () => {
@@ -109,7 +103,15 @@ describe("extractTarget", () => {
 
 describe("createR6Request", () => {
   it("should create a well-formed R6 request", () => {
-    const r6 = createR6Request("sess-1", "agent-1", "Read", { file_path: "/foo" }, 0, undefined, "standard");
+    const r6 = createR6Request(
+      "sess-1",
+      "agent-1",
+      "Read",
+      { file_path: "/foo" },
+      0,
+      undefined,
+      "standard",
+    );
 
     expect(r6.id).toMatch(/^r6:[a-f0-9]{8}$/);
     expect(r6.timestamp).toBeTruthy();
@@ -134,7 +136,15 @@ describe("createR6Request", () => {
   });
 
   it("should link to previous R6 request", () => {
-    const r6 = createR6Request("s", undefined, "Bash", { command: "ls" }, 5, "r6:prev0001", "minimal");
+    const r6 = createR6Request(
+      "s",
+      undefined,
+      "Bash",
+      { command: "ls" },
+      5,
+      "r6:prev0001",
+      "minimal",
+    );
     expect(r6.reference.prevR6Id).toBe("r6:prev0001");
     expect(r6.reference.chainPosition).toBe(5);
   });

@@ -52,12 +52,24 @@ export function matchesTarget(
   patterns: string[],
   useRegex: boolean,
 ): boolean {
-  if (target === undefined) return false;
+  if (target === undefined) {
+    return false;
+  }
   for (const pattern of patterns) {
     if (useRegex) {
-      if (new RegExp(pattern).test(target)) return true;
+      // P1 fix: Guard against invalid regex patterns that could crash the process
+      try {
+        if (new RegExp(pattern).test(target)) {
+          return true;
+        }
+      } catch {
+        // Invalid regex pattern - skip it and continue
+        continue;
+      }
     } else {
-      if (globToRegex(pattern).test(target)) return true;
+      if (globToRegex(pattern).test(target)) {
+        return true;
+      }
     }
   }
   return false;
@@ -75,8 +87,12 @@ export function matchesRule(
   match: PolicyMatch,
 ): boolean {
   // Each specified criterion must match (AND logic)
-  if (match.tools && !matchesList(toolName, match.tools)) return false;
-  if (match.categories && !matchesList(category, match.categories)) return false;
+  if (match.tools && !matchesList(toolName, match.tools)) {
+    return false;
+  }
+  if (match.categories && !matchesList(category, match.categories)) {
+    return false;
+  }
   if (match.targetPatterns) {
     if (!matchesTarget(target, match.targetPatterns, match.targetPatternsAreRegex ?? false)) {
       return false;

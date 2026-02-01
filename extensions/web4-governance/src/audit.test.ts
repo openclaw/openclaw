@@ -13,7 +13,15 @@ function cleanup() {
 }
 
 function makeR6(actionIndex: number, toolName = "Read") {
-  return createR6Request("test-session", "agent-1", toolName, { file_path: "/foo" }, actionIndex, undefined, "standard");
+  return createR6Request(
+    "test-session",
+    "agent-1",
+    toolName,
+    { file_path: "/foo" },
+    actionIndex,
+    undefined,
+    "standard",
+  );
 }
 
 describe("AuditChain", () => {
@@ -102,8 +110,8 @@ describe("AuditChain", () => {
 
     const last3 = chain.getLast(3);
     expect(last3).toHaveLength(3);
-    expect(last3[0]!.provenance.actionIndex).toBe(2);
-    expect(last3[2]!.provenance.actionIndex).toBe(4);
+    expect(last3[0]?.provenance.actionIndex).toBe(2);
+    expect(last3[2]?.provenance.actionIndex).toBe(4);
   });
 
   it("should return empty array for getLast on nonexistent file", () => {
@@ -136,14 +144,14 @@ describe("AuditChain", () => {
       const chain = populateChain();
       const results = chain.filter({ status: "error" });
       expect(results).toHaveLength(1);
-      expect(results[0]!.result.status).toBe("error");
+      expect(results[0]?.result.status).toBe("error");
     });
 
     it("should filter by status blocked", () => {
       const chain = populateChain();
       const results = chain.filter({ status: "blocked" });
       expect(results).toHaveLength(1);
-      expect(results[0]!.tool).toBe("WebFetch");
+      expect(results[0]?.tool).toBe("WebFetch");
     });
 
     it("should filter by category", () => {

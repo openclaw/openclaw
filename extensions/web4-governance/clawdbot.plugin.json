@@ -76,7 +76,16 @@
                       "type": "array",
                       "items": {
                         "type": "string",
-                        "enum": ["file_read", "file_write", "command", "network", "delegation", "state", "mcp", "unknown"]
+                        "enum": [
+                          "file_read",
+                          "file_write",
+                          "command",
+                          "network",
+                          "delegation",
+                          "state",
+                          "mcp",
+                          "unknown"
+                        ]
                       },
                       "description": "Tool categories to match"
                     },

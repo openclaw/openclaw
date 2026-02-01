@@ -20,10 +20,7 @@ export type SoftLCTToken = {
 export function createSoftLCT(sessionId: string): SoftLCTToken {
   const machine = hostname();
   const user = userInfo().username;
-  const machineHash = createHash("sha256")
-    .update(`${machine}:${user}`)
-    .digest("hex")
-    .slice(0, 8);
+  const machineHash = createHash("sha256").update(`${machine}:${user}`).digest("hex").slice(0, 8);
 
   return {
     tokenId: `web4:session:${machineHash}:${sessionId.slice(0, 8)}`,

@@ -36,7 +36,9 @@ export class SessionStore {
 
   load(sessionId: string): SessionState | null {
     const path = this.filePath(sessionId);
-    if (!existsSync(path)) return null;
+    if (!existsSync(path)) {
+      return null;
+    }
     try {
       return JSON.parse(readFileSync(path, "utf-8")) as SessionState;
     } catch {

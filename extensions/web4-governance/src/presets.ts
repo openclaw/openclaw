@@ -124,13 +124,12 @@ export function isPresetName(name: string): name is PresetName {
  *   2. Top-level overrides (defaultPolicy, enforce) from user config
  *   3. Additional rules from user config are appended after preset rules
  */
-export function resolvePreset(
-  presetName: string,
-  overrides?: Partial<PolicyConfig>,
-): PolicyConfig {
+export function resolvePreset(presetName: string, overrides?: Partial<PolicyConfig>): PolicyConfig {
   const preset = getPreset(presetName);
   if (!preset) {
-    throw new Error(`Unknown policy preset: "${presetName}". Available: ${Object.keys(PRESETS).join(", ")}`);
+    throw new Error(
+      `Unknown policy preset: "${presetName}". Available: ${Object.keys(PRESETS).join(", ")}`,
+    );
   }
 
   const base = { ...preset.config };
