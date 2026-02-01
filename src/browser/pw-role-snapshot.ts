@@ -191,7 +191,7 @@ function processLine(
     return null;
   }
 
-  const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
+  const match = line.match(/^(\s*-\s*)([\w-]+)(?:\s+"((?:[^"\\]|\\.)*)")?(.*)$/);
   if (!match) {
     return options.interactive ? null : line;
   }
@@ -229,7 +229,7 @@ function processLine(
 
   let enhanced = `${prefix}${roleRaw}`;
   if (name) {
-    enhanced += ` "${name}"`;
+    enhanced += ` "${name.replace(/"/g, '\\"')}"`;
   }
   enhanced += ` [ref=${ref}]`;
   if (nth > 0) {
@@ -276,7 +276,7 @@ export function buildRoleSnapshotFromAriaSnapshot(
         continue;
       }
 
-      const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
+      const match = line.match(/^(\s*-\s*)([\w-]+)(?:\s+"((?:[^"\\]|\\.)*)")?(.*)$/);
       if (!match) {
         continue;
       }
@@ -301,7 +301,7 @@ export function buildRoleSnapshotFromAriaSnapshot(
 
       let enhanced = `- ${roleRaw}`;
       if (name) {
-        enhanced += ` "${name}"`;
+        enhanced += ` "${name.replace(/"/g, '\\"')}"`;
       }
       enhanced += ` [ref=${ref}]`;
       if (nth > 0) {
@@ -361,7 +361,7 @@ export function buildRoleSnapshotFromAiSnapshot(
       if (options.maxDepth !== undefined && depth > options.maxDepth) {
         continue;
       }
-      const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
+      const match = line.match(/^(\s*-\s*)([\w-]+)(?:\s+"((?:[^"\\]|\\.)*)")?(.*)$/);
       if (!match) {
         continue;
       }
@@ -378,7 +378,7 @@ export function buildRoleSnapshotFromAiSnapshot(
         continue;
       }
       refs[ref] = { role, ...(name ? { name } : {}) };
-      out.push(`- ${roleRaw}${name ? ` "${name}"` : ""}${suffix}`);
+      out.push(`- ${roleRaw}${name ? ` "${name.replace(/"/g, '\\"')}"` : ""}${suffix}`);
     }
     return {
       snapshot: out.join("\n") || "(no interactive elements)",
@@ -393,7 +393,7 @@ export function buildRoleSnapshotFromAiSnapshot(
       continue;
     }
 
-    const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
+    const match = line.match(/^(\s*-\s*)([\w-]+)(?:\s+"((?:[^"\\]|\\.)*)")?(.*)$/);
     if (!match) {
       out.push(line);
       continue;
