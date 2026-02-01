@@ -7,15 +7,21 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Docs: add direct BotFather link and verification reminder in Telegram setup. (#4064) Thanks @shatner.
+- Docs: add Mintlify language navigation for zh-Hans. (#6416) Thanks @joshp123.
 - Telegram: use shared pairing store. (#6127) Thanks @obviyus.
+- Agents: add OpenRouter app attribution headers. (#5050) Thanks @alexanderatallah.
 
 ### Fixes
 
+- Docs: run oxfmt to fix format checks. (#6513) Thanks @app/clawdinator.
 - Auto-reply: avoid referencing workspace files in /new greeting prompt. (#5706) Thanks @bravostation.
 - Process: resolve Windows `spawn()` failures for npm-family CLIs by appending `.cmd` when needed. (#5815) Thanks @thejhinvirtuoso.
 - Docs: update MiniMax OAuth setup commands; Extensions: use OpenClaw plugin SDK for MiniMax OAuth. (#5402) Thanks @Maosghoul.
 - Discord: resolve PluralKit proxied senders for allowlists and labels. (#5838) Thanks @thewilloftheshadow.
 - Telegram: restore draft streaming partials. (#5543) Thanks @obviyus.
+- Docker: use container port for gateway command instead of host port. (#5110) Thanks @mise42.
+- Docs: add zh-CN frontmatter titles for localized metadata. (#6487) Thanks @joshp123.
+- Docs: clarify Moonshot endpoints. (#4763) Thanks @hansbbans.
 - fix(lobster): block arbitrary exec via lobsterPath/cwd injection (GHSA-4mhr-g7xj-cg8j). (#5335) Thanks @vignesh07.
 
 ## 2026.1.30
@@ -126,6 +132,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Skills: update session-logs paths to use ~/.openclaw. (#4502) Thanks @bonald.
 - Telegram: avoid silent empty replies by tracking normalization skips before fallback. (#3796)
 - Mentions: honor mentionPatterns even when explicit mentions are present. (#3303) Thanks @HirokiKobayashi-R.
 - Discord: restore username directory lookup in target resolution. (#3131) Thanks @bonald.

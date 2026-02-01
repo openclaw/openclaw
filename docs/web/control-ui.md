@@ -54,6 +54,7 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 [Devices CLI](/cli/devices) for token rotation and revocation.
 
 **Notes:**
+
 - Local connections (`127.0.0.1`) are auto-approved.
 - Remote connections (LAN, Tailnet, etc.) require explicit approval.
 - Each browser profile generates a unique device ID, so switching browsers or
