@@ -35,6 +35,7 @@ export const createTelegramMessageProcessor = (deps) => {
       bot,
       cfg,
       account,
+      telegramCfg,
       historyLimit,
       groupHistories,
       dmPolicy,

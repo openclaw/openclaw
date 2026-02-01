@@ -303,6 +303,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.msteams": "MS Teams",
   "channels.telegram.botToken": "Telegram Bot Token",
   "channels.telegram.dmPolicy": "Telegram DM Policy",
+  "channels.telegram.dynamicAgents": "Telegram Dynamic Agents",
   "channels.telegram.streamMode": "Telegram Draft Stream Mode",
   "channels.telegram.draftChunk.minChars": "Telegram Draft Chunk Min Chars",
   "channels.telegram.draftChunk.maxChars": "Telegram Draft Chunk Max Chars",
@@ -635,6 +636,8 @@ const FIELD_HELP: Record<string, string> = {
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
+  "channels.telegram.dynamicAgents":
+    'Dynamic agent routing for Telegram inbound messages ("dm", "group", or "dm+group"; default: "off").',
   "channels.telegram.streamMode":
     "Draft streaming mode for Telegram replies (off | partial | block). Separate from block streaming; requires private topics + sendMessageDraft.",
   "channels.telegram.draftChunk.minChars":

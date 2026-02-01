@@ -1,6 +1,11 @@
 import type { Bot } from "grammy";
 import type { OpenClawConfig } from "../config/config.js";
-import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
+import type {
+  DmPolicy,
+  TelegramAccountConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "../config/types.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
@@ -29,8 +34,12 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import { buildAgentSessionKey, resolveAgentRoute } from "../routing/resolve-route.js";
+import {
+  buildAgentMainSessionKey,
+  resolveThreadSessionKeys,
+  sanitizeAgentId,
+} from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
@@ -97,6 +106,8 @@ type BuildTelegramMessageContextParams = {
   bot: Bot;
   cfg: OpenClawConfig;
   account: { accountId: string };
+  /** Merged Telegram account config (includes per-account overrides). */
+  telegramCfg: TelegramAccountConfig;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmPolicy: DmPolicy;
@@ -108,6 +119,47 @@ type BuildTelegramMessageContextParams = {
   resolveGroupRequireMention: ResolveGroupRequireMention;
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
 };
+
+type TelegramDynamicAgentsMode = "off" | "dm" | "group" | "dm+group";
+
+/**
+ * Resolve Telegram dynamic agent mode (off/dm/group/dm+group).
+ */
+function resolveTelegramDynamicAgentsMode(telegramCfg?: {
+  dynamicAgents?: string | undefined;
+}): TelegramDynamicAgentsMode {
+  const raw = telegramCfg?.dynamicAgents;
+  const normalized = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (normalized === "dm" || normalized === "group" || normalized === "dm+group") {
+    return normalized;
+  }
+  return "off";
+}
+
+/**
+ * Derive a stable agentId for DMs/groups; returns null to use the default route.
+ */
+function resolveTelegramDynamicAgentId(params: {
+  mode: TelegramDynamicAgentsMode;
+  isGroup: boolean;
+  accountId: string;
+  chatId: number;
+  senderId?: number | null;
+}): string | null {
+  if (params.mode === "off") {
+    return null;
+  }
+  if (params.isGroup && params.mode === "dm") {
+    return null;
+  }
+  if (!params.isGroup && params.mode === "group") {
+    return null;
+  }
+  const base = params.isGroup
+    ? `tggroup-${params.accountId}-${params.chatId}`
+    : `tgdm-${params.accountId}-${params.senderId ?? params.chatId}`;
+  return sanitizeAgentId(base);
+}
 
 async function resolveStickerVisionSupport(params: {
   cfg: OpenClawConfig;
@@ -137,6 +189,7 @@ export const buildTelegramMessageContext = async ({
   bot,
   cfg,
   account,
+  telegramCfg,
   historyLimit,
   groupHistories,
   dmPolicy,
@@ -165,15 +218,36 @@ export const buildTelegramMessageContext = async ({
   const replyThreadId = isGroup ? resolvedThreadId : messageThreadId;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
-  const route = resolveAgentRoute({
+  const peer = { kind: isGroup ? "group" : "dm", id: peerId } as const;
+  const baseRoute = resolveAgentRoute({
     cfg,
     channel: "telegram",
     accountId: account.accountId,
-    peer: {
-      kind: isGroup ? "group" : "dm",
-      id: peerId,
-    },
+    peer,
   });
+  // Dynamic agent routing: derive per-user/group agent IDs when enabled.
+  const dynamicAgentId = resolveTelegramDynamicAgentId({
+    mode: resolveTelegramDynamicAgentsMode(telegramCfg),
+    isGroup,
+    accountId: account.accountId,
+    chatId,
+    senderId: msg.from?.id ?? null,
+  });
+  const route = dynamicAgentId
+    ? {
+        ...baseRoute,
+        agentId: dynamicAgentId,
+        sessionKey: buildAgentSessionKey({
+          agentId: dynamicAgentId,
+          channel: baseRoute.channel,
+          accountId: baseRoute.accountId,
+          peer,
+          dmScope: cfg.session?.dmScope,
+          identityLinks: cfg.session?.identityLinks,
+        }).toLowerCase(),
+        mainSessionKey: buildAgentMainSessionKey({ agentId: dynamicAgentId }).toLowerCase(),
+      }
+    : baseRoute;
   const baseSessionKey = route.sessionKey;
   // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
   const dmThreadId = !isGroup ? messageThreadId : undefined;
