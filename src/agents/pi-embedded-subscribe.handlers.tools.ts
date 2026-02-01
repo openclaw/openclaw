@@ -1,7 +1,16 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
+
+// Dedicated error class for hook blocking to avoid magic property issues
+class ToolBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolBlockedError";
+  }
+}
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import {
   extractToolErrorMessage,
@@ -49,7 +58,94 @@ export async function handleToolExecutionStart(
   const rawToolName = String(evt.toolName);
   const toolName = normalizeToolName(rawToolName);
   const toolCallId = String(evt.toolCallId);
-  const args = evt.args;
+  let args = evt.args;
+
+  // Run before_tool_call hook - allows plugins to modify or block tool calls
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_tool_call")) {
+    try {
+      // Normalize args to object for hook contract - plugins expect params to be an object
+      const normalizedParams =
+        args && typeof args === "object" && !Array.isArray(args)
+          ? (args as Record<string, unknown>)
+          : {};
+
+      const hookResult = await hookRunner.runBeforeToolCall(
+        {
+          toolName,
+          params: normalizedParams,
+        },
+        {
+          toolName,
+        },
+      );
+
+      // Check if hook blocked the tool call
+      if (hookResult?.block) {
+        const blockReason = hookResult.blockReason || "Tool call blocked by plugin hook";
+
+        // Update internal state to match normal tool execution flow
+        const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
+        ctx.state.toolMetaById.set(toolCallId, meta);
+
+        ctx.log.debug(
+          `Tool call blocked by plugin hook: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId} reason=${blockReason}`,
+        );
+
+        // Emit tool start/end events with error to maintain event consistency
+        emitAgentEvent({
+          runId: ctx.params.runId,
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: toolName,
+            toolCallId,
+            args: args as Record<string, unknown>,
+          },
+        });
+
+        // Call onAgentEvent callback to match normal flow
+        void ctx.params.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "start", name: toolName, toolCallId },
+        });
+
+        emitAgentEvent({
+          runId: ctx.params.runId,
+          stream: "tool",
+          data: {
+            phase: "end",
+            name: toolName,
+            toolCallId,
+            error: blockReason,
+          },
+        });
+
+        // Throw dedicated error class instead of using magic properties
+        throw new ToolBlockedError(blockReason);
+      }
+
+      // If hook modified params, update args safely
+      if (hookResult?.params) {
+        if (args && typeof args === "object" && !Array.isArray(args)) {
+          // Safe to merge with existing object args
+          args = { ...(args as Record<string, unknown>), ...hookResult.params };
+        } else {
+          // For non-object args, replace entirely with hook params
+          args = hookResult.params;
+        }
+      }
+    } catch (err) {
+      // If it's our blocking error, re-throw it
+      if (err instanceof ToolBlockedError) {
+        throw err;
+      }
+      // For other hook errors, log but don't block the tool call
+      ctx.log.warn(
+        `before_tool_call hook failed: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId} error=${String(err)}`,
+      );
+    }
+  }
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
