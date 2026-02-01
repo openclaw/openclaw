@@ -1,5 +1,8 @@
 export type CompactionSafeguardRuntimeValue = {
   maxHistoryShare?: number;
+  // Model info passed from extensions.ts for fallback when ctx.model is undefined
+  model?: unknown;
+  modelRegistry?: unknown;
 };
 
 // Session-scoped runtime registry keyed by object identity.
