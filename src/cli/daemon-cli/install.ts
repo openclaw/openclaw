@@ -93,10 +93,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
 
+  // Resolve bind mode from config (loopback is the safe default)
+  const bind = cfg.gateway?.bind ?? "loopback";
+
   const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
     env: process.env,
     port,
     token: opts.token || cfg.gateway?.auth?.token || process.env.OPENCLAW_GATEWAY_TOKEN,
+    bind,
     runtime: runtimeRaw,
     warn: (message) => {
       if (json) {

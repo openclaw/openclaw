@@ -30,6 +30,7 @@ export async function buildGatewayInstallPlan(params: {
   port: number;
   runtime: GatewayDaemonRuntime;
   token?: string;
+  bind?: string;
   devMode?: boolean;
   nodePath?: string;
   warn?: WarnFn;
@@ -45,6 +46,7 @@ export async function buildGatewayInstallPlan(params: {
     }));
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
+    bind: params.bind,
     dev: devMode,
     runtime: params.runtime,
     nodePath,
@@ -60,6 +62,7 @@ export async function buildGatewayInstallPlan(params: {
     env: params.env,
     port: params.port,
     token: params.token,
+    bind: params.bind,
     launchdLabel:
       process.platform === "darwin"
         ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
