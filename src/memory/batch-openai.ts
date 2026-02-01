@@ -34,9 +34,34 @@ export type OpenAiBatchOutputLine = {
 export const OPENAI_BATCH_ENDPOINT = "/v1/embeddings";
 const OPENAI_BATCH_COMPLETION_WINDOW = "24h";
 const OPENAI_BATCH_MAX_REQUESTS = 50000;
+const OPENAI_FETCH_TIMEOUT_MS = 30000; // 30 second timeout for individual fetch calls
 
 function getOpenAiBaseUrl(openAi: OpenAiEmbeddingClient): string {
   return openAi.baseUrl?.replace(/\/$/, "") ?? "";
+}
+
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit & { timeoutMs?: number },
+): Promise<Response> {
+  const timeoutMs = options.timeoutMs ?? OPENAI_FETCH_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(`fetch timeout after ${timeoutMs}ms: ${url}`);
+    }
+    throw err;
+  }
 }
 
 function getOpenAiHeaders(
@@ -81,10 +106,11 @@ async function submitOpenAiBatch(params: {
     `memory-embeddings.${hashText(String(Date.now()))}.jsonl`,
   );
 
-  const fileRes = await fetch(`${baseUrl}/files`, {
+  const fileRes = await fetchWithTimeout(`${baseUrl}/files`, {
     method: "POST",
     headers: getOpenAiHeaders(params.openAi, { json: false }),
     body: form,
+    timeoutMs: 60000, // 60s for file upload
   });
   if (!fileRes.ok) {
     const text = await fileRes.text();
@@ -97,7 +123,7 @@ async function submitOpenAiBatch(params: {
 
   const batchRes = await retryAsync(
     async () => {
-      const res = await fetch(`${baseUrl}/batches`, {
+      const res = await fetchWithTimeout(`${baseUrl}/batches`, {
         method: "POST",
         headers: getOpenAiHeaders(params.openAi, { json: true }),
         body: JSON.stringify({
@@ -139,7 +165,7 @@ async function fetchOpenAiBatchStatus(params: {
   batchId: string;
 }): Promise<OpenAiBatchStatus> {
   const baseUrl = getOpenAiBaseUrl(params.openAi);
-  const res = await fetch(`${baseUrl}/batches/${params.batchId}`, {
+  const res = await fetchWithTimeout(`${baseUrl}/batches/${params.batchId}`, {
     headers: getOpenAiHeaders(params.openAi, { json: true }),
   });
   if (!res.ok) {
@@ -154,8 +180,9 @@ async function fetchOpenAiFileContent(params: {
   fileId: string;
 }): Promise<string> {
   const baseUrl = getOpenAiBaseUrl(params.openAi);
-  const res = await fetch(`${baseUrl}/files/${params.fileId}/content`, {
+  const res = await fetchWithTimeout(`${baseUrl}/files/${params.fileId}/content`, {
     headers: getOpenAiHeaders(params.openAi, { json: true }),
+    timeoutMs: 60000, // 60s for file download
   });
   if (!res.ok) {
     const text = await res.text();
@@ -212,10 +239,24 @@ async function waitForOpenAiBatch(params: {
   while (true) {
     const status =
       current ??
-      (await fetchOpenAiBatchStatus({
-        openAi: params.openAi,
-        batchId: params.batchId,
-      }));
+      (await retryAsync(
+        async () =>
+          await fetchOpenAiBatchStatus({
+            openAi: params.openAi,
+            batchId: params.batchId,
+          }),
+        {
+          attempts: 3,
+          minDelayMs: 500,
+          maxDelayMs: 2000,
+          jitter: 0.2,
+          shouldRetry: (err) => {
+            // Retry on network errors and timeout errors
+            const message = err instanceof Error ? err.message : String(err);
+            return message.includes("timeout") || message.includes("fetch failed");
+          },
+        },
+      ));
     const state = status.status ?? "unknown";
     if (state === "completed") {
       if (!status.output_file_id) {

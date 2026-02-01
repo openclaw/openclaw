@@ -9,15 +9,12 @@ export type OpenAiEmbeddingClient = {
 
 export const DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const OPENAI_SYNC_EMBED_TIMEOUT_MS = 30_000; // 30s timeout for sync embedding requests
 
 export function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
-  if (!trimmed) {
-    return DEFAULT_OPENAI_EMBEDDING_MODEL;
-  }
-  if (trimmed.startsWith("openai/")) {
-    return trimmed.slice("openai/".length);
-  }
+  if (!trimmed) return DEFAULT_OPENAI_EMBEDDING_MODEL;
+  if (trimmed.startsWith("openai/")) return trimmed.slice("openai/".length);
   return trimmed;
 }
 
@@ -28,14 +25,27 @@ export async function createOpenAiEmbeddingProvider(
   const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
 
   const embed = async (input: string[]): Promise<number[][]> => {
-    if (input.length === 0) {
-      return [];
+    if (input.length === 0) return [];
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), OPENAI_SYNC_EMBED_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: client.headers,
+        body: JSON.stringify({ model: client.model, input }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(
+          `openai embeddings sync fetch timeout after ${OPENAI_SYNC_EMBED_TIMEOUT_MS}ms`,
+        );
+      }
+      throw err;
     }
-    const res = await fetch(url, {
-      method: "POST",
-      headers: client.headers,
-      body: JSON.stringify({ model: client.model, input }),
-    });
+    clearTimeout(timeoutId);
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`openai embeddings failed: ${res.status} ${text}`);

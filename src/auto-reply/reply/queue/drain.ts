@@ -44,13 +44,13 @@ export function scheduleFollowupDrain(
             const to = item.originatingTo;
             const accountId = item.originatingAccountId;
             const threadId = item.originatingThreadId;
-            if (!channel && !to && !accountId && typeof threadId !== "number") {
+            if (!channel && !to && !accountId && threadId == null) {
               return {};
             }
             if (!isRoutableChannel(channel) || !to) {
               return { cross: true };
             }
-            const threadKey = typeof threadId === "number" ? String(threadId) : "";
+            const threadKey = threadId != null ? String(threadId) : "";
             return {
               key: [channel, to, accountId || "", threadKey].join("|"),
             };
@@ -67,7 +67,10 @@ export function scheduleFollowupDrain(
           }
 
           const items = queue.items.splice(0, queue.items.length);
-          const summary = buildQueueSummaryPrompt({ state: queue, noun: "message" });
+          const summary = buildQueueSummaryPrompt({
+            state: queue,
+            noun: "message",
+          });
           const run = items.at(-1)?.run ?? queue.lastRun;
           if (!run) {
             break;
@@ -80,7 +83,7 @@ export function scheduleFollowupDrain(
             (i) => i.originatingAccountId,
           )?.originatingAccountId;
           const originatingThreadId = items.find(
-            (i) => typeof i.originatingThreadId === "number",
+            (i) => i.originatingThreadId != null,
           )?.originatingThreadId;
 
           const prompt = buildCollectPrompt({
@@ -101,7 +104,10 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        const summaryPrompt = buildQueueSummaryPrompt({ state: queue, noun: "message" });
+        const summaryPrompt = buildQueueSummaryPrompt({
+          state: queue,
+          noun: "message",
+        });
         if (summaryPrompt) {
           const run = queue.lastRun;
           if (!run) {

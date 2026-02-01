@@ -183,7 +183,9 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
   const now = Date.now();
 
   for (const job of jobs) {
-    const idLabel = pad(job.id, CRON_ID_PAD);
+    // Gateway may return either 'id' or 'jobId' depending on API version
+    const id = (job as CronJob & { jobId?: string }).jobId ?? job.id ?? "";
+    const idLabel = pad(id, CRON_ID_PAD);
     const nameLabel = pad(truncate(job.name, CRON_NAME_PAD), CRON_NAME_PAD);
     const scheduleLabel = pad(
       truncate(formatSchedule(job.schedule), CRON_SCHEDULE_PAD),
