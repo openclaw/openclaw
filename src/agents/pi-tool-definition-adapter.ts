@@ -6,11 +6,16 @@ import type {
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import { logDebug, logError } from "../logger.js";
+import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
 type AnyAgentTool = AgentTool<any, unknown>;
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function describeToolExecutionError(err: unknown): {
   message: string;
@@ -76,6 +81,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: (toolName: string, params: Record<string, unknown>) => void,
+  hookContext?: { agentId?: string; sessionKey?: string },
 ): ToolDefinition[] {
   return tools.map((tool) => {
     const func = tool.function;
@@ -91,9 +97,20 @@ export function toClientToolDefinitions(
         _ctx,
         _signal,
       ): Promise<AgentToolResult<unknown>> => {
+        const outcome = await runBeforeToolCallHook({
+          toolName: func.name,
+          params,
+          toolCallId,
+          ctx: hookContext,
+        });
+        if (outcome.blocked) {
+          throw new Error(outcome.reason);
+        }
+        const adjustedParams = outcome.params;
+        const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
         // Notify handler that a client tool was called
         if (onClientToolCall) {
-          onClientToolCall(func.name, params as Record<string, unknown>);
+          onClientToolCall(func.name, paramsRecord);
         }
         // Return a pending result - the client will execute this tool
         return jsonResult({
