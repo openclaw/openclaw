@@ -62,6 +62,14 @@ export type TelegramAccountConfig = {
    * - "disabled": ignore all inbound DMs
    */
   dmPolicy?: DmPolicy;
+  /**
+   * Dynamic agent routing for Telegram inbound messages.
+   * - "off": disable (default)
+   * - "dm": one agent per DM user
+   * - "group": one agent per group chat
+   * - "dm+group": enable both DM + group routing
+   */
+  dynamicAgents?: "off" | "dm" | "group" | "dm+group";
   /** If false, do not start this Telegram account. Default: true. */
   enabled?: boolean;
   botToken?: string;
