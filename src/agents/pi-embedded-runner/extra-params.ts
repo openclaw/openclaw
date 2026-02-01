@@ -21,6 +21,9 @@ export function resolveExtraParams(params: {
 }
 
 type CacheRetention = "none" | "short" | "long";
+type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
+  cacheRetention?: CacheRetention;
+};
 
 /**
  * Resolve cacheRetention from extraParams, supporting both new `cacheRetention`
@@ -65,7 +68,7 @@ function createStreamFnWithExtraParams(
     return undefined;
   }
 
-  const streamParams: Partial<SimpleStreamOptions> = {};
+  const streamParams: CacheRetentionStreamOptions = {};
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
