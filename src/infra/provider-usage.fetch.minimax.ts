@@ -307,13 +307,51 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
   return fromCounts;
 }
 
+// Auto-detect region for usage endpoint (same logic as model endpoint)
+function detectMinimaxUsageRegion(): "cn" | "global" {
+  const envRegion = process.env.MINIMAX_REGION?.toLowerCase();
+  if (envRegion === "cn" || envRegion === "china") {
+    return "cn";
+  }
+  if (envRegion === "global" || envRegion === "overseas") {
+    return "global";
+  }
+
+  try {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const chinaTzs = [
+      "Asia/Shanghai",
+      "Asia/Chongqing",
+      "Asia/Urumqi",
+      "Asia/Hong_Kong",
+      "Asia/Macau",
+      "Asia/Taipei",
+    ];
+    if (chinaTzs.includes(timezone)) {
+      return "cn";
+    }
+  } catch {
+    // Fallback to global
+  }
+
+  return "global";
+}
+
+const MINIMAX_USAGE_ENDPOINTS = {
+  cn: "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+  global: "https://api.minimax.io/v1/api/openplatform/coding_plan/remains",
+} as const;
+
 export async function fetchMinimaxUsage(
   apiKey: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<ProviderUsageSnapshot> {
+  const region = detectMinimaxUsageRegion();
+  const usageEndpoint = MINIMAX_USAGE_ENDPOINTS[region];
+
   const res = await fetchJson(
-    "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains",
+    usageEndpoint,
     {
       method: "GET",
       headers: {

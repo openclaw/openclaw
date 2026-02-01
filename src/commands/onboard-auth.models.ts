@@ -1,7 +1,54 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
 
-export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
-export const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
+// Auto-detect region based on timezone for optimal MiniMax endpoint
+function detectMinimaxRegion(): "cn" | "global" {
+  // Allow manual override via environment variable
+  const envRegion = process.env.MINIMAX_REGION?.toLowerCase();
+  if (envRegion === "cn" || envRegion === "china") {
+    return "cn";
+  }
+  if (envRegion === "global" || envRegion === "overseas") {
+    return "global";
+  }
+
+  // Auto-detect based on timezone
+  try {
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    // China mainland timezones
+    const chinaTzs = [
+      "Asia/Shanghai",
+      "Asia/Chongqing",
+      "Asia/Urumqi",
+      "Asia/Hong_Kong",
+      "Asia/Macau",
+      "Asia/Taipei",
+    ];
+    if (chinaTzs.includes(timezone)) {
+      return "cn";
+    }
+  } catch {
+    // Fallback to global if timezone detection fails
+  }
+
+  return "global";
+}
+
+// Region-specific base URLs
+const MINIMAX_BASE_URLS = {
+  cn: {
+    v1: "https://api.minimaxi.com/v1",
+    anthropic: "https://api.minimaxi.com/anthropic",
+  },
+  global: {
+    v1: "https://api.minimax.io/v1",
+    anthropic: "https://api.minimax.io/anthropic",
+  },
+} as const;
+
+// Auto-select base URL based on region
+const DETECTED_REGION = detectMinimaxRegion();
+export const DEFAULT_MINIMAX_BASE_URL = MINIMAX_BASE_URLS[DETECTED_REGION].v1;
+export const MINIMAX_API_BASE_URL = MINIMAX_BASE_URLS[DETECTED_REGION].anthropic;
 export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.1";
 export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
 export const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
