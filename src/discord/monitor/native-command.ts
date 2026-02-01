@@ -50,8 +50,8 @@ import {
   resolveDiscordGuildEntry,
   resolveDiscordUserAllowed,
 } from "./allow-list.js";
-import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
+import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];

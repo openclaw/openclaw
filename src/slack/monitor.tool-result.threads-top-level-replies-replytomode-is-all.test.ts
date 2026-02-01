@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import { monitorSlackProvider } from "./monitor.js";
 import {
   defaultSlackTestConfig,
   flush,
@@ -10,6 +9,8 @@ import {
   resetSlackTestState,
   waitForSlackEvent,
 } from "./monitor.test-helpers.js";
+
+const { monitorSlackProvider } = await import("./monitor.js");
 
 const slackTestState = getSlackTestState();
 const { sendMock, replyMock } = slackTestState;

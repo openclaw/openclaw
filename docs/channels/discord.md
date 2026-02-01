@@ -368,10 +368,10 @@ sender as `Member (PK:System)` to avoid accidental Discord pings.
     discord: {
       pluralkit: {
         enabled: true,
-        token: "pk_live_..." // optional; required for private systems
-      }
-    }
-  }
+        token: "pk_live_...", // optional; required for private systems
+      },
+    },
+  },
 }
 ```
 
