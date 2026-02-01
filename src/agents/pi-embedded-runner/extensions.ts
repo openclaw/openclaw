@@ -1,9 +1,7 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -45,11 +43,17 @@ function buildContextPruningExtension(params: {
   model: Model<Api> | undefined;
 }): { additionalExtensionPaths?: string[] } {
   const raw = params.cfg?.agents?.defaults?.contextPruning;
-  if (raw?.mode !== "cache-ttl") return {};
-  if (!isCacheTtlEligibleProvider(params.provider, params.modelId)) return {};
+  if (raw?.mode !== "cache-ttl") {
+    return {};
+  }
+  if (!isCacheTtlEligibleProvider(params.provider, params.modelId)) {
+    return {};
+  }
 
   const settings = computeEffectiveSettings(raw);
-  if (!settings) return {};
+  if (!settings) {
+    return {};
+  }
 
   setContextPruningRuntime(params.sessionManager, {
     settings,

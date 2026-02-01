@@ -5,6 +5,8 @@ export function formatLinkUnderstandingBody(params: { body?: string; outputs: st
   }
 
   const base = (params.body ?? "").trim();
-  if (!base) return outputs.join("\n");
+  if (!base) {
+    return outputs.join("\n");
+  }
   return `${base}\n\n${outputs.join("\n")}`;
 }

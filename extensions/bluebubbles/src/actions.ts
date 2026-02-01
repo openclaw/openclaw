@@ -9,14 +9,10 @@ import {
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
   type ChannelToolSend,
-  type OpenClawConfig,
 } from "openclaw/plugin-sdk";
-
+import type { BlueBubblesSendTarget } from "./types.js";
 import { resolveBlueBubblesAccount } from "./accounts.js";
-import { resolveBlueBubblesMessageId } from "./monitor.js";
-import { isMacOS26OrHigher } from "./probe.js";
-import { sendBlueBubblesReaction } from "./reactions.js";
-import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
+import { sendBlueBubblesAttachment } from "./attachments.js";
 import {
   editBlueBubblesMessage,
   unsendBlueBubblesMessage,
@@ -26,16 +22,22 @@ import {
   removeBlueBubblesParticipant,
   leaveBlueBubblesChat,
 } from "./chat.js";
-import { sendBlueBubblesAttachment } from "./attachments.js";
+import { resolveBlueBubblesMessageId } from "./monitor.js";
+import { isMacOS26OrHigher } from "./probe.js";
+import { sendBlueBubblesReaction } from "./reactions.js";
+import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
 import { normalizeBlueBubblesHandle, parseBlueBubblesTarget } from "./targets.js";
-import type { BlueBubblesSendTarget } from "./types.js";
 
 const providerId = "bluebubbles";
 
 function mapTarget(raw: string): BlueBubblesSendTarget {
   const parsed = parseBlueBubblesTarget(raw);
-  if (parsed.kind === "chat_guid") return { kind: "chat_guid", chatGuid: parsed.chatGuid };
-  if (parsed.kind === "chat_id") return { kind: "chat_id", chatId: parsed.chatId };
+  if (parsed.kind === "chat_guid") {
+    return { kind: "chat_guid", chatGuid: parsed.chatGuid };
+  }
+  if (parsed.kind === "chat_id") {
+    return { kind: "chat_id", chatId: parsed.chatId };
+  }
   if (parsed.kind === "chat_identifier") {
     return { kind: "chat_identifier", chatIdentifier: parsed.chatIdentifier };
   }
@@ -52,11 +54,17 @@ function readMessageText(params: Record<string, unknown>): string | undefined {
 
 function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
   const raw = params[key];
-  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "boolean") {
+    return raw;
+  }
   if (typeof raw === "string") {
     const trimmed = raw.trim().toLowerCase();
-    if (trimmed === "true") return true;
-    if (trimmed === "false") return false;
+    if (trimmed === "true") {
+      return true;
+    }
+    if (trimmed === "false") {
+      return false;
+    }
   }
   return undefined;
 }
@@ -66,41 +74,55 @@ const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>(BLUEBUBBLES_ACTION_N
 
 export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const account = resolveBlueBubblesAccount({ cfg: cfg as OpenClawConfig });
-    if (!account.enabled || !account.configured) return [];
-    const gate = createActionGate((cfg as OpenClawConfig).channels?.bluebubbles?.actions);
+    const account = resolveBlueBubblesAccount({ cfg: cfg });
+    if (!account.enabled || !account.configured) {
+      return [];
+    }
+    const gate = createActionGate(cfg.channels?.bluebubbles?.actions);
     const actions = new Set<ChannelMessageActionName>();
     const macOS26 = isMacOS26OrHigher(account.accountId);
     for (const action of BLUEBUBBLES_ACTION_NAMES) {
       const spec = BLUEBUBBLES_ACTIONS[action];
-      if (!spec?.gate) continue;
-      if (spec.unsupportedOnMacOS26 && macOS26) continue;
-      if (gate(spec.gate)) actions.add(action);
+      if (!spec?.gate) {
+        continue;
+      }
+      if (spec.unsupportedOnMacOS26 && macOS26) {
+        continue;
+      }
+      if (gate(spec.gate)) {
+        actions.add(action);
+      }
     }
     return Array.from(actions);
   },
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
   extractToolSend: ({ args }): ChannelToolSend | null => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") return null;
+    if (action !== "sendMessage") {
+      return null;
+    }
     const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) return null;
+    if (!to) {
+      return null;
+    }
     const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
     return { to, accountId };
   },
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     const account = resolveBlueBubblesAccount({
-      cfg: cfg as OpenClawConfig,
+      cfg: cfg,
       accountId: accountId ?? undefined,
     });
     const baseUrl = account.config.serverUrl?.trim();
     const password = account.config.password?.trim();
-    const opts = { cfg: cfg as OpenClawConfig, accountId: accountId ?? undefined };
+    const opts = { cfg: cfg, accountId: accountId ?? undefined };
 
     // Helper to resolve chatGuid from various params or session context
     const resolveChatGuid = async (): Promise<string> => {
       const chatGuid = readStringParam(params, "chatGuid");
-      if (chatGuid?.trim()) return chatGuid.trim();
+      if (chatGuid?.trim()) {
+        return chatGuid.trim();
+      }
 
       const chatIdentifier = readStringParam(params, "chatIdentifier");
       const chatId = readNumberParam(params, "chatId", { integer: true });
@@ -185,8 +207,12 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         readStringParam(params, "message");
       if (!rawMessageId || !newText) {
         const missing: string[] = [];
-        if (!rawMessageId) missing.push("messageId (the message ID to edit)");
-        if (!newText) missing.push("text (the new message content)");
+        if (!rawMessageId) {
+          missing.push("messageId (the message ID to edit)");
+        }
+        if (!newText) {
+          missing.push("text (the new message content)");
+        }
         throw new Error(
           `BlueBubbles edit requires: ${missing.join(", ")}. ` +
             `Use action=edit with messageId=<message_id>, text=<new_content>.`,
@@ -234,9 +260,15 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       const to = readStringParam(params, "to") ?? readStringParam(params, "target");
       if (!rawMessageId || !text || !to) {
         const missing: string[] = [];
-        if (!rawMessageId) missing.push("messageId (the message ID to reply to)");
-        if (!text) missing.push("text or message (the reply message content)");
-        if (!to) missing.push("to or target (the chat target)");
+        if (!rawMessageId) {
+          missing.push("messageId (the message ID to reply to)");
+        }
+        if (!text) {
+          missing.push("text or message (the reply message content)");
+        }
+        if (!to) {
+          missing.push("to or target (the chat target)");
+        }
         throw new Error(
           `BlueBubbles reply requires: ${missing.join(", ")}. ` +
             `Use action=reply with messageId=<message_id>, message=<your reply>, target=<chat_target>.`,
@@ -262,12 +294,17 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       const effectId = readStringParam(params, "effectId") ?? readStringParam(params, "effect");
       if (!text || !to || !effectId) {
         const missing: string[] = [];
-        if (!text) missing.push("text or message (the message content)");
-        if (!to) missing.push("to or target (the chat target)");
-        if (!effectId)
+        if (!text) {
+          missing.push("text or message (the message content)");
+        }
+        if (!to) {
+          missing.push("to or target (the chat target)");
+        }
+        if (!effectId) {
           missing.push(
             "effectId or effect (e.g., slam, loud, gentle, invisible-ink, confetti, lasers, fireworks, balloons, heart)",
           );
+        }
         throw new Error(
           `BlueBubbles sendWithEffect requires: ${missing.join(", ")}. ` +
             `Use action=sendWithEffect with message=<message>, target=<chat_target>, effectId=<effect_name>.`,
@@ -300,9 +337,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       const resolvedChatGuid = await resolveChatGuid();
       const base64Buffer = readStringParam(params, "buffer");
       const filename =
-        readStringParam(params, "filename") ??
-        readStringParam(params, "name") ??
-        "icon.png";
+        readStringParam(params, "filename") ?? readStringParam(params, "name") ?? "icon.png";
       const contentType =
         readStringParam(params, "contentType") ?? readStringParam(params, "mimeType");
 

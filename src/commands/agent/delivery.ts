@@ -1,8 +1,14 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import type { AgentCommandOpts } from "./types.js";
 import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import {
+  resolveAgentDeliveryPlan,
+  resolveAgentOutboundTarget,
+} from "../../infra/outbound/agent-delivery.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
 import {
@@ -11,13 +17,7 @@ import {
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
 } from "../../infra/outbound/payloads.js";
-import {
-  resolveAgentDeliveryPlan,
-  resolveAgentOutboundTarget,
-} from "../../infra/outbound/agent-delivery.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import type { AgentCommandOpts } from "./types.js";
 
 type RunResult = Awaited<
   ReturnType<(typeof import("../../agents/pi-embedded.js"))["runEmbeddedPiAgent"]>
@@ -28,19 +28,31 @@ const NESTED_LOG_PREFIX = "[agent:nested]";
 function formatNestedLogPrefix(opts: AgentCommandOpts): string {
   const parts = [NESTED_LOG_PREFIX];
   const session = opts.sessionKey ?? opts.sessionId;
-  if (session) parts.push(`session=${session}`);
-  if (opts.runId) parts.push(`run=${opts.runId}`);
+  if (session) {
+    parts.push(`session=${session}`);
+  }
+  if (opts.runId) {
+    parts.push(`run=${opts.runId}`);
+  }
   const channel = opts.messageChannel ?? opts.channel;
-  if (channel) parts.push(`channel=${channel}`);
-  if (opts.to) parts.push(`to=${opts.to}`);
-  if (opts.accountId) parts.push(`account=${opts.accountId}`);
+  if (channel) {
+    parts.push(`channel=${channel}`);
+  }
+  if (opts.to) {
+    parts.push(`to=${opts.to}`);
+  }
+  if (opts.accountId) {
+    parts.push(`account=${opts.accountId}`);
+  }
   return parts.join(" ");
 }
 
 function logNestedOutput(runtime: RuntimeEnv, opts: AgentCommandOpts, output: string) {
   const prefix = formatNestedLogPrefix(opts);
   for (const line of output.split(/\r?\n/)) {
-    if (!line) continue;
+    if (!line) {
+      continue;
+    }
     runtime.log(`${prefix} ${line}`);
   }
 }
@@ -102,16 +114,22 @@ export async function deliverAgentCommandResult(params: {
   const logDeliveryError = (err: unknown) => {
     const message = `Delivery failed (${deliveryChannel}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
     runtime.error?.(message);
-    if (!runtime.error) runtime.log(message);
+    if (!runtime.error) {
+      runtime.log(message);
+    }
   };
 
   if (deliver) {
     if (!isDeliveryChannelKnown) {
       const err = new Error(`Unknown channel: ${deliveryChannel}`);
-      if (!bestEffortDeliver) throw err;
+      if (!bestEffortDeliver) {
+        throw err;
+      }
       logDeliveryError(err);
     } else if (resolvedTarget && !resolvedTarget.ok) {
-      if (!bestEffortDeliver) throw resolvedTarget.error;
+      if (!bestEffortDeliver) {
+        throw resolvedTarget.error;
+      }
       logDeliveryError(resolvedTarget.error);
     }
   }
@@ -128,7 +146,9 @@ export async function deliverAgentCommandResult(params: {
         2,
       ),
     );
-    if (!deliver) return { payloads: normalizedPayloads, meta: result.meta };
+    if (!deliver) {
+      return { payloads: normalizedPayloads, meta: result.meta };
+    }
   }
 
   if (!payloads || payloads.length === 0) {
@@ -138,9 +158,13 @@ export async function deliverAgentCommandResult(params: {
 
   const deliveryPayloads = normalizeOutboundPayloads(payloads);
   const logPayload = (payload: NormalizedOutboundPayload) => {
-    if (opts.json) return;
+    if (opts.json) {
+      return;
+    }
     const output = formatOutboundPayloadLog(payload);
-    if (!output) return;
+    if (!output) {
+      return;
+    }
     if (opts.lane === AGENT_LANE_NESTED) {
       logNestedOutput(runtime, opts, output);
       return;
@@ -148,7 +172,9 @@ export async function deliverAgentCommandResult(params: {
     runtime.log(output);
   };
   if (!deliver) {
-    for (const payload of deliveryPayloads) logPayload(payload);
+    for (const payload of deliveryPayloads) {
+      logPayload(payload);
+    }
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget) {

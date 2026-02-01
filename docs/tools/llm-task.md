@@ -3,6 +3,7 @@ summary: "JSON-only LLM tasks for workflows (optional plugin tool)"
 read_when:
   - You want a JSON-only LLM step inside workflows
   - You need schema-validated LLM output for automation
+title: "LLM Task"
 ---
 
 # LLM Task
@@ -15,7 +16,7 @@ without writing custom OpenClaw code for each workflow.
 
 ## Enable the plugin
 
-1) Enable the plugin:
+1. Enable the plugin:
 
 ```json
 {
@@ -27,7 +28,7 @@ without writing custom OpenClaw code for each workflow.
 }
 ```
 
-2) Allowlist the tool (it is registered with `optional: true`):
+2. Allowlist the tool (it is registered with `optional: true`):
 
 ```json
 {

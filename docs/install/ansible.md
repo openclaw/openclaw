@@ -4,6 +4,7 @@ read_when:
   - You want automated server deployment with security hardening
   - You need firewall-isolated setup with VPN access
   - You're deploying to remote Debian/Ubuntu servers
+title: "Ansible"
 ---
 
 # Ansible Installation
@@ -148,6 +149,7 @@ Note: This is idempotent and safe to run multiple times.
 ### Firewall blocks my connection
 
 If you're locked out:
+
 - Ensure you can access via Tailscale VPN first
 - SSH access (port 22) is always allowed
 - The gateway is **only** accessible via Tailscale by design
@@ -193,6 +195,7 @@ openclaw channels login
 ## Advanced Configuration
 
 For detailed security architecture and troubleshooting:
+
 - [Security Architecture](https://github.com/openclaw/openclaw-ansible/blob/main/docs/security.md)
 - [Technical Details](https://github.com/openclaw/openclaw-ansible/blob/main/docs/architecture.md)
 - [Troubleshooting Guide](https://github.com/openclaw/openclaw-ansible/blob/main/docs/troubleshooting.md)

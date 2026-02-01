@@ -1,25 +1,24 @@
+import JSON5 from "json5";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import JSON5 from "json5";
-
+import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
-import { createConfigIO } from "../config/config.js";
-import { resolveNativeSkillsEnabled } from "../config/commands.js";
-import { resolveOAuthDir } from "../config/paths.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
-import { resolveBrowserConfig } from "../browser/config.js";
+import type { ExecFn } from "./windows-acl.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
-import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
-import { resolveGatewayAuth } from "../gateway/auth.js";
-import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
+import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
+import { resolveBrowserConfig } from "../browser/config.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { resolveNativeSkillsEnabled } from "../config/commands.js";
+import { createConfigIO } from "../config/config.js";
 import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "../config/includes.js";
+import { resolveOAuthDir } from "../config/paths.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   formatPermissionDetail,
@@ -27,7 +26,6 @@ import {
   inspectPathPermissions,
   safeStat,
 } from "./audit-fs.js";
-import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditFinding = {
   checkId: string;
@@ -40,11 +38,19 @@ export type SecurityAuditFinding = {
 const SMALL_MODEL_PARAM_B_MAX = 300;
 
 function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
-  if (!p.startsWith("~")) return p;
+  if (!p.startsWith("~")) {
+    return p;
+  }
   const home = typeof env.HOME === "string" && env.HOME.trim() ? env.HOME.trim() : null;
-  if (!home) return null;
-  if (p === "~") return home;
-  if (p.startsWith("~/") || p.startsWith("~\\")) return path.join(home, p.slice(2));
+  if (!home) {
+    return null;
+  }
+  if (p === "~") {
+    return home;
+  }
+  if (p.startsWith("~/") || p.startsWith("~\\")) {
+    return path.join(home, p.slice(2));
+  }
   return null;
 }
 
@@ -54,17 +60,25 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
   other: number;
 } {
   const channels = cfg.channels as Record<string, unknown> | undefined;
-  if (!channels || typeof channels !== "object") return { open: 0, allowlist: 0, other: 0 };
+  if (!channels || typeof channels !== "object") {
+    return { open: 0, allowlist: 0, other: 0 };
+  }
   let open = 0;
   let allowlist = 0;
   let other = 0;
   for (const value of Object.values(channels)) {
-    if (!value || typeof value !== "object") continue;
+    if (!value || typeof value !== "object") {
+      continue;
+    }
     const section = value as Record<string, unknown>;
     const policy = section.groupPolicy;
-    if (policy === "open") open += 1;
-    else if (policy === "allowlist") allowlist += 1;
-    else other += 1;
+    if (policy === "open") {
+      open += 1;
+    } else if (policy === "allowlist") {
+      allowlist += 1;
+    } else {
+      other += 1;
+    }
   }
   return { open, allowlist, other };
 }
@@ -159,7 +173,9 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
 
 export function collectHooksHardeningFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  if (cfg.hooks?.enabled !== true) return findings;
+  if (cfg.hooks?.enabled !== true) {
+    return findings;
+  }
 
   const token = typeof cfg.hooks?.token === "string" ? cfg.hooks.token.trim() : "";
   if (token && token.length < 24) {
@@ -209,24 +225,32 @@ export function collectHooksHardeningFindings(cfg: OpenClawConfig): SecurityAudi
 type ModelRef = { id: string; source: string };
 
 function addModel(models: ModelRef[], raw: unknown, source: string) {
-  if (typeof raw !== "string") return;
+  if (typeof raw !== "string") {
+    return;
+  }
   const id = raw.trim();
-  if (!id) return;
+  if (!id) {
+    return;
+  }
   models.push({ id, source });
 }
 
 function collectModels(cfg: OpenClawConfig): ModelRef[] {
   const out: ModelRef[] = [];
   addModel(out, cfg.agents?.defaults?.model?.primary, "agents.defaults.model.primary");
-  for (const f of cfg.agents?.defaults?.model?.fallbacks ?? [])
+  for (const f of cfg.agents?.defaults?.model?.fallbacks ?? []) {
     addModel(out, f, "agents.defaults.model.fallbacks");
+  }
   addModel(out, cfg.agents?.defaults?.imageModel?.primary, "agents.defaults.imageModel.primary");
-  for (const f of cfg.agents?.defaults?.imageModel?.fallbacks ?? [])
+  for (const f of cfg.agents?.defaults?.imageModel?.fallbacks ?? []) {
     addModel(out, f, "agents.defaults.imageModel.fallbacks");
+  }
 
   const list = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
   for (const agent of list ?? []) {
-    if (!agent || typeof agent !== "object") continue;
+    if (!agent || typeof agent !== "object") {
+      continue;
+    }
     const id =
       typeof (agent as { id?: unknown }).id === "string" ? (agent as { id: string }).id : "";
     const model = (agent as { model?: unknown }).model;
@@ -236,7 +260,9 @@ function collectModels(cfg: OpenClawConfig): ModelRef[] {
       addModel(out, (model as { primary?: unknown }).primary, `agents.list.${id}.model.primary`);
       const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
       if (Array.isArray(fallbacks)) {
-        for (const f of fallbacks) addModel(out, f, `agents.list.${id}.model.fallbacks`);
+        for (const f of fallbacks) {
+          addModel(out, f, `agents.list.${id}.model.fallbacks`);
+        }
       }
     }
   }
@@ -259,10 +285,16 @@ function inferParamBFromIdOrName(text: string): number | null {
   let best: number | null = null;
   for (const match of matches) {
     const numRaw = match[1];
-    if (!numRaw) continue;
+    if (!numRaw) {
+      continue;
+    }
     const value = Number(numRaw);
-    if (!Number.isFinite(value) || value <= 0) continue;
-    if (best === null || value > best) best = value;
+    if (!Number.isFinite(value) || value <= 0) {
+      continue;
+    }
+    if (best === null || value > best) {
+      best = value;
+    }
   }
   return best;
 }
@@ -289,7 +321,9 @@ function isClaude45OrHigher(id: string): boolean {
 export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const models = collectModels(cfg);
-  if (models.length === 0) return findings;
+  if (models.length === 0) {
+    return findings;
+  }
 
   const weakMatches = new Map<string, { model: string; source: string; reasons: string[] }>();
   const addWeakMatch = (model: string, source: string, reason: string) => {
@@ -299,7 +333,9 @@ export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditF
       weakMatches.set(key, { model, source, reasons: [reason] });
       return;
     }
-    if (!existing.reasons.includes(reason)) existing.reasons.push(reason);
+    if (!existing.reasons.includes(reason)) {
+      existing.reasons.push(reason);
+    }
   };
 
   for (const entry of models) {
@@ -373,10 +409,14 @@ function extractAgentIdFromSource(source: string): string | null {
 }
 
 function pickToolPolicy(config?: { allow?: string[]; deny?: string[] }): SandboxToolPolicy | null {
-  if (!config) return null;
+  if (!config) {
+    return null;
+  }
   const allow = Array.isArray(config.allow) ? config.allow : undefined;
   const deny = Array.isArray(config.deny) ? config.deny : undefined;
-  if (!allow && !deny) return null;
+  if (!allow && !deny) {
+    return null;
+  }
   return { allow, deny };
 }
 
@@ -389,13 +429,19 @@ function resolveToolPolicies(params: {
   const policies: SandboxToolPolicy[] = [];
   const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
   const profilePolicy = resolveToolProfilePolicy(profile);
-  if (profilePolicy) policies.push(profilePolicy);
+  if (profilePolicy) {
+    policies.push(profilePolicy);
+  }
 
   const globalPolicy = pickToolPolicy(params.cfg.tools ?? undefined);
-  if (globalPolicy) policies.push(globalPolicy);
+  if (globalPolicy) {
+    policies.push(globalPolicy);
+  }
 
   const agentPolicy = pickToolPolicy(params.agentTools);
-  if (agentPolicy) policies.push(agentPolicy);
+  if (agentPolicy) {
+    policies.push(agentPolicy);
+  }
 
   if (params.sandboxMode === "all") {
     const sandboxPolicy = resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined);
@@ -418,14 +464,20 @@ function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
 
 function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   const enabled = cfg.tools?.web?.search?.enabled;
-  if (enabled === false) return false;
-  if (enabled === true) return true;
+  if (enabled === false) {
+    return false;
+  }
+  if (enabled === true) {
+    return true;
+  }
   return hasWebSearchKey(cfg, env);
 }
 
 function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
   const enabled = cfg.tools?.web?.fetch?.enabled;
-  if (enabled === false) return false;
+  if (enabled === false) {
+    return false;
+  }
   return true;
 }
 
@@ -443,17 +495,23 @@ export function collectSmallModelRiskFindings(params: {
 }): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const models = collectModels(params.cfg).filter((entry) => !entry.source.includes("imageModel"));
-  if (models.length === 0) return findings;
+  if (models.length === 0) {
+    return findings;
+  }
 
   const smallModels = models
     .map((entry) => {
       const paramB = inferParamBFromIdOrName(entry.id);
-      if (!paramB || paramB > SMALL_MODEL_PARAM_B_MAX) return null;
+      if (!paramB || paramB > SMALL_MODEL_PARAM_B_MAX) {
+        return null;
+      }
       return { ...entry, paramB };
     })
     .filter((entry): entry is { id: string; source: string; paramB: number } => Boolean(entry));
 
-  if (smallModels.length === 0) return findings;
+  if (smallModels.length === 0) {
+    return findings;
+  }
 
   let hasUnsafe = false;
   const modelLines: string[] = [];
@@ -473,19 +531,29 @@ export function collectSmallModelRiskFindings(params: {
     });
     const exposed: string[] = [];
     if (isWebSearchEnabled(params.cfg, params.env)) {
-      if (isToolAllowedByPolicies("web_search", policies)) exposed.push("web_search");
+      if (isToolAllowedByPolicies("web_search", policies)) {
+        exposed.push("web_search");
+      }
     }
     if (isWebFetchEnabled(params.cfg)) {
-      if (isToolAllowedByPolicies("web_fetch", policies)) exposed.push("web_fetch");
+      if (isToolAllowedByPolicies("web_fetch", policies)) {
+        exposed.push("web_fetch");
+      }
     }
     if (isBrowserEnabled(params.cfg)) {
-      if (isToolAllowedByPolicies("browser", policies)) exposed.push("browser");
+      if (isToolAllowedByPolicies("browser", policies)) {
+        exposed.push("browser");
+      }
     }
-    for (const tool of exposed) exposureSet.add(tool);
+    for (const tool of exposed) {
+      exposureSet.add(tool);
+    }
     const sandboxLabel = sandboxMode === "all" ? "sandbox=all" : `sandbox=${sandboxMode}`;
     const exposureLabel = exposed.length > 0 ? ` web=[${exposed.join(", ")}]` : " web=[off]";
     const safe = sandboxMode === "all" && exposed.length === 0;
-    if (!safe) hasUnsafe = true;
+    if (!safe) {
+      hasUnsafe = true;
+    }
     const statusLabel = safe ? "ok" : "unsafe";
     modelLines.push(
       `- ${entry.id} (${entry.paramB}B) @ ${entry.source} (${statusLabel}; ${sandboxLabel};${exposureLabel})`,
@@ -523,14 +591,18 @@ export async function collectPluginsTrustFindings(params: {
   const findings: SecurityAuditFinding[] = [];
   const extensionsDir = path.join(params.stateDir, "extensions");
   const st = await safeStat(extensionsDir);
-  if (!st.ok || !st.isDir) return findings;
+  if (!st.ok || !st.isDir) {
+    return findings;
+  }
 
   const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch(() => []);
   const pluginDirs = entries
     .filter((e) => e.isDirectory())
     .map((e) => e.name)
     .filter(Boolean);
-  if (pluginDirs.length === 0) return findings;
+  if (pluginDirs.length === 0) {
+    return findings;
+  }
 
   const allow = params.cfg.plugins?.allow;
   const allowConfigured = Array.isArray(allow) && allow.length > 0;
@@ -623,21 +695,32 @@ function resolveIncludePath(baseConfigPath: string, includePath: string): string
 function listDirectIncludes(parsed: unknown): string[] {
   const out: string[] = [];
   const visit = (value: unknown) => {
-    if (!value) return;
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item);
+    if (!value) {
       return;
     }
-    if (typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        visit(item);
+      }
+      return;
+    }
+    if (typeof value !== "object") {
+      return;
+    }
     const rec = value as Record<string, unknown>;
     const includeVal = rec[INCLUDE_KEY];
-    if (typeof includeVal === "string") out.push(includeVal);
-    else if (Array.isArray(includeVal)) {
+    if (typeof includeVal === "string") {
+      out.push(includeVal);
+    } else if (Array.isArray(includeVal)) {
       for (const item of includeVal) {
-        if (typeof item === "string") out.push(item);
+        if (typeof item === "string") {
+          out.push(item);
+        }
       }
     }
-    for (const v of Object.values(rec)) visit(v);
+    for (const v of Object.values(rec)) {
+      visit(v);
+    }
   };
   visit(parsed);
   return out;
@@ -651,17 +734,23 @@ async function collectIncludePathsRecursive(params: {
   const result: string[] = [];
 
   const walk = async (basePath: string, parsed: unknown, depth: number): Promise<void> => {
-    if (depth > MAX_INCLUDE_DEPTH) return;
+    if (depth > MAX_INCLUDE_DEPTH) {
+      return;
+    }
     for (const raw of listDirectIncludes(parsed)) {
       const resolved = resolveIncludePath(basePath, raw);
-      if (visited.has(resolved)) continue;
+      if (visited.has(resolved)) {
+        continue;
+      }
       visited.add(resolved);
       result.push(resolved);
       const rawText = await fs.readFile(resolved, "utf-8").catch(() => null);
-      if (!rawText) continue;
+      if (!rawText) {
+        continue;
+      }
       const nestedParsed = (() => {
         try {
-          return JSON5.parse(rawText) as unknown;
+          return JSON5.parse(rawText);
         } catch {
           return null;
         }
@@ -684,14 +773,18 @@ export async function collectIncludeFilePermFindings(params: {
   execIcacls?: ExecFn;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
-  if (!params.configSnapshot.exists) return findings;
+  if (!params.configSnapshot.exists) {
+    return findings;
+  }
 
   const configPath = params.configSnapshot.path;
   const includePaths = await collectIncludePathsRecursive({
     configPath,
     parsed: params.configSnapshot.parsed,
   });
-  if (includePaths.length === 0) return findings;
+  if (includePaths.length === 0) {
+    return findings;
+  }
 
   for (const p of includePaths) {
     // eslint-disable-next-line no-await-in-loop
@@ -700,7 +793,9 @@ export async function collectIncludeFilePermFindings(params: {
       platform: params.platform,
       exec: params.execIcacls,
     });
-    if (!perms.ok) continue;
+    if (!perms.ok) {
+      continue;
+    }
     if (perms.worldWritable || perms.groupWritable) {
       findings.push({
         checkId: "fs.config_include.perms_writable",
@@ -908,18 +1003,27 @@ export async function collectStateDeepFilesystemFindings(params: {
 function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
   const out: string[] = [];
   const channels = cfg.channels as Record<string, unknown> | undefined;
-  if (!channels || typeof channels !== "object") return out;
+  if (!channels || typeof channels !== "object") {
+    return out;
+  }
   for (const [channelId, value] of Object.entries(channels)) {
-    if (!value || typeof value !== "object") continue;
+    if (!value || typeof value !== "object") {
+      continue;
+    }
     const section = value as Record<string, unknown>;
-    if (section.groupPolicy === "open") out.push(`channels.${channelId}.groupPolicy`);
+    if (section.groupPolicy === "open") {
+      out.push(`channels.${channelId}.groupPolicy`);
+    }
     const accounts = section.accounts;
     if (accounts && typeof accounts === "object") {
       for (const [accountId, accountVal] of Object.entries(accounts)) {
-        if (!accountVal || typeof accountVal !== "object") continue;
+        if (!accountVal || typeof accountVal !== "object") {
+          continue;
+        }
         const acc = accountVal as Record<string, unknown>;
-        if (acc.groupPolicy === "open")
+        if (acc.groupPolicy === "open") {
           out.push(`channels.${channelId}.accounts.${accountId}.groupPolicy`);
+        }
       }
     }
   }
@@ -929,7 +1033,9 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
 export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const openGroups = listGroupPolicyOpen(cfg);
-  if (openGroups.length === 0) return findings;
+  if (openGroups.length === 0) {
+    return findings;
+  }
 
   const elevatedEnabled = cfg.tools?.elevated?.enabled !== false;
   if (elevatedEnabled) {

@@ -4,17 +4,19 @@ read_when:
   - You want to use Claude Max subscription with OpenAI-compatible tools
   - You want a local API server that wraps Claude Code CLI
   - You want to save money by using subscription instead of API keys
+title: "Claude Max API Proxy"
 ---
+
 # Claude Max API Proxy
 
 **claude-max-api-proxy** is a community tool that exposes your Claude Max/Pro subscription as an OpenAI-compatible API endpoint. This allows you to use your subscription with any tool that supports the OpenAI API format.
 
 ## Why Use This?
 
-| Approach | Cost | Best For |
-|----------|------|----------|
-| Anthropic API | Pay per token (~$15/M input, $75/M output for Opus) | Production apps, high volume |
-| Claude Max subscription | $200/month flat | Personal use, development, unlimited usage |
+| Approach                | Cost                                                | Best For                                   |
+| ----------------------- | --------------------------------------------------- | ------------------------------------------ |
+| Anthropic API           | Pay per token (~$15/M input, $75/M output for Opus) | Production apps, high volume               |
+| Claude Max subscription | $200/month flat                                     | Personal use, development, unlimited usage |
 
 If you have a Claude Max subscription and want to use it with OpenAI-compatible tools, this proxy can save you significant money.
 
@@ -26,6 +28,7 @@ Your App → claude-max-api-proxy → Claude Code CLI → Anthropic (via subscri
 ```
 
 The proxy:
+
 1. Accepts OpenAI-format requests at `http://localhost:3456/v1/chat/completions`
 2. Converts them to Claude Code CLI commands
 3. Returns responses in OpenAI format (streaming supported)
@@ -75,23 +78,23 @@ You can point OpenClaw at the proxy as a custom OpenAI-compatible endpoint:
 {
   env: {
     OPENAI_API_KEY: "not-needed",
-    OPENAI_BASE_URL: "http://localhost:3456/v1"
+    OPENAI_BASE_URL: "http://localhost:3456/v1",
   },
   agents: {
     defaults: {
-      model: { primary: "openai/claude-opus-4" }
-    }
-  }
+      model: { primary: "openai/claude-opus-4" },
+    },
+  },
 }
 ```
 
 ## Available Models
 
-| Model ID | Maps To |
-|----------|---------|
-| `claude-opus-4` | Claude Opus 4 |
+| Model ID          | Maps To         |
+| ----------------- | --------------- |
+| `claude-opus-4`   | Claude Opus 4   |
 | `claude-sonnet-4` | Claude Sonnet 4 |
-| `claude-haiku-4` | Claude Haiku 4 |
+| `claude-haiku-4`  | Claude Haiku 4  |
 
 ## Auto-Start on macOS
 

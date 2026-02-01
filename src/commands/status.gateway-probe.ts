@@ -32,10 +32,14 @@ export function pickGatewaySelfPresence(presence: unknown): {
   version?: string;
   platform?: string;
 } | null {
-  if (!Array.isArray(presence)) return null;
+  if (!Array.isArray(presence)) {
+    return null;
+  }
   const entries = presence as Array<Record<string, unknown>>;
   const self = entries.find((e) => e.mode === "gateway" && e.reason === "self") ?? null;
-  if (!self) return null;
+  if (!self) {
+    return null;
+  }
   return {
     host: typeof self.host === "string" ? self.host : undefined,
     ip: typeof self.ip === "string" ? self.ip : undefined,

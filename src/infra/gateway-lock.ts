@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
-
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -44,7 +43,9 @@ export class GatewayLockError extends Error {
 type LockOwnerStatus = "alive" | "dead" | "unknown";
 
 function isAlive(pid: number): boolean {
-  if (!Number.isFinite(pid) || pid <= 0) return false;
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -66,14 +67,14 @@ function parseProcCmdline(raw: string): string[] {
 
 function isGatewayArgv(args: string[]): boolean {
   const normalized = args.map(normalizeProcArg);
-  if (!normalized.includes("gateway")) return false;
+  if (!normalized.includes("gateway")) {
+    return false;
+  }
 
   const entryCandidates = [
     "dist/index.js",
-    "dist/index.mjs",
     "dist/entry.js",
     "openclaw.mjs",
-    "dist/entry.mjs",
     "scripts/run-node.mjs",
     "src/index.ts",
   ];
@@ -98,7 +99,9 @@ function readLinuxStartTime(pid: number): number | null {
   try {
     const raw = fsSync.readFileSync(`/proc/${pid}/stat`, "utf8").trim();
     const closeParen = raw.lastIndexOf(")");
-    if (closeParen < 0) return null;
+    if (closeParen < 0) {
+      return null;
+    }
     const rest = raw.slice(closeParen + 1).trim();
     const fields = rest.split(/\s+/);
     const startTime = Number.parseInt(fields[19] ?? "", 10);
@@ -113,18 +116,26 @@ function resolveGatewayOwnerStatus(
   payload: LockPayload | null,
   platform: NodeJS.Platform,
 ): LockOwnerStatus {
-  if (!isAlive(pid)) return "dead";
-  if (platform !== "linux") return "alive";
+  if (!isAlive(pid)) {
+    return "dead";
+  }
+  if (platform !== "linux") {
+    return "alive";
+  }
 
   const payloadStartTime = payload?.startTime;
   if (Number.isFinite(payloadStartTime)) {
     const currentStartTime = readLinuxStartTime(pid);
-    if (currentStartTime == null) return "unknown";
+    if (currentStartTime == null) {
+      return "unknown";
+    }
     return currentStartTime === payloadStartTime ? "alive" : "dead";
   }
 
   const args = readLinuxCmdline(pid);
-  if (!args) return "unknown";
+  if (!args) {
+    return "unknown";
+  }
   return isGatewayArgv(args) ? "alive" : "dead";
 }
 
@@ -132,9 +143,15 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
   try {
     const raw = await fs.readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<LockPayload>;
-    if (typeof parsed.pid !== "number") return null;
-    if (typeof parsed.createdAt !== "string") return null;
-    if (typeof parsed.configPath !== "string") return null;
+    if (typeof parsed.pid !== "number") {
+      return null;
+    }
+    if (typeof parsed.createdAt !== "string") {
+      return null;
+    }
+    if (typeof parsed.configPath !== "string") {
+      return null;
+    }
     const startTime = typeof parsed.startTime === "number" ? parsed.startTime : undefined;
     return {
       pid: parsed.pid,

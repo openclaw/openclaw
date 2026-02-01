@@ -28,55 +28,55 @@ An alternative register for OpenProse that draws from the works of Franz Kafka�
 
 ### Core Constructs
 
-| Functional | Kafka | Reference |
-|------------|-------|-----------|
-| `agent` | `clerk` | A functionary in the apparatus |
-| `session` | `proceeding` | An official action taken |
+| Functional | Kafka         | Reference                              |
+| ---------- | ------------- | -------------------------------------- |
+| `agent`    | `clerk`       | A functionary in the apparatus         |
+| `session`  | `proceeding`  | An official action taken               |
 | `parallel` | `departments` | Multiple bureaus acting simultaneously |
-| `block` | `regulation` | A codified procedure |
+| `block`    | `regulation`  | A codified procedure                   |
 
 ### Composition & Binding
 
-| Functional | Kafka | Reference |
-|------------|-------|-----------|
-| `use` | `requisition` | Requesting from the archives |
-| `input` | `petition` | What is submitted for consideration |
-| `output` | `verdict` | What is returned by the apparatus |
-| `let` | `file` | Recording in the system |
-| `const` | `statute` | Unchangeable law |
-| `context` | `dossier` | The accumulated file on a case |
+| Functional | Kafka         | Reference                           |
+| ---------- | ------------- | ----------------------------------- |
+| `use`      | `requisition` | Requesting from the archives        |
+| `input`    | `petition`    | What is submitted for consideration |
+| `output`   | `verdict`     | What is returned by the apparatus   |
+| `let`      | `file`        | Recording in the system             |
+| `const`    | `statute`     | Unchangeable law                    |
+| `context`  | `dossier`     | The accumulated file on a case      |
 
 ### Control Flow
 
-| Functional | Kafka | Reference |
-|------------|-------|-----------|
-| `repeat N` | `N hearings` | Repeated appearances before the court |
-| `for...in` | `for each...in the matter of` | Bureaucratic iteration |
-| `loop` | `appeal` | Endless re-petition, the process continues |
-| `until` | `until` | Unchanged |
-| `while` | `while` | Unchanged |
-| `choice` | `tribunal` | Where judgment is rendered |
-| `option` | `ruling` | One possible judgment |
-| `if` | `in the event that` | Bureaucratic conditional |
-| `elif` | `or in the event that` | Continued conditional |
-| `else` | `otherwise` | Default ruling |
+| Functional | Kafka                         | Reference                                  |
+| ---------- | ----------------------------- | ------------------------------------------ |
+| `repeat N` | `N hearings`                  | Repeated appearances before the court      |
+| `for...in` | `for each...in the matter of` | Bureaucratic iteration                     |
+| `loop`     | `appeal`                      | Endless re-petition, the process continues |
+| `until`    | `until`                       | Unchanged                                  |
+| `while`    | `while`                       | Unchanged                                  |
+| `choice`   | `tribunal`                    | Where judgment is rendered                 |
+| `option`   | `ruling`                      | One possible judgment                      |
+| `if`       | `in the event that`           | Bureaucratic conditional                   |
+| `elif`     | `or in the event that`        | Continued conditional                      |
+| `else`     | `otherwise`                   | Default ruling                             |
 
 ### Error Handling
 
-| Functional | Kafka | Reference |
-|------------|-------|-----------|
-| `try` | `submit` | Submitting for processing |
-| `catch` | `should it be denied` | Rejection by the apparatus |
-| `finally` | `regardless` | What happens no matter the outcome |
-| `throw` | `reject` | The system refuses |
-| `retry` | `resubmit` | Try the process again |
+| Functional | Kafka                 | Reference                          |
+| ---------- | --------------------- | ---------------------------------- |
+| `try`      | `submit`              | Submitting for processing          |
+| `catch`    | `should it be denied` | Rejection by the apparatus         |
+| `finally`  | `regardless`          | What happens no matter the outcome |
+| `throw`    | `reject`              | The system refuses                 |
+| `retry`    | `resubmit`            | Try the process again              |
 
 ### Session Properties
 
-| Functional | Kafka | Reference |
-|------------|-------|-----------|
-| `prompt` | `directive` | Official instructions |
-| `model` | `authority` | Which level of the hierarchy |
+| Functional | Kafka       | Reference                    |
+| ---------- | ----------- | ---------------------------- |
+| `prompt`   | `directive` | Official instructions        |
+| `model`    | `authority` | Which level of the hierarchy |
 
 ### Unchanged
 
@@ -280,7 +280,7 @@ statute config = { authority: "opus", resubmit: 3 }
 ## The Case For Kafka
 
 1. **Darkly comic.** Programs-as-bureaucracy is funny and relatable.
-2. **Surprisingly apt.** Software often *is* an inscrutable apparatus.
+2. **Surprisingly apt.** Software often _is_ an inscrutable apparatus.
 3. **Clean mappings.** Petition/verdict, file/dossier, clerk/proceeding all work well.
 4. **Appeal as loop.** The endless appeal process is a perfect metaphor for retry logic.
 5. **Cultural resonance.** "Kafkaesque" is a widely understood adjective.
@@ -297,15 +297,15 @@ statute config = { authority: "opus", resubmit: 3 }
 
 ## Key Kafka Concepts
 
-| Term | Meaning | Used for |
-|------|---------|----------|
-| The apparatus | The inscrutable system | The VM itself |
-| K. | The protagonist, never fully named | The user |
-| The Trial | Process without clear rules | Program execution |
-| The Castle | Unreachable authority | Higher-level systems |
-| Clerk | Functionary who processes | `agent` → `clerk` |
-| Proceeding | Official action | `session` → `proceeding` |
-| Dossier | Accumulated file | `context` → `dossier` |
+| Term          | Meaning                            | Used for                 |
+| ------------- | ---------------------------------- | ------------------------ |
+| The apparatus | The inscrutable system             | The VM itself            |
+| K.            | The protagonist, never fully named | The user                 |
+| The Trial     | Process without clear rules        | Program execution        |
+| The Castle    | Unreachable authority              | Higher-level systems     |
+| Clerk         | Functionary who processes          | `agent` → `clerk`        |
+| Proceeding    | Official action                    | `session` → `proceeding` |
+| Dossier       | Accumulated file                   | `context` → `dossier`    |
 
 ---
 
@@ -313,37 +313,37 @@ statute config = { authority: "opus", resubmit: 3 }
 
 ### For `clerk` (agent)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `official` | Too generic |
-| `functionary` | Hard to spell |
-| `bureaucrat` | Too pejorative |
-| `advocate` | Too positive/helpful |
+| Keyword       | Rejected because     |
+| ------------- | -------------------- |
+| `official`    | Too generic          |
+| `functionary` | Hard to spell        |
+| `bureaucrat`  | Too pejorative       |
+| `advocate`    | Too positive/helpful |
 
 ### For `proceeding` (session)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `case` | Overloaded (switch case) |
+| Keyword   | Rejected because                 |
+| --------- | -------------------------------- |
+| `case`    | Overloaded (switch case)         |
 | `hearing` | Reserved for `repeat N hearings` |
-| `trial` | Used in Homeric register |
-| `process` | Too technical |
+| `trial`   | Used in Homeric register         |
+| `process` | Too technical                    |
 
 ### For `departments` (parallel)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `bureaus` | Good alternative, slightly less clear |
-| `offices` | Too mundane |
-| `ministries` | More Orwellian than Kafkaesque |
+| Keyword      | Rejected because                      |
+| ------------ | ------------------------------------- |
+| `bureaus`    | Good alternative, slightly less clear |
+| `offices`    | Too mundane                           |
+| `ministries` | More Orwellian than Kafkaesque        |
 
 ### For `appeal` (loop)
 
-| Keyword | Rejected because |
-|---------|------------------|
+| Keyword    | Rejected because    |
+| ---------- | ------------------- |
 | `recourse` | Too legal-technical |
-| `petition` | Used for `input` |
-| `process` | Too generic |
+| `petition` | Used for `input`    |
+| `process`  | Too generic         |
 
 ---
 
@@ -368,6 +368,6 @@ Not recommended for:
 ## Closing Note
 
 > "Someone must have slandered Josef K., for one morning, without having done anything wrong, he was arrested."
-> — *The Trial*
+> — _The Trial_
 
 In the Kafka register, your program is Josef K. The apparatus will process it. Whether it succeeds or fails, no one can say for certain. But the proceedings will continue.

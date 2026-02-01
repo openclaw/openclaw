@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 
@@ -18,7 +17,9 @@ export function createGatewayPluginRequestHandler(params: {
   return async (req, res) => {
     const routes = registry.httpRoutes ?? [];
     const handlers = registry.httpHandlers ?? [];
-    if (routes.length === 0 && handlers.length === 0) return false;
+    if (routes.length === 0 && handlers.length === 0) {
+      return false;
+    }
 
     if (routes.length > 0) {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -42,7 +43,9 @@ export function createGatewayPluginRequestHandler(params: {
     for (const entry of handlers) {
       try {
         const handled = await entry.handler(req, res);
-        if (handled) return true;
+        if (handled) {
+          return true;
+        }
       } catch (err) {
         log.warn(`plugin http handler failed (${entry.pluginId}): ${String(err)}`);
         if (!res.headersSent) {

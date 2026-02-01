@@ -4,12 +4,15 @@ read_when:
   - Setting up BlueBubbles channel
   - Troubleshooting webhook pairing
   - Configuring iMessage on macOS
+title: "BlueBubbles"
 ---
+
 # BlueBubbles (macOS REST)
 
 Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **Recommended for iMessage integration** due to its richer API and easier setup compared to the legacy imsg channel.
 
 ## Overview
+
 - Runs on macOS via the BlueBubbles helper app ([bluebubbles.app](https://bluebubbles.app)).
 - Recommended/tested: macOS Sequoia (15). macOS Tahoe (26) works; edit is currently broken on Tahoe, and group icon updates may report success but not sync.
 - OpenClaw talks to it through its REST API (`GET /api/v1/ping`, `POST /message/text`, `POST /chat/:id/*`).
@@ -20,6 +23,7 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
 - Advanced features: edit, unsend, reply threading, message effects, group management.
 
 ## Quick start
+
 1. Install the BlueBubbles server on your Mac (follow the instructions at [bluebubbles.app/install](https://bluebubbles.app/install)).
 2. In the BlueBubbles config, enable the web API and set a password.
 3. Run `openclaw onboard` and select BlueBubbles, or configure manually:
@@ -30,21 +34,24 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
          enabled: true,
          serverUrl: "http://192.168.1.100:1234",
          password: "example-password",
-         webhookPath: "/bluebubbles-webhook"
-       }
-     }
+         webhookPath: "/bluebubbles-webhook",
+       },
+     },
    }
    ```
 4. Point BlueBubbles webhooks to your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
 5. Start the gateway; it will register the webhook handler and start pairing.
 
 ## Onboarding
+
 BlueBubbles is available in the interactive setup wizard:
+
 ```
 openclaw onboard
 ```
 
 The wizard prompts for:
+
 - **Server URL** (required): BlueBubbles server address (e.g., `http://192.168.1.100:1234`)
 - **Password** (required): API password from BlueBubbles Server settings
 - **Webhook path** (optional): Defaults to `/bluebubbles-webhook`
@@ -52,12 +59,15 @@ The wizard prompts for:
 - **Allow list**: Phone numbers, emails, or chat targets
 
 You can also add BlueBubbles via CLI:
+
 ```
 openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --password <password>
 ```
 
 ## Access control (DMs + groups)
+
 DMs:
+
 - Default: `channels.bluebubbles.dmPolicy = "pairing"`.
 - Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
@@ -66,16 +76,20 @@ DMs:
 - Pairing is the default token exchange. Details: [Pairing](/start/pairing)
 
 Groups:
+
 - `channels.bluebubbles.groupPolicy = open | allowlist | disabled` (default: `allowlist`).
 - `channels.bluebubbles.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
 
 ### Mention gating (groups)
+
 BlueBubbles supports mention gating for group chats, matching iMessage/WhatsApp behavior:
+
 - Uses `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`) to detect mentions.
 - When `requireMention` is enabled for a group, the agent only responds when mentioned.
 - Control commands from authorized senders bypass mention gating.
 
 Per-group configuration:
+
 ```json5
 {
   channels: {
@@ -83,20 +97,22 @@ Per-group configuration:
       groupPolicy: "allowlist",
       groupAllowFrom: ["+15555550123"],
       groups: {
-        "*": { requireMention: true },  // default for all groups
-        "iMessage;-;chat123": { requireMention: false }  // override for specific group
-      }
-    }
-  }
+        "*": { requireMention: true }, // default for all groups
+        "iMessage;-;chat123": { requireMention: false }, // override for specific group
+      },
+    },
+  },
 }
 ```
 
 ### Command gating
+
 - Control commands (e.g., `/config`, `/model`) require authorization.
 - Uses `allowFrom` and `groupAllowFrom` to determine command authorization.
 - Authorized senders can run control commands even without mentioning in groups.
 
 ## Typing + read receipts
+
 - **Typing indicators**: Sent automatically before and during response generation.
 - **Read receipts**: Controlled by `channels.bluebubbles.sendReadReceipts` (default: `true`).
 - **Typing indicators**: OpenClaw sends typing start events; BlueBubbles clears typing automatically on send or timeout (manual stop via DELETE is unreliable).
@@ -105,13 +121,14 @@ Per-group configuration:
 {
   channels: {
     bluebubbles: {
-      sendReadReceipts: false  // disable read receipts
-    }
-  }
+      sendReadReceipts: false, // disable read receipts
+    },
+  },
 }
 ```
 
 ## Advanced actions
+
 BlueBubbles supports advanced message actions when enabled in config:
 
 ```json5
@@ -119,24 +136,25 @@ BlueBubbles supports advanced message actions when enabled in config:
   channels: {
     bluebubbles: {
       actions: {
-        reactions: true,       // tapbacks (default: true)
-        edit: true,            // edit sent messages (macOS 13+, broken on macOS 26 Tahoe)
-        unsend: true,          // unsend messages (macOS 13+)
-        reply: true,           // reply threading by message GUID
-        sendWithEffect: true,  // message effects (slam, loud, etc.)
-        renameGroup: true,     // rename group chats
-        setGroupIcon: true,    // set group chat icon/photo (flaky on macOS 26 Tahoe)
-        addParticipant: true,  // add participants to groups
+        reactions: true, // tapbacks (default: true)
+        edit: true, // edit sent messages (macOS 13+, broken on macOS 26 Tahoe)
+        unsend: true, // unsend messages (macOS 13+)
+        reply: true, // reply threading by message GUID
+        sendWithEffect: true, // message effects (slam, loud, etc.)
+        renameGroup: true, // rename group chats
+        setGroupIcon: true, // set group chat icon/photo (flaky on macOS 26 Tahoe)
+        addParticipant: true, // add participants to groups
         removeParticipant: true, // remove participants from groups
-        leaveGroup: true,      // leave group chats
-        sendAttachment: true   // send attachments/media
-      }
-    }
-  }
+        leaveGroup: true, // leave group chats
+        sendAttachment: true, // send attachments/media
+      },
+    },
+  },
 }
 ```
 
 Available actions:
+
 - **react**: Add/remove tapback reactions (`messageId`, `emoji`, `remove`)
 - **edit**: Edit a sent message (`messageId`, `text`)
 - **unsend**: Unsend a message (`messageId`)
@@ -151,39 +169,47 @@ Available actions:
   - Voice memos: set `asVoice: true` with **MP3** or **CAF** audio to send as an iMessage voice message. BlueBubbles converts MP3 → CAF when sending voice memos.
 
 ### Message IDs (short vs full)
-OpenClaw may surface *short* message IDs (e.g., `1`, `2`) to save tokens.
+
+OpenClaw may surface _short_ message IDs (e.g., `1`, `2`) to save tokens.
+
 - `MessageSid` / `ReplyToId` can be short IDs.
 - `MessageSidFull` / `ReplyToIdFull` contain the provider full IDs.
 - Short IDs are in-memory; they can expire on restart or cache eviction.
 - Actions accept short or full `messageId`, but short IDs will error if no longer available.
 
 Use full IDs for durable automations and storage:
+
 - Templates: `{{MessageSidFull}}`, `{{ReplyToIdFull}}`
 - Context: `MessageSidFull` / `ReplyToIdFull` in inbound payloads
 
 See [Configuration](/gateway/configuration) for template variables.
 
 ## Block streaming
+
 Control whether responses are sent as a single message or streamed in blocks:
+
 ```json5
 {
   channels: {
     bluebubbles: {
-      blockStreaming: true  // enable block streaming (default behavior)
-    }
-  }
+      blockStreaming: true, // enable block streaming (default behavior)
+    },
+  },
 }
 ```
 
 ## Media + limits
+
 - Inbound attachments are downloaded and stored in the media cache.
 - Media cap via `channels.bluebubbles.mediaMaxMb` (default: 8 MB).
 - Outbound text is chunked to `channels.bluebubbles.textChunkLimit` (default: 4000 chars).
 
 ## Configuration reference
+
 Full configuration: [Configuration](/gateway/configuration)
 
 Provider options:
+
 - `channels.bluebubbles.enabled`: Enable/disable the channel.
 - `channels.bluebubbles.serverUrl`: BlueBubbles REST API base URL.
 - `channels.bluebubbles.password`: API password.
@@ -204,11 +230,14 @@ Provider options:
 - `channels.bluebubbles.accounts`: Multi-account configuration.
 
 Related global options:
+
 - `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`).
 - `messages.responsePrefix`.
 
 ## Addressing / delivery targets
+
 Prefer `chat_guid` for stable routing:
+
 - `chat_guid:iMessage;-;+15555550123` (preferred for groups)
 - `chat_id:123`
 - `chat_identifier:...`
@@ -216,12 +245,14 @@ Prefer `chat_guid` for stable routing:
   - If a direct handle does not have an existing DM chat, OpenClaw will create one via `POST /api/v1/chat/new`. This requires the BlueBubbles Private API to be enabled.
 
 ## Security
+
 - Webhook requests are authenticated by comparing `guid`/`password` query params or headers against `channels.bluebubbles.password`. Requests from `localhost` are also accepted.
 - Keep the API password and webhook endpoint secret (treat them like credentials).
 - Localhost trust means a same-host reverse proxy can unintentionally bypass the password. If you proxy the gateway, require auth at the proxy and configure `gateway.trustedProxies`. See [Gateway security](/gateway/security#reverse-proxy-configuration).
 - Enable HTTPS + firewall rules on the BlueBubbles server if exposing it outside your LAN.
 
 ## Troubleshooting
+
 - If typing/read events stop working, check the BlueBubbles webhook logs and verify the gateway path matches `channels.bluebubbles.webhookPath`.
 - Pairing codes expire after one hour; use `openclaw pairing list bluebubbles` and `openclaw pairing approve bluebubbles <code>`.
 - Reactions require the BlueBubbles private API (`POST /api/v1/message/react`); ensure the server version exposes it.

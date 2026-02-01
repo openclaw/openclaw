@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
@@ -12,10 +11,14 @@ function decoratedMarkerPath(userDataDir: string) {
 
 function safeReadJson(filePath: string): Record<string, unknown> | null {
   try {
-    if (!fs.existsSync(filePath)) return null;
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
     const raw = fs.readFileSync(filePath, "utf-8");
     const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
     return parsed as Record<string, unknown>;
   } catch {
     return null;
@@ -41,7 +44,9 @@ function setDeep(obj: Record<string, unknown>, keys: string[], value: unknown) {
 
 function parseHexRgbToSignedArgbInt(hex: string): number | null {
   const cleaned = hex.trim().replace(/^#/, "");
-  if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) return null;
+  if (!/^[0-9a-fA-F]{6}$/.test(cleaned)) {
+    return null;
+  }
   const rgb = Number.parseInt(cleaned, 16);
   const argbUnsigned = (0xff << 24) | rgb;
   // Chrome stores colors as signed 32-bit ints (SkColor).

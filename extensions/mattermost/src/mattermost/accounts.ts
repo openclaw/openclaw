@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
-
 import type { MattermostAccountConfig, MattermostChatMode } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
 
@@ -26,19 +25,25 @@ export type ResolvedMattermostAccount = {
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   const accounts = cfg.channels?.mattermost?.accounts;
-  if (!accounts || typeof accounts !== "object") return [];
+  if (!accounts || typeof accounts !== "object") {
+    return [];
+  }
   return Object.keys(accounts).filter(Boolean);
 }
 
 export function listMattermostAccountIds(cfg: OpenClawConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
-  return ids.sort((a, b) => a.localeCompare(b));
+  if (ids.length === 0) {
+    return [DEFAULT_ACCOUNT_ID];
+  }
+  return ids.toSorted((a, b) => a.localeCompare(b));
 }
 
 export function resolveDefaultMattermostAccountId(cfg: OpenClawConfig): string {
   const ids = listMattermostAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;
+  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
+    return DEFAULT_ACCOUNT_ID;
+  }
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
@@ -47,7 +52,9 @@ function resolveAccountConfig(
   accountId: string,
 ): MattermostAccountConfig | undefined {
   const accounts = cfg.channels?.mattermost?.accounts;
-  if (!accounts || typeof accounts !== "object") return undefined;
+  if (!accounts || typeof accounts !== "object") {
+    return undefined;
+  }
   return accounts[accountId] as MattermostAccountConfig | undefined;
 }
 
@@ -62,9 +69,15 @@ function mergeMattermostAccountConfig(
 }
 
 function resolveMattermostRequireMention(config: MattermostAccountConfig): boolean | undefined {
-  if (config.chatmode === "oncall") return true;
-  if (config.chatmode === "onmessage") return false;
-  if (config.chatmode === "onchar") return true;
+  if (config.chatmode === "oncall") {
+    return true;
+  }
+  if (config.chatmode === "onmessage") {
+    return false;
+  }
+  if (config.chatmode === "onchar") {
+    return true;
+  }
   return config.requireMention;
 }
 

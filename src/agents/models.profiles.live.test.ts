@@ -1,5 +1,4 @@
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
@@ -14,6 +13,7 @@ import { isModernModelRef } from "./live-model-filter.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { isRateLimitErrorMessage } from "./pi-embedded-helpers/errors.js";
+import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -23,7 +23,9 @@ const describeLive = LIVE ? describe : describe.skip;
 
 function parseProviderFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") return null;
+  if (!trimmed || trimmed === "all") {
+    return null;
+  }
   const ids = trimmed
     .split(",")
     .map((s) => s.trim())
@@ -33,7 +35,9 @@ function parseProviderFilter(raw?: string): Set<string> | null {
 
 function parseModelFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
-  if (!trimmed || trimmed === "all") return null;
+  if (!trimmed || trimmed === "all") {
+    return null;
+  }
   const ids = trimmed
     .split(",")
     .map((s) => s.trim())
@@ -47,19 +51,35 @@ function logProgress(message: string): void {
 
 function isGoogleModelNotFoundError(err: unknown): boolean {
   const msg = String(err);
-  if (!/not found/i.test(msg)) return false;
-  if (/models\/.+ is not found for api version/i.test(msg)) return true;
-  if (/"status"\\s*:\\s*"NOT_FOUND"/.test(msg)) return true;
-  if (/"code"\\s*:\\s*404/.test(msg)) return true;
+  if (!/not found/i.test(msg)) {
+    return false;
+  }
+  if (/models\/.+ is not found for api version/i.test(msg)) {
+    return true;
+  }
+  if (/"status"\\s*:\\s*"NOT_FOUND"/.test(msg)) {
+    return true;
+  }
+  if (/"code"\\s*:\\s*404/.test(msg)) {
+    return true;
+  }
   return false;
 }
 
 function isModelNotFoundErrorMessage(raw: string): boolean {
   const msg = raw.trim();
-  if (!msg) return false;
-  if (/\b404\b/.test(msg) && /not[_-]?found/i.test(msg)) return true;
-  if (/not_found_error/i.test(msg)) return true;
-  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not[_-]?found/i.test(msg)) return true;
+  if (!msg) {
+    return false;
+  }
+  if (/\b404\b/.test(msg) && /not[_-]?found/i.test(msg)) {
+    return true;
+  }
+  if (/not_found_error/i.test(msg)) {
+    return true;
+  }
+  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not[_-]?found/i.test(msg)) {
+    return true;
+  }
   return false;
 }
 
@@ -74,7 +94,9 @@ function isInstructionsRequiredError(raw: string): boolean {
 
 function toInt(value: string | undefined, fallback: number): number {
   const trimmed = value?.trim();
-  if (!trimmed) return fallback;
+  if (!trimmed) {
+    return fallback;
+  }
   const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
@@ -82,10 +104,14 @@ function toInt(value: string | undefined, fallback: number): number {
 function resolveTestReasoning(
   model: Model<Api>,
 ): "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
-  if (!model.reasoning) return undefined;
+  if (!model.reasoning) {
+    return undefined;
+  }
   const id = model.id.toLowerCase();
   if (model.provider === "openai" || model.provider === "openai-codex") {
-    if (id.includes("pro")) return "high";
+    if (id.includes("pro")) {
+      return "high";
+    }
     return "medium";
   }
   return "low";
@@ -142,7 +168,9 @@ async function completeOkWithRetry(params: {
   };
 
   const first = await runOnce();
-  if (first.text.length > 0) return first;
+  if (first.text.length > 0) {
+    return first;
+  }
   return await runOnce();
 }
 
@@ -167,7 +195,7 @@ describeLive("live models (profile keys)", () => {
       const agentDir = resolveOpenClawAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
-      const models = modelRegistry.getAll() as Array<Model<Api>>;
+      const models = modelRegistry.getAll();
 
       const rawModels = process.env.OPENCLAW_LIVE_MODELS?.trim();
       const useModern = rawModels === "modern" || rawModels === "all";
@@ -185,9 +213,13 @@ describeLive("live models (profile keys)", () => {
       }> = [];
 
       for (const model of models) {
-        if (providers && !providers.has(model.provider)) continue;
+        if (providers && !providers.has(model.provider)) {
+          continue;
+        }
         const id = `${model.provider}/${model.id}`;
-        if (filter && !filter.has(id)) continue;
+        if (filter && !filter.has(id)) {
+          continue;
+        }
         if (!filter && useModern) {
           if (!isModernModelRef({ provider: model.provider, id: model.id })) {
             continue;

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 
@@ -12,10 +11,7 @@ function createProvider(): TwilioProvider {
   );
 }
 
-function createContext(
-  rawBody: string,
-  query?: WebhookContext["query"],
-): WebhookContext {
+function createContext(rawBody: string, query?: WebhookContext["query"]): WebhookContext {
   return {
     headers: {},
     rawBody,

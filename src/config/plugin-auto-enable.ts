@@ -1,14 +1,14 @@
 import type { OpenClawConfig } from "./config.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
+import {
+  getChannelPluginCatalogEntry,
+  listChannelPluginCatalogEntries,
+} from "../channels/plugins/catalog.js";
 import {
   getChatChannelMeta,
   listChatChannels,
   normalizeChatChannelId,
 } from "../channels/registry.js";
-import {
-  getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries,
-} from "../channels/plugins/catalog.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 import { hasAnyWhatsAppAuth } from "../web/accounts.js";
 
 type PluginEnableChange = {
@@ -33,6 +33,7 @@ const PROVIDER_PLUGIN_IDS: Array<{ pluginId: string; providerId: string }> = [
   { pluginId: "google-gemini-cli-auth", providerId: "google-gemini-cli" },
   { pluginId: "qwen-portal-auth", providerId: "qwen-portal" },
   { pluginId: "copilot-proxy", providerId: "copilot-proxy" },
+  { pluginId: "minimax-portal-auth", providerId: "minimax-portal" },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -48,11 +49,17 @@ function recordHasKeys(value: unknown): boolean {
 }
 
 function accountsHaveKeys(value: unknown, keys: string[]): boolean {
-  if (!isRecord(value)) return false;
+  if (!isRecord(value)) {
+    return false;
+  }
   for (const account of Object.values(value)) {
-    if (!isRecord(account)) continue;
+    if (!isRecord(account)) {
+      continue;
+    }
     for (const key of keys) {
-      if (hasNonEmptyString(account[key])) return true;
+      if (hasNonEmptyString(account[key])) {
+        return true;
+      }
     }
   }
   return false;
@@ -68,20 +75,36 @@ function resolveChannelConfig(
 }
 
 function isTelegramConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  if (hasNonEmptyString(env.TELEGRAM_BOT_TOKEN)) return true;
+  if (hasNonEmptyString(env.TELEGRAM_BOT_TOKEN)) {
+    return true;
+  }
   const entry = resolveChannelConfig(cfg, "telegram");
-  if (!entry) return false;
-  if (hasNonEmptyString(entry.botToken) || hasNonEmptyString(entry.tokenFile)) return true;
-  if (accountsHaveKeys(entry.accounts, ["botToken", "tokenFile"])) return true;
+  if (!entry) {
+    return false;
+  }
+  if (hasNonEmptyString(entry.botToken) || hasNonEmptyString(entry.tokenFile)) {
+    return true;
+  }
+  if (accountsHaveKeys(entry.accounts, ["botToken", "tokenFile"])) {
+    return true;
+  }
   return recordHasKeys(entry);
 }
 
 function isDiscordConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  if (hasNonEmptyString(env.DISCORD_BOT_TOKEN)) return true;
+  if (hasNonEmptyString(env.DISCORD_BOT_TOKEN)) {
+    return true;
+  }
   const entry = resolveChannelConfig(cfg, "discord");
-  if (!entry) return false;
-  if (hasNonEmptyString(entry.token)) return true;
-  if (accountsHaveKeys(entry.accounts, ["token"])) return true;
+  if (!entry) {
+    return false;
+  }
+  if (hasNonEmptyString(entry.token)) {
+    return true;
+  }
+  if (accountsHaveKeys(entry.accounts, ["token"])) {
+    return true;
+  }
   return recordHasKeys(entry);
 }
 
@@ -94,7 +117,9 @@ function isSlackConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean
     return true;
   }
   const entry = resolveChannelConfig(cfg, "slack");
-  if (!entry) return false;
+  if (!entry) {
+    return false;
+  }
   if (
     hasNonEmptyString(entry.botToken) ||
     hasNonEmptyString(entry.appToken) ||
@@ -102,13 +127,17 @@ function isSlackConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean
   ) {
     return true;
   }
-  if (accountsHaveKeys(entry.accounts, ["botToken", "appToken", "userToken"])) return true;
+  if (accountsHaveKeys(entry.accounts, ["botToken", "appToken", "userToken"])) {
+    return true;
+  }
   return recordHasKeys(entry);
 }
 
 function isSignalConfigured(cfg: OpenClawConfig): boolean {
   const entry = resolveChannelConfig(cfg, "signal");
-  if (!entry) return false;
+  if (!entry) {
+    return false;
+  }
   if (
     hasNonEmptyString(entry.account) ||
     hasNonEmptyString(entry.httpUrl) ||
@@ -118,21 +147,31 @@ function isSignalConfigured(cfg: OpenClawConfig): boolean {
   ) {
     return true;
   }
-  if (accountsHaveKeys(entry.accounts, ["account", "httpUrl", "httpHost", "cliPath"])) return true;
+  if (accountsHaveKeys(entry.accounts, ["account", "httpUrl", "httpHost", "cliPath"])) {
+    return true;
+  }
   return recordHasKeys(entry);
 }
 
 function isIMessageConfigured(cfg: OpenClawConfig): boolean {
   const entry = resolveChannelConfig(cfg, "imessage");
-  if (!entry) return false;
-  if (hasNonEmptyString(entry.cliPath)) return true;
+  if (!entry) {
+    return false;
+  }
+  if (hasNonEmptyString(entry.cliPath)) {
+    return true;
+  }
   return recordHasKeys(entry);
 }
 
 function isWhatsAppConfigured(cfg: OpenClawConfig): boolean {
-  if (hasAnyWhatsAppAuth(cfg)) return true;
+  if (hasAnyWhatsAppAuth(cfg)) {
+    return true;
+  }
   const entry = resolveChannelConfig(cfg, "whatsapp");
-  if (!entry) return false;
+  if (!entry) {
+    return false;
+  }
   return recordHasKeys(entry);
 }
 
@@ -167,10 +206,14 @@ export function isChannelConfigured(
 function collectModelRefs(cfg: OpenClawConfig): string[] {
   const refs: string[] = [];
   const pushModelRef = (value: unknown) => {
-    if (typeof value === "string" && value.trim()) refs.push(value.trim());
+    if (typeof value === "string" && value.trim()) {
+      refs.push(value.trim());
+    }
   };
   const collectFromAgent = (agent: Record<string, unknown> | null | undefined) => {
-    if (!agent) return;
+    if (!agent) {
+      return;
+    }
     const model = agent.model;
     if (typeof model === "string") {
       pushModelRef(model);
@@ -178,7 +221,9 @@ function collectModelRefs(cfg: OpenClawConfig): string[] {
       pushModelRef(model.primary);
       const fallbacks = model.fallbacks;
       if (Array.isArray(fallbacks)) {
-        for (const entry of fallbacks) pushModelRef(entry);
+        for (const entry of fallbacks) {
+          pushModelRef(entry);
+        }
       }
     }
     const models = agent.models;
@@ -195,7 +240,9 @@ function collectModelRefs(cfg: OpenClawConfig): string[] {
   const list = cfg.agents?.list;
   if (Array.isArray(list)) {
     for (const entry of list) {
-      if (isRecord(entry)) collectFromAgent(entry);
+      if (isRecord(entry)) {
+        collectFromAgent(entry);
+      }
     }
   }
   return refs;
@@ -204,7 +251,9 @@ function collectModelRefs(cfg: OpenClawConfig): string[] {
 function extractProviderFromModelRef(value: string): string | null {
   const trimmed = value.trim();
   const slash = trimmed.indexOf("/");
-  if (slash <= 0) return null;
+  if (slash <= 0) {
+    return null;
+  }
   return normalizeProviderId(trimmed.slice(0, slash));
 }
 
@@ -214,23 +263,31 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
   const profiles = cfg.auth?.profiles;
   if (profiles && typeof profiles === "object") {
     for (const profile of Object.values(profiles)) {
-      if (!isRecord(profile)) continue;
+      if (!isRecord(profile)) {
+        continue;
+      }
       const provider = normalizeProviderId(String(profile.provider ?? ""));
-      if (provider === normalized) return true;
+      if (provider === normalized) {
+        return true;
+      }
     }
   }
 
   const providerConfig = cfg.models?.providers;
   if (providerConfig && typeof providerConfig === "object") {
     for (const key of Object.keys(providerConfig)) {
-      if (normalizeProviderId(key) === normalized) return true;
+      if (normalizeProviderId(key) === normalized) {
+        return true;
+      }
     }
   }
 
   const modelRefs = collectModelRefs(cfg);
   for (const ref of modelRefs) {
     const provider = extractProviderFromModelRef(ref);
-    if (provider && provider === normalized) return true;
+    if (provider && provider === normalized) {
+      return true;
+    }
   }
 
   return false;
@@ -245,12 +302,16 @@ function resolveConfiguredPlugins(
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
   if (configuredChannels && typeof configuredChannels === "object") {
     for (const key of Object.keys(configuredChannels)) {
-      if (key === "defaults") continue;
+      if (key === "defaults") {
+        continue;
+      }
       channelIds.add(key);
     }
   }
   for (const channelId of channelIds) {
-    if (!channelId) continue;
+    if (!channelId) {
+      continue;
+    }
     if (isChannelConfigured(cfg, channelId, env)) {
       changes.push({
         pluginId: channelId,
@@ -294,9 +355,15 @@ function shouldSkipPreferredPluginAutoEnable(
   configured: PluginEnableChange[],
 ): boolean {
   for (const other of configured) {
-    if (other.pluginId === entry.pluginId) continue;
-    if (isPluginDenied(cfg, other.pluginId)) continue;
-    if (isPluginExplicitlyDisabled(cfg, other.pluginId)) continue;
+    if (other.pluginId === entry.pluginId) {
+      continue;
+    }
+    if (isPluginDenied(cfg, other.pluginId)) {
+      continue;
+    }
+    if (isPluginExplicitlyDisabled(cfg, other.pluginId)) {
+      continue;
+    }
     const preferOver = resolvePreferredOverIds(other.pluginId);
     if (preferOver.includes(entry.pluginId)) {
       return true;
@@ -307,7 +374,9 @@ function shouldSkipPreferredPluginAutoEnable(
 
 function ensureAllowlisted(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
   const allow = cfg.plugins?.allow;
-  if (!Array.isArray(allow) || allow.includes(pluginId)) return cfg;
+  if (!Array.isArray(allow) || allow.includes(pluginId)) {
+    return cfg;
+  }
   return {
     ...cfg,
     plugins: {
@@ -363,13 +432,21 @@ export function applyPluginAutoEnable(params: {
   }
 
   for (const entry of configured) {
-    if (isPluginDenied(next, entry.pluginId)) continue;
-    if (isPluginExplicitlyDisabled(next, entry.pluginId)) continue;
-    if (shouldSkipPreferredPluginAutoEnable(next, entry, configured)) continue;
+    if (isPluginDenied(next, entry.pluginId)) {
+      continue;
+    }
+    if (isPluginExplicitlyDisabled(next, entry.pluginId)) {
+      continue;
+    }
+    if (shouldSkipPreferredPluginAutoEnable(next, entry, configured)) {
+      continue;
+    }
     const allow = next.plugins?.allow;
     const allowMissing = Array.isArray(allow) && !allow.includes(entry.pluginId);
     const alreadyEnabled = next.plugins?.entries?.[entry.pluginId]?.enabled === true;
-    if (alreadyEnabled && !allowMissing) continue;
+    if (alreadyEnabled && !allowMissing) {
+      continue;
+    }
     next = enablePluginEntry(next, entry.pluginId);
     next = ensureAllowlisted(next, entry.pluginId);
     changes.push(formatAutoEnableChange(entry));

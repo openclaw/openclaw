@@ -1,11 +1,11 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { StickerMetadata } from "../telegram/bot/types.js";
-import type { InternalMessageChannel } from "../utils/message-channel.js";
-import type { CommandArgs } from "./commands-registry.types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
+import type { StickerMetadata } from "../telegram/bot/types.js";
+import type { InternalMessageChannel } from "../utils/message-channel.js";
+import type { CommandArgs } from "./commands-registry.types.js";
 
 /** Valid message channels for routing. */
 export type OriginatingChannelType = ChannelId | InternalMessageChannel;
@@ -138,8 +138,12 @@ export type TemplateContext = MsgContext & {
 };
 
 function formatTemplateValue(value: unknown): string {
-  if (value == null) return "";
-  if (typeof value === "string") return value;
+  if (value == null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
     return String(value);
   }
@@ -149,8 +153,12 @@ function formatTemplateValue(value: unknown): string {
   if (Array.isArray(value)) {
     return value
       .flatMap((entry) => {
-        if (entry == null) return [];
-        if (typeof entry === "string") return [entry];
+        if (entry == null) {
+          return [];
+        }
+        if (typeof entry === "string") {
+          return [entry];
+        }
         if (typeof entry === "number" || typeof entry === "boolean" || typeof entry === "bigint") {
           return [String(entry)];
         }
@@ -166,7 +174,9 @@ function formatTemplateValue(value: unknown): string {
 
 // Simple {{Placeholder}} interpolation using inbound message context.
 export function applyTemplate(str: string | undefined, ctx: TemplateContext) {
-  if (!str) return "";
+  if (!str) {
+    return "";
+  }
   return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
     const value = ctx[key as keyof TemplateContext];
     return formatTemplateValue(value);

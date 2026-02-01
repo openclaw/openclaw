@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
   stripThinkingTagsFromText,
 } from "../pi-embedded-utils.js";
-import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
@@ -53,13 +53,19 @@ export function resolveMainSessionAlias(cfg: OpenClawConfig) {
 }
 
 export function resolveDisplaySessionKey(params: { key: string; alias: string; mainKey: string }) {
-  if (params.key === params.alias) return "main";
-  if (params.key === params.mainKey) return "main";
+  if (params.key === params.alias) {
+    return "main";
+  }
+  if (params.key === params.mainKey) {
+    return "main";
+  }
   return params.key;
 }
 
 export function resolveInternalSessionKey(params: { key: string; alias: string; mainKey: string }) {
-  if (params.key === "main") return params.alias;
+  if (params.key === "main") {
+    return params.alias;
+  }
   return params.key;
 }
 
@@ -74,20 +80,32 @@ export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolic
   const enabled = routingA2A?.enabled === true;
   const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
   const matchesAllow = (agentId: string) => {
-    if (allowPatterns.length === 0) return true;
+    if (allowPatterns.length === 0) {
+      return true;
+    }
     return allowPatterns.some((pattern) => {
       const raw = String(pattern ?? "").trim();
-      if (!raw) return false;
-      if (raw === "*") return true;
-      if (!raw.includes("*")) return raw === agentId;
+      if (!raw) {
+        return false;
+      }
+      if (raw === "*") {
+        return true;
+      }
+      if (!raw.includes("*")) {
+        return raw === agentId;
+      }
       const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
       return re.test(agentId);
     });
   };
   const isAllowed = (requesterAgentId: string, targetAgentId: string) => {
-    if (requesterAgentId === targetAgentId) return true;
-    if (!enabled) return false;
+    if (requesterAgentId === targetAgentId) {
+      return true;
+    }
+    if (!enabled) {
+      return false;
+    }
     return matchesAllow(requesterAgentId) && matchesAllow(targetAgentId);
   };
   return { enabled, matchesAllow, isAllowed };
@@ -101,14 +119,28 @@ export function looksLikeSessionId(value: string): boolean {
 
 export function looksLikeSessionKey(value: string): boolean {
   const raw = value.trim();
-  if (!raw) return false;
+  if (!raw) {
+    return false;
+  }
   // These are canonical key shapes that should never be treated as sessionIds.
-  if (raw === "main" || raw === "global" || raw === "unknown") return true;
-  if (isAcpSessionKey(raw)) return true;
-  if (raw.startsWith("agent:")) return true;
-  if (raw.startsWith("cron:") || raw.startsWith("hook:")) return true;
-  if (raw.startsWith("node-") || raw.startsWith("node:")) return true;
-  if (raw.includes(":group:") || raw.includes(":channel:")) return true;
+  if (raw === "main" || raw === "global" || raw === "unknown") {
+    return true;
+  }
+  if (isAcpSessionKey(raw)) {
+    return true;
+  }
+  if (raw.startsWith("agent:")) {
+    return true;
+  }
+  if (raw.startsWith("cron:") || raw.startsWith("hook:")) {
+    return true;
+  }
+  if (raw.startsWith("node-") || raw.startsWith("node:")) {
+    return true;
+  }
+  if (raw.includes(":group:") || raw.includes(":channel:")) {
+    return true;
+  }
   return false;
 }
 
@@ -135,7 +167,7 @@ async function resolveSessionKeyFromSessionId(params: {
 }): Promise<SessionReferenceResolution> {
   try {
     // Resolve via gateway so we respect store routing and visibility rules.
-    const result = (await callGateway({
+    const result = await callGateway<{ key?: string }>({
       method: "sessions.resolve",
       params: {
         sessionId: params.sessionId,
@@ -143,7 +175,7 @@ async function resolveSessionKeyFromSessionId(params: {
         includeGlobal: !params.restrictToSpawned,
         includeUnknown: !params.restrictToSpawned,
       },
-    })) as { key?: unknown };
+    });
     const key = typeof result?.key === "string" ? result.key.trim() : "";
     if (!key) {
       throw new Error(
@@ -188,15 +220,17 @@ async function resolveSessionKeyFromKey(params: {
 }): Promise<SessionReferenceResolution | null> {
   try {
     // Try key-based resolution first so non-standard keys keep working.
-    const result = (await callGateway({
+    const result = await callGateway<{ key?: string }>({
       method: "sessions.resolve",
       params: {
         key: params.key,
         spawnedBy: params.restrictToSpawned ? params.requesterInternalKey : undefined,
       },
-    })) as { key?: unknown };
+    });
     const key = typeof result?.key === "string" ? result.key.trim() : "";
-    if (!key) return null;
+    if (!key) {
+      return null;
+    }
     return {
       ok: true,
       key,
@@ -229,7 +263,9 @@ export async function resolveSessionReference(params: {
       requesterInternalKey: params.requesterInternalKey,
       restrictToSpawned: params.restrictToSpawned,
     });
-    if (resolvedByKey) return resolvedByKey;
+    if (resolvedByKey) {
+      return resolvedByKey;
+    }
     return await resolveSessionKeyFromSessionId({
       sessionId: raw,
       alias: params.alias,
@@ -259,11 +295,21 @@ export function classifySessionKind(params: {
   mainKey: string;
 }): SessionKind {
   const key = params.key;
-  if (key === params.alias || key === params.mainKey) return "main";
-  if (key.startsWith("cron:")) return "cron";
-  if (key.startsWith("hook:")) return "hook";
-  if (key.startsWith("node-") || key.startsWith("node:")) return "node";
-  if (params.gatewayKind === "group") return "group";
+  if (key === params.alias || key === params.mainKey) {
+    return "main";
+  }
+  if (key.startsWith("cron:")) {
+    return "cron";
+  }
+  if (key.startsWith("hook:")) {
+    return "hook";
+  }
+  if (key.startsWith("node-") || key.startsWith("node:")) {
+    return "node";
+  }
+  if (params.gatewayKind === "group") {
+    return "group";
+  }
   if (key.includes(":group:") || key.includes(":channel:")) {
     return "group";
   }
@@ -276,11 +322,17 @@ export function deriveChannel(params: {
   channel?: string | null;
   lastChannel?: string | null;
 }): string {
-  if (params.kind === "cron" || params.kind === "hook" || params.kind === "node") return "internal";
+  if (params.kind === "cron" || params.kind === "hook" || params.kind === "node") {
+    return "internal";
+  }
   const channel = normalizeKey(params.channel ?? undefined);
-  if (channel) return channel;
+  if (channel) {
+    return channel;
+  }
   const lastChannel = normalizeKey(params.lastChannel ?? undefined);
-  if (lastChannel) return lastChannel;
+  if (lastChannel) {
+    return lastChannel;
+  }
   const parts = params.key.split(":").filter(Boolean);
   if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
     return parts[0];
@@ -290,7 +342,9 @@ export function deriveChannel(params: {
 
 export function stripToolMessages(messages: unknown[]): unknown[] {
   return messages.filter((msg) => {
-    if (!msg || typeof msg !== "object") return true;
+    if (!msg || typeof msg !== "object") {
+      return true;
+    }
     const role = (msg as { role?: unknown }).role;
     return role !== "toolResult";
   });
@@ -301,19 +355,31 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
  * This ensures user-facing text doesn't leak internal tool representations.
  */
 export function sanitizeTextContent(text: string): string {
-  if (!text) return text;
+  if (!text) {
+    return text;
+  }
   return stripThinkingTagsFromText(stripDowngradedToolCallText(stripMinimaxToolCallXml(text)));
 }
 
 export function extractAssistantText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") return undefined;
-  if ((message as { role?: unknown }).role !== "assistant") return undefined;
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  if ((message as { role?: unknown }).role !== "assistant") {
+    return undefined;
+  }
   const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) return undefined;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
   const chunks: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") continue;
-    if ((block as { type?: unknown }).type !== "text") continue;
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    if ((block as { type?: unknown }).type !== "text") {
+      continue;
+    }
     const text = (block as { text?: unknown }).text;
     if (typeof text === "string") {
       const sanitized = sanitizeTextContent(text);

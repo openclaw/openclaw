@@ -1,3 +1,6 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { ReplyPayload } from "../types.js";
+import type { InlineDirectives } from "./directive-handling.parse.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles.js";
 import {
   type ModelAliasIndex,
@@ -6,9 +9,8 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
-import type { ReplyPayload } from "../types.js";
+import { resolveModelsCommandReply } from "./commands-models.js";
 import {
   formatAuthLabel,
   type ModelAuthDetailMode,
@@ -19,8 +21,6 @@ import {
   type ModelPickerCatalogEntry,
   resolveProviderEndpointLabel,
 } from "./directive-handling.model-picker.js";
-import type { InlineDirectives } from "./directive-handling.parse.js";
-import { resolveModelsCommandReply } from "./commands-models.js";
 import { type ModelDirectiveSelection, resolveModelDirectiveSelection } from "./model-selection.js";
 
 function buildModelPickerCatalog(params: {
@@ -43,22 +43,30 @@ function buildModelPickerCatalog(params: {
     const pushRef = (ref: { provider: string; model: string }, name?: string) => {
       const provider = normalizeProviderId(ref.provider);
       const id = String(ref.model ?? "").trim();
-      if (!provider || !id) return;
+      if (!provider || !id) {
+        return;
+      }
       const key = modelKey(provider, id);
-      if (keys.has(key)) return;
+      if (keys.has(key)) {
+        return;
+      }
       keys.add(key);
       out.push({ provider, id, name: name ?? id });
     };
 
     const pushRaw = (raw?: string) => {
       const value = String(raw ?? "").trim();
-      if (!value) return;
+      if (!value) {
+        return;
+      }
       const resolved = resolveModelRefFromString({
         raw: value,
         defaultProvider: params.defaultProvider,
         aliasIndex: params.aliasIndex,
       });
-      if (!resolved) return;
+      if (!resolved) {
+        return;
+      }
       pushRef(resolved.ref);
     };
 
@@ -92,9 +100,13 @@ function buildModelPickerCatalog(params: {
   const push = (entry: ModelPickerCatalogEntry) => {
     const provider = normalizeProviderId(entry.provider);
     const id = String(entry.id ?? "").trim();
-    if (!provider || !id) return;
+    if (!provider || !id) {
+      return;
+    }
     const key = modelKey(provider, id);
-    if (keys.has(key)) return;
+    if (keys.has(key)) {
+      return;
+    }
     keys.add(key);
     out.push({ provider, id, name: entry.name });
   };
@@ -131,7 +143,9 @@ function buildModelPickerCatalog(params: {
       defaultProvider: params.defaultProvider,
       aliasIndex: params.aliasIndex,
     });
-    if (!resolved) continue;
+    if (!resolved) {
+      continue;
+    }
     push({
       provider: resolved.ref.provider,
       id: resolved.ref.model,
@@ -164,14 +178,18 @@ export async function maybeHandleModelDirectiveInfo(params: {
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   resetModelOverride: boolean;
 }): Promise<ReplyPayload | undefined> {
-  if (!params.directives.hasModelDirective) return undefined;
+  if (!params.directives.hasModelDirective) {
+    return undefined;
+  }
 
   const rawDirective = params.directives.rawModelDirective?.trim();
   const directive = rawDirective?.toLowerCase();
   const wantsStatus = directive === "status";
   const wantsSummary = !rawDirective;
   const wantsLegacyList = directive === "list";
-  if (!wantsSummary && !wantsStatus && !wantsLegacyList) return undefined;
+  if (!wantsSummary && !wantsStatus && !wantsLegacyList) {
+    return undefined;
+  }
 
   if (params.directives.rawModelProfile) {
     return { text: "Auth profile override requires a model selection." };
@@ -209,12 +227,16 @@ export async function maybeHandleModelDirectiveInfo(params: {
   const modelsPath = `${params.agentDir}/models.json`;
   const formatPath = (value: string) => shortenHomePath(value);
   const authMode: ModelAuthDetailMode = "verbose";
-  if (pickerCatalog.length === 0) return { text: "No models available." };
+  if (pickerCatalog.length === 0) {
+    return { text: "No models available." };
+  }
 
   const authByProvider = new Map<string, string>();
   for (const entry of pickerCatalog) {
     const provider = normalizeProviderId(entry.provider);
-    if (authByProvider.has(provider)) continue;
+    if (authByProvider.has(provider)) {
+      continue;
+    }
     const auth = await resolveAuthLabel(
       provider,
       params.cfg,
@@ -250,7 +272,9 @@ export async function maybeHandleModelDirectiveInfo(params: {
 
   for (const provider of byProvider.keys()) {
     const models = byProvider.get(provider);
-    if (!models) continue;
+    if (!models) {
+      continue;
+    }
     const authLabel = authByProvider.get(provider) ?? "missing";
     const endpoint = resolveProviderEndpointLabel(provider, params.cfg);
     const endpointSuffix = endpoint.endpoint

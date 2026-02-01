@@ -99,7 +99,9 @@ describe("openclaw-tools: subagents", () => {
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) throw new Error("missing sessions_spawn tool");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
 
     const result = await tool.execute("call2", {
       task: "do thing",
@@ -111,7 +113,9 @@ describe("openclaw-tools: subagents", () => {
       runId: "run-1",
     });
 
-    if (!childRunId) throw new Error("missing child runId");
+    if (!childRunId) {
+      throw new Error("missing child runId");
+    }
     emitAgentEvent({
       runId: childRunId,
       stream: "lifecycle",
@@ -159,7 +163,9 @@ describe("openclaw-tools: subagents", () => {
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) throw new Error("missing sessions_spawn tool");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
 
     const result = await tool.execute("call6", {
       task: "do thing",

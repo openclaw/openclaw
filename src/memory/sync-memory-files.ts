@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildFileEntry, listMemoryFiles, type MemoryFileEntry } from "./internal.js";
 
@@ -80,7 +79,9 @@ export async function syncMemoryFiles(params: {
     .prepare(`SELECT path FROM files WHERE source = ?`)
     .all("memory") as Array<{ path: string }>;
   for (const stale of staleRows) {
-    if (activePaths.has(stale.path)) continue;
+    if (activePaths.has(stale.path)) {
+      continue;
+    }
     params.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(stale.path, "memory");
     try {
       params.db

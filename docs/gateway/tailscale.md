@@ -3,7 +3,9 @@ summary: "Integrated Tailscale Serve/Funnel for the Gateway dashboard"
 read_when:
   - Exposing the Gateway Control UI outside localhost
   - Automating tailnet or public dashboard access
+title: "Tailscale"
 ---
+
 # Tailscale (Gateway dashboard)
 
 OpenClaw can auto-configure Tailscale **Serve** (tailnet) or **Funnel** (public) for the
@@ -42,8 +44,8 @@ force `gateway.auth.mode: "password"`.
 {
   gateway: {
     bind: "loopback",
-    tailscale: { mode: "serve" }
-  }
+    tailscale: { mode: "serve" },
+  },
 }
 ```
 
@@ -57,12 +59,13 @@ Use this when you want the Gateway to listen directly on the Tailnet IP (no Serv
 {
   gateway: {
     bind: "tailnet",
-    auth: { mode: "token", token: "your-token" }
-  }
+    auth: { mode: "token", token: "your-token" },
+  },
 }
 ```
 
 Connect from another Tailnet device:
+
 - Control UI: `http://<tailscale-ip>:18789/`
 - WebSocket: `ws://<tailscale-ip>:18789`
 
@@ -75,8 +78,8 @@ Note: loopback (`http://127.0.0.1:18789`) will **not** work in this mode.
   gateway: {
     bind: "loopback",
     tailscale: { mode: "funnel" },
-    auth: { mode: "password", password: "replace-me" }
-  }
+    auth: { mode: "password", password: "replace-me" },
+  },
 }
 ```
 

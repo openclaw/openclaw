@@ -2,37 +2,12 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import type { OpenClawConfig } from "../config/config.js";
-import {
-  findModelInCatalog,
-  loadModelCatalog,
-  modelSupportsVision,
-} from "../agents/model-catalog.js";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { applyTemplate } from "../auto-reply/templating.js";
-import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { runExec } from "../process/exec.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
-import { MediaAttachmentCache, normalizeAttachments, selectAttachments } from "./attachments.js";
-import {
-  CLI_OUTPUT_MAX_BUFFER,
-  DEFAULT_AUDIO_MODELS,
-  DEFAULT_TIMEOUT_SECONDS,
-} from "./defaults.js";
-import { isMediaUnderstandingSkipError, MediaUnderstandingSkipError } from "./errors.js";
-import {
-  resolveMaxBytes,
-  resolveMaxChars,
-  resolveModelEntries,
-  resolvePrompt,
-  resolveScopeDecision,
-  resolveTimeoutMs,
-} from "./resolve.js";
 import type {
   MediaAttachment,
   MediaUnderstandingCapability,
@@ -41,12 +16,36 @@ import type {
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
+import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import {
+  findModelInCatalog,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "../agents/model-catalog.js";
+import { applyTemplate } from "../auto-reply/templating.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { runExec } from "../process/exec.js";
+import { MediaAttachmentCache, normalizeAttachments, selectAttachments } from "./attachments.js";
+import {
+  CLI_OUTPUT_MAX_BUFFER,
+  DEFAULT_AUDIO_MODELS,
+  DEFAULT_TIMEOUT_SECONDS,
+} from "./defaults.js";
+import { isMediaUnderstandingSkipError, MediaUnderstandingSkipError } from "./errors.js";
+import { describeImageWithModel } from "./providers/image.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
 } from "./providers/index.js";
-import { describeImageWithModel } from "./providers/image.js";
+import {
+  resolveMaxBytes,
+  resolveMaxChars,
+  resolveModelEntries,
+  resolvePrompt,
+  resolveScopeDecision,
+  resolveTimeoutMs,
+} from "./resolve.js";
 import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
 const AUTO_AUDIO_KEY_PROVIDERS = ["openai", "groq", "deepgram", "google"] as const;
@@ -89,10 +88,16 @@ const binaryCache = new Map<string, Promise<string | null>>();
 const geminiProbeCache = new Map<string, Promise<boolean>>();
 
 function expandHomeDir(value: string): string {
-  if (!value.startsWith("~")) return value;
+  if (!value.startsWith("~")) {
+    return value;
+  }
   const home = os.homedir();
-  if (value === "~") return home;
-  if (value.startsWith("~/")) return path.join(home, value.slice(2));
+  if (value === "~") {
+    return home;
+  }
+  if (value.startsWith("~/")) {
+    return path.join(home, value.slice(2));
+  }
   return value;
 }
 
@@ -101,9 +106,13 @@ function hasPathSeparator(value: string): boolean {
 }
 
 function candidateBinaryNames(name: string): string[] {
-  if (process.platform !== "win32") return [name];
+  if (process.platform !== "win32") {
+    return [name];
+  }
   const ext = path.extname(name);
-  if (ext) return [name];
+  if (ext) {
+    return [name];
+  }
   const pathext = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
     .split(";")
     .map((item) => item.trim())
@@ -116,8 +125,12 @@ function candidateBinaryNames(name: string): string[] {
 async function isExecutable(filePath: string): Promise<boolean> {
   try {
     const stat = await fs.stat(filePath);
-    if (!stat.isFile()) return false;
-    if (process.platform === "win32") return true;
+    if (!stat.isFile()) {
+      return false;
+    }
+    if (process.platform === "win32") {
+      return true;
+    }
     await fs.access(filePath, fsConstants.X_OK);
     return true;
   } catch {
@@ -127,25 +140,35 @@ async function isExecutable(filePath: string): Promise<boolean> {
 
 async function findBinary(name: string): Promise<string | null> {
   const cached = binaryCache.get(name);
-  if (cached) return cached;
+  if (cached) {
+    return cached;
+  }
   const resolved = (async () => {
     const direct = expandHomeDir(name.trim());
     if (direct && hasPathSeparator(direct)) {
       for (const candidate of candidateBinaryNames(direct)) {
-        if (await isExecutable(candidate)) return candidate;
+        if (await isExecutable(candidate)) {
+          return candidate;
+        }
       }
     }
 
     const searchName = name.trim();
-    if (!searchName) return null;
+    if (!searchName) {
+      return null;
+    }
     const pathEntries = (process.env.PATH ?? "").split(path.delimiter);
     const candidates = candidateBinaryNames(searchName);
     for (const entryRaw of pathEntries) {
       const entry = expandHomeDir(entryRaw.trim().replace(/^"(.*)"$/, "$1"));
-      if (!entry) continue;
+      if (!entry) {
+        continue;
+      }
       for (const candidate of candidates) {
         const fullPath = path.join(entry, candidate);
-        if (await isExecutable(fullPath)) return fullPath;
+        if (await isExecutable(fullPath)) {
+          return fullPath;
+        }
       }
     }
 
@@ -160,7 +183,9 @@ async function hasBinary(name: string): Promise<boolean> {
 }
 
 async function fileExists(filePath?: string | null): Promise<boolean> {
-  if (!filePath) return false;
+  if (!filePath) {
+    return false;
+  }
   try {
     await fs.stat(filePath);
     return true;
@@ -172,7 +197,9 @@ async function fileExists(filePath?: string | null): Promise<boolean> {
 function extractLastJsonObject(raw: string): unknown {
   const trimmed = raw.trim();
   const start = trimmed.lastIndexOf("{");
-  if (start === -1) return null;
+  if (start === -1) {
+    return null;
+  }
   const slice = trimmed.slice(start);
   try {
     return JSON.parse(slice);
@@ -183,9 +210,13 @@ function extractLastJsonObject(raw: string): unknown {
 
 function extractGeminiResponse(raw: string): string | null {
   const payload = extractLastJsonObject(raw);
-  if (!payload || typeof payload !== "object") return null;
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
   const response = (payload as { response?: unknown }).response;
-  if (typeof response !== "string") return null;
+  if (typeof response !== "string") {
+    return null;
+  }
   const trimmed = response.trim();
   return trimmed || null;
 }
@@ -193,9 +224,13 @@ function extractGeminiResponse(raw: string): string | null {
 function extractSherpaOnnxText(raw: string): string | null {
   const tryParse = (value: string): string | null => {
     const trimmed = value.trim();
-    if (!trimmed) return null;
+    if (!trimmed) {
+      return null;
+    }
     const head = trimmed[0];
-    if (head !== "{" && head !== '"') return null;
+    if (head !== "{" && head !== '"') {
+      return null;
+    }
     try {
       const parsed = JSON.parse(trimmed) as unknown;
       if (typeof parsed === "string") {
@@ -212,7 +247,9 @@ function extractSherpaOnnxText(raw: string): string | null {
   };
 
   const direct = tryParse(raw);
-  if (direct) return direct;
+  if (direct) {
+    return direct;
+  }
 
   const lines = raw
     .split("\n")
@@ -220,16 +257,22 @@ function extractSherpaOnnxText(raw: string): string | null {
     .filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const parsed = tryParse(lines[i] ?? "");
-    if (parsed) return parsed;
+    if (parsed) {
+      return parsed;
+    }
   }
   return null;
 }
 
 async function probeGeminiCli(): Promise<boolean> {
   const cached = geminiProbeCache.get("gemini");
-  if (cached) return cached;
+  if (cached) {
+    return cached;
+  }
   const resolved = (async () => {
-    if (!(await hasBinary("gemini"))) return false;
+    if (!(await hasBinary("gemini"))) {
+      return false;
+    }
     try {
       const { stdout } = await runExec("gemini", ["--output-format", "json", "ok"], {
         timeoutMs: 8000,
@@ -244,11 +287,15 @@ async function probeGeminiCli(): Promise<boolean> {
 }
 
 async function resolveLocalWhisperCppEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await hasBinary("whisper-cli"))) return null;
+  if (!(await hasBinary("whisper-cli"))) {
+    return null;
+  }
   const envModel = process.env.WHISPER_CPP_MODEL?.trim();
   const defaultModel = "/opt/homebrew/share/whisper-cpp/for-tests-ggml-tiny.bin";
   const modelPath = envModel && (await fileExists(envModel)) ? envModel : defaultModel;
-  if (!(await fileExists(modelPath))) return null;
+  if (!(await fileExists(modelPath))) {
+    return null;
+  }
   return {
     type: "cli",
     command: "whisper-cli",
@@ -257,7 +304,9 @@ async function resolveLocalWhisperCppEntry(): Promise<MediaUnderstandingModelCon
 }
 
 async function resolveLocalWhisperEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await hasBinary("whisper"))) return null;
+  if (!(await hasBinary("whisper"))) {
+    return null;
+  }
   return {
     type: "cli",
     command: "whisper",
@@ -276,17 +325,29 @@ async function resolveLocalWhisperEntry(): Promise<MediaUnderstandingModelConfig
 }
 
 async function resolveSherpaOnnxEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await hasBinary("sherpa-onnx-offline"))) return null;
+  if (!(await hasBinary("sherpa-onnx-offline"))) {
+    return null;
+  }
   const modelDir = process.env.SHERPA_ONNX_MODEL_DIR?.trim();
-  if (!modelDir) return null;
+  if (!modelDir) {
+    return null;
+  }
   const tokens = path.join(modelDir, "tokens.txt");
   const encoder = path.join(modelDir, "encoder.onnx");
   const decoder = path.join(modelDir, "decoder.onnx");
   const joiner = path.join(modelDir, "joiner.onnx");
-  if (!(await fileExists(tokens))) return null;
-  if (!(await fileExists(encoder))) return null;
-  if (!(await fileExists(decoder))) return null;
-  if (!(await fileExists(joiner))) return null;
+  if (!(await fileExists(tokens))) {
+    return null;
+  }
+  if (!(await fileExists(encoder))) {
+    return null;
+  }
+  if (!(await fileExists(decoder))) {
+    return null;
+  }
+  if (!(await fileExists(joiner))) {
+    return null;
+  }
   return {
     type: "cli",
     command: "sherpa-onnx-offline",
@@ -302,16 +363,22 @@ async function resolveSherpaOnnxEntry(): Promise<MediaUnderstandingModelConfig |
 
 async function resolveLocalAudioEntry(): Promise<MediaUnderstandingModelConfig | null> {
   const sherpa = await resolveSherpaOnnxEntry();
-  if (sherpa) return sherpa;
+  if (sherpa) {
+    return sherpa;
+  }
   const whisperCpp = await resolveLocalWhisperCppEntry();
-  if (whisperCpp) return whisperCpp;
+  if (whisperCpp) {
+    return whisperCpp;
+  }
   return await resolveLocalWhisperEntry();
 }
 
 async function resolveGeminiCliEntry(
   _capability: MediaUnderstandingCapability,
 ): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await probeGeminiCli())) return null;
+  if (!(await probeGeminiCli())) {
+    return null;
+  }
   return {
     type: "cli",
     command: "gemini",
@@ -341,10 +408,18 @@ async function resolveKeyEntry(params: {
     model?: string,
   ): Promise<MediaUnderstandingModelConfig | null> => {
     const provider = getMediaUnderstandingProvider(providerId, providerRegistry);
-    if (!provider) return null;
-    if (capability === "audio" && !provider.transcribeAudio) return null;
-    if (capability === "image" && !provider.describeImage) return null;
-    if (capability === "video" && !provider.describeVideo) return null;
+    if (!provider) {
+      return null;
+    }
+    if (capability === "audio" && !provider.transcribeAudio) {
+      return null;
+    }
+    if (capability === "image" && !provider.describeImage) {
+      return null;
+    }
+    if (capability === "video" && !provider.describeVideo) {
+      return null;
+    }
     try {
       await resolveApiKeyForProvider({ provider: providerId, cfg, agentDir });
       return { type: "provider" as const, provider: providerId, model };
@@ -357,12 +432,16 @@ async function resolveKeyEntry(params: {
     const activeProvider = params.activeModel?.provider?.trim();
     if (activeProvider) {
       const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
-      if (activeEntry) return activeEntry;
+      if (activeEntry) {
+        return activeEntry;
+      }
     }
     for (const providerId of AUTO_IMAGE_KEY_PROVIDERS) {
       const model = DEFAULT_IMAGE_MODELS[providerId];
       const entry = await checkProvider(providerId, model);
-      if (entry) return entry;
+      if (entry) {
+        return entry;
+      }
     }
     return null;
   }
@@ -371,11 +450,15 @@ async function resolveKeyEntry(params: {
     const activeProvider = params.activeModel?.provider?.trim();
     if (activeProvider) {
       const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
-      if (activeEntry) return activeEntry;
+      if (activeEntry) {
+        return activeEntry;
+      }
     }
     for (const providerId of AUTO_VIDEO_KEY_PROVIDERS) {
       const entry = await checkProvider(providerId, undefined);
-      if (entry) return entry;
+      if (entry) {
+        return entry;
+      }
     }
     return null;
   }
@@ -383,11 +466,15 @@ async function resolveKeyEntry(params: {
   const activeProvider = params.activeModel?.provider?.trim();
   if (activeProvider) {
     const activeEntry = await checkProvider(activeProvider, params.activeModel?.model);
-    if (activeEntry) return activeEntry;
+    if (activeEntry) {
+      return activeEntry;
+    }
   }
   for (const providerId of AUTO_AUDIO_KEY_PROVIDERS) {
     const entry = await checkProvider(providerId, undefined);
-    if (entry) return entry;
+    if (entry) {
+      return entry;
+    }
   }
   return null;
 }
@@ -400,15 +487,23 @@ async function resolveAutoEntries(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig[]> {
   const activeEntry = await resolveActiveModelEntry(params);
-  if (activeEntry) return [activeEntry];
+  if (activeEntry) {
+    return [activeEntry];
+  }
   if (params.capability === "audio") {
     const localAudio = await resolveLocalAudioEntry();
-    if (localAudio) return [localAudio];
+    if (localAudio) {
+      return [localAudio];
+    }
   }
   const gemini = await resolveGeminiCliEntry(params.capability);
-  if (gemini) return [gemini];
+  if (gemini) {
+    return [gemini];
+  }
   const keys = await resolveKeyEntry(params);
-  if (keys) return [keys];
+  if (keys) {
+    return [keys];
+  }
   return [];
 }
 
@@ -419,11 +514,17 @@ export async function resolveAutoImageModel(params: {
 }): Promise<ActiveMediaModel | null> {
   const providerRegistry = buildProviderRegistry();
   const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
-    if (!entry || entry.type === "cli") return null;
+    if (!entry || entry.type === "cli") {
+      return null;
+    }
     const provider = entry.provider;
-    if (!provider) return null;
+    if (!provider) {
+      return null;
+    }
     const model = entry.model ?? DEFAULT_IMAGE_MODELS[provider];
-    if (!model) return null;
+    if (!model) {
+      return null;
+    }
     return { provider, model };
   };
   const activeEntry = await resolveActiveModelEntry({
@@ -434,7 +535,9 @@ export async function resolveAutoImageModel(params: {
     activeModel: params.activeModel,
   });
   const resolvedActive = toActive(activeEntry);
-  if (resolvedActive) return resolvedActive;
+  if (resolvedActive) {
+    return resolvedActive;
+  }
   const keyEntry = await resolveKeyEntry({
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -453,14 +556,26 @@ async function resolveActiveModelEntry(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig | null> {
   const activeProviderRaw = params.activeModel?.provider?.trim();
-  if (!activeProviderRaw) return null;
+  if (!activeProviderRaw) {
+    return null;
+  }
   const providerId = normalizeMediaProviderId(activeProviderRaw);
-  if (!providerId) return null;
+  if (!providerId) {
+    return null;
+  }
   const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
-  if (!provider) return null;
-  if (params.capability === "audio" && !provider.transcribeAudio) return null;
-  if (params.capability === "image" && !provider.describeImage) return null;
-  if (params.capability === "video" && !provider.describeVideo) return null;
+  if (!provider) {
+    return null;
+  }
+  if (params.capability === "audio" && !provider.transcribeAudio) {
+    return null;
+  }
+  if (params.capability === "image" && !provider.describeImage) {
+    return null;
+  }
+  if (params.capability === "video" && !provider.describeVideo) {
+    return null;
+  }
   try {
     await resolveApiKeyForProvider({
       provider: providerId,
@@ -479,7 +594,9 @@ async function resolveActiveModelEntry(params: {
 
 function trimOutput(text: string, maxChars?: number): string {
   const trimmed = text.trim();
-  if (!maxChars || trimmed.length <= maxChars) return trimmed;
+  if (!maxChars || trimmed.length <= maxChars) {
+    return trimmed;
+  }
   return trimmed.slice(0, maxChars).trim();
 }
 
@@ -491,7 +608,9 @@ function findArgValue(args: string[], keys: string[]): string | undefined {
   for (let i = 0; i < args.length; i += 1) {
     if (keys.includes(args[i] ?? "")) {
       const value = args[i + 1];
-      if (value) return value;
+      if (value) {
+        return value;
+      }
     }
   }
   return undefined;
@@ -504,17 +623,25 @@ function hasArg(args: string[], keys: string[]): boolean {
 function resolveWhisperOutputPath(args: string[], mediaPath: string): string | null {
   const outputDir = findArgValue(args, ["--output_dir", "-o"]);
   const outputFormat = findArgValue(args, ["--output_format"]);
-  if (!outputDir || !outputFormat) return null;
+  if (!outputDir || !outputFormat) {
+    return null;
+  }
   const formats = outputFormat.split(",").map((value) => value.trim());
-  if (!formats.includes("txt")) return null;
+  if (!formats.includes("txt")) {
+    return null;
+  }
   const base = path.parse(mediaPath).name;
   return path.join(outputDir, `${base}.txt`);
 }
 
 function resolveWhisperCppOutputPath(args: string[]): string | null {
-  if (!hasArg(args, ["-otxt", "--output-txt"])) return null;
+  if (!hasArg(args, ["-otxt", "--output-txt"])) {
+    return null;
+  }
   const outputBase = findArgValue(args, ["-of", "--output-file"]);
-  if (!outputBase) return null;
+  if (!outputBase) {
+    return null;
+  }
   return `${outputBase}.txt`;
 }
 
@@ -534,18 +661,24 @@ async function resolveCliOutput(params: {
   if (fileOutput && (await fileExists(fileOutput))) {
     try {
       const content = await fs.readFile(fileOutput, "utf8");
-      if (content.trim()) return content.trim();
+      if (content.trim()) {
+        return content.trim();
+      }
     } catch {}
   }
 
   if (commandId === "gemini") {
     const response = extractGeminiResponse(params.stdout);
-    if (response) return response;
+    if (response) {
+      return response;
+    }
   }
 
   if (commandId === "sherpa-onnx-offline") {
     const response = extractSherpaOnnxText(params.stdout);
-    if (response) return response;
+    if (response) {
+      return response;
+    }
   }
 
   return params.stdout.trim();
@@ -556,10 +689,14 @@ type ProviderQuery = Record<string, string | number | boolean>;
 function normalizeProviderQuery(
   options?: Record<string, string | number | boolean>,
 ): ProviderQuery | undefined {
-  if (!options) return undefined;
+  if (!options) {
+    return undefined;
+  }
   const query: ProviderQuery = {};
   for (const [key, value] of Object.entries(options)) {
-    if (value === undefined) continue;
+    if (value === undefined) {
+      continue;
+    }
     query[key] = value;
   }
   return Object.keys(query).length > 0 ? query : undefined;
@@ -570,11 +707,19 @@ function buildDeepgramCompatQuery(options?: {
   punctuate?: boolean;
   smartFormat?: boolean;
 }): ProviderQuery | undefined {
-  if (!options) return undefined;
+  if (!options) {
+    return undefined;
+  }
   const query: ProviderQuery = {};
-  if (typeof options.detectLanguage === "boolean") query.detect_language = options.detectLanguage;
-  if (typeof options.punctuate === "boolean") query.punctuate = options.punctuate;
-  if (typeof options.smartFormat === "boolean") query.smart_format = options.smartFormat;
+  if (typeof options.detectLanguage === "boolean") {
+    query.detect_language = options.detectLanguage;
+  }
+  if (typeof options.punctuate === "boolean") {
+    query.punctuate = options.punctuate;
+  }
+  if (typeof options.smartFormat === "boolean") {
+    query.smart_format = options.smartFormat;
+  }
   return Object.keys(query).length > 0 ? query : undefined;
 }
 
@@ -908,7 +1053,9 @@ async function runCliEntry(params: {
       mediaPath,
     });
     const text = trimOutput(resolved, maxChars);
-    if (!text) return null;
+    if (!text) {
+      return null;
+    }
     return {
       kind: capability === "audio" ? "audio.transcription" : `${capability}.description`,
       attachmentIndex: params.attachmentIndex,
@@ -964,8 +1111,12 @@ async function runAttachmentEntries(params: {
             });
       if (result) {
         const decision = buildModelDecision({ entry, entryType, outcome: "success" });
-        if (result.provider) decision.provider = result.provider;
-        if (result.model) decision.model = result.model;
+        if (result.provider) {
+          decision.provider = result.provider;
+        }
+        if (result.model) {
+          decision.model = result.model;
+        }
         attempts.push(decision);
         return { output: result, attempts };
       }
@@ -1129,7 +1280,9 @@ export async function runCapability(params: {
       entries: resolvedEntries,
       config,
     });
-    if (output) outputs.push(output);
+    if (output) {
+      outputs.push(output);
+    }
     attachmentDecisions.push({
       attachmentIndex: attachment.index,
       attempts,

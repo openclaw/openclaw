@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-
 import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAudit } from "../security/audit.js";
@@ -77,7 +76,7 @@ export function registerSecurityCli(program: Command) {
         } else if (
           fixResult.errors.length === 0 &&
           fixResult.changes.length === 0 &&
-          fixResult.actions.every((a) => a.ok === false)
+          fixResult.actions.every((a) => !a.ok)
         ) {
           lines.push(muted("Fixes: no changes applied"));
         } else {
@@ -89,21 +88,27 @@ export function registerSecurityCli(program: Command) {
           for (const action of fixResult.actions) {
             if (action.kind === "chmod") {
               const mode = action.mode.toString(8).padStart(3, "0");
-              if (action.ok) lines.push(muted(`  chmod ${mode} ${shortenHomePath(action.path)}`));
-              else if (action.skipped)
+              if (action.ok) {
+                lines.push(muted(`  chmod ${mode} ${shortenHomePath(action.path)}`));
+              } else if (action.skipped) {
                 lines.push(
                   muted(`  skip chmod ${mode} ${shortenHomePath(action.path)} (${action.skipped})`),
                 );
-              else if (action.error)
+              } else if (action.error) {
                 lines.push(
                   muted(`  chmod ${mode} ${shortenHomePath(action.path)} failed: ${action.error}`),
                 );
+              }
               continue;
             }
             const command = shortenHomeInString(action.command);
-            if (action.ok) lines.push(muted(`  ${command}`));
-            else if (action.skipped) lines.push(muted(`  skip ${command} (${action.skipped})`));
-            else if (action.error) lines.push(muted(`  ${command} failed: ${action.error}`));
+            if (action.ok) {
+              lines.push(muted(`  ${command}`));
+            } else if (action.skipped) {
+              lines.push(muted(`  skip ${command} (${action.skipped})`));
+            } else if (action.error) {
+              lines.push(muted(`  ${command} failed: ${action.error}`));
+            }
           }
           if (fixResult.errors.length > 0) {
             for (const err of fixResult.errors) {
@@ -118,7 +123,9 @@ export function registerSecurityCli(program: Command) {
 
       const render = (sev: "critical" | "warn" | "info") => {
         const list = bySeverity(sev);
-        if (list.length === 0) return;
+        if (list.length === 0) {
+          return;
+        }
         const label =
           sev === "critical"
             ? rich
@@ -136,7 +143,9 @@ export function registerSecurityCli(program: Command) {
         for (const f of list) {
           lines.push(`${theme.muted(f.checkId)} ${f.title}`);
           lines.push(`  ${f.detail}`);
-          if (f.remediation?.trim()) lines.push(`  ${muted(`Fix: ${f.remediation.trim()}`)}`);
+          if (f.remediation?.trim()) {
+            lines.push(`  ${muted(`Fix: ${f.remediation.trim()}`)}`);
+          }
         }
       };
 

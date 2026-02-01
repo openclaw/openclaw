@@ -1,19 +1,19 @@
-import { DEFAULT_CHAT_CHANNEL } from "../channels/registry.js";
 import type { CliDeps } from "../cli/deps.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { listAgentIds } from "../agents/agent-scope.js";
+import { DEFAULT_CHAT_CHANNEL } from "../channels/registry.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
-import { resolveSessionKeyForRequest } from "./agent/session.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
-import { listAgentIds } from "../agents/agent-scope.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
 import { agentCommand } from "./agent.js";
+import { resolveSessionKeyForRequest } from "./agent/session.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -69,19 +69,25 @@ function formatPayloadForLog(payload: {
   mediaUrl?: string | null;
 }) {
   const lines: string[] = [];
-  if (payload.text) lines.push(payload.text.trimEnd());
+  if (payload.text) {
+    lines.push(payload.text.trimEnd());
+  }
   const mediaUrl =
     typeof payload.mediaUrl === "string" && payload.mediaUrl.trim()
       ? payload.mediaUrl.trim()
       : undefined;
   const media = payload.mediaUrls ?? (mediaUrl ? [mediaUrl] : []);
-  for (const url of media) lines.push(`MEDIA:${url}`);
+  for (const url of media) {
+    lines.push(`MEDIA:${url}`);
+  }
   return lines.join("\n").trimEnd();
 }
 
 export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   const body = (opts.message ?? "").trim();
-  if (!body) throw new Error("Message (--message) is required");
+  if (!body) {
+    throw new Error("Message (--message) is required");
+  }
   if (!opts.to && !opts.sessionId && !opts.agent) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
@@ -158,7 +164,9 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 
   for (const payload of payloads) {
     const out = formatPayloadForLog(payload);
-    if (out) runtime.log(out);
+    if (out) {
+      runtime.log(out);
+    }
   }
 
   return response;

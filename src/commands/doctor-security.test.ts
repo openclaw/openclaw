@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -27,10 +26,16 @@ describe("noteSecurityWarnings gateway exposure", () => {
   });
 
   afterEach(() => {
-    if (prevToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    else process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
-    if (prevPassword === undefined) delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    else process.env.OPENCLAW_GATEWAY_PASSWORD = prevPassword;
+    if (prevToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+    }
+    if (prevPassword === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    } else {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = prevPassword;
+    }
   });
 
   const lastMessage = () => String(note.mock.calls.at(-1)?.[0] ?? "");

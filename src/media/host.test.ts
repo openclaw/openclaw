@@ -1,6 +1,5 @@
-import fs from "node:fs/promises";
 import type { Server } from "node:http";
-
+import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

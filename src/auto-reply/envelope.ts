@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
-import type { OpenClawConfig } from "../config/config.js";
 
 export type AgentEnvelopeParams = {
   channel: string;
@@ -77,10 +77,16 @@ function resolveExplicitTimezone(value: string): string | undefined {
 
 function resolveEnvelopeTimezone(options: NormalizedEnvelopeOptions): ResolvedEnvelopeTimezone {
   const trimmed = options.timezone?.trim();
-  if (!trimmed) return { mode: "local" };
+  if (!trimmed) {
+    return { mode: "local" };
+  }
   const lowered = trimmed.toLowerCase();
-  if (lowered === "utc" || lowered === "gmt") return { mode: "utc" };
-  if (lowered === "local" || lowered === "host") return { mode: "local" };
+  if (lowered === "utc" || lowered === "gmt") {
+    return { mode: "utc" };
+  }
+  if (lowered === "local" || lowered === "host") {
+    return { mode: "local" };
+  }
   if (lowered === "user") {
     return { mode: "iana", timeZone: resolveUserTimezone(options.userTimezone) };
   }
@@ -97,7 +103,7 @@ function formatUtcTimestamp(date: Date): string {
   return `${yyyy}-${mm}-${dd}T${hh}:${min}Z`;
 }
 
-function formatZonedTimestamp(date: Date, timeZone?: string): string | undefined {
+export function formatZonedTimestamp(date: Date, timeZone?: string): string | undefined {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone,
     year: "numeric",
@@ -115,10 +121,12 @@ function formatZonedTimestamp(date: Date, timeZone?: string): string | undefined
   const hh = pick("hour");
   const min = pick("minute");
   const tz = [...parts]
-    .reverse()
+    .toReversed()
     .find((part) => part.type === "timeZoneName")
     ?.value?.trim();
-  if (!yyyy || !mm || !dd || !hh || !min) return undefined;
+  if (!yyyy || !mm || !dd || !hh || !min) {
+    return undefined;
+  }
   return `${yyyy}-${mm}-${dd} ${hh}:${min}${tz ? ` ${tz}` : ""}`;
 }
 
@@ -126,29 +134,47 @@ function formatTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
-  if (!ts) return undefined;
+  if (!ts) {
+    return undefined;
+  }
   const resolved = normalizeEnvelopeOptions(options);
-  if (!resolved.includeTimestamp) return undefined;
+  if (!resolved.includeTimestamp) {
+    return undefined;
+  }
   const date = ts instanceof Date ? ts : new Date(ts);
-  if (Number.isNaN(date.getTime())) return undefined;
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
   const zone = resolveEnvelopeTimezone(resolved);
-  if (zone.mode === "utc") return formatUtcTimestamp(date);
-  if (zone.mode === "local") return formatZonedTimestamp(date);
+  if (zone.mode === "utc") {
+    return formatUtcTimestamp(date);
+  }
+  if (zone.mode === "local") {
+    return formatZonedTimestamp(date);
+  }
   return formatZonedTimestamp(date, zone.timeZone);
 }
 
 function formatElapsedTime(currentMs: number, previousMs: number): string | undefined {
   const elapsedMs = currentMs - previousMs;
-  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return undefined;
+  if (!Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    return undefined;
+  }
 
   const seconds = Math.floor(elapsedMs / 1000);
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
 
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
 
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h`;
+  if (hours < 24) {
+    return `${hours}h`;
+  }
 
   const days = Math.floor(hours / 24);
   return `${days}d`;
@@ -173,10 +199,16 @@ export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
   } else if (elapsed) {
     parts.push(`+${elapsed}`);
   }
-  if (params.host?.trim()) parts.push(params.host.trim());
-  if (params.ip?.trim()) parts.push(params.ip.trim());
+  if (params.host?.trim()) {
+    parts.push(params.host.trim());
+  }
+  if (params.ip?.trim()) {
+    parts.push(params.ip.trim());
+  }
   const ts = formatTimestamp(params.timestamp, resolved);
-  if (ts) parts.push(ts);
+  if (ts) {
+    parts.push(ts);
+  }
   const header = `[${parts.join(" ")}]`;
   return `${header} ${params.body}`;
 }
@@ -223,7 +255,9 @@ export function formatInboundFromLabel(params: {
 
   const directLabel = params.directLabel.trim();
   const directId = params.directId?.trim();
-  if (!directId || directId === directLabel) return directLabel;
+  if (!directId || directId === directLabel) {
+    return directLabel;
+  }
   return `${directLabel} id:${directId}`;
 }
 

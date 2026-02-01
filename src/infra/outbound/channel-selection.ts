@@ -1,6 +1,6 @@
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   listDeliverableMessageChannels,
   type DeliverableMessageChannel,
@@ -16,24 +16,34 @@ function isKnownChannel(value: string): boolean {
 }
 
 function isAccountEnabled(account: unknown): boolean {
-  if (!account || typeof account !== "object") return true;
+  if (!account || typeof account !== "object") {
+    return true;
+  }
   const enabled = (account as { enabled?: boolean }).enabled;
   return enabled !== false;
 }
 
 async function isPluginConfigured(plugin: ChannelPlugin, cfg: OpenClawConfig): Promise<boolean> {
   const accountIds = plugin.config.listAccountIds(cfg);
-  if (accountIds.length === 0) return false;
+  if (accountIds.length === 0) {
+    return false;
+  }
 
   for (const accountId of accountIds) {
     const account = plugin.config.resolveAccount(cfg, accountId);
     const enabled = plugin.config.isEnabled
       ? plugin.config.isEnabled(account, cfg)
       : isAccountEnabled(account);
-    if (!enabled) continue;
-    if (!plugin.config.isConfigured) return true;
+    if (!enabled) {
+      continue;
+    }
+    if (!plugin.config.isConfigured) {
+      return true;
+    }
     const configured = await plugin.config.isConfigured(account, cfg);
-    if (configured) return true;
+    if (configured) {
+      return true;
+    }
   }
 
   return false;
@@ -44,9 +54,11 @@ export async function listConfiguredMessageChannels(
 ): Promise<MessageChannelId[]> {
   const channels: MessageChannelId[] = [];
   for (const plugin of listChannelPlugins()) {
-    if (!isKnownChannel(plugin.id)) continue;
+    if (!isKnownChannel(plugin.id)) {
+      continue;
+    }
     if (await isPluginConfigured(plugin, cfg)) {
-      channels.push(plugin.id as MessageChannelId);
+      channels.push(plugin.id);
     }
   }
   return channels;

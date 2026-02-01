@@ -1,3 +1,6 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import {
   resolveDefaultAgentId,
@@ -7,15 +10,12 @@ import {
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { resolvePluginProviders } from "../plugins/providers.js";
-import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import { isRemoteEnvironment } from "./oauth-env.js";
+import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
 import { applyAuthProfileConfig } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
-import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
-import { isRemoteEnvironment } from "./oauth-env.js";
 
 export type PluginProviderAuthChoiceOptions = {
   authChoice: string;
@@ -42,7 +42,9 @@ function resolveProviderMatch(
 
 function pickAuthMethod(provider: ProviderPlugin, rawMethod?: string): ProviderAuthMethod | null {
   const raw = rawMethod?.trim();
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const normalized = raw.toLowerCase();
   return (
     provider.auth.find((method) => method.id.toLowerCase() === normalized) ??
@@ -99,7 +101,9 @@ export async function applyAuthChoicePluginProvider(
   params: ApplyAuthChoiceParams,
   options: PluginProviderAuthChoiceOptions,
 ): Promise<ApplyAuthChoiceResult | null> {
-  if (params.authChoice !== options.authChoice) return null;
+  if (params.authChoice !== options.authChoice) {
+    return null;
+  }
 
   const enableResult = enablePluginInConfig(params.config, options.pluginId);
   let nextConfig = enableResult.config;

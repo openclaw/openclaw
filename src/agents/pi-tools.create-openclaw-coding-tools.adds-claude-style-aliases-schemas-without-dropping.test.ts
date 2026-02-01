@@ -1,7 +1,7 @@
+import type { AgentTool } from "@mariozechner/pi-agent-core";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -220,14 +220,18 @@ describe("createOpenClawCodingTools", () => {
     const keywords = new Set(["anyOf", "oneOf", "allOf"]);
 
     const walk = (value: unknown, path: string, name: string): void => {
-      if (!value) return;
+      if (!value) {
+        return;
+      }
       if (Array.isArray(value)) {
         for (const [index, entry] of value.entries()) {
           walk(entry, `${path}[${index}]`, name);
         }
         return;
       }
-      if (typeof value !== "object") return;
+      if (typeof value !== "object") {
+        return;
+      }
 
       const record = value as Record<string, unknown>;
       for (const [key, entry] of Object.entries(record)) {
@@ -270,14 +274,18 @@ describe("createOpenClawCodingTools", () => {
     const keywords = new Set(["anyOf", "oneOf", "allOf"]);
 
     const walk = (value: unknown, path: string, name: string): void => {
-      if (!value) return;
+      if (!value) {
+        return;
+      }
       if (Array.isArray(value)) {
         for (const [index, entry] of value.entries()) {
           walk(entry, `${path}[${index}]`, name);
         }
         return;
       }
-      if (typeof value !== "object") return;
+      if (typeof value !== "object") {
+        return;
+      }
       const record = value as Record<string, unknown>;
       for (const [key, entry] of Object.entries(record)) {
         const nextPath = path ? `${path}.${key}` : key;
@@ -289,7 +297,9 @@ describe("createOpenClawCodingTools", () => {
     };
 
     for (const tool of tools) {
-      if (!coreTools.has(tool.name)) continue;
+      if (!coreTools.has(tool.name)) {
+        continue;
+      }
       walk(tool.parameters, "", tool.name);
     }
 
@@ -410,7 +420,9 @@ describe("createOpenClawCodingTools", () => {
 
     const findUnsupportedKeywords = (schema: unknown, path: string): string[] => {
       const found: string[] = [];
-      if (!schema || typeof schema !== "object") return found;
+      if (!schema || typeof schema !== "object") {
+        return found;
+      }
       if (Array.isArray(schema)) {
         schema.forEach((item, i) => {
           found.push(...findUnsupportedKeywords(item, `${path}[${i}]`));
@@ -432,7 +444,9 @@ describe("createOpenClawCodingTools", () => {
       }
 
       for (const [key, value] of Object.entries(record)) {
-        if (key === "properties") continue;
+        if (key === "properties") {
+          continue;
+        }
         if (unsupportedKeywords.has(key)) {
           found.push(`${path}.${key}`);
         }

@@ -1,4 +1,3 @@
-import { Type } from "@sinclair/typebox";
 import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -24,7 +23,9 @@ function resolveDefaultDbPath(): string {
   const home = homedir();
   const preferred = join(home, ".openclaw", "memory", "lancedb");
   try {
-    if (fs.existsSync(preferred)) return preferred;
+    if (fs.existsSync(preferred)) {
+      return preferred;
+    }
   } catch {
     // best-effort
   }
@@ -32,7 +33,9 @@ function resolveDefaultDbPath(): string {
   for (const legacy of LEGACY_STATE_DIRS) {
     const candidate = join(home, legacy, "memory", "lancedb");
     try {
-      if (fs.existsSync(candidate)) return candidate;
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
     } catch {
       // best-effort
     }
@@ -48,13 +51,11 @@ const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-large": 3072,
 };
 
-function assertAllowedKeys(
-  value: Record<string, unknown>,
-  allowed: string[],
-  label: string,
-) {
+function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
-  if (unknown.length === 0) return;
+  if (unknown.length === 0) {
+    return;
+  }
   throw new Error(`${label} has unknown keys: ${unknown.join(", ")}`);
 }
 

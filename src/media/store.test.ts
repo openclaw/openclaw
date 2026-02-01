@@ -1,10 +1,9 @@
+import JSZip from "jszip";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 
 describe("media store", () => {
@@ -20,8 +19,11 @@ describe("media store", () => {
 
   const restoreEnv = () => {
     for (const [key, value] of Object.entries(envSnapshot)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   };
 

@@ -8,7 +8,9 @@ const DEFAULT_GOOGLE_AUDIO_PROMPT = "Transcribe the audio.";
 
 function resolveModel(model?: string): string {
   const trimmed = model?.trim();
-  if (!trimmed) return DEFAULT_GOOGLE_AUDIO_MODEL;
+  if (!trimmed) {
+    return DEFAULT_GOOGLE_AUDIO_MODEL;
+  }
   return normalizeGoogleModelId(trimmed);
 }
 

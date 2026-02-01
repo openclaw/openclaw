@@ -27,29 +27,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function shouldAuditChannelConfig(config: DiscordGuildChannelConfig | undefined) {
-  if (!config) return true;
-  if (config.allow === false) return false;
-  if (config.enabled === false) return false;
+  if (!config) {
+    return true;
+  }
+  if (config.allow === false) {
+    return false;
+  }
+  if (config.enabled === false) {
+    return false;
+  }
   return true;
 }
 
 function listConfiguredGuildChannelKeys(
   guilds: Record<string, DiscordGuildEntry> | undefined,
 ): string[] {
-  if (!guilds) return [];
+  if (!guilds) {
+    return [];
+  }
   const ids = new Set<string>();
   for (const entry of Object.values(guilds)) {
-    if (!entry || typeof entry !== "object") continue;
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
     const channelsRaw = (entry as { channels?: unknown }).channels;
-    if (!isRecord(channelsRaw)) continue;
+    if (!isRecord(channelsRaw)) {
+      continue;
+    }
     for (const [key, value] of Object.entries(channelsRaw)) {
       const channelId = String(key).trim();
-      if (!channelId) continue;
-      if (!shouldAuditChannelConfig(value as DiscordGuildChannelConfig | undefined)) continue;
+      if (!channelId) {
+        continue;
+      }
+      if (!shouldAuditChannelConfig(value as DiscordGuildChannelConfig | undefined)) {
+        continue;
+      }
       ids.add(channelId);
     }
   }
-  return [...ids].sort((a, b) => a.localeCompare(b));
+  return [...ids].toSorted((a, b) => a.localeCompare(b));
 }
 
 export function collectDiscordAuditChannelIds(params: {

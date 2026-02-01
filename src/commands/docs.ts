@@ -1,9 +1,9 @@
-import { hasBinary } from "../agents/skills.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { hasBinary } from "../agents/skills.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { formatCliCommand } from "../cli/command-format.js";
 
 const SEARCH_TOOL = "https://docs.openclaw.ai/mcp.SearchOpenClaw";
 const SEARCH_TIMEOUT_MS = 30_000;
@@ -26,8 +26,12 @@ type ToolRunOptions = {
 };
 
 function resolveNodeRunner(): NodeRunner {
-  if (hasBinary("pnpm")) return { cmd: "pnpm", args: ["dlx"] };
-  if (hasBinary("npx")) return { cmd: "npx", args: ["-y"] };
+  if (hasBinary("pnpm")) {
+    return { cmd: "pnpm", args: ["dlx"] };
+  }
+  if (hasBinary("npx")) {
+    return { cmd: "npx", args: ["-y"] };
+  }
   throw new Error("Missing pnpm or npx; install a Node package runner.");
 }
 
@@ -52,15 +56,21 @@ async function runTool(tool: string, toolArgs: string[], options: ToolRunOptions
 
 function extractLine(lines: string[], prefix: string): string | undefined {
   const line = lines.find((value) => value.startsWith(prefix));
-  if (!line) return undefined;
+  if (!line) {
+    return undefined;
+  }
   return line.slice(prefix.length).trim();
 }
 
 function normalizeSnippet(raw: string | undefined, fallback: string): string {
   const base = raw && raw.trim().length > 0 ? raw : fallback;
   const cleaned = base.replace(/\s+/g, " ").trim();
-  if (!cleaned) return "";
-  if (cleaned.length <= DEFAULT_SNIPPET_MAX) return cleaned;
+  if (!cleaned) {
+    return "";
+  }
+  if (cleaned.length <= DEFAULT_SNIPPET_MAX) {
+    return cleaned;
+  }
   return `${cleaned.slice(0, DEFAULT_SNIPPET_MAX - 3)}...`;
 }
 
@@ -84,7 +94,9 @@ function parseSearchOutput(raw: string): DocResult[] {
     const lines = block.split("\n");
     const title = extractLine(lines, "Title:");
     const link = extractLine(lines, "Link:");
-    if (!title || !link) continue;
+    if (!title || !link) {
+      continue;
+    }
     const content = extractLine(lines, "Content:");
     const contentIndex = lines.findIndex((line) => line.startsWith("Content:"));
     const body =

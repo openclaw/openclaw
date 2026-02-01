@@ -1,5 +1,5 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
@@ -24,7 +24,9 @@ type ChannelAccountEntry = {
 
 const formatAccountLabel = (params: { accountId: string; name?: string }) => {
   const base = params.accountId || DEFAULT_ACCOUNT_ID;
-  if (params.name?.trim()) return `${base} (${params.name.trim()})`;
+  if (params.name?.trim()) {
+    return `${base} (${params.name.trim()})`;
+  }
   return base;
 };
 
@@ -39,7 +41,9 @@ const resolveAccountEnabled = (
   if (plugin.config.isEnabled) {
     return plugin.config.isEnabled(account, cfg);
   }
-  if (!account || typeof account !== "object") return true;
+  if (!account || typeof account !== "object") {
+    return true;
+  }
   const enabled = (account as { enabled?: boolean }).enabled;
   return enabled !== false;
 };
@@ -98,8 +102,12 @@ const buildAccountDetails = (params: {
 }): string[] => {
   const details: string[] = [];
   const snapshot = params.entry.snapshot;
-  if (snapshot.enabled === false) details.push("disabled");
-  if (snapshot.dmPolicy) details.push(`dm:${snapshot.dmPolicy}`);
+  if (snapshot.enabled === false) {
+    details.push("disabled");
+  }
+  if (snapshot.dmPolicy) {
+    details.push(`dm:${snapshot.dmPolicy}`);
+  }
   if (snapshot.tokenSource && snapshot.tokenSource !== "none") {
     details.push(`token:${snapshot.tokenSource}`);
   }
@@ -109,10 +117,18 @@ const buildAccountDetails = (params: {
   if (snapshot.appTokenSource && snapshot.appTokenSource !== "none") {
     details.push(`app:${snapshot.appTokenSource}`);
   }
-  if (snapshot.baseUrl) details.push(snapshot.baseUrl);
-  if (snapshot.port != null) details.push(`port:${snapshot.port}`);
-  if (snapshot.cliPath) details.push(`cli:${snapshot.cliPath}`);
-  if (snapshot.dbPath) details.push(`db:${snapshot.dbPath}`);
+  if (snapshot.baseUrl) {
+    details.push(snapshot.baseUrl);
+  }
+  if (snapshot.port != null) {
+    details.push(`port:${snapshot.port}`);
+  }
+  if (snapshot.cliPath) {
+    details.push(`cli:${snapshot.cliPath}`);
+  }
+  if (snapshot.dbPath) {
+    details.push(`db:${snapshot.dbPath}`);
+  }
 
   if (params.includeAllowFrom && snapshot.allowFrom?.length) {
     const formatted = formatAllowFrom({
@@ -174,7 +190,7 @@ export async function buildChannelSummary(
         })
       : undefined;
 
-    const summaryRecord = summary as Record<string, unknown> | undefined;
+    const summaryRecord = summary;
     const linked =
       summaryRecord && typeof summaryRecord.linked === "boolean" ? summaryRecord.linked : null;
     const configured =
@@ -204,7 +220,9 @@ export async function buildChannelSummary(
     const authAgeMs =
       summaryRecord && typeof summaryRecord.authAgeMs === "number" ? summaryRecord.authAgeMs : null;
     const self = summaryRecord?.self as { e164?: string | null } | undefined;
-    if (self?.e164) line += ` ${self.e164}`;
+    if (self?.e164) {
+      line += ` ${self.e164}`;
+    }
     if (authAgeMs != null && authAgeMs >= 0) {
       line += ` auth ${formatAge(authAgeMs)}`;
     }
@@ -236,12 +254,20 @@ export async function buildChannelSummary(
 }
 
 export function formatAge(ms: number): string {
-  if (ms < 0) return "unknown";
+  if (ms < 0) {
+    return "unknown";
+  }
   const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1) {
+    return "just now";
+  }
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
   const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
+  if (hours < 48) {
+    return `${hours}h ago`;
+  }
   const days = Math.round(hours / 24);
   return `${days}d ago`;
 }

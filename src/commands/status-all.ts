@@ -1,11 +1,12 @@
+import type { GatewayService } from "../daemon/service.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
-import { withProgress } from "../cli/progress.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { withProgress } from "../cli/progress.js";
 import { loadConfig, readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
-import type { GatewayService } from "../daemon/service.js";
-import { resolveGatewayService } from "../daemon/service.js";
 import { resolveNodeService } from "../daemon/node-service.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
@@ -14,16 +15,15 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { inspectPortUsage } from "../infra/ports.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
+import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
 import { readTailscaleStatusJson } from "../infra/tailscale.js";
-import { checkUpdateStatus, compareSemverStrings } from "../infra/update-check.js";
 import {
   formatUpdateChannelLabel,
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
 } from "../infra/update-channels.js";
-import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
+import { checkUpdateStatus, compareSemverStrings } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
 import { getAgentLocalStatuses } from "./status-all/agents.js";
@@ -197,7 +197,9 @@ export async function statusAllCommand(
     progress.tick();
 
     const connectionDetailsForReport = (() => {
-      if (!remoteUrlMissing) return connection.message;
+      if (!remoteUrlMissing) {
+        return connection.message;
+      }
       const bindMode = cfg.gateway?.bind ?? "loopback";
       const configPath = snap?.path?.trim() ? snap.path.trim() : "(unknown config path)";
       return [
@@ -220,7 +222,7 @@ export async function statusAllCommand(
 
     progress.setLabel("Querying gateway…");
     const health = gatewayReachable
-      ? await callGateway<unknown>({
+      ? await callGateway({
           method: "health",
           timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
           ...callOverrides,
@@ -228,7 +230,7 @@ export async function statusAllCommand(
       : { error: gatewayProbe?.error ?? "gateway unreachable" };
 
     const channelsStatus = gatewayReachable
-      ? await callGateway<Record<string, unknown>>({
+      ? await callGateway({
           method: "channels.status",
           params: { probe: false, timeoutMs: opts?.timeoutMs ?? 10_000 },
           timeoutMs: Math.min(8000, opts?.timeoutMs ?? 10_000),
@@ -277,31 +279,50 @@ export async function statusAllCommand(
       if (update.installKind === "git" && update.git) {
         const parts: string[] = [];
         parts.push(update.git.branch ? `git ${update.git.branch}` : "git");
-        if (update.git.upstream) parts.push(`↔ ${update.git.upstream}`);
-        if (update.git.dirty) parts.push("dirty");
-        if (update.git.behind != null && update.git.ahead != null) {
-          if (update.git.behind === 0 && update.git.ahead === 0) parts.push("up to date");
-          else if (update.git.behind > 0 && update.git.ahead === 0)
-            parts.push(`behind ${update.git.behind}`);
-          else if (update.git.behind === 0 && update.git.ahead > 0)
-            parts.push(`ahead ${update.git.ahead}`);
-          else parts.push(`diverged (ahead ${update.git.ahead}, behind ${update.git.behind})`);
+        if (update.git.upstream) {
+          parts.push(`↔ ${update.git.upstream}`);
         }
-        if (update.git.fetchOk === false) parts.push("fetch failed");
+        if (update.git.dirty) {
+          parts.push("dirty");
+        }
+        if (update.git.behind != null && update.git.ahead != null) {
+          if (update.git.behind === 0 && update.git.ahead === 0) {
+            parts.push("up to date");
+          } else if (update.git.behind > 0 && update.git.ahead === 0) {
+            parts.push(`behind ${update.git.behind}`);
+          } else if (update.git.behind === 0 && update.git.ahead > 0) {
+            parts.push(`ahead ${update.git.ahead}`);
+          } else {
+            parts.push(`diverged (ahead ${update.git.ahead}, behind ${update.git.behind})`);
+          }
+        }
+        if (update.git.fetchOk === false) {
+          parts.push("fetch failed");
+        }
 
         const latest = update.registry?.latestVersion;
         if (latest) {
           const cmp = compareSemverStrings(VERSION, latest);
-          if (cmp === 0) parts.push(`npm latest ${latest}`);
-          else if (cmp != null && cmp < 0) parts.push(`npm update ${latest}`);
-          else parts.push(`npm latest ${latest} (local newer)`);
+          if (cmp === 0) {
+            parts.push(`npm latest ${latest}`);
+          } else if (cmp != null && cmp < 0) {
+            parts.push(`npm update ${latest}`);
+          } else {
+            parts.push(`npm latest ${latest} (local newer)`);
+          }
         } else if (update.registry?.error) {
           parts.push("npm latest unknown");
         }
 
-        if (update.deps?.status === "ok") parts.push("deps ok");
-        if (update.deps?.status === "stale") parts.push("deps stale");
-        if (update.deps?.status === "missing") parts.push("deps missing");
+        if (update.deps?.status === "ok") {
+          parts.push("deps ok");
+        }
+        if (update.deps?.status === "stale") {
+          parts.push("deps stale");
+        }
+        if (update.deps?.status === "missing") {
+          parts.push("deps missing");
+        }
         return parts.join(" · ");
       }
       const parts: string[] = [];
@@ -309,15 +330,25 @@ export async function statusAllCommand(
       const latest = update.registry?.latestVersion;
       if (latest) {
         const cmp = compareSemverStrings(VERSION, latest);
-        if (cmp === 0) parts.push(`npm latest ${latest}`);
-        else if (cmp != null && cmp < 0) parts.push(`npm update ${latest}`);
-        else parts.push(`npm latest ${latest} (local newer)`);
+        if (cmp === 0) {
+          parts.push(`npm latest ${latest}`);
+        } else if (cmp != null && cmp < 0) {
+          parts.push(`npm update ${latest}`);
+        } else {
+          parts.push(`npm latest ${latest} (local newer)`);
+        }
       } else if (update.registry?.error) {
         parts.push("npm latest unknown");
       }
-      if (update.deps?.status === "ok") parts.push("deps ok");
-      if (update.deps?.status === "stale") parts.push("deps stale");
-      if (update.deps?.status === "missing") parts.push("deps missing");
+      if (update.deps?.status === "ok") {
+        parts.push("deps ok");
+      }
+      if (update.deps?.status === "stale") {
+        parts.push("deps stale");
+      }
+      if (update.deps?.status === "missing") {
+        parts.push("deps missing");
+      }
       return parts.join(" · ");
     })();
 
@@ -379,19 +410,17 @@ export async function statusAllCommand(
       daemon
         ? {
             Item: "Gateway service",
-            Value:
-              daemon.installed === false
-                ? `${daemon.label} not installed`
-                : `${daemon.label} ${daemon.installed ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
+            Value: !daemon.installed
+              ? `${daemon.label} not installed`
+              : `${daemon.label} ${daemon.installed ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
           }
         : { Item: "Gateway service", Value: "unknown" },
       nodeService
         ? {
             Item: "Node service",
-            Value:
-              nodeService.installed === false
-                ? `${nodeService.label} not installed`
-                : `${nodeService.label} ${nodeService.installed ? "installed · " : ""}${nodeService.loadedText}${nodeService.runtime?.status ? ` · ${nodeService.runtime.status}` : ""}${nodeService.runtime?.pid ? ` (pid ${nodeService.runtime.pid})` : ""}`,
+            Value: !nodeService.installed
+              ? `${nodeService.label} not installed`
+              : `${nodeService.label} ${nodeService.installed ? "installed · " : ""}${nodeService.loadedText}${nodeService.runtime?.status ? ` · ${nodeService.runtime.status}` : ""}${nodeService.runtime?.pid ? ` (pid ${nodeService.runtime.pid})` : ""}`,
           }
         : { Item: "Node service", Value: "unknown" },
       {

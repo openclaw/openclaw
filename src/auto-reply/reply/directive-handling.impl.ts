@@ -1,23 +1,24 @@
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
+import type { ReplyPayload } from "../types.js";
+import type { InlineDirectives } from "./directive-handling.parse.js";
+import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
-import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { formatThinkingLevels, formatXHighModelHint, supportsXHighThinking } from "../thinking.js";
-import type { ReplyPayload } from "../types.js";
 import {
   maybeHandleModelDirectiveInfo,
   resolveModelSelectionFromDirective,
 } from "./directive-handling.model.js";
-import type { InlineDirectives } from "./directive-handling.parse.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
   formatDirectiveAck,
@@ -27,7 +28,6 @@ import {
   formatReasoningEvent,
   withOptions,
 } from "./directive-handling.shared.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 
 function resolveExecDefaults(params: {
   cfg: OpenClawConfig;
@@ -54,8 +54,7 @@ function resolveExecDefaults(params: {
       (agentExec?.ask as ExecAsk | undefined) ??
       (globalExec?.ask as ExecAsk | undefined) ??
       "on-miss",
-    node:
-      (params.sessionEntry?.execNode as string | undefined) ?? agentExec?.node ?? globalExec?.node,
+    node: params.sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node,
   };
 }
 
@@ -134,7 +133,9 @@ export async function handleDirectiveOnly(params: {
     allowedModelCatalog,
     resetModelOverride,
   });
-  if (modelInfo) return modelInfo;
+  if (modelInfo) {
+    return modelInfo;
+  }
 
   const modelResolution = resolveModelSelectionFromDirective({
     directives,
@@ -147,7 +148,9 @@ export async function handleDirectiveOnly(params: {
     allowedModelCatalog,
     provider,
   });
-  if (modelResolution.errorText) return { text: modelResolution.errorText };
+  if (modelResolution.errorText) {
+    return { text: modelResolution.errorText };
+  }
   const modelSelection = modelResolution.modelSelection;
   const profileOverride = modelResolution.profileOverride;
 
@@ -268,7 +271,9 @@ export async function handleDirectiveOnly(params: {
     channel: provider,
     sessionEntry,
   });
-  if (queueAck) return queueAck;
+  if (queueAck) {
+    return queueAck;
+  }
 
   if (
     directives.hasThinkDirective &&
@@ -302,8 +307,11 @@ export async function handleDirectiveOnly(params: {
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (directives.hasThinkDirective && directives.thinkLevel) {
-    if (directives.thinkLevel === "off") delete sessionEntry.thinkingLevel;
-    else sessionEntry.thinkingLevel = directives.thinkLevel;
+    if (directives.thinkLevel === "off") {
+      delete sessionEntry.thinkingLevel;
+    } else {
+      sessionEntry.thinkingLevel = directives.thinkLevel;
+    }
   }
   if (shouldDowngradeXHigh) {
     sessionEntry.thinkingLevel = "high";
@@ -312,8 +320,11 @@ export async function handleDirectiveOnly(params: {
     applyVerboseOverride(sessionEntry, directives.verboseLevel);
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {
-    if (directives.reasoningLevel === "off") delete sessionEntry.reasoningLevel;
-    else sessionEntry.reasoningLevel = directives.reasoningLevel;
+    if (directives.reasoningLevel === "off") {
+      delete sessionEntry.reasoningLevel;
+    } else {
+      sessionEntry.reasoningLevel = directives.reasoningLevel;
+    }
     reasoningChanged =
       directives.reasoningLevel !== prevReasoningLevel && directives.reasoningLevel !== undefined;
   }
@@ -352,7 +363,9 @@ export async function handleDirectiveOnly(params: {
     delete sessionEntry.queueCap;
     delete sessionEntry.queueDrop;
   } else if (directives.hasQueueDirective) {
-    if (directives.queueMode) sessionEntry.queueMode = directives.queueMode;
+    if (directives.queueMode) {
+      sessionEntry.queueMode = directives.queueMode;
+    }
     if (typeof directives.debounceMs === "number") {
       sessionEntry.queueDebounceMs = directives.debounceMs;
     }
@@ -428,14 +441,24 @@ export async function handleDirectiveOnly(params: {
           ? formatDirectiveAck("Elevated mode set to full (auto-approve).")
           : formatDirectiveAck("Elevated mode set to ask (approvals may still apply)."),
     );
-    if (shouldHintDirectRuntime) parts.push(formatElevatedRuntimeHint());
+    if (shouldHintDirectRuntime) {
+      parts.push(formatElevatedRuntimeHint());
+    }
   }
   if (directives.hasExecDirective && directives.hasExecOptions) {
     const execParts: string[] = [];
-    if (directives.execHost) execParts.push(`host=${directives.execHost}`);
-    if (directives.execSecurity) execParts.push(`security=${directives.execSecurity}`);
-    if (directives.execAsk) execParts.push(`ask=${directives.execAsk}`);
-    if (directives.execNode) execParts.push(`node=${directives.execNode}`);
+    if (directives.execHost) {
+      execParts.push(`host=${directives.execHost}`);
+    }
+    if (directives.execSecurity) {
+      execParts.push(`security=${directives.execSecurity}`);
+    }
+    if (directives.execAsk) {
+      execParts.push(`ask=${directives.execAsk}`);
+    }
+    if (directives.execNode) {
+      execParts.push(`node=${directives.execNode}`);
+    }
     if (execParts.length > 0) {
       parts.push(formatDirectiveAck(`Exec defaults set (${execParts.join(", ")}).`));
     }
@@ -472,6 +495,8 @@ export async function handleDirectiveOnly(params: {
     parts.push(formatDirectiveAck(`Queue drop set to ${directives.dropPolicy}.`));
   }
   const ack = parts.join(" ").trim();
-  if (!ack && directives.hasStatusDirective) return undefined;
+  if (!ack && directives.hasStatusDirective) {
+    return undefined;
+  }
   return { text: ack || "OK." };
 }

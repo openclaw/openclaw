@@ -23,12 +23,7 @@ export const E164Schema = z
  * - "pairing": Unknown callers can request pairing (future)
  * - "open": Accept all inbound calls (dangerous!)
  */
-export const InboundPolicySchema = z.enum([
-  "disabled",
-  "allowlist",
-  "pairing",
-  "open",
-]);
+export const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"]);
 export type InboundPolicy = z.infer<typeof InboundPolicySchema>;
 
 // -----------------------------------------------------------------------------
@@ -37,33 +32,33 @@ export type InboundPolicy = z.infer<typeof InboundPolicySchema>;
 
 export const TelnyxConfigSchema = z
   .object({
-  /** Telnyx API v2 key */
-  apiKey: z.string().min(1).optional(),
-  /** Telnyx connection ID (from Call Control app) */
-  connectionId: z.string().min(1).optional(),
-  /** Public key for webhook signature verification */
-  publicKey: z.string().min(1).optional(),
-})
+    /** Telnyx API v2 key */
+    apiKey: z.string().min(1).optional(),
+    /** Telnyx connection ID (from Call Control app) */
+    connectionId: z.string().min(1).optional(),
+    /** Public key for webhook signature verification */
+    publicKey: z.string().min(1).optional(),
+  })
   .strict();
 export type TelnyxConfig = z.infer<typeof TelnyxConfigSchema>;
 
 export const TwilioConfigSchema = z
   .object({
-  /** Twilio Account SID */
-  accountSid: z.string().min(1).optional(),
-  /** Twilio Auth Token */
-  authToken: z.string().min(1).optional(),
-})
+    /** Twilio Account SID */
+    accountSid: z.string().min(1).optional(),
+    /** Twilio Auth Token */
+    authToken: z.string().min(1).optional(),
+  })
   .strict();
 export type TwilioConfig = z.infer<typeof TwilioConfigSchema>;
 
 export const PlivoConfigSchema = z
   .object({
-  /** Plivo Auth ID (starts with MA/SA) */
-  authId: z.string().min(1).optional(),
-  /** Plivo Auth Token */
-  authToken: z.string().min(1).optional(),
-})
+    /** Plivo Auth ID (starts with MA/SA) */
+    authId: z.string().min(1).optional(),
+    /** Plivo Auth Token */
+    authToken: z.string().min(1).optional(),
+  })
   .strict();
 export type PlivoConfig = z.infer<typeof PlivoConfigSchema>;
 
@@ -190,9 +185,7 @@ export const VoiceCallTailscaleConfigSchema = z
   })
   .strict()
   .default({ mode: "off", path: "/voice/webhook" });
-export type VoiceCallTailscaleConfig = z.infer<
-  typeof VoiceCallTailscaleConfigSchema
->;
+export type VoiceCallTailscaleConfig = z.infer<typeof VoiceCallTailscaleConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Tunnel Configuration (unified ngrok/tailscale)
@@ -207,9 +200,7 @@ export const VoiceCallTunnelConfigSchema = z
      * - "tailscale-serve": Tailscale serve (private to tailnet)
      * - "tailscale-funnel": Tailscale funnel (public HTTPS)
      */
-    provider: z
-      .enum(["none", "ngrok", "tailscale-serve", "tailscale-funnel"])
-      .default("none"),
+    provider: z.enum(["none", "ngrok", "tailscale-serve", "tailscale-funnel"]).default("none"),
     /** ngrok auth token (optional, enables longer sessions and more features) */
     ngrokAuthToken: z.string().min(1).optional(),
     /** ngrok custom domain (paid feature, e.g., "myapp.ngrok.io") */
@@ -283,9 +274,7 @@ export const VoiceCallStreamingConfigSchema = z
     vadThreshold: 0.5,
     streamPath: "/voice/stream",
   });
-export type VoiceCallStreamingConfig = z.infer<
-  typeof VoiceCallStreamingConfigSchema
->;
+export type VoiceCallStreamingConfig = z.infer<typeof VoiceCallStreamingConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Main Voice Call Configuration
@@ -293,90 +282,90 @@ export type VoiceCallStreamingConfig = z.infer<
 
 export const VoiceCallConfigSchema = z
   .object({
-  /** Enable voice call functionality */
-  enabled: z.boolean().default(false),
+    /** Enable voice call functionality */
+    enabled: z.boolean().default(false),
 
-  /** Active provider (telnyx, twilio, plivo, or mock) */
-  provider: z.enum(["telnyx", "twilio", "plivo", "mock"]).optional(),
+    /** Active provider (telnyx, twilio, plivo, or mock) */
+    provider: z.enum(["telnyx", "twilio", "plivo", "mock"]).optional(),
 
-  /** Telnyx-specific configuration */
-  telnyx: TelnyxConfigSchema.optional(),
+    /** Telnyx-specific configuration */
+    telnyx: TelnyxConfigSchema.optional(),
 
-  /** Twilio-specific configuration */
-  twilio: TwilioConfigSchema.optional(),
+    /** Twilio-specific configuration */
+    twilio: TwilioConfigSchema.optional(),
 
-  /** Plivo-specific configuration */
-  plivo: PlivoConfigSchema.optional(),
+    /** Plivo-specific configuration */
+    plivo: PlivoConfigSchema.optional(),
 
-  /** Phone number to call from (E.164) */
-  fromNumber: E164Schema.optional(),
+    /** Phone number to call from (E.164) */
+    fromNumber: E164Schema.optional(),
 
-  /** Default phone number to call (E.164) */
-  toNumber: E164Schema.optional(),
+    /** Default phone number to call (E.164) */
+    toNumber: E164Schema.optional(),
 
-  /** Inbound call policy */
-  inboundPolicy: InboundPolicySchema.default("disabled"),
+    /** Inbound call policy */
+    inboundPolicy: InboundPolicySchema.default("disabled"),
 
-  /** Allowlist of phone numbers for inbound calls (E.164) */
-  allowFrom: z.array(E164Schema).default([]),
+    /** Allowlist of phone numbers for inbound calls (E.164) */
+    allowFrom: z.array(E164Schema).default([]),
 
-  /** Greeting message for inbound calls */
-  inboundGreeting: z.string().optional(),
+    /** Greeting message for inbound calls */
+    inboundGreeting: z.string().optional(),
 
-  /** Outbound call configuration */
-  outbound: OutboundConfigSchema,
+    /** Outbound call configuration */
+    outbound: OutboundConfigSchema,
 
-  /** Maximum call duration in seconds */
-  maxDurationSeconds: z.number().int().positive().default(300),
+    /** Maximum call duration in seconds */
+    maxDurationSeconds: z.number().int().positive().default(300),
 
-  /** Silence timeout for end-of-speech detection (ms) */
-  silenceTimeoutMs: z.number().int().positive().default(800),
+    /** Silence timeout for end-of-speech detection (ms) */
+    silenceTimeoutMs: z.number().int().positive().default(800),
 
-  /** Timeout for user transcript (ms) */
-  transcriptTimeoutMs: z.number().int().positive().default(180000),
+    /** Timeout for user transcript (ms) */
+    transcriptTimeoutMs: z.number().int().positive().default(180000),
 
-  /** Ring timeout for outbound calls (ms) */
-  ringTimeoutMs: z.number().int().positive().default(30000),
+    /** Ring timeout for outbound calls (ms) */
+    ringTimeoutMs: z.number().int().positive().default(30000),
 
-  /** Maximum concurrent calls */
-  maxConcurrentCalls: z.number().int().positive().default(1),
+    /** Maximum concurrent calls */
+    maxConcurrentCalls: z.number().int().positive().default(1),
 
-  /** Webhook server configuration */
-  serve: VoiceCallServeConfigSchema,
+    /** Webhook server configuration */
+    serve: VoiceCallServeConfigSchema,
 
-  /** Tailscale exposure configuration (legacy, prefer tunnel config) */
-  tailscale: VoiceCallTailscaleConfigSchema,
+    /** Tailscale exposure configuration (legacy, prefer tunnel config) */
+    tailscale: VoiceCallTailscaleConfigSchema,
 
-  /** Tunnel configuration (unified ngrok/tailscale) */
-  tunnel: VoiceCallTunnelConfigSchema,
+    /** Tunnel configuration (unified ngrok/tailscale) */
+    tunnel: VoiceCallTunnelConfigSchema,
 
-  /** Real-time audio streaming configuration */
-  streaming: VoiceCallStreamingConfigSchema,
+    /** Real-time audio streaming configuration */
+    streaming: VoiceCallStreamingConfigSchema,
 
-  /** Public webhook URL override (if set, bypasses tunnel auto-detection) */
-  publicUrl: z.string().url().optional(),
+    /** Public webhook URL override (if set, bypasses tunnel auto-detection) */
+    publicUrl: z.string().url().optional(),
 
-  /** Skip webhook signature verification (development only, NOT for production) */
-  skipSignatureVerification: z.boolean().default(false),
+    /** Skip webhook signature verification (development only, NOT for production) */
+    skipSignatureVerification: z.boolean().default(false),
 
-  /** STT configuration */
-  stt: SttConfigSchema,
+    /** STT configuration */
+    stt: SttConfigSchema,
 
-  /** TTS override (deep-merges with core messages.tts) */
-  tts: TtsConfigSchema,
+    /** TTS override (deep-merges with core messages.tts) */
+    tts: TtsConfigSchema,
 
-  /** Store path for call logs */
-  store: z.string().optional(),
+    /** Store path for call logs */
+    store: z.string().optional(),
 
-  /** Model for generating voice responses (e.g., "anthropic/claude-sonnet-4", "openai/gpt-4o") */
-  responseModel: z.string().default("openai/gpt-4o-mini"),
+    /** Model for generating voice responses (e.g., "anthropic/claude-sonnet-4", "openai/gpt-4o") */
+    responseModel: z.string().default("openai/gpt-4o-mini"),
 
-  /** System prompt for voice responses */
-  responseSystemPrompt: z.string().optional(),
+    /** System prompt for voice responses */
+    responseSystemPrompt: z.string().optional(),
 
-  /** Timeout for response generation in ms (default 30s) */
-  responseTimeoutMs: z.number().int().positive().default(30000),
-})
+    /** Timeout for response generation in ms (default 30s) */
+    responseTimeoutMs: z.number().int().positive().default(30000),
+  })
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
@@ -395,30 +384,23 @@ export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig
   // Telnyx
   if (resolved.provider === "telnyx") {
     resolved.telnyx = resolved.telnyx ?? {};
-    resolved.telnyx.apiKey =
-      resolved.telnyx.apiKey ?? process.env.TELNYX_API_KEY;
-    resolved.telnyx.connectionId =
-      resolved.telnyx.connectionId ?? process.env.TELNYX_CONNECTION_ID;
-    resolved.telnyx.publicKey =
-      resolved.telnyx.publicKey ?? process.env.TELNYX_PUBLIC_KEY;
+    resolved.telnyx.apiKey = resolved.telnyx.apiKey ?? process.env.TELNYX_API_KEY;
+    resolved.telnyx.connectionId = resolved.telnyx.connectionId ?? process.env.TELNYX_CONNECTION_ID;
+    resolved.telnyx.publicKey = resolved.telnyx.publicKey ?? process.env.TELNYX_PUBLIC_KEY;
   }
 
   // Twilio
   if (resolved.provider === "twilio") {
     resolved.twilio = resolved.twilio ?? {};
-    resolved.twilio.accountSid =
-      resolved.twilio.accountSid ?? process.env.TWILIO_ACCOUNT_SID;
-    resolved.twilio.authToken =
-      resolved.twilio.authToken ?? process.env.TWILIO_AUTH_TOKEN;
+    resolved.twilio.accountSid = resolved.twilio.accountSid ?? process.env.TWILIO_ACCOUNT_SID;
+    resolved.twilio.authToken = resolved.twilio.authToken ?? process.env.TWILIO_AUTH_TOKEN;
   }
 
   // Plivo
   if (resolved.provider === "plivo") {
     resolved.plivo = resolved.plivo ?? {};
-    resolved.plivo.authId =
-      resolved.plivo.authId ?? process.env.PLIVO_AUTH_ID;
-    resolved.plivo.authToken =
-      resolved.plivo.authToken ?? process.env.PLIVO_AUTH_TOKEN;
+    resolved.plivo.authId = resolved.plivo.authId ?? process.env.PLIVO_AUTH_ID;
+    resolved.plivo.authToken = resolved.plivo.authToken ?? process.env.PLIVO_AUTH_TOKEN;
   }
 
   // Tunnel Config
@@ -427,13 +409,9 @@ export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig
     allowNgrokFreeTierLoopbackBypass: false,
   };
   resolved.tunnel.allowNgrokFreeTierLoopbackBypass =
-    resolved.tunnel.allowNgrokFreeTierLoopbackBypass ||
-    resolved.tunnel.allowNgrokFreeTier ||
-    false;
-  resolved.tunnel.ngrokAuthToken =
-    resolved.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN;
-  resolved.tunnel.ngrokDomain =
-    resolved.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN;
+    resolved.tunnel.allowNgrokFreeTierLoopbackBypass || resolved.tunnel.allowNgrokFreeTier || false;
+  resolved.tunnel.ngrokAuthToken = resolved.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN;
+  resolved.tunnel.ngrokDomain = resolved.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN;
 
   return resolved;
 }

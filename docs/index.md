@@ -2,19 +2,27 @@
 summary: "Top-level overview of OpenClaw, features, and purpose"
 read_when:
   - Introducing OpenClaw to newcomers
+title: "OpenClaw"
 ---
+
 # OpenClaw 🦞
 
-> *"EXFOLIATE! EXFOLIATE!"* — A space lobster, probably
-
+> _"EXFOLIATE! EXFOLIATE!"_ — A space lobster, probably
 
 <p align="center">
-    <picture>
-        <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
-        <img src="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text.png" alt="OpenClaw" width="500">
-    </picture>
+    <img
+        src="/assets/openclaw-logo-text-dark.png"
+        alt="OpenClaw"
+        width="500"
+        class="dark:hidden"
+    />
+    <img
+        src="/assets/openclaw-logo-text.png"
+        alt="OpenClaw"
+        width="500"
+        class="hidden dark:block"
+    />
 </p>
-
 
 <p align="center">
   <strong>Any OS + WhatsApp/Telegram/Discord/iMessage gateway for AI agents (Pi).</strong><br />
@@ -167,10 +175,10 @@ Example:
   channels: {
     whatsapp: {
       allowFrom: ["+15555550123"],
-      groups: { "*": { requireMention: true } }
-    }
+      groups: { "*": { requireMention: true } },
+    },
   },
-  messages: { groupChat: { mentionPatterns: ["@openclaw"] } }
+  messages: { groupChat: { mentionPatterns: ["@openclaw"] } },
 }
 ```
 
@@ -178,7 +186,7 @@ Example:
 
 - Start here:
   - [Docs hubs (all pages linked)](/start/hubs)
-  - [Help](/help) ← *common fixes + troubleshooting*
+  - [Help](/help) ← _common fixes + troubleshooting_
   - [Configuration](/gateway/configuration)
   - [Configuration examples](/gateway/configuration-examples)
   - [Slash commands](/tools/slash-commands)
@@ -227,12 +235,12 @@ Example:
 
 ---
 
-*"We're all just playing with our own prompts."* — an AI, probably high on tokens
+_"We're all just playing with our own prompts."_ — an AI, probably high on tokens
 
 ## Credits
 
-- **Peter Steinberger** ([@steipete](https://twitter.com/steipete)) — Creator, lobster whisperer
-- **Mario Zechner** ([@badlogicc](https://twitter.com/badlogicgames)) — Pi creator, security pen-tester
+- **Peter Steinberger** ([@steipete](https://x.com/steipete)) — Creator, lobster whisperer
+- **Mario Zechner** ([@badlogicc](https://x.com/badlogicgames)) — Pi creator, security pen-tester
 - **Clawd** — The space lobster who demanded a better name
 
 ## Core Contributors
@@ -246,4 +254,4 @@ MIT — Free as a lobster in the ocean 🦞
 
 ---
 
-*"We're all just playing with our own prompts."* — An AI, probably high on tokens
+_"We're all just playing with our own prompts."_ — An AI, probably high on tokens

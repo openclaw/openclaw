@@ -1,7 +1,7 @@
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;
@@ -16,14 +16,18 @@ const debugEmbeddings = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_MEMORY_EMBED
 const log = createSubsystemLogger("memory/embeddings");
 
 const debugLog = (message: string, meta?: Record<string, unknown>) => {
-  if (!debugEmbeddings) return;
+  if (!debugEmbeddings) {
+    return;
+  }
   const suffix = meta ? ` ${JSON.stringify(meta)}` : "";
   log.raw(`${message}${suffix}`);
 };
 
 function resolveRemoteApiKey(remoteApiKey?: string): string | undefined {
   const trimmed = remoteApiKey?.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   if (trimmed === "GOOGLE_API_KEY" || trimmed === "GEMINI_API_KEY") {
     return process.env[trimmed]?.trim();
   }
@@ -32,17 +36,25 @@ function resolveRemoteApiKey(remoteApiKey?: string): string | undefined {
 
 function normalizeGeminiModel(model: string): string {
   const trimmed = model.trim();
-  if (!trimmed) return DEFAULT_GEMINI_EMBEDDING_MODEL;
+  if (!trimmed) {
+    return DEFAULT_GEMINI_EMBEDDING_MODEL;
+  }
   const withoutPrefix = trimmed.replace(/^models\//, "");
-  if (withoutPrefix.startsWith("gemini/")) return withoutPrefix.slice("gemini/".length);
-  if (withoutPrefix.startsWith("google/")) return withoutPrefix.slice("google/".length);
+  if (withoutPrefix.startsWith("gemini/")) {
+    return withoutPrefix.slice("gemini/".length);
+  }
+  if (withoutPrefix.startsWith("google/")) {
+    return withoutPrefix.slice("google/".length);
+  }
   return withoutPrefix;
 }
 
 function normalizeGeminiBaseUrl(raw: string): string {
   const trimmed = raw.replace(/\/+$/, "");
   const openAiIndex = trimmed.indexOf("/openai");
-  if (openAiIndex > -1) return trimmed.slice(0, openAiIndex);
+  if (openAiIndex > -1) {
+    return trimmed.slice(0, openAiIndex);
+  }
   return trimmed;
 }
 
@@ -59,7 +71,9 @@ export async function createGeminiEmbeddingProvider(
   const batchUrl = `${baseUrl}/${client.modelPath}:batchEmbedContents`;
 
   const embedQuery = async (text: string): Promise<number[]> => {
-    if (!text.trim()) return [];
+    if (!text.trim()) {
+      return [];
+    }
     const res = await fetch(embedUrl, {
       method: "POST",
       headers: client.headers,
@@ -77,7 +91,9 @@ export async function createGeminiEmbeddingProvider(
   };
 
   const embedBatch = async (texts: string[]): Promise<number[][]> => {
-    if (texts.length === 0) return [];
+    if (texts.length === 0) {
+      return [];
+    }
     const requests = texts.map((text) => ({
       model: client.modelPath,
       content: { parts: [{ text }] },

@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
-
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 
@@ -42,6 +40,7 @@ describe("discord processDiscordMessage inbound contract", () => {
       historyLimit: 0,
       mediaMaxBytes: 1024,
       textLimit: 4000,
+      sender: { label: "user" },
       replyToMode: "off",
       ackReactionScope: "direct",
       groupPolicy: "open",
