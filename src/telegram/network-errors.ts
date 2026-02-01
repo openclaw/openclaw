@@ -36,6 +36,7 @@ const RECOVERABLE_MESSAGE_SNIPPETS = [
   "client network socket disconnected",
   "socket hang up",
   "getaddrinfo",
+  "timed out",
 ];
 
 function normalizeCode(code?: string): string {

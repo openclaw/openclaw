@@ -39,4 +39,10 @@ describe("isRecoverableTelegramNetworkError", () => {
   it("returns false for unrelated errors", () => {
     expect(isRecoverableTelegramNetworkError(new Error("invalid token"))).toBe(false);
   });
+
+  it("detects grammY getUpdates timeout errors", () => {
+    // grammY throws this message when long-polling times out
+    const err = new Error("Request to 'getUpdates' timed out after 500 seconds");
+    expect(isRecoverableTelegramNetworkError(err, { context: "polling" })).toBe(true);
+  });
 });
