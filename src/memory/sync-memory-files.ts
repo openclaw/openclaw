@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { SqliteDatabase } from "./sqlite.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildFileEntry, listMemoryFiles, type MemoryFileEntry } from "./internal.js";
 
@@ -14,7 +14,7 @@ type ProgressState = {
 export async function syncMemoryFiles(params: {
   workspaceDir: string;
   extraPaths?: string[];
-  db: DatabaseSync;
+  db: SqliteDatabase;
   needsFullReindex: boolean;
   progress?: ProgressState;
   batchEnabled: boolean;

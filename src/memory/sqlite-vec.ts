@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
+import { isBunRuntime, type SqliteDatabase } from "./sqlite.js";
 
 export async function loadSqliteVecExtension(params: {
-  db: DatabaseSync;
+  db: SqliteDatabase;
   extensionPath?: string;
 }): Promise<{ ok: boolean; extensionPath?: string; error?: string }> {
   try {
@@ -9,7 +9,12 @@ export async function loadSqliteVecExtension(params: {
     const resolvedPath = params.extensionPath?.trim() ? params.extensionPath.trim() : undefined;
     const extensionPath = resolvedPath ?? sqliteVec.getLoadablePath();
 
-    params.db.enableLoadExtension(true);
+    // Node's DatabaseSync requires enabling extension loading first
+    // Bun's Database doesn't have this method and allows extensions by default
+    if (!isBunRuntime && "enableLoadExtension" in params.db) {
+      params.db.enableLoadExtension(true);
+    }
+
     if (resolvedPath) {
       params.db.loadExtension(extensionPath);
     } else {

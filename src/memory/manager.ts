@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import chokidar, { type FSWatcher } from "chokidar";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
@@ -6,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SqliteDatabase } from "./sqlite.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -43,7 +43,7 @@ import {
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
-import { requireNodeSqlite } from "./sqlite.js";
+import { isBunRuntime, requireSqlite } from "./sqlite.js";
 
 type MemorySource = "memory" | "sessions";
 
@@ -137,7 +137,7 @@ export class MemoryIndexManager {
   private batchFailureLastError?: string;
   private batchFailureLastProvider?: string;
   private batchFailureLock: Promise<void> = Promise.resolve();
-  private db: DatabaseSync;
+  private db: SqliteDatabase;
   private readonly sources: Set<MemorySource>;
   private providerKey: string;
   private readonly cache: { enabled: boolean; maxEntries?: number };
@@ -737,19 +737,24 @@ export class MemoryIndexManager {
     return { sql: ` AND ${column} IN (${placeholders})`, params: sources };
   }
 
-  private openDatabase(): DatabaseSync {
+  private openDatabase(): SqliteDatabase {
     const dbPath = resolveUserPath(this.settings.store.path);
     return this.openDatabaseAtPath(dbPath);
   }
 
-  private openDatabaseAtPath(dbPath: string): DatabaseSync {
+  private openDatabaseAtPath(dbPath: string): SqliteDatabase {
     const dir = path.dirname(dbPath);
     ensureDir(dir);
-    const { DatabaseSync } = requireNodeSqlite();
+    const sqlite = requireSqlite();
+    if (isBunRuntime) {
+      const { Database } = sqlite as typeof import("bun:sqlite");
+      return new Database(dbPath);
+    }
+    const { DatabaseSync } = sqlite as typeof import("node:sqlite");
     return new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
   }
 
-  private seedEmbeddingCache(sourceDb: DatabaseSync): void {
+  private seedEmbeddingCache(sourceDb: SqliteDatabase): void {
     if (!this.cache.enabled) {
       return;
     }
