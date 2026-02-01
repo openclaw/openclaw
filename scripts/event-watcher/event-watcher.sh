@@ -25,7 +25,7 @@ set -euo pipefail
 # Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${EVENT_WATCHER_CONFIG:-$HOME/.clawdbot/event-watcher.json5}"
-STATE_FILE="$HOME/.clawdbot/event-watcher-state.json"
+STATE_FILE=""  # Set from config in init_config()
 LOG_FILE="$HOME/.clawdbot/logs/event-watcher.log"
 PID_FILE="$HOME/.clawdbot/event-watcher.pid"
 
@@ -45,6 +45,7 @@ done
 POLL_INTERVAL=30
 WAKE_MODE="now"
 DEBUG="${EVENT_WATCHER_DEBUG:-0}"
+DRY_RUN="${EVENT_WATCHER_DRY_RUN:-0}"
 
 # ============================================================================
 # Utilities
@@ -126,6 +127,11 @@ wake_clawdbot() {
     local message="$1"
     local mode="${2:-$WAKE_MODE}"
     
+    if [ "$DRY_RUN" = "1" ]; then
+        log "[DRY RUN] Would wake Clawdbot: $message"
+        return 0
+    fi
+    
     log "Waking Clawdbot: $message"
     
     if command -v clawdbot &>/dev/null; then
@@ -185,10 +191,13 @@ watcher_gmail() {
     fi
     
     local result
-    result=$("$PYTHON_CMD" "$gmail_script" "$creds_file" 2>/dev/null || echo '{"error":"failed"}')
+    result=$("$PYTHON_CMD" "$gmail_script" "$creds_file" 2>/dev/null || echo '{"error":"script failed"}')
     
-    if [ "$result" = "error" ]; then
-        debug "Gmail check failed"
+    # Check for error in JSON response
+    local error_msg
+    error_msg=$(echo "$result" | jq -r '.error // empty' 2>/dev/null)
+    if [ -n "$error_msg" ]; then
+        debug "Gmail check failed: $error_msg"
         return
     fi
     
@@ -279,27 +288,35 @@ watcher_template() {
 run_all_watchers() {
     debug "Running all watchers..."
     
-    watcher_gmail
-    watcher_calendar
-    watcher_template
+    # Run each watcher in a subshell to prevent one failure from killing the loop
+    # This overrides set -e behavior for individual watchers
+    (watcher_gmail) || debug "Gmail watcher returned non-zero"
+    (watcher_calendar) || debug "Calendar watcher returned non-zero"
+    (watcher_template) || debug "Template watcher returned non-zero"
     
     # Add calls to your custom watchers here:
-    # watcher_my_custom_source
+    # (watcher_my_custom_source) || debug "Custom watcher returned non-zero"
     
     debug "Watcher cycle complete"
 }
 
+# Initialize config values
+init_config() {
+    STATE_FILE=$(read_config '.stateFile' "$HOME/.clawdbot/event-watcher-state.json")
+    STATE_FILE="${STATE_FILE/#\~/$HOME}"
+    POLL_INTERVAL=$(read_config '.pollIntervalSeconds' '30')
+    WAKE_MODE=$(read_config '.wakeMode' 'now')
+}
+
 run_once() {
+    init_config
     log "Event Watcher running (single check)"
     run_all_watchers
 }
 
 run_loop() {
+    init_config
     log "Event Watcher starting (continuous mode, interval: ${POLL_INTERVAL}s)"
-    
-    # Load config
-    POLL_INTERVAL=$(read_config '.pollIntervalSeconds' '30')
-    WAKE_MODE=$(read_config '.wakeMode' 'now')
     
     while true; do
         run_all_watchers
@@ -351,15 +368,17 @@ Commands:
   --daemon    Start as background daemon
   --stop      Stop the daemon
   --status    Show daemon status
+  --dry-run   Check sources but don't actually wake (safe testing)
   --help      Show this help
 
 Configuration: $CONFIG_FILE
-State file:    $STATE_FILE
+State file:    (from config, default: ~/.clawdbot/event-watcher-state.json)
 Log file:      $LOG_FILE
 
 Environment:
-  EVENT_WATCHER_CONFIG  Override config file path
-  EVENT_WATCHER_DEBUG   Enable debug output (1 = on)
+  EVENT_WATCHER_CONFIG   Override config file path
+  EVENT_WATCHER_DEBUG    Enable debug output (1 = on)
+  EVENT_WATCHER_DRY_RUN  Don't actually wake, just log (1 = on)
 
 EOF
 }
@@ -397,6 +416,11 @@ main() {
             ;;
         --status)
             show_status
+            ;;
+        --dry-run)
+            DRY_RUN=1
+            DEBUG=1
+            run_once
             ;;
         --help|-h)
             show_help
