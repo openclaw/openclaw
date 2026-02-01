@@ -157,11 +157,12 @@
 }
 
 .model-picker-model--selected {
-  background: rgba(var(--accent-rgb), 0.15);
+  background: var(--accent-subtle);
 }
 
 .model-picker-model--selected:hover {
-  background: rgba(var(--accent-rgb), 0.2);
+  background: var(--accent-subtle);
+  filter: brightness(1.1);
 }
 
 .model-picker-model-main {

@@ -55,19 +55,8 @@ import {
 } from "./controllers/exec-approvals";
 import { loadLogs } from "./controllers/logs";
 import { loadNodes } from "./controllers/nodes";
-import { loadNodes } from "./controllers/nodes";
-import { loadPresence } from "./controllers/presence";
 import { loadPresence } from "./controllers/presence";
 import { deleteSession, loadSessions, patchSession } from "./controllers/sessions";
-import { deleteSession, loadSessions, patchSession } from "./controllers/sessions";
-import {
-  installSkill,
-  loadSkills,
-  saveSkillApiKey,
-  updateSkillEdit,
-  updateSkillEnabled,
-  type SkillMessage,
-} from "./controllers/skills";
 import {
   installSkill,
   loadSkills,

@@ -31,7 +31,7 @@ function formatProviderName(provider: string): string {
     openai: "OpenAI",
     anthropic: "Anthropic",
     google: "Google",
-    "google-antigravity": "Google Antigravity",
+    "google-antigravity": "Google AG",
     "github-copilot": "GitHub Copilot",
     deepseek: "DeepSeek",
     groq: "Groq",
@@ -88,25 +88,30 @@ export function renderModelPickerDialog(props: ModelPickerDialogProps) {
     }
   };
 
-  // Use document-level listener for Escape key (more reliable than element-level)
-  const handleKeyDown = (e: KeyboardEvent) => {
+  // Use a single cleanup function that removes listener on ANY close
+  const escapeHandler = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
       props.onClose();
-      e.stopPropagation();
     }
   };
 
-  // Attach document listener when dialog is rendered
-  // Note: Lit will re-render on close, so we set up listener each time dialog opens
+  // Add listener immediately
+  document.addEventListener("keydown", escapeHandler);
+
+  // Wrap onClose to ensure cleanup happens on any close method
+  const handleCloseWithCleanup = () => {
+    document.removeEventListener("keydown", escapeHandler);
+    props.onClose();
+  };
+
+  const handleBackdropClickWithCleanup = (e: Event) => {
+    if ((e.target as HTMLElement).classList.contains("model-picker-backdrop")) {
+      handleCloseWithCleanup();
+    }
+  };
+
+  // Focus dialog on next tick for accessibility
   setTimeout(() => {
-    const cleanup = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        props.onClose();
-        document.removeEventListener("keydown", cleanup);
-      }
-    };
-    document.addEventListener("keydown", cleanup);
-    // Focus the dialog for accessibility
     const dialog = document.querySelector(".model-picker-dialog") as HTMLElement;
     dialog?.focus();
   }, 0);
@@ -114,7 +119,7 @@ export function renderModelPickerDialog(props: ModelPickerDialogProps) {
   return html`
     <div
       class="model-picker-backdrop"
-      @click=${handleBackdropClick}
+      @click=${handleBackdropClickWithCleanup}
     >
       <div
         class="model-picker-dialog"
@@ -127,7 +132,7 @@ export function renderModelPickerDialog(props: ModelPickerDialogProps) {
           <h2 id="model-picker-title" class="model-picker-title">Select Model</h2>
           <button
             class="model-picker-close"
-            @click=${props.onClose}
+            @click=${handleCloseWithCleanup}
             aria-label="Close"
             type="button"
           >
@@ -157,7 +162,7 @@ export function renderModelPickerDialog(props: ModelPickerDialogProps) {
                         class="model-picker-model ${isSelected ? "model-picker-model--selected" : ""}"
                         @click=${() => {
                           props.onSelect(model.id);
-                          props.onClose();
+                          handleCloseWithCleanup();
                         }}
                         type="button"
                       >

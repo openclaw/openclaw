@@ -160,10 +160,28 @@ describe("message-normalizer", () => {
       expect(isToolResultMessage({ role: "TOOL_RESULT" })).toBe(true);
     });
 
-    it("returns false for other roles", () => {
+    it("returns true for tool and function roles", () => {
+      expect(isToolResultMessage({ role: "tool" })).toBe(true);
+      expect(isToolResultMessage({ role: "function" })).toBe(true);
+    });
+
+    it("returns true for messages with toolCallId", () => {
+      expect(isToolResultMessage({ role: "user", toolCallId: "call_123" })).toBe(true);
+      expect(isToolResultMessage({ role: "user", tool_call_id: "call_456" })).toBe(true);
+    });
+
+    it("returns true for messages with tool_result content", () => {
+      expect(
+        isToolResultMessage({ role: "user", content: [{ type: "tool_result", text: "output" }] }),
+      ).toBe(true);
+      expect(
+        isToolResultMessage({ role: "user", content: [{ type: "toolresult", text: "output" }] }),
+      ).toBe(true);
+    });
+
+    it("returns false for other roles without tool markers", () => {
       expect(isToolResultMessage({ role: "user" })).toBe(false);
       expect(isToolResultMessage({ role: "assistant" })).toBe(false);
-      expect(isToolResultMessage({ role: "tool" })).toBe(false);
     });
 
     it("returns false for missing role", () => {
@@ -174,6 +192,11 @@ describe("message-normalizer", () => {
     it("returns false for non-string role", () => {
       expect(isToolResultMessage({ role: 123 })).toBe(false);
       expect(isToolResultMessage({ role: null })).toBe(false);
+    });
+
+    it("returns false for null/undefined input", () => {
+      expect(isToolResultMessage(null)).toBe(false);
+      expect(isToolResultMessage(undefined)).toBe(false);
     });
   });
 });
