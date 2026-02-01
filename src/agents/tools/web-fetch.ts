@@ -1,16 +1,22 @@
+import type { Dispatcher } from "undici";
 import { Type } from "@sinclair/typebox";
-
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostname,
   SsrFBlockedError,
 } from "../../infra/net/ssrf.js";
-import type { Dispatcher } from "undici";
 import { stringEnum } from "../schema/typebox.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import {
+  extractReadableContent,
+  htmlToMarkdown,
+  markdownToText,
+  truncateText,
+  type ExtractMode,
+} from "./web-fetch-utils.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -23,13 +29,6 @@ import {
   withTimeout,
   writeCache,
 } from "./web-shared.js";
-import {
-  extractReadableContent,
-  htmlToMarkdown,
-  markdownToText,
-  truncateText,
-  type ExtractMode,
-} from "./web-fetch-utils.js";
 
 export { extractReadableContent } from "./web-fetch-utils.js";
 
@@ -80,24 +79,34 @@ type FirecrawlFetchConfig =
 
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   const fetch = cfg?.tools?.web?.fetch;
-  if (!fetch || typeof fetch !== "object") return undefined;
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
   return fetch as WebFetchConfig;
 }
 
 function resolveFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
-  if (typeof params.fetch?.enabled === "boolean") return params.fetch.enabled;
+  if (typeof params.fetch?.enabled === "boolean") {
+    return params.fetch.enabled;
+  }
   return true;
 }
 
 function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
-  if (typeof fetch?.readability === "boolean") return fetch.readability;
+  if (typeof fetch?.readability === "boolean") {
+    return fetch.readability;
+  }
   return true;
 }
 
 function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
-  if (!fetch || typeof fetch !== "object") return undefined;
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
   const firecrawl = "firecrawl" in fetch ? fetch.firecrawl : undefined;
-  if (!firecrawl || typeof firecrawl !== "object") return undefined;
+  if (!firecrawl || typeof firecrawl !== "object") {
+    return undefined;
+  }
   return firecrawl as FirecrawlFetchConfig;
 }
 
@@ -114,7 +123,9 @@ function resolveFirecrawlEnabled(params: {
   firecrawl?: FirecrawlFetchConfig;
   apiKey?: string;
 }): boolean {
-  if (typeof params.firecrawl?.enabled === "boolean") return params.firecrawl.enabled;
+  if (typeof params.firecrawl?.enabled === "boolean") {
+    return params.firecrawl.enabled;
+  }
   return Boolean(params.apiKey);
 }
 
@@ -127,7 +138,9 @@ function resolveFirecrawlBaseUrl(firecrawl?: FirecrawlFetchConfig): string {
 }
 
 function resolveFirecrawlOnlyMainContent(firecrawl?: FirecrawlFetchConfig): boolean {
-  if (typeof firecrawl?.onlyMainContent === "boolean") return firecrawl.onlyMainContent;
+  if (typeof firecrawl?.onlyMainContent === "boolean") {
+    return firecrawl.onlyMainContent;
+  }
   return true;
 }
 
@@ -136,14 +149,18 @@ function resolveFirecrawlMaxAgeMs(firecrawl?: FirecrawlFetchConfig): number | un
     firecrawl && "maxAgeMs" in firecrawl && typeof firecrawl.maxAgeMs === "number"
       ? firecrawl.maxAgeMs
       : undefined;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) return undefined;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return undefined;
+  }
   const parsed = Math.max(0, Math.floor(raw));
   return parsed > 0 ? parsed : undefined;
 }
 
 function resolveFirecrawlMaxAgeMsOrDefault(firecrawl?: FirecrawlFetchConfig): number {
   const resolved = resolveFirecrawlMaxAgeMs(firecrawl);
-  if (typeof resolved === "number") return resolved;
+  if (typeof resolved === "number") {
+    return resolved;
+  }
   return DEFAULT_FIRECRAWL_MAX_AGE_MS;
 }
 
@@ -159,7 +176,9 @@ function resolveMaxRedirects(value: unknown, fallback: number): number {
 
 function looksLikeHtml(value: string): boolean {
   const trimmed = value.trimStart();
-  if (!trimmed) return false;
+  if (!trimmed) {
+    return false;
+  }
   const head = trimmed.slice(0, 256).toLowerCase();
   return head.startsWith("<!doctype html") || head.startsWith("<html");
 }
@@ -243,7 +262,9 @@ function formatWebFetchErrorDetail(params: {
   maxChars: number;
 }): string {
   const { detail, contentType, maxChars } = params;
-  if (!detail) return "";
+  if (!detail) {
+    return "";
+  }
   let text = detail;
   const contentTypeLower = contentType?.toLowerCase();
   if (contentTypeLower?.includes("text/html") || looksLikeHtml(detail)) {
@@ -351,7 +372,9 @@ async function runWebFetch(params: {
     `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
-  if (cached) return { ...cached.value, cached: true };
+  if (cached) {
+    return { ...cached.value, cached: true };
+  }
 
   let parsedUrl: URL;
   try {
@@ -535,7 +558,9 @@ async function tryFirecrawlFallback(params: {
   firecrawlStoreInCache: boolean;
   firecrawlTimeoutSeconds: number;
 }): Promise<{ text: string; title?: string } | null> {
-  if (!params.firecrawlEnabled || !params.firecrawlApiKey) return null;
+  if (!params.firecrawlEnabled || !params.firecrawlApiKey) {
+    return null;
+  }
   try {
     const firecrawl = await fetchFirecrawlContent({
       url: params.url,
@@ -556,7 +581,9 @@ async function tryFirecrawlFallback(params: {
 
 function resolveFirecrawlEndpoint(baseUrl: string): string {
   const trimmed = baseUrl.trim();
-  if (!trimmed) return `${DEFAULT_FIRECRAWL_BASE_URL}/v2/scrape`;
+  if (!trimmed) {
+    return `${DEFAULT_FIRECRAWL_BASE_URL}/v2/scrape`;
+  }
   try {
     const url = new URL(trimmed);
     if (url.pathname && url.pathname !== "/") {
@@ -574,7 +601,9 @@ export function createWebFetchTool(options?: {
   sandboxed?: boolean;
 }): AnyAgentTool | null {
   const fetch = resolveFetchConfig(options?.config);
-  if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) return null;
+  if (!resolveFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
+    return null;
+  }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
   const firecrawl = resolveFirecrawlConfig(fetch);
   const firecrawlApiKey = resolveFirecrawlApiKey(firecrawl);

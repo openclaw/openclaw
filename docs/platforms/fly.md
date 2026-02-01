@@ -78,13 +78,13 @@ primary_region = "iad"
 
 **Key settings:**
 
-| Setting | Why |
-|---------|-----|
-| `--bind lan` | Binds to `0.0.0.0` so Fly's proxy can reach the gateway |
-| `--allow-unconfigured` | Starts without a config file (you'll create one after) |
-| `internal_port = 3000` | Must match `--port 3000` (or `OPENCLAW_GATEWAY_PORT`) for Fly health checks |
-| `memory = "2048mb"` | 512MB is too small; 2GB recommended |
-| `OPENCLAW_STATE_DIR = "/data"` | Persists state on the volume |
+| Setting                        | Why                                                                         |
+| ------------------------------ | --------------------------------------------------------------------------- |
+| `--bind lan`                   | Binds to `0.0.0.0` so Fly's proxy can reach the gateway                     |
+| `--allow-unconfigured`         | Starts without a config file (you'll create one after)                      |
+| `internal_port = 3000`         | Must match `--port 3000` (or `OPENCLAW_GATEWAY_PORT`) for Fly health checks |
+| `memory = "2048mb"`            | 512MB is too small; 2GB recommended                                         |
+| `OPENCLAW_STATE_DIR = "/data"` | Persists state on the volume                                                |
 
 ## 3) Set secrets
 
@@ -104,6 +104,7 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 ```
 
 **Notes:**
+
 - Non-loopback binds (`--bind lan`) require `OPENCLAW_GATEWAY_TOKEN` for security.
 - Treat these tokens like passwords.
 - **Prefer env vars over config file** for all API keys and tokens. This keeps secrets out of `openclaw.json` where they could be accidentally exposed or logged.
@@ -117,12 +118,14 @@ fly deploy
 First deploy builds the Docker image (~2-3 minutes). Subsequent deploys are faster.
 
 After deployment, verify:
+
 ```bash
 fly status
 fly logs
 ```
 
 You should see:
+
 ```
 [gateway] listening on ws://0.0.0.0:3000 (PID xxx)
 [discord] logged in to discord as xxx
@@ -137,6 +140,7 @@ fly ssh console
 ```
 
 Create the config directory and file:
+
 ```bash
 mkdir -p /data
 cat > /data/openclaw.json << 'EOF'
@@ -194,12 +198,14 @@ EOF
 **Note:** With `OPENCLAW_STATE_DIR=/data`, the config path is `/data/openclaw.json`.
 
 **Note:** The Discord token can come from either:
+
 - Environment variable: `DISCORD_BOT_TOKEN` (recommended for secrets)
 - Config file: `channels.discord.token`
 
 If using env var, no need to add token to config. The gateway reads `DISCORD_BOT_TOKEN` automatically.
 
 Restart to apply:
+
 ```bash
 exit
 fly machine restart <machine-id>
@@ -210,6 +216,7 @@ fly machine restart <machine-id>
 ### Control UI
 
 Open in browser:
+
 ```bash
 fly open
 ```
@@ -250,12 +257,14 @@ Fly can't reach the gateway on the configured port.
 Container keeps restarting or getting killed. Signs: `SIGABRT`, `v8::internal::Runtime_AllocateInYoungGeneration`, or silent restarts.
 
 **Fix:** Increase memory in `fly.toml`:
+
 ```toml
 [[vm]]
   memory = "2048mb"
 ```
 
 Or update an existing machine:
+
 ```bash
 fly machine update <machine-id> --vm-memory 2048 -y
 ```
@@ -269,6 +278,7 @@ Gateway refuses to start with "already running" errors.
 This happens when the container restarts but the PID lock file persists on the volume.
 
 **Fix:** Delete the lock file:
+
 ```bash
 fly ssh console --command "rm -f /data/gateway.*.lock"
 fly machine restart <machine-id>
@@ -281,6 +291,7 @@ The lock file is at `/data/gateway.*.lock` (not in a subdirectory).
 If using `--allow-unconfigured`, the gateway creates a minimal config. Your custom config at `/data/openclaw.json` should be read on restart.
 
 Verify the config exists:
+
 ```bash
 fly ssh console --command "cat /data/openclaw.json"
 ```
@@ -299,6 +310,7 @@ fly sftp shell
 ```
 
 **Note:** `fly sftp` may fail if the file already exists. Delete first:
+
 ```bash
 fly ssh console --command "rm /data/openclaw.json"
 ```
@@ -381,6 +393,7 @@ fly ips allocate-v6 --private -a my-openclaw
 ```
 
 After this, `fly ips list` should show only a `private` type IP:
+
 ```
 VERSION  IP                   TYPE             REGION
 v6       fdaa:x:x:x:x::x      private          global
@@ -391,6 +404,7 @@ v6       fdaa:x:x:x:x::x      private          global
 Since there's no public URL, use one of these methods:
 
 **Option 1: Local proxy (simplest)**
+
 ```bash
 # Forward local port 3000 to the app
 fly proxy 3000:3000 -a my-openclaw
@@ -399,6 +413,7 @@ fly proxy 3000:3000 -a my-openclaw
 ```
 
 **Option 2: WireGuard VPN**
+
 ```bash
 # Create WireGuard config (one-time)
 fly wireguard create
@@ -408,6 +423,7 @@ fly wireguard create
 ```
 
 **Option 3: SSH only**
+
 ```bash
 fly ssh console -a my-openclaw
 ```
@@ -421,6 +437,7 @@ If you need webhook callbacks (Twilio, Telnyx, etc.) without public exposure:
 3. **Outbound-only** - Some providers (Twilio) work fine for outbound calls without webhooks
 
 Example voice-call config with ngrok:
+
 ```json
 {
   "plugins": {
@@ -441,12 +458,12 @@ The ngrok tunnel runs inside the container and provides a public webhook URL wit
 
 ### Security benefits
 
-| Aspect | Public | Private |
-|--------|--------|---------|
-| Internet scanners | Discoverable | Hidden |
-| Direct attacks | Possible | Blocked |
-| Control UI access | Browser | Proxy/VPN |
-| Webhook delivery | Direct | Via tunnel |
+| Aspect            | Public       | Private    |
+| ----------------- | ------------ | ---------- |
+| Internet scanners | Discoverable | Hidden     |
+| Direct attacks    | Possible     | Blocked    |
+| Control UI access | Browser      | Proxy/VPN  |
+| Webhook delivery  | Direct       | Via tunnel |
 
 ## Notes
 
@@ -459,6 +476,7 @@ The ngrok tunnel runs inside the container and provides a public webhook URL wit
 ## Cost
 
 With the recommended config (`shared-cpu-2x`, 2GB RAM):
+
 - ~$10-15/month depending on usage
 - Free tier includes some allowance
 

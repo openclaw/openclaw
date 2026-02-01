@@ -1,3 +1,6 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { ThinkLevel } from "./directives.js";
+import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -9,12 +12,9 @@ import {
   resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
-import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
-import type { ThinkLevel } from "./directives.js";
 
 export type ModelDirectiveSelection = {
   provider: string;
@@ -48,11 +48,17 @@ const FUZZY_VARIANT_TOKENS = [
 ];
 
 function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): number | null {
-  if (a === b) return 0;
-  if (!a || !b) return null;
+  if (a === b) {
+    return 0;
+  }
+  if (!a || !b) {
+    return null;
+  }
   const aLen = a.length;
   const bLen = b.length;
-  if (Math.abs(aLen - bLen) > maxDistance) return null;
+  if (Math.abs(aLen - bLen) > maxDistance) {
+    return null;
+  }
 
   // Standard DP with early exit. O(maxDistance * minLen) in common cases.
   const prev = Array.from({ length: bLen + 1 }, (_, idx) => idx);
@@ -66,16 +72,24 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
     for (let j = 1; j <= bLen; j++) {
       const cost = aChar === b.charCodeAt(j - 1) ? 0 : 1;
       curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
-      if (curr[j] < rowMin) rowMin = curr[j];
+      if (curr[j] < rowMin) {
+        rowMin = curr[j];
+      }
     }
 
-    if (rowMin > maxDistance) return null;
+    if (rowMin > maxDistance) {
+      return null;
+    }
 
-    for (let j = 0; j <= bLen; j++) prev[j] = curr[j] ?? 0;
+    for (let j = 0; j <= bLen; j++) {
+      prev[j] = curr[j] ?? 0;
+    }
   }
 
   const dist = prev[bLen] ?? null;
-  if (dist == null || dist > maxDistance) return null;
+  if (dist == null || dist > maxDistance) {
+    return null;
+  }
   return dist;
 }
 
@@ -90,7 +104,9 @@ function resolveModelOverrideFromEntry(entry?: SessionEntry): {
   model: string;
 } | null {
   const model = entry?.modelOverride?.trim();
-  if (!model) return null;
+  if (!model) {
+    return null;
+  }
   const provider = entry?.providerOverride?.trim() || undefined;
   return { provider, model };
 }
@@ -100,9 +116,13 @@ function resolveParentSessionKeyCandidate(params: {
   parentSessionKey?: string;
 }): string | null {
   const explicit = params.parentSessionKey?.trim();
-  if (explicit && explicit !== params.sessionKey) return explicit;
+  if (explicit && explicit !== params.sessionKey) {
+    return explicit;
+  }
   const derived = resolveThreadParentSessionKey(params.sessionKey);
-  if (derived && derived !== params.sessionKey) return derived;
+  if (derived && derived !== params.sessionKey) {
+    return derived;
+  }
   return null;
 }
 
@@ -113,15 +133,21 @@ function resolveStoredModelOverride(params: {
   parentSessionKey?: string;
 }): StoredModelOverride | null {
   const direct = resolveModelOverrideFromEntry(params.sessionEntry);
-  if (direct) return { ...direct, source: "session" };
+  if (direct) {
+    return { ...direct, source: "session" };
+  }
   const parentKey = resolveParentSessionKeyCandidate({
     sessionKey: params.sessionKey,
     parentSessionKey: params.parentSessionKey,
   });
-  if (!parentKey || !params.sessionStore) return null;
+  if (!parentKey || !params.sessionStore) {
+    return null;
+  }
   const parentEntry = params.sessionStore[parentKey];
   const parentOverride = resolveModelOverrideFromEntry(parentEntry);
-  if (!parentOverride) return null;
+  if (!parentOverride) {
+    return null;
+  }
   return { ...parentOverride, source: "parent" };
 }
 
@@ -152,11 +178,19 @@ function scoreFuzzyMatch(params: {
     value: string,
     weights: { exact: number; starts: number; includes: number },
   ) => {
-    if (!fragment) return 0;
+    if (!fragment) {
+      return 0;
+    }
     let score = 0;
-    if (value === fragment) score = Math.max(score, weights.exact);
-    if (value.startsWith(fragment)) score = Math.max(score, weights.starts);
-    if (value.includes(fragment)) score = Math.max(score, weights.includes);
+    if (value === fragment) {
+      score = Math.max(score, weights.exact);
+    }
+    if (value.startsWith(fragment)) {
+      score = Math.max(score, weights.starts);
+    }
+    if (value.includes(fragment)) {
+      score = Math.max(score, weights.includes);
+    }
     return score;
   };
 
@@ -200,13 +234,19 @@ function scoreFuzzyMatch(params: {
   if (fragmentVariants.length === 0 && variantCount > 0) {
     score -= variantCount * 30;
   } else if (fragmentVariants.length > 0) {
-    if (variantMatchCount > 0) score += variantMatchCount * 40;
-    if (variantMatchCount === 0) score -= 20;
+    if (variantMatchCount > 0) {
+      score += variantMatchCount * 40;
+    }
+    if (variantMatchCount === 0) {
+      score -= 20;
+    }
   }
 
   const defaultProvider = normalizeProviderId(params.defaultProvider);
   const isDefault = provider === defaultProvider && model === params.defaultModel;
-  if (isDefault) score += 20;
+  if (isDefault) {
+    score += 20;
+  }
 
   return {
     score,
@@ -331,7 +371,9 @@ export async function createModelSelectionState(params: {
 
   let defaultThinkingLevel: ThinkLevel | undefined;
   const resolveDefaultThinkingLevel = async () => {
-    if (defaultThinkingLevel) return defaultThinkingLevel;
+    if (defaultThinkingLevel) {
+      return defaultThinkingLevel;
+    }
     let catalogForThinking = modelCatalog ?? allowedModelCatalog;
     if (!catalogForThinking || catalogForThinking.length === 0) {
       modelCatalog = await loadModelCatalog({ config: cfg });
@@ -389,17 +431,23 @@ export function resolveModelDirectiveSelection(params: {
     fragment: string;
   }): { selection?: ModelDirectiveSelection; error?: string } => {
     const fragment = params.fragment.trim().toLowerCase();
-    if (!fragment) return {};
+    if (!fragment) {
+      return {};
+    }
 
     const providerFilter = params.provider ? normalizeProviderId(params.provider) : undefined;
 
     const candidates: Array<{ provider: string; model: string }> = [];
     for (const key of allowedModelKeys) {
       const slash = key.indexOf("/");
-      if (slash <= 0) continue;
+      if (slash <= 0) {
+        continue;
+      }
       const provider = normalizeProviderId(key.slice(0, slash));
       const model = key.slice(slash + 1);
-      if (providerFilter && provider !== providerFilter) continue;
+      if (providerFilter && provider !== providerFilter) {
+        continue;
+      }
       candidates.push({ provider, model });
     }
 
@@ -407,7 +455,9 @@ export function resolveModelDirectiveSelection(params: {
     if (!params.provider) {
       const aliasMatches: Array<{ provider: string; model: string }> = [];
       for (const [aliasKey, entry] of aliasIndex.byAlias.entries()) {
-        if (!aliasKey.includes(fragment)) continue;
+        if (!aliasKey.includes(fragment)) {
+          continue;
+        }
         aliasMatches.push({
           provider: entry.ref.provider,
           model: entry.ref.model,
@@ -415,14 +465,18 @@ export function resolveModelDirectiveSelection(params: {
       }
       for (const match of aliasMatches) {
         const key = modelKey(match.provider, match.model);
-        if (!allowedModelKeys.has(key)) continue;
+        if (!allowedModelKeys.has(key)) {
+          continue;
+        }
         if (!candidates.some((c) => c.provider === match.provider && c.model === match.model)) {
           candidates.push(match);
         }
       }
     }
 
-    if (candidates.length === 0) return {};
+    if (candidates.length === 0) {
+      return {};
+    }
 
     const scored = candidates
       .map((candidate) => {
@@ -434,24 +488,37 @@ export function resolveModelDirectiveSelection(params: {
           defaultProvider,
           defaultModel,
         });
-        return { candidate, ...details };
+        return Object.assign({ candidate }, details);
       })
-      .sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
-        if (a.variantMatchCount !== b.variantMatchCount)
+      .toSorted((a, b) => {
+        if (b.score !== a.score) {
+          return b.score - a.score;
+        }
+        if (a.isDefault !== b.isDefault) {
+          return a.isDefault ? -1 : 1;
+        }
+        if (a.variantMatchCount !== b.variantMatchCount) {
           return b.variantMatchCount - a.variantMatchCount;
-        if (a.variantCount !== b.variantCount) return a.variantCount - b.variantCount;
-        if (a.modelLength !== b.modelLength) return a.modelLength - b.modelLength;
+        }
+        if (a.variantCount !== b.variantCount) {
+          return a.variantCount - b.variantCount;
+        }
+        if (a.modelLength !== b.modelLength) {
+          return a.modelLength - b.modelLength;
+        }
         return a.key.localeCompare(b.key);
       });
 
     const bestScored = scored[0];
     const best = bestScored?.candidate;
-    if (!best || !bestScored) return {};
+    if (!best || !bestScored) {
+      return {};
+    }
 
     const minScore = providerFilter ? 90 : 120;
-    if (bestScored.score < minScore) return {};
+    if (bestScored.score < minScore) {
+      return {};
+    }
 
     return { selection: buildSelection(best.provider, best.model) };
   };
@@ -464,7 +531,9 @@ export function resolveModelDirectiveSelection(params: {
 
   if (!resolved) {
     const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
-    if (fuzzy.selection || fuzzy.error) return fuzzy;
+    if (fuzzy.selection || fuzzy.error) {
+      return fuzzy;
+    }
     return {
       error: `Unrecognized model "${rawTrimmed}". Use /models to list providers, or /models <provider> to list models.`,
     };
@@ -489,12 +558,16 @@ export function resolveModelDirectiveSelection(params: {
     const provider = normalizeProviderId(rawTrimmed.slice(0, slash).trim());
     const fragment = rawTrimmed.slice(slash + 1).trim();
     const fuzzy = resolveFuzzy({ provider, fragment });
-    if (fuzzy.selection || fuzzy.error) return fuzzy;
+    if (fuzzy.selection || fuzzy.error) {
+      return fuzzy;
+    }
   }
 
   // Otherwise, try fuzzy matching across allowlisted models.
   const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
-  if (fuzzy.selection || fuzzy.error) return fuzzy;
+  if (fuzzy.selection || fuzzy.error) {
+    return fuzzy;
+  }
 
   return {
     error: `Model "${resolved.ref.provider}/${resolved.ref.model}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,

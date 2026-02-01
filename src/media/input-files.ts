@@ -1,10 +1,10 @@
-import { logWarn } from "../logger.js";
+import type { Dispatcher } from "undici";
 import {
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostname,
 } from "../infra/net/ssrf.js";
-import type { Dispatcher } from "undici";
+import { logWarn } from "../logger.js";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -117,7 +117,9 @@ function isRedirectStatus(status: number): boolean {
 }
 
 export function normalizeMimeType(value: string | undefined): string | undefined {
-  if (!value) return undefined;
+  if (!value) {
+    return undefined;
+  }
   const [raw] = value.split(";");
   const normalized = raw?.trim().toLowerCase();
   return normalized || undefined;
@@ -127,7 +129,9 @@ export function parseContentType(value: string | undefined): {
   mimeType?: string;
   charset?: string;
 } {
-  if (!value) return {};
+  if (!value) {
+    return {};
+  }
   const parts = value.split(";").map((part) => part.trim());
   const mimeType = normalizeMimeType(parts[0]);
   const charset = parts
@@ -226,7 +230,9 @@ function decodeTextContent(buffer: Buffer, charset: string | undefined): string 
 }
 
 function clampText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
+  if (text.length <= maxChars) {
+    return text;
+  }
   return text.slice(0, maxChars);
 }
 
@@ -250,7 +256,9 @@ async function extractPdfContent(params: {
       .map((item) => ("str" in item ? String(item.str) : ""))
       .filter(Boolean)
       .join(" ");
-    if (pageText) textParts.push(pageText);
+    if (pageText) {
+      textParts.push(pageText);
+    }
   }
 
   const text = textParts.join("\n\n");

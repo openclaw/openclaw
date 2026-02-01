@@ -3,7 +3,9 @@ summary: "Repository scripts: purpose, scope, and safety notes"
 read_when:
   - Running scripts from the repo
   - Adding or changing scripts under ./scripts
+title: "Scripts"
 ---
+
 # Scripts
 
 The `scripts/` directory contains helper scripts for local workflows and ops tasks.

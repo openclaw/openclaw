@@ -1,9 +1,9 @@
 import { DisconnectReason } from "@whiskeysockets/baileys";
+import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { danger, info, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { createWaSocket, formatError, logoutWeb, waitForWaConnection } from "./session.js";
 
@@ -60,11 +60,11 @@ export async function loginWeb(
           `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${formatCliCommand("openclaw channels login")} and scan the QR again.`,
         ),
       );
-      throw new Error("Session logged out; cache cleared. Re-run login.");
+      throw new Error("Session logged out; cache cleared. Re-run login.", { cause: err });
     }
     const formatted = formatError(err);
     console.error(danger(`WhatsApp Web connection ended before fully opening. ${formatted}`));
-    throw new Error(formatted);
+    throw new Error(formatted, { cause: err });
   } finally {
     // Let Baileys flush any final events before closing the socket.
     setTimeout(() => {

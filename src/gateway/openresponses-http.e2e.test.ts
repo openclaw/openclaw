@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -73,7 +72,9 @@ function parseSseEvents(text: string): Array<{ event?: string; data: string }> {
 }
 
 async function ensureResponseConsumed(res: Response) {
-  if (res.bodyUsed) return;
+  if (res.bodyUsed) {
+    return;
+  }
   try {
     await res.text();
   } catch {
@@ -493,7 +494,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       const typeText = await resTypeMatch.text();
       const typeEvents = parseSseEvents(typeText);
       for (const event of typeEvents) {
-        if (event.data === "[DONE]") continue;
+        if (event.data === "[DONE]") {
+          continue;
+        }
         const parsed = JSON.parse(event.data) as { type?: string };
         expect(event.event).toBe(parsed.type);
       }

@@ -18,7 +18,9 @@ const memoryCorePlugin = {
           config: ctx.config,
           agentSessionKey: ctx.sessionKey,
         });
-        if (!memorySearchTool || !memoryGetTool) return null;
+        if (!memorySearchTool || !memoryGetTool) {
+          return null;
+        }
         return [memorySearchTool, memoryGetTool];
       },
       { names: ["memory_search", "memory_get"] },

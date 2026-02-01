@@ -1,9 +1,9 @@
-import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AuthProfileStore } from "./types.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { listProfilesForProvider } from "./profiles.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
-import type { AuthProfileStore } from "./types.js";
 
 export function formatAuthDoctorHint(params: {
   cfg?: OpenClawConfig;
@@ -12,7 +12,9 @@ export function formatAuthDoctorHint(params: {
   profileId?: string;
 }): string {
   const providerKey = normalizeProviderId(params.provider);
-  if (providerKey !== "anthropic") return "";
+  if (providerKey !== "anthropic") {
+    return "";
+  }
 
   const legacyProfileId = params.profileId ?? "anthropic:default";
   const suggested = suggestOAuthProfileIdForLegacyDefault({
@@ -21,7 +23,9 @@ export function formatAuthDoctorHint(params: {
     provider: providerKey,
     legacyProfileId,
   });
-  if (!suggested || suggested === legacyProfileId) return "";
+  if (!suggested || suggested === legacyProfileId) {
+    return "";
+  }
 
   const storeOauthProfiles = listProfilesForProvider(params.store, providerKey)
     .filter((id) => params.store.profiles[id]?.type === "oauth")

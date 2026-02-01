@@ -1,9 +1,7 @@
+import type { Page } from "playwright-core";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import type { Page } from "playwright-core";
-
 import {
   ensurePageState,
   getPageForTargetId,
@@ -31,7 +29,9 @@ function createPageDownloadWaiter(page: Page, timeoutMs: number) {
   let handler: ((download: unknown) => void) | undefined;
 
   const cleanup = () => {
-    if (timer) clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
     timer = undefined;
     if (handler) {
       page.off("download", handler as never);
@@ -41,7 +41,9 @@ function createPageDownloadWaiter(page: Page, timeoutMs: number) {
 
   const promise = new Promise<unknown>((resolve, reject) => {
     handler = (download: unknown) => {
-      if (done) return;
+      if (done) {
+        return;
+      }
       done = true;
       cleanup();
       resolve(download);
@@ -49,7 +51,9 @@ function createPageDownloadWaiter(page: Page, timeoutMs: number) {
 
     page.on("download", handler as never);
     timer = setTimeout(() => {
-      if (done) return;
+      if (done) {
+        return;
+      }
       done = true;
       cleanup();
       reject(new Error("Timeout waiting for download"));
@@ -59,7 +63,9 @@ function createPageDownloadWaiter(page: Page, timeoutMs: number) {
   return {
     promise,
     cancel: () => {
-      if (done) return;
+      if (done) {
+        return;
+      }
       done = true;
       cleanup();
     },
@@ -82,7 +88,9 @@ export async function armFileUploadViaPlaywright(opts: {
   void page
     .waitForEvent("filechooser", { timeout })
     .then(async (fileChooser) => {
-      if (state.armIdUpload !== armId) return;
+      if (state.armIdUpload !== armId) {
+        return;
+      }
       if (!opts.paths?.length) {
         // Playwright removed `FileChooser.cancel()`; best-effort close the chooser instead.
         try {
@@ -130,9 +138,14 @@ export async function armDialogViaPlaywright(opts: {
   void page
     .waitForEvent("dialog", { timeout })
     .then(async (dialog) => {
-      if (state.armIdDialog !== armId) return;
-      if (opts.accept) await dialog.accept(opts.promptText);
-      else await dialog.dismiss();
+      if (state.armIdDialog !== armId) {
+        return;
+      }
+      if (opts.accept) {
+        await dialog.accept(opts.promptText);
+      } else {
+        await dialog.dismiss();
+      }
     })
     .catch(() => {
       // Ignore timeouts; the dialog may never appear.
@@ -199,7 +212,9 @@ export async function downloadViaPlaywright(opts: {
 
   const ref = requireRef(opts.ref);
   const outPath = String(opts.path ?? "").trim();
-  if (!outPath) throw new Error("path is required");
+  if (!outPath) {
+    throw new Error("path is required");
+  }
 
   state.armIdDownload = bumpDownloadArmId();
   const armId = state.armIdDownload;

@@ -1,6 +1,5 @@
 import { type AddressInfo, createServer } from "node:net";
 import { fetch as realFetch } from "undici";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
 
@@ -73,7 +72,9 @@ function makeProc(pid = 123) {
       return undefined;
     },
     emitExit: () => {
-      for (const cb of handlers.get("exit") ?? []) cb(0);
+      for (const cb of handlers.get("exit") ?? []) {
+        cb(0);
+      }
     },
     kill: () => {
       return true;
@@ -163,7 +164,9 @@ async function getFreePort(): Promise<number> {
         s.close((err) => (err ? reject(err) : resolve(assigned)));
       });
     });
-    if (port < 65535) return port;
+    if (port < 65535) {
+      return port;
+    }
   }
 }
 
@@ -189,12 +192,18 @@ describe("browser control server", () => {
     createTargetId = null;
 
     cdpMocks.createTargetViaCdp.mockImplementation(async () => {
-      if (createTargetId) return { targetId: createTargetId };
+      if (createTargetId) {
+        return { targetId: createTargetId };
+      }
       throw new Error("cdp disabled");
     });
 
-    for (const fn of Object.values(pwMocks)) fn.mockClear();
-    for (const fn of Object.values(cdpMocks)) fn.mockClear();
+    for (const fn of Object.values(pwMocks)) {
+      fn.mockClear();
+    }
+    for (const fn of Object.values(cdpMocks)) {
+      fn.mockClear();
+    }
 
     testPort = await getFreePort();
     cdpBaseUrl = `http://127.0.0.1:${testPort + 1}`;
@@ -208,7 +217,9 @@ describe("browser control server", () => {
       vi.fn(async (url: string, init?: RequestInit) => {
         const u = String(url);
         if (u.includes("/json/list")) {
-          if (!reachable) return makeResponse([]);
+          if (!reachable) {
+            return makeResponse([]);
+          }
           return makeResponse([
             {
               id: "abcd1234",
@@ -241,8 +252,12 @@ describe("browser control server", () => {
             type: "page",
           });
         }
-        if (u.includes("/json/activate/")) return makeResponse("ok");
-        if (u.includes("/json/close/")) return makeResponse("ok");
+        if (u.includes("/json/activate/")) {
+          return makeResponse("ok");
+        }
+        if (u.includes("/json/close/")) {
+          return makeResponse("ok");
+        }
         return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
       }),
     );
@@ -306,9 +321,9 @@ describe("browser control server", () => {
   it("agent contract: navigation + common act commands", async () => {
     const base = await startServerAndBase();
 
-    const nav = (await postJson(`${base}/navigate`, {
+    const nav = await postJson(`${base}/navigate`, {
       url: "https://example.com",
-    })) as { ok: boolean; targetId?: string };
+    });
     expect(nav.ok).toBe(true);
     expect(typeof nav.targetId).toBe("string");
     expect(pwMocks.navigateViaPlaywright).toHaveBeenCalledWith({
@@ -317,12 +332,12 @@ describe("browser control server", () => {
       url: "https://example.com",
     });
 
-    const click = (await postJson(`${base}/act`, {
+    const click = await postJson(`${base}/act`, {
       kind: "click",
       ref: "1",
       button: "left",
       modifiers: ["Shift"],
-    })) as { ok: boolean };
+    });
     expect(click.ok).toBe(true);
     expect(pwMocks.clickViaPlaywright).toHaveBeenNthCalledWith(1, {
       cdpUrl: cdpBaseUrl,
@@ -343,11 +358,11 @@ describe("browser control server", () => {
       /'selector' is not supported/i,
     );
 
-    const type = (await postJson(`${base}/act`, {
+    const type = await postJson(`${base}/act`, {
       kind: "type",
       ref: "1",
       text: "",
-    })) as { ok: boolean };
+    });
     expect(type.ok).toBe(true);
     expect(pwMocks.typeViaPlaywright).toHaveBeenNthCalledWith(1, {
       cdpUrl: cdpBaseUrl,
@@ -358,10 +373,10 @@ describe("browser control server", () => {
       slowly: false,
     });
 
-    const press = (await postJson(`${base}/act`, {
+    const press = await postJson(`${base}/act`, {
       kind: "press",
       key: "Enter",
-    })) as { ok: boolean };
+    });
     expect(press.ok).toBe(true);
     expect(pwMocks.pressKeyViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: cdpBaseUrl,
@@ -369,10 +384,10 @@ describe("browser control server", () => {
       key: "Enter",
     });
 
-    const hover = (await postJson(`${base}/act`, {
+    const hover = await postJson(`${base}/act`, {
       kind: "hover",
       ref: "2",
-    })) as { ok: boolean };
+    });
     expect(hover.ok).toBe(true);
     expect(pwMocks.hoverViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: cdpBaseUrl,
@@ -380,10 +395,10 @@ describe("browser control server", () => {
       ref: "2",
     });
 
-    const scroll = (await postJson(`${base}/act`, {
+    const scroll = await postJson(`${base}/act`, {
       kind: "scrollIntoView",
       ref: "2",
-    })) as { ok: boolean };
+    });
     expect(scroll.ok).toBe(true);
     expect(pwMocks.scrollIntoViewViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: cdpBaseUrl,
@@ -391,11 +406,11 @@ describe("browser control server", () => {
       ref: "2",
     });
 
-    const drag = (await postJson(`${base}/act`, {
+    const drag = await postJson(`${base}/act`, {
       kind: "drag",
       startRef: "3",
       endRef: "4",
-    })) as { ok: boolean };
+    });
     expect(drag.ok).toBe(true);
     expect(pwMocks.dragViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: cdpBaseUrl,

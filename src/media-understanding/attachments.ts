@@ -3,15 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
+import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
 import { detectMime, getFileExtension, isAudioFileName, kindFromMime } from "../media/mime.js";
-import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { fetchWithTimeout } from "./providers/shared.js";
-import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
+import { fetchWithTimeout } from "./providers/shared.js";
 
 type MediaBufferResult = {
   buffer: Buffer;
@@ -40,7 +39,9 @@ const DEFAULT_MAX_ATTACHMENTS = 1;
 
 function normalizeAttachmentPath(raw?: string | null): string | undefined {
   const value = raw?.trim();
-  if (!value) return undefined;
+  if (!value) {
+    return undefined;
+  }
   if (value.startsWith("file://")) {
     try {
       return fileURLToPath(value);
@@ -58,7 +59,9 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
   const resolveMime = (count: number, index: number) => {
     const typeHint = typesFromArray?.[index];
     const trimmed = typeof typeHint === "string" ? typeHint.trim() : "";
-    if (trimmed) return trimmed;
+    if (trimmed) {
+      return trimmed;
+    }
     return count === 1 ? ctx.MediaType : undefined;
   };
 
@@ -89,7 +92,9 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
 
   const pathValue = ctx.MediaPath?.trim();
   const url = ctx.MediaUrl?.trim();
-  if (!pathValue && !url) return [];
+  if (!pathValue && !url) {
+    return [];
+  }
   return [
     {
       path: pathValue || undefined,
@@ -104,12 +109,20 @@ export function resolveAttachmentKind(
   attachment: MediaAttachment,
 ): "image" | "audio" | "video" | "document" | "unknown" {
   const kind = kindFromMime(attachment.mime);
-  if (kind === "image" || kind === "audio" || kind === "video") return kind;
+  if (kind === "image" || kind === "audio" || kind === "video") {
+    return kind;
+  }
 
   const ext = getFileExtension(attachment.path ?? attachment.url);
-  if (!ext) return "unknown";
-  if ([".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"].includes(ext)) return "video";
-  if (isAudioFileName(attachment.path ?? attachment.url)) return "audio";
+  if (!ext) {
+    return "unknown";
+  }
+  if ([".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"].includes(ext)) {
+    return "video";
+  }
+  if (isAudioFileName(attachment.path ?? attachment.url)) {
+    return "audio";
+  }
   if ([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"].includes(ext)) {
     return "image";
   }
@@ -129,14 +142,22 @@ export function isImageAttachment(attachment: MediaAttachment): boolean {
 }
 
 function isAbortError(err: unknown): boolean {
-  if (!err) return false;
-  if (err instanceof Error && err.name === "AbortError") return true;
+  if (!err) {
+    return false;
+  }
+  if (err instanceof Error && err.name === "AbortError") {
+    return true;
+  }
   return false;
 }
 
 function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") return input;
-  if (input instanceof URL) return input.toString();
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
   return input.url;
 }
 
@@ -144,8 +165,12 @@ function orderAttachments(
   attachments: MediaAttachment[],
   prefer?: MediaUnderstandingAttachmentsConfig["prefer"],
 ): MediaAttachment[] {
-  if (!prefer || prefer === "first") return attachments;
-  if (prefer === "last") return [...attachments].reverse();
+  if (!prefer || prefer === "first") {
+    return attachments;
+  }
+  if (prefer === "last") {
+    return [...attachments].toReversed();
+  }
   if (prefer === "path") {
     const withPath = attachments.filter((item) => item.path);
     const withoutPath = attachments.filter((item) => !item.path);
@@ -166,11 +191,17 @@ export function selectAttachments(params: {
 }): MediaAttachment[] {
   const { capability, attachments, policy } = params;
   const matches = attachments.filter((item) => {
-    if (capability === "image") return isImageAttachment(item);
-    if (capability === "audio") return isAudioAttachment(item);
+    if (capability === "image") {
+      return isImageAttachment(item);
+    }
+    if (capability === "audio") {
+      return isAudioAttachment(item);
+    }
     return isVideoAttachment(item);
   });
-  if (matches.length === 0) return [];
+  if (matches.length === 0) {
+    return [];
+  }
 
   const ordered = orderAttachments(matches, policy?.prefer);
   const mode = policy?.mode ?? "first";
@@ -367,13 +398,19 @@ export class MediaAttachmentCache {
 
   private resolveLocalPath(attachment: MediaAttachment): string | undefined {
     const rawPath = normalizeAttachmentPath(attachment.path);
-    if (!rawPath) return undefined;
+    if (!rawPath) {
+      return undefined;
+    }
     return path.isAbsolute(rawPath) ? rawPath : path.resolve(rawPath);
   }
 
   private async ensureLocalStat(entry: AttachmentCacheEntry): Promise<number | undefined> {
-    if (!entry.resolvedPath) return undefined;
-    if (entry.statSize !== undefined) return entry.statSize;
+    if (!entry.resolvedPath) {
+      return undefined;
+    }
+    if (entry.statSize !== undefined) {
+      return entry.statSize;
+    }
     try {
       const stat = await fs.stat(entry.resolvedPath);
       if (!stat.isFile()) {

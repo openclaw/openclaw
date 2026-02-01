@@ -1,8 +1,8 @@
 import os from "node:os";
 import path from "node:path";
+import type { SessionEntry } from "./types.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveStateDir } from "../paths.js";
-import type { SessionEntry } from "./types.js";
 
 function resolveAgentSessionsDir(
   agentId?: string,
@@ -60,7 +60,9 @@ export function resolveSessionFilePath(
 
 export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
   const agentId = normalizeAgentId(opts?.agentId ?? DEFAULT_AGENT_ID);
-  if (!store) return resolveDefaultSessionStorePath(agentId);
+  if (!store) {
+    return resolveDefaultSessionStorePath(agentId);
+  }
   if (store.includes("{agentId}")) {
     const expanded = store.replaceAll("{agentId}", agentId);
     if (expanded.startsWith("~")) {
@@ -68,6 +70,8 @@ export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
     }
     return path.resolve(expanded);
   }
-  if (store.startsWith("~")) return path.resolve(store.replace(/^~(?=$|[\\/])/, os.homedir()));
+  if (store.startsWith("~")) {
+    return path.resolve(store.replace(/^~(?=$|[\\/])/, os.homedir()));
+  }
   return path.resolve(store);
 }

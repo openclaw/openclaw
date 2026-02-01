@@ -3,6 +3,7 @@ summary: "SOUL Evil hook (swap SOUL.md with SOUL_EVIL.md)"
 read_when:
   - You want to enable or tune the SOUL Evil hook
   - You want a purge window or random-chance persona swap
+title: "SOUL Evil Hook"
 ---
 
 # SOUL Evil Hook

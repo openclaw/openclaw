@@ -12,7 +12,9 @@ async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     const data = (await res.json()) as { message?: string } | undefined;
-    if (data?.message) return data.message;
+    if (data?.message) {
+      return data.message;
+    }
     return JSON.stringify(data);
   }
   return await res.text();
@@ -65,6 +67,8 @@ export async function probeMattermost(
       elapsedMs: Date.now() - start,
     };
   } finally {
-    if (timer) clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }

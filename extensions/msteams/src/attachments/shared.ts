@@ -55,7 +55,9 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function normalizeContentType(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
+  if (typeof value !== "string") {
+    return undefined;
+  }
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
 }
@@ -78,17 +80,25 @@ export function inferPlaceholder(params: {
 export function isLikelyImageAttachment(att: MSTeamsAttachmentLike): boolean {
   const contentType = normalizeContentType(att.contentType) ?? "";
   const name = typeof att.name === "string" ? att.name : "";
-  if (contentType.startsWith("image/")) return true;
-  if (IMAGE_EXT_RE.test(name)) return true;
+  if (contentType.startsWith("image/")) {
+    return true;
+  }
+  if (IMAGE_EXT_RE.test(name)) {
+    return true;
+  }
 
   if (
     contentType === "application/vnd.microsoft.teams.file.download.info" &&
     isRecord(att.content)
   ) {
     const fileType = typeof att.content.fileType === "string" ? att.content.fileType : "";
-    if (fileType && IMAGE_EXT_RE.test(`x.${fileType}`)) return true;
+    if (fileType && IMAGE_EXT_RE.test(`x.${fileType}`)) {
+      return true;
+    }
     const fileName = typeof att.content.fileName === "string" ? att.content.fileName : "";
-    if (fileName && IMAGE_EXT_RE.test(fileName)) return true;
+    if (fileName && IMAGE_EXT_RE.test(fileName)) {
+      return true;
+    }
   }
 
   return false;
@@ -124,9 +134,15 @@ function isHtmlAttachment(att: MSTeamsAttachmentLike): boolean {
 }
 
 export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | undefined {
-  if (!isHtmlAttachment(att)) return undefined;
-  if (typeof att.content === "string") return att.content;
-  if (!isRecord(att.content)) return undefined;
+  if (!isHtmlAttachment(att)) {
+    return undefined;
+  }
+  if (typeof att.content === "string") {
+    return att.content;
+  }
+  if (!isRecord(att.content)) {
+    return undefined;
+  }
   const text =
     typeof att.content.text === "string"
       ? att.content.text
@@ -140,12 +156,18 @@ export function extractHtmlFromAttachment(att: MSTeamsAttachmentLike): string | 
 
 function decodeDataImage(src: string): InlineImageCandidate | null {
   const match = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/i.exec(src);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   const contentType = match[1]?.toLowerCase();
   const isBase64 = Boolean(match[2]);
-  if (!isBase64) return null;
+  if (!isBase64) {
+    return null;
+  }
   const payload = match[3] ?? "";
-  if (!payload) return null;
+  if (!payload) {
+    return null;
+  }
   try {
     const data = Buffer.from(payload, "base64");
     return { kind: "data", data, contentType, placeholder: "<media:image>" };
@@ -170,7 +192,9 @@ export function extractInlineImageCandidates(
   const out: InlineImageCandidate[] = [];
   for (const att of attachments) {
     const html = extractHtmlFromAttachment(att);
-    if (!html) continue;
+    if (!html) {
+      continue;
+    }
     IMG_SRC_RE.lastIndex = 0;
     let match: RegExpExecArray | null = IMG_SRC_RE.exec(html);
     while (match) {
@@ -178,7 +202,9 @@ export function extractInlineImageCandidates(
       if (src && !src.startsWith("cid:")) {
         if (src.startsWith("data:")) {
           const decoded = decodeDataImage(src);
-          if (decoded) out.push(decoded);
+          if (decoded) {
+            out.push(decoded);
+          }
         } else {
           out.push({
             kind: "url",
@@ -204,8 +230,12 @@ export function safeHostForUrl(url: string): string {
 
 function normalizeAllowHost(value: string): string {
   const trimmed = value.trim().toLowerCase();
-  if (!trimmed) return "";
-  if (trimmed === "*") return "*";
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed === "*") {
+    return "*";
+  }
   return trimmed.replace(/^\*\.?/, "");
 }
 
@@ -214,12 +244,16 @@ export function resolveAllowedHosts(input?: string[]): string[] {
     return DEFAULT_MEDIA_HOST_ALLOWLIST.slice();
   }
   const normalized = input.map(normalizeAllowHost).filter(Boolean);
-  if (normalized.includes("*")) return ["*"];
+  if (normalized.includes("*")) {
+    return ["*"];
+  }
   return normalized;
 }
 
 function isHostAllowed(host: string, allowlist: string[]): boolean {
-  if (allowlist.includes("*")) return true;
+  if (allowlist.includes("*")) {
+    return true;
+  }
   const normalized = host.toLowerCase();
   return allowlist.some((entry) => normalized === entry || normalized.endsWith(`.${entry}`));
 }
@@ -227,7 +261,9 @@ function isHostAllowed(host: string, allowlist: string[]): boolean {
 export function isUrlAllowed(url: string, allowlist: string[]): boolean {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== "https:") return false;
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
     return isHostAllowed(parsed.hostname, allowlist);
   } catch {
     return false;

@@ -1,6 +1,6 @@
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 
 type ChatChannel = ChannelId;
@@ -56,7 +56,9 @@ export function applyChannelAccountConfig(params: {
   const accountId = normalizeAccountId(params.accountId);
   const plugin = getChannelPlugin(params.channel);
   const apply = plugin?.setup?.applyAccountConfig;
-  if (!apply) return params.cfg;
+  if (!apply) {
+    return params.cfg;
+  }
   const input: ChannelSetupInput = {
     name: params.name,
     token: params.token,

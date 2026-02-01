@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -62,11 +61,15 @@ vi.mock("@mariozechner/pi-ai", async () => {
   return {
     ...actual,
     complete: async (model: { api: string; provider: string; id: string }) => {
-      if (model.id === "mock-error") return buildAssistantErrorMessage(model);
+      if (model.id === "mock-error") {
+        return buildAssistantErrorMessage(model);
+      }
       return buildAssistantMessage(model);
     },
     completeSimple: async (model: { api: string; provider: string; id: string }) => {
-      if (model.id === "mock-error") return buildAssistantErrorMessage(model);
+      if (model.id === "mock-error") {
+        return buildAssistantErrorMessage(model);
+      }
       return buildAssistantMessage(model);
     },
     streamSimple: (model: { api: string; provider: string; id: string }) => {
@@ -104,7 +107,9 @@ beforeAll(async () => {
 }, 20_000);
 
 afterAll(async () => {
-  if (!tempRoot) return;
+  if (!tempRoot) {
+    return;
+  }
   await fs.rm(tempRoot, { recursive: true, force: true });
   tempRoot = undefined;
 });
@@ -142,7 +147,9 @@ const testSessionKey = "agent:test:embedded";
 const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
 const textFromContent = (content: unknown) => {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return content;
+  }
   if (Array.isArray(content) && content[0]?.type === "text") {
     return (content[0] as { text?: string }).text;
   }

@@ -18,7 +18,7 @@ const safeUrlSchema = z
         return false;
       }
     },
-    { message: "URL must use https:// protocol" }
+    { message: "URL must use https:// protocol" },
   );
 
 /**

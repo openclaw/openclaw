@@ -20,10 +20,16 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     apply: (raw, changes) => {
       const auth = getRecord(raw.auth);
       const profiles = getRecord(auth?.profiles);
-      if (!profiles) return;
+      if (!profiles) {
+        return;
+      }
       const claudeCli = getRecord(profiles["anthropic:claude-cli"]);
-      if (!claudeCli) return;
-      if (claudeCli.mode !== "token") return;
+      if (!claudeCli) {
+        return;
+      }
+      if (claudeCli.mode !== "token") {
+        return;
+      }
       claudeCli.mode = "oauth";
       changes.push('Updated auth.profiles["anthropic:claude-cli"].mode → "oauth".');
     },
@@ -35,7 +41,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     apply: (raw, changes) => {
       const tools = ensureRecord(raw, "tools");
       const bash = getRecord(tools.bash);
-      if (!bash) return;
+      if (!bash) {
+        return;
+      }
       if (tools.exec === undefined) {
         tools.exec = bash;
         changes.push("Moved tools.bash → tools.exec.");
@@ -51,7 +59,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     apply: (raw, changes) => {
       const messages = getRecord(raw.messages);
       const tts = getRecord(messages?.tts);
-      if (!tts) return;
+      if (!tts) {
+        return;
+      }
       if (tts.auto !== undefined) {
         if ("enabled" in tts) {
           delete tts.enabled;
@@ -59,7 +69,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
         }
         return;
       }
-      if (typeof tts.enabled !== "boolean") return;
+      if (typeof tts.enabled !== "boolean") {
+        return;
+      }
       tts.auto = tts.enabled ? "always" : "off";
       delete tts.enabled;
       changes.push(`Moved messages.tts.enabled → messages.tts.auto (${String(tts.auto)}).`);
@@ -70,7 +82,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     describe: "Move agent config to agents.defaults and tools",
     apply: (raw, changes) => {
       const agent = getRecord(raw.agent);
-      if (!agent) return;
+      if (!agent) {
+        return;
+      }
 
       const agents = ensureRecord(raw, "agents");
       const defaults = getRecord(agents.defaults) ?? {};
@@ -136,8 +150,12 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       delete agentCopy.tools;
       delete agentCopy.elevated;
       delete agentCopy.bash;
-      if (isRecord(agentCopy.sandbox)) delete agentCopy.sandbox.tools;
-      if (isRecord(agentCopy.subagents)) delete agentCopy.subagents.tools;
+      if (isRecord(agentCopy.sandbox)) {
+        delete agentCopy.sandbox.tools;
+      }
+      if (isRecord(agentCopy.subagents)) {
+        delete agentCopy.subagents.tools;
+      }
 
       mergeMissing(defaults, agentCopy);
       agents.defaults = defaults;
@@ -151,7 +169,9 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
     describe: "Move identity to agents.list[].identity",
     apply: (raw, changes) => {
       const identity = getRecord(raw.identity);
-      if (!identity) return;
+      if (!identity) {
+        return;
+      }
 
       const agents = ensureRecord(raw, "agents");
       const list = getAgentsList(agents);

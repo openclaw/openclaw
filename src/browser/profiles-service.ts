@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
+import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
-import { DEFAULT_BROWSER_DEFAULT_PROFILE_NAME } from "./constants.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
+import { DEFAULT_BROWSER_DEFAULT_PROFILE_NAME } from "./constants.js";
 import {
   allocateCdpPort,
   allocateColor,
@@ -14,7 +14,6 @@ import {
   getUsedPorts,
   isValidProfileName,
 } from "./profiles.js";
-import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
 
 export type CreateProfileParams = {
@@ -124,7 +123,9 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
 
   const deleteProfile = async (nameRaw: string): Promise<DeleteProfileResult> => {
     const name = nameRaw.trim();
-    if (!name) throw new Error("profile name is required");
+    if (!name) {
+      throw new Error("profile name is required");
+    }
     if (!isValidProfileName(name)) {
       throw new Error("invalid profile name");
     }

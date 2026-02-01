@@ -28,13 +28,13 @@ If `$(npm prefix -g)/bin` (macOS/Linux) or `$(npm prefix -g)` (Windows) is **not
 
 ## Fix: put npm’s global bin dir on PATH
 
-1) Find your global npm prefix:
+1. Find your global npm prefix:
 
 ```bash
 npm prefix -g
 ```
 
-2) Add the global npm bin directory to your shell startup file:
+2. Add the global npm bin directory to your shell startup file:
 
 - zsh: `~/.zshrc`
 - bash: `~/.bashrc`

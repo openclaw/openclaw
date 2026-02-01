@@ -1,6 +1,6 @@
 import type { Command } from "commander";
-import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
+import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
 import { loadConfig } from "../config/config.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import {
@@ -25,18 +25,22 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
   )
     .trim()
     .toLowerCase();
-  if (!value) throw new Error("Channel required");
+  if (!value) {
+    throw new Error("Channel required");
+  }
 
   const normalized = normalizeChannelId(value);
   if (normalized) {
-    if (!channels.includes(normalized as PairingChannel)) {
+    if (!channels.includes(normalized)) {
       throw new Error(`Channel ${normalized} does not support pairing`);
     }
-    return normalized as PairingChannel;
+    return normalized;
   }
 
   // Allow extension channels: validate format but don't require registry
-  if (/^[a-z][a-z0-9_-]{0,63}$/.test(value)) return value as PairingChannel;
+  if (/^[a-z][a-z0-9_-]{0,63}$/.test(value)) {
+    return value as PairingChannel;
+  }
   throw new Error(`Invalid channel: ${value}`);
 }
 
@@ -136,7 +140,9 @@ export function registerPairingCli(program: Command) {
         `${theme.success("Approved")} ${theme.muted(channel)} sender ${theme.command(approved.id)}.`,
       );
 
-      if (!opts.notify) return;
+      if (!opts.notify) {
+        return;
+      }
       await notifyApproved(channel, approved.id).catch((err) => {
         defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
       });

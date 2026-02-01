@@ -4,6 +4,7 @@ read_when:
   - You want to connect OpenClaw to LINE
   - You need LINE webhook + credential setup
   - You want LINE-specific message options
+title: LINE
 ---
 
 # LINE (plugin)
@@ -32,12 +33,12 @@ openclaw plugins install ./extensions/line
 
 ## Setup
 
-1) Create a LINE Developers account and open the Console:
+1. Create a LINE Developers account and open the Console:
    https://developers.line.biz/console/
-2) Create (or pick) a Provider and add a **Messaging API** channel.
-3) Copy the **Channel access token** and **Channel secret** from the channel settings.
-4) Enable **Use webhook** in the Messaging API settings.
-5) Set the webhook URL to your gateway endpoint (HTTPS required):
+2. Create (or pick) a Provider and add a **Messaging API** channel.
+3. Copy the **Channel access token** and **Channel secret** from the channel settings.
+4. Enable **Use webhook** in the Messaging API settings.
+5. Set the webhook URL to your gateway endpoint (HTTPS required):
 
 ```
 https://gateway-host/line/webhook
@@ -58,9 +59,9 @@ Minimal config:
       enabled: true,
       channelAccessToken: "LINE_CHANNEL_ACCESS_TOKEN",
       channelSecret: "LINE_CHANNEL_SECRET",
-      dmPolicy: "pairing"
-    }
-  }
+      dmPolicy: "pairing",
+    },
+  },
 }
 ```
 
@@ -76,9 +77,9 @@ Token/secret files:
   channels: {
     line: {
       tokenFile: "/path/to/line-token.txt",
-      secretFile: "/path/to/line-secret.txt"
-    }
-  }
+      secretFile: "/path/to/line-secret.txt",
+    },
+  },
 }
 ```
 
@@ -92,11 +93,11 @@ Multiple accounts:
         marketing: {
           channelAccessToken: "...",
           channelSecret: "...",
-          webhookPath: "/line/marketing"
-        }
-      }
-    }
-  }
+          webhookPath: "/line/marketing",
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -148,11 +149,13 @@ messages.
         title: "Office",
         address: "123 Main St",
         latitude: 35.681236,
-        longitude: 139.767125
+        longitude: 139.767125,
       },
       flexMessage: {
         altText: "Status card",
-        contents: { /* Flex payload */ }
+        contents: {
+          /* Flex payload */
+        },
       },
       templateMessage: {
         type: "confirm",
@@ -160,10 +163,10 @@ messages.
         confirmLabel: "Yes",
         confirmData: "yes",
         cancelLabel: "No",
-        cancelData: "no"
-      }
-    }
-  }
+        cancelData: "no",
+      },
+    },
+  },
 }
 ```
 

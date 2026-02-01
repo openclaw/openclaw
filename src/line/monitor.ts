@@ -1,12 +1,18 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "../config/config.js";
-import { danger, logVerbose } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLineBot } from "./bot.js";
-import { validateLineSignature } from "./signature.js";
+import type { LineChannelData, ResolvedLineAccount } from "./types.js";
+import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { chunkMarkdownText } from "../auto-reply/chunk.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
+import { danger, logVerbose } from "../globals.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import { deliverLineAutoReply } from "./auto-reply-delivery.js";
+import { createLineBot } from "./bot.js";
+import { processLineMessage } from "./markdown-to-line.js";
+import { sendLineReplyChunks } from "./reply-chunks.js";
 import {
   replyMessageLine,
   showLoadingAnimation,
@@ -20,14 +26,8 @@ import {
   createImageMessage,
   createLocationMessage,
 } from "./send.js";
+import { validateLineSignature } from "./signature.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
-import type { LineChannelData, ResolvedLineAccount } from "./types.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
-import { chunkMarkdownText } from "../auto-reply/chunk.js";
-import { processLineMessage } from "./markdown-to-line.js";
-import { sendLineReplyChunks } from "./reply-chunks.js";
-import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 
 export interface MonitorLineProviderOptions {
   channelAccessToken: string;
@@ -105,7 +105,9 @@ function startLineLoadingKeepalive(params: {
   let stopped = false;
 
   const trigger = () => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
     void showLoadingAnimation(params.userId, {
       accountId: params.accountId,
       loadingSeconds,
@@ -116,7 +118,9 @@ function startLineLoadingKeepalive(params: {
   const timer = setInterval(trigger, intervalMs);
 
   return () => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
     stopped = true;
     clearInterval(timer);
   };
@@ -154,7 +158,9 @@ export async function monitorLineProvider(
     runtime,
     config,
     onMessage: async (ctx) => {
-      if (!ctx) return;
+      if (!ctx) {
+        return;
+      }
 
       const { ctxPayload, replyToken, route } = ctx;
 

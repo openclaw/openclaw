@@ -18,7 +18,9 @@ const DEFAULT_SLOT_BY_KEY: Record<PluginSlotKey, string> = {
 };
 
 export function slotKeyForPluginKind(kind?: PluginKind): PluginSlotKey | null {
-  if (!kind) return null;
+  if (!kind) {
+    return null;
+  }
   return SLOT_BY_KIND[kind] ?? null;
 }
 
@@ -62,8 +64,12 @@ export function applyExclusiveSlotSelection(params: {
   const disabledIds: string[] = [];
   if (params.registry) {
     for (const plugin of params.registry.plugins) {
-      if (plugin.id === params.selectedId) continue;
-      if (plugin.kind !== params.selectedKind) continue;
+      if (plugin.id === params.selectedId) {
+        continue;
+      }
+      if (plugin.kind !== params.selectedKind) {
+        continue;
+      }
       const entry = entries[plugin.id];
       if (!entry || entry.enabled !== false) {
         entries[plugin.id] = {
@@ -76,7 +82,9 @@ export function applyExclusiveSlotSelection(params: {
   }
 
   if (disabledIds.length > 0) {
-    warnings.push(`Disabled other "${slotKey}" slot plugins: ${disabledIds.sort().join(", ")}.`);
+    warnings.push(
+      `Disabled other "${slotKey}" slot plugins: ${disabledIds.toSorted().join(", ")}.`,
+    );
   }
 
   const changed = prevSlot !== params.selectedId || disabledIds.length > 0;

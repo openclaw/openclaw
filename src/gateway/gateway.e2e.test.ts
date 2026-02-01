@@ -2,16 +2,14 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
+import { startGatewayServer } from "./server.js";
 import {
   connectDeviceAuthReq,
   connectGatewayClient,
   getFreeGatewayPort,
 } from "./test-helpers.e2e.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
-import { startGatewayServer } from "./server.js";
 
 function extractPayloadText(result: unknown): string {
   const record = result as Record<string, unknown>;
@@ -109,7 +107,7 @@ describe("gateway e2e", () => {
       try {
         const sessionKey = "agent:dev:mock-openai";
 
-        await client.request<Record<string, unknown>>("sessions.patch", {
+        await client.request("sessions.patch", {
           key: sessionKey,
           model: "openai/gpt-5.2",
         });
@@ -219,9 +217,13 @@ describe("gateway e2e", () => {
       let didSendToken = false;
       while (!next.done) {
         const step = next.step;
-        if (!step) throw new Error("wizard missing step");
+        if (!step) {
+          throw new Error("wizard missing step");
+        }
         const value = step.type === "text" ? wizardToken : null;
-        if (step.type === "text") didSendToken = true;
+        if (step.type === "text") {
+          didSendToken = true;
+        }
         next = await client.request("wizard.next", {
           sessionId,
           answer: { stepId: step.id, value },

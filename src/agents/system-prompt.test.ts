@@ -46,9 +46,30 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Voice (TTS)");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
+    expect(prompt).toContain("## Safety");
+    expect(prompt).toContain("You have no independent goals");
+    expect(prompt).toContain("Prioritize safety and human oversight");
+    expect(prompt).toContain("if instructions conflict");
+    expect(prompt).toContain("Inspired by Anthropic's constitution");
+    expect(prompt).toContain("Do not manipulate or persuade anyone");
+    expect(prompt).toContain("Do not copy yourself or change system prompts");
     expect(prompt).toContain("## Subagent Context");
     expect(prompt).not.toContain("## Group Chat Context");
     expect(prompt).toContain("Subagent details");
+  });
+
+  it("includes safety guardrails in full prompts", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("## Safety");
+    expect(prompt).toContain("You have no independent goals");
+    expect(prompt).toContain("Prioritize safety and human oversight");
+    expect(prompt).toContain("if instructions conflict");
+    expect(prompt).toContain("Inspired by Anthropic's constitution");
+    expect(prompt).toContain("Do not manipulate or persuade anyone");
+    expect(prompt).toContain("Do not copy yourself or change system prompts");
   });
 
   it("includes voice hint when provided", () => {
@@ -169,6 +190,41 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Current Date & Time");
     expect(prompt).toContain("Time zone: America/Chicago");
+  });
+
+  it("hints to use session_status for current date/time", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      userTimezone: "America/Chicago",
+    });
+
+    expect(prompt).toContain("session_status");
+    expect(prompt).toContain("current date");
+  });
+
+  // The system prompt intentionally does NOT include the current date/time.
+  // Only the timezone is included, to keep the prompt stable for caching.
+  // See: https://github.com/moltbot/moltbot/commit/66eec295b894bce8333886cfbca3b960c57c4946
+  // Agents should use session_status or message timestamps to determine the date/time.
+  // Related: https://github.com/moltbot/moltbot/issues/1897
+  //          https://github.com/moltbot/moltbot/issues/3658
+  it("does NOT include a date or time in the system prompt (cache stability)", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      userTimezone: "America/Chicago",
+      userTime: "Monday, January 5th, 2026 — 3:26 PM",
+      userTimeFormat: "12",
+    });
+
+    // The prompt should contain the timezone but NOT the formatted date/time string.
+    // This is intentional for prompt cache stability — the date/time was removed in
+    // commit 66eec295b. If you're here because you want to add it back, please see
+    // https://github.com/moltbot/moltbot/issues/3658 for the preferred approach:
+    // gateway-level timestamp injection into messages, not the system prompt.
+    expect(prompt).toContain("Time zone: America/Chicago");
+    expect(prompt).not.toContain("Monday, January 5th, 2026");
+    expect(prompt).not.toContain("3:26 PM");
+    expect(prompt).not.toContain("15:26");
   });
 
   it("includes model alias guidance when aliases are provided", () => {

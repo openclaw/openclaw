@@ -3,6 +3,7 @@ summary: "Run the ACP bridge for IDE integrations"
 read_when:
   - Setting up ACP-based IDE integrations
   - Debugging ACP session routing to the Gateway
+title: "acp"
 ---
 
 # acp
@@ -110,9 +111,12 @@ To target a specific Gateway or agent:
       "command": "openclaw",
       "args": [
         "acp",
-        "--url", "wss://gateway-host:18789",
-        "--token", "<token>",
-        "--session", "agent:design:main"
+        "--url",
+        "wss://gateway-host:18789",
+        "--token",
+        "<token>",
+        "--session",
+        "agent:design:main"
       ],
       "env": {}
     }

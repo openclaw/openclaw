@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-
 import { refreshQwenPortalCredentials } from "./qwen-portal-oauth.js";
 
 const originalFetch = globalThis.fetch;

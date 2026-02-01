@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { appendCdpPath, getHeadersWithAuth } from "./cdp.helpers.js";
 
 describe("cdp.helpers", () => {

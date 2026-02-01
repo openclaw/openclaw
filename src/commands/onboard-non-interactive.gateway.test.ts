@@ -2,9 +2,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 
 const gatewayClientCalls: Array<{
@@ -55,8 +53,11 @@ async function getFreePort(): Promise<number> {
       }
       const port = addr.port;
       srv.close((err) => {
-        if (err) reject(err);
-        else resolve(port);
+        if (err) {
+          reject(err);
+        } else {
+          resolve(port);
+        }
       });
     });
   });
@@ -227,7 +228,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     // otherwise sees a mocked writeConfigFile and the config never lands on disk).
     vi.resetModules();
     vi.doMock("../config/config.js", async () => {
-      return (await vi.importActual("../config/config.js")) as typeof import("../config/config.js");
+      return await vi.importActual("../config/config.js");
     });
 
     const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");

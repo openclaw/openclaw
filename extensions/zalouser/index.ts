@@ -1,9 +1,8 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-
 import { zalouserDock, zalouserPlugin } from "./src/channel.js";
-import { ZalouserToolSchema, executeZalouserTool } from "./src/tool.js";
 import { setZalouserRuntime } from "./src/runtime.js";
+import { ZalouserToolSchema, executeZalouserTool } from "./src/tool.js";
 
 const plugin = {
   id: "zalouser",

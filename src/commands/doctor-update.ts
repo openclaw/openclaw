@@ -1,16 +1,18 @@
-import { runGatewayUpdate } from "../infra/update-runner.js";
-import { isTruthyEnvValue } from "../infra/env.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { isTruthyEnvValue } from "../infra/env.js";
+import { runGatewayUpdate } from "../infra/update-runner.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { note } from "../terminal/note.js";
 
 async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git" | "unknown"> {
   const res = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     timeoutMs: 5000,
   }).catch(() => null);
-  if (!res) return "unknown";
+  if (!res) {
+    return "unknown";
+  }
   if (res.code !== 0) {
     // Avoid noisy "Update via package manager" notes when git is missing/broken,
     // but do show it when this is clearly not a git checkout.
@@ -36,7 +38,9 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
     params.options.yes !== true &&
     params.options.repair !== true &&
     Boolean(process.stdin.isTTY);
-  if (!canOfferUpdate || !params.root) return { updated: false };
+  if (!canOfferUpdate || !params.root) {
+    return { updated: false };
+  }
 
   const git = await detectOpenClawGitCheckout(params.root);
   if (git === "git") {
@@ -44,7 +48,9 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       message: "Update OpenClaw from git before running doctor?",
       initialValue: true,
     });
-    if (!shouldUpdate) return { updated: false };
+    if (!shouldUpdate) {
+      return { updated: false };
+    }
     note("Running update (fetch/rebase/build/ui:build/doctor)…", "Update");
     const result = await runGatewayUpdate({
       cwd: params.root,

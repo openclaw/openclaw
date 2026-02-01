@@ -39,7 +39,9 @@ export const DEFAULT_POLLY_VOICE = "Polly.Joanna";
  * @returns Polly voice name suitable for Twilio TwiML
  */
 export function mapVoiceToPolly(voice: string | undefined): string {
-  if (!voice) return DEFAULT_POLLY_VOICE;
+  if (!voice) {
+    return DEFAULT_POLLY_VOICE;
+  }
 
   // Already a Polly/Google voice - pass through
   if (voice.startsWith("Polly.") || voice.startsWith("Google.")) {

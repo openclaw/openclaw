@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.js";
 import type { ChannelDirectoryEntry } from "./types.js";
-import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveDiscordAccount } from "../../discord/accounts.js";
+import { resolveSlackAccount } from "../../slack/accounts.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
-import { normalizeSlackMessagingTarget } from "./normalize/slack.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import { normalizeSlackMessagingTarget } from "./normalize/slack.js";
 
 export type DirectoryConfigParams = {
   cfg: OpenClawConfig;
@@ -23,17 +23,23 @@ export async function listSlackDirectoryPeersFromConfig(
 
   for (const entry of account.dm?.allowFrom ?? []) {
     const raw = String(entry).trim();
-    if (!raw || raw === "*") continue;
+    if (!raw || raw === "*") {
+      continue;
+    }
     ids.add(raw);
   }
   for (const id of Object.keys(account.config.dms ?? {})) {
     const trimmed = id.trim();
-    if (trimmed) ids.add(trimmed);
+    if (trimmed) {
+      ids.add(trimmed);
+    }
   }
   for (const channel of Object.values(account.config.channels ?? {})) {
     for (const user of channel.users ?? []) {
       const raw = String(user).trim();
-      if (raw) ids.add(raw);
+      if (raw) {
+        ids.add(raw);
+      }
     }
   }
 
@@ -43,7 +49,9 @@ export async function listSlackDirectoryPeersFromConfig(
     .map((raw) => {
       const mention = raw.match(/^<@([A-Z0-9]+)>$/i);
       const normalizedUserId = (mention?.[1] ?? raw).replace(/^(slack|user):/i, "").trim();
-      if (!normalizedUserId) return null;
+      if (!normalizedUserId) {
+        return null;
+      }
       const target = `user:${normalizedUserId}`;
       return normalizeSlackMessagingTarget(target) ?? target.toLowerCase();
     })
@@ -78,22 +86,30 @@ export async function listDiscordDirectoryPeersFromConfig(
 
   for (const entry of account.config.dm?.allowFrom ?? []) {
     const raw = String(entry).trim();
-    if (!raw || raw === "*") continue;
+    if (!raw || raw === "*") {
+      continue;
+    }
     ids.add(raw);
   }
   for (const id of Object.keys(account.config.dms ?? {})) {
     const trimmed = id.trim();
-    if (trimmed) ids.add(trimmed);
+    if (trimmed) {
+      ids.add(trimmed);
+    }
   }
   for (const guild of Object.values(account.config.guilds ?? {})) {
     for (const entry of guild.users ?? []) {
       const raw = String(entry).trim();
-      if (raw) ids.add(raw);
+      if (raw) {
+        ids.add(raw);
+      }
     }
     for (const channel of Object.values(guild.channels ?? {})) {
       for (const user of channel.users ?? []) {
         const raw = String(user).trim();
-        if (raw) ids.add(raw);
+        if (raw) {
+          ids.add(raw);
+        }
       }
     }
   }
@@ -104,7 +120,9 @@ export async function listDiscordDirectoryPeersFromConfig(
     .map((raw) => {
       const mention = raw.match(/^<@!?(\d+)>$/);
       const cleaned = (mention?.[1] ?? raw).replace(/^(discord|user):/i, "").trim();
-      if (!/^\d+$/.test(cleaned)) return null;
+      if (!/^\d+$/.test(cleaned)) {
+        return null;
+      }
       return `user:${cleaned}`;
     })
     .filter((id): id is string => Boolean(id))
@@ -122,7 +140,9 @@ export async function listDiscordDirectoryGroupsFromConfig(
   for (const guild of Object.values(account.config.guilds ?? {})) {
     for (const channelId of Object.keys(guild.channels ?? {})) {
       const trimmed = channelId.trim();
-      if (trimmed) ids.add(trimmed);
+      if (trimmed) {
+        ids.add(trimmed);
+      }
     }
   }
 
@@ -132,7 +152,9 @@ export async function listDiscordDirectoryGroupsFromConfig(
     .map((raw) => {
       const mention = raw.match(/^<#(\d+)>$/);
       const cleaned = (mention?.[1] ?? raw).replace(/^(discord|channel|group):/i, "").trim();
-      if (!/^\d+$/.test(cleaned)) return null;
+      if (!/^\d+$/.test(cleaned)) {
+        return null;
+      }
       return `channel:${cleaned}`;
     })
     .filter((id): id is string => Boolean(id))
@@ -160,8 +182,12 @@ export async function listTelegramDirectoryPeersFromConfig(
   )
     .map((entry) => {
       const trimmed = entry.trim();
-      if (!trimmed) return null;
-      if (/^-?\d+$/.test(trimmed)) return trimmed;
+      if (!trimmed) {
+        return null;
+      }
+      if (/^-?\d+$/.test(trimmed)) {
+        return trimmed;
+      }
       const withAt = trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
       return withAt;
     })

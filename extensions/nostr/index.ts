@@ -1,11 +1,10 @@
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-
-import { nostrPlugin } from "./src/channel.js";
-import { setNostrRuntime, getNostrRuntime } from "./src/runtime.js";
-import { createNostrProfileHttpHandler } from "./src/nostr-profile-http.js";
-import { resolveNostrAccount } from "./src/types.js";
 import type { NostrProfile } from "./src/config-schema.js";
+import { nostrPlugin } from "./src/channel.js";
+import { createNostrProfileHttpHandler } from "./src/nostr-profile-http.js";
+import { setNostrRuntime, getNostrRuntime } from "./src/runtime.js";
+import { resolveNostrAccount } from "./src/types.js";
 
 const plugin = {
   id: "nostr",
@@ -20,13 +19,13 @@ const plugin = {
     const httpHandler = createNostrProfileHttpHandler({
       getConfigProfile: (accountId: string) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.loadConfig() as OpenClawConfig;
+        const cfg = runtime.config.loadConfig();
         const account = resolveNostrAccount({ cfg, accountId });
         return account.profile;
       },
       updateConfigProfile: async (accountId: string, profile: NostrProfile) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.loadConfig() as OpenClawConfig;
+        const cfg = runtime.config.loadConfig();
 
         // Build the config patch for channels.nostr.profile
         const channels = (cfg.channels ?? {}) as Record<string, unknown>;
@@ -49,7 +48,7 @@ const plugin = {
       },
       getAccountInfo: (accountId: string) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.loadConfig() as OpenClawConfig;
+        const cfg = runtime.config.loadConfig();
         const account = resolveNostrAccount({ cfg, accountId });
         if (!account.configured || !account.publicKey) {
           return null;

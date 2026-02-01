@@ -1,5 +1,4 @@
 import path from "node:path";
-
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
@@ -76,7 +75,9 @@ function selectPreferredInstallSpec(
   install: SkillInstallSpec[],
   prefs: SkillsInstallPreferences,
 ): { spec: SkillInstallSpec; index: number } | undefined {
-  if (install.length === 0) return undefined;
+  if (install.length === 0) {
+    return undefined;
+  }
   const indexed = install.map((spec, index) => ({ spec, index }));
   const findKind = (kind: SkillInstallSpec["kind"]) =>
     indexed.find((item) => item.spec.kind === kind);
@@ -86,11 +87,21 @@ function selectPreferredInstallSpec(
   const goSpec = findKind("go");
   const uvSpec = findKind("uv");
 
-  if (prefs.preferBrew && hasBinary("brew") && brewSpec) return brewSpec;
-  if (uvSpec) return uvSpec;
-  if (nodeSpec) return nodeSpec;
-  if (brewSpec) return brewSpec;
-  if (goSpec) return goSpec;
+  if (prefs.preferBrew && hasBinary("brew") && brewSpec) {
+    return brewSpec;
+  }
+  if (uvSpec) {
+    return uvSpec;
+  }
+  if (nodeSpec) {
+    return nodeSpec;
+  }
+  if (brewSpec) {
+    return brewSpec;
+  }
+  if (goSpec) {
+    return goSpec;
+  }
   return indexed[0];
 }
 
@@ -99,14 +110,18 @@ function normalizeInstallOptions(
   prefs: SkillsInstallPreferences,
 ): SkillInstallOption[] {
   const install = entry.metadata?.install ?? [];
-  if (install.length === 0) return [];
+  if (install.length === 0) {
+    return [];
+  }
 
   const platform = process.platform;
   const filtered = install.filter((spec) => {
     const osList = spec.os ?? [];
     return osList.length === 0 || osList.includes(platform);
   });
-  if (filtered.length === 0) return [];
+  if (filtered.length === 0) {
+    return [];
+  }
 
   const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
     const id = (spec.id ?? `${spec.kind}-${index}`).trim();
@@ -141,7 +156,9 @@ function normalizeInstallOptions(
   }
 
   const preferred = selectPreferredInstallSpec(filtered, prefs);
-  if (!preferred) return [];
+  if (!preferred) {
+    return [];
+  }
   return [toOption(preferred.spec, preferred.index)];
 }
 
@@ -172,8 +189,12 @@ function buildSkillStatus(
   const requiredOs = entry.metadata?.os ?? [];
 
   const missingBins = requiredBins.filter((bin) => {
-    if (hasBinary(bin)) return false;
-    if (eligibility?.remote?.hasBin?.(bin)) return false;
+    if (hasBinary(bin)) {
+      return false;
+    }
+    if (eligibility?.remote?.hasBin?.(bin)) {
+      return false;
+    }
     return true;
   });
   const missingAnyBins =
@@ -193,8 +214,12 @@ function buildSkillStatus(
 
   const missingEnv: string[] = [];
   for (const envName of requiredEnv) {
-    if (process.env[envName]) continue;
-    if (skillConfig?.env?.[envName]) continue;
+    if (process.env[envName]) {
+      continue;
+    }
+    if (skillConfig?.env?.[envName]) {
+      continue;
+    }
     if (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName) {
       continue;
     }

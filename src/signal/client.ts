@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-
 import { resolveFetch } from "../infra/fetch.js";
 
 export type SignalRpcOptions = {
@@ -33,7 +32,9 @@ function normalizeBaseUrl(url: string): string {
   if (!trimmed) {
     throw new Error("Signal base URL is required");
   }
-  if (/^https?:\/\//i.test(trimmed)) return trimmed.replace(/\/+$/, "");
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed.replace(/\/+$/, "");
+  }
   return `http://${trimmed}`.replace(/\/+$/, "");
 }
 
@@ -117,7 +118,9 @@ export async function streamSignalEvents(params: {
 }): Promise<void> {
   const baseUrl = normalizeBaseUrl(params.baseUrl);
   const url = new URL(`${baseUrl}/api/v1/events`);
-  if (params.account) url.searchParams.set("account", params.account);
+  if (params.account) {
+    url.searchParams.set("account", params.account);
+  }
 
   const fetchImpl = resolveFetch();
   if (!fetchImpl) {
@@ -138,7 +141,9 @@ export async function streamSignalEvents(params: {
   let currentEvent: SignalSseEvent = {};
 
   const flushEvent = () => {
-    if (!currentEvent.data && !currentEvent.event && !currentEvent.id) return;
+    if (!currentEvent.data && !currentEvent.event && !currentEvent.id) {
+      return;
+    }
     params.onEvent({
       event: currentEvent.event,
       data: currentEvent.data,
@@ -149,13 +154,17 @@ export async function streamSignalEvents(params: {
 
   while (true) {
     const { value, done } = await reader.read();
-    if (done) break;
+    if (done) {
+      break;
+    }
     buffer += decoder.decode(value, { stream: true });
     let lineEnd = buffer.indexOf("\n");
     while (lineEnd !== -1) {
       let line = buffer.slice(0, lineEnd);
       buffer = buffer.slice(lineEnd + 1);
-      if (line.endsWith("\r")) line = line.slice(0, -1);
+      if (line.endsWith("\r")) {
+        line = line.slice(0, -1);
+      }
 
       if (line === "") {
         flushEvent();

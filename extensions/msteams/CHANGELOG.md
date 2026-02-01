@@ -1,48 +1,63 @@
 # Changelog
 
+## 2026.1.30
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
 ## 2026.1.29
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.23
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.22
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.21
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.20
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.17-1
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.17
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.16
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.15
 
 ### Features
+
 - Bot Framework gateway monitor (Express + JWT auth) with configurable webhook path/port and `/api/messages` fallback.
 - Onboarding flow for Azure Bot credentials (config + env var detection) and DM policy setup.
 - Channel capabilities: DMs, group chats, channels, threads, media, polls, and `teams` alias.

@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import { loadAgentIdentity } from "../commands/agents.config.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 const MAX_ASSISTANT_NAME = 50;
@@ -20,10 +20,16 @@ export type AssistantIdentity = {
 };
 
 function coerceIdentityValue(value: string | undefined, maxLength: number): string | undefined {
-  if (typeof value !== "string") return undefined;
+  if (typeof value !== "string") {
+    return undefined;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  if (trimmed.length <= maxLength) return trimmed;
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
   return trimmed.slice(0, maxLength);
 }
 
@@ -32,17 +38,29 @@ function isAvatarUrl(value: string): boolean {
 }
 
 function looksLikeAvatarPath(value: string): boolean {
-  if (/[\\/]/.test(value)) return true;
+  if (/[\\/]/.test(value)) {
+    return true;
+  }
   return /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(value);
 }
 
 function normalizeAvatarValue(value: string | undefined): string | undefined {
-  if (!value) return undefined;
+  if (!value) {
+    return undefined;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  if (isAvatarUrl(trimmed)) return trimmed;
-  if (looksLikeAvatarPath(trimmed)) return trimmed;
-  if (!/\s/.test(trimmed) && trimmed.length <= 4) return trimmed;
+  if (!trimmed) {
+    return undefined;
+  }
+  if (isAvatarUrl(trimmed)) {
+    return trimmed;
+  }
+  if (looksLikeAvatarPath(trimmed)) {
+    return trimmed;
+  }
+  if (!/\s/.test(trimmed) && trimmed.length <= 4) {
+    return trimmed;
+  }
   return undefined;
 }
 

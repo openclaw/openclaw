@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,

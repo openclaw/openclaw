@@ -1,5 +1,6 @@
 import { z } from "zod";
-
+import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
+import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import {
   BlockStreamingCoalesceSchema,
   DmConfigSchema,
@@ -7,8 +8,6 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
 } from "./zod-schema.core.js";
-import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
-import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
@@ -62,9 +61,13 @@ export const WhatsAppAccountSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.dmPolicy !== "open") return;
+    if (value.dmPolicy !== "open") {
+      return;
+    }
     const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
-    if (allow.includes("*")) return;
+    if (allow.includes("*")) {
+      return;
+    }
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["allowFrom"],
@@ -127,9 +130,13 @@ export const WhatsAppConfigSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (value.dmPolicy !== "open") return;
+    if (value.dmPolicy !== "open") {
+      return;
+    }
     const allow = (value.allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
-    if (allow.includes("*")) return;
+    if (allow.includes("*")) {
+      return;
+    }
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["allowFrom"],

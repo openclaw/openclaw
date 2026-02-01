@@ -1,14 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-import type { OpenClawConfig } from "../config/config.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { runSecurityAudit } from "./audit.js";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { slackPlugin } from "../../extensions/slack/src/channel.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { discordPlugin } from "../../extensions/discord/src/channel.js";
+import { slackPlugin } from "../../extensions/slack/src/channel.js";
+import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { runSecurityAudit } from "./audit.js";
 
 const isWindows = process.platform === "win32";
 
@@ -429,8 +428,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -475,8 +477,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -520,8 +525,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -559,8 +567,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -599,8 +610,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -637,8 +651,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevStateDir == null) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      if (prevStateDir == null) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
     }
   });
 
@@ -785,8 +802,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      else process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
     }
   });
 
@@ -905,14 +925,26 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevDiscordToken == null) delete process.env.DISCORD_BOT_TOKEN;
-      else process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
-      if (prevTelegramToken == null) delete process.env.TELEGRAM_BOT_TOKEN;
-      else process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
-      if (prevSlackBotToken == null) delete process.env.SLACK_BOT_TOKEN;
-      else process.env.SLACK_BOT_TOKEN = prevSlackBotToken;
-      if (prevSlackAppToken == null) delete process.env.SLACK_APP_TOKEN;
-      else process.env.SLACK_APP_TOKEN = prevSlackAppToken;
+      if (prevDiscordToken == null) {
+        delete process.env.DISCORD_BOT_TOKEN;
+      } else {
+        process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
+      }
+      if (prevTelegramToken == null) {
+        delete process.env.TELEGRAM_BOT_TOKEN;
+      } else {
+        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+      }
+      if (prevSlackBotToken == null) {
+        delete process.env.SLACK_BOT_TOKEN;
+      } else {
+        process.env.SLACK_BOT_TOKEN = prevSlackBotToken;
+      }
+      if (prevSlackAppToken == null) {
+        delete process.env.SLACK_APP_TOKEN;
+      } else {
+        process.env.SLACK_APP_TOKEN = prevSlackAppToken;
+      }
     }
   });
 
@@ -949,8 +981,11 @@ describe("security audit", () => {
         ]),
       );
     } finally {
-      if (prevDiscordToken == null) delete process.env.DISCORD_BOT_TOKEN;
-      else process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
+      if (prevDiscordToken == null) {
+        delete process.env.DISCORD_BOT_TOKEN;
+      } else {
+        process.env.DISCORD_BOT_TOKEN = prevDiscordToken;
+      }
     }
   });
 

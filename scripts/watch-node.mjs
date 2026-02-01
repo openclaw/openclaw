@@ -39,7 +39,9 @@ const nodeProcess = spawn(process.execPath, ["--watch", "openclaw.mjs", ...args]
 let exiting = false;
 
 function cleanup(code = 0) {
-  if (exiting) return;
+  if (exiting) {
+    return;
+  }
   exiting = true;
   nodeProcess.kill("SIGTERM");
   compilerProcess.kill("SIGTERM");
@@ -50,11 +52,15 @@ process.on("SIGINT", () => cleanup(130));
 process.on("SIGTERM", () => cleanup(143));
 
 compilerProcess.on("exit", (code) => {
-  if (exiting) return;
+  if (exiting) {
+    return;
+  }
   cleanup(code ?? 1);
 });
 
 nodeProcess.on("exit", (code, signal) => {
-  if (signal || exiting) return;
+  if (signal || exiting) {
+    return;
+  }
   cleanup(code ?? 1);
 });
