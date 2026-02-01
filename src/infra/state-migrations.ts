@@ -198,6 +198,26 @@ function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
   return normalized;
 }
 
+const LEGACY_STATE_DIR_PATTERNS = [
+  /[/\\]\.clawdbot[/\\]/,
+  /[/\\]\.moltbot[/\\]/,
+  /[/\\]\.moldbot[/\\]/,
+];
+
+function rewriteSessionFilePath(entry: SessionEntry, targetDir: string): void {
+  const sessionFile = (entry as unknown as Record<string, unknown>).sessionFile;
+  if (typeof sessionFile !== "string" || !sessionFile.trim()) {
+    return;
+  }
+  for (const pattern of LEGACY_STATE_DIR_PATTERNS) {
+    if (pattern.test(sessionFile)) {
+      const filename = path.basename(sessionFile);
+      (entry as unknown as Record<string, unknown>).sessionFile = path.join(targetDir, filename);
+      return;
+    }
+  }
+}
+
 function resolveUpdatedAt(entry: SessionEntryLike): number {
   return typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
     ? entry.updatedAt
@@ -665,6 +685,7 @@ async function migrateLegacySessions(
       if (!normalizedEntry) {
         continue;
       }
+      rewriteSessionFilePath(normalizedEntry, detected.sessions.targetDir);
       normalized[key] = normalizedEntry;
     }
     await saveSessionStore(detected.sessions.targetStorePath, normalized);

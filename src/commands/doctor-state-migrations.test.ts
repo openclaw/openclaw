@@ -352,4 +352,41 @@ describe("doctor legacy state migrations", () => {
     expect(result.skipped).toBe(true);
     expect(result.migrated).toBe(false);
   });
+
+  it("rewrites sessionFile paths from legacy to new state dir", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {};
+    const legacySessionsDir = path.join(root, "sessions");
+    fs.mkdirSync(legacySessionsDir, { recursive: true });
+
+    // Simulate legacy sessions.json with hardcoded .clawdbot paths
+    const legacySessionFile = "/Users/test/.clawdbot/agents/main/sessions/2024-01-01_abc.jsonl";
+    writeJson5(path.join(legacySessionsDir, "sessions.json"), {
+      "+1555": {
+        sessionId: "a",
+        updatedAt: 10,
+        sessionFile: legacySessionFile,
+      },
+    });
+    fs.writeFileSync(path.join(legacySessionsDir, "2024-01-01_abc.jsonl"), "content", "utf-8");
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    await runLegacyStateMigrations({ detected, now: () => 123 });
+
+    const targetDir = path.join(root, "agents", "main", "sessions");
+    const store = JSON.parse(
+      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
+    ) as Record<string, { sessionId: string; sessionFile?: string }>;
+
+    const entry = store["agent:main:+1555"];
+    expect(entry?.sessionId).toBe("a");
+    // sessionFile path should be rewritten to use new state dir
+    expect(entry?.sessionFile).not.toContain(".clawdbot");
+    if (entry?.sessionFile) {
+      expect(entry.sessionFile).toContain(root);
+    }
+  });
 });
