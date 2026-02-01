@@ -4,10 +4,18 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
   return model.api === "openai-completions";
 }
 
+function hasHostname(baseUrl: string, hostname: string): boolean {
+  try {
+    return new URL(baseUrl).hostname === hostname;
+  } catch {
+    return false;
+  }
+}
+
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";
-  const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
-  const isMoonshot = model.provider === "moonshot" || baseUrl.includes("api.moonshot.ai");
+  const isZai = model.provider === "zai" || hasHostname(baseUrl, "api.z.ai");
+  const isMoonshot = model.provider === "moonshot" || hasHostname(baseUrl, "api.moonshot.ai");
   if ((!isZai && !isMoonshot) || !isOpenAiCompletionsModel(model)) {
     return model;
   }
