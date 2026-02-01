@@ -7,6 +7,20 @@ import {
   setOllamaApiKey,
 } from "./onboard-auth.js";
 
+const DEFAULT_OLLAMA_HOST = OLLAMA_BASE_URL.replace("/v1", "");
+
+/** Check if Ollama is reachable at the given base URL (without /v1 suffix). */
+async function checkOllamaReachable(host: string): Promise<boolean> {
+  try {
+    const response = await fetch(`${host}/api/tags`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function applyAuthChoiceOllama(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
@@ -16,24 +30,27 @@ export async function applyAuthChoiceOllama(
 
   let nextConfig = params.config;
 
-  await params.prompter.note(
-    [
-      "Ollama runs models locally or in the cloud.",
-      "Make sure Ollama is installed and running: https://ollama.com",
-      "Default server: http://127.0.0.1:11434",
-    ].join("\n"),
-    "Ollama",
-  );
-
-  const useDefault = await params.prompter.confirm({
-    message: `Use default Ollama server (${OLLAMA_BASE_URL.replace("/v1", "")})?`,
-    initialValue: true,
-  });
+  // Try auto-detecting Ollama at the default URL
+  const defaultReachable = await checkOllamaReachable(DEFAULT_OLLAMA_HOST);
 
   let baseUrl = OLLAMA_BASE_URL;
-  if (!useDefault) {
+  if (defaultReachable) {
+    await params.prompter.note(
+      `Ollama detected at ${DEFAULT_OLLAMA_HOST}`,
+      "Ollama",
+    );
+  } else {
+    await params.prompter.note(
+      [
+        "Ollama runs models locally or in the cloud.",
+        "Make sure Ollama is installed and running: https://ollama.com",
+      ].join("\n"),
+      "Ollama",
+    );
+
     const customUrl = await params.prompter.text({
-      message: "Enter Ollama server URL (e.g., http://192.168.1.100:11434)",
+      message: `Ollama not detected at default. Enter server URL:`,
+      initialValue: DEFAULT_OLLAMA_HOST,
       validate: (value) => {
         if (!value?.trim()) return "URL is required";
         try {
