@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Models: add Vertex AI Anthropic provider for Claude on GCP. Use your GCP credits directly with `vertex-anthropic/claude-opus-4-5@20251101`. (#XXXX) Thanks @ch_hao.
+
 ### Fixes
 
 - Auto-reply: avoid referencing workspace files in /new greeting prompt. (#5706) Thanks @bravostation.

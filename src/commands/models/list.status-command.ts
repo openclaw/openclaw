@@ -152,6 +152,7 @@ export async function modelsStatusCommand(
     "anthropic",
     "github-copilot",
     "google-vertex",
+    "vertex-anthropic",
     "openai",
     "google",
     "groq",
