@@ -1,10 +1,10 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
   type UpdateCheckResult,
 } from "../infra/update-check.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { VERSION } from "../version.js";
 
 export async function getUpdateCheckResult(params: {
@@ -54,7 +54,9 @@ export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvai
 
 export function formatUpdateAvailableHint(update: UpdateCheckResult): string | null {
   const availability = resolveUpdateAvailability(update);
-  if (!availability.available) return null;
+  if (!availability.available) {
+    return null;
+  }
 
   const details: string[] = [];
   if (availability.hasGitUpdate && availability.gitBehind != null) {
@@ -72,8 +74,12 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
   if (update.installKind === "git" && update.git) {
     const branch = update.git.branch ? `git ${update.git.branch}` : "git";
     parts.push(branch);
-    if (update.git.upstream) parts.push(`↔ ${update.git.upstream}`);
-    if (update.git.dirty === true) parts.push("dirty");
+    if (update.git.upstream) {
+      parts.push(`↔ ${update.git.upstream}`);
+    }
+    if (update.git.dirty === true) {
+      parts.push("dirty");
+    }
     if (update.git.behind != null && update.git.ahead != null) {
       if (update.git.behind === 0 && update.git.ahead === 0) {
         parts.push("up to date");
@@ -85,13 +91,19 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
         parts.push(`diverged (ahead ${update.git.ahead}, behind ${update.git.behind})`);
       }
     }
-    if (update.git.fetchOk === false) parts.push("fetch failed");
+    if (update.git.fetchOk === false) {
+      parts.push("fetch failed");
+    }
 
     if (update.registry?.latestVersion) {
       const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
-      if (cmp === 0) parts.push(`npm latest ${update.registry.latestVersion}`);
-      else if (cmp != null && cmp < 0) parts.push(`npm update ${update.registry.latestVersion}`);
-      else parts.push(`npm latest ${update.registry.latestVersion} (local newer)`);
+      if (cmp === 0) {
+        parts.push(`npm latest ${update.registry.latestVersion}`);
+      } else if (cmp != null && cmp < 0) {
+        parts.push(`npm update ${update.registry.latestVersion}`);
+      } else {
+        parts.push(`npm latest ${update.registry.latestVersion} (local newer)`);
+      }
     } else if (update.registry?.error) {
       parts.push("npm latest unknown");
     }
@@ -99,8 +111,9 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
     parts.push(update.packageManager !== "unknown" ? update.packageManager : "pkg");
     if (update.registry?.latestVersion) {
       const cmp = compareSemverStrings(VERSION, update.registry.latestVersion);
-      if (cmp === 0) parts.push(`npm latest ${update.registry.latestVersion}`);
-      else if (cmp != null && cmp < 0) {
+      if (cmp === 0) {
+        parts.push(`npm latest ${update.registry.latestVersion}`);
+      } else if (cmp != null && cmp < 0) {
         parts.push(`npm update ${update.registry.latestVersion}`);
       } else {
         parts.push(`npm latest ${update.registry.latestVersion} (local newer)`);
@@ -111,9 +124,15 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
   }
 
   if (update.deps) {
-    if (update.deps.status === "ok") parts.push("deps ok");
-    if (update.deps.status === "missing") parts.push("deps missing");
-    if (update.deps.status === "stale") parts.push("deps stale");
+    if (update.deps.status === "ok") {
+      parts.push("deps ok");
+    }
+    if (update.deps.status === "missing") {
+      parts.push("deps missing");
+    }
+    if (update.deps.status === "stale") {
+      parts.push("deps stale");
+    }
   }
   return `Update: ${parts.join(" · ")}`;
 }

@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 
@@ -73,17 +72,23 @@ const connectNodeClient = async (params: {
     commands: params.commands,
     onEvent: params.onEvent,
     onHelloOk: () => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       resolveReady?.();
     },
     onConnectError: (err) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       rejectReady?.(err);
     },
     onClose: (code, reason) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       rejectReady?.(new Error(`gateway closed (${code}): ${reason}`));
     },
@@ -101,7 +106,9 @@ const connectNodeClient = async (params: {
 async function waitForSignal(check: () => boolean, timeoutMs = 2000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (check()) return;
+    if (check()) {
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("timeout");

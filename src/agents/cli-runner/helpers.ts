@@ -1,19 +1,18 @@
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
-import { runExec } from "../../process/exec.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
-import { buildSystemPromptParams } from "../system-prompt-params.js";
-import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { buildAgentSystemPrompt } from "../system-prompt.js";
+import { runExec } from "../../process/exec.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
+import { resolveDefaultModelForAgent } from "../model-selection.js";
+import { buildSystemPromptParams } from "../system-prompt-params.js";
+import { buildAgentSystemPrompt } from "../system-prompt.js";
 
 const CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
 
@@ -25,19 +24,29 @@ export async function cleanupResumeProcesses(
   backend: CliBackendConfig,
   sessionId: string,
 ): Promise<void> {
-  if (process.platform === "win32") return;
+  if (process.platform === "win32") {
+    return;
+  }
   const resumeArgs = backend.resumeArgs ?? [];
-  if (resumeArgs.length === 0) return;
-  if (!resumeArgs.some((arg) => arg.includes("{sessionId}"))) return;
+  if (resumeArgs.length === 0) {
+    return;
+  }
+  if (!resumeArgs.some((arg) => arg.includes("{sessionId}"))) {
+    return;
+  }
   const commandToken = path.basename(backend.command ?? "").trim();
-  if (!commandToken) return;
+  if (!commandToken) {
+    return;
+  }
 
   const resumeTokens = resumeArgs.map((arg) => arg.replaceAll("{sessionId}", sessionId));
   const pattern = [commandToken, ...resumeTokens]
     .filter(Boolean)
     .map((token) => escapeRegex(token))
     .join(".*");
-  if (!pattern) return;
+  if (!pattern) {
+    return;
+  }
 
   try {
     await runExec("pkill", ["-f", pattern]);
@@ -48,14 +57,18 @@ export async function cleanupResumeProcesses(
 
 function buildSessionMatchers(backend: CliBackendConfig): RegExp[] {
   const commandToken = path.basename(backend.command ?? "").trim();
-  if (!commandToken) return [];
+  if (!commandToken) {
+    return [];
+  }
   const matchers: RegExp[] = [];
   const sessionArg = backend.sessionArg?.trim();
   const sessionArgs = backend.sessionArgs ?? [];
   const resumeArgs = backend.resumeArgs ?? [];
 
   const addMatcher = (args: string[]) => {
-    if (args.length === 0) return;
+    if (args.length === 0) {
+      return;
+    }
     const tokens = [commandToken, ...args];
     const pattern = tokens
       .map((token, index) => {
@@ -80,7 +93,9 @@ function buildSessionMatchers(backend: CliBackendConfig): RegExp[] {
 }
 
 function tokenToRegex(token: string): string {
-  if (!token.includes("{sessionId}")) return escapeRegex(token);
+  if (!token.includes("{sessionId}")) {
+    return escapeRegex(token);
+  }
   const parts = token.split("{sessionId}").map((part) => escapeRegex(part));
   return parts.join("\\S+");
 }
@@ -93,24 +108,38 @@ export async function cleanupSuspendedCliProcesses(
   backend: CliBackendConfig,
   threshold = 10,
 ): Promise<void> {
-  if (process.platform === "win32") return;
+  if (process.platform === "win32") {
+    return;
+  }
   const matchers = buildSessionMatchers(backend);
-  if (matchers.length === 0) return;
+  if (matchers.length === 0) {
+    return;
+  }
 
   try {
     const { stdout } = await runExec("ps", ["-ax", "-o", "pid=,stat=,command="]);
     const suspended: number[] = [];
     for (const line of stdout.split("\n")) {
       const trimmed = line.trim();
-      if (!trimmed) continue;
+      if (!trimmed) {
+        continue;
+      }
       const match = /^(\d+)\s+(\S+)\s+(.*)$/.exec(trimmed);
-      if (!match) continue;
+      if (!match) {
+        continue;
+      }
       const pid = Number(match[1]);
       const stat = match[2] ?? "";
       const command = match[3] ?? "";
-      if (!Number.isFinite(pid)) continue;
-      if (!stat.includes("T")) continue;
-      if (!matchers.some((matcher) => matcher.test(command))) continue;
+      if (!Number.isFinite(pid)) {
+        continue;
+      }
+      if (!stat.includes("T")) {
+        continue;
+      }
+      if (!matchers.some((matcher) => matcher.test(command))) {
+        continue;
+      }
       suspended.push(pid);
     }
 
@@ -153,13 +182,17 @@ function buildModelAliasLines(cfg?: OpenClawConfig) {
   const entries: Array<{ alias: string; model: string }> = [];
   for (const [keyRaw, entryRaw] of Object.entries(models)) {
     const model = String(keyRaw ?? "").trim();
-    if (!model) continue;
+    if (!model) {
+      continue;
+    }
     const alias = String((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) continue;
+    if (!alias) {
+      continue;
+    }
     entries.push({ alias, model });
   }
   return entries
-    .sort((a, b) => a.alias.localeCompare(b.alias))
+    .toSorted((a, b) => a.alias.localeCompare(b.alias))
     .map((entry) => `- ${entry.alias}: ${entry.model}`);
 }
 
@@ -217,25 +250,33 @@ export function buildSystemPrompt(params: {
 
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {
   const trimmed = modelId.trim();
-  if (!trimmed) return trimmed;
+  if (!trimmed) {
+    return trimmed;
+  }
   const direct = backend.modelAliases?.[trimmed];
-  if (direct) return direct;
+  if (direct) {
+    return direct;
+  }
   const lower = trimmed.toLowerCase();
   const mapped = backend.modelAliases?.[lower];
-  if (mapped) return mapped;
+  if (mapped) {
+    return mapped;
+  }
   return trimmed;
 }
 
 function toUsage(raw: Record<string, unknown>): CliUsage | undefined {
   const pick = (key: string) =>
-    typeof raw[key] === "number" && raw[key] > 0 ? (raw[key] as number) : undefined;
+    typeof raw[key] === "number" && raw[key] > 0 ? raw[key] : undefined;
   const input = pick("input_tokens") ?? pick("inputTokens");
   const output = pick("output_tokens") ?? pick("outputTokens");
   const cacheRead =
     pick("cache_read_input_tokens") ?? pick("cached_input_tokens") ?? pick("cacheRead");
   const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
-  if (!input && !output && !cacheRead && !cacheWrite && !total) return undefined;
+  if (!input && !output && !cacheRead && !cacheWrite && !total) {
+    return undefined;
+  }
   return { input, output, cacheRead, cacheWrite, total };
 }
 
@@ -244,15 +285,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function collectText(value: unknown): string {
-  if (!value) return "";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map((entry) => collectText(entry)).join("");
-  if (!isRecord(value)) return "";
-  if (typeof value.text === "string") return value.text;
-  if (typeof value.content === "string") return value.content;
-  if (Array.isArray(value.content))
+  if (!value) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => collectText(entry)).join("");
+  }
+  if (!isRecord(value)) {
+    return "";
+  }
+  if (typeof value.text === "string") {
+    return value.text;
+  }
+  if (typeof value.content === "string") {
+    return value.content;
+  }
+  if (Array.isArray(value.content)) {
     return value.content.map((entry) => collectText(entry)).join("");
-  if (isRecord(value.message)) return collectText(value.message);
+  }
+  if (isRecord(value.message)) {
+    return collectText(value.message);
+  }
   return "";
 }
 
@@ -268,21 +324,27 @@ function pickSessionId(
   ];
   for (const field of fields) {
     const value = parsed[field];
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
   }
   return undefined;
 }
 
 export function parseCliJson(raw: string, backend: CliBackendConfig): CliOutput | null {
   const trimmed = raw.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(trimmed);
   } catch {
     return null;
   }
-  if (!isRecord(parsed)) return null;
+  if (!isRecord(parsed)) {
+    return null;
+  }
   const sessionId = pickSessionId(parsed, backend);
   const usage = isRecord(parsed.usage) ? toUsage(parsed.usage) : undefined;
   const text =
@@ -298,7 +360,9 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
     .split(/\r?\n/g)
     .map((line) => line.trim())
     .filter(Boolean);
-  if (lines.length === 0) return null;
+  if (lines.length === 0) {
+    return null;
+  }
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   const texts: string[] = [];
@@ -309,8 +373,12 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
     } catch {
       continue;
     }
-    if (!isRecord(parsed)) continue;
-    if (!sessionId) sessionId = pickSessionId(parsed, backend);
+    if (!isRecord(parsed)) {
+      continue;
+    }
+    if (!sessionId) {
+      sessionId = pickSessionId(parsed, backend);
+    }
     if (!sessionId && typeof parsed.thread_id === "string") {
       sessionId = parsed.thread_id.trim();
     }
@@ -326,7 +394,9 @@ export function parseCliJsonl(raw: string, backend: CliBackendConfig): CliOutput
     }
   }
   const text = texts.join("\n").trim();
-  if (!text) return null;
+  if (!text) {
+    return null;
+  }
   return { text, sessionId, usage };
 }
 
@@ -336,11 +406,19 @@ export function resolveSystemPromptUsage(params: {
   systemPrompt?: string;
 }): string | null {
   const systemPrompt = params.systemPrompt?.trim();
-  if (!systemPrompt) return null;
+  if (!systemPrompt) {
+    return null;
+  }
   const when = params.backend.systemPromptWhen ?? "first";
-  if (when === "never") return null;
-  if (when === "first" && !params.isNewSession) return null;
-  if (!params.backend.systemPromptArg?.trim()) return null;
+  if (when === "never") {
+    return null;
+  }
+  if (when === "first" && !params.isNewSession) {
+    return null;
+  }
+  if (!params.backend.systemPromptArg?.trim()) {
+    return null;
+  }
   return systemPrompt;
 }
 
@@ -350,9 +428,15 @@ export function resolveSessionIdToSend(params: {
 }): { sessionId?: string; isNew: boolean } {
   const mode = params.backend.sessionMode ?? "always";
   const existing = params.cliSessionId?.trim();
-  if (mode === "none") return { sessionId: undefined, isNew: !existing };
-  if (mode === "existing") return { sessionId: existing, isNew: !existing };
-  if (existing) return { sessionId: existing, isNew: false };
+  if (mode === "none") {
+    return { sessionId: undefined, isNew: !existing };
+  }
+  if (mode === "existing") {
+    return { sessionId: existing, isNew: !existing };
+  }
+  if (existing) {
+    return { sessionId: existing, isNew: false };
+  }
   return { sessionId: crypto.randomUUID(), isNew: true };
 }
 
@@ -372,15 +456,25 @@ export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: 
 
 function resolveImageExtension(mimeType: string): string {
   const normalized = mimeType.toLowerCase();
-  if (normalized.includes("png")) return "png";
-  if (normalized.includes("jpeg") || normalized.includes("jpg")) return "jpg";
-  if (normalized.includes("gif")) return "gif";
-  if (normalized.includes("webp")) return "webp";
+  if (normalized.includes("png")) {
+    return "png";
+  }
+  if (normalized.includes("jpeg") || normalized.includes("jpg")) {
+    return "jpg";
+  }
+  if (normalized.includes("gif")) {
+    return "gif";
+  }
+  if (normalized.includes("webp")) {
+    return "webp";
+  }
   return "bin";
 }
 
 export function appendImagePathsToPrompt(prompt: string, paths: string[]): string {
-  if (!paths.length) return prompt;
+  if (!paths.length) {
+    return prompt;
+  }
   const trimmed = prompt.trimEnd();
   const separator = trimmed ? "\n\n" : "";
   return `${trimmed}${separator}${paths.join("\n")}`;

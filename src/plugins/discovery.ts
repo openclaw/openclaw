@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-
+import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
@@ -8,7 +8,6 @@ import {
   type OpenClawPackageManifest,
   type PackageManifest,
 } from "./manifest.js";
-import type { PluginDiagnostic, PluginOrigin } from "./types.js";
 
 const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 
@@ -32,13 +31,17 @@ export type PluginDiscoveryResult = {
 
 function isExtensionFile(filePath: string): boolean {
   const ext = path.extname(filePath);
-  if (!EXTENSION_EXTS.has(ext)) return false;
+  if (!EXTENSION_EXTS.has(ext)) {
+    return false;
+  }
   return !filePath.endsWith(".d.ts");
 }
 
 function readPackageManifest(dir: string): PackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
-  if (!fs.existsSync(manifestPath)) return null;
+  if (!fs.existsSync(manifestPath)) {
+    return null;
+  }
   try {
     const raw = fs.readFileSync(manifestPath, "utf-8");
     return JSON.parse(raw) as PackageManifest;
@@ -49,7 +52,9 @@ function readPackageManifest(dir: string): PackageManifest | null {
 
 function resolvePackageExtensions(manifest: PackageManifest): string[] {
   const raw = getPackageManifestMetadata(manifest)?.extensions;
-  if (!Array.isArray(raw)) return [];
+  if (!Array.isArray(raw)) {
+    return [];
+  }
   return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }
 
@@ -60,7 +65,9 @@ function deriveIdHint(params: {
 }): string {
   const base = path.basename(params.filePath, path.extname(params.filePath));
   const rawPackageName = params.packageName?.trim();
-  if (!rawPackageName) return base;
+  if (!rawPackageName) {
+    return base;
+  }
 
   // Prefer the unscoped name so config keys stay stable even when the npm
   // package is scoped (example: @openclaw/voice-call -> voice-call).
@@ -68,7 +75,9 @@ function deriveIdHint(params: {
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
 
-  if (!params.hasMultipleExtensions) return unscoped;
+  if (!params.hasMultipleExtensions) {
+    return unscoped;
+  }
   return `${unscoped}/${base}`;
 }
 
@@ -84,7 +93,9 @@ function addCandidate(params: {
   packageDir?: string;
 }) {
   const resolved = path.resolve(params.source);
-  if (params.seen.has(resolved)) return;
+  if (params.seen.has(resolved)) {
+    return;
+  }
   params.seen.add(resolved);
   const manifest = params.manifest ?? null;
   params.candidates.push({
@@ -109,7 +120,9 @@ function discoverInDirectory(params: {
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
 }) {
-  if (!fs.existsSync(params.dir)) return;
+  if (!fs.existsSync(params.dir)) {
+    return;
+  }
   let entries: fs.Dirent[] = [];
   try {
     entries = fs.readdirSync(params.dir, { withFileTypes: true });
@@ -125,7 +138,9 @@ function discoverInDirectory(params: {
   for (const entry of entries) {
     const fullPath = path.join(params.dir, entry.name);
     if (entry.isFile()) {
-      if (!isExtensionFile(fullPath)) continue;
+      if (!isExtensionFile(fullPath)) {
+        continue;
+      }
       addCandidate({
         candidates: params.candidates,
         seen: params.seen,
@@ -136,7 +151,9 @@ function discoverInDirectory(params: {
         workspaceDir: params.workspaceDir,
       });
     }
-    if (!entry.isDirectory()) continue;
+    if (!entry.isDirectory()) {
+      continue;
+    }
 
     const manifest = readPackageManifest(fullPath);
     const extensions = manifest ? resolvePackageExtensions(manifest) : [];
@@ -292,9 +309,13 @@ export function discoverOpenClawPlugins(params: {
 
   const extra = params.extraPaths ?? [];
   for (const extraPath of extra) {
-    if (typeof extraPath !== "string") continue;
+    if (typeof extraPath !== "string") {
+      continue;
+    }
     const trimmed = extraPath.trim();
-    if (!trimmed) continue;
+    if (!trimmed) {
+      continue;
+    }
     discoverFromPath({
       rawPath: trimmed,
       origin: "config",

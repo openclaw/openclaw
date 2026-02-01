@@ -1,10 +1,10 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
-import { buildAgentSystemPrompt, type PromptMode } from "../system-prompt.js";
-import { buildToolSummaryMap } from "../tool-summaries.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
 import type { ReasoningLevel, ThinkLevel } from "./utils.js";
+import { buildAgentSystemPrompt, type PromptMode } from "../system-prompt.js";
+import { buildToolSummaryMap } from "../tool-summaries.js";
 
 export function buildEmbeddedSystemPrompt(params: {
   workspaceDir: string;
@@ -75,7 +75,7 @@ export function buildEmbeddedSystemPrompt(params: {
 
 export function createSystemPromptOverride(
   systemPrompt: string,
-): (defaultPrompt: string) => string {
+): (defaultPrompt?: string) => string {
   const trimmed = systemPrompt.trim();
   return () => trimmed;
 }

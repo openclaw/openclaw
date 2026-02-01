@@ -1,13 +1,21 @@
 # Changelog
 
+## 2026.1.30
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
 ## 2026.1.29
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.26
 
 ### Changes
+
 - Breaking: voice-call TTS now uses core `messages.tts` (plugin TTS config deep‑merges with core).
 - Telephony TTS supports OpenAI + ElevenLabs; Edge TTS is ignored for calls.
 - Removed legacy `tts.model`/`tts.voice`/`tts.instructions` plugin fields.
@@ -16,54 +24,65 @@
 ## 2026.1.23
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.22
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.21
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.20
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.17-1
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.17
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.16
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.15
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 2026.1.14
 
 ### Changes
+
 - Version alignment with core OpenClaw release numbers.
 
 ## 0.1.0
 
 ### Highlights
+
 - First public release of the @openclaw/voice-call plugin.
 
 ### Features
+
 - Providers: Twilio (Programmable Voice + Media Streams), Telnyx (Call Control v2), and mock provider for local dev.
 - Call flows: outbound notify vs. conversation modes, configurable auto‑hangup, and multi‑turn continuation.
 - Inbound handling: policy controls (disabled/allowlist/open), allowlist matching, and inbound greeting.

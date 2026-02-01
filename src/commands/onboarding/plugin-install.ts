@@ -1,15 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { recordPluginInstall } from "../../plugins/installs.js";
-import { enablePluginInConfig } from "../../plugins/enable.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import { installPluginFromNpmSpec } from "../../plugins/install.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { enablePluginInConfig } from "../../plugins/enable.js";
+import { installPluginFromNpmSpec } from "../../plugins/install.js";
+import { recordPluginInstall } from "../../plugins/installs.js";
+import { loadOpenClawPlugins } from "../../plugins/loader.js";
 
 type InstallChoice = "npm" | "local" | "skip";
 
@@ -25,7 +25,9 @@ function hasGitWorkspace(workspaceDir?: string): boolean {
     candidates.add(path.join(workspaceDir, ".git"));
   }
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return true;
+    if (fs.existsSync(candidate)) {
+      return true;
+    }
   }
   return false;
 }
@@ -35,16 +37,22 @@ function resolveLocalPath(
   workspaceDir: string | undefined,
   allowLocal: boolean,
 ): string | null {
-  if (!allowLocal) return null;
+  if (!allowLocal) {
+    return null;
+  }
   const raw = entry.install.localPath?.trim();
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
   const candidates = new Set<string>();
   candidates.add(path.resolve(process.cwd(), raw));
   if (workspaceDir && workspaceDir !== process.cwd()) {
     candidates.add(path.resolve(workspaceDir, raw));
   }
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
   }
   return null;
 }
@@ -108,8 +116,12 @@ function resolveInstallDefaultChoice(params: {
     return "npm";
   }
   const entryDefault = entry.install.defaultChoice;
-  if (entryDefault === "local") return localPath ? "local" : "npm";
-  if (entryDefault === "npm") return "npm";
+  if (entryDefault === "local") {
+    return localPath ? "local" : "npm";
+  }
+  if (entryDefault === "npm") {
+    return "npm";
+  }
   return localPath ? "local" : "npm";
 }
 

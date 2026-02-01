@@ -1,21 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { loginWeb } from "../../../channel-web.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { mergeWhatsAppConfig } from "../../../config/merge-config.js";
 import type { DmPolicy } from "../../../config/types.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
 import type { RuntimeEnv } from "../../../runtime.js";
-import { formatDocsLink } from "../../../terminal/links.js";
+import type { WizardPrompter } from "../../../wizard/prompts.js";
+import type { ChannelOnboardingAdapter } from "../onboarding-types.js";
+import { loginWeb } from "../../../channel-web.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
+import { mergeWhatsAppConfig } from "../../../config/merge-config.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../routing/session-key.js";
+import { formatDocsLink } from "../../../terminal/links.js";
 import { normalizeE164 } from "../../../utils.js";
 import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
   resolveWhatsAppAuthDir,
 } from "../../../web/accounts.js";
-import type { WizardPrompter } from "../../../wizard/prompts.js";
-import type { ChannelOnboardingAdapter } from "../onboarding-types.js";
 import { promptAccountId } from "./helpers.js";
 
 const channel = "whatsapp" as const;
@@ -68,9 +68,13 @@ async function promptWhatsAppAllowFrom(
       initialValue: existingAllowFrom[0],
       validate: (value) => {
         const raw = String(value ?? "").trim();
-        if (!raw) return "Required";
+        if (!raw) {
+          return "Required";
+        }
         const normalized = normalizeE164(raw);
-        if (!normalized) return `Invalid number: ${raw}`;
+        if (!normalized) {
+          return `Invalid number: ${raw}`;
+        }
         return undefined;
       },
     });
@@ -107,13 +111,13 @@ async function promptWhatsAppAllowFrom(
     "WhatsApp DM access",
   );
 
-  const phoneMode = (await prompter.select({
+  const phoneMode = await prompter.select({
     message: "WhatsApp phone setup",
     options: [
       { value: "personal", label: "This is my personal phone number" },
       { value: "separate", label: "Separate phone just for OpenClaw" },
     ],
-  })) as "personal" | "separate";
+  });
 
   if (phoneMode === "personal") {
     await prompter.note(
@@ -126,9 +130,13 @@ async function promptWhatsAppAllowFrom(
       initialValue: existingAllowFrom[0],
       validate: (value) => {
         const raw = String(value ?? "").trim();
-        if (!raw) return "Required";
+        if (!raw) {
+          return "Required";
+        }
         const normalized = normalizeE164(raw);
-        if (!normalized) return `Invalid number: ${raw}`;
+        if (!normalized) {
+          return `Invalid number: ${raw}`;
+        }
         return undefined;
       },
     });
@@ -170,7 +178,9 @@ async function promptWhatsAppAllowFrom(
   if (policy === "open") {
     next = setWhatsAppAllowFrom(next, ["*"]);
   }
-  if (policy === "disabled") return next;
+  if (policy === "disabled") {
+    return next;
+  }
 
   const allowOptions =
     existingAllowFrom.length > 0
@@ -187,13 +197,13 @@ async function promptWhatsAppAllowFrom(
           { value: "list", label: "Set allowFrom to specific numbers" },
         ] as const);
 
-  const mode = (await prompter.select({
+  const mode = await prompter.select({
     message: "WhatsApp allowFrom (optional pre-allowlist)",
     options: allowOptions.map((opt) => ({
       value: opt.value,
       label: opt.label,
     })),
-  })) as (typeof allowOptions)[number]["value"];
+  });
 
   if (mode === "keep") {
     // Keep allowFrom as-is.
@@ -205,16 +215,24 @@ async function promptWhatsAppAllowFrom(
       placeholder: "+15555550123, +447700900123",
       validate: (value) => {
         const raw = String(value ?? "").trim();
-        if (!raw) return "Required";
+        if (!raw) {
+          return "Required";
+        }
         const parts = raw
           .split(/[\n,;]+/g)
           .map((p) => p.trim())
           .filter(Boolean);
-        if (parts.length === 0) return "Required";
+        if (parts.length === 0) {
+          return "Required";
+        }
         for (const part of parts) {
-          if (part === "*") continue;
+          if (part === "*") {
+            continue;
+          }
           const normalized = normalizeE164(part);
-          if (!normalized) return `Invalid number: ${part}`;
+          if (!normalized) {
+            return `Invalid number: ${part}`;
+          }
         }
         return undefined;
       },

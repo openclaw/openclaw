@@ -1,8 +1,7 @@
 import { Type } from "@sinclair/typebox";
-
 import type { OpenClawConfig } from "../../config/config.js";
-import { formatCliCommand } from "../../cli/command-format.js";
 import type { AnyAgentTool } from "./common.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   CacheEntry,
@@ -105,13 +104,19 @@ type PerplexityBaseUrlHint = "direct" | "openrouter";
 
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") return undefined;
+  if (!search || typeof search !== "object") {
+    return undefined;
+  }
   return search as WebSearchConfig;
 }
 
 function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: boolean }): boolean {
-  if (typeof params.search?.enabled === "boolean") return params.search.enabled;
-  if (params.sandboxed) return true;
+  if (typeof params.search?.enabled === "boolean") {
+    return params.search.enabled;
+  }
+  if (params.sandboxed) {
+    return true;
+  }
   return true;
 }
 
@@ -143,15 +148,23 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
       : "";
-  if (raw === "perplexity") return "perplexity";
-  if (raw === "brave") return "brave";
+  if (raw === "perplexity") {
+    return "perplexity";
+  }
+  if (raw === "brave") {
+    return "brave";
+  }
   return "brave";
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
-  if (!search || typeof search !== "object") return {};
+  if (!search || typeof search !== "object") {
+    return {};
+  }
   const perplexity = "perplexity" in search ? search.perplexity : undefined;
-  if (!perplexity || typeof perplexity !== "object") return {};
+  if (!perplexity || typeof perplexity !== "object") {
+    return {};
+  }
   return perplexity as PerplexityConfig;
 }
 
@@ -182,7 +195,9 @@ function normalizeApiKey(key: unknown): string {
 }
 
 function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHint | undefined {
-  if (!apiKey) return undefined;
+  if (!apiKey) {
+    return undefined;
+  }
   const normalized = apiKey.toLowerCase();
   if (PERPLEXITY_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
     return "direct";
@@ -202,13 +217,23 @@ function resolvePerplexityBaseUrl(
     perplexity && "baseUrl" in perplexity && typeof perplexity.baseUrl === "string"
       ? perplexity.baseUrl.trim()
       : "";
-  if (fromConfig) return fromConfig;
-  if (apiKeySource === "perplexity_env") return PERPLEXITY_DIRECT_BASE_URL;
-  if (apiKeySource === "openrouter_env") return DEFAULT_PERPLEXITY_BASE_URL;
+  if (fromConfig) {
+    return fromConfig;
+  }
+  if (apiKeySource === "perplexity_env") {
+    return PERPLEXITY_DIRECT_BASE_URL;
+  }
+  if (apiKeySource === "openrouter_env") {
+    return DEFAULT_PERPLEXITY_BASE_URL;
+  }
   if (apiKeySource === "config") {
     const inferred = inferPerplexityBaseUrlFromApiKey(apiKey);
-    if (inferred === "direct") return PERPLEXITY_DIRECT_BASE_URL;
-    if (inferred === "openrouter") return DEFAULT_PERPLEXITY_BASE_URL;
+    if (inferred === "direct") {
+      return PERPLEXITY_DIRECT_BASE_URL;
+    }
+    if (inferred === "openrouter") {
+      return DEFAULT_PERPLEXITY_BASE_URL;
+    }
   }
   return DEFAULT_PERPLEXITY_BASE_URL;
 }
@@ -228,27 +253,43 @@ function resolveSearchCount(value: unknown, fallback: number): number {
 }
 
 function normalizeFreshness(value: string | undefined): string | undefined {
-  if (!value) return undefined;
+  if (!value) {
+    return undefined;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
 
   const lower = trimmed.toLowerCase();
-  if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) return lower;
+  if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) {
+    return lower;
+  }
 
   const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
-  if (!match) return undefined;
+  if (!match) {
+    return undefined;
+  }
 
   const [, start, end] = match;
-  if (!isValidIsoDate(start) || !isValidIsoDate(end)) return undefined;
-  if (start > end) return undefined;
+  if (!isValidIsoDate(start) || !isValidIsoDate(end)) {
+    return undefined;
+  }
+  if (start > end) {
+    return undefined;
+  }
 
   return `${start}to${end}`;
 }
 
 function isValidIsoDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
   const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return false;
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return false;
+  }
 
   const date = new Date(Date.UTC(year, month - 1, day));
   return (
@@ -257,7 +298,9 @@ function isValidIsoDate(value: string): boolean {
 }
 
 function resolveSiteName(url: string | undefined): string | undefined {
-  if (!url) return undefined;
+  if (!url) {
+    return undefined;
+  }
   try {
     return new URL(url).hostname;
   } catch {
@@ -326,7 +369,9 @@ async function runWebSearch(params: {
       : `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
-  if (cached) return { ...cached.value, cached: true };
+  if (cached) {
+    return { ...cached.value, cached: true };
+  }
 
   const start = Date.now();
 
@@ -411,7 +456,9 @@ export function createWebSearchTool(options?: {
   sandboxed?: boolean;
 }): AnyAgentTool | null {
   const search = resolveSearchConfig(options?.config);
-  if (!resolveSearchEnabled({ search, sandboxed: options?.sandboxed })) return null;
+  if (!resolveSearchEnabled({ search, sandboxed: options?.sandboxed })) {
+    return null;
+  }
 
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);

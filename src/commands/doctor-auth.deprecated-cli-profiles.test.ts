@@ -1,11 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { maybeRemoveDeprecatedCliAuthProfiles } from "./doctor-auth.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { maybeRemoveDeprecatedCliAuthProfiles } from "./doctor-auth.js";
 
 let originalAgentDir: string | undefined;
 let originalPiAgentDir: string | undefined;
@@ -50,7 +48,9 @@ afterEach(() => {
 
 describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
   it("removes deprecated CLI auth profiles from store + config", async () => {
-    if (!tempAgentDir) throw new Error("Missing temp agent dir");
+    if (!tempAgentDir) {
+      throw new Error("Missing temp agent dir");
+    }
     const authPath = path.join(tempAgentDir, "auth-profiles.json");
     fs.writeFileSync(
       authPath,

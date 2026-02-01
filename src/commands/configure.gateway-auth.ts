@@ -1,9 +1,9 @@
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
+import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
@@ -28,7 +28,9 @@ export function buildGatewayAuthConfig(params: {
 }): GatewayAuthConfig | undefined {
   const allowTailscale = params.existing?.allowTailscale;
   const base: GatewayAuthConfig = {};
-  if (typeof allowTailscale === "boolean") base.allowTailscale = allowTailscale;
+  if (typeof allowTailscale === "boolean") {
+    base.allowTailscale = allowTailscale;
+  }
 
   if (params.mode === "token") {
     return { ...base, mode: "token", token: params.token };

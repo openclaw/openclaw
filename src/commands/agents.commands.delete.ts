@@ -1,12 +1,11 @@
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
-
 import { createQuietRuntime, requireValidConfig } from "./agents.command-shared.js";
 import { findAgentEntryIndex, listAgentEntries, pruneAgentConfig } from "./agents.config.js";
 import { moveToTrash } from "./onboard-helpers.js";
@@ -22,7 +21,9 @@ export async function agentsDeleteCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const cfg = await requireValidConfig(runtime);
-  if (!cfg) return;
+  if (!cfg) {
+    return;
+  }
 
   const input = opts.id?.trim();
   if (!input) {
@@ -70,7 +71,9 @@ export async function agentsDeleteCommand(
 
   const result = pruneAgentConfig(cfg, agentId);
   await writeConfigFile(result.config);
-  if (!opts.json) logConfigUpdated(runtime);
+  if (!opts.json) {
+    logConfigUpdated(runtime);
+  }
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   await moveToTrash(workspaceDir, quietRuntime);

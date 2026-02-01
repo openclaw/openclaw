@@ -1,7 +1,5 @@
-import type { OpenClawConfig } from "../config/config.js";
-
 import { describe, expect, it, vi } from "vitest";
-
+import type { OpenClawConfig } from "../config/config.js";
 import { noteMacLaunchctlGatewayEnvOverrides } from "./doctor-platform-notes.js";
 
 describe("noteMacLaunchctlGatewayEnvOverrides", () => {

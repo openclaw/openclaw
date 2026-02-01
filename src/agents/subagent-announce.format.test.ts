@@ -24,8 +24,12 @@ vi.mock("../gateway/call.js", () => ({
     if (typed.method === "agent.wait") {
       return { status: "error", startedAt: 10, endedAt: 20, error: "boom" };
     }
-    if (typed.method === "sessions.patch") return {};
-    if (typed.method === "sessions.delete") return {};
+    if (typed.method === "sessions.patch") {
+      return {};
+    }
+    if (typed.method === "sessions.delete") {
+      return {};
+    }
     return {};
   }),
 }));

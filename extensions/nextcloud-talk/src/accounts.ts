@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
-
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
-
 import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
 
 function isTruthyEnvValue(value?: string): boolean {
-  if (!value) return false;
+  if (!value) {
+    return false;
+  }
   return TRUTHY_ENV.has(value.trim().toLowerCase());
 }
 
@@ -29,10 +29,14 @@ export type ResolvedNextcloudTalkAccount = {
 
 function listConfiguredAccountIds(cfg: CoreConfig): string[] {
   const accounts = cfg.channels?.["nextcloud-talk"]?.accounts;
-  if (!accounts || typeof accounts !== "object") return [];
+  if (!accounts || typeof accounts !== "object") {
+    return [];
+  }
   const ids = new Set<string>();
   for (const key of Object.keys(accounts)) {
-    if (!key) continue;
+    if (!key) {
+      continue;
+    }
     ids.add(normalizeAccountId(key));
   }
   return [...ids];
@@ -41,13 +45,17 @@ function listConfiguredAccountIds(cfg: CoreConfig): string[] {
 export function listNextcloudTalkAccountIds(cfg: CoreConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
   debugAccounts("listNextcloudTalkAccountIds", ids);
-  if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
-  return ids.sort((a, b) => a.localeCompare(b));
+  if (ids.length === 0) {
+    return [DEFAULT_ACCOUNT_ID];
+  }
+  return ids.toSorted((a, b) => a.localeCompare(b));
 }
 
 export function resolveDefaultNextcloudTalkAccountId(cfg: CoreConfig): string {
   const ids = listNextcloudTalkAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;
+  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
+    return DEFAULT_ACCOUNT_ID;
+  }
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
@@ -56,9 +64,13 @@ function resolveAccountConfig(
   accountId: string,
 ): NextcloudTalkAccountConfig | undefined {
   const accounts = cfg.channels?.["nextcloud-talk"]?.accounts;
-  if (!accounts || typeof accounts !== "object") return undefined;
+  if (!accounts || typeof accounts !== "object") {
+    return undefined;
+  }
   const direct = accounts[accountId] as NextcloudTalkAccountConfig | undefined;
-  if (direct) return direct;
+  if (direct) {
+    return direct;
+  }
   const normalized = normalizeAccountId(accountId);
   const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
   return matchKey ? (accounts[matchKey] as NextcloudTalkAccountConfig | undefined) : undefined;
@@ -88,7 +100,9 @@ function resolveNextcloudTalkSecret(
   if (merged.botSecretFile) {
     try {
       const fileSecret = readFileSync(merged.botSecretFile, "utf-8").trim();
-      if (fileSecret) return { secret: fileSecret, source: "secretFile" };
+      if (fileSecret) {
+        return { secret: fileSecret, source: "secretFile" };
+      }
     } catch {
       // File not found or unreadable, fall through.
     }
@@ -135,19 +149,25 @@ export function resolveNextcloudTalkAccount(params: {
 
   const normalized = normalizeAccountId(params.accountId);
   const primary = resolve(normalized);
-  if (hasExplicitAccountId) return primary;
-  if (primary.secretSource !== "none") return primary;
+  if (hasExplicitAccountId) {
+    return primary;
+  }
+  if (primary.secretSource !== "none") {
+    return primary;
+  }
 
   const fallbackId = resolveDefaultNextcloudTalkAccountId(params.cfg);
-  if (fallbackId === primary.accountId) return primary;
+  if (fallbackId === primary.accountId) {
+    return primary;
+  }
   const fallback = resolve(fallbackId);
-  if (fallback.secretSource === "none") return primary;
+  if (fallback.secretSource === "none") {
+    return primary;
+  }
   return fallback;
 }
 
-export function listEnabledNextcloudTalkAccounts(
-  cfg: CoreConfig,
-): ResolvedNextcloudTalkAccount[] {
+export function listEnabledNextcloudTalkAccounts(cfg: CoreConfig): ResolvedNextcloudTalkAccount[] {
   return listNextcloudTalkAccountIds(cfg)
     .map((accountId) => resolveNextcloudTalkAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

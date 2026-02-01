@@ -40,7 +40,9 @@ export type MSTeamsUserResolution = {
 };
 
 function readAccessToken(value: unknown): string | null {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") {
+    return value;
+  }
   if (value && typeof value === "object") {
     const token =
       (value as { accessToken?: unknown }).accessToken ?? (value as { token?: unknown }).token;
@@ -55,7 +57,9 @@ function stripProviderPrefix(raw: string): string {
 
 export function normalizeMSTeamsMessagingTarget(raw: string): string | undefined {
   let trimmed = raw.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   trimmed = stripProviderPrefix(trimmed).trim();
   if (/^conversation:/i.test(trimmed)) {
     const id = trimmed.slice("conversation:".length).trim();
@@ -69,18 +73,24 @@ export function normalizeMSTeamsMessagingTarget(raw: string): string | undefined
 }
 
 export function normalizeMSTeamsUserInput(raw: string): string {
-  return stripProviderPrefix(raw).replace(/^(user|conversation):/i, "").trim();
+  return stripProviderPrefix(raw)
+    .replace(/^(user|conversation):/i, "")
+    .trim();
 }
 
 export function parseMSTeamsConversationId(raw: string): string | null {
   const trimmed = stripProviderPrefix(raw).trim();
-  if (!/^conversation:/i.test(trimmed)) return null;
+  if (!/^conversation:/i.test(trimmed)) {
+    return null;
+  }
   const id = trimmed.slice("conversation:".length).trim();
   return id;
 }
 
 function normalizeMSTeamsTeamKey(raw: string): string | undefined {
-  const trimmed = stripProviderPrefix(raw).replace(/^team:/i, "").trim();
+  const trimmed = stripProviderPrefix(raw)
+    .replace(/^team:/i, "")
+    .trim();
   return trimmed || undefined;
 }
 
@@ -91,10 +101,13 @@ function normalizeMSTeamsChannelKey(raw?: string | null): string | undefined {
 
 export function parseMSTeamsTeamChannelInput(raw: string): { team?: string; channel?: string } {
   const trimmed = stripProviderPrefix(raw).trim();
-  if (!trimmed) return {};
+  if (!trimmed) {
+    return {};
+  }
   const parts = trimmed.split("/");
   const team = normalizeMSTeamsTeamKey(parts[0] ?? "");
-  const channel = parts.length > 1 ? normalizeMSTeamsChannelKey(parts.slice(1).join("/")) : undefined;
+  const channel =
+    parts.length > 1 ? normalizeMSTeamsChannelKey(parts.slice(1).join("/")) : undefined;
   return {
     ...(team ? { team } : {}),
     ...(channel ? { channel } : {}),
@@ -105,7 +118,9 @@ export function parseMSTeamsTeamEntry(
   raw: string,
 ): { teamKey: string; channelKey?: string } | null {
   const { team, channel } = parseMSTeamsTeamChannelInput(raw);
-  if (!team) return null;
+  if (!team) {
+    return null;
+  }
   return {
     teamKey: team,
     ...(channel ? { channelKey: channel } : {}),
@@ -128,7 +143,7 @@ async function fetchGraphJson<T>(params: {
   const res = await fetch(`${GRAPH_ROOT}${params.path}`, {
     headers: {
       Authorization: `Bearer ${params.token}`,
-      ...(params.headers ?? {}),
+      ...params.headers,
     },
   });
   if (!res.ok) {
@@ -139,13 +154,19 @@ async function fetchGraphJson<T>(params: {
 }
 
 async function resolveGraphToken(cfg: unknown): Promise<string> {
-  const creds = resolveMSTeamsCredentials((cfg as { channels?: { msteams?: unknown } })?.channels?.msteams);
-  if (!creds) throw new Error("MS Teams credentials missing");
+  const creds = resolveMSTeamsCredentials(
+    (cfg as { channels?: { msteams?: unknown } })?.channels?.msteams,
+  );
+  if (!creds) {
+    throw new Error("MS Teams credentials missing");
+  }
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
   const tokenProvider = new sdk.MsalTokenProvider(authConfig);
   const token = await tokenProvider.getAccessToken("https://graph.microsoft.com");
   const accessToken = readAccessToken(token);
-  if (!accessToken) throw new Error("MS Teams graph token unavailable");
+  if (!accessToken) {
+    throw new Error("MS Teams graph token unavailable");
+  }
   return accessToken;
 }
 
@@ -176,8 +197,9 @@ export async function resolveMSTeamsChannelAllowlist(params: {
       results.push({ input, resolved: false });
       continue;
     }
-    const teams =
-      /^[0-9a-fA-F-]{16,}$/.test(team) ? [{ id: team, displayName: team }] : await listTeamsByName(token, team);
+    const teams = /^[0-9a-fA-F-]{16,}$/.test(team)
+      ? [{ id: team, displayName: team }]
+      : await listTeamsByName(token, team);
     if (teams.length === 0) {
       results.push({ input, resolved: false, note: "team not found" });
       continue;
@@ -202,11 +224,9 @@ export async function resolveMSTeamsChannelAllowlist(params: {
     const channels = await listChannelsForTeam(token, teamId);
     const channelMatch =
       channels.find((item) => item.id === channel) ??
-      channels.find(
-        (item) => item.displayName?.toLowerCase() === channel.toLowerCase(),
-      ) ??
-      channels.find(
-        (item) => item.displayName?.toLowerCase().includes(channel.toLowerCase() ?? ""),
+      channels.find((item) => item.displayName?.toLowerCase() === channel.toLowerCase()) ??
+      channels.find((item) =>
+        item.displayName?.toLowerCase().includes(channel.toLowerCase() ?? ""),
       );
     if (!channelMatch?.id) {
       results.push({ input, resolved: false, note: "channel not found" });

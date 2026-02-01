@@ -1,21 +1,18 @@
-import { join } from "node:path";
-
-import type { Api, AssistantMessage, Context, Model } from "@mariozechner/pi-ai";
+import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { complete } from "@mariozechner/pi-ai";
-import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
-
+import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
+import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
-import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
+import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
-import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
 
 export async function describeImageWithModel(
   params: ImageDescriptionRequest,
 ): Promise<ImageDescriptionResult> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
-  const authStorage = new AuthStorage(join(params.agentDir, "auth.json"));
-  const modelRegistry = new ModelRegistry(authStorage, join(params.agentDir, "models.json"));
+  const authStorage = discoverAuthStorage(params.agentDir);
+  const modelRegistry = discoverModels(authStorage, params.agentDir);
   const model = modelRegistry.find(params.provider, params.model) as Model<Api> | null;
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);
@@ -56,10 +53,10 @@ export async function describeImageWithModel(
       },
     ],
   };
-  const message = (await complete(model, context, {
+  const message = await complete(model, context, {
     apiKey,
     maxTokens: params.maxTokens ?? 512,
-  })) as AssistantMessage;
+  });
   const text = coerceImageAssistantText({
     message,
     provider: model.provider,

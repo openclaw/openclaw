@@ -1,11 +1,11 @@
 import type { SkillEligibilityContext, SkillEntry } from "../agents/skills.js";
-import { loadWorkspaceSkillEntries } from "../agents/skills.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { loadWorkspaceSkillEntries } from "../agents/skills.js";
+import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 
 type RemoteNodeRecord = {
   nodeId: string;
@@ -30,9 +30,15 @@ function describeNode(nodeId: string): string {
 }
 
 function extractErrorMessage(err: unknown): string | undefined {
-  if (!err) return undefined;
-  if (typeof err === "string") return err;
-  if (err instanceof Error) return err.message;
+  if (!err) {
+    return undefined;
+  }
+  if (typeof err === "string") {
+    return err;
+  }
+  if (err instanceof Error) {
+    return err.message;
+  }
   if (typeof err === "object" && "message" in err && typeof err.message === "string") {
     return err.message;
   }
@@ -75,9 +81,15 @@ function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
   const familyNorm = String(deviceFamily ?? "")
     .trim()
     .toLowerCase();
-  if (platformNorm.includes("mac")) return true;
-  if (platformNorm.includes("darwin")) return true;
-  if (familyNorm === "mac") return true;
+  if (platformNorm.includes("mac")) {
+    return true;
+  }
+  if (platformNorm.includes("darwin")) {
+    return true;
+  }
+  if (familyNorm === "mac") {
+    return true;
+  }
   return false;
 }
 
@@ -174,14 +186,20 @@ function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): str
   const bins = new Set<string>();
   for (const entry of entries) {
     const os = entry.metadata?.os ?? [];
-    if (os.length > 0 && !os.includes(targetPlatform)) continue;
+    if (os.length > 0 && !os.includes(targetPlatform)) {
+      continue;
+    }
     const required = entry.metadata?.requires?.bins ?? [];
     const anyBins = entry.metadata?.requires?.anyBins ?? [];
     for (const bin of required) {
-      if (bin.trim()) bins.add(bin.trim());
+      if (bin.trim()) {
+        bins.add(bin.trim());
+      }
     }
     for (const bin of anyBins) {
-      if (bin.trim()) bins.add(bin.trim());
+      if (bin.trim()) {
+        bins.add(bin.trim());
+      }
     }
   }
   return [...bins];
@@ -193,7 +211,9 @@ function buildBinProbeScript(bins: string[]): string {
 }
 
 function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: unknown): string[] {
-  if (!payloadJSON && !payload) return [];
+  if (!payloadJSON && !payload) {
+    return [];
+  }
   try {
     const parsed = payloadJSON
       ? (JSON.parse(payloadJSON) as { stdout?: unknown; bins?: unknown })
@@ -214,10 +234,16 @@ function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: 
 }
 
 function areBinSetsEqual(a: Set<string> | undefined, b: Set<string>): boolean {
-  if (!a) return false;
-  if (a.size !== b.size) return false;
+  if (!a) {
+    return false;
+  }
+  if (a.size !== b.size) {
+    return false;
+  }
   for (const bin of b) {
-    if (!a.has(bin)) return false;
+    if (!a.has(bin)) {
+      return false;
+    }
   }
   return true;
 }
@@ -230,11 +256,17 @@ export async function refreshRemoteNodeBins(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
 }) {
-  if (!remoteRegistry) return;
-  if (!isMacPlatform(params.platform, params.deviceFamily)) return;
+  if (!remoteRegistry) {
+    return;
+  }
+  if (!isMacPlatform(params.platform, params.deviceFamily)) {
+    return;
+  }
   const canWhich = supportsSystemWhich(params.commands);
   const canRun = supportsSystemRun(params.commands);
-  if (!canWhich && !canRun) return;
+  if (!canWhich && !canRun) {
+    return;
+  }
 
   const workspaceDirs = listWorkspaceDirs(params.cfg);
   const requiredBins = new Set<string>();
@@ -244,7 +276,9 @@ export async function refreshRemoteNodeBins(params: {
       requiredBins.add(bin);
     }
   }
-  if (requiredBins.size === 0) return;
+  if (requiredBins.size === 0) {
+    return;
+  }
 
   try {
     const binsList = [...requiredBins];
@@ -274,7 +308,9 @@ export async function refreshRemoteNodeBins(params: {
     const nextBins = new Set(bins);
     const hasChanged = !areBinSetsEqual(existingBins, nextBins);
     recordRemoteNodeBins(params.nodeId, bins);
-    if (!hasChanged) return;
+    if (!hasChanged) {
+      return;
+    }
     await updatePairedNodeMetadata(params.nodeId, { bins });
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   } catch (err) {
@@ -286,10 +322,14 @@ export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] |
   const macNodes = [...remoteNodes.values()].filter(
     (node) => isMacPlatform(node.platform, node.deviceFamily) && supportsSystemRun(node.commands),
   );
-  if (macNodes.length === 0) return undefined;
+  if (macNodes.length === 0) {
+    return undefined;
+  }
   const bins = new Set<string>();
   for (const node of macNodes) {
-    for (const bin of node.bins) bins.add(bin);
+    for (const bin of node.bins) {
+      bins.add(bin);
+    }
   }
   const labels = macNodes.map((node) => node.displayName ?? node.nodeId).filter(Boolean);
   const note =
@@ -305,7 +345,9 @@ export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] |
 }
 
 export async function refreshRemoteBinsForConnectedNodes(cfg: OpenClawConfig) {
-  if (!remoteRegistry) return;
+  if (!remoteRegistry) {
+    return;
+  }
   const connected = remoteRegistry.listConnected();
   for (const node of connected) {
     await refreshRemoteNodeBins({

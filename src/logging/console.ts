@@ -1,12 +1,11 @@
 import { createRequire } from "node:module";
 import util from "node:util";
-
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose } from "../globals.js";
 import { stripAnsi } from "../terminal/ansi.js";
+import { readLoggingConfig } from "./config.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
-import { readLoggingConfig } from "./config.js";
 import { loggingState } from "./state.js";
 
 export type ConsoleStyle = "pretty" | "compact" | "json";
@@ -19,7 +18,9 @@ export type ConsoleLoggerSettings = ConsoleSettings;
 const requireConfig = createRequire(import.meta.url);
 
 function normalizeConsoleLevel(level?: string): LogLevel {
-  if (isVerbose()) return "debug";
+  if (isVerbose()) {
+    return "debug";
+  }
   return normalizeLogLevel(level, "info");
 }
 
@@ -27,7 +28,9 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
   if (style === "compact" || style === "json" || style === "pretty") {
     return style;
   }
-  if (!process.stdout.isTTY) return "compact";
+  if (!process.stdout.isTTY) {
+    return "compact";
+  }
   return "pretty";
 }
 
@@ -57,7 +60,9 @@ function resolveConsoleSettings(): ConsoleSettings {
 }
 
 function consoleSettingsChanged(a: ConsoleSettings | null, b: ConsoleSettings) {
-  if (!a) return true;
+  if (!a) {
+    return true;
+  }
   return a.level !== b.level || a.style !== b.style;
 }
 
@@ -110,7 +115,9 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
 ] as const;
 
 function shouldSuppressConsoleMessage(message: string): boolean {
-  if (isVerbose()) return false;
+  if (isVerbose()) {
+    return false;
+  }
   if (SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix))) {
     return true;
   }
@@ -130,7 +137,9 @@ function isEpipeError(err: unknown): boolean {
 
 function formatConsoleTimestamp(style: ConsoleStyle): string {
   const now = new Date().toISOString();
-  if (style === "pretty") return now.slice(11, 19);
+  if (style === "pretty") {
+    return now.slice(11, 19);
+  }
   return now;
 }
 
@@ -140,7 +149,9 @@ function hasTimestampPrefix(value: string): boolean {
 
 function isJsonPayload(value: string): boolean {
   const trimmed = value.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
+    return false;
+  }
   try {
     JSON.parse(trimmed);
     return true;
@@ -154,7 +165,9 @@ function isJsonPayload(value: string): boolean {
  * This keeps user-facing output unchanged but guarantees every console call is captured in log files.
  */
 export function enableConsoleCapture(): void {
-  if (loggingState.consolePatched) return;
+  if (loggingState.consolePatched) {
+    return;
+  }
   loggingState.consolePatched = true;
 
   let logger: ReturnType<typeof getLogger> | null = null;
@@ -184,7 +197,9 @@ export function enableConsoleCapture(): void {
     (level: LogLevel, orig: (...args: unknown[]) => void) =>
     (...args: unknown[]) => {
       const formatted = util.format(...args);
-      if (shouldSuppressConsoleMessage(formatted)) return;
+      if (shouldSuppressConsoleMessage(formatted)) {
+        return;
+      }
       const trimmed = stripAnsi(formatted).trimStart();
       const shouldPrefixTimestamp =
         loggingState.consoleTimestampPrefix &&
@@ -219,7 +234,9 @@ export function enableConsoleCapture(): void {
           const line = timestamp ? `${timestamp} ${formatted}` : formatted;
           process.stderr.write(`${line}\n`);
         } catch (err) {
-          if (isEpipeError(err)) return;
+          if (isEpipeError(err)) {
+            return;
+          }
           throw err;
         }
       } else {
@@ -238,7 +255,9 @@ export function enableConsoleCapture(): void {
           }
           orig.call(console, timestamp, ...args);
         } catch (err) {
-          if (isEpipeError(err)) return;
+          if (isEpipeError(err)) {
+            return;
+          }
           throw err;
         }
       }

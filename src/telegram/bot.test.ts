@@ -2,12 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
+import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
 import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
 } from "../auto-reply/commands-registry.js";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
-import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
 import { resolveTelegramFetch } from "./fetch.js";
 
 let createTelegramBot: typeof import("./bot.js").createTelegramBot;
@@ -56,17 +56,17 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
   };
 });
 
-const { readTelegramAllowFromStore, upsertTelegramPairingRequest } = vi.hoisted(() => ({
-  readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
-  upsertTelegramPairingRequest: vi.fn(async () => ({
+const { readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(() => ({
+  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
+  upsertChannelPairingRequest: vi.fn(async () => ({
     code: "PAIRCODE",
     created: true,
   })),
 }));
 
-vi.mock("./pairing-store.js", () => ({
-  readTelegramAllowFromStore,
-  upsertTelegramPairingRequest,
+vi.mock("../pairing/pairing-store.js", () => ({
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
 }));
 
 const { enqueueSystemEvent } = vi.hoisted(() => ({
@@ -167,7 +167,9 @@ vi.mock("../auto-reply/reply.js", () => {
 
 const getOnHandler = (event: string) => {
   const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
-  if (!handler) throw new Error(`Missing handler for event: ${event}`);
+  if (!handler) {
+    throw new Error(`Missing handler for event: ${event}`);
+  }
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
 };
 
@@ -310,8 +312,8 @@ describe("createTelegramBot", () => {
       { command: "custom_backup", description: "Git backup" },
       { command: "custom_generate", description: "Create an image" },
     ]);
-    const reserved = listNativeCommandSpecs().map((command) => command.name);
-    expect(registered.some((command) => reserved.includes(command.command))).toBe(false);
+    const reserved = new Set(listNativeCommandSpecs().map((command) => command.name));
+    expect(registered.some((command) => reserved.has(command.command))).toBe(false);
   });
 
   it("uses wrapped fetch when global fetch is available", () => {
@@ -567,8 +569,8 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "pairing" } },
     });
-    readTelegramAllowFromStore.mockResolvedValue([]);
-    upsertTelegramPairingRequest.mockResolvedValue({
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest.mockResolvedValue({
       code: "PAIRME12",
       created: true,
     });
@@ -604,8 +606,8 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "pairing" } },
     });
-    readTelegramAllowFromStore.mockResolvedValue([]);
-    upsertTelegramPairingRequest
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest
       .mockResolvedValueOnce({ code: "PAIRME12", created: true })
       .mockResolvedValueOnce({ code: "PAIRME12", created: false });
 
@@ -2333,13 +2335,15 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    readTelegramAllowFromStore.mockResolvedValueOnce(["12345"]);
+    readChannelAllowFromStore.mockResolvedValueOnce(["12345"]);
 
     createTelegramBot({ token: "tok" });
     const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!handler) throw new Error("status command handler missing");
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
 
     await handler({
       message: {
@@ -2374,13 +2378,15 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    readTelegramAllowFromStore.mockResolvedValueOnce(["12345"]);
+    readChannelAllowFromStore.mockResolvedValueOnce(["12345"]);
 
     createTelegramBot({ token: "tok" });
     const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!handler) throw new Error("status command handler missing");
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
 
     await handler({
       message: {
@@ -2416,13 +2422,15 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    readTelegramAllowFromStore.mockResolvedValueOnce([]);
+    readChannelAllowFromStore.mockResolvedValueOnce([]);
 
     createTelegramBot({ token: "tok" });
     const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!handler) throw new Error("status command handler missing");
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
 
     await handler({
       message: {
@@ -2467,7 +2475,9 @@ describe("createTelegramBot", () => {
     const verboseHandler = commandSpy.mock.calls.find((call) => call[0] === "verbose")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!verboseHandler) throw new Error("verbose command handler missing");
+    if (!verboseHandler) {
+      throw new Error("verbose command handler missing");
+    }
 
     await verboseHandler({
       message: {

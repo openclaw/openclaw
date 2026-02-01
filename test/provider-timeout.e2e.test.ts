@@ -2,9 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
 import { GatewayClient } from "../src/gateway/client.js";
 import { startGatewayServer } from "../src/gateway/server.js";
 import { getDeterministicFreePortBlock } from "../src/test-utils/ports.js";
@@ -83,11 +81,16 @@ async function connectClient(params: { url: string; token: string }) {
   return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
     let settled = false;
     const stop = (err?: Error, client?: InstanceType<typeof GatewayClient>) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
-      if (err) reject(err);
-      else resolve(client as InstanceType<typeof GatewayClient>);
+      if (err) {
+        reject(err);
+      } else {
+        resolve(client as InstanceType<typeof GatewayClient>);
+      }
     };
     const client = new GatewayClient({
       url: params.url,
@@ -146,7 +149,9 @@ describe("provider timeouts (e2e)", () => {
           return buildOpenAIResponsesSse("fallback-ok");
         }
 
-        if (!originalFetch) throw new Error(`fetch is not available (url=${url})`);
+        if (!originalFetch) {
+          throw new Error(`fetch is not available (url=${url})`);
+        }
         return await originalFetch(input, init);
       };
       (globalThis as unknown as { fetch: unknown }).fetch = fetchImpl;
@@ -233,7 +238,7 @@ describe("provider timeouts (e2e)", () => {
 
       try {
         const sessionKey = "agent:dev:timeout-fallback";
-        await client.request<Record<string, unknown>>("sessions.patch", {
+        await client.request("sessions.patch", {
           key: sessionKey,
           model: "primary/gpt-5.2",
         });
@@ -263,20 +268,41 @@ describe("provider timeouts (e2e)", () => {
         await server.close({ reason: "timeout fallback test complete" });
         await fs.rm(tempHome, { recursive: true, force: true });
         (globalThis as unknown as { fetch: unknown }).fetch = originalFetch;
-        if (prev.home === undefined) delete process.env.HOME;
-        else process.env.HOME = prev.home;
-        if (prev.configPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
-        else process.env.OPENCLAW_CONFIG_PATH = prev.configPath;
-        if (prev.token === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-        else process.env.OPENCLAW_GATEWAY_TOKEN = prev.token;
-        if (prev.skipChannels === undefined) delete process.env.OPENCLAW_SKIP_CHANNELS;
-        else process.env.OPENCLAW_SKIP_CHANNELS = prev.skipChannels;
-        if (prev.skipGmail === undefined) delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-        else process.env.OPENCLAW_SKIP_GMAIL_WATCHER = prev.skipGmail;
-        if (prev.skipCron === undefined) delete process.env.OPENCLAW_SKIP_CRON;
-        else process.env.OPENCLAW_SKIP_CRON = prev.skipCron;
-        if (prev.skipCanvas === undefined) delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
-        else process.env.OPENCLAW_SKIP_CANVAS_HOST = prev.skipCanvas;
+        if (prev.home === undefined) {
+          delete process.env.HOME;
+        } else {
+          process.env.HOME = prev.home;
+        }
+        if (prev.configPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = prev.configPath;
+        }
+        if (prev.token === undefined) {
+          delete process.env.OPENCLAW_GATEWAY_TOKEN;
+        } else {
+          process.env.OPENCLAW_GATEWAY_TOKEN = prev.token;
+        }
+        if (prev.skipChannels === undefined) {
+          delete process.env.OPENCLAW_SKIP_CHANNELS;
+        } else {
+          process.env.OPENCLAW_SKIP_CHANNELS = prev.skipChannels;
+        }
+        if (prev.skipGmail === undefined) {
+          delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+        } else {
+          process.env.OPENCLAW_SKIP_GMAIL_WATCHER = prev.skipGmail;
+        }
+        if (prev.skipCron === undefined) {
+          delete process.env.OPENCLAW_SKIP_CRON;
+        } else {
+          process.env.OPENCLAW_SKIP_CRON = prev.skipCron;
+        }
+        if (prev.skipCanvas === undefined) {
+          delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
+        } else {
+          process.env.OPENCLAW_SKIP_CANVAS_HOST = prev.skipCanvas;
+        }
       }
     },
   );
