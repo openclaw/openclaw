@@ -368,11 +368,11 @@ export const registerTelegramNativeCommands = ({
   ];
 
   if (allCommands.length > TELEGRAM_MAX_COMMANDS) {
-    runtime.error?.(
+    runtime.log?.(
       warn(
         `Telegram limits bots to ${TELEGRAM_MAX_COMMANDS} commands. ` +
           `${allCommands.length} commands configured; registering first ${TELEGRAM_MAX_COMMANDS}. ` +
-          `Set channels.telegram.commands.native: false to disable skill command registration.`,
+          `Set channels.telegram.commands.skills: false to disable skill command registration.`,
       ),
     );
   }
