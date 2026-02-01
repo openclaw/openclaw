@@ -446,9 +446,15 @@ describe("applyMediaUnderstanding", () => {
     const cfg: OpenClawConfig = {
       tools: {
         media: {
-          image: { enabled: true, models: [{ provider: "openai", model: "gpt-5.2" }] },
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "gpt-5.2" }],
+          },
           audio: { enabled: true, models: [{ provider: "groq" }] },
-          video: { enabled: true, models: [{ provider: "google", model: "gemini-3" }] },
+          video: {
+            enabled: true,
+            models: [{ provider: "google", model: "gemini-3" }],
+          },
         },
       },
     };
@@ -669,5 +675,69 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain("中文内容");
+  });
+
+  it("does not inject binary audio (ogg) as text file block", async () => {
+    const { applyMediaUnderstanding } = await loadApply();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
+    const oggPath = path.join(dir, "voice.ogg");
+    // Real OGG magic bytes: "OggS" header followed by binary data
+    const oggHeader = Buffer.from([
+      0x4f,
+      0x67,
+      0x67,
+      0x53, // "OggS"
+      0x00,
+      0x02,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x44,
+      0x0e,
+      0x59,
+      0x34,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x4d,
+      0x9a,
+      0x73,
+      0x58,
+      0x01,
+      0x1e,
+    ]);
+    // Pad with mixed binary content
+    const binaryPad = Buffer.alloc(4096);
+    for (let i = 0; i < binaryPad.length; i++) {
+      binaryPad[i] = (i * 7 + 0x80) & 0xff;
+    }
+    await fs.writeFile(oggPath, Buffer.concat([oggHeader, binaryPad]));
+
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      MediaPath: oggPath,
+      MediaType: "audio/ogg",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          audio: { enabled: false },
+          image: { enabled: false },
+          video: { enabled: false },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({ ctx, cfg });
+
+    // Binary audio must NOT be injected as a file block
+    expect(result.appliedFile).toBe(false);
+    expect(ctx.Body).not.toContain("<file");
   });
 });
