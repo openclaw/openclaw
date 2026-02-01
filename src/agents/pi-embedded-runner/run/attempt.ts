@@ -1,7 +1,12 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  SessionManager,
+  SettingsManager,
+} from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -78,7 +83,11 @@ import {
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
-import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
+import {
+  applySystemPromptOverrideToSession,
+  buildEmbeddedSystemPrompt,
+  createSystemPromptOverride,
+} from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { detectAndLoadPromptImages } from "./images.js";
@@ -385,7 +394,8 @@ export async function runEmbeddedAttempt(
       skillsPrompt,
       tools,
     });
-    const systemPrompt = createSystemPromptOverride(appendPrompt);
+    const systemPromptOverride = createSystemPromptOverride(appendPrompt);
+    const systemPromptText = systemPromptOverride();
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -457,6 +467,13 @@ export async function runEmbeddedAttempt(
 
       const allCustomTools = [...customTools, ...clientToolDefs];
 
+      const resourceLoader = new DefaultResourceLoader({
+        cwd: resolvedWorkspace,
+        agentDir,
+        settingsManager,
+        additionalExtensionPaths,
+      });
+      await resourceLoader.reload();
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
@@ -468,11 +485,9 @@ export async function runEmbeddedAttempt(
         customTools: allCustomTools,
         sessionManager,
         settingsManager,
-        systemPrompt,
-        additionalExtensionPaths,
-        skills: [],
-        contextFiles: [],
+        resourceLoader,
       }));
+      applySystemPromptOverrideToSession(session, systemPromptOverride);
       if (!session) {
         throw new Error("Embedded agent session missing");
       }
@@ -513,7 +528,7 @@ export async function runEmbeddedAttempt(
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
           messages: activeSession.messages,
-          system: systemPrompt,
+          system: systemPromptText,
           note: "after session create",
         });
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
