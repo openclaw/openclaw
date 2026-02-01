@@ -137,4 +137,21 @@ export function clearActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueu
   }
 }
 
+export function forceClearActiveEmbeddedRun(sessionId: string, handle: EmbeddedPiQueueHandle) {
+  // Only force-clear if the handle matches the timed-out run.
+  // This prevents clearing a newer run that started after the timeout.
+  if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
+    ACTIVE_EMBEDDED_RUNS.delete(sessionId);
+    logSessionStateChange({ sessionId, state: "idle", reason: "timeout_force_cleared" });
+    diag.warn(
+      `run force cleared after timeout: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`,
+    );
+    notifyEmbeddedRunEnded(sessionId);
+  } else {
+    diag.debug(
+      `force clear skipped: sessionId=${sessionId} reason=handle_mismatch (run was replaced)`,
+    );
+  }
+}
+
 export type { EmbeddedPiQueueHandle };
