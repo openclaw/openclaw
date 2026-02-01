@@ -40,11 +40,11 @@ importers:
         specifier: 1.2.0-beta.3
         version: 1.2.0-beta.3
       '@mariozechner/pi-agent-core':
-        specifier: 0.50.7
-        version: 0.50.7(ws@8.19.0)(zod@4.3.6)
+        specifier: 0.50.9
+        version: 0.50.9(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-ai':
-        specifier: 0.50.7
-        version: 0.50.7(ws@8.19.0)(zod@4.3.6)
+        specifier: 0.50.9
+        version: 0.50.9(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-coding-agent':
         specifier: 0.50.7
         version: 0.50.7(ws@8.19.0)(zod@4.3.6)
@@ -1391,12 +1391,12 @@ packages:
     resolution: {integrity: sha512-faGUlTcXka5l7rv0lP3K3vGW/ejRuOS24RR2aSFWREUQqzjgdsuWNo/IiPqL3kWRGt6Ahl2+qcDAwtdeWeuGUw==}
     hasBin: true
 
-  '@mariozechner/pi-agent-core@0.50.7':
-    resolution: {integrity: sha512-iSNh+7QQFVge3co0Au1X6sqXAr+X6e3XlRXM7oE3m6zMWj76A1YCciV2sLI/imBcoFLum8blIaM0empwL477dQ==}
+  '@mariozechner/pi-agent-core@0.50.9':
+    resolution: {integrity: sha512-Zsgqs/f2Fxrub1k95vj8kg7M1eTDdS1lP3gTV7h9raBUQzoaPP+9jYGoUL5KKqxsBbt7WgeAQrK3nrev400EHA==}
     engines: {node: '>=20.0.0'}
 
-  '@mariozechner/pi-ai@0.50.7':
-    resolution: {integrity: sha512-mVqaTE/Ulijd1olduEU02IfIP91aNt6F0UYJQNLR+m3b/6bsn21csZJZnkjYia0kHX7PnOLtikO2jG7dJpYY6g==}
+  '@mariozechner/pi-ai@0.50.9':
+    resolution: {integrity: sha512-a6sLIHLH+wo5zTFoo/0AE/P6GPyJzaXnE86z89t6tINzeSdKMApZZ+B4Cy4U3GpsYfxuZ9gBJlcKbfj+oKP3wg==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
@@ -1407,6 +1407,10 @@ packages:
 
   '@mariozechner/pi-tui@0.50.7':
     resolution: {integrity: sha512-O8H8hXqoWdE+5eUUPiswq+WT+2eeshJHJmXKWMJMoSitNqdwzYZds9umAKdVLII6ZvjnFtd0awnf4VThYQBFIA==}
+    engines: {node: '>=20.0.0'}
+
+  '@mariozechner/pi-tui@0.50.9':
+    resolution: {integrity: sha512-suMWoh+XB3JKkwrXfXSwEAsvkrPUn6Zn8JQ1I+1hcNQqH/lY6e8LFRwVBkkvPt/jwoxBh8jGoiTNVh5i7Yod0g==}
     engines: {node: '>=20.0.0'}
 
   '@matrix-org/matrix-sdk-crypto-nodejs@0.4.0':
@@ -6389,10 +6393,10 @@ snapshots:
       std-env: 3.10.0
       yoctocolors: 2.1.2
 
-  '@mariozechner/pi-agent-core@0.50.7(ws@8.19.0)(zod@4.3.6)':
+  '@mariozechner/pi-agent-core@0.50.9(ws@8.19.0)(zod@4.3.6)':
     dependencies:
-      '@mariozechner/pi-ai': 0.50.7(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-tui': 0.50.7
+      '@mariozechner/pi-ai': 0.50.9(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-tui': 0.50.9
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - aws-crt
@@ -6402,7 +6406,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.50.7(ws@8.19.0)(zod@4.3.6)':
+  '@mariozechner/pi-ai@0.50.9(ws@8.19.0)(zod@4.3.6)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.6)
       '@aws-sdk/client-bedrock-runtime': 3.980.0
@@ -6430,8 +6434,8 @@ snapshots:
     dependencies:
       '@mariozechner/clipboard': 0.3.0
       '@mariozechner/jiti': 2.6.5
-      '@mariozechner/pi-agent-core': 0.50.7(ws@8.19.0)(zod@4.3.6)
-      '@mariozechner/pi-ai': 0.50.7(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-agent-core': 0.50.9(ws@8.19.0)(zod@4.3.6)
+      '@mariozechner/pi-ai': 0.50.9(ws@8.19.0)(zod@4.3.6)
       '@mariozechner/pi-tui': 0.50.7
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
@@ -6454,6 +6458,14 @@ snapshots:
       - zod
 
   '@mariozechner/pi-tui@0.50.7':
+    dependencies:
+      '@types/mime-types': 2.1.4
+      chalk: 5.6.2
+      get-east-asian-width: 1.4.0
+      marked: 15.0.12
+      mime-types: 3.0.2
+
+  '@mariozechner/pi-tui@0.50.9':
     dependencies:
       '@types/mime-types': 2.1.4
       chalk: 5.6.2
