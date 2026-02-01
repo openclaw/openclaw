@@ -101,7 +101,9 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
 }
 
 function resolveFetchProxy(fetch?: WebFetchConfig): string | undefined {
-  if (!fetch || typeof fetch !== "object") return undefined;
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
   const proxy = "proxy" in fetch && typeof fetch.proxy === "string" ? fetch.proxy.trim() : "";
   return proxy || undefined;
 }
@@ -221,11 +223,15 @@ async function fetchWithRedirects(params: {
     try {
       parsedUrl = new URL(currentUrl);
     } catch {
-      if (proxyDispatcher) await closeDispatcher(proxyDispatcher);
+      if (proxyDispatcher) {
+        await closeDispatcher(proxyDispatcher);
+      }
       throw new Error("Invalid URL: must be http or https");
     }
     if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-      if (proxyDispatcher) await closeDispatcher(proxyDispatcher);
+      if (proxyDispatcher) {
+        await closeDispatcher(proxyDispatcher);
+      }
       throw new Error("Invalid URL: must be http or https");
     }
 
@@ -253,34 +259,48 @@ async function fetchWithRedirects(params: {
       } as RequestInit);
     } catch (err) {
       // Only close non-proxy dispatchers on error; proxy dispatcher is reused
-      if (!proxyDispatcher) await closeDispatcher(dispatcher);
-      else await closeDispatcher(proxyDispatcher);
+      if (!proxyDispatcher) {
+        await closeDispatcher(dispatcher);
+      } else {
+        await closeDispatcher(proxyDispatcher);
+      }
       throw err;
     }
 
     if (isRedirectStatus(res.status)) {
       const location = res.headers.get("location");
       if (!location) {
-        if (!proxyDispatcher) await closeDispatcher(dispatcher);
-        else await closeDispatcher(proxyDispatcher);
+        if (!proxyDispatcher) {
+          await closeDispatcher(dispatcher);
+        } else {
+          await closeDispatcher(proxyDispatcher);
+        }
         throw new Error(`Redirect missing location header (${res.status})`);
       }
       redirectCount += 1;
       if (redirectCount > params.maxRedirects) {
-        if (!proxyDispatcher) await closeDispatcher(dispatcher);
-        else await closeDispatcher(proxyDispatcher);
+        if (!proxyDispatcher) {
+          await closeDispatcher(dispatcher);
+        } else {
+          await closeDispatcher(proxyDispatcher);
+        }
         throw new Error(`Too many redirects (limit: ${params.maxRedirects})`);
       }
       const nextUrl = new URL(location, parsedUrl).toString();
       if (visited.has(nextUrl)) {
-        if (!proxyDispatcher) await closeDispatcher(dispatcher);
-        else await closeDispatcher(proxyDispatcher);
+        if (!proxyDispatcher) {
+          await closeDispatcher(dispatcher);
+        } else {
+          await closeDispatcher(proxyDispatcher);
+        }
         throw new Error("Redirect loop detected");
       }
       visited.add(nextUrl);
       void res.body?.cancel();
       // Only close pinned dispatcher on redirect; proxy dispatcher is reused
-      if (!proxyDispatcher) await closeDispatcher(dispatcher);
+      if (!proxyDispatcher) {
+        await closeDispatcher(dispatcher);
+      }
       currentUrl = nextUrl;
       continue;
     }
@@ -428,7 +448,6 @@ async function runWebFetch(params: {
   const start = Date.now();
   let res: Response;
   let dispatcher: Dispatcher | null = null;
-  let isProxyDispatcher = false;
   let finalUrl = params.url;
   try {
     const result = await fetchWithRedirects({
@@ -441,7 +460,6 @@ async function runWebFetch(params: {
     res = result.response;
     finalUrl = result.finalUrl;
     dispatcher = result.dispatcher;
-    isProxyDispatcher = result.isProxyDispatcher;
   } catch (error) {
     if (error instanceof SsrFBlockedError) {
       throw error;
