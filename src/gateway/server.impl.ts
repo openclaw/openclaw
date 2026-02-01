@@ -148,6 +148,19 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  // Install global unhandled rejection handler to prevent gateway crashes
+  // from background promises (e.g., Telegram polling, network operations)
+  const handleUnhandledRejection = (reason: unknown, _promise: Promise<unknown>) => {
+    const formatted = reason instanceof Error ? reason.message : String(reason);
+    log.error(`unhandled promise rejection: ${formatted}`);
+    // Log additional details for debugging
+    if (reason instanceof Error && reason.stack) {
+      log.debug(`rejection stack: ${reason.stack}`);
+    }
+    // Don't crash the gateway - log and continue
+  };
+  process.on("unhandledRejection", handleUnhandledRejection);
+
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
   logAcceptedEnvOption({
@@ -576,6 +589,9 @@ export async function startGatewayServer(
 
   return {
     close: async (opts) => {
+      // Remove unhandled rejection handler on shutdown
+      process.off("unhandledRejection", handleUnhandledRejection);
+
       if (diagnosticsEnabled) {
         stopDiagnosticHeartbeat();
       }
