@@ -478,10 +478,18 @@ export async function runReplyAgent(params: {
             config: cfg,
           })
         : undefined;
+      const input = usage.input ?? 0;
+      const output = usage.output ?? 0;
+      const cacheRead = usage.cacheRead ?? 0;
+      const cacheWrite = usage.cacheWrite ?? 0;
+      const promptTokens = input + cacheRead + cacheWrite;
+      const totalTokens = usage.total ?? promptTokens + output;
       let formatted = formatResponseUsageLine({
         usage,
         showCost,
         costConfig,
+        contextUsed: responseUsageMode === "full" ? totalTokens : undefined,
+        contextLimit: responseUsageMode === "full" ? contextTokensUsed : undefined,
       });
       if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session ${sessionKey}`;

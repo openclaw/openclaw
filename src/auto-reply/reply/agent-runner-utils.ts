@@ -80,6 +80,8 @@ export const formatResponseUsageLine = (params: {
     cacheRead: number;
     cacheWrite: number;
   };
+  contextUsed?: number;
+  contextLimit?: number;
 }): string | null => {
   const usage = params.usage;
   if (!usage) {
@@ -105,8 +107,17 @@ export const formatResponseUsageLine = (params: {
         })
       : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
-  const suffix = costLabel ? ` · est ${costLabel}` : "";
-  return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
+  const costSuffix = costLabel ? ` · est ${costLabel}` : "";
+  let contextSuffix = "";
+  if (
+    typeof params.contextUsed === "number" &&
+    typeof params.contextLimit === "number" &&
+    params.contextLimit > 0
+  ) {
+    const pct = Math.min(999, Math.round((params.contextUsed / params.contextLimit) * 100));
+    contextSuffix = ` · context ${formatTokenCount(params.contextUsed)}/${formatTokenCount(params.contextLimit)} (${pct}%)`;
+  }
+  return `Usage: ${inputLabel} in / ${outputLabel} out${costSuffix}${contextSuffix}`;
 };
 
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
