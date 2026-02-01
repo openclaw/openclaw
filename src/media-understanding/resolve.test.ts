@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveEntriesWithActiveFallback, resolveModelEntries } from "./resolve.js";
 
 const providerRegistry = new Map([
-  ["openai", { capabilities: ["image"] }],
+  ["openai", { capabilities: ["image", "audio"] }],
   ["groq", { capabilities: ["audio"] }],
 ]);
 
@@ -29,7 +29,7 @@ describe("resolveModelEntries", () => {
       capability: "audio",
       providerRegistry,
     });
-    expect(audioEntries).toHaveLength(0);
+    expect(audioEntries).toHaveLength(1);
   });
 
   it("keeps per-capability entries even without explicit caps", () => {
