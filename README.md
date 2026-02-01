@@ -42,7 +42,6 @@ Model note: while any model is supported, I strongly recommend **Anthropic Pro/M
 - Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.openclaw.ai/concepts/model-failover)
 
 ## Install (recommended)
-
 Runtime: **Node ≥22**.
 
 ```bash
@@ -71,6 +70,16 @@ openclaw message send --to +1234567890 --message "Hello from OpenClaw"
 # Talk to the assistant (optionally deliver back to any connected channel: WhatsApp/Telegram/Slack/Discord/Google Chat/Signal/iMessage/BlueBubbles/Microsoft Teams/Matrix/Zalo/Zalo Personal/WebChat)
 openclaw agent --message "Ship checklist" --thinking high
 ```
+## Environment Requirements
+
+OpenClaw and some extensions (including the Matrix plugin) require:
+
+- **Node.js >= 22.12.0**
+- **pnpm** (workspace install required)
+
+Running OpenClaw with unsupported Node.js versions or without pnpm may cause
+extensions like Matrix to fail to load with unclear errors.
+
 
 Upgrading? [Updating guide](https://docs.openclaw.ai/install/updating) (and run `openclaw doctor`).
 
