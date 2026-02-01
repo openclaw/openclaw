@@ -103,7 +103,7 @@ export function registerBrowserStateCommands(
   set
     .command("headers")
     .description("Set extra HTTP headers (JSON object)")
-    .requiredOption("--json <json>", "JSON object of headers")
+    .requiredOption("--headers-json <stringified json>", "Stringified JSON object of headers.")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
