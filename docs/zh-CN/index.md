@@ -1,14 +1,14 @@
 ---
 read_when:
-    - 向新用户介绍 OpenClaw
+  - 向新用户介绍 OpenClaw
 summary: OpenClaw 的顶层概述、功能特性与用途
 x-i18n:
-    generated_at: "2026-02-01T13:34:09Z"
-    model: claude-opus-4-5
-    provider: pi
-    source_hash: 92462177964ac72c344d3e8613a3756bc8e06eb7844cda20a38cd43e7cadd3b2
-    source_path: index.md
-    workflow: 9
+  generated_at: "2026-02-01T13:34:09Z"
+  model: claude-opus-4-5
+  provider: pi
+  source_hash: 92462177964ac72c344d3e8613a3756bc8e06eb7844cda20a38cd43e7cadd3b2
+  source_path: index.md
+  workflow: 9
 ---
 
 # OpenClaw 🦞

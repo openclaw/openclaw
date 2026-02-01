@@ -11,7 +11,9 @@ export type ContextWindowInfo = {
 };
 
 function normalizePositiveInt(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
   const int = Math.floor(value);
   return int > 0 ? int : null;
 }
