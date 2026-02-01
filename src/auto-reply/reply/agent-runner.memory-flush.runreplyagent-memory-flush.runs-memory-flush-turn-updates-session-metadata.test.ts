@@ -38,6 +38,7 @@ vi.mock("../../agents/cli-runner.js", () => ({
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  getActiveRunThreadContext: vi.fn().mockReturnValue(undefined),
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
 }));
 

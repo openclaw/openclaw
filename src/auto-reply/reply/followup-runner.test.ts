@@ -26,6 +26,7 @@ vi.mock("../../agents/model-fallback.js", () => ({
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
+  getActiveRunThreadContext: vi.fn().mockReturnValue(undefined),
 }));
 
 import { createFollowupRunner } from "./followup-runner.js";
