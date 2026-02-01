@@ -64,6 +64,22 @@ describe("createThinkingDisabledWrapper", () => {
     expect(payload.thinking).toEqual({ type: "enabled", budget_tokens: 1024 });
   });
 
+  it("does not overwrite explicit null thinking value", () => {
+    const baseFn: StreamFn = vi.fn((_model, _ctx, _options) => {
+      return { push: vi.fn(), end: vi.fn() } as never;
+    });
+
+    const wrapped = createThinkingDisabledWrapper(baseFn, makeModel());
+    void wrapped(makeModel(), { messages: [], tools: [] }, {});
+
+    const call = vi.mocked(baseFn).mock.calls[0];
+    const optionsArg = call[2] as { onPayload?: (p: unknown) => void };
+    const payload: Record<string, unknown> = { model: "test", thinking: null };
+    optionsArg.onPayload!(payload);
+
+    expect(payload.thinking).toBeNull();
+  });
+
   it("returns base streamFn unchanged for non-reasoning model", () => {
     const baseFn: StreamFn = vi.fn();
     const result = createThinkingDisabledWrapper(baseFn, makeModel({ reasoning: false }));

@@ -173,7 +173,7 @@ export function createThinkingDisabledWrapper(baseStreamFn: StreamFn, model: Mod
   return (mdl, context, options) => {
     const nextOnPayload = (payload: unknown) => {
       const p = payload as Record<string, unknown>;
-      if (!p.thinking) {
+      if (!("thinking" in p)) {
         p.thinking = { type: "disabled" };
       }
       options?.onPayload?.(payload);
