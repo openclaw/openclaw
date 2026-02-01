@@ -92,7 +92,15 @@ lume create openclaw --os macos --ipsw latest
 
 This downloads macOS and creates the VM. A VNC window opens automatically.
 
-Note: The download can take a while depending on your connection.
+**Note:**  
+- The download can take a while depending on your connection.  
+- In some environments, the VNC window may not open automatically after running `lume create`.  
+  If this happens, you can start the VM manually and open the VNC display with:
+  ```bash
+  lume run openclaw
+  ```
+  This will open the VNC window so you can complete the macOS Setup Assistant.  
+  Use `--no-display` if you prefer to run the VM headless.
 
 ---
 
