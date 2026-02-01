@@ -19,6 +19,14 @@ A targeted exploration of the startup path revealed specific culprits:
 2.  **Compromised Fast Path**: `src/cli/route.ts` (the `tryRouteCli` function) imports `findRoutedCommand` from `command-registry.ts`.
     - Impact: The router, intended to be a fast path, incurs the same initialization cost as the full program because it triggers the eager imports in the registry.
 
+## Progress
+
+- [x] **Benchmark Baseline**: Established baseline latency for `version` (3.26s), `help` (5.10s), and `status` (9.48s). See `benchmarks.md`.
+- [x] **Import Analysis**: Identified `src/cli/program/command-registry.ts` as the root cause of eager loading, specifically the top-level imports of `registerStatusHealthSessionsCommands` which pulls in the plugin system.
+- [ ] **Lazy Registry Refactor**: Decouple routing metadata from command implementation imports (In Progress).
+- [ ] **Async Program Build**: Propagate async requirements up to `buildProgram()` to support lazy loading.
+- [ ] **Build Optimization**: Address the `pnpm tsgo` overhead in `scripts/run-node.mjs`.
+
 ## Architecture: Lazy Command Registry
 To address the eager import issues, we will refactor `src/cli/program/command-registry.ts` to separate **routing metadata** from **command registration logic**.
 
