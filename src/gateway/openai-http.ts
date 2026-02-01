@@ -273,6 +273,28 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let sawAssistantDelta = false;
   let closed = false;
+  let sentTerminalChunk = false;
+
+  /** Send a terminal chunk with finish_reason before [DONE]. */
+  const endStream = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    if (!sentTerminalChunk) {
+      sentTerminalChunk = true;
+      writeSse(res, {
+        id: runId,
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      });
+    }
+    unsubscribe();
+    writeDone(res);
+    res.end();
+  };
 
   const unsubscribe = onAgentEvent((evt) => {
     if (evt.runId !== runId) {
@@ -321,17 +343,16 @@ export async function handleOpenAiHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        closed = true;
-        unsubscribe();
-        writeDone(res);
-        res.end();
+        endStream();
       }
     }
   });
 
   req.on("close", () => {
-    closed = true;
-    unsubscribe();
+    if (!closed) {
+      closed = true;
+      unsubscribe();
+    }
   });
 
   void (async () => {
@@ -394,6 +415,7 @@ export async function handleOpenAiHttpRequest(
       if (closed) {
         return;
       }
+      sentTerminalChunk = true;
       writeSse(res, {
         id: runId,
         object: "chat.completion.chunk",
@@ -413,12 +435,7 @@ export async function handleOpenAiHttpRequest(
         data: { phase: "error" },
       });
     } finally {
-      if (!closed) {
-        closed = true;
-        unsubscribe();
-        writeDone(res);
-        res.end();
-      }
+      endStream();
     }
   })();
 
