@@ -198,11 +198,13 @@ function cleanSchemaForGeminiWithDefs(
       const result: Record<string, unknown> = {
         ...(cleaned as Record<string, unknown>),
       };
-      for (const key of ["description", "title", "default"]) {
-        if (key in obj && obj[key] !== undefined) {
-          result[key] = obj[key];
+      // Preserve all sibling properties except "$ref"
+      for (const [key, value] of Object.entries(obj)) {
+        if (key !== "$ref" && value !== undefined) {
+          result[key] = value;
         }
       }
+
       return result;
     }
 
