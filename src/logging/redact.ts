@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import safeRegex from "safe-regex";
 import type { OpenClawConfig } from "../config/config.js";
 
 const requireConfig = createRequire(import.meta.url);
@@ -44,17 +45,36 @@ function normalizeMode(value?: string): RedactSensitiveMode {
   return value === "off" ? "off" : DEFAULT_REDACT_MODE;
 }
 
+// Cache for warning deduplication - warn once per pattern
+const warnedPatterns = new Set<string>();
+const MAX_WARNED_PATTERNS = 1000;
+
 function parsePattern(raw: string): RegExp | null {
   if (!raw.trim()) {
     return null;
   }
   const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
+
   try {
+    let re: RegExp;
     if (match) {
       const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
-      return new RegExp(match[1], flags);
+      re = new RegExp(match[1], flags);
+    } else {
+      re = new RegExp(raw, "gi");
     }
-    return new RegExp(raw, "gi");
+
+    // Reject patterns that could cause catastrophic backtracking (ReDoS)
+    // Pass compiled RegExp to safeRegex to respect flags (e.g., 'u' for Unicode)
+    if (!safeRegex(re)) {
+      if (!warnedPatterns.has(raw) && warnedPatterns.size < MAX_WARNED_PATTERNS) {
+        warnedPatterns.add(raw);
+        console.warn(`[redact] Rejected potentially unsafe regex pattern: ${raw}`);
+      }
+      return null;
+    }
+
+    return re;
   } catch {
     return null;
   }
