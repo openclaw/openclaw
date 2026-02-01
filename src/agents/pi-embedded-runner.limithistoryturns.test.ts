@@ -159,4 +159,84 @@ describe("limitHistoryTurns", () => {
     expect(limited[0].content).toEqual([{ type: "text", text: "second" }]);
     expect(limited[1].content).toEqual([{ type: "text", text: "response" }]);
   });
+
+  it("drops orphaned toolResult messages after truncation", () => {
+    // Scenario: truncation cuts off assistant with toolCall but keeps toolResult
+    // This can happen when toolResult messages are reordered after the cutoff user
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool-abc", name: "exec", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool-abc",
+        toolName: "exec",
+        content: [{ type: "text", text: "result" }],
+      },
+      { role: "user", content: [{ type: "text", text: "second question" }] },
+      { role: "assistant", content: [{ type: "text", text: "response" }] },
+    ] as AgentMessage[];
+    const limited = limitHistoryTurns(messages, 1);
+    // Should keep only the last user turn and response, dropping orphaned toolResult
+    expect(limited.length).toBe(2);
+    expect(limited[0].role).toBe("user");
+    expect((limited[0] as { content: unknown[] }).content).toEqual([
+      { type: "text", text: "second question" },
+    ]);
+    expect(limited[1].role).toBe("assistant");
+  });
+
+  it("keeps toolResult when its matching toolCall is in the kept messages", () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      { role: "assistant", content: [{ type: "text", text: "hi" }] },
+      { role: "user", content: [{ type: "text", text: "do something" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool-def", name: "exec", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool-def",
+        toolName: "exec",
+        content: [{ type: "text", text: "result" }],
+      },
+      { role: "assistant", content: [{ type: "text", text: "done" }] },
+    ] as AgentMessage[];
+    const limited = limitHistoryTurns(messages, 1);
+    // Should keep user, assistant with toolCall, toolResult, and final assistant
+    expect(limited.length).toBe(4);
+    expect(limited[0].role).toBe("user");
+    expect(limited[1].role).toBe("assistant");
+    expect(
+      ((limited[1] as { content: unknown[] }).content as Array<{ type: string }>)[0].type,
+    ).toBe("toolCall");
+    expect(limited[2].role).toBe("toolResult");
+    expect(limited[3].role).toBe("assistant");
+  });
+
+  it("handles toolUse type blocks (alternative naming)", () => {
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "hello" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "tool-xyz", name: "search", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool-xyz",
+        toolName: "search",
+        content: [{ type: "text", text: "found it" }],
+      },
+      { role: "user", content: [{ type: "text", text: "thanks" }] },
+      { role: "assistant", content: [{ type: "text", text: "welcome" }] },
+    ] as AgentMessage[];
+    const limited = limitHistoryTurns(messages, 1);
+    // Should drop orphaned toolResult since toolUse is truncated
+    expect(limited.length).toBe(2);
+    expect(limited[0].role).toBe("user");
+    expect(limited[1].role).toBe("assistant");
+  });
 });
