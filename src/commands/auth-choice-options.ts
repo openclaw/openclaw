@@ -56,8 +56,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   },
   {
     value: "moonshot",
-    label: "Moonshot AI",
-    hint: "Kimi K2 + Kimi Coding",
+    label: "Moonshot AI (Kimi K2.5)",
+    hint: "API key + Kimi Code Plan",
     choices: ["moonshot-api-key", "kimi-code-api-key"],
   },
   {
@@ -146,8 +146,8 @@ export function buildAuthChoiceOptions(params: {
     value: "ai-gateway-api-key",
     label: "Vercel AI Gateway API key",
   });
-  options.push({ value: "moonshot-api-key", label: "Moonshot AI API key" });
-  options.push({ value: "kimi-code-api-key", label: "Kimi Coding API key" });
+  options.push({ value: "moonshot-api-key", label: "Kimi API key" });
+  options.push({ value: "kimi-code-api-key", label: "Kimi Code Plan API key" });
   options.push({ value: "synthetic-api-key", label: "Synthetic API key" });
   options.push({
     value: "venice-api-key",
