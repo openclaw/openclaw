@@ -141,7 +141,7 @@ export function resolveDiscordUserAllowed(params: {
   userName?: string;
   userTag?: string;
 }) {
-  const allowList = normalizeDiscordAllowList(params.allowList, ["discord:", "user:"]);
+  const allowList = normalizeDiscordAllowList(params.allowList, ["discord:", "user:", "pk:"]);
   if (!allowList) {
     return true;
   }
@@ -161,7 +161,7 @@ export function resolveDiscordCommandAuthorized(params: {
   if (!params.isDirectMessage) {
     return true;
   }
-  const allowList = normalizeDiscordAllowList(params.allowFrom, ["discord:", "user:"]);
+  const allowList = normalizeDiscordAllowList(params.allowFrom, ["discord:", "user:", "pk:"]);
   if (!allowList) {
     return true;
   }
@@ -409,7 +409,7 @@ export function shouldEmitDiscordReactionNotification(params: {
     return Boolean(params.botId && params.messageAuthorId === params.botId);
   }
   if (mode === "allowlist") {
-    const list = normalizeDiscordAllowList(params.allowlist, ["discord:", "user:"]);
+    const list = normalizeDiscordAllowList(params.allowlist, ["discord:", "user:", "pk:"]);
     if (!list) {
       return false;
     }
