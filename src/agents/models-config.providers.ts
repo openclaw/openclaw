@@ -76,6 +76,25 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+// Azure OpenAI configuration
+const AZURE_OPENAI_DEFAULT_CONTEXT_WINDOW = 128000;
+const AZURE_OPENAI_DEFAULT_MAX_TOKENS = 16384;
+const AZURE_OPENAI_DEFAULT_COST = {
+  input: 2.5,
+  output: 10,
+  cacheRead: 1.25,
+  cacheWrite: 2.5,
+};
+
+export type AzureOpenAIConfig = {
+  /** Azure OpenAI resource endpoint (e.g., https://my-resource.openai.azure.com) */
+  endpoint: string;
+  /** Azure OpenAI API key */
+  apiKey?: string;
+  /** Map model IDs to Azure deployment names */
+  deployments?: Record<string, string>;
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -390,6 +409,60 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   return {
     baseUrl: OLLAMA_BASE_URL,
     api: "openai-completions",
+    models,
+  };
+}
+
+/**
+ * Build Azure OpenAI provider configuration using native pi-ai Azure support.
+ *
+ * Uses pi-ai's built-in `azure-openai-responses` API which handles Azure's
+ * authentication and URL format natively.
+ *
+ * @example
+ * ```typescript
+ * const provider = buildAzureOpenAIProvider({
+ *   endpoint: "https://my-resource.openai.azure.com",
+ *   apiKey: "your-azure-api-key",
+ *   deployments: {
+ *     "gpt-4o-mini": "my-gpt4o-deployment",
+ *     "gpt-5.2-codex": "my-gpt5-deployment",
+ *   },
+ * });
+ * ```
+ */
+export function buildAzureOpenAIProvider(config: AzureOpenAIConfig): ProviderConfig {
+  const deployments = config.deployments ?? {};
+
+  const models: ModelDefinitionConfig[] = Object.entries(deployments).map(
+    ([modelId, deploymentName]) => {
+      const lowerModelId = modelId.toLowerCase();
+      const isGpt5 = lowerModelId.includes("gpt-5");
+      const isO1 = lowerModelId.startsWith("o1");
+      const isO3 = lowerModelId.startsWith("o3");
+      const isReasoning = isO1 || isO3;
+
+      return {
+        id: deploymentName,
+        name: modelId,
+        reasoning: isReasoning,
+        input: ["text", "image"] as Array<"text" | "image">,
+        cost: AZURE_OPENAI_DEFAULT_COST,
+        contextWindow: isGpt5 || isO3 ? 200000 : AZURE_OPENAI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: AZURE_OPENAI_DEFAULT_MAX_TOKENS,
+        compat: {
+          supportsStore: false,
+        },
+      };
+    },
+  );
+
+  const baseUrl = `${config.endpoint.replace(/\/+$/, "")}/openai/v1`;
+
+  return {
+    baseUrl,
+    api: "azure-openai-responses",
+    apiKey: config.apiKey,
     models,
   };
 }
