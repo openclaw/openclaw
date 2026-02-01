@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import { loadConfig } from "../config/config.js";
@@ -7,8 +6,8 @@ import { danger } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { renderTable } from "../terminal/table.js";
+import { theme } from "../terminal/theme.js";
 
 function parseLimit(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {

@@ -1,5 +1,5 @@
-import { resolveBlueBubblesAccount } from "./accounts.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { resolveBlueBubblesAccount } from "./accounts.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 export type BlueBubblesReactionOpts = {

@@ -1,24 +1,24 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+} from "../../agents/tools/sessions-helpers.js";
 import {
   loadSessionStore,
   resolveStorePath,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry.js";
-import type { FinalizedMsgContext, MsgContext } from "../templating.js";
-import { logVerbose } from "../../globals.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { clearSessionQueues } from "./queue.js";
-import {
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "../../agents/tools/sessions-helpers.js";
 
 const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit", "interrupt"]);
 const ABORT_MEMORY = new Map<string, boolean>();

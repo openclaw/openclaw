@@ -1,9 +1,9 @@
 import type { Command } from "commander";
+import type { ProgramContext } from "./context.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { isRich, theme } from "../../terminal/theme.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
-import type { ProgramContext } from "./context.js";
 
 const CLI_NAME = resolveCliName();
 

@@ -1,17 +1,17 @@
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
-import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
+import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
+import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   authorizeGatewaySigusr1Restart,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
-import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { CommandLane } from "../process/lanes.js";
-import { isTruthyEnvValue } from "../infra/env.js";
-import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";

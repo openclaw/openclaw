@@ -1,9 +1,7 @@
-import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
-
+import { createServer } from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
-
 import { rawDataToString } from "../infra/ws.js";
 
 type CdpCommand = {

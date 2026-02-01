@@ -1,3 +1,4 @@
+import { listAgentIds } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -5,7 +6,6 @@ import {
   parseModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { listAgentIds } from "../../agents/agent-scope.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   type OpenClawConfig,

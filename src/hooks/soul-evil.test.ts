@@ -1,15 +1,13 @@
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
+import { DEFAULT_SOUL_FILENAME, type WorkspaceBootstrapFile } from "../agents/workspace.js";
+import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   applySoulEvilOverride,
   decideSoulEvil,
   DEFAULT_SOUL_EVIL_FILENAME,
   resolveSoulEvilConfigFromHook,
 } from "./soul-evil.js";
-import { DEFAULT_SOUL_FILENAME, type WorkspaceBootstrapFile } from "../agents/workspace.js";
-import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 
 const makeFiles = (overrides?: Partial<WorkspaceBootstrapFile>) => [
   {

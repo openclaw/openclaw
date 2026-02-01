@@ -1,6 +1,4 @@
 import { html, nothing } from "lit";
-
-import { formatAgo } from "../format";
 import type {
   ChannelAccountSnapshot,
   ChannelUiMetaEntry,
@@ -16,12 +14,13 @@ import type {
   WhatsAppStatus,
 } from "../types";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./channels.types";
-import { channelEnabled, renderChannelAccountCount } from "./channels.shared";
+import { formatAgo } from "../format";
 import { renderChannelConfigSection } from "./channels.config";
 import { renderDiscordCard } from "./channels.discord";
 import { renderGoogleChatCard } from "./channels.googlechat";
 import { renderIMessageCard } from "./channels.imessage";
 import { renderNostrCard } from "./channels.nostr";
+import { channelEnabled, renderChannelAccountCount } from "./channels.shared";
 import { renderSignalCard } from "./channels.signal";
 import { renderSlackCard } from "./channels.slack";
 import { renderTelegramCard } from "./channels.telegram";

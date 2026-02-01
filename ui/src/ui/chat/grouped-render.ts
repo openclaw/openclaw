@@ -1,16 +1,15 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-
 import type { AssistantIdentity } from "../assistant-identity";
-import { toSanitizedMarkdownHtml } from "../markdown";
 import type { MessageGroup } from "../types/chat-types";
+import { toSanitizedMarkdownHtml } from "../markdown";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown";
-import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer";
 import {
   extractTextCached,
   extractThinkingCached,
   formatReasoningMarkdown,
 } from "./message-extract";
+import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards";
 
 type ImageBlock = {

@@ -1,5 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import {

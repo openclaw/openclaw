@@ -1,12 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import type { CoreConfig } from "./src/core-bridge.js";
+import { registerVoiceCallCli } from "./src/cli.js";
 import {
   VoiceCallConfigSchema,
   resolveVoiceCallConfig,
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./src/config.js";
-import { registerVoiceCallCli } from "./src/cli.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./src/runtime.js";
 
 const voiceCallConfigSchema = {

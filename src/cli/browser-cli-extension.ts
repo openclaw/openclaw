@@ -1,14 +1,12 @@
+import type { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-import type { Command } from "commander";
-
+import { movePathToTrash } from "../browser/trash.js";
 import { STATE_DIR } from "../config/paths.js";
 import { danger, info } from "../globals.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { defaultRuntime } from "../runtime.js";
-import { movePathToTrash } from "../browser/trash.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";

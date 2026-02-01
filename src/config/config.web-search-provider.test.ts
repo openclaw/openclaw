@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { validateConfigObject } from "./config.js";
 
 describe("web search provider config", () => {

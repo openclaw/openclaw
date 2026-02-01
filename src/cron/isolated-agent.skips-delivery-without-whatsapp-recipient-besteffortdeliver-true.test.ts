@@ -1,21 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { CronJob } from "./types.js";
+import { discordPlugin } from "../../extensions/discord/src/channel.js";
+import { setDiscordRuntime } from "../../extensions/discord/src/runtime.js";
+import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
+import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
+import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import type { CronJob } from "./types.js";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
-import { setDiscordRuntime } from "../../extensions/discord/src/runtime.js";
-import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
-import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),

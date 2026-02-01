@@ -1,9 +1,7 @@
-import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-
-import { describe, expect, it } from "vitest";
-
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import { createServer } from "node:http";
+import { describe, expect, it } from "vitest";
 import type { ResolvedZaloAccount } from "./types.js";
 import { handleZaloWebhookRequest, registerZaloWebhookTarget } from "./monitor.js";
 

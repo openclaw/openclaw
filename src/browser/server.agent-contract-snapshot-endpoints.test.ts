@@ -1,6 +1,5 @@
 import { type AddressInfo, createServer } from "node:net";
 import { fetch as realFetch } from "undici";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
 

@@ -3,8 +3,6 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { resolveUserPath } from "./utils.js";
 import type { CallMode, VoiceCallConfig } from "./config.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import {
@@ -17,6 +15,7 @@ import {
   TerminalStates,
   type TranscriptEntry,
 } from "./types.js";
+import { resolveUserPath } from "./utils.js";
 import { escapeXml, mapVoiceToPolly } from "./voice-mapping.js";
 
 function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {

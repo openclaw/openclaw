@@ -1,7 +1,5 @@
-import { describe, expect, it } from "vitest";
-
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
-
+import { describe, expect, it } from "vitest";
 import { zaloPlugin } from "./channel.js";
 
 describe("zalo directory", () => {

@@ -30,7 +30,6 @@ import {
   type ChannelPlugin,
   type ResolvedSlackAccount,
 } from "openclaw/plugin-sdk";
-
 import { getSlackRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("slack");

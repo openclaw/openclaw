@@ -1,5 +1,4 @@
 import { html } from "lit";
-
 import type { ConfigUiHints } from "../types";
 import type { ChannelsProps } from "./channels.types";
 import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./config-form";

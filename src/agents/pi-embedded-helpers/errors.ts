@@ -1,8 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-
 import type { OpenClawConfig } from "../../config/config.js";
-import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import type { FailoverReason } from "./types.js";
+import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {

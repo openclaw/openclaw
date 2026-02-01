@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   formatDocsLink,
   promptAccountId,
@@ -6,10 +7,8 @@ import {
   type ChannelOnboardingAdapter,
   type WizardPrompter,
 } from "openclaw/plugin-sdk";
-
-import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 import type { TlonResolvedAccount } from "./types.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 
 const channel = "tlon" as const;
 

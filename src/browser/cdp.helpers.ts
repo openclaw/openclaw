@@ -1,5 +1,4 @@
 import WebSocket from "ws";
-
 import { rawDataToString } from "../infra/ws.js";
 
 type CdpResponse = {

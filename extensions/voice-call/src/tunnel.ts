@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-
 import { getTailscaleDnsName } from "./webhook.js";
 
 /**

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { zalouserPlugin } from "./channel.js";
 
 describe("zalouser outbound chunker", () => {

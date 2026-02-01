@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
@@ -12,10 +14,8 @@ import {
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { note } from "../terminal/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
+import { note } from "../terminal/note.js";
 
 export async function maybeRepairAnthropicOAuthProfileId(
   cfg: OpenClawConfig,

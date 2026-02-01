@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { buildInboundLine } from "./message-line.js";
 
 describe("buildInboundLine", () => {

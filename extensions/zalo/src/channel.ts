@@ -15,7 +15,6 @@ import {
   PAIRING_APPROVED_MESSAGE,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk";
-
 import {
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
@@ -25,8 +24,8 @@ import {
 import { zaloMessageActions } from "./actions.js";
 import { ZaloConfigSchema } from "./config-schema.js";
 import { zaloOnboardingAdapter } from "./onboarding.js";
-import { resolveZaloProxyFetch } from "./proxy.js";
 import { probeZalo } from "./probe.js";
+import { resolveZaloProxyFetch } from "./proxy.js";
 import { sendMessageZalo } from "./send.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 

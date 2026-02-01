@@ -1,3 +1,4 @@
+import type { MSTeamsTurnContext } from "../sdk-types.js";
 import {
   buildMSTeamsGraphMessageUrls,
   downloadMSTeamsAttachments,
@@ -7,7 +8,6 @@ import {
   type MSTeamsHtmlAttachmentSummary,
   type MSTeamsInboundMedia,
 } from "../attachments.js";
-import type { MSTeamsTurnContext } from "../sdk-types.js";
 
 type MSTeamsLogger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;

@@ -1,9 +1,7 @@
-import fs from "node:fs";
-
 import json5 from "json5";
-
-import { resolveConfigPath } from "../config/paths.js";
+import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveConfigPath } from "../config/paths.js";
 
 type LoggingConfig = OpenClawConfig["logging"];
 

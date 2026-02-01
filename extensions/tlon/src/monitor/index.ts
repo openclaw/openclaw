@@ -1,13 +1,12 @@
-import { format } from "node:util";
-
 import type { RuntimeEnv, ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk";
-
+import { format } from "node:util";
 import { getTlonRuntime } from "../runtime.js";
-import { resolveTlonAccount } from "../types.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
+import { resolveTlonAccount } from "../types.js";
 import { authenticate } from "../urbit/auth.js";
-import { UrbitSSEClient } from "../urbit/sse-client.js";
 import { sendDm, sendGroupMessage } from "../urbit/send.js";
+import { UrbitSSEClient } from "../urbit/sse-client.js";
+import { fetchAllChannels } from "./discovery.js";
 import { cacheMessage, getChannelHistory } from "./history.js";
 import { createProcessedMessageTracker } from "./processed-messages.js";
 import {
@@ -17,7 +16,6 @@ import {
   isDmAllowed,
   isSummarizationRequest,
 } from "./utils.js";
-import { fetchAllChannels } from "./discovery.js";
 
 export type MonitorTlonOpts = {
   runtime?: RuntimeEnv;

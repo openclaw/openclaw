@@ -1,9 +1,18 @@
-import crypto from "node:crypto";
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-
+import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { resolveBrowserConfig } from "../browser/config.js";
+import {
+  createBrowserControlContext,
+  startBrowserControlServiceFromConfig,
+} from "../browser/control-service.js";
+import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
+import { loadConfig } from "../config/config.js";
+import { GatewayClient } from "../gateway/client.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import {
   addAllowlistEntry,
   analyzeArgvCommand,
@@ -31,22 +40,11 @@ import {
   type ExecHostRunResult,
 } from "../infra/exec-host.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { loadConfig } from "../config/config.js";
-import { resolveBrowserConfig } from "../browser/config.js";
-import {
-  createBrowserControlContext,
-  startBrowserControlServiceFromConfig,
-} from "../browser/control-service.js";
-import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
-import { detectMime } from "../media/mime.js";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { VERSION } from "../version.js";
+import { detectMime } from "../media/mime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-
+import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
-import { GatewayClient } from "../gateway/client.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;

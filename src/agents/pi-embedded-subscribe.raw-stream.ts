@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 

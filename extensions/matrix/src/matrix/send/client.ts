@@ -1,5 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-
+import type { CoreConfig } from "../types.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { getActiveMatrixClient } from "../active-client.js";
 import {
@@ -8,7 +8,6 @@ import {
   resolveMatrixAuth,
   resolveSharedMatrixClient,
 } from "../client.js";
-import type { CoreConfig } from "../types.js";
 
 const getCore = () => getMatrixRuntime();
 

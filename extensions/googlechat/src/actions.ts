@@ -10,7 +10,6 @@ import {
   readReactionParams,
   readStringParam,
 } from "openclaw/plugin-sdk";
-
 import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accounts.js";
 import {
   createGoogleChatReaction,

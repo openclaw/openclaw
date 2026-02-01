@@ -1,5 +1,4 @@
 import { GoogleAuth, OAuth2Client } from "google-auth-library";
-
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 
 const CHAT_SCOPE = "https://www.googleapis.com/auth/chat.bot";

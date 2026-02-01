@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-
 import { WizardSession } from "./session.js";
 
 function noteRunner() {

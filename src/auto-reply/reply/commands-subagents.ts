@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
-
-import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import type { CommandHandler } from "./commands-types.js";
 import { AGENT_LANE_SUBAGENT } from "../../agents/lanes.js";
+import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import { listSubagentRunsForRequester } from "../../agents/subagent-registry.js";
 import {
   extractAssistantText,
@@ -10,12 +11,13 @@ import {
   sanitizeTextContent,
   stripToolMessages,
 } from "../../agents/tools/sessions-helpers.js";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { stopSubagentsForRequester } from "./abort.js";
+import { clearSessionQueues } from "./queue.js";
 import {
   formatAgeShort,
   formatDurationShort,
@@ -23,9 +25,6 @@ import {
   formatRunStatus,
   sortSubagentRuns,
 } from "./subagents-utils.js";
-import { stopSubagentsForRequester } from "./abort.js";
-import type { CommandHandler } from "./commands-types.js";
-import { clearSessionQueues } from "./queue.js";
 
 type SubagentTargetResolution = {
   entry?: SubagentRunRecord;

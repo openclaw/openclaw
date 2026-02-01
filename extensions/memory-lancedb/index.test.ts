@@ -8,10 +8,10 @@
  * - Auto-capture filtering
  */
 
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
+import { describe, test, expect, beforeEach, afterEach } from "vitest";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "test-key";
 const HAS_OPENAI_KEY = Boolean(process.env.OPENAI_API_KEY);

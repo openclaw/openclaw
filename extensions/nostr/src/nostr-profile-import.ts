@@ -6,10 +6,9 @@
  */
 
 import { SimplePool, verifyEvent, type Event } from "nostr-tools";
-
-import { contentToProfile, type ProfileContent } from "./nostr-profile.js";
 import type { NostrProfile } from "./config-schema.js";
 import { validateUrlSafety } from "./nostr-profile-http.js";
+import { contentToProfile, type ProfileContent } from "./nostr-profile.js";
 
 // ============================================================================
 // Types

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { formatZonedTimestamp } from "../../auto-reply/envelope.js";
+import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 
 describe("injectTimestamp", () => {
   beforeEach(() => {

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { CliBackendConfig } from "../config/types.js";
 import { runCliAgent } from "./cli-runner.js";
 import { cleanupSuspendedCliProcesses } from "./cli-runner/helpers.js";

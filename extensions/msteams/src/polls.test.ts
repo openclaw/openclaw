@@ -1,10 +1,8 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { beforeEach, describe, expect, it } from "vitest";
-
-import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { buildMSTeamsPollCard, createMSTeamsPollStoreFs, extractMSTeamsPollVote } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 

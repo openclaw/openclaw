@@ -1,5 +1,11 @@
 import { z } from "zod";
-
+import {
+  normalizeTelegramCommandDescription,
+  normalizeTelegramCommandName,
+  resolveTelegramCustomCommands,
+} from "./telegram-custom-commands.js";
+import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
+import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import {
   BlockStreamingChunkSchema,
   BlockStreamingCoalesceSchema,
@@ -14,13 +20,6 @@ import {
   RetryConfigSchema,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
-import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
-import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
-import {
-  normalizeTelegramCommandDescription,
-  normalizeTelegramCommandName,
-  resolveTelegramCustomCommands,
-} from "./telegram-custom-commands.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 

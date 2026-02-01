@@ -1,6 +1,6 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const OXFMT_EXTENSIONS = new Set([".cjs", ".js", ".json", ".jsonc", ".jsx", ".mjs", ".ts", ".tsx"]);

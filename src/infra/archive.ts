@@ -1,7 +1,7 @@
+import JSZip from "jszip";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
-import JSZip from "jszip";
 
 export type ArchiveKind = "tar" | "zip";
 

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { normalizePluginsConfig } from "./config-state.js";
 
 describe("normalizePluginsConfig", () => {

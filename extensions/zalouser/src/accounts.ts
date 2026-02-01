@@ -1,8 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
-
-import { runZca, parseJsonOutput } from "./zca.js";
 import type { ResolvedZalouserAccount, ZalouserAccountConfig, ZalouserConfig } from "./types.js";
+import { runZca, parseJsonOutput } from "./zca.js";
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   const accounts = (cfg.channels?.zalouser as ZalouserConfig | undefined)?.accounts;

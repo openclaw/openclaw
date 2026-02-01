@@ -1,6 +1,5 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
 import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
 
 describe("detectLegacyWorkspaceDirs", () => {

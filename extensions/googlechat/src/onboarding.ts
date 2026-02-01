@@ -10,7 +10,6 @@ import {
   normalizeAccountId,
   migrateBaseNameToDefaultAccount,
 } from "openclaw/plugin-sdk";
-
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,

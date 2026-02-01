@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
 
 function countLines(text: string) {

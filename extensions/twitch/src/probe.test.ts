@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { probeTwitch } from "./probe.js";
 import type { TwitchAccountConfig } from "./types.js";
+import { probeTwitch } from "./probe.js";
 
 // Mock Twurple modules - Vitest v4 compatible mocking
 const mockUnbind = vi.fn();

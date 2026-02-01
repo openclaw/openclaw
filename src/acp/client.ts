@@ -1,7 +1,3 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import * as readline from "node:readline";
-import { Readable, Writable } from "node:stream";
-
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
@@ -9,7 +5,9 @@ import {
   type RequestPermissionRequest,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
-
+import { spawn, type ChildProcess } from "node:child_process";
+import * as readline from "node:readline";
+import { Readable, Writable } from "node:stream";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 
 export type AcpClientOptions = {

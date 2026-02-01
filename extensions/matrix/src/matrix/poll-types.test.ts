@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { parsePollStartContent } from "./poll-types.js";
 
 describe("parsePollStartContent", () => {

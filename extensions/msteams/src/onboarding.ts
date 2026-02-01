@@ -11,13 +11,12 @@ import {
   formatDocsLink,
   promptChannelAccessConfig,
 } from "openclaw/plugin-sdk";
-
-import { resolveMSTeamsCredentials } from "./token.js";
 import {
   parseMSTeamsTeamEntry,
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
+import { resolveMSTeamsCredentials } from "./token.js";
 
 const channel = "msteams" as const;
 

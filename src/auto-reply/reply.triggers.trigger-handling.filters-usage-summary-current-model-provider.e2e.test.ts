@@ -1,5 +1,5 @@
-import { join } from "node:path";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-
 import { writeBase64ToFile } from "./nodes-camera.js";
 
 export type ScreenRecordPayload = {

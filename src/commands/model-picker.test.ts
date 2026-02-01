@@ -1,13 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
-import { makePrompter } from "./onboarding/__tests__/test-utils.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
   promptDefaultModel,
   promptModelAllowlist,
 } from "./model-picker.js";
+import { makePrompter } from "./onboarding/__tests__/test-utils.js";
 
 const loadModelCatalog = vi.hoisted(() => vi.fn());
 vi.mock("../agents/model-catalog.js", () => ({

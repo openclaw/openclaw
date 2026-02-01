@@ -1,7 +1,5 @@
 import crypto from "node:crypto";
-
 import { describe, expect, it } from "vitest";
-
 import { verifyPlivoWebhook, verifyTwilioWebhook } from "./webhook-security.js";
 
 function canonicalizeBase64(input: string): string {

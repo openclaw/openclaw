@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentRoute } from "./resolve-route.js";
 

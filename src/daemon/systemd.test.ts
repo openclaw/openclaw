@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { parseSystemdShow, resolveSystemdUserUnitPath } from "./systemd.js";
 
 describe("systemd runtime parsing", () => {

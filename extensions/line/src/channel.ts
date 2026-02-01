@@ -10,7 +10,6 @@ import {
   type LineChannelData,
   type ResolvedLineAccount,
 } from "openclaw/plugin-sdk";
-
 import { getLineRuntime } from "./runtime.js";
 
 // LINE channel metadata

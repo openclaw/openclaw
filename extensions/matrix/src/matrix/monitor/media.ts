@@ -1,5 +1,4 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-
 import { getMatrixRuntime } from "../../runtime.js";
 
 // Type for encrypted file info

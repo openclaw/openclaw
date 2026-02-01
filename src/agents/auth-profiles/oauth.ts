@@ -1,15 +1,14 @@
 import { getOAuthApiKey, type OAuthCredentials } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
-
 import type { OpenClawConfig } from "../../config/config.js";
-import { refreshChutesTokens } from "../chutes-oauth.js";
+import type { AuthProfileStore } from "./types.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
+import { refreshChutesTokens } from "../chutes-oauth.js";
 import { AUTH_STORE_LOCK_OPTIONS, log } from "./constants.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./store.js";
-import type { AuthProfileStore } from "./types.js";
 
 function buildOAuthApiKey(provider: string, credentials: OAuthCredentials): string {
   const needsProjectId = provider === "google-gemini-cli" || provider === "google-antigravity";

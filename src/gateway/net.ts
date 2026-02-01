@@ -1,5 +1,4 @@
 import net from "node:net";
-
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 
 export function isLoopbackAddress(ip: string | undefined): boolean {

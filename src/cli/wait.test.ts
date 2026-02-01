@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { waitForever } from "./wait.js";
 
 describe("waitForever", () => {

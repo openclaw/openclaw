@@ -1,17 +1,6 @@
 import { html, nothing } from "lit";
-
-import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
 import type { AppViewState } from "./app-view-state";
-import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
-import {
-  TAB_GROUPS,
-  iconForTab,
-  pathForTab,
-  subtitleForTab,
-  titleForTab,
-  type Tab,
-} from "./navigation";
-import { icons } from "./icons";
+import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
 import type { UiSettings } from "./storage";
 import type { ThemeMode } from "./theme";
 import type { ThemeTransitionContext } from "./theme-transition";
@@ -30,40 +19,10 @@ import type {
   StatusSummary,
 } from "./types";
 import type { ChatQueueItem, CronFormState } from "./ui-types";
+import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { refreshChatAvatar } from "./app-chat";
-import { renderChat } from "./views/chat";
-import { renderConfig } from "./views/config";
-import { renderChannels } from "./views/channels";
-import { renderCron } from "./views/cron";
-import { renderDebug } from "./views/debug";
-import { renderInstances } from "./views/instances";
-import { renderLogs } from "./views/logs";
-import { renderNodes } from "./views/nodes";
-import { renderOverview } from "./views/overview";
-import { renderSessions } from "./views/sessions";
-import { renderExecApprovalPrompt } from "./views/exec-approval";
-import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation";
-import {
-  approveDevicePairing,
-  loadDevices,
-  rejectDevicePairing,
-  revokeDeviceToken,
-  rotateDeviceToken,
-} from "./controllers/devices";
-import { renderSkills } from "./views/skills";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers";
 import { loadChannels } from "./controllers/channels";
-import { loadPresence } from "./controllers/presence";
-import { deleteSession, loadSessions, patchSession } from "./controllers/sessions";
-import {
-  installSkill,
-  loadSkills,
-  saveSkillApiKey,
-  updateSkillEdit,
-  updateSkillEnabled,
-  type SkillMessage,
-} from "./controllers/skills";
-import { loadNodes } from "./controllers/nodes";
 import { loadChatHistory } from "./controllers/chat";
 import {
   applyConfig,
@@ -74,12 +33,6 @@ import {
   removeConfigFormValue,
 } from "./controllers/config";
 import {
-  loadExecApprovals,
-  removeExecApprovalsFormValue,
-  saveExecApprovals,
-  updateExecApprovalsFormValue,
-} from "./controllers/exec-approvals";
-import {
   loadCronRuns,
   toggleCronJob,
   runCronJob,
@@ -87,7 +40,53 @@ import {
   addCronJob,
 } from "./controllers/cron";
 import { loadDebug, callDebugMethod } from "./controllers/debug";
+import {
+  approveDevicePairing,
+  loadDevices,
+  rejectDevicePairing,
+  revokeDeviceToken,
+  rotateDeviceToken,
+} from "./controllers/devices";
+import {
+  loadExecApprovals,
+  removeExecApprovalsFormValue,
+  saveExecApprovals,
+  updateExecApprovalsFormValue,
+} from "./controllers/exec-approvals";
 import { loadLogs } from "./controllers/logs";
+import { loadNodes } from "./controllers/nodes";
+import { loadPresence } from "./controllers/presence";
+import { deleteSession, loadSessions, patchSession } from "./controllers/sessions";
+import {
+  installSkill,
+  loadSkills,
+  saveSkillApiKey,
+  updateSkillEdit,
+  updateSkillEnabled,
+  type SkillMessage,
+} from "./controllers/skills";
+import { icons } from "./icons";
+import {
+  TAB_GROUPS,
+  iconForTab,
+  pathForTab,
+  subtitleForTab,
+  titleForTab,
+  type Tab,
+} from "./navigation";
+import { renderChannels } from "./views/channels";
+import { renderChat } from "./views/chat";
+import { renderConfig } from "./views/config";
+import { renderCron } from "./views/cron";
+import { renderDebug } from "./views/debug";
+import { renderExecApprovalPrompt } from "./views/exec-approval";
+import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation";
+import { renderInstances } from "./views/instances";
+import { renderLogs } from "./views/logs";
+import { renderNodes } from "./views/nodes";
+import { renderOverview } from "./views/overview";
+import { renderSessions } from "./views/sessions";
+import { renderSkills } from "./views/skills";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;

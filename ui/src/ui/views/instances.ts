@@ -1,7 +1,6 @@
 import { html, nothing } from "lit";
-
-import { formatPresenceAge, formatPresenceSummary } from "../presenter";
 import type { PresenceEntry } from "../types";
+import { formatPresenceAge, formatPresenceSummary } from "../presenter";
 
 export type InstancesProps = {
   loading: boolean;

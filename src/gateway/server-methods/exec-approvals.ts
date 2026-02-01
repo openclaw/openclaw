@@ -1,3 +1,4 @@
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   ensureExecApprovals,
   normalizeExecApprovals,
@@ -17,7 +18,6 @@ import {
   validateExecApprovalsSetParams,
 } from "../protocol/index.js";
 import { respondUnavailableOnThrow, safeParseJson } from "./nodes.helpers.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function resolveBaseHash(params: unknown): string | null {
   const raw = (params as { baseHash?: unknown })?.baseHash;

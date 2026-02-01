@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
-
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { getGoogleChatAccessToken } from "./auth.js";
 import type { GoogleChatReaction } from "./types.js";
+import { getGoogleChatAccessToken } from "./auth.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";

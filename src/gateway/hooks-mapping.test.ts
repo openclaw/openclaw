@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
 import { applyHookMappings, resolveHookMappings } from "./hooks-mapping.js";
 
 const baseUrl = new URL("http://127.0.0.1:18789/hooks/gmail");

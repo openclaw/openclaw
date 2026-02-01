@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SkillEntry, SkillSnapshot } from "./types.js";
 import { resolveSkillConfig } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import type { SkillEntry, SkillSnapshot } from "./types.js";
 
 export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: OpenClawConfig }) {
   const { skills, config } = params;

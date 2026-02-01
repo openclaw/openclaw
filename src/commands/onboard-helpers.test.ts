@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import {
   normalizeGatewayTokenInput,
   openUrl,

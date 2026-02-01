@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { formatHealthCheckFailure } from "./health-format.js";
 
 const ansiEscape = String.fromCharCode(27);

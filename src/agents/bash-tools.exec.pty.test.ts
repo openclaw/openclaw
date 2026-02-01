@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from "vitest";
-
-import { createExecTool } from "./bash-tools.exec";
 import { resetProcessRegistryForTests } from "./bash-process-registry";
+import { createExecTool } from "./bash-tools.exec";
 
 afterEach(() => {
   resetProcessRegistryForTests();

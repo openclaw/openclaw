@@ -2,7 +2,6 @@ import { Type } from "@sinclair/typebox";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-
 import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
 
 type LobsterEnvelope =

@@ -1,12 +1,12 @@
 import type { Command } from "commander";
-import { defaultRuntime } from "../../runtime.js";
-import { formatAge, formatPermissions, parseNodeList, parsePairingList } from "./format.js";
-import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
+import { defaultRuntime } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
-import { parseDurationMs } from "../parse-duration.js";
 import { shortenHomeInString } from "../../utils.js";
+import { parseDurationMs } from "../parse-duration.js";
+import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { formatAge, formatPermissions, parseNodeList, parsePairingList } from "./format.js";
+import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();

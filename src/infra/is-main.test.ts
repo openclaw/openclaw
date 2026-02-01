@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { isMainModule } from "./is-main.js";
 
 describe("isMainModule", () => {

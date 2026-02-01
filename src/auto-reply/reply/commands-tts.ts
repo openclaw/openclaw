@@ -1,6 +1,6 @@
-import { logVerbose } from "../../globals.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandler } from "./commands-types.js";
+import { logVerbose } from "../../globals.js";
 import {
   getLastTtsAttempt,
   getTtsMaxLength,

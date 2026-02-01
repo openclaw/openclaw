@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { join, parse } from "node:path";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 // Mock fs module before importing the module under test
 const mockExistsSync = vi.fn();

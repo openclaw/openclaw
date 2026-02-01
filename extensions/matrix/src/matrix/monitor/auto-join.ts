@@ -1,7 +1,6 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { AutojoinRoomsMixin } from "@vector-im/matrix-bot-sdk";
-
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import { AutojoinRoomsMixin } from "@vector-im/matrix-bot-sdk";
 import type { CoreConfig } from "../../types.js";
 import { getMatrixRuntime } from "../../runtime.js";
 

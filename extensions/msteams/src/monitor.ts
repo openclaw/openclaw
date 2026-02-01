@@ -6,18 +6,18 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
+import type { MSTeamsAdapter } from "./messenger.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import { formatUnknownError } from "./errors.js";
-import type { MSTeamsAdapter } from "./messenger.js";
 import { registerMSTeamsHandlers } from "./monitor-handler.js";
 import { createMSTeamsPollStoreFs, type MSTeamsPollStore } from "./polls.js";
 import {
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
+import { getMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
-import { getMSTeamsRuntime } from "./runtime.js";
 
 export type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;

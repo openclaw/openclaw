@@ -1,8 +1,8 @@
 import { html, nothing } from "lit";
 import type { ConfigUiHints } from "../types";
 import { icons } from "../icons";
-import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared";
 import { renderNode } from "./config-form.node";
+import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared";
 
 export type ConfigFormProps = {
   schema: JsonSchema | null;

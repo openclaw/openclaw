@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-import { onAgentEvent } from "../../infra/agent-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();

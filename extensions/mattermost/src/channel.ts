@@ -9,11 +9,8 @@ import {
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
-
 import { MattermostConfigSchema } from "./config-schema.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
-import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
-import { mattermostOnboardingAdapter } from "./onboarding.js";
 import {
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
@@ -24,6 +21,8 @@ import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import { monitorMattermostProvider } from "./mattermost/monitor.js";
 import { probeMattermost } from "./mattermost/probe.js";
 import { sendMessageMattermost } from "./mattermost/send.js";
+import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
+import { mattermostOnboardingAdapter } from "./onboarding.js";
 import { getMattermostRuntime } from "./runtime.js";
 
 const meta = {

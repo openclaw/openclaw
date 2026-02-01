@@ -1,8 +1,7 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-
 import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
-import { sendMessageMatrix } from "../send.js";
 import { getMatrixRuntime } from "../../runtime.js";
+import { sendMessageMatrix } from "../send.js";
 
 export async function deliverMatrixReplies(params: {
   replies: ReplyPayload[];

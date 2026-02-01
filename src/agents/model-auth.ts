@@ -1,10 +1,9 @@
-import path from "node:path";
-
 import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
-import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,

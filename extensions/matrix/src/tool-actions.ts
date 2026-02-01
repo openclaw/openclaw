@@ -1,5 +1,11 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-
+import {
+  createActionGate,
+  jsonResult,
+  readNumberParam,
+  readReactionParams,
+  readStringParam,
+} from "openclaw/plugin-sdk";
 import type { CoreConfig } from "./types.js";
 import {
   deleteMatrixMessage,
@@ -15,13 +21,6 @@ import {
   unpinMatrixMessage,
 } from "./matrix/actions.js";
 import { reactMatrixMessage } from "./matrix/send.js";
-import {
-  createActionGate,
-  jsonResult,
-  readNumberParam,
-  readReactionParams,
-  readStringParam,
-} from "openclaw/plugin-sdk";
 
 const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
 const reactionActions = new Set(["react", "reactions"]);

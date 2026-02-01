@@ -1,5 +1,5 @@
-import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { logConfigUpdated } from "../../config/logging.js";
 import { resolveModelTarget, updateConfig } from "./shared.js";
 
 export async function modelsSetImageCommand(modelRaw: string, runtime: RuntimeEnv) {

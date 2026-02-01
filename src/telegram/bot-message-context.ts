@@ -1,5 +1,7 @@
 import type { Bot } from "grammy";
-
+import type { OpenClawConfig } from "../config/config.js";
+import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
+import type { TelegramContext } from "./bot/types.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
   findModelInCatalog,
@@ -17,21 +19,25 @@ import {
 } from "../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
+import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
+import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
+import { logInboundDrop } from "../channels/logging.js";
+import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { recordInboundSession } from "../channels/session.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
-import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
-import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
-import { resolveControlCommandGate } from "../channels/command-gating.js";
-import { logInboundDrop } from "../channels/logging.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import {
+  firstDefined,
+  isSenderAllowed,
+  normalizeAllowFromWithStore,
+  resolveSenderAllowMatch,
+} from "./bot-access.js";
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -46,14 +52,7 @@ import {
   hasBotMention,
   resolveTelegramForumThreadId,
 } from "./bot/helpers.js";
-import {
-  firstDefined,
-  isSenderAllowed,
-  normalizeAllowFromWithStore,
-  resolveSenderAllowMatch,
-} from "./bot-access.js";
 import { upsertTelegramPairingRequest } from "./pairing-store.js";
-import type { TelegramContext } from "./bot/types.js";
 
 type TelegramMediaRef = {
   path: string;

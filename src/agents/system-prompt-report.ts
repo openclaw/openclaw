@@ -1,8 +1,7 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-
+import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
-import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 
 function extractBetween(
   input: string,

@@ -1,7 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
-
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 
 export const BASE_CHUNK_RATIO = 0.4;

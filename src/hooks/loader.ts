@@ -5,14 +5,14 @@
  * and from directory-based discovery (bundled, managed, workspace)
  */
 
-import { pathToFileURL } from "node:url";
 import path from "node:path";
-import { registerInternalHook } from "./internal-hooks.js";
+import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
-import { loadWorkspaceHookEntries } from "./workspace.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
+import { registerInternalHook } from "./internal-hooks.js";
+import { loadWorkspaceHookEntries } from "./workspace.js";
 
 /**
  * Load and register all hook handlers
