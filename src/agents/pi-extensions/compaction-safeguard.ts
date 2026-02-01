@@ -197,10 +197,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     try {
       const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
       const modelContextWindow = resolveContextWindowTokens(model);
-      const contextWindowTokens = Math.min(
-        runtime?.contextWindowTokens ?? modelContextWindow,
-        modelContextWindow,
-      );
+      const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
       let messagesToSummarize = preparation.messagesToSummarize;
 
