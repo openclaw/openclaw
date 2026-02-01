@@ -20,7 +20,7 @@ jobs:
       - name: Checkout formal models
         uses: actions/checkout@v4
         with:
-          repository: openclaw/clawdbot-formal-models
+          repository: vignesh07/clawdbot-formal-models
           ref: main
           path: clawdbot-formal-models
 
