@@ -3,6 +3,15 @@
  *
  * Implements the OpenResponses `/v1/responses` endpoint for OpenClaw Gateway.
  *
+ * SECURITY NOTE: Streaming responses (stream: true) bypass the http_response_sending hook.
+ * This is a known limitation - implementing output scanning for streaming would require
+ * buffering the entire response, which defeats the purpose of streaming.
+ *
+ * Plugins that need output scanning should:
+ * 1. For non-streaming: Use http_response_sending hook (fully supported)
+ * 2. For streaming: Consider using message_sending hook at the messaging layer,
+ *    or accept that streaming responses cannot be scanned for output leaks.
+ *
  * @see https://www.open-responses.com/
  */
 
@@ -699,6 +708,9 @@ export async function handleOpenResponsesHttpRequest(
 
   // ─────────────────────────────────────────────────────────────────────────
   // Streaming mode
+  // SECURITY NOTE: http_response_sending hook is NOT invoked for streaming.
+  // Streaming responses cannot be scanned without buffering, which breaks UX.
+  // See module-level security note for details.
   // ─────────────────────────────────────────────────────────────────────────
 
   setSseHeaders(res);
