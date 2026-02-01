@@ -14,7 +14,6 @@ provider and set the default model to `moonshot/kimi-k2.5`, or use
 Kimi Coding with `kimi-coding/k2p5`.
 
 Current Kimi K2 model IDs:
-
 <!-- moonshot-kimi-k2-ids:start -->
 
 - `kimi-k2.5`

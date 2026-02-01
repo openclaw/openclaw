@@ -8,6 +8,7 @@ import {
   resolvePinnedHostname,
   SsrFBlockedError,
 } from "../../infra/net/ssrf.js";
+import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { stringEnum } from "../schema/typebox.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
@@ -275,6 +276,80 @@ function formatWebFetchErrorDetail(params: {
   const truncated = truncateText(text.trim(), maxChars);
   return truncated.text;
 }
+
+const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
+const WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD = wrapExternalContent("", {
+  source: "web_fetch",
+  includeWarning: false,
+}).length;
+
+function wrapWebFetchContent(
+  value: string,
+  maxChars: number,
+): {
+  text: string;
+  truncated: boolean;
+  rawLength: number;
+  wrappedLength: number;
+} {
+  if (maxChars <= 0) {
+    return { text: "", truncated: true, rawLength: 0, wrappedLength: 0 };
+  }
+  const includeWarning = maxChars >= WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD;
+  const wrapperOverhead = includeWarning
+    ? WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD
+    : WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD;
+  if (wrapperOverhead > maxChars) {
+    const minimal = includeWarning
+      ? wrapWebContent("", "web_fetch")
+      : wrapExternalContent("", { source: "web_fetch", includeWarning: false });
+    const truncatedWrapper = truncateText(minimal, maxChars);
+    return {
+      text: truncatedWrapper.text,
+      truncated: true,
+      rawLength: 0,
+      wrappedLength: truncatedWrapper.text.length,
+    };
+  }
+  const maxInner = Math.max(0, maxChars - wrapperOverhead);
+  let truncated = truncateText(value, maxInner);
+  let wrappedText = includeWarning
+    ? wrapWebContent(truncated.text, "web_fetch")
+    : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
+
+  if (wrappedText.length > maxChars) {
+    const excess = wrappedText.length - maxChars;
+    const adjustedMaxInner = Math.max(0, maxInner - excess);
+    truncated = truncateText(value, adjustedMaxInner);
+    wrappedText = includeWarning
+      ? wrapWebContent(truncated.text, "web_fetch")
+      : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
+  }
+
+  return {
+    text: wrappedText,
+    truncated: truncated.truncated,
+    rawLength: truncated.text.length,
+    wrappedLength: wrappedText.length,
+  };
+}
+
+function wrapWebFetchField(value: string | undefined): string | undefined {
+  if (!value) {
+    return value;
+  }
+  return wrapExternalContent(value, { source: "web_fetch", includeWarning: false });
+}
+
+function normalizeContentType(value: string | null | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const [raw] = value.split(";");
+  const trimmed = raw?.trim();
+  return trimmed || undefined;
+}
+
 export async function fetchFirecrawlContent(params: {
   url: string;
   extractMode: ExtractMode;
@@ -329,8 +404,10 @@ export async function fetchFirecrawlContent(params: {
   };
 
   if (!res.ok || payload?.success === false) {
-    const detail = payload?.error || res.statusText;
-    throw new Error(`Firecrawl fetch failed (${res.status}): ${detail}`.trim());
+    const detail = payload?.error ?? "";
+    throw new Error(
+      `Firecrawl fetch failed (${res.status}): ${wrapWebContent(detail || res.statusText, "web_fetch")}`.trim(),
+    );
   }
 
   const data = payload?.data ?? {};
@@ -416,21 +493,24 @@ async function runWebFetch(params: {
         storeInCache: params.firecrawlStoreInCache,
         timeoutSeconds: params.firecrawlTimeoutSeconds,
       });
-      const truncated = truncateText(firecrawl.text, params.maxChars);
+      const wrapped = wrapWebFetchContent(firecrawl.text, params.maxChars);
+      const wrappedTitle = firecrawl.title ? wrapWebFetchField(firecrawl.title) : undefined;
       const payload = {
-        url: params.url,
-        finalUrl: firecrawl.finalUrl || finalUrl,
+        url: params.url, // Keep raw for tool chaining
+        finalUrl: firecrawl.finalUrl || finalUrl, // Keep raw
         status: firecrawl.status ?? 200,
-        contentType: "text/markdown",
-        title: firecrawl.title,
+        contentType: "text/markdown", // Protocol metadata, don't wrap
+        title: wrappedTitle,
         extractMode: params.extractMode,
         extractor: "firecrawl",
-        truncated: truncated.truncated,
-        length: truncated.text.length,
+        truncated: wrapped.truncated,
+        length: wrapped.wrappedLength,
+        rawLength: wrapped.rawLength, // Actual content length, not wrapped
+        wrappedLength: wrapped.wrappedLength,
         fetchedAt: new Date().toISOString(),
         tookMs: Date.now() - start,
-        text: truncated.text,
-        warning: firecrawl.warning,
+        text: wrapped.text,
+        warning: wrapWebFetchField(firecrawl.warning),
       };
       writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
       return payload;
@@ -452,21 +532,24 @@ async function runWebFetch(params: {
           storeInCache: params.firecrawlStoreInCache,
           timeoutSeconds: params.firecrawlTimeoutSeconds,
         });
-        const truncated = truncateText(firecrawl.text, params.maxChars);
+        const wrapped = wrapWebFetchContent(firecrawl.text, params.maxChars);
+        const wrappedTitle = firecrawl.title ? wrapWebFetchField(firecrawl.title) : undefined;
         const payload = {
-          url: params.url,
-          finalUrl: firecrawl.finalUrl || finalUrl,
+          url: params.url, // Keep raw for tool chaining
+          finalUrl: firecrawl.finalUrl || finalUrl, // Keep raw
           status: firecrawl.status ?? res.status,
-          contentType: "text/markdown",
-          title: firecrawl.title,
+          contentType: "text/markdown", // Protocol metadata, don't wrap
+          title: wrappedTitle,
           extractMode: params.extractMode,
           extractor: "firecrawl",
-          truncated: truncated.truncated,
-          length: truncated.text.length,
+          truncated: wrapped.truncated,
+          length: wrapped.wrappedLength,
+          rawLength: wrapped.rawLength, // Actual content length, not wrapped
+          wrappedLength: wrapped.wrappedLength,
           fetchedAt: new Date().toISOString(),
           tookMs: Date.now() - start,
-          text: truncated.text,
-          warning: firecrawl.warning,
+          text: wrapped.text,
+          warning: wrapWebFetchField(firecrawl.warning),
         };
         writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
         return payload;
@@ -477,10 +560,12 @@ async function runWebFetch(params: {
         contentType: res.headers.get("content-type"),
         maxChars: DEFAULT_ERROR_MAX_CHARS,
       });
-      throw new Error(`Web fetch failed (${res.status}): ${detail || res.statusText}`);
+      const wrappedDetail = wrapWebFetchContent(detail || res.statusText, DEFAULT_ERROR_MAX_CHARS);
+      throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);
     }
 
     const contentType = res.headers.get("content-type") ?? "application/octet-stream";
+    const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
     const body = await readResponseText(res);
 
     let title: string | undefined;
@@ -524,20 +609,23 @@ async function runWebFetch(params: {
       }
     }
 
-    const truncated = truncateText(text, params.maxChars);
+    const wrapped = wrapWebFetchContent(text, params.maxChars);
+    const wrappedTitle = title ? wrapWebFetchField(title) : undefined;
     const payload = {
-      url: params.url,
-      finalUrl,
+      url: params.url, // Keep raw for tool chaining
+      finalUrl, // Keep raw
       status: res.status,
-      contentType,
-      title,
+      contentType: normalizedContentType, // Protocol metadata, don't wrap
+      title: wrappedTitle,
       extractMode: params.extractMode,
       extractor,
-      truncated: truncated.truncated,
-      length: truncated.text.length,
+      truncated: wrapped.truncated,
+      length: wrapped.wrappedLength,
+      rawLength: wrapped.rawLength, // Actual content length, not wrapped
+      wrappedLength: wrapped.wrappedLength,
       fetchedAt: new Date().toISOString(),
       tookMs: Date.now() - start,
-      text: truncated.text,
+      text: wrapped.text,
     };
     writeCache(FETCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
