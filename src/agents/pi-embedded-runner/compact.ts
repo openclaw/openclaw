@@ -36,6 +36,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../pi-embedded-helpers.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import {
   ensurePiCompactionReserveTokens,
   resolveCompactionReserveTokensFloor,
@@ -431,8 +432,19 @@ export async function compactEmbeddedPiSessionDirect(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
-        if (limited.length > 0) {
-          session.agent.replaceMessages(limited);
+        // Re-run sanitization after limiting to fix any orphaned tool results or
+        // consecutive messages created by the history limit cut-off (issue #4650)
+        const postLimitRepaired = transcriptPolicy.repairToolUseResultPairing
+          ? sanitizeToolUseResultPairing(limited)
+          : limited;
+        const postLimitGemini = transcriptPolicy.validateGeminiTurns
+          ? validateGeminiTurns(postLimitRepaired)
+          : postLimitRepaired;
+        const postLimitValidated = transcriptPolicy.validateAnthropicTurns
+          ? validateAnthropicTurns(postLimitGemini)
+          : postLimitGemini;
+        if (postLimitValidated.length > 0) {
+          session.agent.replaceMessages(postLimitValidated);
         }
         const result = await session.compact(params.customInstructions);
         // Estimate tokens after compaction by summing token estimates for remaining messages

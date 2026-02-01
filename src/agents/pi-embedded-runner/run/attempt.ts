@@ -38,6 +38,7 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import {
   ensurePiCompactionReserveTokens,
@@ -555,8 +556,19 @@ export async function runEmbeddedAttempt(
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
         cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        // Re-run sanitization after limiting to fix any orphaned tool results or
+        // consecutive messages created by the history limit cut-off (issue #4650)
+        const postLimitRepaired = transcriptPolicy.repairToolUseResultPairing
+          ? sanitizeToolUseResultPairing(limited)
+          : limited;
+        const postLimitGemini = transcriptPolicy.validateGeminiTurns
+          ? validateGeminiTurns(postLimitRepaired)
+          : postLimitRepaired;
+        const postLimitValidated = transcriptPolicy.validateAnthropicTurns
+          ? validateAnthropicTurns(postLimitGemini)
+          : postLimitGemini;
+        if (postLimitValidated.length > 0) {
+          activeSession.agent.replaceMessages(postLimitValidated);
         }
       } catch (err) {
         sessionManager.flushPendingToolResults?.();
