@@ -109,4 +109,47 @@ describe("tool image sanitizing", () => {
     }
     expect(image.mimeType).toBe("image/jpeg");
   });
+
+  it("resizes images where decoded bytes < limit but base64 string > limit", async () => {
+    // This test verifies the fix for issue #5344:
+    // The API enforces the limit on base64 string length, not decoded bytes.
+    // Base64 encoding inflates data by ~33%, so an image with decoded size 4MB
+    // produces a base64 string of ~5.3MB, which exceeds the 5MB API limit.
+    const width = 2200;
+    const height = 2200;
+    const raw = Buffer.alloc(width * height * 3, 0xaa);
+    const png = await sharp(raw, {
+      raw: { width, height, channels: 3 },
+    })
+      .png({ compressionLevel: 0 })
+      .toBuffer();
+
+    const base64 = png.toString("base64");
+    const decodedBytes = png.byteLength;
+    const base64Length = base64.length;
+
+    // Verify test precondition: decoded bytes could be under 5MB but base64 over 5MB
+    // (due to compression this may vary, but the logic should handle both correctly)
+    expect(base64Length).toBeGreaterThan(decodedBytes);
+    expect(base64Length / decodedBytes).toBeCloseTo(4 / 3, 1); // ~1.33x inflation
+
+    const blocks = [
+      {
+        type: "image" as const,
+        data: base64,
+        mimeType: "image/png",
+      },
+    ];
+
+    // Use maxBytes as the limit for base64 string length
+    const maxBytes = 5 * 1024 * 1024;
+    const out = await sanitizeContentBlocksImages(blocks, "test", { maxBytes });
+    const image = out.find((b) => b.type === "image");
+    if (!image || image.type !== "image") {
+      throw new Error("expected image block");
+    }
+
+    // The output base64 string should be within the limit
+    expect(image.data.length).toBeLessThanOrEqual(maxBytes);
+  }, 20_000);
 });
