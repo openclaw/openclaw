@@ -202,7 +202,7 @@ export async function fetchAntigravityUsage(
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
-    "User-Agent": "antigravity",
+    "User-Agent": "antigravity/1.15.8 linux/arm64",
     "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
   };
 
