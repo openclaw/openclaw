@@ -1,10 +1,10 @@
+import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { extractBatchErrorMessage, formatUnavailableBatchError } from "./batch-error-utils.js";
 import { postJsonWithRetry } from "./batch-http.js";
 import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
 import { runEmbeddingBatchGroups } from "./batch-runner.js";
 import { uploadBatchJsonlFile } from "./batch-upload.js";
 import { buildBatchHeaders, normalizeBatchBaseUrl } from "./batch-utils.js";
-import type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 
 export type OpenAiBatchRequest = {
   custom_id: string;
@@ -13,6 +13,7 @@ export type OpenAiBatchRequest = {
   body: {
     model: string;
     input: string;
+    input_type?: "query" | "document";
   };
 };
 

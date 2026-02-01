@@ -1,11 +1,12 @@
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
 import { fetchRemoteEmbeddingVectors } from "./embeddings-remote-fetch.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
 export type OpenAiEmbeddingClient = {
   baseUrl: string;
   headers: Record<string, string>;
   model: string;
+  queryModel?: string;
 };
 
 export const DEFAULT_OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
@@ -15,6 +16,8 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-3-large": 8192,
   "text-embedding-ada-002": 8191,
 };
+
+type OpenAiEmbeddingInputType = "query" | "document";
 
 export function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
@@ -33,14 +36,28 @@ export async function createOpenAiEmbeddingProvider(
   const client = await resolveOpenAiEmbeddingClient(options);
   const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
 
-  const embed = async (input: string[]): Promise<number[][]> => {
+  const embed = async (
+    input: string[],
+    params?: { model?: string; inputType?: OpenAiEmbeddingInputType },
+  ): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
+    }
+    const body: {
+      model: string;
+      input: string[];
+      input_type?: OpenAiEmbeddingInputType;
+    } = {
+      model: params?.model ?? client.model,
+      input,
+    };
+    if (params?.inputType) {
+      body.input_type = params.inputType;
     }
     return await fetchRemoteEmbeddingVectors({
       url,
       headers: client.headers,
-      body: { model: client.model, input },
+      body,
       errorPrefix: "openai embeddings failed",
     });
   };
@@ -51,10 +68,15 @@ export async function createOpenAiEmbeddingProvider(
       model: client.model,
       maxInputTokens: OPENAI_MAX_INPUT_TOKENS[client.model],
       embedQuery: async (text) => {
-        const [vec] = await embed([text]);
+        const [vec] = await (client.queryModel
+          ? embed([text], { model: client.queryModel, inputType: "query" })
+          : embed([text]));
         return vec ?? [];
       },
-      embedBatch: embed,
+      embedBatch: async (texts) =>
+        client.queryModel
+          ? embed(texts, { model: client.model, inputType: "document" })
+          : embed(texts),
     },
     client,
   };
@@ -69,5 +91,7 @@ export async function resolveOpenAiEmbeddingClient(
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
   });
   const model = normalizeOpenAiModel(options.model);
-  return { baseUrl, headers, model };
+  const queryModelRaw = options.queryModel?.trim();
+  const queryModel = queryModelRaw ? normalizeOpenAiModel(queryModelRaw) : undefined;
+  return { baseUrl, headers, model, queryModel };
 }

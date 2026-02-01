@@ -306,6 +306,8 @@ export type MemorySearchConfig = {
   fallback?: "openai" | "gemini" | "local" | "voyage" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
+  /** Optional embedding model id for query embeddings (asymmetric search). */
+  queryModel?: string;
   /** Local embedding settings (node-llama-cpp). */
   local?: {
     /** GGUF model path or hf: URI. */

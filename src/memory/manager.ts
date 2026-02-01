@@ -1,11 +1,19 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { type FSWatcher } from "chokidar";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type {
+  MemoryEmbeddingProbeResult,
+  MemoryProviderStatus,
+  MemorySearchManager,
+  MemorySearchResult,
+  MemorySource,
+  MemorySyncProgressUpdate,
+} from "./types.js";
+import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createEmbeddingProvider,
@@ -20,14 +28,6 @@ import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
 import { extractKeywords } from "./query-expansion.js";
-import type {
-  MemoryEmbeddingProbeResult,
-  MemoryProviderStatus,
-  MemorySearchManager,
-  MemorySearchResult,
-  MemorySource,
-  MemorySyncProgressUpdate,
-} from "./types.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -119,6 +119,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       provider: settings.provider,
       remote: settings.remote,
       model: settings.model,
+      queryModel: settings.queryModel,
       fallback: settings.fallback,
       local: settings.local,
     });
@@ -499,8 +500,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // Determine search mode: "fts-only" if no provider, "hybrid" otherwise
     const searchMode = this.provider ? "hybrid" : "fts-only";
     const providerInfo = this.provider
-      ? { provider: this.provider.id, model: this.provider.model }
-      : { provider: "none", model: undefined };
+      ? {
+          provider: this.provider.id,
+          model: this.provider.model,
+          queryModel: this.openAi?.queryModel,
+        }
+      : { provider: "none", model: undefined, queryModel: undefined };
 
     return {
       backend: "builtin",
@@ -511,6 +516,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       dbPath: this.settings.store.path,
       provider: providerInfo.provider,
       model: providerInfo.model,
+      queryModel: providerInfo.queryModel,
       requestedProvider: this.requestedProvider,
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,

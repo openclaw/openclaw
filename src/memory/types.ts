@@ -25,6 +25,7 @@ export type MemoryProviderStatus = {
   backend: "builtin" | "qmd";
   provider: string;
   model?: string;
+  queryModel?: string;
   requestedProvider?: string;
   files?: number;
   chunks?: number;

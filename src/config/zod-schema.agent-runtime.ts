@@ -531,6 +531,7 @@ export const MemorySearchSchema = z
       ])
       .optional(),
     model: z.string().optional(),
+    queryModel: z.string().optional(),
     local: z
       .object({
         modelPath: z.string().optional(),
