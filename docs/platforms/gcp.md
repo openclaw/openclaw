@@ -36,7 +36,55 @@ For the generic Docker flow, see [Docker](/install/docker).
 
 ---
 
+## Automated deployment (recommended for beginners)
+
+For a fully automated deployment, use the deployment script.
+It handles all the steps below automatically, including Docker setup, gateway configuration, and optional Tailscale HTTPS.
+
+```bash
+# Clone the repository first
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
+
+# Basic deployment (SSH tunnel access)
+./scripts/deploy/google/compute-engine/run.sh \
+  --project YOUR_PROJECT_ID \
+  --anthropic-key sk-ant-xxx
+
+# With Tailscale for HTTPS access (no SSH tunnel needed)
+./scripts/deploy/google/compute-engine/run.sh \
+  --project YOUR_PROJECT_ID \
+  --anthropic-key sk-ant-xxx \
+  --tailscale
+
+# Full setup: HTTPS + Telegram auto-approval
+./scripts/deploy/google/compute-engine/run.sh \
+  --project YOUR_PROJECT_ID \
+  --anthropic-key sk-ant-xxx \
+  --tailscale \
+  --telegram-user-id YOUR_TELEGRAM_ID
+```
+
+**Features:**
+- Auto-generates secure tokens (gateway token, keyring password)
+- Installs Docker and all dependencies
+- Configures `gateway.mode=local` automatically
+- Optional Tailscale Serve for HTTPS (avoids browser secure context issues)
+- Optional Telegram allowlist (skips manual pairing)
+- Container stability checks with auto-restart
+
+**To uninstall:**
+```bash
+./scripts/deploy/google/compute-engine/uninstall.sh --project YOUR_PROJECT_ID
+```
+
+See [scripts/deploy/google/compute-engine/README.md](https://github.com/openclaw/openclaw/blob/main/scripts/deploy/google/compute-engine/README.md) for all options.
+
+---
+
 ## Quick path (experienced operators)
+
+If you prefer manual setup or need custom configuration:
 
 1. Create GCP project + enable Compute Engine API
 2. Create Compute Engine VM (e2-small, Debian 12, 20GB)
