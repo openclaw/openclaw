@@ -242,6 +242,7 @@
       "form-data": "2.5.4",
       "@hono/node-server>hono": "4.11.7",
       "hono": "4.11.7",
+      "request": "npm:@cypress/request@3.0.0",
       "qs": "6.14.1",
       "@sinclair/typebox": "0.34.47",
       "tar": "7.5.7",
