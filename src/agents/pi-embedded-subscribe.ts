@@ -289,20 +289,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const stripBlockTags = (
     text: string,
-    state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
+    tagState: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
   ): string => {
     if (!text) {
       return text;
     }
 
-    const inlineStateStart = state.inlineCode ?? createInlineCodeState();
+    const inlineStateStart = tagState.inlineCode ?? createInlineCodeState();
     const codeSpans = buildCodeSpanIndex(text, inlineStateStart);
 
     // 1. Handle <think> blocks (stateful, strip content inside)
     let processed = "";
     THINKING_TAG_SCAN_RE.lastIndex = 0;
     let lastIndex = 0;
-    let inThinking = state.thinking;
+    let inThinking = tagState.thinking;
     for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
       const idx = match.index ?? 0;
       if (codeSpans.isInside(idx)) {
@@ -318,7 +318,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!inThinking) {
       processed += text.slice(lastIndex);
     }
-    state.thinking = inThinking;
+    tagState.thinking = inThinking;
 
     // 2. Handle <final> blocks (stateful, strip content OUTSIDE)
     // If enforcement is disabled, we still strip the tags themselves to prevent
@@ -329,7 +329,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // in streaming chunks), so tag-based enforcement is unnecessary.
     const finalCodeSpans = buildCodeSpanIndex(processed, inlineStateStart);
     if (!params.enforceFinalTag || state.nativeReasoningDetected) {
-      state.inlineCode = finalCodeSpans.inlineState;
+      tagState.inlineCode = finalCodeSpans.inlineState;
       FINAL_TAG_SCAN_RE.lastIndex = 0;
       return stripTagsOutsideCodeSpans(processed, FINAL_TAG_SCAN_RE, finalCodeSpans.isInside);
     }
@@ -338,8 +338,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     let result = "";
     FINAL_TAG_SCAN_RE.lastIndex = 0;
     let lastFinalIndex = 0;
-    let inFinal = state.final;
-    let everInFinal = state.final;
+    let inFinal = tagState.final;
+    let everInFinal = tagState.final;
 
     for (const match of processed.matchAll(FINAL_TAG_SCAN_RE)) {
       const idx = match.index ?? 0;
@@ -364,7 +364,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (inFinal) {
       result += processed.slice(lastFinalIndex);
     }
-    state.final = inFinal;
+    tagState.final = inFinal;
 
     // Strict Mode: If enforcing final tags, we MUST NOT return content unless
     // we have seen a <final> tag. Otherwise, we leak "thinking out loud" text
@@ -376,7 +376,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Hardened Cleanup: Remove any remaining <final> tags that might have been
     // missed (e.g. nested tags or hallucinations) to prevent leakage.
     const resultCodeSpans = buildCodeSpanIndex(result, inlineStateStart);
-    state.inlineCode = resultCodeSpans.inlineState;
+    tagState.inlineCode = resultCodeSpans.inlineState;
     return stripTagsOutsideCodeSpans(result, FINAL_TAG_SCAN_RE, resultCodeSpans.isInside);
   };
 
