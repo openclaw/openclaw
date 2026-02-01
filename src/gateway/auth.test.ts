@@ -98,4 +98,26 @@ describe("gateway auth", () => {
     expect(res.method).toBe("tailscale");
     expect(res.user).toBe("peter");
   });
+
+  it("rejects tailscale auth when whois fails (e.g., Funnel/public internet)", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: async () => null,
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-for": "203.0.113.50",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "gateway.example.ts.net",
+          "tailscale-user-login": "attacker@evil.com",
+          "tailscale-user-name": "Attacker",
+        },
+      } as never,
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_missing");
+  });
 });
