@@ -2,7 +2,9 @@ Sources/Gateway/GatewayConnectionController.swift
 Sources/Gateway/GatewayDiscoveryDebugLogView.swift
 Sources/Gateway/GatewayDiscoveryModel.swift
 Sources/Gateway/GatewaySettingsStore.swift
+Sources/Gateway/GatewayHealthMonitor.swift
 Sources/Gateway/KeychainStore.swift
+Sources/Capabilities/NodeCapabilityRouter.swift
 Sources/Camera/CameraController.swift
 Sources/Chat/ChatSheet.swift
 Sources/Chat/IOSGatewayChatTransport.swift
@@ -58,6 +60,7 @@ Sources/Voice/VoiceWakePreferences.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/CanvasCommandParams.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/CanvasCommands.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/Capabilities.swift
+../shared/OpenClawKit/Sources/OpenClawKit/ChatCommands.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/ContactsCommands.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/DeviceCommands.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/OpenClawKitResources.swift

@@ -214,8 +214,8 @@ final class GatewayConnectionController {
         guard let appModel else { return }
         let connectOptions = self.makeConnectOptions()
 
-        Task { [weak self] in
-            guard let self else { return }
+        Task { [weak appModel] in
+            guard let appModel else { return }
             await MainActor.run {
                 appModel.gatewayStatusText = "Connecting…"
             }
@@ -353,6 +353,7 @@ final class GatewayConnectionController {
             OpenClawCanvasA2UICommand.reset.rawValue,
             OpenClawScreenCommand.record.rawValue,
             OpenClawSystemCommand.notify.rawValue,
+            OpenClawChatCommand.push.rawValue,
             OpenClawTalkCommand.pttStart.rawValue,
             OpenClawTalkCommand.pttStop.rawValue,
             OpenClawTalkCommand.pttCancel.rawValue,

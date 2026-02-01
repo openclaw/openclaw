@@ -34,6 +34,8 @@ const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
 const SYSTEM_NOTIFY_COMMANDS = ["system.notify"];
 
+const CHAT_COMMANDS = ["chat.push"];
+
 const TALK_COMMANDS = ["talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once"];
 
 const SYSTEM_COMMANDS = [
@@ -52,6 +54,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...SCREEN_COMMANDS,
     ...LOCATION_COMMANDS,
     ...SYSTEM_NOTIFY_COMMANDS,
+    ...CHAT_COMMANDS,
     ...DEVICE_COMMANDS,
     ...PHOTOS_COMMANDS,
     ...CONTACTS_COMMANDS,

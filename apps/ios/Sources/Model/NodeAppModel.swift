@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import OpenClawKit
 import Observation
 import SwiftUI
@@ -61,6 +62,8 @@ final class NodeAppModel {
     private var gatewayTask: Task<Void, Never>?
     private var voiceWakeSyncTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
+    @ObservationIgnored private var capabilityRouter: NodeCapabilityRouter
+    private let gatewayHealthMonitor = GatewayHealthMonitor()
     private let notificationCenter: NotificationCentering
     let voiceWake = VoiceWakeManager()
     let talkMode: TalkModeManager
@@ -108,6 +111,8 @@ final class NodeAppModel {
         self.remindersService = remindersService
         self.motionService = motionService
         self.talkMode = talkMode
+        self.capabilityRouter = NodeCapabilityRouter(handlers: [:])
+        self.capabilityRouter = self.buildCapabilityRouter()
 
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
@@ -281,6 +286,7 @@ final class NodeAppModel {
         connectOptions: GatewayConnectOptions)
     {
         self.gatewayTask?.cancel()
+        self.gatewayHealthMonitor.stop()
         self.gatewayServerName = nil
         self.gatewayRemoteAddress = nil
         let id = gatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -325,6 +331,7 @@ final class NodeAppModel {
                             }
                             await self.refreshBrandingFromGateway()
                             await self.startVoiceWakeSync()
+                            await MainActor.run { self.startGatewayHealthMonitor() }
                             await self.showA2UIOnConnectIfNeeded()
                         },
                         onDisconnected: { [weak self] reason in
@@ -337,6 +344,7 @@ final class NodeAppModel {
                                 self.showLocalCanvasOnDisconnect()
                                 self.gatewayStatusText = "Disconnected: \(reason)"
                             }
+                            await MainActor.run { self.stopGatewayHealthMonitor() }
                         },
                         onInvoke: { [weak self] req in
                             guard let self else {
@@ -391,6 +399,7 @@ final class NodeAppModel {
         self.gatewayTask = nil
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
+        self.gatewayHealthMonitor.stop()
         Task { await self.gateway.disconnect() }
         self.gatewayStatusText = "Offline"
         self.gatewayServerName = nil
@@ -490,6 +499,27 @@ final class NodeAppModel {
                 VoiceWakePreferences.saveTriggerWords(triggers)
             }
         }
+    }
+
+    private func startGatewayHealthMonitor() {
+        self.gatewayHealthMonitor.start(
+            check: { [weak self] in
+                guard let self else { return false }
+                do {
+                    let data = try await self.gateway.request(method: "health", paramsJSON: nil, timeoutSeconds: 6)
+                    return (try? JSONDecoder().decode(OpenClawGatewayHealthOK.self, from: data))?.ok ?? true
+                } catch {
+                    return false
+                }
+            },
+            onFailure: { [weak self] _ in
+                guard let self else { return }
+                await self.gateway.disconnect()
+            })
+    }
+
+    private func stopGatewayHealthMonitor() {
+        self.gatewayHealthMonitor.stop()
     }
 
     private func refreshWakeWordsFromGateway() async {
@@ -597,54 +627,19 @@ final class NodeAppModel {
         }
 
         do {
-            switch command {
-            case OpenClawLocationCommand.get.rawValue:
-                return try await self.handleLocationInvoke(req)
-            case OpenClawCanvasCommand.present.rawValue,
-                 OpenClawCanvasCommand.hide.rawValue,
-                 OpenClawCanvasCommand.navigate.rawValue,
-                 OpenClawCanvasCommand.evalJS.rawValue,
-                 OpenClawCanvasCommand.snapshot.rawValue:
-                return try await self.handleCanvasInvoke(req)
-            case OpenClawCanvasA2UICommand.reset.rawValue,
-                 OpenClawCanvasA2UICommand.push.rawValue,
-                 OpenClawCanvasA2UICommand.pushJSONL.rawValue:
-                return try await self.handleCanvasA2UIInvoke(req)
-            case OpenClawCameraCommand.list.rawValue,
-                 OpenClawCameraCommand.snap.rawValue,
-                 OpenClawCameraCommand.clip.rawValue:
-                return try await self.handleCameraInvoke(req)
-            case OpenClawScreenCommand.record.rawValue:
-                return try await self.handleScreenRecordInvoke(req)
-            case OpenClawSystemCommand.notify.rawValue:
-                return try await self.handleSystemNotify(req)
-            case OpenClawDeviceCommand.status.rawValue,
-                 OpenClawDeviceCommand.info.rawValue:
-                return try await self.handleDeviceInvoke(req)
-            case OpenClawPhotosCommand.latest.rawValue:
-                return try await self.handlePhotosInvoke(req)
-            case OpenClawContactsCommand.search.rawValue,
-                 OpenClawContactsCommand.add.rawValue:
-                return try await self.handleContactsInvoke(req)
-            case OpenClawCalendarCommand.events.rawValue,
-                 OpenClawCalendarCommand.add.rawValue:
-                return try await self.handleCalendarInvoke(req)
-            case OpenClawRemindersCommand.list.rawValue,
-                 OpenClawRemindersCommand.add.rawValue:
-                return try await self.handleRemindersInvoke(req)
-            case OpenClawMotionCommand.activity.rawValue,
-                 OpenClawMotionCommand.pedometer.rawValue:
-                return try await self.handleMotionInvoke(req)
-            case OpenClawTalkCommand.pttStart.rawValue,
-                 OpenClawTalkCommand.pttStop.rawValue,
-                 OpenClawTalkCommand.pttCancel.rawValue,
-                 OpenClawTalkCommand.pttOnce.rawValue:
-                return try await self.handleTalkInvoke(req)
-            default:
+            return try await self.capabilityRouter.handle(req)
+        } catch let error as NodeCapabilityRouter.RouterError {
+            switch error {
+            case .unknownCommand:
                 return BridgeInvokeResponse(
                     id: req.id,
                     ok: false,
                     error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
+            case .handlerUnavailable:
+                return BridgeInvokeResponse(
+                    id: req.id,
+                    ok: false,
+                    error: OpenClawNodeError(code: .unavailable, message: "node handler unavailable"))
             }
         } catch {
             if command.hasPrefix("camera.") {
@@ -983,6 +978,22 @@ final class NodeAppModel {
             let content = UNMutableNotificationContent()
             content.title = title
             content.body = body
+            if #available(iOS 15.0, *) {
+                switch params.priority ?? .active {
+                case .passive:
+                    content.interruptionLevel = .passive
+                case .timeSensitive:
+                    content.interruptionLevel = .timeSensitive
+                case .active:
+                    content.interruptionLevel = .active
+                }
+            }
+            let soundValue = params.sound?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if let soundValue, ["none", "silent", "off", "false", "0"].contains(soundValue) {
+                content.sound = nil
+            } else {
+                content.sound = .default
+            }
             let request = UNNotificationRequest(
                 identifier: UUID().uuidString,
                 content: content,
@@ -996,6 +1007,51 @@ final class NodeAppModel {
                 error: OpenClawNodeError(code: .unavailable, message: "NOTIFICATION_FAILED: \(error.message)"))
         }
         return BridgeInvokeResponse(id: req.id, ok: true)
+    }
+
+    private func handleChatPushInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(OpenClawChatPushParams.self, from: req.paramsJSON)
+        let text = params.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: empty chat.push text"))
+        }
+
+        let finalStatus = await self.requestNotificationAuthorizationIfNeeded()
+        let messageId = UUID().uuidString
+        if finalStatus == .authorized || finalStatus == .provisional || finalStatus == .ephemeral {
+            let addResult = await self.runNotificationCall(timeoutSeconds: 2.0) { [notificationCenter] in
+                let content = UNMutableNotificationContent()
+                content.title = "OpenClaw"
+                content.body = text
+                content.sound = .default
+                content.userInfo = ["messageId": messageId]
+                let request = UNNotificationRequest(
+                    identifier: messageId,
+                    content: content,
+                    trigger: nil)
+                try await notificationCenter.add(request)
+            }
+            if case let .failure(error) = addResult {
+                return BridgeInvokeResponse(
+                    id: req.id,
+                    ok: false,
+                    error: OpenClawNodeError(code: .unavailable, message: "NOTIFICATION_FAILED: \(error.message)"))
+            }
+        }
+
+        if params.speak ?? true {
+            let toSpeak = text
+            Task { @MainActor in
+                try? await TalkSystemSpeechSynthesizer.shared.speak(text: toSpeak)
+            }
+        }
+
+        let payload = OpenClawChatPushPayload(messageId: messageId)
+        let json = try Self.encodePayload(payload)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
     }
 
     private func requestNotificationAuthorizationIfNeeded() async -> NotificationAuthorizationStatus {
@@ -1203,6 +1259,123 @@ final class NodeAppModel {
 }
 
 private extension NodeAppModel {
+    // Central registry for node invoke routing to keep commands in one place.
+    func buildCapabilityRouter() -> NodeCapabilityRouter {
+        var handlers: [String: NodeCapabilityRouter.Handler] = [:]
+
+        func register(_ commands: [String], handler: @escaping NodeCapabilityRouter.Handler) {
+            for command in commands {
+                handlers[command] = handler
+            }
+        }
+
+        register([OpenClawLocationCommand.get.rawValue]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleLocationInvoke(req)
+        }
+
+        register([
+            OpenClawCanvasCommand.present.rawValue,
+            OpenClawCanvasCommand.hide.rawValue,
+            OpenClawCanvasCommand.navigate.rawValue,
+            OpenClawCanvasCommand.evalJS.rawValue,
+            OpenClawCanvasCommand.snapshot.rawValue,
+        ]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleCanvasInvoke(req)
+        }
+
+        register([
+            OpenClawCanvasA2UICommand.reset.rawValue,
+            OpenClawCanvasA2UICommand.push.rawValue,
+            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
+        ]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleCanvasA2UIInvoke(req)
+        }
+
+        register([
+            OpenClawCameraCommand.list.rawValue,
+            OpenClawCameraCommand.snap.rawValue,
+            OpenClawCameraCommand.clip.rawValue,
+        ]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleCameraInvoke(req)
+        }
+
+        register([OpenClawScreenCommand.record.rawValue]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleScreenRecordInvoke(req)
+        }
+
+        register([OpenClawSystemCommand.notify.rawValue]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleSystemNotify(req)
+        }
+
+        register([OpenClawChatCommand.push.rawValue]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleChatPushInvoke(req)
+        }
+
+        register([
+            OpenClawDeviceCommand.status.rawValue,
+            OpenClawDeviceCommand.info.rawValue,
+        ]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleDeviceInvoke(req)
+        }
+
+        register([OpenClawPhotosCommand.latest.rawValue]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handlePhotosInvoke(req)
+        }
+
+        register([
+            OpenClawContactsCommand.search.rawValue,
+            OpenClawContactsCommand.add.rawValue,
+        ]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleContactsInvoke(req)
+        }
+
+        register([
+            OpenClawCalendarCommand.events.rawValue,
+            OpenClawCalendarCommand.add.rawValue,
+        ]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleCalendarInvoke(req)
+        }
+
+        register([
+            OpenClawRemindersCommand.list.rawValue,
+            OpenClawRemindersCommand.add.rawValue,
+        ]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleRemindersInvoke(req)
+        }
+
+        register([
+            OpenClawMotionCommand.activity.rawValue,
+            OpenClawMotionCommand.pedometer.rawValue,
+        ]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleMotionInvoke(req)
+        }
+
+        register([
+            OpenClawTalkCommand.pttStart.rawValue,
+            OpenClawTalkCommand.pttStop.rawValue,
+            OpenClawTalkCommand.pttCancel.rawValue,
+            OpenClawTalkCommand.pttOnce.rawValue,
+        ]) { [weak self] req in
+            guard let self else { throw NodeCapabilityRouter.RouterError.handlerUnavailable }
+            return try await self.handleTalkInvoke(req)
+        }
+
+        return NodeCapabilityRouter(handlers: handlers)
+    }
+
     func locationMode() -> OpenClawLocationMode {
         let raw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
         return OpenClawLocationMode(rawValue: raw) ?? .off

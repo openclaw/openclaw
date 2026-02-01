@@ -92,6 +92,7 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
             let commands = Set(controller._test_currentCommands())
 
             #expect(commands.contains(OpenClawSystemCommand.notify.rawValue))
+            #expect(commands.contains(OpenClawChatCommand.push.rawValue))
             #expect(!commands.contains(OpenClawSystemCommand.run.rawValue))
             #expect(!commands.contains(OpenClawSystemCommand.which.rawValue))
             #expect(!commands.contains(OpenClawSystemCommand.execApprovalsGet.rawValue))
