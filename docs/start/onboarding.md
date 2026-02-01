@@ -24,6 +24,7 @@ wizard, and let the agent bootstrap itself.
 8. Ready
 
 ## 1) Welcome + security notice
+
 Read the security notice displayed and decide accordingly.
 
 ## 2) Local vs Remote
