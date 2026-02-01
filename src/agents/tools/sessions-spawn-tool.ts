@@ -225,6 +225,8 @@ export function createSessionsSpawnTool(opts?: {
             message: task,
             sessionKey: childSessionKey,
             channel: requesterOrigin?.channel,
+            threadId: requesterOrigin?.threadId,
+            accountId: requesterOrigin?.accountId,
             idempotencyKey: childIdem,
             deliver: false,
             lane: AGENT_LANE_SUBAGENT,
