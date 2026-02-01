@@ -410,10 +410,103 @@ fun SettingsSheet(viewModel: MainViewModel) {
             modifier = Modifier.alpha(if (manualEnabled) 1f else 0.5f),
           )
 
+          // Manual gateway auth (token/password).
+          enum class ManualAuthMode {
+            None,
+            Token,
+            Password,
+          }
+
+          var manualAuthMode by remember { mutableStateOf(ManualAuthMode.None) }
+          var manualAuthToken by remember { mutableStateOf("") }
+          var manualAuthPassword by remember { mutableStateOf("") }
+
+          Text("Auth", style = MaterialTheme.typography.titleSmall)
+
+          ListItem(
+            headlineContent = { Text("None") },
+            supportingContent = { Text("Connect without token/password (if the gateway allows it).") },
+            trailingContent = {
+              RadioButton(
+                selected = manualAuthMode == ManualAuthMode.None,
+                onClick = {
+                  manualAuthMode = ManualAuthMode.None
+                  manualAuthToken = ""
+                  manualAuthPassword = ""
+                },
+                enabled = manualEnabled,
+              )
+            },
+            modifier = Modifier.alpha(if (manualEnabled) 1f else 0.5f),
+          )
+
+          ListItem(
+            headlineContent = { Text("Token") },
+            supportingContent = { Text("Use a gateway token for authentication.") },
+            trailingContent = {
+              RadioButton(
+                selected = manualAuthMode == ManualAuthMode.Token,
+                onClick = { manualAuthMode = ManualAuthMode.Token },
+                enabled = manualEnabled,
+              )
+            },
+            modifier = Modifier.alpha(if (manualEnabled) 1f else 0.5f),
+          )
+
+          AnimatedVisibility(visible = manualEnabled && manualAuthMode == ManualAuthMode.Token) {
+            OutlinedTextField(
+              value = manualAuthToken,
+              onValueChange = { manualAuthToken = it },
+              label = { Text("Gateway Token") },
+              modifier = Modifier.fillMaxWidth(),
+              enabled = manualEnabled,
+              singleLine = true,
+            )
+          }
+
+          ListItem(
+            headlineContent = { Text("Password") },
+            supportingContent = { Text("Use a gateway password for authentication.") },
+            trailingContent = {
+              RadioButton(
+                selected = manualAuthMode == ManualAuthMode.Password,
+                onClick = { manualAuthMode = ManualAuthMode.Password },
+                enabled = manualEnabled,
+              )
+            },
+            modifier = Modifier.alpha(if (manualEnabled) 1f else 0.5f),
+          )
+
+          AnimatedVisibility(visible = manualEnabled && manualAuthMode == ManualAuthMode.Password) {
+            OutlinedTextField(
+              value = manualAuthPassword,
+              onValueChange = { manualAuthPassword = it },
+              label = { Text("Gateway Password") },
+              modifier = Modifier.fillMaxWidth(),
+              enabled = manualEnabled,
+              singleLine = true,
+              // Note: we don't prefill this for safety.
+              visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            )
+          }
+
           val hostOk = manualHost.trim().isNotEmpty()
           val portOk = manualPort in 1..65535
           Button(
             onClick = {
+              // Persist auth choice before connecting.
+              when (manualAuthMode) {
+                ManualAuthMode.None -> viewModel.clearGatewayAuth()
+                ManualAuthMode.Token -> {
+                  viewModel.setGatewayPassword(null)
+                  viewModel.setGatewayToken(manualAuthToken)
+                }
+                ManualAuthMode.Password -> {
+                  viewModel.setGatewayToken(null)
+                  viewModel.setGatewayPassword(manualAuthPassword)
+                }
+              }
+
               NodeForegroundService.start(context)
               viewModel.connectManual()
             },

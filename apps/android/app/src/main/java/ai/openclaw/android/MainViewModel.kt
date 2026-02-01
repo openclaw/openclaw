@@ -128,6 +128,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.refreshGatewayConnection()
   }
 
+  fun setGatewayToken(token: String?) {
+    runtime.setGatewayToken(token)
+  }
+
+  fun setGatewayPassword(password: String?) {
+    runtime.setGatewayPassword(password)
+  }
+
+  fun clearGatewayAuth() {
+    runtime.clearGatewayAuth()
+  }
+
   fun connect(endpoint: GatewayEndpoint) {
     runtime.connect(endpoint)
   }

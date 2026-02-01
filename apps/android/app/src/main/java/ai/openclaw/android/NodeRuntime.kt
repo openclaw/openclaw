@@ -557,6 +557,29 @@ class NodeRuntime(context: Context) {
     nodeSession.reconnect()
   }
 
+  fun setGatewayToken(token: String?) {
+    val trimmed = token?.trim().orEmpty()
+    if (trimmed.isEmpty()) {
+      prefs.clearGatewayToken()
+    } else {
+      prefs.saveGatewayToken(trimmed)
+    }
+  }
+
+  fun setGatewayPassword(password: String?) {
+    val trimmed = password?.trim().orEmpty()
+    if (trimmed.isEmpty()) {
+      prefs.clearGatewayPassword()
+    } else {
+      prefs.saveGatewayPassword(trimmed)
+    }
+  }
+
+  fun clearGatewayAuth() {
+    prefs.clearGatewayToken()
+    prefs.clearGatewayPassword()
+  }
+
   fun connect(endpoint: GatewayEndpoint) {
     connectedEndpoint = endpoint
     operatorStatusText = "Connecting…"

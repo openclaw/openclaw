@@ -159,6 +159,11 @@ class SecurePrefs(context: Context) {
     prefs.edit { putString(key, token.trim()) }
   }
 
+  fun clearGatewayToken() {
+    val key = "gateway.token.${_instanceId.value}"
+    prefs.edit { remove(key) }
+  }
+
   fun loadGatewayPassword(): String? {
     val key = "gateway.password.${_instanceId.value}"
     val stored = prefs.getString(key, null)?.trim()
@@ -168,6 +173,11 @@ class SecurePrefs(context: Context) {
   fun saveGatewayPassword(password: String) {
     val key = "gateway.password.${_instanceId.value}"
     prefs.edit { putString(key, password.trim()) }
+  }
+
+  fun clearGatewayPassword() {
+    val key = "gateway.password.${_instanceId.value}"
+    prefs.edit { remove(key) }
   }
 
   fun loadGatewayTlsFingerprint(stableId: String): String? {
