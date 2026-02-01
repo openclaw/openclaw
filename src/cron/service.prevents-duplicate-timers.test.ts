@@ -78,7 +78,7 @@ describe("CronService", () => {
     await cronB.status();
 
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeatNow).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
 
     cronA.stop();
     cronB.stop();

@@ -164,41 +164,45 @@ export async function executeJob(
         return;
       }
       state.deps.enqueueSystemEvent(text, { agentId: job.agentId });
-      if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
-        const reason = `cron:${job.id}`;
-        const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-        const maxWaitMs = 2 * 60_000;
-        const waitStartedAt = state.deps.nowMs();
+      if (job.wakeMode === "now") {
+        if (state.deps.runHeartbeatOnce) {
+          const reason = `cron:${job.id}`;
+          const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+          const maxWaitMs = 2 * 60_000;
+          const waitStartedAt = state.deps.nowMs();
 
-        let heartbeatResult: HeartbeatRunResult;
-        for (;;) {
-          heartbeatResult = await state.deps.runHeartbeatOnce({ reason });
-          if (
-            heartbeatResult.status !== "skipped" ||
-            heartbeatResult.reason !== "requests-in-flight"
-          ) {
-            break;
+          let heartbeatResult: HeartbeatRunResult;
+          for (;;) {
+            heartbeatResult = await state.deps.runHeartbeatOnce({ reason });
+            if (
+              heartbeatResult.status !== "skipped" ||
+              heartbeatResult.reason !== "requests-in-flight"
+            ) {
+              break;
+            }
+            if (state.deps.nowMs() - waitStartedAt > maxWaitMs) {
+              heartbeatResult = {
+                status: "skipped",
+                reason: "timeout waiting for main lane to become idle",
+              };
+              break;
+            }
+            await delay(250);
           }
-          if (state.deps.nowMs() - waitStartedAt > maxWaitMs) {
-            heartbeatResult = {
-              status: "skipped",
-              reason: "timeout waiting for main lane to become idle",
-            };
-            break;
-          }
-          await delay(250);
-        }
 
-        if (heartbeatResult.status === "ran") {
-          await finish("ok", undefined, text);
-        } else if (heartbeatResult.status === "skipped") {
-          await finish("skipped", heartbeatResult.reason, text);
+          if (heartbeatResult.status === "ran") {
+            await finish("ok", undefined, text);
+          } else if (heartbeatResult.status === "skipped") {
+            await finish("skipped", heartbeatResult.reason, text);
+          } else {
+            await finish("error", heartbeatResult.reason, text);
+          }
         } else {
-          await finish("error", heartbeatResult.reason, text);
+          state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+          await finish("ok", undefined, text);
         }
       } else {
-        // wakeMode is "next-heartbeat" or runHeartbeatOnce not available
-        state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+        // next-heartbeat: leave the event queued for the scheduled heartbeat.
         await finish("ok", undefined, text);
       }
       return;
