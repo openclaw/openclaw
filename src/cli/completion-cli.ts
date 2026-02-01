@@ -54,7 +54,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
 
   if (shell === "zsh") {
     profilePath = path.join(home, ".zshrc");
-    sourceLine = `source <(${binName} completion --shell zsh 2>/dev/null)`;
+    sourceLine = `source <(${binName} completion --shell zsh)`;
   } else if (shell === "bash") {
     // Try .bashrc first, then .bash_profile
     profilePath = path.join(home, ".bashrc");
