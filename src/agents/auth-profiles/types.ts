@@ -1,5 +1,4 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-
 import type { OpenClawConfig } from "../../config/config.js";
 
 export type ApiKeyCredential = {

@@ -1,0 +1,9 @@
+{
+  "id": "minimax-portal-auth",
+  "providers": ["minimax-portal"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

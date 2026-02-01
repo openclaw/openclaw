@@ -1,5 +1,4 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-
 import type { OpenClawConfig } from "../../config/config.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
@@ -17,7 +16,9 @@ export function limitHistoryTurns(
   messages: AgentMessage[],
   limit: number | undefined,
 ): AgentMessage[] {
-  if (!limit || limit <= 0 || messages.length === 0) return messages;
+  if (!limit || limit <= 0 || messages.length === 0) {
+    return messages;
+  }
 
   let userCount = 0;
   let lastUserIndex = messages.length;
@@ -42,18 +43,24 @@ export function getDmHistoryLimitFromSessionKey(
   sessionKey: string | undefined,
   config: OpenClawConfig | undefined,
 ): number | undefined {
-  if (!sessionKey || !config) return undefined;
+  if (!sessionKey || !config) {
+    return undefined;
+  }
 
   const parts = sessionKey.split(":").filter(Boolean);
   const providerParts = parts.length >= 3 && parts[0] === "agent" ? parts.slice(2) : parts;
 
   const provider = providerParts[0]?.toLowerCase();
-  if (!provider) return undefined;
+  if (!provider) {
+    return undefined;
+  }
 
   const kind = providerParts[1]?.toLowerCase();
   const userIdRaw = providerParts.slice(2).join(":");
   const userId = stripThreadSuffix(userIdRaw);
-  if (kind !== "dm") return undefined;
+  if (kind !== "dm") {
+    return undefined;
+  }
 
   const getLimit = (
     providerConfig:
@@ -63,7 +70,9 @@ export function getDmHistoryLimitFromSessionKey(
         }
       | undefined,
   ): number | undefined => {
-    if (!providerConfig) return undefined;
+    if (!providerConfig) {
+      return undefined;
+    }
     if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
       return providerConfig.dms[userId].historyLimit;
     }
@@ -75,9 +84,13 @@ export function getDmHistoryLimitFromSessionKey(
     providerId: string,
   ): { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> } | undefined => {
     const channels = cfg?.channels;
-    if (!channels || typeof channels !== "object") return undefined;
+    if (!channels || typeof channels !== "object") {
+      return undefined;
+    }
     const entry = (channels as Record<string, unknown>)[providerId];
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return undefined;
+    }
     return entry as { dmHistoryLimit?: number; dms?: Record<string, { historyLimit?: number }> };
   };
 

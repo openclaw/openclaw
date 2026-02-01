@@ -12,11 +12,15 @@ type OpenAIReasoningSignature = {
 };
 
 function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature | null {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
   let candidate: { id?: unknown; type?: unknown } | null = null;
   if (typeof value === "string") {
     const trimmed = value.trim();
-    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+      return null;
+    }
     try {
       candidate = JSON.parse(trimmed) as { id?: unknown; type?: unknown };
     } catch {
@@ -25,10 +29,14 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
   } else if (typeof value === "object") {
     candidate = value as { id?: unknown; type?: unknown };
   }
-  if (!candidate) return null;
+  if (!candidate) {
+    return null;
+  }
   const id = typeof candidate.id === "string" ? candidate.id : "";
   const type = typeof candidate.type === "string" ? candidate.type : "";
-  if (!id.startsWith("rs_")) return null;
+  if (!id.startsWith("rs_")) {
+    return null;
+  }
   if (type === "reasoning" || type.startsWith("reasoning.")) {
     return { id, type };
   }
@@ -41,8 +49,12 @@ function hasFollowingNonThinkingBlock(
 ): boolean {
   for (let i = index + 1; i < content.length; i++) {
     const block = content[i];
-    if (!block || typeof block !== "object") return true;
-    if ((block as { type?: unknown }).type !== "thinking") return true;
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    if ((block as { type?: unknown }).type !== "thinking") {
+      return true;
+    }
   }
   return false;
 }
@@ -87,16 +99,16 @@ export function downgradeOpenAIReasoningBlocks(messages: AgentMessage[]): AgentM
       }
       const record = block as OpenAIThinkingBlock;
       if (record.type !== "thinking") {
-        nextContent.push(block as AssistantContentBlock);
+        nextContent.push(block);
         continue;
       }
       const signature = parseOpenAIReasoningSignature(record.thinkingSignature);
       if (!signature) {
-        nextContent.push(block as AssistantContentBlock);
+        nextContent.push(block);
         continue;
       }
       if (hasFollowingNonThinkingBlock(assistantMsg.content, i)) {
-        nextContent.push(block as AssistantContentBlock);
+        nextContent.push(block);
         continue;
       }
       changed = true;

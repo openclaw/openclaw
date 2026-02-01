@@ -1,6 +1,6 @@
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
-import { parseBooleanValue } from "../../utils/boolean.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
+import { parseBooleanValue } from "../../utils/boolean.js";
 
 /**
  * Extract profile name from query string or body and get profile context.
@@ -37,7 +37,9 @@ export function jsonError(res: BrowserResponse, status: number, message: string)
 }
 
 export function toStringOrEmpty(value: unknown) {
-  if (typeof value === "string") return value.trim();
+  if (typeof value === "string") {
+    return value.trim();
+  }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value).trim();
   }
@@ -45,7 +47,9 @@ export function toStringOrEmpty(value: unknown) {
 }
 
 export function toNumber(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
   if (typeof value === "string" && value.trim()) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : undefined;
@@ -61,7 +65,9 @@ export function toBoolean(value: unknown) {
 }
 
 export function toStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
   const strings = value.map((v) => toStringOrEmpty(v)).filter(Boolean);
   return strings.length ? strings : undefined;
 }

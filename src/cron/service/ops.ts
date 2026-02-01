@@ -1,4 +1,5 @@
 import type { CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronServiceState } from "./state.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -9,7 +10,6 @@ import {
   recomputeNextRuns,
 } from "./jobs.js";
 import { locked } from "./locked.js";
-import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { armTimer, emit, executeJob, stopTimer, wake } from "./timer.js";
 
@@ -45,7 +45,7 @@ export async function status(state: CronServiceState) {
       enabled: state.deps.cronEnabled,
       storePath: state.deps.storePath,
       jobs: state.store?.jobs.length ?? 0,
-      nextWakeAtMs: state.deps.cronEnabled === true ? (nextWakeAtMs(state) ?? null) : null,
+      nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
     };
   });
 }
@@ -55,7 +55,7 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
     await ensureLoaded(state);
     const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
-    return jobs.sort((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+    return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
   });
 }
 
@@ -107,12 +107,16 @@ export async function remove(state: CronServiceState, id: string) {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state);
     const before = state.store?.jobs.length ?? 0;
-    if (!state.store) return { ok: false, removed: false } as const;
+    if (!state.store) {
+      return { ok: false, removed: false } as const;
+    }
     state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
     const removed = (state.store.jobs.length ?? 0) !== before;
     await persist(state);
     armTimer(state);
-    if (removed) emit(state, { jobId: id, action: "removed" });
+    if (removed) {
+      emit(state, { jobId: id, action: "removed" });
+    }
     return { ok: true, removed } as const;
   });
 }
@@ -124,7 +128,9 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
     const due = isJobDue(job, now, { forced: mode === "force" });
-    if (!due) return { ok: true, ran: false, reason: "not-due" as const };
+    if (!due) {
+      return { ok: true, ran: false, reason: "not-due" as const };
+    }
     await executeJob(state, job, now, { forced: mode === "force" });
     await persist(state);
     armTimer(state);

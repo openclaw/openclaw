@@ -4,6 +4,7 @@ read_when:
   - Adding agent-controlled browser automation
   - Debugging why openclaw is interfering with your own Chrome
   - Implementing browser settings + lifecycle in the macOS app
+title: "Browser (OpenClaw-managed)"
 ---
 
 # Browser (openclaw-managed)
@@ -13,6 +14,7 @@ It is isolated from your personal browser and is managed through a small local
 control service inside the Gateway (loopback only).
 
 Beginner view:
+
 - Think of it as a **separate, agent-only browser**.
 - The `openclaw` profile does **not** touch your personal browser profile.
 - The agent can **open tabs, read pages, click, and type** in a safe lane.
@@ -56,9 +58,9 @@ Browser settings live in `~/.openclaw/openclaw.json`.
 ```json5
 {
   browser: {
-    enabled: true,                    // default: true
+    enabled: true, // default: true
     // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
-    remoteCdpTimeoutMs: 1500,         // remote CDP HTTP timeout (ms)
+    remoteCdpTimeoutMs: 1500, // remote CDP HTTP timeout (ms)
     remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
     defaultProfile: "chrome",
     color: "#FF4500",
@@ -69,13 +71,14 @@ Browser settings live in `~/.openclaw/openclaw.json`.
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
-      remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" }
-    }
-  }
+      remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
+    },
+  },
 }
 ```
 
 Notes:
+
 - The browser control service binds to loopback on a port derived from `gateway.port`
   (default: `18791`, which is gateway + 2). The relay uses the next port (`18792`).
 - If you override the Gateway port (`gateway.port` or `OPENCLAW_GATEWAY_PORT`),
@@ -132,6 +135,7 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
   attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
 
 Remote CDP URLs can include auth:
+
 - Query tokens (e.g., `https://provider.example?token=<token>`)
 - HTTP Basic auth (e.g., `https://user:pass@provider.example`)
 
@@ -146,6 +150,7 @@ auto-route browser tool calls to that node without any extra browser config.
 This is the default path for remote gateways.
 
 Notes:
+
 - The node host exposes its local browser control server via a **proxy command**.
 - Profiles come from the node’s own `browser.profiles` config (same as local).
 - Disable if you don’t want it:
@@ -159,6 +164,7 @@ CDP endpoints over HTTPS. You can point a OpenClaw browser profile at a
 Browserless region endpoint and authenticate with your API key.
 
 Example:
+
 ```json5
 {
   browser: {
@@ -169,36 +175,41 @@ Example:
     profiles: {
       browserless: {
         cdpUrl: "https://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
-        color: "#00AA00"
-      }
-    }
-  }
+        color: "#00AA00",
+      },
+    },
+  },
 }
 ```
 
 Notes:
+
 - Replace `<BROWSERLESS_API_KEY>` with your real Browserless token.
 - Choose the region endpoint that matches your Browserless account (see their docs).
 
 ## Security
 
 Key ideas:
+
 - Browser control is loopback-only; access flows through the Gateway’s auth or node pairing.
 - Keep the Gateway and any node hosts on a private network (Tailscale); avoid public exposure.
 - Treat remote CDP URLs/tokens as secrets; prefer env vars or a secrets manager.
 
 Remote CDP tips:
+
 - Prefer HTTPS endpoints and short-lived tokens where possible.
 - Avoid embedding long-lived tokens directly in config files.
 
 ## Profiles (multi-browser)
 
 OpenClaw supports multiple named profiles (routing configs). Profiles can be:
+
 - **openclaw-managed**: a dedicated Chromium-based browser instance with its own user data directory + CDP port
 - **remote**: an explicit CDP URL (Chromium-based browser running elsewhere)
 - **extension relay**: your existing Chrome tab(s) via the local relay + Chrome extension
 
 Defaults:
+
 - The `openclaw` profile is auto-created if missing.
 - The `chrome` profile is built-in for the Chrome extension relay (points at `http://127.0.0.1:18792` by default).
 - Local CDP ports allocate from **18800–18899** by default.
@@ -213,6 +224,7 @@ OpenClaw can also drive **your existing Chrome tabs** (no separate “openclaw�
 Full guide: [Chrome extension](/tools/chrome-extension)
 
 Flow:
+
 - The Gateway runs locally (same machine) or a node host runs on the browser machine.
 - A local **relay server** listens at a loopback `cdpUrl` (default: `http://127.0.0.1:18792`).
 - You click the **OpenClaw Browser Relay** extension icon on a tab to attach (it does not auto-attach).
@@ -224,12 +236,13 @@ If the Gateway runs elsewhere, run a node host on the browser machine so the Gat
 
 If the agent session is sandboxed, the `browser` tool may default to `target="sandbox"` (sandbox browser).
 Chrome extension relay takeover requires host browser control, so either:
+
 - run the session unsandboxed, or
 - set `agents.defaults.sandbox.browser.allowHostControl: true` and use `target="host"` when calling the tool.
 
 ### Setup
 
-1) Load the extension (dev/unpacked):
+1. Load the extension (dev/unpacked):
 
 ```bash
 openclaw browser extension install
@@ -239,7 +252,8 @@ openclaw browser extension install
 - “Load unpacked” → select the directory printed by `openclaw browser extension path`
 - Pin the extension, then click it on the tab you want to control (badge shows `ON`).
 
-2) Use it:
+2. Use it:
+
 - CLI: `openclaw browser --browser-profile chrome tabs`
 - Agent tool: `browser` with `profile="chrome"`
 
@@ -254,6 +268,7 @@ openclaw browser create-profile \
 ```
 
 Notes:
+
 - This mode relies on Playwright-on-CDP for most operations (screenshots/snapshots/actions).
 - Detach by clicking the extension icon again.
 
@@ -266,6 +281,7 @@ Notes:
 ## Browser selection
 
 When launching locally, OpenClaw picks the first available:
+
 1. Chrome
 2. Brave
 3. Edge
@@ -275,6 +291,7 @@ When launching locally, OpenClaw picks the first available:
 You can override with `browser.executablePath`.
 
 Platforms:
+
 - macOS: checks `/Applications` and `~/Applications`.
 - Linux: looks for `google-chrome`, `brave`, `microsoft-edge`, `chromium`, etc.
 - Windows: checks common install locations.
@@ -312,6 +329,7 @@ OpenClaw with browser support.
 ## How it works (internal)
 
 High-level flow:
+
 - A small **control server** accepts HTTP requests.
 - It connects to Chromium-based browsers (Chrome/Brave/Edge/Chromium) via **CDP**.
 - For advanced actions (click/type/snapshot/PDF), it uses **Playwright** on top
@@ -327,6 +345,7 @@ All commands accept `--browser-profile <name>` to target a specific profile.
 All commands also accept `--json` for machine-readable output (stable payloads).
 
 Basics:
+
 - `openclaw browser status`
 - `openclaw browser start`
 - `openclaw browser stop`
@@ -340,6 +359,7 @@ Basics:
 - `openclaw browser close abcd1234`
 
 Inspection:
+
 - `openclaw browser screenshot`
 - `openclaw browser screenshot --full-page`
 - `openclaw browser screenshot --ref 12`
@@ -358,6 +378,7 @@ Inspection:
 - `openclaw browser responsebody "**/api" --max-chars 5000`
 
 Actions:
+
 - `openclaw browser navigate https://example.com`
 - `openclaw browser resize 1280 720`
 - `openclaw browser click 12 --double`
@@ -381,6 +402,7 @@ Actions:
 - `openclaw browser trace stop`
 
 State:
+
 - `openclaw browser cookies`
 - `openclaw browser cookies set session abc123 --url "https://example.com"`
 - `openclaw browser cookies clear`
@@ -399,6 +421,7 @@ State:
 - `openclaw browser set device "iPhone 14"`
 
 Notes:
+
 - `upload` and `dialog` are **arming** calls; run them before the click/press
   that triggers the chooser/dialog.
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
@@ -430,6 +453,7 @@ OpenClaw supports two “snapshot” styles:
   - Add `--labels` to include a viewport screenshot with overlayed `e12` labels.
 
 Ref behavior:
+
 - Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
 - If the role snapshot was taken with `--frame`, role refs are scoped to that iframe until the next role snapshot.
 
@@ -520,9 +544,11 @@ For Linux-specific issues (especially snap Chromium), see
 ## Agent tools + how control works
 
 The agent gets **one tool** for browser automation:
+
 - `browser` — status/start/stop/tabs/open/focus/close/snapshot/screenshot/navigate/act
 
 How it maps:
+
 - `browser snapshot` returns a stable UI tree (AI or ARIA).
 - `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
 - `browser screenshot` captures pixels (full page or element).

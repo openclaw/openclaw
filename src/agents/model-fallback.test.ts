@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
@@ -158,7 +157,9 @@ describe("runWithModelFallback", () => {
       },
     });
     const run = vi.fn().mockImplementation(async (providerId, modelId) => {
-      if (providerId === "fallback") return "ok";
+      if (providerId === "fallback") {
+        return "ok";
+      }
       throw new Error(`unexpected provider: ${providerId}/${modelId}`);
     });
 
@@ -219,7 +220,9 @@ describe("runWithModelFallback", () => {
       },
     });
     const run = vi.fn().mockImplementation(async (providerId) => {
-      if (providerId === provider) return "ok";
+      if (providerId === provider) {
+        return "ok";
+      }
       return "unexpected";
     });
 

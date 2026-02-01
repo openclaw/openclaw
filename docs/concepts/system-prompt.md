@@ -3,7 +3,9 @@ summary: "What the OpenClaw system prompt contains and how it is assembled"
 read_when:
   - Editing system prompt text, tools list, or time/heartbeat sections
   - Changing workspace bootstrap or skills injection behavior
+title: "System Prompt"
 ---
+
 # System Prompt
 
 OpenClaw builds a custom system prompt for every agent run. The prompt is **OpenClaw-owned** and does not use the p-coding-agent default prompt.
@@ -15,6 +17,7 @@ The prompt is assembled by OpenClaw and injected into each agent run.
 The prompt is intentionally compact and uses fixed sections:
 
 - **Tooling**: current tool list + short descriptions.
+- **Safety**: short guardrail reminder to avoid power-seeking behavior or bypassing oversight.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
 - **OpenClaw Self-Update**: how to run `config.apply` and `update.run`.
 - **Workspace**: working directory (`agents.defaults.workspace`).
@@ -27,6 +30,8 @@ The prompt is intentionally compact and uses fixed sections:
 - **Runtime**: host, OS, node, model, repo root (when detected), thinking level (one line).
 - **Reasoning**: current visibility level + /reasoning toggle hint.
 
+Safety guardrails in the system prompt are advisory. They guide model behavior but do not enforce policy. Use tool policy, exec approvals, sandboxing, and channel allowlists for hard enforcement; operators can disable these by design.
+
 ## Prompt modes
 
 OpenClaw can render smaller system prompts for sub-agents. The runtime sets a
@@ -35,9 +40,9 @@ OpenClaw can render smaller system prompts for sub-agents. The runtime sets a
 - `full` (default): includes all sections above.
 - `minimal`: used for sub-agents; omits **Skills**, **Memory Recall**, **OpenClaw
   Self-Update**, **Model Aliases**, **User Identity**, **Reply Tags**,
-  **Messaging**, **Silent Replies**, and **Heartbeats**. Tooling, Workspace,
-  Sandbox, Current Date & Time (when known), Runtime, and injected context stay
-  available.
+  **Messaging**, **Silent Replies**, and **Heartbeats**. Tooling, **Safety**,
+  Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected
+  context stay available.
 - `none`: returns only the base identity line.
 
 When `promptMode=minimal`, extra injected prompts are labeled **Subagent
@@ -105,6 +110,6 @@ This keeps the base prompt small while still enabling targeted skill usage.
 When available, the system prompt includes a **Documentation** section that points to the
 local OpenClaw docs directory (either `docs/` in the repo workspace or the bundled npm
 package docs) and also notes the public mirror, source repo, community Discord, and
-ClawdHub (https://clawdhub.com) for skills discovery. The prompt instructs the model to consult local docs first
+ClawHub (https://clawhub.com) for skills discovery. The prompt instructs the model to consult local docs first
 for OpenClaw behavior, commands, configuration, or architecture, and to run
 `openclaw status` itself when possible (asking the user only when it lacks access).

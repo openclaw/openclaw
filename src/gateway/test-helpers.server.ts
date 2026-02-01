@@ -2,10 +2,9 @@ import fs from "node:fs/promises";
 import { type AddressInfo, createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-
+import type { GatewayServerOptions } from "./server.js";
 import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
@@ -19,10 +18,8 @@ import { resetLogger, setLoggerOverride } from "../logging.js";
 import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-
-import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
-import type { GatewayServerOptions } from "./server.js";
+import { PROTOCOL_VERSION } from "./protocol/index.js";
 import {
   agentCommand,
   cronIsolatedRun,
@@ -56,7 +53,9 @@ export async function writeSessionStore(params: {
   mainKey?: string;
 }): Promise<void> {
   const storePath = params.storePath ?? testState.sessionStorePath;
-  if (!storePath) throw new Error("writeSessionStore requires testState.sessionStorePath");
+  if (!storePath) {
+    throw new Error("writeSessionStore requires testState.sessionStorePath");
+  }
   const agentId = params.agentId ?? DEFAULT_AGENT_ID;
   const store: Record<string, Partial<SessionEntry>> = {};
   for (const [requestKey, entry] of Object.entries(params.entries)) {
@@ -148,21 +147,41 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
   resetLogger();
   if (options.restoreEnv) {
-    if (previousHome === undefined) delete process.env.HOME;
-    else process.env.HOME = previousHome;
-    if (previousUserProfile === undefined) delete process.env.USERPROFILE;
-    else process.env.USERPROFILE = previousUserProfile;
-    if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
-    else process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    if (previousConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
-    else process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-    if (previousSkipBrowserControl === undefined)
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+    if (previousUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = previousUserProfile;
+    }
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    if (previousConfigPath === undefined) {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+    if (previousSkipBrowserControl === undefined) {
       delete process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
-    else process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = previousSkipBrowserControl;
-    if (previousSkipGmailWatcher === undefined) delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-    else process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previousSkipGmailWatcher;
-    if (previousSkipCanvasHost === undefined) delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
-    else process.env.OPENCLAW_SKIP_CANVAS_HOST = previousSkipCanvasHost;
+    } else {
+      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = previousSkipBrowserControl;
+    }
+    if (previousSkipGmailWatcher === undefined) {
+      delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+    } else {
+      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previousSkipGmailWatcher;
+    }
+    if (previousSkipCanvasHost === undefined) {
+      delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
+    } else {
+      process.env.OPENCLAW_SKIP_CANVAS_HOST = previousSkipCanvasHost;
+    }
   }
   if (options.restoreEnv && tempHome) {
     await fs.rm(tempHome, {
@@ -281,7 +300,9 @@ export async function startServerWithClient(token?: string, opts?: GatewayServer
       break;
     } catch (err) {
       const code = (err as { cause?: { code?: string } }).cause?.code;
-      if (code !== "EADDRINUSE") throw err;
+      if (code !== "EADDRINUSE") {
+        throw err;
+      }
       port = await getFreePort();
     }
   }
@@ -359,8 +380,12 @@ export async function connectReq(
   const password = opts?.password ?? defaultPassword;
   const requestedScopes = Array.isArray(opts?.scopes) ? opts?.scopes : [];
   const device = (() => {
-    if (opts?.device === null) return undefined;
-    if (opts?.device) return opts.device;
+    if (opts?.device === null) {
+      return undefined;
+    }
+    if (opts?.device) {
+      return opts.device;
+    }
     const identity = loadOrCreateDeviceIdentity();
     const signedAtMs = Date.now();
     const payload = buildDeviceAuthPayload({
@@ -406,7 +431,9 @@ export async function connectReq(
     }),
   );
   const isResponseForId = (o: unknown): boolean => {
-    if (!o || typeof o !== "object" || Array.isArray(o)) return false;
+    if (!o || typeof o !== "object" || Array.isArray(o)) {
+      return false;
+    }
     const rec = o as Record<string, unknown>;
     return rec.type === "res" && rec.id === id;
   };
@@ -438,7 +465,9 @@ export async function rpcReq<T = unknown>(
   }>(
     ws,
     (o) => {
-      if (!o || typeof o !== "object" || Array.isArray(o)) return false;
+      if (!o || typeof o !== "object" || Array.isArray(o)) {
+        return false;
+      }
       const rec = o as Record<string, unknown>;
       return rec.type === "res" && rec.id === id;
     },
@@ -451,7 +480,9 @@ export async function waitForSystemEvent(timeoutMs = 2000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const events = peekSystemEvents(sessionKey);
-    if (events.length > 0) return events;
+    if (events.length > 0) {
+      return events;
+    }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("timeout waiting for system event");

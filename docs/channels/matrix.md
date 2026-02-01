@@ -2,7 +2,9 @@
 summary: "Matrix support status, capabilities, and configuration"
 read_when:
   - Working on Matrix channel features
+title: "Matrix"
 ---
+
 # Matrix (plugin)
 
 Matrix is an open, decentralized messaging protocol. OpenClaw connects as a Matrix **user**
@@ -36,13 +38,13 @@ Details: [Plugins](/plugin)
 
 ## Setup
 
-1) Install the Matrix plugin:
+1. Install the Matrix plugin:
    - From npm: `openclaw plugins install @openclaw/matrix`
    - From a local checkout: `openclaw plugins install ./extensions/matrix`
-2) Create a Matrix account on a homeserver:
+2. Create a Matrix account on a homeserver:
    - Browse hosting options at [https://matrix.org/ecosystem/hosting/](https://matrix.org/ecosystem/hosting/)
    - Or host it yourself.
-3) Get an access token for the bot account:
+3. Get an access token for the bot account:
    - Use the Matrix login API with `curl` at your home server:
 
    ```bash
@@ -63,14 +65,15 @@ Details: [Plugins](/plugin)
    - Or set `channels.matrix.userId` + `channels.matrix.password`: OpenClaw calls the same
      login endpoint, stores the access token in `~/.openclaw/credentials/matrix/credentials.json`,
      and reuses it on next start.
-4) Configure credentials:
+
+4. Configure credentials:
    - Env: `MATRIX_HOMESERVER`, `MATRIX_ACCESS_TOKEN` (or `MATRIX_USER_ID` + `MATRIX_PASSWORD`)
    - Or config: `channels.matrix.*`
    - If both are set, config takes precedence.
    - With access token: user ID is fetched automatically via `/whoami`.
    - When set, `channels.matrix.userId` should be the full Matrix ID (example: `@bot:example.org`).
-5) Restart the gateway (or finish onboarding).
-6) Start a DM with the bot or invite it to a room from any Matrix client
+5. Restart the gateway (or finish onboarding).
+6. Start a DM with the bot or invite it to a room from any Matrix client
    (Element, Beeper, etc.; see https://matrix.org/ecosystem/clients/). Beeper requires E2EE,
    so set `channels.matrix.encryption: true` and verify the device.
 
@@ -83,9 +86,9 @@ Minimal config (access token, user ID auto-fetched):
       enabled: true,
       homeserver: "https://matrix.example.org",
       accessToken: "syt_***",
-      dm: { policy: "pairing" }
-    }
-  }
+      dm: { policy: "pairing" },
+    },
+  },
 }
 ```
 
@@ -99,9 +102,9 @@ E2EE config (end to end encryption enabled):
       homeserver: "https://matrix.example.org",
       accessToken: "syt_***",
       encryption: true,
-      dm: { policy: "pairing" }
-    }
-  }
+      dm: { policy: "pairing" },
+    },
+  },
 }
 ```
 
@@ -159,11 +162,11 @@ Once verified, the bot can decrypt messages in encrypted rooms.
       groupPolicy: "allowlist",
       groups: {
         "!roomId:example.org": { allow: true },
-        "#alias:example.org": { allow: true }
+        "#alias:example.org": { allow: true },
       },
-      groupAllowFrom: ["@owner:example.org"]
-    }
-  }
+      groupAllowFrom: ["@owner:example.org"],
+    },
+  },
 }
 ```
 
@@ -187,17 +190,17 @@ Once verified, the bot can decrypt messages in encrypted rooms.
 
 ## Capabilities
 
-| Feature | Status |
-|---------|--------|
-| Direct messages | ✅ Supported |
-| Rooms | ✅ Supported |
-| Threads | ✅ Supported |
-| Media | ✅ Supported |
-| E2EE | ✅ Supported (crypto module required) |
-| Reactions | ✅ Supported (send/read via tools) |
-| Polls | ✅ Send supported; inbound poll starts are converted to text (responses/ends ignored) |
-| Location | ✅ Supported (geo URI; altitude ignored) |
-| Native commands | ✅ Supported |
+| Feature         | Status                                                                                |
+| --------------- | ------------------------------------------------------------------------------------- |
+| Direct messages | ✅ Supported                                                                          |
+| Rooms           | ✅ Supported                                                                          |
+| Threads         | ✅ Supported                                                                          |
+| Media           | ✅ Supported                                                                          |
+| E2EE            | ✅ Supported (crypto module required)                                                 |
+| Reactions       | ✅ Supported (send/read via tools)                                                    |
+| Polls           | ✅ Send supported; inbound poll starts are converted to text (responses/ends ignored) |
+| Location        | ✅ Supported (geo URI; altitude ignored)                                              |
+| Native commands | ✅ Supported                                                                          |
 
 ## Configuration reference (Matrix)
 

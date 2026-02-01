@@ -19,7 +19,9 @@ type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
 const cleanupHandlers = new Map<CleanupSignal, () => void>();
 
 function isAlive(pid: number): boolean {
-  if (!Number.isFinite(pid) || pid <= 0) return false;
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
   try {
     process.kill(pid, 0);
     return true;
@@ -57,7 +59,9 @@ function handleTerminationSignal(signal: CleanupSignal): void {
   const shouldReraise = process.listenerCount(signal) === 1;
   if (shouldReraise) {
     const handler = cleanupHandlers.get(signal);
-    if (handler) process.off(signal, handler);
+    if (handler) {
+      process.off(signal, handler);
+    }
     try {
       process.kill(process.pid, signal);
     } catch {
@@ -67,7 +71,9 @@ function handleTerminationSignal(signal: CleanupSignal): void {
 }
 
 function registerCleanupHandlers(): void {
-  if (cleanupRegistered) return;
+  if (cleanupRegistered) {
+    return;
+  }
   cleanupRegistered = true;
 
   // Cleanup on normal exit and process.exit() calls
@@ -91,8 +97,12 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
   try {
     const raw = await fs.readFile(lockPath, "utf8");
     const parsed = JSON.parse(raw) as Partial<LockFilePayload>;
-    if (typeof parsed.pid !== "number") return null;
-    if (typeof parsed.createdAt !== "string") return null;
+    if (typeof parsed.pid !== "number") {
+      return null;
+    }
+    if (typeof parsed.createdAt !== "string") {
+      return null;
+    }
     return { pid: parsed.pid, createdAt: parsed.createdAt };
   } catch {
     return null;
@@ -124,12 +134,19 @@ export async function acquireSessionWriteLock(params: {
   const held = HELD_LOCKS.get(normalizedSessionFile);
   if (held) {
     held.count += 1;
+    let released = false; // Track if this handle has been released (idempotent - fix for #3092)
     return {
       release: async () => {
+        if (released) return; // Idempotent: safe to call multiple times
+        released = true;
         const current = HELD_LOCKS.get(normalizedSessionFile);
-        if (!current) return;
+        if (!current) {
+          return;
+        }
         current.count -= 1;
-        if (current.count > 0) return;
+        if (current.count > 0) {
+          return;
+        }
         HELD_LOCKS.delete(normalizedSessionFile);
         await current.handle.close();
         await fs.rm(current.lockPath, { force: true });
@@ -148,12 +165,19 @@ export async function acquireSessionWriteLock(params: {
         "utf8",
       );
       HELD_LOCKS.set(normalizedSessionFile, { count: 1, handle, lockPath });
+      let released = false; // Track if this handle has been released (idempotent - fix for #3092)
       return {
         release: async () => {
+          if (released) return; // Idempotent: safe to call multiple times
+          released = true;
           const current = HELD_LOCKS.get(normalizedSessionFile);
-          if (!current) return;
+          if (!current) {
+            return;
+          }
           current.count -= 1;
-          if (current.count > 0) return;
+          if (current.count > 0) {
+            return;
+          }
           HELD_LOCKS.delete(normalizedSessionFile);
           await current.handle.close();
           await fs.rm(current.lockPath, { force: true });
@@ -161,7 +185,9 @@ export async function acquireSessionWriteLock(params: {
       };
     } catch (err) {
       const code = (err as { code?: unknown }).code;
-      if (code !== "EEXIST") throw err;
+      if (code !== "EEXIST") {
+        throw err;
+      }
       const payload = await readLockPayload(lockPath);
       const createdAt = payload?.createdAt ? Date.parse(payload.createdAt) : NaN;
       const stale = !Number.isFinite(createdAt) || Date.now() - createdAt > staleMs;

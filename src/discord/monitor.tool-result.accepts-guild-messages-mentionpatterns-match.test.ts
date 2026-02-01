@@ -2,7 +2,6 @@ import type { Client } from "@buape/carbon";
 import { ChannelType, MessageType } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { __resetDiscordChannelInfoCacheForTest } from "./monitor/message-utils.js";
 
 const sendMock = vi.fn();

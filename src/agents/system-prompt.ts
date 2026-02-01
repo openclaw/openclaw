@@ -1,13 +1,13 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
  * - "full": All sections (default, for main agent)
- * - "minimal": Reduced sections (Tooling, Workspace, Runtime) - used for subagents
+ * - "minimal": Reduced sections (Tooling, Safety, Workspace, Sandbox, Runtime) - used for subagents
  * - "none": Just basic identity line, no sections
  */
 export type PromptMode = "full" | "minimal" | "none";
@@ -17,9 +17,13 @@ function buildSkillsSection(params: {
   isMinimal: boolean;
   readToolName: string;
 }) {
-  if (params.isMinimal) return [];
+  if (params.isMinimal) {
+    return [];
+  }
   const trimmed = params.skillsPrompt?.trim();
-  if (!trimmed) return [];
+  if (!trimmed) {
+    return [];
+  }
   return [
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
@@ -33,7 +37,9 @@ function buildSkillsSection(params: {
 }
 
 function buildMemorySection(params: { isMinimal: boolean; availableTools: Set<string> }) {
-  if (params.isMinimal) return [];
+  if (params.isMinimal) {
+    return [];
+  }
   if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
     return [];
   }
@@ -45,17 +51,38 @@ function buildMemorySection(params: { isMinimal: boolean; availableTools: Set<st
 }
 
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
-  if (!ownerLine || isMinimal) return [];
+  if (!ownerLine || isMinimal) {
+    return [];
+  }
   return ["## User Identity", ownerLine, ""];
 }
 
 function buildTimeSection(params: { userTimezone?: string }) {
-  if (!params.userTimezone) return [];
-  return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
+  if (!params.userTimezone) {
+    return [];
+  }
+  return [
+    "## Current Date & Time",
+    `Time zone: ${params.userTimezone}`,
+    "If you need the current date, time, or day of week, use the session_status tool.",
+    "",
+  ];
+}
+
+function buildSafetySection() {
+  return [
+    "## Safety",
+    "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
+    "Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards. (Inspired by Anthropic's constitution.)",
+    "Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.",
+    "",
+  ];
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
-  if (isMinimal) return [];
+  if (isMinimal) {
+    return [];
+  }
   return [
     "## Reply Tags",
     "To request a native reply/quote on supported surfaces, include one tag in your reply:",
@@ -75,7 +102,9 @@ function buildMessagingSection(params: {
   runtimeChannel?: string;
   messageToolHints?: string[];
 }) {
-  if (params.isMinimal) return [];
+  if (params.isMinimal) {
+    return [];
+  }
   return [
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
@@ -104,22 +133,28 @@ function buildMessagingSection(params: {
 }
 
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
-  if (params.isMinimal) return [];
+  if (params.isMinimal) {
+    return [];
+  }
   const hint = params.ttsHint?.trim();
-  if (!hint) return [];
+  if (!hint) {
+    return [];
+  }
   return ["## Voice (TTS)", hint, ""];
 }
 
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
-  if (!docsPath || params.isMinimal) return [];
+  if (!docsPath || params.isMinimal) {
+    return [];
+  }
   return [
     "## Documentation",
     `OpenClaw docs: ${docsPath}`,
     "Mirror: https://docs.openclaw.ai",
     "Source: https://github.com/openclaw/openclaw",
     "Community: https://discord.com/invite/clawd",
-    "Find new skills: https://clawdhub.com",
+    "Find new skills: https://clawhub.com",
     "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
     "When diagnosing issues, run `openclaw status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
     "",
@@ -252,7 +287,9 @@ export function buildAgentSystemPrompt(params: {
   const externalToolSummaries = new Map<string, string>();
   for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
     const normalized = key.trim().toLowerCase();
-    if (!normalized || !value?.trim()) continue;
+    if (!normalized || !value?.trim()) {
+      continue;
+    }
     externalToolSummaries.set(normalized, value.trim());
   }
   const extraTools = Array.from(
@@ -264,7 +301,7 @@ export function buildAgentSystemPrompt(params: {
     const name = resolveToolName(tool);
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
-  for (const tool of extraTools.sort()) {
+  for (const tool of extraTools.toSorted()) {
     const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
     const name = resolveToolName(tool);
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
@@ -360,6 +397,7 @@ export function buildAgentSystemPrompt(params: {
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
     "",
+    ...buildSafetySection(),
     "## OpenClaw CLI Quick Reference",
     "OpenClaw is controlled via subcommands. Do not invent commands.",
     "To manage the Gateway daemon service (start/stop/restart):",

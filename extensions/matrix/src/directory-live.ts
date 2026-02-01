@@ -1,5 +1,4 @@
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk";
-
 import { resolveMatrixAuth } from "./matrix/client.js";
 
 type MatrixUserResult = {
@@ -55,7 +54,9 @@ export async function listMatrixDirectoryPeersLive(params: {
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
   const query = normalizeQuery(params.query);
-  if (!query) return [];
+  if (!query) {
+    return [];
+  }
   const auth = await resolveMatrixAuth({ cfg: params.cfg as never });
   const res = await fetchMatrixJson<MatrixUserDirectoryResponse>({
     homeserver: auth.homeserver,
@@ -71,7 +72,9 @@ export async function listMatrixDirectoryPeersLive(params: {
   return results
     .map((entry) => {
       const userId = entry.user_id?.trim();
-      if (!userId) return null;
+      if (!userId) {
+        return null;
+      }
       return {
         kind: "user",
         id: userId,
@@ -123,13 +126,17 @@ export async function listMatrixDirectoryGroupsLive(params: {
   limit?: number | null;
 }): Promise<ChannelDirectoryEntry[]> {
   const query = normalizeQuery(params.query);
-  if (!query) return [];
+  if (!query) {
+    return [];
+  }
   const auth = await resolveMatrixAuth({ cfg: params.cfg as never });
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
 
   if (query.startsWith("#")) {
     const roomId = await resolveMatrixRoomAlias(auth.homeserver, auth.accessToken, query);
-    if (!roomId) return [];
+    if (!roomId) {
+      return [];
+    }
     return [
       {
         kind: "group",
@@ -160,15 +167,21 @@ export async function listMatrixDirectoryGroupsLive(params: {
 
   for (const roomId of rooms) {
     const name = await fetchMatrixRoomName(auth.homeserver, auth.accessToken, roomId);
-    if (!name) continue;
-    if (!name.toLowerCase().includes(query)) continue;
+    if (!name) {
+      continue;
+    }
+    if (!name.toLowerCase().includes(query)) {
+      continue;
+    }
     results.push({
       kind: "group",
       id: roomId,
       name,
       handle: `#${name}`,
     });
-    if (results.length >= limit) break;
+    if (results.length >= limit) {
+      break;
+    }
   }
 
   return results;

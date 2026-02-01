@@ -15,7 +15,9 @@ const asString = (value: unknown): string | undefined =>
   typeof value === "string" ? value : typeof value === "number" ? String(value) : undefined;
 
 function readZalouserAccountStatus(value: ChannelAccountSnapshot): ZalouserAccountStatus | null {
-  if (!isRecord(value)) return null;
+  if (!isRecord(value)) {
+    return null;
+  }
   return {
     accountId: value.accountId,
     enabled: value.enabled,
@@ -26,7 +28,9 @@ function readZalouserAccountStatus(value: ChannelAccountSnapshot): ZalouserAccou
 }
 
 function isMissingZca(lastError?: string): boolean {
-  if (!lastError) return false;
+  if (!lastError) {
+    return false;
+  }
   const lower = lastError.toLowerCase();
   return lower.includes("zca") && (lower.includes("not found") || lower.includes("enoent"));
 }
@@ -37,10 +41,14 @@ export function collectZalouserStatusIssues(
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
     const account = readZalouserAccountStatus(entry);
-    if (!account) continue;
+    if (!account) {
+      continue;
+    }
     const accountId = asString(account.accountId) ?? "default";
     const enabled = account.enabled !== false;
-    if (!enabled) continue;
+    if (!enabled) {
+      continue;
+    }
 
     const configured = account.configured === true;
     const lastError = asString(account.lastError)?.trim();

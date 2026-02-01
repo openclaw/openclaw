@@ -1,5 +1,12 @@
+import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
+import type { ReplyPayload } from "../../../auto-reply/types.js";
+import type { loadConfig } from "../../../config/config.js";
+import type { getChildLogger } from "../../../logging.js";
+import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import type { WebInboundMsg } from "../types.js";
 import { resolveIdentityNamePrefix } from "../../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
+import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
 import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
@@ -8,30 +15,23 @@ import {
   buildHistoryContextFromEntries,
   type HistoryEntry,
 } from "../../../auto-reply/reply/history.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
-import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
-import type { ReplyPayload } from "../../../auto-reply/types.js";
-import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
 import { toLocationContext } from "../../../channels/location.js";
 import { createReplyPrefixContext } from "../../../channels/reply-prefix.js";
-import type { loadConfig } from "../../../config/config.js";
+import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
 import {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   resolveStorePath,
 } from "../../../config/sessions.js";
-import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
-import type { getChildLogger } from "../../../logging.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
-import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog, whatsappOutboundLog } from "../loggers.js";
-import type { WebInboundMsg } from "../types.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { formatGroupMembers } from "./group-members.js";
@@ -60,13 +60,17 @@ async function resolveWhatsAppCommandAuthorized(params: {
   msg: WebInboundMsg;
 }): Promise<boolean> {
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-  if (!useAccessGroups) return true;
+  if (!useAccessGroups) {
+    return true;
+  }
 
   const isGroup = params.msg.chatType === "group";
   const senderE164 = normalizeE164(
     isGroup ? (params.msg.senderE164 ?? "") : (params.msg.senderE164 ?? params.msg.from ?? ""),
   );
-  if (!senderE164) return false;
+  if (!senderE164) {
+    return false;
+  }
 
   const configuredAllowFrom = params.cfg.channels?.whatsapp?.allowFrom ?? [];
   const configuredGroupAllowFrom =
@@ -74,8 +78,12 @@ async function resolveWhatsAppCommandAuthorized(params: {
     (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
 
   if (isGroup) {
-    if (!configuredGroupAllowFrom || configuredGroupAllowFrom.length === 0) return false;
-    if (configuredGroupAllowFrom.some((v) => String(v).trim() === "*")) return true;
+    if (!configuredGroupAllowFrom || configuredGroupAllowFrom.length === 0) {
+      return false;
+    }
+    if (configuredGroupAllowFrom.some((v) => String(v).trim() === "*")) {
+      return true;
+    }
     return normalizeAllowFromE164(configuredGroupAllowFrom).includes(senderE164);
   }
 
@@ -89,7 +97,9 @@ async function resolveWhatsAppCommandAuthorized(params: {
       : params.msg.selfE164
         ? [params.msg.selfE164]
         : [];
-  if (allowFrom.some((v) => String(v).trim() === "*")) return true;
+  if (allowFrom.some((v) => String(v).trim() === "*")) {
+    return true;
+  }
   return normalizeAllowFromE164(allowFrom).includes(senderE164);
 }
 
@@ -221,9 +231,13 @@ export async function processMessage(params: {
   const dmRouteTarget =
     params.msg.chatType !== "group"
       ? (() => {
-          if (params.msg.senderE164) return normalizeE164(params.msg.senderE164);
+          if (params.msg.senderE164) {
+            return normalizeE164(params.msg.senderE164);
+          }
           // In direct chats, `msg.from` is already the canonical conversation id.
-          if (params.msg.from.includes("@")) return jidToE164(params.msg.from);
+          if (params.msg.from.includes("@")) {
+            return jidToE164(params.msg.from);
+          }
           return normalizeE164(params.msg.from);
         })()
       : undefined;

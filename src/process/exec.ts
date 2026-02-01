@@ -1,12 +1,33 @@
 import { execFile, spawn } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-
 import { danger, shouldLogVerbose } from "../globals.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Resolves a command for Windows compatibility.
+ * On Windows, non-.exe commands (like npm, pnpm) require their .cmd extension.
+ */
+function resolveCommand(command: string): string {
+  if (process.platform !== "win32") {
+    return command;
+  }
+  const basename = path.basename(command).toLowerCase();
+  // Skip if already has an extension (.cmd, .exe, .bat, etc.)
+  const ext = path.extname(basename);
+  if (ext) {
+    return command;
+  }
+  // Common npm-related commands that need .cmd extension on Windows
+  const cmdCommands = ["npm", "pnpm", "yarn", "npx"];
+  if (cmdCommands.includes(basename)) {
+    return `${command}.cmd`;
+  }
+  return command;
+}
 
 // Simple promise-wrapped execFile with optional verbosity logging.
 export async function runExec(
@@ -23,10 +44,14 @@ export async function runExec(
           encoding: "utf8" as const,
         };
   try {
-    const { stdout, stderr } = await execFileAsync(command, args, options);
+    const { stdout, stderr } = await execFileAsync(resolveCommand(command), args, options);
     if (shouldLogVerbose()) {
-      if (stdout.trim()) logDebug(stdout.trim());
-      if (stderr.trim()) logError(stderr.trim());
+      if (stdout.trim()) {
+        logDebug(stdout.trim());
+      }
+      if (stderr.trim()) {
+        logError(stderr.trim());
+      }
     }
     return { stdout, stderr };
   } catch (err) {
@@ -65,7 +90,9 @@ export async function runCommandWithTimeout(
 
   const shouldSuppressNpmFund = (() => {
     const cmd = path.basename(argv[0] ?? "");
-    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") return true;
+    if (cmd === "npm" || cmd === "npm.cmd" || cmd === "npm.exe") {
+      return true;
+    }
     if (cmd === "node" || cmd === "node.exe") {
       const script = argv[1] ?? "";
       return script.includes("npm-cli.js");
@@ -75,12 +102,16 @@ export async function runCommandWithTimeout(
 
   const resolvedEnv = env ? { ...process.env, ...env } : { ...process.env };
   if (shouldSuppressNpmFund) {
-    if (resolvedEnv.NPM_CONFIG_FUND == null) resolvedEnv.NPM_CONFIG_FUND = "false";
-    if (resolvedEnv.npm_config_fund == null) resolvedEnv.npm_config_fund = "false";
+    if (resolvedEnv.NPM_CONFIG_FUND == null) {
+      resolvedEnv.NPM_CONFIG_FUND = "false";
+    }
+    if (resolvedEnv.npm_config_fund == null) {
+      resolvedEnv.npm_config_fund = "false";
+    }
   }
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const child = spawn(argv[0], argv.slice(1), {
+  const child = spawn(resolveCommand(argv[0]), argv.slice(1), {
     stdio,
     cwd,
     env: resolvedEnv,
@@ -109,13 +140,17 @@ export async function runCommandWithTimeout(
       stderr += d.toString();
     });
     child.on("error", (err) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       reject(err);
     });
     child.on("close", (code, signal) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       resolve({ stdout, stderr, code, signal, killed: child.killed });

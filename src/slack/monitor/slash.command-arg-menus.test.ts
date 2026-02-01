@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 
 const dispatchMock = vi.fn();
@@ -103,7 +102,9 @@ describe("Slack native command argument menus", () => {
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
     const handler = commands.get("/usage");
-    if (!handler) throw new Error("Missing /usage handler");
+    if (!handler) {
+      throw new Error("Missing /usage handler");
+    }
 
     const respond = vi.fn().mockResolvedValue(undefined);
     const ack = vi.fn().mockResolvedValue(undefined);
@@ -132,7 +133,9 @@ describe("Slack native command argument menus", () => {
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
     const handler = actions.get("openclaw_cmdarg");
-    if (!handler) throw new Error("Missing arg-menu action handler");
+    if (!handler) {
+      throw new Error("Missing arg-menu action handler");
+    }
 
     const respond = vi.fn().mockResolvedValue(undefined);
     await handler({
@@ -158,7 +161,9 @@ describe("Slack native command argument menus", () => {
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
     const handler = actions.get("openclaw_cmdarg");
-    if (!handler) throw new Error("Missing arg-menu action handler");
+    if (!handler) {
+      throw new Error("Missing arg-menu action handler");
+    }
 
     const respond = vi.fn().mockResolvedValue(undefined);
     await handler({
@@ -186,7 +191,9 @@ describe("Slack native command argument menus", () => {
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
     const handler = actions.get("openclaw_cmdarg");
-    if (!handler) throw new Error("Missing arg-menu action handler");
+    if (!handler) {
+      throw new Error("Missing arg-menu action handler");
+    }
 
     await handler({
       ack: vi.fn().mockResolvedValue(undefined),
@@ -208,7 +215,9 @@ describe("Slack native command argument menus", () => {
     registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
 
     const handler = actions.get("openclaw_cmdarg");
-    if (!handler) throw new Error("Missing arg-menu action handler");
+    if (!handler) {
+      throw new Error("Missing arg-menu action handler");
+    }
 
     await handler({
       ack: vi.fn().mockResolvedValue(undefined),

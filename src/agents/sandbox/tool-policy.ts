@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveAgentConfig } from "../agent-scope.js";
-import { expandToolGroups } from "../tool-policy.js";
-import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./constants.js";
 import type {
   SandboxToolPolicy,
   SandboxToolPolicyResolved,
   SandboxToolPolicySource,
 } from "./types.js";
+import { resolveAgentConfig } from "../agent-scope.js";
+import { expandToolGroups } from "../tool-policy.js";
+import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./constants.js";
 
 type CompiledPattern =
   | { kind: "all" }
@@ -15,9 +15,15 @@ type CompiledPattern =
 
 function compilePattern(pattern: string): CompiledPattern {
   const normalized = pattern.trim().toLowerCase();
-  if (!normalized) return { kind: "exact", value: "" };
-  if (normalized === "*") return { kind: "all" };
-  if (!normalized.includes("*")) return { kind: "exact", value: normalized };
+  if (!normalized) {
+    return { kind: "exact", value: "" };
+  }
+  if (normalized === "*") {
+    return { kind: "all" };
+  }
+  if (!normalized.includes("*")) {
+    return { kind: "exact", value: normalized };
+  }
   const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return {
     kind: "regex",
@@ -26,7 +32,9 @@ function compilePattern(pattern: string): CompiledPattern {
 }
 
 function compilePatterns(patterns?: string[]): CompiledPattern[] {
-  if (!Array.isArray(patterns)) return [];
+  if (!Array.isArray(patterns)) {
+    return [];
+  }
   return expandToolGroups(patterns)
     .map(compilePattern)
     .filter((pattern) => pattern.kind !== "exact" || pattern.value);
@@ -34,9 +42,15 @@ function compilePatterns(patterns?: string[]): CompiledPattern[] {
 
 function matchesAny(name: string, patterns: CompiledPattern[]): boolean {
   for (const pattern of patterns) {
-    if (pattern.kind === "all") return true;
-    if (pattern.kind === "exact" && name === pattern.value) return true;
-    if (pattern.kind === "regex" && pattern.value.test(name)) return true;
+    if (pattern.kind === "all") {
+      return true;
+    }
+    if (pattern.kind === "exact" && name === pattern.value) {
+      return true;
+    }
+    if (pattern.kind === "regex" && pattern.value.test(name)) {
+      return true;
+    }
   }
   return false;
 }
@@ -44,9 +58,13 @@ function matchesAny(name: string, patterns: CompiledPattern[]): boolean {
 export function isToolAllowed(policy: SandboxToolPolicy, name: string) {
   const normalized = name.trim().toLowerCase();
   const deny = compilePatterns(policy.deny);
-  if (matchesAny(normalized, deny)) return false;
+  if (matchesAny(normalized, deny)) {
+    return false;
+  }
   const allow = compilePatterns(policy.allow);
-  if (allow.length === 0) return true;
+  if (allow.length === 0) {
+    return true;
+  }
   return matchesAny(normalized, allow);
 }
 

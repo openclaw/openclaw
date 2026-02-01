@@ -3,7 +3,6 @@
  */
 
 import path from "node:path";
-
 import {
   detectMime,
   extensionForMime,
@@ -19,7 +18,9 @@ export async function getMimeType(url: string): Promise<string> {
   // Handle data URLs: data:image/png;base64,...
   if (url.startsWith("data:")) {
     const match = url.match(/^data:([^;,]+)/);
-    if (match?.[1]) return match[1];
+    if (match?.[1]) {
+      return match[1];
+    }
   }
 
   // Use shared MIME detection (extension-based for URLs)
@@ -46,7 +47,9 @@ export async function extractFilename(url: string): Promise<string> {
     const pathname = new URL(url).pathname;
     const basename = path.basename(pathname);
     const existingExt = getFileExtension(pathname);
-    if (basename && existingExt) return basename;
+    if (basename && existingExt) {
+      return basename;
+    }
     // No extension in URL, derive from MIME
     const mime = await getMimeType(url);
     const ext = extensionForMime(mime) ?? ".bin";
@@ -69,9 +72,15 @@ export function isLocalPath(url: string): boolean {
  * Extract the message ID from a Bot Framework response.
  */
 export function extractMessageId(response: unknown): string | null {
-  if (!response || typeof response !== "object") return null;
-  if (!("id" in response)) return null;
+  if (!response || typeof response !== "object") {
+    return null;
+  }
+  if (!("id" in response)) {
+    return null;
+  }
   const { id } = response as { id?: unknown };
-  if (typeof id !== "string" || !id) return null;
+  if (typeof id !== "string" || !id) {
+    return null;
+  }
   return id;
 }

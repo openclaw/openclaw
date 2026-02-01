@@ -8,15 +8,21 @@ function stripAnsi(input: string): string {
     }
 
     const next = input[i + 1];
-    if (next !== "[") continue;
+    if (next !== "[") {
+      continue;
+    }
     i += 1;
 
     while (i + 1 < input.length) {
       i += 1;
       const c = input[i];
-      if (!c) break;
+      if (!c) {
+        break;
+      }
       const isLetter = (c >= "A" && c <= "Z") || (c >= "a" && c <= "z") || c === "~";
-      if (isLetter) break;
+      if (isLetter) {
+        break;
+      }
     }
   }
   return out;

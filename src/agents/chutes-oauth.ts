@@ -1,6 +1,5 @@
-import { createHash, randomBytes } from "node:crypto";
-
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import { createHash, randomBytes } from "node:crypto";
 
 export const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;
@@ -39,13 +38,17 @@ export function parseOAuthCallbackInput(
   expectedState: string,
 ): { code: string; state: string } | { error: string } {
   const trimmed = input.trim();
-  if (!trimmed) return { error: "No input provided" };
+  if (!trimmed) {
+    return { error: "No input provided" };
+  }
 
   try {
     const url = new URL(trimmed);
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
-    if (!code) return { error: "Missing 'code' parameter in URL" };
+    if (!code) {
+      return { error: "Missing 'code' parameter in URL" };
+    }
     if (!state) {
       return { error: "Missing 'state' parameter. Paste the full URL." };
     }
@@ -71,9 +74,13 @@ export async function fetchChutesUserInfo(params: {
   const response = await fetchFn(CHUTES_USERINFO_ENDPOINT, {
     headers: { Authorization: `Bearer ${params.accessToken}` },
   });
-  if (!response.ok) return null;
+  if (!response.ok) {
+    return null;
+  }
   const data = (await response.json()) as unknown;
-  if (!data || typeof data !== "object") return null;
+  if (!data || typeof data !== "object") {
+    return null;
+  }
   const typed = data as ChutesUserInfo;
   return typed;
 }
@@ -119,7 +126,9 @@ export async function exchangeChutesCodeForTokens(params: {
   const refresh = data.refresh_token?.trim();
   const expiresIn = data.expires_in ?? 0;
 
-  if (!access) throw new Error("Chutes token exchange returned no access_token");
+  if (!access) {
+    throw new Error("Chutes token exchange returned no access_token");
+  }
   if (!refresh) {
     throw new Error("Chutes token exchange returned no refresh_token");
   }
@@ -160,7 +169,9 @@ export async function refreshChutesTokens(params: {
     client_id: clientId,
     refresh_token: refreshToken,
   });
-  if (clientSecret) body.set("client_secret", clientSecret);
+  if (clientSecret) {
+    body.set("client_secret", clientSecret);
+  }
 
   const response = await fetchFn(CHUTES_TOKEN_ENDPOINT, {
     method: "POST",
@@ -181,7 +192,9 @@ export async function refreshChutesTokens(params: {
   const newRefresh = data.refresh_token?.trim();
   const expiresIn = data.expires_in ?? 0;
 
-  if (!access) throw new Error("Chutes token refresh returned no access_token");
+  if (!access) {
+    throw new Error("Chutes token refresh returned no access_token");
+  }
 
   return {
     ...params.credential,

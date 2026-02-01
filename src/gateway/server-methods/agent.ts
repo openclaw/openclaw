@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { agentCommand } from "../../commands/agent.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
+import { agentCommand } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -14,6 +15,7 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
@@ -23,11 +25,10 @@ import {
   isGatewayMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
+import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import {
-  type AgentIdentityParams,
-  type AgentWaitParams,
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -37,14 +38,12 @@ import {
 } from "../protocol/index.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { resolveAssistantIdentity } from "../assistant-identity.js";
-import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { waitForAgentJob } from "./agent-job.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 
 export const agentHandlers: GatewayRequestHandlers = {
   agent: async ({ params, respond, context }) => {
-    const p = params as Record<string, unknown>;
+    const p = params;
     if (!validateAgentParams(p)) {
       respond(
         false,
@@ -138,6 +137,13 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+
+    // Inject timestamp into messages that don't already have one.
+    // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
+    // formatting in a separate code path — they never reach this handler.
+    // See: https://github.com/moltbot/moltbot/issues/3658
+    message = injectTimestamp(message, timestampOptsFromConfig(cfg));
+
     const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
     const channelHints = [request.channel, request.replyChannel]
       .filter((value): value is string => typeof value === "string")
@@ -430,7 +436,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as AgentIdentityParams;
+    const p = params;
     const agentIdRaw = typeof p.agentId === "string" ? p.agentId.trim() : "";
     const sessionKeyRaw = typeof p.sessionKey === "string" ? p.sessionKey.trim() : "";
     let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
@@ -471,7 +477,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as AgentWaitParams;
+    const p = params;
     const runId = p.runId.trim();
     const timeoutMs =
       typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)

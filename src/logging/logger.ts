@@ -1,13 +1,11 @@
-import { createRequire } from "node:module";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-
 import { Logger as TsLogger } from "tslog";
-
 import type { OpenClawConfig } from "../config/types.js";
 import type { ConsoleStyle } from "./console.js";
-import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { readLoggingConfig } from "./config.js";
+import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { loggingState } from "./state.js";
 
 // Pin to /tmp so mac Debug UI and docs match; os.tmpdir() can be a per-user
@@ -42,7 +40,9 @@ const externalTransports = new Set<LogTransport>();
 
 function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTransport): void {
   logger.attachTransport((logObj: LogObj) => {
-    if (!externalTransports.has(transport)) return;
+    if (!externalTransports.has(transport)) {
+      return;
+    }
     try {
       transport(logObj as LogTransportRecord);
     } catch {
@@ -70,14 +70,20 @@ function resolveSettings(): ResolvedSettings {
 }
 
 function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
-  if (!a) return true;
+  if (!a) {
+    return true;
+  }
   return a.level !== b.level || a.file !== b.file;
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
   const settings = (loggingState.cachedSettings as ResolvedSettings | null) ?? resolveSettings();
-  if (!loggingState.cachedSettings) loggingState.cachedSettings = settings;
-  if (settings.level === "silent") return false;
+  if (!loggingState.cachedSettings) {
+    loggingState.cachedSettings = settings;
+  }
+  if (settings.level === "silent") {
+    return false;
+  }
   return levelToMinLevel(level) <= levelToMinLevel(settings.level);
 }
 
@@ -223,8 +229,12 @@ function pruneOldRollingLogs(dir: string): void {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     const cutoff = Date.now() - MAX_LOG_AGE_MS;
     for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      if (!entry.name.startsWith(`${LOG_PREFIX}-`) || !entry.name.endsWith(LOG_SUFFIX)) continue;
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (!entry.name.startsWith(`${LOG_PREFIX}-`) || !entry.name.endsWith(LOG_SUFFIX)) {
+        continue;
+      }
       const fullPath = path.join(dir, entry.name);
       try {
         const stat = fs.statSync(fullPath);

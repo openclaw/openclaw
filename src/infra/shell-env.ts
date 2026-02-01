@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-
 import { isTruthyEnvValue } from "./env.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -16,12 +15,18 @@ function parseShellEnv(stdout: Buffer): Map<string, string> {
   const shellEnv = new Map<string, string>();
   const parts = stdout.toString("utf8").split("\0");
   for (const part of parts) {
-    if (!part) continue;
+    if (!part) {
+      continue;
+    }
     const eq = part.indexOf("=");
-    if (eq <= 0) continue;
+    if (eq <= 0) {
+      continue;
+    }
     const key = part.slice(0, eq);
     const value = part.slice(eq + 1);
-    if (!key) continue;
+    if (!key) {
+      continue;
+    }
     shellEnv.set(key, value);
   }
   return shellEnv;
@@ -83,9 +88,13 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
 
   const applied: string[] = [];
   for (const key of opts.expectedKeys) {
-    if (opts.env[key]?.trim()) continue;
+    if (opts.env[key]?.trim()) {
+      continue;
+    }
     const value = shellEnv.get(key);
-    if (!value?.trim()) continue;
+    if (!value?.trim()) {
+      continue;
+    }
     opts.env[key] = value;
     applied.push(key);
   }
@@ -104,9 +113,13 @@ export function shouldDeferShellEnvFallback(env: NodeJS.ProcessEnv): boolean {
 
 export function resolveShellEnvFallbackTimeoutMs(env: NodeJS.ProcessEnv): number {
   const raw = env.OPENCLAW_SHELL_ENV_TIMEOUT_MS?.trim();
-  if (!raw) return DEFAULT_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_TIMEOUT_MS;
+  }
   const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) return DEFAULT_TIMEOUT_MS;
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_TIMEOUT_MS;
+  }
   return Math.max(0, parsed);
 }
 
@@ -115,7 +128,9 @@ export function getShellPathFromLoginShell(opts: {
   timeoutMs?: number;
   exec?: typeof execFileSync;
 }): string | null {
-  if (cachedShellPath !== undefined) return cachedShellPath;
+  if (cachedShellPath !== undefined) {
+    return cachedShellPath;
+  }
   if (process.platform === "win32") {
     cachedShellPath = null;
     return cachedShellPath;
