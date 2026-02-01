@@ -491,6 +491,106 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("allows group messages when groupAllowFrom contains the group JID", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          groupAllowFrom: ["11111@g.us"], // Group JID, not a phone number
+          groupPolicy: "allowlist",
+        },
+      },
+      messages: {
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: _ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
+    const sock = await createWaSocket();
+
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "grp-jid-match",
+            fromMe: false,
+            remoteJid: "11111@g.us",
+            participant: "999@s.whatsapp.net",
+          },
+          message: { conversation: "group jid allowlisted" },
+          messageTimestamp: nowSeconds(),
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Should call onMessage because the group JID is in groupAllowFrom
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    const payload = onMessage.mock.calls[0][0];
+    expect(payload.chatType).toBe("group");
+
+    await listener.close();
+  });
+
+  it("blocks group messages when group JID is not in groupAllowFrom", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          groupAllowFrom: ["22222@g.us"], // Different group JID
+          groupPolicy: "allowlist",
+        },
+      },
+      messages: {
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      verbose: false,
+      accountId: _ACCOUNT_ID,
+      authDir,
+      onMessage,
+    });
+    const sock = await createWaSocket();
+
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "grp-jid-no-match",
+            fromMe: false,
+            remoteJid: "11111@g.us",
+            participant: "999@s.whatsapp.net",
+          },
+          message: { conversation: "group not allowlisted" },
+          messageTimestamp: nowSeconds(),
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Should NOT call onMessage because group JID 11111@g.us is not in groupAllowFrom
+    expect(onMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
   it("blocks group messages when groupPolicy allowlist has no groupAllowFrom", async () => {
     mockLoadConfig.mockReturnValue({
       channels: {
