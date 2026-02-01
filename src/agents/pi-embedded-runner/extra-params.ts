@@ -108,7 +108,7 @@ function createStreamFnWithExtraParams(
 function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
-    underlying(model as Model<Api>, context, {
+    underlying(model, context, {
       ...options,
       headers: {
         ...OPENROUTER_APP_HEADERS,
