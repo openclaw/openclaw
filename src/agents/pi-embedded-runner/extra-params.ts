@@ -40,21 +40,69 @@ function resolveCacheControlTtl(
   return undefined;
 }
 
+/**
+ * Check if a provider requires developer -> system role transformation.
+ * DeepSeek and other non-OpenAI providers don't support the "developer" role.
+ *
+ * @internal Exported for testing
+ */
+export function needsRoleTransformation(provider: string, modelId: string): boolean {
+  // DeepSeek models don't support "developer" role
+  if (modelId.toLowerCase().includes("deepseek")) {
+    return true;
+  }
+  // OpenAI supports "developer" role natively
+  if (provider === "openai") {
+    return false;
+  }
+  // OpenRouter with OpenAI models (except o1 series which use "developer")
+  if (provider === "openrouter" && modelId.startsWith("openai/")) {
+    return false;
+  }
+  // Default: assume non-OpenAI providers need transformation
+  return true;
+}
+
+/**
+ * Transform "developer" role messages to "system" role for providers that don't support it.
+ *
+ * @internal Exported for testing
+ */
+export function transformDeveloperRole(
+  context: { messages?: Array<{ role: string; content: unknown }> },
+): { messages?: Array<{ role: string; content: unknown }> } {
+  if (!context.messages || context.messages.length === 0) {
+    return context;
+  }
+
+  const transformed = context.messages.map((msg) => {
+    if (msg.role === "developer") {
+      return { ...msg, role: "system" };
+    }
+    return msg;
+  });
+
+  return { ...context, messages: transformed };
+}
+
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
   provider: string,
   modelId: string,
 ): StreamFn | undefined {
-  if (!extraParams || Object.keys(extraParams).length === 0) {
+  const hasExtraParams = extraParams && Object.keys(extraParams).length > 0;
+  const needsRoleTransform = needsRoleTransformation(provider, modelId);
+
+  if (!hasExtraParams && !needsRoleTransform) {
     return undefined;
   }
 
   const streamParams: Partial<SimpleStreamOptions> & { cacheControlTtl?: CacheControlTtl } = {};
-  if (typeof extraParams.temperature === "number") {
+  if (typeof extraParams?.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
-  if (typeof extraParams.maxTokens === "number") {
+  if (typeof extraParams?.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
   }
   const cacheControlTtl = resolveCacheControlTtl(extraParams, provider, modelId);
@@ -62,18 +110,26 @@ function createStreamFnWithExtraParams(
     streamParams.cacheControlTtl = cacheControlTtl;
   }
 
-  if (Object.keys(streamParams).length === 0) {
+  const hasStreamParams = Object.keys(streamParams).length > 0;
+
+  if (!hasStreamParams && !needsRoleTransform) {
     return undefined;
   }
 
-  log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
+  log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}, roleTransform: ${needsRoleTransform}`);
 
   const underlying = baseStreamFn ?? streamSimple;
-  const wrappedStreamFn: StreamFn = (model, context, options) =>
-    underlying(model, context, {
+  const wrappedStreamFn: StreamFn = (model, context, options) => {
+    // Transform context messages if needed (developer -> system)
+    const transformedContext = needsRoleTransform
+      ? transformDeveloperRole(context as { messages?: Array<{ role: string; content: unknown }> })
+      : context;
+
+    return underlying(model, transformedContext, {
       ...streamParams,
       ...options,
     });
+  };
 
   return wrappedStreamFn;
 }
