@@ -533,7 +533,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       updateLastRoute:
         !isGroup && updateTarget
           ? {
-              sessionKey: route.mainSessionKey,
+              sessionKey: route.sessionKey,
               channel: "imessage",
               to: updateTarget,
               accountId: route.accountId,

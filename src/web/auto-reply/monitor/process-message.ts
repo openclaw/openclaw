@@ -309,7 +309,7 @@ export async function processMessage(params: {
       cfg: params.cfg,
       backgroundTasks: params.backgroundTasks,
       storeAgentId: params.route.agentId,
-      sessionKey: params.route.mainSessionKey,
+      sessionKey: params.route.sessionKey,
       channel: "whatsapp",
       to: dmRouteTarget,
       accountId: params.route.accountId,

@@ -25,7 +25,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     });
     await updateLastRoute({
       storePath,
-      sessionKey: route.mainSessionKey,
+      sessionKey: route.sessionKey,
       deliveryContext: {
         channel: "slack",
         to: `user:${message.user}`,

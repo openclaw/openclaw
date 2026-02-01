@@ -305,7 +305,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     ctx: ctxPayload,
     updateLastRoute: isDirectMessage
       ? {
-          sessionKey: route.mainSessionKey,
+          sessionKey: route.sessionKey,
           channel: "discord",
           to: `user:${author.id}`,
           accountId: route.accountId,
