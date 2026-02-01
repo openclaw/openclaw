@@ -8,6 +8,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { GatewayClient } from "../../gateway/client.js";
 import { logDebug, logError } from "../../logger.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import { safePatternMatch } from "../../utils/safe-pattern-match.js";
 import { createDiscordClient } from "../send.shared.js";
 
 const EXEC_APPROVAL_KEY = "execapproval";
@@ -226,19 +227,15 @@ export class DiscordExecApprovalHandler {
       }
     }
 
-    // Check session filter (substring match)
+    // Check session filter (substring match or regex)
     if (config.sessionFilter?.length) {
       const session = request.request.sessionKey;
       if (!session) {
         return false;
       }
-      const matches = config.sessionFilter.some((p) => {
-        try {
-          return session.includes(p) || new RegExp(p).test(session);
-        } catch {
-          return session.includes(p);
-        }
-      });
+      const matches = config.sessionFilter.some((p) =>
+        safePatternMatch(session, p, "[discord/exec-approvals]"),
+      );
       if (!matches) {
         return false;
       }
