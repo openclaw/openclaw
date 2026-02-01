@@ -67,7 +67,7 @@ export async function preflightDiscordMessage(
   }
 
   const allowBots = params.discordConfig?.allowBots ?? false;
-  if (author.bot && params.botUserId && author.id === params.botUserId) {
+  if (params.botUserId && author.id === params.botUserId) {
     // Always ignore own messages to prevent self-reply loops
     return null;
   }
