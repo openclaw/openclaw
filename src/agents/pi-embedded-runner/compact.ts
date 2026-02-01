@@ -1,7 +1,6 @@
 import {
   createAgentSession,
   estimateTokens,
-  DefaultResourceLoader,
   SessionManager,
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
@@ -388,13 +387,6 @@ export async function compactEmbeddedPiSessionDirect(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
-      const resourceLoader = new DefaultResourceLoader({
-        cwd: resolvedWorkspace,
-        agentDir,
-        settingsManager,
-        additionalExtensionPaths,
-      });
-      await resourceLoader.reload();
       const { session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
@@ -404,9 +396,9 @@ export async function compactEmbeddedPiSessionDirect(
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         tools: builtInTools,
         customTools,
+        additionalExtensionPaths,
         sessionManager,
         settingsManager,
-        resourceLoader,
       });
       applySystemPromptOverrideToSession(session, systemPromptOverride);
 
