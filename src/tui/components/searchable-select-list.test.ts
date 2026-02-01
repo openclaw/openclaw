@@ -1,3 +1,4 @@
+import { visibleWidth } from "@mariozechner/pi-tui";
 import { describe, expect, it } from "vitest";
 import { SearchableSelectList, type SearchableSelectListTheme } from "./searchable-select-list.js";
 
@@ -215,5 +216,65 @@ describe("SearchableSelectList", () => {
     list.handleInput("\x1b");
 
     expect(cancelled).toBe(true);
+  });
+
+  describe("SearchableSelectList - Width Constraints", () => {
+    // Mock theme that passes text through without adding extra characters,
+    // to isolate layout width logic from theme decorations.
+    const strictMockTheme: SearchableSelectListTheme = {
+      selectedPrefix: (t) => t,
+      selectedText: (t) => t,
+      description: (t) => t,
+      scrollInfo: (t) => t,
+      noMatch: (t) => t,
+      searchPrompt: (_) => `search: `,
+      searchInput: (t) => t,
+      matchHighlight: (t) => t,
+    };
+
+    it("truncates content to fit within terminal width", () => {
+      const longLabel = "a".repeat(300);
+      const longDesc = "b".repeat(300);
+      const items = [
+        {
+          value: "long-item",
+          label: longLabel,
+          description: longDesc,
+        },
+      ];
+      const list = new SearchableSelectList(items, 5, strictMockTheme);
+      const terminalWidth = 100;
+
+      // Render with constrained width
+      const output = list.render(terminalWidth);
+
+      // Check that no line exceeds the terminal width
+      for (const line of output) {
+        // We strip ANSI codes (though mock theme adds none) and check width
+        const width = visibleWidth(line);
+        expect(width).toBeLessThanOrEqual(terminalWidth);
+      }
+    });
+
+    it("truncates wide characters safely", () => {
+      // "你好" is 2 chars length, but 4 visual width
+      const wideLabel = "你好".repeat(50);
+      const items = [
+        {
+          value: "wide-item",
+          label: wideLabel,
+          description: "desc",
+        },
+      ];
+      const list = new SearchableSelectList(items, 5, strictMockTheme);
+      const terminalWidth = 60;
+
+      const output = list.render(terminalWidth);
+
+      for (const line of output) {
+        const width = visibleWidth(line);
+        expect(width).toBeLessThanOrEqual(terminalWidth);
+      }
+    });
   });
 });

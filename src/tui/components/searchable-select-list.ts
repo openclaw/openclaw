@@ -7,8 +7,8 @@ import {
   type SelectItem,
   type SelectListTheme,
   truncateToWidth,
+  visibleWidth,
 } from "@mariozechner/pi-tui";
-import { visibleWidth } from "../../terminal/ansi.js";
 import { findWordBoundaryIndex, fuzzyFilterLower, prepareSearchItems } from "./fuzzy-filter.js";
 
 export interface SearchableSelectListTheme extends SelectListTheme {
@@ -215,7 +215,7 @@ export class SearchableSelectList implements Component {
     query: string,
   ): string {
     const prefix = isSelected ? "→ " : "  ";
-    const prefixWidth = prefix.length;
+    const prefixWidth = visibleWidth(prefix);
     const displayValue = this.getItemLabel(item);
 
     if (item.description && width > 40) {
@@ -236,7 +236,7 @@ export class SearchableSelectList implements Component {
       }
     }
 
-    const maxWidth = width - prefixWidth - 2;
+    const maxWidth = Math.max(0, width - prefixWidth - 2);
     const truncatedValue = truncateToWidth(displayValue, maxWidth, "");
     const valueText = this.highlightMatch(truncatedValue, query);
     const line = `${prefix}${valueText}`;

@@ -243,7 +243,11 @@ Recurring, isolated job with delivery:
 ```json
 {
   "name": "Morning brief",
-  "schedule": { "kind": "cron", "expr": "0 7 * * *", "tz": "America/Los_Angeles" },
+  "schedule": {
+    "kind": "cron",
+    "expr": "0 7 * * *",
+    "tz": "America/Los_Angeles"
+  },
   "sessionTarget": "isolated",
   "wakeMode": "next-heartbeat",
   "payload": {
