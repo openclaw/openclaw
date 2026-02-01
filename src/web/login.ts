@@ -21,7 +21,7 @@ export async function loginWeb(
   });
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {
-    await wait(sock);
+    await wait(sock, 120_000);
     console.log(success("✅ Linked! Credentials saved for future sends."));
   } catch (err) {
     const code =
@@ -42,7 +42,7 @@ export async function loginWeb(
         authDir: account.authDir,
       });
       try {
-        await wait(retry);
+        await wait(retry, 120_000);
         console.log(success("✅ Linked after restart; web session ready."));
         return;
       } finally {
