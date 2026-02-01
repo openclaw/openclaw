@@ -237,13 +237,7 @@ describe("memory flush prompt estimates", () => {
   });
 
   it("adds the estimate to the larger of stored and transcript totals", () => {
-    expect(
-      resolveEffectivePromptTokens({
-        baseTotalTokens: 120,
-        transcriptTotalTokens: 200,
-        promptTokenEstimate: 30,
-      }),
-    ).toBe(230);
+    expect(resolveEffectivePromptTokens(120, 200, 30)).toBe(230);
   });
 });
 
