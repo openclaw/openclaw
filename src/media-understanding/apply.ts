@@ -256,7 +256,11 @@ async function extractFileBlocks(params: {
     const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
     const textSample = decodeTextSample(bufferResult?.buffer);
     const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
-    if (!forcedTextMimeResolved && kind === "audio" && !textLike) {
+    // Always skip audio/video from text extraction — they're handled by the
+    // transcription/description pipeline in runCapability. The old `!textLike`
+    // guard was fooled by resolveUtf16Charset detecting binary null bytes as
+    // UTF-16, causing raw binary to be dumped as a <file> block.
+    if (!forcedTextMimeResolved && (kind === "audio" || kind === "video")) {
       continue;
     }
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
