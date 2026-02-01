@@ -119,8 +119,9 @@ Runtime requirement: **Node ≥ 22**.
 
 ```bash
 # Recommended: global install (npm/pnpm)
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
+npm install -g openclaw@beta
+# or: pnpm add -g openclaw@beta
+# Note: Use @beta until npm @latest is updated (see issue #3787)
 
 # Onboard + install the service (launchd/systemd user service)
 openclaw onboard --install-daemon

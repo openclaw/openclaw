@@ -63,13 +63,15 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
 If you already have Node:
 
 ```bash
-npm install -g openclaw@latest
+npm install -g openclaw@beta
 ```
+
+> **Note:** Use `@beta` instead of `@latest` until npm `@latest` is updated. The `@latest` tag currently points to an old version (v0.1.0) that lacks the CLI binary.
 
 If you have libvips installed globally (common on macOS via Homebrew) and `sharp` fails to install, force prebuilt binaries:
 
 ```bash
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
+SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@beta
 ```
 
 If you see `sharp: Please add node-gyp to your dependencies`, either install build tooling (macOS: Xcode CLT + `npm install -g node-gyp`) or use the `SHARP_IGNORE_GLOBAL_LIBVIPS=1` workaround above to skip the native build.
@@ -77,7 +79,7 @@ If you see `sharp: Please add node-gyp to your dependencies`, either install bui
 Or:
 
 ```bash
-pnpm add -g openclaw@latest
+pnpm add -g openclaw@beta
 ```
 
 Then:

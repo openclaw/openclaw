@@ -46,11 +46,13 @@ Model note: while any model is supported, I strongly recommend **Anthropic Pro/M
 Runtime: **Node ≥22**.
 
 ```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
+npm install -g openclaw@beta
+# or: pnpm add -g openclaw@beta
 
 openclaw onboard --install-daemon
 ```
+
+> **Note:** Use `@beta` instead of `@latest` until npm `@latest` is updated. The `@latest` tag currently points to an old version (v0.1.0) that lacks the CLI binary. See [#3787](https://github.com/moltbot/moltbot/issues/3787).
 
 The wizard installs the Gateway daemon (launchd/systemd user service) so it stays running.
 

@@ -70,12 +70,14 @@ iwr -useb https://openclaw.ai/install.ps1 | iex
 Alternative (global install):
 
 ```bash
-npm install -g openclaw@latest
+npm install -g openclaw@beta
 ```
 
 ```bash
-pnpm add -g openclaw@latest
+pnpm add -g openclaw@beta
 ```
+
+> **Note:** Use `@beta` instead of `@latest` until npm `@latest` is updated. The `@latest` tag currently points to an old version (v0.1.0) that lacks the CLI binary.
 
 ## 2) Run the onboarding wizard (and install the service)
 

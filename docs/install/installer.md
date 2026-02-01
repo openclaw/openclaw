@@ -31,12 +31,14 @@ If the installer completes but `openclaw` is not found in a new terminal, it’s
 
 ## install.sh (recommended)
 
+> **Note:** The installer currently uses `@latest`, but `@latest` points to an old version (v0.1.0) without CLI support. Until the installer is updated, use manual install with `npm install -g moltbot@beta` instead. See [#3787](https://github.com/moltbot/moltbot/issues/3787).
+
 What it does (high level):
 
 - Detect OS (macOS / Linux / WSL).
 - Ensure Node.js **22+** (macOS via Homebrew; Linux via NodeSource).
 - Choose install method:
-  - `npm` (default): `npm install -g openclaw@latest`
+  - `npm` (default): `npm install -g openclaw@beta` (recommended; `@latest` is outdated)
   - `git`: clone/build a source checkout and install a wrapper script
 - On Linux: avoid global npm permission errors by switching npm's prefix to `~/.npm-global` when needed.
 - If upgrading an existing install: runs `openclaw doctor --non-interactive` (best effort).
@@ -84,11 +86,13 @@ curl -fsSL https://openclaw.ai/install-cli.sh | bash -s -- --help
 
 ## install.ps1 (Windows PowerShell)
 
+> **Note:** The installer currently uses `@latest`, but `@latest` points to an old version (v0.1.0) without CLI support. Until the installer is updated, use manual install with `npm install -g moltbot@beta` instead. See [#3787](https://github.com/moltbot/moltbot/issues/3787).
+
 What it does (high level):
 
 - Ensure Node.js **22+** (winget/Chocolatey/Scoop or manual).
 - Choose install method:
-  - `npm` (default): `npm install -g openclaw@latest`
+  - `npm` (default): `npm install -g openclaw@beta` (recommended; `@latest` is outdated)
   - `git`: clone/build a source checkout and install a wrapper script
 - Runs `openclaw doctor --non-interactive` on upgrades and git installs (best effort).
 
