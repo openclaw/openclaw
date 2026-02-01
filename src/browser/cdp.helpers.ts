@@ -1,5 +1,6 @@
 import WebSocket from "ws";
 import { rawDataToString } from "../infra/ws.js";
+import { getChromeExtensionRelayAuthHeaders } from "./extension-relay.js";
 
 type CdpResponse = {
   id: number;
@@ -28,20 +29,24 @@ export function isLoopbackHost(host: string) {
 }
 
 export function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
+  const relayHeaders = getChromeExtensionRelayAuthHeaders(url);
+  const mergedHeaders = { ...relayHeaders, ...headers };
   try {
     const parsed = new URL(url);
-    const hasAuthHeader = Object.keys(headers).some((key) => key.toLowerCase() === "authorization");
+    const hasAuthHeader = Object.keys(mergedHeaders).some(
+      (key) => key.toLowerCase() === "authorization",
+    );
     if (hasAuthHeader) {
-      return headers;
+      return mergedHeaders;
     }
     if (parsed.username || parsed.password) {
       const auth = Buffer.from(`${parsed.username}:${parsed.password}`).toString("base64");
-      return { ...headers, Authorization: `Basic ${auth}` };
+      return { ...mergedHeaders, Authorization: `Basic ${auth}` };
     }
   } catch {
     // ignore
   }
-  return headers;
+  return mergedHeaders;
 }
 
 export function appendCdpPath(cdpUrl: string, path: string): string {
