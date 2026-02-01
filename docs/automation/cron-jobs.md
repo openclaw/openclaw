@@ -423,11 +423,279 @@ Immediate system event without creating a job:
 openclaw system event --mode now --text "Next heartbeat: check battery."
 ```
 
+## JSON Schema / API Usage
+
+When calling the cron tool directly (e.g., via `message` or sub-agent), use the following JSON schema. This applies to both `systemEvent` and `agentTurn` payloads.
+
+### Common Fields (All Jobs)
+
+```json5
+{
+  "name": "job-name",
+  "schedule": {
+    "kind": "at",
+    "atMs": 1738262400000
+  },
+  "sessionTarget": "main",
+  "deleteAfterRun": true
+}
+```
+
+| Field           | Type    | Required | Description                             |
+|-----------------|---------|----------|-----------------------------------------|
+| `name`          | string  | Yes      | Human-readable job name                 |
+| `schedule`      | object  | Yes      | See schedule kinds below                |
+| `sessionTarget` | string  | No       | `"main"` (default) or `"isolated"`      |  
+| `agentId`       | string  | No       | Pin to specific agent                   |
+| `deleteAfterRun`| boolean | No       | Auto-delete successful one-shot jobs    |
+
+
+### Schedule Kinds
+
+#### One-shot (at)
+
+```json5
+{
+  "schedule": {
+    "kind": "at",
+    "atMs": 1738262400000  // Epoch milliseconds
+  }
+}
+```
+
+**Note**: `atMs` is epoch milliseconds, not an ISO string. Use `Date.now()` or convert with `new Date("2026-01-30T18:00:00Z").getTime()`.
+
+#### Interval (every)
+
+```json5
+{
+  "schedule": {
+    "kind": "every",
+    "everyMs": 1800000  // 30 minutes
+  }
+}
+```
+
+#### Cron expression
+
+```json5
+{
+  "schedule": {
+    "kind": "cron",
+    "cron": "0 7 * * *",  // 7 AM daily
+    "tz": "America/Los_Angeles"  // Optional IANA timezone
+  }
+}
+```
+
+### Payloads
+
+#### SystemEvent (main session only)
+
+```json5
+{
+  "name": "Reminder",
+  "schedule": { "kind": "at", "atMs": 1738262400000 },
+  "sessionTarget": "main",
+  "payload": {
+    "kind": "systemEvent",
+    "text": "Check calendar for upcoming meetings."
+  },
+  "wakeMode": "now"  // "now" or "next-heartbeat" (default)
+}
+```
+
+#### AgentTurn (isolated session)
+
+```json5
+{
+  "name": "Morning summary",
+  "schedule": { "kind": "cron", "cron": "0 7 * * *", "tz": "America/Los_Angeles" },
+  "sessionTarget": "isolated",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Summarize yesterday's work and prioritize today's tasks.",
+    "model": "opus",  // Optional override
+    "thinking": "medium",  // Optional: off, minimal, low, medium, high, xhigh
+    "timeoutSeconds": 120  // Optional
+  },
+  "deliver": {
+    "enabled": true,
+    "channel": "whatsapp",
+    "to": "+15551234567"
+  }
+}
+```
+
+### Delivery Options (isolated only)
+
+```json5
+{
+  "deliver": {
+    "enabled": true,
+    "channel": "telegram",
+    "to": "-1001234567890",
+    "bestEffortDeliver": true  // Avoid failing job if delivery fails
+  }
+}
+```
+
+### Telegram Topics
+
+```json5
+{
+  "deliver": {
+    "channel": "telegram",
+    "to": "-1001234567890:topic:123"  // Forum topic delivery
+  }
+}
+```
+
+
+## JSON Schema / API Usage
+
+When calling the cron tool directly (e.g., via `message` or sub-agent), use the following JSON schema. This applies to both `systemEvent` and `agentTurn` payloads.
+
+### Common Fields (All Jobs)
+
+
+
+```json5
+{
+  "name": "job-name",
+  "schedule": {
+    "kind": "at",
+    "atMs": 1738262400000
+  },
+  "sessionTarget": "main",
+  "deleteAfterRun": true
+}
+```
+
+
+
+| Field | Type | Required | Description |
+
+|-------|------|----------|-------------|
+
+| `name` | string | Yes | Human-readable job name |
+
+| `schedule` | object | Yes | See schedule kinds below |
+
+| `sessionTarget` | string | No | `"main"` (default) or `"isolated"` |
+
+| `agentId` | string | No | Pin to specific agent (falls back to default) |
+
+| `deleteAfterRun` | boolean | No | Auto-delete successful one-shot jobs |
+
+
+
+### Schedule Kinds
+
+#### One-shot (at)
+
+```json5
+{
+  "schedule": {
+    "kind": "at",
+    "atMs": 1738262400000  // Epoch milliseconds
+  }
+}
+```
+**Note**: `atMs` is epoch milliseconds, not an ISO string. Use `Date.now()` or convert with `new Date("2026-01-30T18:00:00Z").getTime()`.
+
+#### Interval (every)
+
+```json5
+{
+  "schedule": {
+    "kind": "every",
+    "everyMs": 1800000  // 30 minutes
+  }
+}
+```
+
+#### Cron expression
+
+```json5
+{
+  "schedule": {
+    "kind": "cron",
+    "cron": "0 7 * * *",  // 7 AM daily
+    "tz": "America/Los_Angeles"  // Optional IANA timezone
+  }
+}
+```
+
+### Payloads
+
+#### SystemEvent (main session only)
+
+```json5
+{
+  "name": "Reminder",
+  "schedule": { "kind": "at", "atMs": 1738262400000 },
+  "sessionTarget": "main",
+  "payload": {
+    "kind": "systemEvent",
+    "text": "Check calendar for upcoming meetings."
+  },
+  "wakeMode": "now"  // "now" or "next-heartbeat" (default)
+}
+```
+
+#### AgentTurn (isolated session)
+
+```json5
+{
+  "name": "Morning summary",
+  "schedule": { "kind": "cron", "cron": "0 7 * * *", "tz": "America/Los_Angeles" },
+  "sessionTarget": "isolated",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Summarize yesterday's work and prioritize today.s tasks.",
+    "model": "opus",  // Optional override
+    "thinking": "medium",  // Optional: off, minimal, low, medium, high, xhigh
+    "timeoutSeconds": 120  // Optional
+  },
+  "deliver": {
+    "enabled": true,
+    "channel": "whatsapp",
+    "to": "+15551234567"
+  }
+}
+```
+
+### Delivery Options (isolated only)
+
+```json5
+{
+  "deliver": {
+    "enabled": true,
+    "channel": "telegram",
+    "to": "-1001234567890",
+    "bestEffortDeliver": true  // Avoid failing job if delivery fails
+  }
+}
+```
+
+### Telegram Topics
+
+```json5
+{
+  "deliver": {
+    "channel": "telegram",
+    "to": "-1001234567890:topic:123"  // Forum topic delivery
+  }
+}
+```
+
 ## Gateway API surface
 
 - `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`
 - `cron.run` (force or due), `cron.runs`
-  For immediate system events without a job, use [`openclaw system event`](/cli/system).
+
+For immediate system events without a job, use [`openclaw system event`](/cli/system).
 
 ## Troubleshooting
 
