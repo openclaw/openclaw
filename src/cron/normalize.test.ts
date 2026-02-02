@@ -3,6 +3,35 @@ import { describe, expect, it } from "vitest";
 import { normalizeCronJobCreate } from "./normalize.js";
 
 describe("normalizeCronJobCreate", () => {
+  it("defaults enabled to true when not provided", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "no-enabled",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.enabled).toBe(true);
+  });
+
+  it("preserves explicit enabled: false", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "explicit-false",
+      enabled: false,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.enabled).toBe(false);
+  });
+
   it("maps legacy payload.provider to payload.channel and strips provider", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy",
