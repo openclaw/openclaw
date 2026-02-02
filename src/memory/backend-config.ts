@@ -11,6 +11,7 @@ import type {
 } from "../config/types.memory.js";
 import type { SessionSendPolicyConfig } from "../config/types.base.js";
 import { resolveUserPath } from "../utils.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
 
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
@@ -232,8 +233,11 @@ export function resolveMemoryBackendConfig(params: {
     ...resolveCustomPaths(qmdCfg?.paths, workspaceDir, nameSet),
   ];
 
+  const rawCommand = qmdCfg?.command?.trim() || "qmd";
+  const parsedCommand = splitShellArgs(rawCommand);
+  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
   const resolved: ResolvedQmdConfig = {
-    command: (qmdCfg?.command?.trim() || "qmd").split(/\s+/)[0] || "qmd",
+    command,
     collections,
     includeDefaultMemory,
     sessions: resolveSessionConfig(qmdCfg?.sessions, workspaceDir),

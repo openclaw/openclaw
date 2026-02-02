@@ -30,6 +30,20 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.update.intervalMs).toBeGreaterThan(0);
   });
 
+  it("parses quoted qmd command paths", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: '"/Applications/QMD Tools/qmd" --flag',
+        },
+      },
+    } as MoltbotConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(resolved.qmd?.command).toBe("/Applications/QMD Tools/qmd");
+  });
+
   it("resolves custom paths relative to workspace", () => {
     const cfg = {
       agents: {
