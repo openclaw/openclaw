@@ -355,7 +355,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               : "next-heartbeat";
           const ipcWake = shouldUseInProcess(gatewayOpts) ? getInProcessServices() : undefined;
           if (ipcWake) {
-            const result = ipcWake.cron.wake({ mode, text });
+            const result = await ipcWake.cron.wake({ mode, text });
             return jsonResult(result);
           }
           return jsonResult(
