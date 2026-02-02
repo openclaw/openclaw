@@ -41,7 +41,7 @@ openclaw cron add \
   --at "2026-02-01T16:00:00Z" \
   --session main \
   --system-event "Reminder: check the cron docs draft" \
-  --wake now \
+  --post-run trigger-heartbeat \
   --delete-after-run
 
 openclaw cron list
@@ -121,8 +121,10 @@ Cron 表达式使用 `croner`。如果省略时区，将使用 Gateway网关主�
 
 主会话任务入队一个系统事件，并可选择唤醒心跳运行器。它们必须使用 `payload.kind = "systemEvent"`。
 
-- `wakeMode: "next-heartbeat"`（默认）：事件等待下一次计划心跳。
-- `wakeMode: "now"`：事件触发立即心跳运行。
+- `postRun: null`（默认）：事件等待下一次计划心跳。
+- `postRun: "trigger-heartbeat"`：事件触发立即心跳运行。
+
+> **向后兼容：** 旧的 `wakeMode` 字段仍可使用（`"now"` 映射为 `"trigger-heartbeat"`，`"next-heartbeat"` 映射为 `null`）。
 
 当你需要正常的心跳提示 + 主会话上下文时，这是最佳选择。参见[心跳](/gateway/heartbeat)。
 
@@ -135,7 +137,7 @@ Cron 表达式使用 `croner`。如果省略时区，将使用 Gateway网关主�
 - 提示以 `[cron:<jobId> <任务名称>]` 为前缀，便于追踪。
 - 每次运行都会启动一个**全新的会话 ID**（不继承之前的对话）。
 - 摘要会发布到主会话（前缀 `Cron`，可配置）。
-- `wakeMode: "now"` 在发布摘要后触发立即心跳。
+- `postRun: "trigger-heartbeat"` 在发布摘要后触发立即心跳。
 - 如果 `payload.deliver: true`，输出会投递到渠道；否则保留在内部。
 
 对于嘈杂、频繁或"后台杂务"类任务，使用隔离任务可以避免污染你的主聊天记录。
@@ -223,7 +225,7 @@ Telegram 通过 `message_thread_id` 支持论坛主题。对于定时任务投�
   "name": "Reminder",
   "schedule": { "kind": "at", "atMs": 1738262400000 },
   "sessionTarget": "main",
-  "wakeMode": "now",
+  "postRun": "trigger-heartbeat",
   "payload": { "kind": "systemEvent", "text": "Reminder text" },
   "deleteAfterRun": true
 }
@@ -236,7 +238,7 @@ Telegram 通过 `message_thread_id` 支持论坛主题。对于定时任务投�
   "name": "Morning brief",
   "schedule": { "kind": "cron", "expr": "0 7 * * *", "tz": "America/Los_Angeles" },
   "sessionTarget": "isolated",
-  "wakeMode": "next-heartbeat",
+  "postRun": null,
   "payload": {
     "kind": "agentTurn",
     "message": "Summarize overnight updates.",
@@ -255,7 +257,7 @@ Telegram 通过 `message_thread_id` 支持论坛主题。对于定时任务投�
 - `atMs` 和 `everyMs` 为纪元毫秒数。
 - `sessionTarget` 必须为 `"main"` 或 `"isolated"`，且必须与 `payload.kind` 匹配。
 - 可选字段：`agentId`、`description`、`enabled`、`deleteAfterRun`、`isolation`。
-- `wakeMode` 省略时默认为 `"next-heartbeat"`。
+- `postRun` 省略时默认为 `null`。旧的 `wakeMode` 字段仍可向后兼容使用（`"now"` -> `"trigger-heartbeat"`，`"next-heartbeat"` -> `null`）。
 
 ### cron.update 参数
 
@@ -317,7 +319,7 @@ openclaw cron add \
   --at "2026-01-12T18:00:00Z" \
   --session main \
   --system-event "Reminder: submit expense report." \
-  --wake now \
+  --post-run trigger-heartbeat \
   --delete-after-run
 ```
 
@@ -329,7 +331,7 @@ openclaw cron add \
   --at "20m" \
   --session main \
   --system-event "Next heartbeat: check calendar." \
-  --wake now
+  --post-run trigger-heartbeat
 ```
 
 周期性隔离任务（投递到 WhatsApp）：

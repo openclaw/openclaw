@@ -56,7 +56,7 @@ describe("CronService", () => {
       enabled: true,
       schedule: { kind: "at", atMs },
       sessionTarget: "main",
-      wakeMode: "now",
+      postRun: "trigger-heartbeat",
       payload: { kind: "systemEvent", text: "   " },
     });
 
@@ -95,7 +95,7 @@ describe("CronService", () => {
       enabled: true,
       schedule: { kind: "at", atMs },
       sessionTarget: "main",
-      wakeMode: "now",
+      postRun: "trigger-heartbeat",
       payload: { kind: "systemEvent", text: "hello" },
     });
 
@@ -135,7 +135,7 @@ describe("CronService", () => {
       enabled: true,
       schedule: { kind: "at", atMs },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+      postRun: null,
       payload: { kind: "systemEvent", text: "hello" },
     });
 

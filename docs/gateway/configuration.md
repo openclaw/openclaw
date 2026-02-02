@@ -3133,7 +3133,7 @@ Defaults:
       {
         match: { path: "gmail" },
         action: "agent",
-        wakeMode: "now",
+        postRun: "trigger-heartbeat",
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
@@ -3155,10 +3155,10 @@ Requests must include the hook token:
 Endpoints:
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, sessionKey?, postRun?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
-`/hooks/agent` always posts a summary into the main session (and can optionally trigger an immediate heartbeat via `wakeMode: "now"`).
+`/hooks/agent` always posts a summary into the main session (and can optionally trigger an immediate heartbeat via `postRun: "trigger-heartbeat"`). The old `wakeMode` field is still accepted for backwards compatibility.
 
 Mapping notes:
 

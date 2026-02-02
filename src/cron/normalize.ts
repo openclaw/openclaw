@@ -118,9 +118,16 @@ export function normalizeCronJobInput(
     next.payload = coercePayload(base.payload);
   }
 
+  // Migrate legacy wakeMode → postRun
+  if ("wakeMode" in next && !("postRun" in next)) {
+    const legacy = next.wakeMode;
+    next.postRun = legacy === "now" ? "trigger-heartbeat" : null;
+    delete next.wakeMode;
+  }
+
   if (options.applyDefaults) {
-    if (!next.wakeMode) {
-      next.wakeMode = "next-heartbeat";
+    if (!("postRun" in next)) {
+      next.postRun = null;
     }
     if (!next.sessionTarget && isRecord(next.payload)) {
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";

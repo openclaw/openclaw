@@ -17,7 +17,7 @@ x-i18n:
 
 ## 背景
 
-近期 Gateway网关日志显示 `cron.add` 反复因无效参数（缺少 `sessionTarget`、`wakeMode`、`payload` 以及格式错误的 `schedule`）而失败。这表明至少有一个客户端（可能是智能体工具调用路径）正在发送包装过的或部分指定的任务载荷。此外，TypeScript、Gateway网关 schema、CLI 标志和 UI 表单类型之间的 cron 提供商枚举存在偏差，同时 `cron.status` 的 UI 也存在不匹配问题（期望 `jobCount`，而 Gateway网关返回的是 `jobs`）。
+近期 Gateway网关日志显示 `cron.add` 反复因无效参数（缺少 `sessionTarget`、`postRun`（原 `wakeMode`）、`payload` 以及格式错误的 `schedule`）而失败。这表明至少有一个客户端（可能是智能体工具调用路径）正在发送包装过的或部分指定的任务载荷。此外，TypeScript、Gateway网关 schema、CLI 标志和 UI 表单类型之间的 cron 提供商枚举存在偏差，同时 `cron.status` 的 UI 也存在不匹配问题（期望 `jobCount`，而 Gateway网关返回的是 `jobs`）。
 
 ## 目标
 
@@ -50,7 +50,7 @@ x-i18n:
 ## 当前行为
 
 - **标准化：** 包装的 `data`/`job` 载荷会被解包；在安全的情况下推断 `schedule.kind` 和 `payload.kind`。
-- **默认值：** 当 `wakeMode` 和 `sessionTarget` 缺失时，应用安全的默认值。
+- **默认值：** 当 `postRun`（原 `wakeMode`）和 `sessionTarget` 缺失时，应用安全的默认值。
 - **提供商：** Discord/Slack/Signal/iMessage 现在在 CLI/UI 中一致地显示。
 
 请参阅 [Cron 任务](/automation/cron-jobs) 了解标准化后的结构和示例。

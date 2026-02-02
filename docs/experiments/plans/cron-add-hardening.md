@@ -10,7 +10,7 @@ title: "Cron Add Hardening"
 
 ## Context
 
-Recent gateway logs show repeated `cron.add` failures with invalid parameters (missing `sessionTarget`, `wakeMode`, `payload`, and malformed `schedule`). This indicates that at least one client (likely the agent tool call path) is sending wrapped or partially specified job payloads. Separately, there is drift between cron provider enums in TypeScript, gateway schema, CLI flags, and UI form types, plus a UI mismatch for `cron.status` (expects `jobCount` while gateway returns `jobs`).
+Recent gateway logs show repeated `cron.add` failures with invalid parameters (missing `sessionTarget`, `postRun` (formerly `wakeMode`), `payload`, and malformed `schedule`). This indicates that at least one client (likely the agent tool call path) is sending wrapped or partially specified job payloads. Separately, there is drift between cron provider enums in TypeScript, gateway schema, CLI flags, and UI form types, plus a UI mismatch for `cron.status` (expects `jobCount` while gateway returns `jobs`).
 
 ## Goals
 
@@ -43,7 +43,7 @@ Recent gateway logs show repeated `cron.add` failures with invalid parameters (m
 ## Current behavior
 
 - **Normalization:** wrapped `data`/`job` payloads are unwrapped; `schedule.kind` and `payload.kind` are inferred when safe.
-- **Defaults:** safe defaults are applied for `wakeMode` and `sessionTarget` when missing.
+- **Defaults:** safe defaults are applied for `postRun` (formerly `wakeMode`) and `sessionTarget` when missing.
 - **Providers:** Discord/Slack/Signal/iMessage are now consistently surfaced across CLI/UI.
 
 See [Cron jobs](/automation/cron-jobs) for the normalized shape and examples.

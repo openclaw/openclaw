@@ -36,7 +36,8 @@ export function registerCronEditCommand(cron: Command) {
       .option("--session <target>", "Session target (main|isolated)")
       .option("--agent <id>", "Set agent id")
       .option("--clear-agent", "Unset agent and use default", false)
-      .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
+      .option("--post-run <mode>", "Post-run action (trigger-heartbeat or none)")
+      .option("--wake <mode>", "[deprecated] Use --post-run instead")
       .option("--at <when>", "Set one-shot time (ISO) or duration like 20m")
       .option("--every <duration>", "Set interval duration like 10m")
       .option("--cron <expr>", "Set cron expression")
@@ -103,8 +104,12 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.session === "string") {
             patch.sessionTarget = opts.session;
           }
-          if (typeof opts.wake === "string") {
-            patch.wakeMode = opts.wake;
+          if (typeof opts.postRun === "string") {
+            patch.postRun =
+              opts.postRun.trim() === "trigger-heartbeat" ? "trigger-heartbeat" : null;
+          } else if (typeof opts.wake === "string") {
+            // Deprecated --wake flag: map old values to new
+            patch.postRun = opts.wake.trim() === "now" ? "trigger-heartbeat" : null;
           }
           if (opts.agent && opts.clearAgent) {
             throw new Error("Use --agent or --clear-agent, not both");

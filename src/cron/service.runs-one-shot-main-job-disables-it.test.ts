@@ -57,7 +57,7 @@ describe("CronService", () => {
       enabled: true,
       schedule: { kind: "at", atMs },
       sessionTarget: "main",
-      wakeMode: "now",
+      postRun: "trigger-heartbeat",
       payload: { kind: "systemEvent", text: "hello" },
     });
 
@@ -101,7 +101,7 @@ describe("CronService", () => {
       deleteAfterRun: true,
       schedule: { kind: "at", atMs },
       sessionTarget: "main",
-      wakeMode: "now",
+      postRun: "trigger-heartbeat",
       payload: { kind: "systemEvent", text: "hello" },
     });
 
@@ -119,7 +119,7 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
-  it("wakeMode now waits for heartbeat completion when available", async () => {
+  it("postRun trigger-heartbeat waits for heartbeat completion when available", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
@@ -151,11 +151,11 @@ describe("CronService", () => {
 
     await cron.start();
     const job = await cron.add({
-      name: "wakeMode now waits",
+      name: "postRun trigger-heartbeat waits",
       enabled: true,
       schedule: { kind: "at", atMs: 1 },
       sessionTarget: "main",
-      wakeMode: "now",
+      postRun: "trigger-heartbeat",
       payload: { kind: "systemEvent", text: "hello" },
     });
 
@@ -210,7 +210,7 @@ describe("CronService", () => {
       name: "weekly",
       schedule: { kind: "at", atMs },
       sessionTarget: "isolated",
-      wakeMode: "now",
+      postRun: "trigger-heartbeat",
       payload: { kind: "agentTurn", message: "do it", deliver: false },
     });
 
@@ -240,7 +240,7 @@ describe("CronService", () => {
       updatedAtMs: Date.now(),
       schedule: { kind: "cron", expr: "* * * * *" },
       sessionTarget: "isolated",
-      wakeMode: "now",
+      postRun: "trigger-heartbeat",
       payload: {
         kind: "agentTurn",
         message: "hi",
@@ -291,7 +291,7 @@ describe("CronService", () => {
       updatedAtMs: Date.now(),
       schedule: { kind: "cron", expr: "* * * * *" },
       sessionTarget: "isolated",
-      wakeMode: "now",
+      postRun: "trigger-heartbeat",
       payload: {
         kind: "agentTurn",
         message: "hi",
@@ -354,7 +354,7 @@ describe("CronService", () => {
       enabled: true,
       schedule: { kind: "at", atMs },
       sessionTarget: "isolated",
-      wakeMode: "now",
+      postRun: "trigger-heartbeat",
       payload: { kind: "agentTurn", message: "do it", deliver: false },
     });
 
@@ -390,7 +390,7 @@ describe("CronService", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 1000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
+        postRun: null,
         payload: { kind: "agentTurn", message: "nope" },
       }),
     ).rejects.toThrow(/main cron jobs require/);
@@ -401,7 +401,7 @@ describe("CronService", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 1000 },
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
+        postRun: null,
         payload: { kind: "systemEvent", text: "nope" },
       }),
     ).rejects.toThrow(/isolated cron jobs require/);
@@ -429,7 +429,7 @@ describe("CronService", () => {
             updatedAtMs: Date.parse("2025-12-13T00:00:00.000Z"),
             schedule: { kind: "at", atMs },
             sessionTarget: "main",
-            wakeMode: "now",
+            postRun: "trigger-heartbeat",
             payload: { kind: "agentTurn", message: "bad" },
             state: {},
           },

@@ -26,7 +26,7 @@ export type CronFormState = {
   cronExpr: string;
   cronTz: string;
   sessionTarget: "main" | "isolated";
-  wakeMode: "next-heartbeat" | "now";
+  postRun: "trigger-heartbeat" | null;
   payloadKind: "systemEvent" | "agentTurn";
   payloadText: string;
   deliver: boolean;

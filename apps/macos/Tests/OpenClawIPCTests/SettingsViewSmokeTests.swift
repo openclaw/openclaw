@@ -21,7 +21,7 @@ struct SettingsViewSmokeTests {
             updatedAtMs: 1_700_000_100_000,
             schedule: .cron(expr: "0 8 * * *", tz: "UTC"),
             sessionTarget: .main,
-            wakeMode: .now,
+            postRun: .triggerHeartbeat,
             payload: .systemEvent(text: "ping"),
             isolation: nil,
             state: CronJobState(
@@ -43,7 +43,7 @@ struct SettingsViewSmokeTests {
             updatedAtMs: 1_700_000_100_000,
             schedule: .every(everyMs: 30000, anchorMs: nil),
             sessionTarget: .isolated,
-            wakeMode: .nextHeartbeat,
+            postRun: nil,
             payload: .agentTurn(
                 message: "hello",
                 thinking: "low",

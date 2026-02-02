@@ -57,7 +57,7 @@ describe("CronService", () => {
       enabled: true,
       schedule: { kind: "at", atMs },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+      postRun: null,
       payload: { kind: "systemEvent", text: "hello" },
     });
 

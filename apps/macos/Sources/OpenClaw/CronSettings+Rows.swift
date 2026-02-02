@@ -19,7 +19,7 @@ extension CronSettings {
             }
             HStack(spacing: 6) {
                 StatusPill(text: job.sessionTarget.rawValue, tint: .secondary)
-                StatusPill(text: job.wakeMode.rawValue, tint: .secondary)
+                StatusPill(text: job.postRun?.rawValue ?? "none", tint: .secondary)
                 if let agentId = job.agentId, !agentId.isEmpty {
                     StatusPill(text: "agent \(agentId)", tint: .secondary)
                 }
@@ -104,7 +104,7 @@ extension CronSettings {
                 LabeledContent("Agent") { Text(agentId) }
             }
             LabeledContent("Session") { Text(job.sessionTarget.rawValue) }
-            LabeledContent("Wake") { Text(job.wakeMode.rawValue) }
+            LabeledContent("Post-run") { Text(job.postRun?.rawValue ?? "none") }
             LabeledContent("Next run") {
                 if let date = job.nextRunDate {
                     Text(date.formatted(date: .abbreviated, time: .standard))

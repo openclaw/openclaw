@@ -69,7 +69,7 @@ Gateway网关可以暴露一个小型 HTTP webhook 端点用于外部触发。
   "message": "Run this",
   "name": "Email",
   "sessionKey": "hook:email:msg-123",
-  "wakeMode": "now",
+  "postRun": "trigger-heartbeat",
   "deliver": true,
   "channel": "last",
   "to": "+15551234567",
@@ -82,7 +82,7 @@ Gateway网关可以暴露一个小型 HTTP webhook 端点用于外部触发。
 - `message` **必填**（字符串）：智能体处理的提示或消息。
 - `name` 可选（字符串）：hook 的人类可读名称（例如 "GitHub"），用作会话摘要的前缀。
 - `sessionKey` 可选（字符串）：用于标识智能体会话的键。默认为随机的 `hook:<uuid>`。使用一致的键可以在 hook 上下文中进行多轮对话。
-- `wakeMode` 可选（`now` | `next-heartbeat`）：是否触发立即心跳（默认 `now`）或等待下一次周期性检查。
+- `postRun` 可选（`"trigger-heartbeat"` | `null`）：是否触发立即心跳（默认 `"trigger-heartbeat"`）或运行后不做任何操作。旧的 `wakeMode` 字段（`"now"` | `"next-heartbeat"`）仍可向后兼容使用。
 - `deliver` 可选（布尔值）：如果为 `true`，智能体的回复将发送到消息渠道。默认为 `true`。仅为心跳确认的回复会被自动跳过。
 - `channel` 可选（字符串）：投递的消息渠道。可选值：`last`、`whatsapp`、`telegram`、`discord`、`slack`、`mattermost`（插件）、`signal`、`imessage`、`msteams`。默认为 `last`。
 - `to` 可选（字符串）：渠道的接收方标识符（例如 WhatsApp/Signal 的电话号码、Telegram 的聊天 ID、Discord/Slack/Mattermost（插件）的频道 ID、Microsoft Teams 的会话 ID）。默认为主会话中的最后一个接收方。
@@ -94,7 +94,7 @@ Gateway网关可以暴露一个小型 HTTP webhook 端点用于外部触发。
 
 - 运行一次**隔离式**智能体轮次（使用独立的会话键）
 - 始终将摘要发布到**主**会话
-- 如果 `wakeMode=now`，触发立即心跳
+- 如果 `postRun="trigger-heartbeat"`，触发立即心跳
 
 ### `POST /hooks/<name>`（映射）
 
@@ -132,7 +132,7 @@ curl -X POST http://127.0.0.1:18789/hooks/wake \
 curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'x-openclaw-token: SECRET' \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Summarize inbox","name":"Email","wakeMode":"next-heartbeat"}'
+  -d '{"message":"Summarize inbox","name":"Email","postRun":null}'
 ```
 
 ### 使用不同的模型

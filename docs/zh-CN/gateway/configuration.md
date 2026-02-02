@@ -3078,7 +3078,7 @@ openclaw gateway --port 19001
       {
         match: { path: "gmail" },
         action: "agent",
-        wakeMode: "now",
+        postRun: "trigger-heartbeat",
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
@@ -3100,10 +3100,10 @@ openclaw gateway --port 19001
 端点：
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, sessionKey?, postRun?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
 - `POST /hooks/<name>` → 通过 `hooks.mappings` 解析
 
-`/hooks/agent` 始终将摘要发布到主会话（并可通过 `wakeMode: "now"` 可选地触发即时心跳）。
+`/hooks/agent` 始终将摘要发布到主会话（并可通过 `postRun: "trigger-heartbeat"` 可选地触发即时心跳）。旧的 `wakeMode` 字段仍可向后兼容使用。
 
 映射说明：
 

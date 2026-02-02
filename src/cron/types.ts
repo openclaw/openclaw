@@ -6,6 +6,8 @@ export type CronSchedule =
   | { kind: "cron"; expr: string; tz?: string };
 
 export type CronSessionTarget = "main" | "isolated";
+export type CronPostRun = "trigger-heartbeat" | null;
+/** @deprecated Use {@link CronPostRun} instead. */
 export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronMessageChannel = ChannelId | "last";
@@ -73,7 +75,9 @@ export type CronJob = {
   updatedAtMs: number;
   schedule: CronSchedule;
   sessionTarget: CronSessionTarget;
-  wakeMode: CronWakeMode;
+  postRun: CronPostRun;
+  /** @deprecated Use {@link postRun} instead. Kept for backwards compatibility with old configs. */
+  wakeMode?: CronWakeMode;
   payload: CronPayload;
   isolation?: CronIsolation;
   state: CronJobState;

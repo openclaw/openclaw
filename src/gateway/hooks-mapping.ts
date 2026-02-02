@@ -8,6 +8,8 @@ export type HookMappingResolved = {
   matchPath?: string;
   matchSource?: string;
   action: "wake" | "agent";
+  postRun?: "trigger-heartbeat" | null;
+  /** @deprecated Use postRun instead. */
   wakeMode?: "now" | "next-heartbeat";
   name?: string;
   sessionKey?: string;
@@ -39,13 +41,13 @@ export type HookAction =
   | {
       kind: "wake";
       text: string;
-      mode: "now" | "next-heartbeat";
+      mode: "trigger-heartbeat" | null;
     }
   | {
       kind: "agent";
       message: string;
       name?: string;
-      wakeMode: "now" | "next-heartbeat";
+      postRun: "trigger-heartbeat" | null;
       sessionKey?: string;
       deliver?: boolean;
       allowUnsafeExternalContent?: boolean;
@@ -67,7 +69,7 @@ const hookPresetMappings: Record<string, HookMappingConfig[]> = {
       id: "gmail",
       match: { path: "gmail" },
       action: "agent",
-      wakeMode: "now",
+      postRun: "trigger-heartbeat",
       name: "Gmail",
       sessionKey: "hook:gmail:{{messages[0].id}}",
       messageTemplate:
@@ -81,8 +83,10 @@ const transformCache = new Map<string, HookTransformFn>();
 type HookTransformResult = Partial<{
   kind: HookAction["kind"];
   text: string;
-  mode: "now" | "next-heartbeat";
+  mode: "trigger-heartbeat" | null;
   message: string;
+  postRun: "trigger-heartbeat" | null;
+  /** @deprecated Use postRun instead. */
   wakeMode: "now" | "next-heartbeat";
   name: string;
   sessionKey: string;
@@ -181,7 +185,13 @@ function normalizeHookMapping(
   const matchPath = normalizeMatchPath(mapping.match?.path);
   const matchSource = mapping.match?.source?.trim();
   const action = mapping.action ?? "agent";
-  const wakeMode = mapping.wakeMode ?? "now";
+  // Support both postRun (new) and wakeMode (deprecated)
+  const postRun: "trigger-heartbeat" | null =
+    "postRun" in mapping
+      ? (mapping.postRun as "trigger-heartbeat" | null)
+      : mapping.wakeMode === "next-heartbeat"
+        ? null
+        : "trigger-heartbeat";
   const transform = mapping.transform
     ? {
         modulePath: resolvePath(transformsDir, mapping.transform.module),
@@ -194,7 +204,7 @@ function normalizeHookMapping(
     matchPath,
     matchSource,
     action,
-    wakeMode,
+    postRun,
     name: mapping.name,
     sessionKey: mapping.sessionKey,
     messageTemplate: mapping.messageTemplate,
@@ -236,7 +246,7 @@ function buildActionFromMapping(
       action: {
         kind: "wake",
         text,
-        mode: mapping.wakeMode ?? "now",
+        mode: mapping.postRun ?? "trigger-heartbeat",
       },
     };
   }
@@ -247,7 +257,7 @@ function buildActionFromMapping(
       kind: "agent",
       message,
       name: renderOptional(mapping.name, ctx),
-      wakeMode: mapping.wakeMode ?? "now",
+      postRun: mapping.postRun ?? "trigger-heartbeat",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
       deliver: mapping.deliver,
       allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
@@ -272,18 +282,25 @@ function mergeAction(
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
-    const mode = override.mode === "next-heartbeat" ? "next-heartbeat" : (baseWake?.mode ?? "now");
+    // Support both postRun (new) and mode/wakeMode (deprecated) from transforms
+    const mode: "trigger-heartbeat" | null =
+      override.mode === null ? null : (override.mode ?? baseWake?.mode ?? "trigger-heartbeat");
     return validateAction({ kind: "wake", text, mode });
   }
   const baseAgent = base.kind === "agent" ? base : undefined;
   const message =
     typeof override.message === "string" ? override.message : (baseAgent?.message ?? "");
-  const wakeMode =
-    override.wakeMode === "next-heartbeat" ? "next-heartbeat" : (baseAgent?.wakeMode ?? "now");
+  // Support both postRun (new) and wakeMode (deprecated) from transforms
+  const postRun: "trigger-heartbeat" | null =
+    "postRun" in override
+      ? (override.postRun ?? "trigger-heartbeat")
+      : override.wakeMode === "next-heartbeat"
+        ? null
+        : (baseAgent?.postRun ?? "trigger-heartbeat");
   return validateAction({
     kind: "agent",
     message,
-    wakeMode,
+    postRun,
     name: override.name ?? baseAgent?.name,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
     deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,

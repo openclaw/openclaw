@@ -27,7 +27,13 @@ import { collectConfigEnvVars } from "./env-vars.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
-import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
+import {
+  resolveConfigBackupBasePath,
+  resolveConfigBackupDir,
+  resolveConfigPath,
+  resolveDefaultConfigCandidates,
+  resolveStateDir,
+} from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 import { compareOpenClawVersions } from "./version.js";
@@ -90,11 +96,23 @@ function coerceConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
+async function ensureConfigBackupDir(
+  configPath: string,
+  ioFs: typeof fs.promises,
+): Promise<string> {
+  const backupDir = resolveConfigBackupDir(configPath);
+  await ioFs.mkdir(backupDir, { recursive: true, mode: 0o700 }).catch(() => {
+    // best-effort
+  });
+  return backupDir;
+}
+
 async function rotateConfigBackups(configPath: string, ioFs: typeof fs.promises): Promise<void> {
+  await ensureConfigBackupDir(configPath, ioFs);
   if (CONFIG_BACKUP_COUNT <= 1) {
     return;
   }
-  const backupBase = `${configPath}.bak`;
+  const backupBase = resolveConfigBackupBasePath(configPath);
   const maxIndex = CONFIG_BACKUP_COUNT - 1;
   await ioFs.unlink(`${backupBase}.${maxIndex}`).catch(() => {
     // best-effort
@@ -107,6 +125,69 @@ async function rotateConfigBackups(configPath: string, ioFs: typeof fs.promises)
   await ioFs.rename(backupBase, `${backupBase}.1`).catch(() => {
     // best-effort
   });
+}
+
+export type ConfigBackupMigrationResult = {
+  configPath: string;
+  backupDir: string;
+  moved: string[];
+  skipped: string[];
+};
+
+export async function migrateLegacyConfigBackups(
+  overrides: ConfigIoDeps = {},
+): Promise<ConfigBackupMigrationResult> {
+  const deps = normalizeDeps(overrides);
+  const configPath = resolveConfigPathForDeps(deps);
+  const backupDir = resolveConfigBackupDir(configPath);
+  const configDir = path.dirname(configPath);
+  let entries: string[] = [];
+  try {
+    entries = await deps.fs.promises.readdir(configDir);
+  } catch {
+    return { configPath, backupDir, moved: [], skipped: [] };
+  }
+  const baseName = path.basename(configPath);
+  const backupPrefix = `${baseName}.bak`;
+  const legacyNames = entries.filter(
+    (entry) => entry === backupPrefix || entry.startsWith(`${backupPrefix}.`),
+  );
+  if (legacyNames.length === 0) {
+    return { configPath, backupDir, moved: [], skipped: [] };
+  }
+  await ensureConfigBackupDir(configPath, deps.fs.promises);
+
+  const moved: string[] = [];
+  const skipped: string[] = [];
+  for (const entry of legacyNames) {
+    const source = path.join(configDir, entry);
+    const target = path.join(backupDir, entry);
+    try {
+      await deps.fs.promises.rename(source, target);
+      moved.push(entry);
+      continue;
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "ENOENT") {
+        continue;
+      }
+      if (code === "EEXIST" || code === "ENOTEMPTY") {
+        const uniqueTarget = path.join(backupDir, `${entry}.legacy.${Date.now()}`);
+        try {
+          await deps.fs.promises.rename(source, uniqueTarget);
+          moved.push(entry);
+          continue;
+        } catch (innerErr) {
+          skipped.push(entry);
+          deps.logger.warn(`Failed to move legacy config backup ${source}: ${String(innerErr)}`);
+          continue;
+        }
+      }
+      skipped.push(entry);
+      deps.logger.warn(`Failed to move legacy config backup ${source}: ${String(err)}`);
+    }
+  }
+  return { configPath, backupDir, moved, skipped };
 }
 
 export type ConfigIoDeps = {
@@ -508,10 +589,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     });
 
     if (deps.fs.existsSync(configPath)) {
-      await rotateConfigBackups(configPath, deps.fs.promises);
-      await deps.fs.promises.copyFile(configPath, `${configPath}.bak`).catch(() => {
-        // best-effort
+      await migrateLegacyConfigBackups({
+        fs: deps.fs,
+        env: deps.env,
+        homedir: deps.homedir,
+        configPath,
+        logger: deps.logger,
       });
+      await rotateConfigBackups(configPath, deps.fs.promises);
+      await deps.fs.promises
+        .copyFile(configPath, resolveConfigBackupBasePath(configPath))
+        .catch(() => {
+          // best-effort
+        });
     }
 
     try {

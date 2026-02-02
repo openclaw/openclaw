@@ -365,7 +365,7 @@ x-i18n:
         id: "gmail-hook",
         match: { path: "gmail" },
         action: "agent",
-        wakeMode: "now",
+        postRun: "trigger-heartbeat",
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}",

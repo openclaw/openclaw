@@ -62,6 +62,8 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
 }
 
 export type CronRunMode = "due" | "force";
+export type CronPostRun = "trigger-heartbeat" | null;
+/** @deprecated Use {@link CronPostRun} instead. */
 export type CronWakeMode = "now" | "next-heartbeat";
 
 export type CronStatusSummary = {

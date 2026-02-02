@@ -32,7 +32,7 @@ struct CronJobEditor: View {
     @State var agentId: String = ""
     @State var enabled: Bool = true
     @State var sessionTarget: CronSessionTarget = .main
-    @State var wakeMode: CronWakeMode = .nextHeartbeat
+    @State var postRun: CronPostRun? = nil
     @State var deleteAfterRun: Bool = false
 
     enum ScheduleKind: String, CaseIterable, Identifiable { case at, every, cron; var id: String { rawValue } }
@@ -120,10 +120,10 @@ struct CronJobEditor: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             GridRow {
-                                self.gridLabel("Wake mode")
-                                Picker("", selection: self.$wakeMode) {
-                                    Text("next-heartbeat").tag(CronWakeMode.nextHeartbeat)
-                                    Text("now").tag(CronWakeMode.now)
+                                self.gridLabel("Post-run")
+                                Picker("", selection: self.$postRun) {
+                                    Text("none").tag(CronPostRun?.none)
+                                    Text("trigger-heartbeat").tag(CronPostRun?.some(.triggerHeartbeat))
                                 }
                                 .labelsHidden()
                                 .pickerStyle(.segmented)

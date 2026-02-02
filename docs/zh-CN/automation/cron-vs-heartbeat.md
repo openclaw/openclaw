@@ -126,9 +126,11 @@ openclaw cron add \
   --at "20m" \
   --session main \
   --system-event "Reminder: standup meeting starts in 10 minutes." \
-  --wake now \
+  --post-run trigger-heartbeat \
   --delete-after-run
 ```
+
+> **注意：** `--wake` 标志已弃用；请改用 `--post-run`。
 
 完整 CLI 参考请参阅[定时任务](/automation/cron-jobs)。
 
@@ -186,7 +188,7 @@ openclaw cron add --name "Morning brief" --cron "0 7 * * *" --session isolated -
 openclaw cron add --name "Weekly review" --cron "0 9 * * 1" --session isolated --message "..." --model opus
 
 # 一次性提醒
-openclaw cron add --name "Call back" --at "2h" --session main --system-event "Call back the client" --wake now
+openclaw cron add --name "Call back" --at "2h" --session main --system-event "Call back the client" --post-run trigger-heartbeat
 ```
 
 ## Lobster：带审批的确定性工作流
@@ -241,7 +243,7 @@ openclaw cron add \
   --every "4h" \
   --session main \
   --system-event "Time for a project health check" \
-  --wake now
+  --post-run trigger-heartbeat
 ```
 
 ### 何时使用隔离式定时任务

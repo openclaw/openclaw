@@ -70,7 +70,8 @@ export function registerCronAddCommand(cron: Command) {
       .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
       .option("--agent <id>", "Agent id for this job")
       .option("--session <target>", "Session target (main|isolated)", "main")
-      .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
+      .option("--post-run <mode>", "Post-run action (trigger-heartbeat or none)", "")
+      .option("--wake <mode>", "[deprecated] Use --post-run instead")
       .option("--at <when>", "Run once at time (ISO) or +duration (e.g. 20m)")
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
       .option("--cron <expr>", "Cron expression (5-field)")
@@ -136,10 +137,24 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("--session must be main or isolated");
           }
 
-          const wakeModeRaw = typeof opts.wake === "string" ? opts.wake : "next-heartbeat";
-          const wakeMode = wakeModeRaw.trim() || "next-heartbeat";
-          if (wakeMode !== "now" && wakeMode !== "next-heartbeat") {
-            throw new Error("--wake must be now or next-heartbeat");
+          // Support both --post-run (new) and --wake (deprecated)
+          let postRun: "trigger-heartbeat" | null = null;
+          if (typeof opts.postRun === "string" && opts.postRun.trim()) {
+            const val = opts.postRun.trim();
+            if (val !== "trigger-heartbeat") {
+              throw new Error("--post-run must be trigger-heartbeat or omitted");
+            }
+            postRun = "trigger-heartbeat";
+          } else if (typeof opts.wake === "string" && opts.wake.trim()) {
+            // Deprecated --wake flag: map old values
+            const val = opts.wake.trim();
+            if (val === "now") {
+              postRun = "trigger-heartbeat";
+            } else if (val === "next-heartbeat") {
+              postRun = null;
+            } else {
+              throw new Error("--wake must be now or next-heartbeat (deprecated: use --post-run)");
+            }
           }
 
           const agentId =
@@ -220,7 +235,7 @@ export function registerCronAddCommand(cron: Command) {
             agentId,
             schedule,
             sessionTarget,
-            wakeMode,
+            postRun,
             payload,
             isolation,
           };

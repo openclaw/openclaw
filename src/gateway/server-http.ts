@@ -34,11 +34,11 @@ import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 type HookDispatchers = {
-  dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
+  dispatchWakeHook: (value: { text: string; mode: "trigger-heartbeat" | null }) => void;
   dispatchAgentHook: (value: {
     message: string;
     name: string;
-    wakeMode: "now" | "next-heartbeat";
+    postRun: "trigger-heartbeat" | null;
     sessionKey: string;
     deliver: boolean;
     channel: HookMessageChannel;
@@ -175,7 +175,7 @@ export function createHooksRequestHandler(
           const runId = dispatchAgentHook({
             message: mapped.action.message,
             name: mapped.action.name ?? "Hook",
-            wakeMode: mapped.action.wakeMode,
+            postRun: mapped.action.postRun,
             sessionKey: mapped.action.sessionKey ?? "",
             deliver: resolveHookDeliver(mapped.action.deliver),
             channel,

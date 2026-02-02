@@ -119,9 +119,11 @@ openclaw cron add \
   --at "20m" \
   --session main \
   --system-event "Reminder: standup meeting starts in 10 minutes." \
-  --wake now \
+  --post-run trigger-heartbeat \
   --delete-after-run
 ```
+
+> **Note:** The `--wake` flag is deprecated; use `--post-run` instead.
 
 See [Cron jobs](/automation/cron-jobs) for full CLI reference.
 
@@ -179,7 +181,7 @@ openclaw cron add --name "Morning brief" --cron "0 7 * * *" --session isolated -
 openclaw cron add --name "Weekly review" --cron "0 9 * * 1" --session isolated --message "..." --model opus
 
 # One-shot reminder
-openclaw cron add --name "Call back" --at "2h" --session main --system-event "Call back the client" --wake now
+openclaw cron add --name "Call back" --at "2h" --session main --system-event "Call back the client" --post-run trigger-heartbeat
 ```
 
 ## Lobster: Deterministic workflows with approvals
@@ -236,7 +238,7 @@ openclaw cron add \
   --every "4h" \
   --session main \
   --system-event "Time for a project health check" \
-  --wake now
+  --post-run trigger-heartbeat
 ```
 
 ### When to use isolated cron

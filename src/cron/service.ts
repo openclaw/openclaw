@@ -42,7 +42,7 @@ export class CronService {
     return await ops.run(this.state, id, mode);
   }
 
-  wake(opts: { mode: "now" | "next-heartbeat"; text: string }) {
+  wake(opts: { mode: "trigger-heartbeat" | null; text: string }) {
     return ops.wakeNow(this.state, opts);
   }
 }

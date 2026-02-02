@@ -144,7 +144,7 @@ export async function executeJob(
       state.deps.enqueueSystemEvent(`${statusPrefix}: ${body}`, {
         agentId: job.agentId,
       });
-      if (job.wakeMode === "now") {
+      if (job.postRun === "trigger-heartbeat") {
         state.deps.requestHeartbeatNow({ reason: `cron:${job.id}:post` });
       }
     }
@@ -164,7 +164,7 @@ export async function executeJob(
         return;
       }
       state.deps.enqueueSystemEvent(text, { agentId: job.agentId });
-      if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
+      if (job.postRun === "trigger-heartbeat" && state.deps.runHeartbeatOnce) {
         const reason = `cron:${job.id}`;
         const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
         const maxWaitMs = 2 * 60_000;
@@ -197,7 +197,7 @@ export async function executeJob(
           await finish("error", heartbeatResult.reason, text);
         }
       } else {
-        // wakeMode is "next-heartbeat" or runHeartbeatOnce not available
+        // postRun is null or runHeartbeatOnce not available
         state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
         await finish("ok", undefined, text);
       }
@@ -233,14 +233,14 @@ export async function executeJob(
 
 export function wake(
   state: CronServiceState,
-  opts: { mode: "now" | "next-heartbeat"; text: string },
+  opts: { mode: "trigger-heartbeat" | null; text: string },
 ) {
   const text = opts.text.trim();
   if (!text) {
     return { ok: false } as const;
   }
   state.deps.enqueueSystemEvent(text);
-  if (opts.mode === "now") {
+  if (opts.mode === "trigger-heartbeat") {
     state.deps.requestHeartbeatNow({ reason: "wake" });
   }
   return { ok: true } as const;

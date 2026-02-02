@@ -98,7 +98,12 @@ export const AgentWaitParamsSchema = Type.Object(
 
 export const WakeParamsSchema = Type.Object(
   {
-    mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
+    mode: Type.Union([
+      Type.Literal("trigger-heartbeat"),
+      Type.Null(),
+      Type.Literal("now"),
+      Type.Literal("next-heartbeat"),
+    ]),
     text: NonEmptyString,
   },
   { additionalProperties: false },

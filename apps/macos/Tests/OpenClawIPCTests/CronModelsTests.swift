@@ -51,7 +51,7 @@ struct CronModelsTests {
             updatedAtMs: 0,
             schedule: .at(atMs: 1_700_000_000_000),
             sessionTarget: .main,
-            wakeMode: .now,
+            postRun: .triggerHeartbeat,
             payload: .systemEvent(text: "ping"),
             isolation: nil,
             state: CronJobState())
@@ -90,7 +90,7 @@ struct CronModelsTests {
             updatedAtMs: 0,
             schedule: .at(atMs: 0),
             sessionTarget: .main,
-            wakeMode: .now,
+            postRun: .triggerHeartbeat,
             payload: .systemEvent(text: "hi"),
             isolation: nil,
             state: CronJobState())
@@ -113,7 +113,7 @@ struct CronModelsTests {
             updatedAtMs: 0,
             schedule: .at(atMs: 0),
             sessionTarget: .main,
-            wakeMode: .now,
+            postRun: .triggerHeartbeat,
             payload: .systemEvent(text: "hi"),
             isolation: nil,
             state: CronJobState(

@@ -126,7 +126,7 @@ export async function addCronJob(state: CronState) {
       enabled: state.cronForm.enabled,
       schedule,
       sessionTarget: state.cronForm.sessionTarget,
-      wakeMode: state.cronForm.wakeMode,
+      postRun: state.cronForm.postRun,
       payload,
       isolation:
         state.cronForm.postToMainPrefix.trim() && state.cronForm.sessionTarget === "isolated"

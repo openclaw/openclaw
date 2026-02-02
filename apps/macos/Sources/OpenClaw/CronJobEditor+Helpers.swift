@@ -17,7 +17,7 @@ extension CronJobEditor {
         self.enabled = job.enabled
         self.deleteAfterRun = job.deleteAfterRun ?? false
         self.sessionTarget = job.sessionTarget
-        self.wakeMode = job.wakeMode
+        self.postRun = job.postRun
 
         switch job.schedule {
         case let .at(atMs):
@@ -76,9 +76,11 @@ extension CronJobEditor {
             "enabled": self.enabled,
             "schedule": schedule,
             "sessionTarget": self.sessionTarget.rawValue,
-            "wakeMode": self.wakeMode.rawValue,
             "payload": payload,
         ]
+        if let postRun = self.postRun {
+            root["postRun"] = postRun.rawValue
+        }
         self.applyDeleteAfterRun(to: &root)
         if !description.isEmpty { root["description"] = description }
         if !agentId.isEmpty {

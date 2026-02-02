@@ -159,16 +159,18 @@ export function renderCron(props: CronProps) {
             </select>
           </label>
           <label class="field">
-            <span>Wake mode</span>
+            <span>Post-run</span>
             <select
-              .value=${props.form.wakeMode}
-              @change=${(e: Event) =>
+              .value=${props.form.postRun ?? ""}
+              @change=${(e: Event) => {
+                const val = (e.target as HTMLSelectElement).value;
                 props.onFormChange({
-                  wakeMode: (e.target as HTMLSelectElement).value as CronFormState["wakeMode"],
-                })}
+                  postRun: val === "trigger-heartbeat" ? "trigger-heartbeat" : null,
+                });
+              }}
             >
-              <option value="next-heartbeat">Next heartbeat</option>
-              <option value="now">Now</option>
+              <option value="">None</option>
+              <option value="trigger-heartbeat">Trigger heartbeat</option>
             </select>
           </label>
           <label class="field">
@@ -396,7 +398,7 @@ function renderJob(job: CronJob, props: CronProps) {
         <div class="chip-row" style="margin-top: 6px;">
           <span class="chip">${job.enabled ? "enabled" : "disabled"}</span>
           <span class="chip">${job.sessionTarget}</span>
-          <span class="chip">${job.wakeMode}</span>
+          <span class="chip">${job.postRun ?? "none"}</span>
         </div>
       </div>
       <div class="list-meta">

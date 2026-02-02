@@ -70,7 +70,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
+        postRun: null,
         payload: { kind: "systemEvent", text: "hello" },
       });
       expect(addRes.ok).toBe(true);
@@ -91,7 +91,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "at", atMs: routeAtMs },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
+        postRun: null,
         payload: { kind: "systemEvent", text: "cron route check" },
       });
       expect(routeRes.ok).toBe(true);
@@ -114,10 +114,10 @@ describe("gateway server cron", () => {
       });
       expect(wrappedRes.ok).toBe(true);
       const wrappedPayload = wrappedRes.payload as
-        | { schedule?: unknown; sessionTarget?: unknown; wakeMode?: unknown }
+        | { schedule?: unknown; sessionTarget?: unknown; postRun?: unknown }
         | undefined;
       expect(wrappedPayload?.sessionTarget).toBe("main");
-      expect(wrappedPayload?.wakeMode).toBe("next-heartbeat");
+      expect(wrappedPayload?.postRun).toBeNull();
       expect((wrappedPayload?.schedule as { kind?: unknown } | undefined)?.kind).toBe("at");
 
       const patchRes = await rpcReq(ws, "cron.add", {
@@ -125,7 +125,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
+        postRun: null,
         payload: { kind: "systemEvent", text: "hello" },
       });
       expect(patchRes.ok).toBe(true);
@@ -153,7 +153,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
+        postRun: null,
         payload: { kind: "agentTurn", message: "hello", model: "opus" },
       });
       expect(mergeRes.ok).toBe(true);
@@ -192,7 +192,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
+        postRun: null,
         payload: { kind: "systemEvent", text: "hello" },
       });
       expect(rejectRes.ok).toBe(true);
@@ -213,7 +213,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
+        postRun: null,
         payload: { kind: "systemEvent", text: "hello" },
       });
       expect(jobIdRes.ok).toBe(true);
@@ -235,7 +235,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
+        postRun: null,
         payload: { kind: "systemEvent", text: "hello" },
       });
       expect(disableRes.ok).toBe(true);
@@ -284,7 +284,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "at", atMs },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
+        postRun: null,
         payload: { kind: "systemEvent", text: "hello" },
       });
       expect(addRes.ok).toBe(true);
@@ -333,7 +333,7 @@ describe("gateway server cron", () => {
         enabled: true,
         schedule: { kind: "at", atMs: Date.now() - 10 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
+        postRun: null,
         payload: { kind: "systemEvent", text: "auto" },
       });
       expect(autoRes.ok).toBe(true);
