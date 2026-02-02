@@ -2,7 +2,9 @@
 summary: "Direct `openclaw agent` CLI runs (with optional delivery)"
 read_when:
   - Adding or modifying the agent CLI entrypoint
+title: "Agent Send"
 ---
+
 # `openclaw agent` (direct agent runs)
 
 `openclaw agent` runs a single agent turn without needing an inbound chat message.

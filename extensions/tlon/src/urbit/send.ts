@@ -14,7 +14,7 @@ type SendTextParams = {
 export async function sendDm({ api, fromShip, toShip, text }: SendTextParams) {
   const story = [{ inline: [text] }];
   const sentAt = Date.now();
-  const idUd = scot('ud', da.fromUnix(sentAt));
+  const idUd = scot("ud", da.fromUnix(sentAt));
   const id = `${fromShip}/${idUd}`;
 
   const delta = {
@@ -121,7 +121,11 @@ export async function sendGroupMessage({
 export function buildMediaText(text: string | undefined, mediaUrl: string | undefined): string {
   const cleanText = text?.trim() ?? "";
   const cleanUrl = mediaUrl?.trim() ?? "";
-  if (cleanText && cleanUrl) return `${cleanText}\n${cleanUrl}`;
-  if (cleanUrl) return cleanUrl;
+  if (cleanText && cleanUrl) {
+    return `${cleanText}\n${cleanUrl}`;
+  }
+  if (cleanUrl) {
+    return cleanUrl;
+  }
   return cleanText;
 }

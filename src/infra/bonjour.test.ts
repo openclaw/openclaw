@@ -1,7 +1,5 @@
 import os from "node:os";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import * as logging from "../logging.js";
 
 const mocks = vi.hoisted(() => ({
@@ -65,7 +63,9 @@ describe("gateway bonjour advertiser", () => {
 
   afterEach(() => {
     for (const key of Object.keys(process.env)) {
-      if (!(key in prevEnv)) delete process.env[key];
+      if (!(key in prevEnv)) {
+        delete process.env[key];
+      }
     }
     for (const [key, value] of Object.entries(prevEnv)) {
       process.env[key] = value;

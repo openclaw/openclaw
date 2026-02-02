@@ -1,18 +1,12 @@
 import { html } from "lit";
-
 import type { ConfigUiHints } from "../types";
 import type { ChannelsProps } from "./channels.types";
-import {
-  analyzeConfigSchema,
-  renderNode,
-  schemaType,
-  type JsonSchema,
-} from "./config-form";
+import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./config-form";
 
 type ChannelConfigFormProps = {
   channelId: string;
   configValue: Record<string, unknown> | null;
-  schema: unknown | null;
+  schema: unknown;
   uiHints: ConfigUiHints;
   disabled: boolean;
   onPatch: (path: Array<string | number>, value: unknown) => void;
@@ -24,7 +18,9 @@ function resolveSchemaNode(
 ): JsonSchema | null {
   let current = schema;
   for (const key of path) {
-    if (!current) return null;
+    if (!current) {
+      return null;
+    }
     const type = schemaType(current);
     if (type === "object") {
       const properties = current.properties ?? {};
@@ -34,13 +30,15 @@ function resolveSchemaNode(
       }
       const additional = current.additionalProperties;
       if (typeof key === "string" && additional && typeof additional === "object") {
-        current = additional as JsonSchema;
+        current = additional;
         continue;
       }
       return null;
     }
     if (type === "array") {
-      if (typeof key !== "number") return null;
+      if (typeof key !== "number") {
+        return null;
+      }
       const items = Array.isArray(current.items) ? current.items[0] : current.items;
       current = items ?? null;
       continue;
@@ -61,9 +59,7 @@ function resolveChannelValue(
     (fromChannels && typeof fromChannels === "object"
       ? (fromChannels as Record<string, unknown>)
       : null) ??
-    (fallback && typeof fallback === "object"
-      ? (fallback as Record<string, unknown>)
-      : null);
+    (fallback && typeof fallback === "object" ? (fallback as Record<string, unknown>) : null);
   return resolved ?? {};
 }
 
@@ -71,11 +67,15 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
   const analysis = analyzeConfigSchema(props.schema);
   const normalized = analysis.schema;
   if (!normalized) {
-    return html`<div class="callout danger">Schema unavailable. Use Raw.</div>`;
+    return html`
+      <div class="callout danger">Schema unavailable. Use Raw.</div>
+    `;
   }
   const node = resolveSchemaNode(normalized, ["channels", props.channelId]);
   if (!node) {
-    return html`<div class="callout danger">Channel config schema unavailable.</div>`;
+    return html`
+      <div class="callout danger">Channel config schema unavailable.</div>
+    `;
   }
   const configValue = props.configValue ?? {};
   const value = resolveChannelValue(configValue, props.channelId);
@@ -95,24 +95,25 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
   `;
 }
 
-export function renderChannelConfigSection(params: {
-  channelId: string;
-  props: ChannelsProps;
-}) {
+export function renderChannelConfigSection(params: { channelId: string; props: ChannelsProps }) {
   const { channelId, props } = params;
   const disabled = props.configSaving || props.configSchemaLoading;
   return html`
     <div style="margin-top: 16px;">
-      ${props.configSchemaLoading
-        ? html`<div class="muted">Loading config schema…</div>`
-        : renderChannelConfigForm({
-            channelId,
-            configValue: props.configForm,
-            schema: props.configSchema,
-            uiHints: props.configUiHints,
-            disabled,
-            onPatch: props.onConfigPatch,
-          })}
+      ${
+        props.configSchemaLoading
+          ? html`
+              <div class="muted">Loading config schema…</div>
+            `
+          : renderChannelConfigForm({
+              channelId,
+              configValue: props.configForm,
+              schema: props.configSchema,
+              uiHints: props.configUiHints,
+              disabled,
+              onPatch: props.onConfigPatch,
+            })
+      }
       <div class="row" style="margin-top: 12px;">
         <button
           class="btn primary"

@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
@@ -30,7 +29,9 @@ describe("gateway tool", () => {
         config: { commands: { restart: true } },
       }).find((candidate) => candidate.name === "gateway");
       expect(tool).toBeDefined();
-      if (!tool) throw new Error("missing gateway tool");
+      if (!tool) {
+        throw new Error("missing gateway tool");
+      }
 
       const result = await tool.execute("call1", {
         action: "restart",
@@ -78,7 +79,9 @@ describe("gateway tool", () => {
       agentSessionKey: "agent:main:whatsapp:dm:+15555550123",
     }).find((candidate) => candidate.name === "gateway");
     expect(tool).toBeDefined();
-    if (!tool) throw new Error("missing gateway tool");
+    if (!tool) {
+      throw new Error("missing gateway tool");
+    }
 
     const raw = '{\n  agents: { defaults: { workspace: "~/openclaw" } }\n}\n';
     await tool.execute("call2", {
@@ -104,7 +107,9 @@ describe("gateway tool", () => {
       agentSessionKey: "agent:main:whatsapp:dm:+15555550123",
     }).find((candidate) => candidate.name === "gateway");
     expect(tool).toBeDefined();
-    if (!tool) throw new Error("missing gateway tool");
+    if (!tool) {
+      throw new Error("missing gateway tool");
+    }
 
     const raw = '{\n  channels: { telegram: { groups: { "*": { requireMention: false } } } }\n}\n';
     await tool.execute("call4", {
@@ -130,7 +135,9 @@ describe("gateway tool", () => {
       agentSessionKey: "agent:main:whatsapp:dm:+15555550123",
     }).find((candidate) => candidate.name === "gateway");
     expect(tool).toBeDefined();
-    if (!tool) throw new Error("missing gateway tool");
+    if (!tool) {
+      throw new Error("missing gateway tool");
+    }
 
     await tool.execute("call3", {
       action: "update.run",

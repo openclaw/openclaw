@@ -328,6 +328,8 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.discord.maxLinesPerMessage": "Discord Max Lines Per Message",
   "channels.discord.intents.presence": "Discord Presence Intent",
   "channels.discord.intents.guildMembers": "Discord Guild Members Intent",
+  "channels.discord.pluralkit.enabled": "Discord PluralKit Enabled",
+  "channels.discord.pluralkit.token": "Discord PluralKit Token",
   "channels.slack.dm.policy": "Slack DM Policy",
   "channels.slack.allowBots": "Slack Allow Bot Messages",
   "channels.discord.token": "Discord Bot Token",
@@ -674,6 +676,10 @@ const FIELD_HELP: Record<string, string> = {
     "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
   "channels.discord.intents.guildMembers":
     "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false.",
+  "channels.discord.pluralkit.enabled":
+    "Resolve PluralKit proxied messages and treat system members as distinct senders.",
+  "channels.discord.pluralkit.token":
+    "Optional PluralKit token for resolving private systems or members.",
   "channels.slack.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires channels.slack.dm.allowFrom=["*"].',
 };
@@ -701,19 +707,27 @@ type JsonSchemaObject = JsonSchemaNode & {
 };
 
 function cloneSchema<T>(value: T): T {
-  if (typeof structuredClone === "function") return structuredClone(value);
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function asSchemaObject(value: unknown): JsonSchemaObject | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
   return value as JsonSchemaObject;
 }
 
 function isObjectSchema(schema: JsonSchemaObject): boolean {
   const type = schema.type;
-  if (type === "object") return true;
-  if (Array.isArray(type) && type.includes("object")) return true;
+  if (type === "object") {
+    return true;
+  }
+  if (Array.isArray(type) && type.includes("object")) {
+    return true;
+  }
   return Boolean(schema.properties || schema.additionalProperties);
 }
 
@@ -731,7 +745,9 @@ function mergeObjectSchema(base: JsonSchemaObject, extension: JsonSchemaObject):
     merged.required = Array.from(mergedRequired);
   }
   const additional = extension.additionalProperties ?? base.additionalProperties;
-  if (additional !== undefined) merged.additionalProperties = additional;
+  if (additional !== undefined) {
+    merged.additionalProperties = additional;
+  }
   return merged;
 }
 
@@ -773,7 +789,9 @@ function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): Co
   const next: ConfigUiHints = { ...hints };
   for (const plugin of plugins) {
     const id = plugin.id.trim();
-    if (!id) continue;
+    if (!id) {
+      continue;
+    }
     const name = (plugin.name ?? id).trim() || id;
     const basePath = `plugins.entries.${id}`;
 
@@ -797,7 +815,9 @@ function applyPluginHints(hints: ConfigUiHints, plugins: PluginUiMetadata[]): Co
     const uiHints = plugin.configUiHints ?? {};
     for (const [relPathRaw, hint] of Object.entries(uiHints)) {
       const relPath = relPathRaw.trim().replace(/^\./, "");
-      if (!relPath) continue;
+      if (!relPath) {
+        continue;
+      }
       const key = `${basePath}.config.${relPath}`;
       next[key] = {
         ...next[key],
@@ -812,7 +832,9 @@ function applyChannelHints(hints: ConfigUiHints, channels: ChannelUiMetadata[]):
   const next: ConfigUiHints = { ...hints };
   for (const channel of channels) {
     const id = channel.id.trim();
-    if (!id) continue;
+    if (!id) {
+      continue;
+    }
     const basePath = `channels.${id}`;
     const current = next[basePath] ?? {};
     const label = channel.label?.trim();
@@ -826,7 +848,9 @@ function applyChannelHints(hints: ConfigUiHints, channels: ChannelUiMetadata[]):
     const uiHints = channel.configUiHints ?? {};
     for (const [relPathRaw, hint] of Object.entries(uiHints)) {
       const relPath = relPathRaw.trim().replace(/^\./, "");
-      if (!relPath) continue;
+      if (!relPath) {
+        continue;
+      }
       const key = `${basePath}.${relPath}`;
       next[key] = {
         ...next[key],
@@ -842,13 +866,17 @@ function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
   const ordered: string[] = [];
   for (const id of CHANNEL_IDS) {
     const normalized = id.trim().toLowerCase();
-    if (!normalized || seen.has(normalized)) continue;
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
     seen.add(normalized);
     ordered.push(normalized);
   }
   for (const channel of channels) {
     const normalized = channel.id.trim().toLowerCase();
-    if (!normalized || seen.has(normalized)) continue;
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
     seen.add(normalized);
     ordered.push(normalized);
   }
@@ -880,14 +908,18 @@ function applyPluginSchemas(schema: ConfigSchema, plugins: PluginUiMetadata[]): 
   const root = asSchemaObject(next);
   const pluginsNode = asSchemaObject(root?.properties?.plugins);
   const entriesNode = asSchemaObject(pluginsNode?.properties?.entries);
-  if (!entriesNode) return next;
+  if (!entriesNode) {
+    return next;
+  }
 
   const entryBase = asSchemaObject(entriesNode.additionalProperties);
   const entryProperties = entriesNode.properties ?? {};
   entriesNode.properties = entryProperties;
 
   for (const plugin of plugins) {
-    if (!plugin.configSchema) continue;
+    if (!plugin.configSchema) {
+      continue;
+    }
     const entrySchema = entryBase
       ? cloneSchema(entryBase)
       : ({ type: "object" } as JsonSchemaObject);
@@ -916,12 +948,16 @@ function applyChannelSchemas(schema: ConfigSchema, channels: ChannelUiMetadata[]
   const next = cloneSchema(schema);
   const root = asSchemaObject(next);
   const channelsNode = asSchemaObject(root?.properties?.channels);
-  if (!channelsNode) return next;
+  if (!channelsNode) {
+    return next;
+  }
   const channelProps = channelsNode.properties ?? {};
   channelsNode.properties = channelProps;
 
   for (const channel of channels) {
-    if (!channel.configSchema) continue;
+    if (!channel.configSchema) {
+      continue;
+    }
     const existing = asSchemaObject(channelProps[channel.id]);
     const incoming = asSchemaObject(channel.configSchema);
     if (existing && incoming && isObjectSchema(existing) && isObjectSchema(incoming)) {
@@ -939,7 +975,9 @@ let cachedBase: ConfigSchemaResponse | null = null;
 function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
   const next = cloneSchema(schema);
   const root = asSchemaObject(next);
-  if (!root || !root.properties) return next;
+  if (!root || !root.properties) {
+    return next;
+  }
   const channelsNode = asSchemaObject(root.properties.channels);
   if (channelsNode) {
     channelsNode.properties = {};
@@ -950,7 +988,9 @@ function stripChannelSchema(schema: ConfigSchema): ConfigSchema {
 }
 
 function buildBaseConfigSchema(): ConfigSchemaResponse {
-  if (cachedBase) return cachedBase;
+  if (cachedBase) {
+    return cachedBase;
+  }
   const schema = OpenClawSchema.toJSONSchema({
     target: "draft-07",
     unrepresentable: "any",
@@ -974,7 +1014,9 @@ export function buildConfigSchema(params?: {
   const base = buildBaseConfigSchema();
   const plugins = params?.plugins ?? [];
   const channels = params?.channels ?? [];
-  if (plugins.length === 0 && channels.length === 0) return base;
+  if (plugins.length === 0 && channels.length === 0) {
+    return base;
+  }
   const mergedHints = applySensitiveHints(
     applyHeartbeatTargetHints(
       applyChannelHints(applyPluginHints(base.uiHints, plugins), channels),

@@ -1,7 +1,9 @@
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
-import { getReplyFromConfig } from "../../auto-reply/reply.js";
+import type { WebChannelStatus, WebInboundMsg, WebMonitorTuning } from "./types.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import { resolveInboundDebounceMs } from "../../auto-reply/inbound-debounce.js";
+import { getReplyFromConfig } from "../../auto-reply/reply.js";
+import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { waitForever } from "../../cli/wait.js";
 import { loadConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
@@ -11,7 +13,6 @@ import { registerUnhandledRejectionHandler } from "../../infra/unhandled-rejecti
 import { getChildLogger } from "../../logging.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { formatCliCommand } from "../../cli/command-format.js";
 import { resolveWhatsAppAccount } from "../accounts.js";
 import { setActiveWebListener } from "../active-listener.js";
 import { monitorWebInbox } from "../inbound.js";
@@ -28,7 +29,6 @@ import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createEchoTracker } from "./monitor/echo.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
-import type { WebChannelStatus, WebInboundMsg, WebMonitorTuning } from "./types.js";
 import { isLikelyWhatsAppCryptoError } from "./util.js";
 
 export async function monitorWebChannel(
@@ -141,7 +141,9 @@ export async function monitorWebChannel(
   let reconnectAttempts = 0;
 
   while (true) {
-    if (stopRequested()) break;
+    if (stopRequested()) {
+      break;
+    }
 
     const connectionId = newConnectionId();
     const startedAt = Date.now();
@@ -175,9 +177,15 @@ export async function monitorWebChannel(
 
     const inboundDebounceMs = resolveInboundDebounceMs({ cfg, channel: "whatsapp" });
     const shouldDebounce = (msg: WebInboundMsg) => {
-      if (msg.mediaPath || msg.mediaType) return false;
-      if (msg.location) return false;
-      if (msg.replyToId || msg.replyToBody) return false;
+      if (msg.mediaPath || msg.mediaType) {
+        return false;
+      }
+      if (msg.location) {
+        return false;
+      }
+      if (msg.replyToId || msg.replyToBody) {
+        return false;
+      }
       return !hasControlCommand(msg.body, cfg);
     };
 
@@ -219,7 +227,9 @@ export async function monitorWebChannel(
 
     setActiveWebListener(account.accountId, listener);
     unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
-      if (!isLikelyWhatsAppCryptoError(reason)) return false;
+      if (!isLikelyWhatsAppCryptoError(reason)) {
+        return false;
+      }
       const errorStr = formatError(reason);
       reconnectLogger.warn(
         { connectionId, error: errorStr },
@@ -239,8 +249,12 @@ export async function monitorWebChannel(
         unregisterUnhandled();
         unregisterUnhandled = null;
       }
-      if (heartbeat) clearInterval(heartbeat);
-      if (watchdogTimer) clearInterval(watchdogTimer);
+      if (heartbeat) {
+        clearInterval(heartbeat);
+      }
+      if (watchdogTimer) {
+        clearInterval(watchdogTimer);
+      }
       if (backgroundTasks.size > 0) {
         await Promise.allSettled(backgroundTasks);
         backgroundTasks.clear();
@@ -279,9 +293,13 @@ export async function monitorWebChannel(
       }, heartbeatSeconds * 1000);
 
       watchdogTimer = setInterval(() => {
-        if (!lastMessageAt) return;
+        if (!lastMessageAt) {
+          return;
+        }
         const timeSinceLastMessage = Date.now() - lastMessageAt;
-        if (timeSinceLastMessage <= MESSAGE_TIMEOUT_MS) return;
+        if (timeSinceLastMessage <= MESSAGE_TIMEOUT_MS) {
+          return;
+        }
         const minutesSinceLastMessage = Math.floor(timeSinceLastMessage / 60000);
         heartbeatLogger.warn(
           {

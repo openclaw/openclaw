@@ -22,7 +22,9 @@ export function getDefaultCopilotModelIds(): string[] {
 
 export function buildCopilotModelDefinition(modelId: string): ModelDefinitionConfig {
   const id = modelId.trim();
-  if (!id) throw new Error("Model id required");
+  if (!id) {
+    throw new Error("Model id required");
+  }
   return {
     id,
     name: id,

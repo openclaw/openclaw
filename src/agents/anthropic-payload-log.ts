@@ -1,14 +1,12 @@
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import type { Api, Model } from "@mariozechner/pi-ai";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
-
 import { resolveStateDir } from "../config/paths.js";
-import { parseBooleanValue } from "../utils/boolean.js";
-import { resolveUserPath } from "../utils.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveUserPath } from "../utils.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 
 type PayloadLogStage = "request" | "usage";
 
@@ -52,7 +50,9 @@ function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
 
 function getWriter(filePath: string): PayloadLogWriter {
   const existing = writers.get(filePath);
-  if (existing) return existing;
+  if (existing) {
+    return existing;
+  }
 
   const dir = path.dirname(filePath);
   const ready = fs.mkdir(dir, { recursive: true }).catch(() => undefined);
@@ -75,8 +75,12 @@ function getWriter(filePath: string): PayloadLogWriter {
 function safeJsonStringify(value: unknown): string | null {
   try {
     return JSON.stringify(value, (_key, val) => {
-      if (typeof val === "bigint") return val.toString();
-      if (typeof val === "function") return "[Function]";
+      if (typeof val === "bigint") {
+        return val.toString();
+      }
+      if (typeof val === "function") {
+        return "[Function]";
+      }
       if (val instanceof Error) {
         return { name: val.name, message: val.message, stack: val.stack };
       }
@@ -91,8 +95,12 @@ function safeJsonStringify(value: unknown): string | null {
 }
 
 function formatError(error: unknown): string | undefined {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
   if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
     return String(error);
   }
@@ -104,7 +112,9 @@ function formatError(error: unknown): string | undefined {
 
 function digest(value: unknown): string | undefined {
   const serialized = safeJsonStringify(value);
-  if (!serialized) return undefined;
+  if (!serialized) {
+    return undefined;
+  }
   return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
@@ -140,7 +150,9 @@ export function createAnthropicPayloadLogger(params: {
 }): AnthropicPayloadLogger | null {
   const env = params.env ?? process.env;
   const cfg = resolvePayloadLogConfig(env);
-  if (!cfg.enabled) return null;
+  if (!cfg.enabled) {
+    return null;
+  }
 
   const writer = getWriter(cfg.filePath);
   const base: Omit<PayloadLogEvent, "ts" | "stage"> = {
@@ -155,13 +167,15 @@ export function createAnthropicPayloadLogger(params: {
 
   const record = (event: PayloadLogEvent) => {
     const line = safeJsonStringify(event);
-    if (!line) return;
+    if (!line) {
+      return;
+    }
     writer.write(`${line}\n`);
   };
 
   const wrapStreamFn: AnthropicPayloadLogger["wrapStreamFn"] = (streamFn) => {
     const wrapped: StreamFn = (model, context, options) => {
-      if (!isAnthropicModel(model as Model<Api>)) {
+      if (!isAnthropicModel(model)) {
         return streamFn(model, context, options);
       }
       const nextOnPayload = (payload: unknown) => {

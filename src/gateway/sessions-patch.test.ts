@@ -13,7 +13,9 @@ describe("gateway sessions patch", () => {
       patch: { elevatedLevel: "off" },
     });
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok) {
+      return;
+    }
     expect(res.entry.elevatedLevel).toBe("off");
   });
 
@@ -26,7 +28,9 @@ describe("gateway sessions patch", () => {
       patch: { elevatedLevel: "on" },
     });
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok) {
+      return;
+    }
     expect(res.entry.elevatedLevel).toBe("on");
   });
 
@@ -41,7 +45,9 @@ describe("gateway sessions patch", () => {
       patch: { elevatedLevel: null },
     });
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok) {
+      return;
+    }
     expect(res.entry.elevatedLevel).toBeUndefined();
   });
 
@@ -54,7 +60,9 @@ describe("gateway sessions patch", () => {
       patch: { elevatedLevel: "maybe" },
     });
     expect(res.ok).toBe(false);
-    if (res.ok) return;
+    if (res.ok) {
+      return;
+    }
     expect(res.error.message).toContain("invalid elevatedLevel");
   });
 
@@ -78,7 +86,9 @@ describe("gateway sessions patch", () => {
       loadGatewayModelCatalog: async () => [{ provider: "openai", id: "gpt-5.2" }],
     });
     expect(res.ok).toBe(true);
-    if (!res.ok) return;
+    if (!res.ok) {
+      return;
+    }
     expect(res.entry.providerOverride).toBe("openai");
     expect(res.entry.modelOverride).toBe("gpt-5.2");
     expect(res.entry.authProfileOverride).toBeUndefined();

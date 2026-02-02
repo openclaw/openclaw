@@ -74,7 +74,9 @@ describe("openclaw-tools: subagents", () => {
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) throw new Error("missing sessions_spawn tool");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
 
     const result = await tool.execute("call10", {
       task: "do thing",
@@ -111,7 +113,9 @@ describe("openclaw-tools: subagents", () => {
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) throw new Error("missing sessions_spawn tool");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
 
     const result = await tool.execute("call9", {
       task: "do thing",
@@ -175,7 +179,9 @@ describe("openclaw-tools: subagents", () => {
       agentSessionKey: "discord:group:req",
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) throw new Error("missing sessions_spawn tool");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
 
     const result = await tool.execute("call1", {
       task: "do thing",
@@ -187,7 +193,9 @@ describe("openclaw-tools: subagents", () => {
       runId: "run-1",
     });
 
-    if (!childRunId) throw new Error("missing child runId");
+    if (!childRunId) {
+      throw new Error("missing child runId");
+    }
     emitAgentEvent({
       runId: childRunId,
       stream: "lifecycle",
@@ -277,7 +285,9 @@ describe("openclaw-tools: subagents", () => {
       agentChannel: "whatsapp",
       agentAccountId: "kev",
     }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) throw new Error("missing sessions_spawn tool");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
 
     const result = await tool.execute("call2", {
       task: "do thing",
@@ -289,7 +299,9 @@ describe("openclaw-tools: subagents", () => {
       runId: "run-1",
     });
 
-    if (!childRunId) throw new Error("missing child runId");
+    if (!childRunId) {
+      throw new Error("missing child runId");
+    }
     emitAgentEvent({
       runId: childRunId,
       stream: "lifecycle",

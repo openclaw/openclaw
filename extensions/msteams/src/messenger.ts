@@ -134,7 +134,9 @@ function pushTextMessages(
     chunkMode: ChunkMode;
   },
 ) {
-  if (!text) return;
+  if (!text) {
+    return;
+  }
   if (opts.chunkText) {
     for (const chunk of getMSTeamsRuntime().channel.text.chunkMarkdownTextWithMode(
       text,
@@ -142,26 +144,33 @@ function pushTextMessages(
       opts.chunkMode,
     )) {
       const trimmed = chunk.trim();
-      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) continue;
+      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+        continue;
+      }
       out.push({ text: trimmed });
     }
     return;
   }
 
   const trimmed = text.trim();
-  if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) return;
+  if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+    return;
+  }
   out.push({ text: trimmed });
 }
 
-
 function clampMs(value: number, maxMs: number): number {
-  if (!Number.isFinite(value) || value < 0) return 0;
+  if (!Number.isFinite(value) || value < 0) {
+    return 0;
+  }
   return Math.min(value, maxMs);
 }
 
 async function sleep(ms: number): Promise<void> {
   const delay = Math.max(0, ms);
-  if (delay === 0) return;
+  if (delay === 0) {
+    return;
+  }
   await new Promise<void>((resolve) => {
     setTimeout(resolve, delay);
   });
@@ -220,7 +229,9 @@ export function renderReplyPayloadsToMessages(
       tableMode,
     );
 
-    if (!text && mediaList.length === 0) continue;
+    if (!text && mediaList.length === 0) {
+      continue;
+    }
 
     if (mediaList.length === 0) {
       pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
@@ -234,7 +245,9 @@ export function renderReplyPayloadsToMessages(
         out.push({ text: text || undefined, mediaUrl: firstMedia });
         // Additional media URLs as separate messages
         for (let i = 1; i < mediaList.length; i++) {
-          if (mediaList[i]) out.push({ mediaUrl: mediaList[i] });
+          if (mediaList[i]) {
+            out.push({ mediaUrl: mediaList[i] });
+          }
         }
       } else {
         pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
@@ -245,7 +258,9 @@ export function renderReplyPayloadsToMessages(
     // mediaMode === "split"
     pushTextMessages(out, text, { chunkText, chunkLimit, chunkMode });
     for (const mediaUrl of mediaList) {
-      if (!mediaUrl) continue;
+      if (!mediaUrl) {
+        continue;
+      }
       out.push({ mediaUrl });
     }
   }
@@ -283,12 +298,14 @@ async function buildActivity(
       const isPersonal = conversationType === "personal";
       const isImage = contentType?.startsWith("image/") ?? false;
 
-      if (requiresFileConsent({
-        conversationType,
-        contentType,
-        bufferSize: media.buffer.length,
-        thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
-      })) {
+      if (
+        requiresFileConsent({
+          conversationType,
+          contentType,
+          bufferSize: media.buffer.length,
+          thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
+        })
+      ) {
         // Large file or non-image in personal chat: use FileConsentCard flow
         const conversationId = conversationRef.conversation?.id ?? "unknown";
         const { activity: consentActivity } = prepareFileConsentActivity({
@@ -382,7 +399,9 @@ export async function sendMSTeamsMessages(params: {
   const messages = params.messages.filter(
     (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl,
   );
-  if (messages.length === 0) return [];
+  if (messages.length === 0) {
+    return [];
+  }
 
   const retryOptions = resolveRetryOptions(params.retry);
 
@@ -390,7 +409,9 @@ export async function sendMSTeamsMessages(params: {
     sendOnce: () => Promise<unknown>,
     meta: { messageIndex: number; messageCount: number },
   ): Promise<unknown> => {
-    if (!retryOptions.enabled) return await sendOnce();
+    if (!retryOptions.enabled) {
+      return await sendOnce();
+    }
 
     let attempt = 1;
     while (true) {
@@ -399,7 +420,9 @@ export async function sendMSTeamsMessages(params: {
       } catch (err) {
         const classification = classifyMSTeamsSendError(err);
         const canRetry = attempt < retryOptions.maxAttempts && shouldRetry(classification);
-        if (!canRetry) throw err;
+        if (!canRetry) {
+          throw err;
+        }
 
         const delayMs = computeRetryDelayMs(attempt, classification, retryOptions);
         const nextAttempt = attempt + 1;
@@ -428,7 +451,13 @@ export async function sendMSTeamsMessages(params: {
       const response = await sendWithRetry(
         async () =>
           await ctx.sendActivity(
-            await buildActivity(message, params.conversationRef, params.tokenProvider, params.sharePointSiteId, params.mediaMaxBytes),
+            await buildActivity(
+              message,
+              params.conversationRef,
+              params.tokenProvider,
+              params.sharePointSiteId,
+              params.mediaMaxBytes,
+            ),
           ),
         { messageIndex: idx, messageCount: messages.length },
       );
@@ -449,7 +478,13 @@ export async function sendMSTeamsMessages(params: {
       const response = await sendWithRetry(
         async () =>
           await ctx.sendActivity(
-            await buildActivity(message, params.conversationRef, params.tokenProvider, params.sharePointSiteId, params.mediaMaxBytes),
+            await buildActivity(
+              message,
+              params.conversationRef,
+              params.tokenProvider,
+              params.sharePointSiteId,
+              params.mediaMaxBytes,
+            ),
           ),
         { messageIndex: idx, messageCount: messages.length },
       );

@@ -1,23 +1,24 @@
 ---
 summary: "How the installer scripts work (install.sh + install-cli.sh), flags, and automation"
 read_when:
-  - You want to understand `openclaw.bot/install.sh`
+  - You want to understand `openclaw.ai/install.sh`
   - You want to automate installs (CI / headless)
   - You want to install from a GitHub checkout
+title: "Installer Internals"
 ---
 
 # Installer internals
 
 OpenClaw ships two installer scripts (served from `openclaw.ai`):
 
-- `https://openclaw.bot/install.sh` — “recommended” installer (global npm install by default; can also install from a GitHub checkout)
-- `https://openclaw.bot/install-cli.sh` — non-root-friendly CLI installer (installs into a prefix with its own Node)
- - `https://openclaw.ai/install.ps1` — Windows PowerShell installer (npm by default; optional git install)
+- `https://openclaw.ai/install.sh` — “recommended” installer (global npm install by default; can also install from a GitHub checkout)
+- `https://openclaw.ai/install-cli.sh` — non-root-friendly CLI installer (installs into a prefix with its own Node)
+- `https://openclaw.ai/install.ps1` — Windows PowerShell installer (npm by default; optional git install)
 
 To see the current flags/behavior, run:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --help
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --help
 ```
 
 Windows (PowerShell) help:
@@ -37,15 +38,15 @@ What it does (high level):
 - Choose install method:
   - `npm` (default): `npm install -g openclaw@latest`
   - `git`: clone/build a source checkout and install a wrapper script
-- On Linux: avoid global npm permission errors by switching npm’s prefix to `~/.npm-global` when needed.
+- On Linux: avoid global npm permission errors by switching npm's prefix to `~/.npm-global` when needed.
 - If upgrading an existing install: runs `openclaw doctor --non-interactive` (best effort).
 - For git installs: runs `openclaw doctor --non-interactive` after install/update (best effort).
 - Mitigates `sharp` native install gotchas by defaulting `SHARP_IGNORE_GLOBAL_LIBVIPS=1` (avoids building against system libvips).
 
-If you *want* `sharp` to link against a globally-installed libvips (or you’re debugging), set:
+If you _want_ `sharp` to link against a globally-installed libvips (or you’re debugging), set:
 
 ```bash
-SHARP_IGNORE_GLOBAL_LIBVIPS=0 curl -fsSL https://openclaw.bot/install.sh | bash
+SHARP_IGNORE_GLOBAL_LIBVIPS=0 curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 ### Discoverability / “git install” prompt
@@ -61,11 +62,11 @@ In non-interactive contexts (no TTY / `--no-prompt`), you must pass `--install-m
 
 Git is required for the `--install-method git` path (clone / pull).
 
-For `npm` installs, Git is *usually* not required, but some environments still end up needing it (e.g. when a package or dependency is fetched via a git URL). The installer currently ensures Git is present to avoid `spawn git ENOENT` surprises on fresh distros.
+For `npm` installs, Git is _usually_ not required, but some environments still end up needing it (e.g. when a package or dependency is fetched via a git URL). The installer currently ensures Git is present to avoid `spawn git ENOENT` surprises on fresh distros.
 
 ### Why npm hits `EACCES` on fresh Linux
 
-On some Linux setups (especially after installing Node via the system package manager or NodeSource), npm’s global prefix points at a root-owned location. Then `npm install -g ...` fails with `EACCES` / `mkdir` permission errors.
+On some Linux setups (especially after installing Node via the system package manager or NodeSource), npm's global prefix points at a root-owned location. Then `npm install -g ...` fails with `EACCES` / `mkdir` permission errors.
 
 `install.sh` mitigates this by switching the prefix to:
 
@@ -78,7 +79,7 @@ This script installs `openclaw` into a prefix (default: `~/.openclaw`) and also 
 Help:
 
 ```bash
-curl -fsSL https://openclaw.bot/install-cli.sh | bash -s -- --help
+curl -fsSL https://openclaw.ai/install-cli.sh | bash -s -- --help
 ```
 
 ## install.ps1 (Windows PowerShell)

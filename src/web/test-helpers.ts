@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-
 import type { MockBaileysSocket } from "../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../test/mocks/baileys.js";
 
@@ -37,7 +36,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
     ...actual,
     loadConfig: () => {
       const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
-      if (typeof getter === "function") return getter();
+      if (typeof getter === "function") {
+        return getter();
+      }
       return DEFAULT_CONFIG;
     },
   };
@@ -84,7 +85,11 @@ export function resetBaileysMocks() {
 
 export function getLastSocket(): MockBaileysSocket {
   const getter = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")];
-  if (typeof getter === "function") return (getter as () => MockBaileysSocket)();
-  if (!getter) throw new Error("Baileys mock not initialized");
+  if (typeof getter === "function") {
+    return (getter as () => MockBaileysSocket)();
+  }
+  if (!getter) {
+    throw new Error("Baileys mock not initialized");
+  }
   throw new Error("Invalid Baileys socket getter");
 }

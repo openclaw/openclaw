@@ -1,32 +1,31 @@
+import { createJiti } from "jiti";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
-
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveUserPath } from "../utils.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import {
-  normalizePluginsConfig,
-  resolveEnableState,
-  resolveMemorySlotDecision,
-  type NormalizedPluginsConfig,
-} from "./config-state.js";
-import { initializeGlobalHookRunner } from "./hook-runner-global.js";
-import { clearPluginCommands } from "./commands.js";
-import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import { createPluginRuntime } from "./runtime/index.js";
-import { setActivePluginRegistry } from "./runtime.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
 import type {
   OpenClawPluginDefinition,
   OpenClawPluginModule,
   PluginDiagnostic,
   PluginLogger,
 } from "./types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveUserPath } from "../utils.js";
+import { clearPluginCommands } from "./commands.js";
+import {
+  normalizePluginsConfig,
+  resolveEnableState,
+  resolveMemorySlotDecision,
+  type NormalizedPluginsConfig,
+} from "./config-state.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
+import { initializeGlobalHookRunner } from "./hook-runner-global.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
+import { setActivePluginRegistry } from "./runtime.js";
+import { createPluginRuntime } from "./runtime/index.js";
+import { validateJsonSchemaValue } from "./schema-validator.js";
 
 export type PluginLoadResult = PluginRegistry;
 
@@ -56,10 +55,14 @@ const resolvePluginSdkAlias = (): string | null => {
         ? [distCandidate, srcCandidate]
         : [srcCandidate, distCandidate];
       for (const candidate of orderedCandidates) {
-        if (fs.existsSync(candidate)) return candidate;
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
       }
       const parent = path.dirname(cursor);
-      if (parent === cursor) break;
+      if (parent === cursor) {
+        break;
+      }
       cursor = parent;
     }
   } catch {
@@ -405,7 +408,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     try {
       const result = register(api);
-      if (result && typeof (result as Promise<void>).then === "function") {
+      if (result && typeof result.then === "function") {
         registry.diagnostics.push({
           level: "warn",
           pluginId: record.id,

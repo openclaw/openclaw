@@ -3,22 +3,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
 import { findExtraGatewayServices, renderGatewayServiceCleanupHints } from "../daemon/inspect.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
-import { resolveGatewayService } from "../daemon/service.js";
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
-import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -26,16 +25,24 @@ function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDa
   const first = programArguments?.[0];
   if (first) {
     const base = path.basename(first).toLowerCase();
-    if (base === "bun" || base === "bun.exe") return "bun";
-    if (base === "node" || base === "node.exe") return "node";
+    if (base === "bun" || base === "bun.exe") {
+      return "bun";
+    }
+    if (base === "node" || base === "node.exe") {
+      return "node";
+    }
   }
   return DEFAULT_GATEWAY_DAEMON_RUNTIME;
 }
 
 function findGatewayEntrypoint(programArguments?: string[]): string | null {
-  if (!programArguments || programArguments.length === 0) return null;
+  if (!programArguments || programArguments.length === 0) {
+    return null;
+  }
   const gatewayIndex = programArguments.indexOf("gateway");
-  if (gatewayIndex <= 0) return null;
+  if (gatewayIndex <= 0) {
+    return null;
+  }
   return programArguments[gatewayIndex - 1] ?? null;
 }
 
@@ -44,7 +51,9 @@ function normalizeExecutablePath(value: string): string {
 }
 
 function extractDetailPath(detail: string, prefix: string): string | null {
-  if (!detail.startsWith(prefix)) return null;
+  if (!detail.startsWith(prefix)) {
+    return null;
+  }
   const value = detail.slice(prefix.length).trim();
   return value.length > 0 ? value : null;
 }
@@ -102,7 +111,9 @@ export async function maybeRepairGatewayServiceConfig(
   } catch {
     command = null;
   }
-  if (!command) return;
+  if (!command) {
+    return;
+  }
 
   const audit = await auditGatewayServiceConfig({
     env: process.env,
@@ -115,7 +126,9 @@ export async function maybeRepairGatewayServiceConfig(
   const systemNodePath = systemNodeInfo?.supported ? systemNodeInfo.path : null;
   if (needsNodeRuntime && !systemNodePath) {
     const warning = renderSystemNodeWarning(systemNodeInfo);
-    if (warning) note(warning, "Gateway runtime");
+    if (warning) {
+      note(warning, "Gateway runtime");
+    }
     note(
       "System Node 22+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
       "Gateway runtime",
@@ -148,7 +161,9 @@ export async function maybeRepairGatewayServiceConfig(
     });
   }
 
-  if (audit.issues.length === 0) return;
+  if (audit.issues.length === 0) {
+    return;
+  }
 
   note(
     audit.issues
@@ -178,7 +193,9 @@ export async function maybeRepairGatewayServiceConfig(
         message: "Update gateway service config to the recommended defaults now?",
         initialValue: true,
       });
-  if (!repair) return;
+  if (!repair) {
+    return;
+  }
   try {
     await service.install({
       env: process.env,
@@ -200,7 +217,9 @@ export async function maybeScanExtraGatewayServices(
   const extraServices = await findExtraGatewayServices(process.env, {
     deep: options.deep,
   });
-  if (extraServices.length === 0) return;
+  if (extraServices.length === 0) {
+    return;
+  }
 
   note(
     extraServices.map((svc) => `- ${svc.label} (${svc.scope}, ${svc.detail})`).join("\n"),

@@ -1,11 +1,10 @@
 import type { Command } from "commander";
-
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginLogger } from "./types.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadOpenClawPlugins } from "./loader.js";
-import type { PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -45,8 +44,8 @@ export function registerPluginCliCommands(program: Command, cfg?: OpenClawConfig
         workspaceDir,
         logger,
       });
-      if (result && typeof (result as Promise<void>).then === "function") {
-        void (result as Promise<void>).catch((err) => {
+      if (result && typeof result.then === "function") {
+        void result.catch((err) => {
           log.warn(`plugin CLI register failed (${entry.pluginId}): ${String(err)}`);
         });
       }

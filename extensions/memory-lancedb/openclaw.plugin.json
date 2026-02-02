@@ -40,15 +40,10 @@
           },
           "model": {
             "type": "string",
-            "enum": [
-              "text-embedding-3-small",
-              "text-embedding-3-large"
-            ]
+            "enum": ["text-embedding-3-small", "text-embedding-3-large"]
           }
         },
-        "required": [
-          "apiKey"
-        ]
+        "required": ["apiKey"]
       },
       "dbPath": {
         "type": "string"
@@ -60,8 +55,6 @@
         "type": "boolean"
       }
     },
-    "required": [
-      "embedding"
-    ]
+    "required": ["embedding"]
   }
 }
