@@ -1,8 +1,10 @@
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
+import type { ProviderUsageSnapshot } from "../../infra/provider-usage.types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { loadConfig } from "../../config/config.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import { loadCostUsageSummary } from "../../infra/session-cost-usage.js";
+import { getTokenUsageSummaries } from "../../infra/token-usage-tracker.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 
@@ -77,7 +79,8 @@ async function loadCostUsageSummaryCached(params: {
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond }) => {
     const summary = await loadProviderUsageSummary();
-    respond(true, summary, undefined);
+    const tokenUsage = getTokenUsageSummaries();
+    respond(true, { ...summary, tokenUsage }, undefined);
   },
   "usage.cost": async ({ respond, params }) => {
     const config = loadConfig();

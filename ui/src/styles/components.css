@@ -1634,6 +1634,32 @@
   flex-shrink: 0;
 }
 
+.usage-tokens {
+  font-size: 11px;
+}
+
+.usage-tokens__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.usage-tokens__label {
+  color: var(--text-muted);
+  min-width: 50px;
+}
+
+.usage-tokens__value {
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.usage-tokens__detail {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
 /* ===========================================
    Busy Button State (animated dots)
    =========================================== */

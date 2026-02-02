@@ -44,6 +44,7 @@ import {
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
+import { recordTokenUsage } from "../../infra/token-usage-tracker.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -624,6 +625,19 @@ export async function runEmbeddedPiAgent(
           }
 
           const usage = normalizeUsage(lastAssistant?.usage as UsageLike);
+          
+          // Record token usage for tracking
+          if (usage && (usage.input || usage.output)) {
+            recordTokenUsage({
+              provider: lastAssistant?.provider ?? provider,
+              model: lastAssistant?.model ?? model.id,
+              inputTokens: usage.input ?? 0,
+              outputTokens: usage.output ?? 0,
+              cacheReadTokens: usage.cacheRead,
+              cacheWriteTokens: usage.cacheWrite,
+            });
+          }
+          
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: lastAssistant?.provider ?? provider,

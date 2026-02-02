@@ -540,7 +540,54 @@ export type ProviderUsageSnapshot = {
   error?: string;
 };
 
+export type TokenUsageSummary = {
+  provider: string;
+  displayName: string;
+  session: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    requestCount: number;
+    estimatedCostUSD?: number;
+  };
+  today: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    requestCount: number;
+    estimatedCostUSD?: number;
+  };
+  thisMonth?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    requestCount: number;
+    estimatedCostUSD: number;
+    budgetPercent: number;
+    budgetUSD: number;
+  };
+  fiveHour: {
+    outputTokens: number;
+    requestCount: number;
+    estimatedPercent?: number;
+    estimatedLimit?: number;
+  };
+  rollingMinute?: {
+    inputTokens: number;
+    outputTokens: number;
+    requestCount: number;
+  };
+  estimated: {
+    tier: string;
+    fiveHourLimit: number;
+    dailyLimit: number;
+    fiveHourPercent: number;
+    dailyPercent: number;
+  };
+};
+
 export type UsageSummary = {
   updatedAt: number;
   providers: ProviderUsageSnapshot[];
+  tokenUsage?: TokenUsageSummary[];
 };

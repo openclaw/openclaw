@@ -658,13 +658,16 @@ function renderProviderUsagePanel(usage: UsageSummary | null, loading: boolean, 
     `;
   }
 
-  if (!usage || usage.providers.length === 0) {
+  const hasProviders = usage && usage.providers.length > 0;
+  const hasTokens = usage?.tokenUsage && usage.tokenUsage.length > 0;
+  
+  if (!hasProviders && !hasTokens) {
     return html`
       <div class="nav-group nav-group--usage">
         <div class="nav-label nav-label--static">
           <span class="nav-label__text">Model Usage</span>
         </div>
-        <div class="usage-panel usage-panel--empty">No usage data available</div>
+        <div class="usage-panel usage-panel--empty">No usage data</div>
       </div>
     `;
   }
@@ -675,7 +678,7 @@ function renderProviderUsagePanel(usage: UsageSummary | null, loading: boolean, 
         <span class="nav-label__text">Model Usage</span>
       </div>
       <div class="usage-panel">
-        ${usage.providers.map((provider) => html`
+        ${hasProviders ? usage!.providers.map((provider) => html`
           <div class="usage-provider">
             <div class="usage-provider__name">${provider.displayName}</div>
             ${provider.error
@@ -683,8 +686,52 @@ function renderProviderUsagePanel(usage: UsageSummary | null, loading: boolean, 
               : provider.windows.map((w) => renderUsageBar(w.usedPercent, w.label, w.resetAt))
             }
           </div>
-        `)}
+        `) : nothing}
+        ${hasTokens ? usage!.tokenUsage!.map((t) => {
+          // Check if this provider has rate limit data from browser
+          const hasRateLimits = usage!.providers.some(
+            (p) => p.provider === t.provider && p.windows.length > 0 && !p.error
+          );
+          
+          return html`
+            <div class="usage-provider">
+              <div class="usage-provider__name">${t.displayName}</div>
+              ${!hasRateLimits && t.estimated.fiveHourPercent > 0 ? html`
+                ${renderUsageBar(t.estimated.fiveHourPercent, "5h est.", undefined)}
+                ${renderUsageBar(t.estimated.dailyPercent, "Day est.", undefined)}
+              ` : nothing}
+              ${t.thisMonth?.budgetPercent !== undefined ? html`
+                ${renderUsageBar(t.thisMonth.budgetPercent, `Month ($${t.thisMonth.budgetUSD})`, undefined)}
+              ` : nothing}
+              <div class="usage-tokens">
+                <div class="usage-tokens__row">
+                  <span class="usage-tokens__label">5h:</span>
+                  <span class="usage-tokens__value">${formatTokenCount(t.fiveHour.outputTokens)}</span>
+                  <span class="usage-tokens__detail">out (${t.fiveHour.requestCount} calls)</span>
+                </div>
+                <div class="usage-tokens__row">
+                  <span class="usage-tokens__label">Today:</span>
+                  <span class="usage-tokens__value">${formatTokenCount(t.today.outputTokens)}</span>
+                  <span class="usage-tokens__detail">out${t.today.estimatedCostUSD ? ` ~$${t.today.estimatedCostUSD.toFixed(2)}` : ""}</span>
+                </div>
+                ${t.thisMonth ? html`
+                <div class="usage-tokens__row">
+                  <span class="usage-tokens__label">Month:</span>
+                  <span class="usage-tokens__value">~$${t.thisMonth.estimatedCostUSD.toFixed(2)}</span>
+                  <span class="usage-tokens__detail">${t.thisMonth.budgetPercent.toFixed(0)}% of budget</span>
+                </div>
+                ` : nothing}
+              </div>
+            </div>
+          `;
+        }) : nothing}
       </div>
     </div>
   `;
+}
+
+function formatTokenCount(count: number): string {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
+  return String(count);
 }
