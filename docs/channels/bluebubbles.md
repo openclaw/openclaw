@@ -192,7 +192,7 @@ Control whether responses are sent as a single message or streamed in blocks:
 {
   channels: {
     bluebubbles: {
-      blockStreaming: true, // enable block streaming (default behavior)
+      blockStreaming: true, // enable block streaming (off by default)
     },
   },
 }
@@ -220,7 +220,7 @@ Provider options:
 - `channels.bluebubbles.groupAllowFrom`: Group sender allowlist.
 - `channels.bluebubbles.groups`: Per-group config (`requireMention`, etc.).
 - `channels.bluebubbles.sendReadReceipts`: Send read receipts (default: `true`).
-- `channels.bluebubbles.blockStreaming`: Enable block streaming (default: `true`).
+- `channels.bluebubbles.blockStreaming`: Enable block streaming (default: `false`; required for streaming replies).
 - `channels.bluebubbles.textChunkLimit`: Outbound chunk size in chars (default: 4000).
 - `channels.bluebubbles.chunkMode`: `length` (default) splits only when exceeding `textChunkLimit`; `newline` splits on blank lines (paragraph boundaries) before length chunking.
 - `channels.bluebubbles.mediaMaxMb`: Inbound media cap in MB (default: 8).
