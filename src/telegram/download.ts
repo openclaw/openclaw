@@ -8,9 +8,14 @@ export type TelegramFileInfo = {
   file_path?: string;
 };
 
-export async function getTelegramFile(token: string, fileId: string): Promise<TelegramFileInfo> {
+export async function getTelegramFile(
+  token: string,
+  fileId: string,
+  timeoutMs = 30_000,
+): Promise<TelegramFileInfo> {
   const res = await fetch(
     `https://api.telegram.org/bot${token}/getFile?file_id=${encodeURIComponent(fileId)}`,
+    { signal: AbortSignal.timeout(timeoutMs) },
   );
   if (!res.ok) {
     throw new Error(`getFile failed: ${res.status} ${res.statusText}`);
@@ -26,12 +31,13 @@ export async function downloadTelegramFile(
   token: string,
   info: TelegramFileInfo,
   maxBytes?: number,
+  timeoutMs = 60_000,
 ): Promise<SavedMedia> {
   if (!info.file_path) {
     throw new Error("file_path missing");
   }
   const url = `https://api.telegram.org/file/bot${token}/${info.file_path}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok || !res.body) {
     throw new Error(`Failed to download telegram file: HTTP ${res.status}`);
   }
