@@ -172,7 +172,10 @@ async function loadWebMediaInternal(
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind);
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
-      if (isGif || !optimizeImages) {
+      // Preserve WebP files under 500KB (used as WhatsApp stickers).
+      const isWebpSticker =
+        params.contentType === "image/webp" && params.buffer.length <= 500 * 1024;
+      if (isGif || isWebpSticker || !optimizeImages) {
         if (params.buffer.length > cap) {
           throw new Error(formatCapLimit(isGif ? "GIF" : "Media", cap, params.buffer.length));
         }

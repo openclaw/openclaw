@@ -21,7 +21,14 @@ export function createWebSendApi(params: {
       const jid = toWhatsappJid(to);
       let payload: AnyMessageContent;
       if (mediaBuffer && mediaType) {
-        if (mediaType.startsWith("image/")) {
+        if (
+          mediaType === "image/webp" &&
+          mediaBuffer.length <= 500 * 1024 &&
+          (!text || text.trim() === "")
+        ) {
+          // WebP files under 500KB with no caption are sent as stickers.
+          payload = { sticker: mediaBuffer } as AnyMessageContent;
+        } else if (mediaType.startsWith("image/")) {
           payload = {
             image: mediaBuffer,
             caption: text || undefined,
