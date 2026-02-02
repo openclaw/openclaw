@@ -48,7 +48,9 @@ describe("memory search citations", () => {
     backend = "builtin";
     const cfg = { memory: { citations: "on" }, agents: { list: [{ id: "main", default: true }] } };
     const tool = createMemorySearchTool({ config: cfg });
-    if (!tool) throw new Error("tool missing");
+    if (!tool) {
+      throw new Error("tool missing");
+    }
     const result = await tool.execute("call_citations_on", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
     expect(details.results[0]?.snippet).toMatch(/Source: MEMORY.md#L5-L7/);
@@ -59,7 +61,9 @@ describe("memory search citations", () => {
     backend = "builtin";
     const cfg = { memory: { citations: "off" }, agents: { list: [{ id: "main", default: true }] } };
     const tool = createMemorySearchTool({ config: cfg });
-    if (!tool) throw new Error("tool missing");
+    if (!tool) {
+      throw new Error("tool missing");
+    }
     const result = await tool.execute("call_citations_off", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
     expect(details.results[0]?.snippet).not.toMatch(/Source:/);
@@ -73,7 +77,9 @@ describe("memory search citations", () => {
       agents: { list: [{ id: "main", default: true }] },
     };
     const tool = createMemorySearchTool({ config: cfg });
-    if (!tool) throw new Error("tool missing");
+    if (!tool) {
+      throw new Error("tool missing");
+    }
     const result = await tool.execute("call_citations_qmd", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
     expect(details.results[0]?.snippet.length).toBeLessThanOrEqual(20);
