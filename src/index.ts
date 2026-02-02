@@ -45,8 +45,6 @@ assertSupportedRuntime();
 
 import { buildProgram } from "./cli/program.js";
 
-const program = await buildProgram();
-
 export {
   assertWebChannel,
   applyTemplate,
@@ -86,7 +84,10 @@ if (isMain) {
     process.exit(1);
   });
 
-  void program.parseAsync(process.argv).catch((err) => {
+  void (async () => {
+    const program = await buildProgram();
+    await program.parseAsync(process.argv);
+  })().catch((err) => {
     console.error("[openclaw] CLI failed:", formatUncaughtError(err));
     process.exit(1);
   });
