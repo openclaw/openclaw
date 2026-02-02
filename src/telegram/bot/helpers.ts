@@ -12,6 +12,13 @@ import { formatLocationText, type NormalizedLocation } from "../../channels/loca
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
+export type TelegramThreadScope = "dm" | "forum" | "none";
+
+export type TelegramThreadSpec = {
+  id?: number;
+  scope: TelegramThreadScope;
+};
+
 /**
  * Resolve the thread ID for Telegram forum topics.
  * For non-forum groups, returns undefined even if messageThreadId is present
@@ -33,17 +40,47 @@ export function resolveTelegramForumThreadId(params: {
   return params.messageThreadId;
 }
 
+export function resolveTelegramThreadSpec(params: {
+  isGroup: boolean;
+  isForum?: boolean;
+  messageThreadId?: number | null;
+}): TelegramThreadSpec {
+  if (params.isGroup) {
+    const id = resolveTelegramForumThreadId({
+      isForum: params.isForum,
+      messageThreadId: params.messageThreadId,
+    });
+    return {
+      id,
+      scope: params.isForum ? "forum" : "none",
+    };
+  }
+  if (params.messageThreadId == null) {
+    return { scope: "dm" };
+  }
+  return {
+    id: params.messageThreadId,
+    scope: "dm",
+  };
+}
+
 /**
  * Build thread params for Telegram API calls (messages, media).
  * General forum topic (id=1) must be treated like a regular supergroup send:
  * Telegram rejects sendMessage/sendMedia with message_thread_id=1 ("thread not found").
  */
-export function buildTelegramThreadParams(messageThreadId?: number) {
-  if (messageThreadId == null) {
+export function buildTelegramThreadParams(thread?: TelegramThreadSpec | number | null) {
+  let spec: TelegramThreadSpec | undefined;
+  if (typeof thread === "number") {
+    spec = { id: thread, scope: "forum" };
+  } else if (thread && typeof thread === "object") {
+    spec = thread;
+  }
+  if (!spec?.id) {
     return undefined;
   }
-  const normalized = Math.trunc(messageThreadId);
-  if (normalized === TELEGRAM_GENERAL_TOPIC_ID) {
+  const normalized = Math.trunc(spec.id);
+  if (normalized === TELEGRAM_GENERAL_TOPIC_ID && spec.scope === "forum") {
     return undefined;
   }
   return { message_thread_id: normalized };

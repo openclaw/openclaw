@@ -8,7 +8,7 @@ describe("createTelegramDraftStream", () => {
       api: api as any,
       chatId: 123,
       draftId: 42,
-      messageThreadId: 99,
+      thread: { id: 99, scope: "forum" },
     });
 
     stream.update("Hello");
@@ -24,11 +24,27 @@ describe("createTelegramDraftStream", () => {
       api: api as any,
       chatId: 123,
       draftId: 42,
-      messageThreadId: 1,
+      thread: { id: 1, scope: "forum" },
     });
 
     stream.update("Hello");
 
     expect(api.sendMessageDraft).toHaveBeenCalledWith(123, 42, "Hello", undefined);
+  });
+
+  it("keeps message_thread_id for dm threads", () => {
+    const api = { sendMessageDraft: vi.fn().mockResolvedValue(true) };
+    const stream = createTelegramDraftStream({
+      api: api as any,
+      chatId: 123,
+      draftId: 42,
+      thread: { id: 1, scope: "dm" },
+    });
+
+    stream.update("Hello");
+
+    expect(api.sendMessageDraft).toHaveBeenCalledWith(123, 42, "Hello", {
+      message_thread_id: 1,
+    });
   });
 });
