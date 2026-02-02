@@ -1,5 +1,8 @@
-import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
+import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
+import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
@@ -9,13 +12,11 @@ import {
   normalizeTokenProviderInput,
 } from "./auth-choice.apply-helpers.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyAuthChoiceOpenRouter } from "./auth-choice.apply.openrouter.js";
 import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "./google-gemini-model-default.js";
-import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
@@ -36,6 +37,8 @@ import {
   applyMoonshotProviderConfigCn,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
+  applyPuterConfig,
+  applyPuterProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyTogetherConfig,
@@ -54,6 +57,7 @@ import {
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
+  PUTER_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
@@ -69,6 +73,7 @@ import {
   setMistralApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
+  setPuterApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
   setVeniceApiKey,
@@ -77,7 +82,7 @@ import {
   setZaiApiKey,
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
-import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
+import { openUrl } from "./onboard-helpers.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
 
@@ -100,6 +105,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   opencode: "opencode-zen",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
+  puter: "puter-api-key",
 };
 
 const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
@@ -138,6 +144,18 @@ type SimpleApiKeyProviderFlow = {
 };
 
 const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProviderFlow>> = {
+  "puter-api-key": {
+    provider: "puter",
+    profileId: "puter:default",
+    expectedProviders: ["puter"],
+    envLabel: "PUTER_API_KEY",
+    promptMessage: "Enter Puter API key",
+    setCredential: setPuterApiKey,
+    defaultModel: PUTER_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyPuterConfig,
+    applyProviderConfig: applyPuterProviderConfig,
+    noteDefault: PUTER_DEFAULT_MODEL_REF,
+  },
   "ai-gateway-api-key": {
     provider: "vercel-ai-gateway",
     profileId: "vercel-ai-gateway:default",
@@ -453,6 +471,52 @@ export async function applyAuthChoiceApiProviders(
       applyDefaultConfig: applyLitellmConfig,
       applyProviderConfig: applyLitellmProviderConfig,
       noteDefault: LITELLM_DEFAULT_MODEL_REF,
+    });
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "puter-web") {
+    await params.prompter.note(
+      [
+        "Puter web login opens your browser so you can copy an API key.",
+        "After signing in, paste the key back here.",
+      ].join("\n"),
+      "Puter",
+    );
+    const opened = await openUrl("https://puter.com/?action=copyauth");
+    if (!opened) {
+      await params.prompter.note(
+        "Open this URL manually: https://puter.com/?action=copyauth",
+        "Puter",
+      );
+    }
+
+    await ensureApiKeyFromOptionEnvOrPrompt({
+      token: params.opts?.token,
+      provider: "puter",
+      tokenProvider: normalizedTokenProvider,
+      secretInputMode: requestedSecretInputMode,
+      config: nextConfig,
+      expectedProviders: ["puter"],
+      envLabel: "PUTER_API_KEY",
+      promptMessage: "Enter Puter API key",
+      normalize: normalizeApiKeyInput,
+      validate: validateApiKeyInput,
+      prompter: params.prompter,
+      setCredential: async (apiKey, mode) =>
+        setPuterApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+    });
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "puter:default",
+      provider: "puter",
+      mode: "api_key",
+    });
+    await applyProviderDefaultModel({
+      defaultModel: PUTER_DEFAULT_MODEL_REF,
+      applyDefaultConfig: applyPuterConfig,
+      applyProviderConfig: applyPuterProviderConfig,
+      noteDefault: PUTER_DEFAULT_MODEL_REF,
     });
     return { config: nextConfig, agentModelOverride };
   }
