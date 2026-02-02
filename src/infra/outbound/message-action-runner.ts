@@ -20,7 +20,7 @@ import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import { extensionForMime } from "../../media/mime.js";
 import { parseSlackTarget } from "../../slack/targets.js";
-import { parseTelegramTarget } from "../../telegram/targets.js";
+// parseTelegramTarget no longer used (telegram auto-threading uses string matching)
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -259,13 +259,12 @@ function resolveTelegramAutoThreadId(params: {
   if (!context?.currentThreadTs || !context.currentChannelId) {
     return undefined;
   }
-  // Parse both targets to extract base chat IDs, ignoring topic suffixes and
-  // internal prefixes (e.g. "telegram:group:123:topic:456" → "123").
-  // This mirrors Slack's parseSlackTarget approach — compare canonical chat IDs
-  // so auto-threading applies even when representations differ.
-  const parsedTo = parseTelegramTarget(params.to);
-  const parsedChannel = parseTelegramTarget(context.currentChannelId);
-  if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
+  // Only apply when the target matches the originating chat.
+  // Note: Telegram topic routing is carried via threadId/message_thread_id;
+  // `currentChannelId` (and most agent targets) are typically the base chat id.
+  const normalizedTo = params.to.trim().toLowerCase();
+  const normalizedChannel = context.currentChannelId.trim().toLowerCase();
+  if (normalizedTo !== normalizedChannel) {
     return undefined;
   }
   return context.currentThreadTs;
