@@ -454,7 +454,9 @@ export function createNodesTool(options?: {
                 invokeParams = JSON.parse(invokeParamsJson);
               } catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
-                throw new Error(`invokeParamsJson must be valid JSON: ${message}`);
+                throw new Error(`invokeParamsJson must be valid JSON: ${message}`, {
+                  cause: err,
+                });
               }
             }
             const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
