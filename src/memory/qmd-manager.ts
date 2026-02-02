@@ -12,6 +12,7 @@ import {
   buildSessionEntry,
   type SessionFileEntry,
 } from "./session-files.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { requireNodeSqlite } from "./sqlite.js";
 import type {
   MemoryEmbeddingProbeResult,
@@ -561,8 +562,13 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private deriveChannelFromKey(key?: string) {
     if (!key) return undefined;
-    const parts = key.split(":").filter(Boolean);
-    if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
+    const normalized = this.normalizeSessionKey(key);
+    if (!normalized) return undefined;
+    const parts = normalized.split(":").filter(Boolean);
+    if (
+      parts.length >= 2 &&
+      (parts[1] === "group" || parts[1] === "channel" || parts[1] === "dm")
+    ) {
       return parts[0]?.toLowerCase();
     }
     return undefined;
@@ -570,9 +576,20 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private deriveChatTypeFromKey(key?: string) {
     if (!key) return undefined;
-    if (key.includes(":group:")) return "group";
-    if (key.includes(":channel:")) return "channel";
+    const normalized = this.normalizeSessionKey(key);
+    if (!normalized) return undefined;
+    if (normalized.includes(":group:")) return "group";
+    if (normalized.includes(":channel:")) return "channel";
     return "direct";
+  }
+
+  private normalizeSessionKey(key: string): string | undefined {
+    const trimmed = key.trim();
+    if (!trimmed) return undefined;
+    const parsed = parseAgentSessionKey(trimmed);
+    const normalized = (parsed?.rest ?? trimmed).toLowerCase();
+    if (normalized.startsWith("subagent:")) return undefined;
+    return normalized;
   }
 
   private toDocLocation(
