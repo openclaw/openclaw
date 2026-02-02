@@ -459,6 +459,16 @@ export const buildTelegramMessageContext = async ({
     }
   }
 
+  // Yield to other mentioned bots in open groups (local fork patch)
+  // If this is an open group (no requireMention) but another bot was @mentioned, stay quiet
+  if (isGroup && !requireMention && hasAnyMention && !wasMentioned) {
+    logger.info(
+      { chatId, reason: "other-agent-mentioned" },
+      "skipping group message (yielding to mentioned bot)",
+    );
+    return null;
+  }
+
   // ACK reactions
   const ackReaction = resolveAckReaction(cfg, route.agentId);
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
