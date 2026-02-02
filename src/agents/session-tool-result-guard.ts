@@ -103,7 +103,7 @@ export function installSessionToolResultGuard(
       if (sanitized.length === 0) {
         return undefined;
       }
-      nextMessage = sanitized[0] as AgentMessage;
+      nextMessage = sanitized[0];
     }
     const nextRole = (nextMessage as { role?: unknown }).role;
 
