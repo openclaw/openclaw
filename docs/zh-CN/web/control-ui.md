@@ -176,6 +176,7 @@ pnpm ui:dev # 首次运行时自动安装 UI 依赖
 然后将 UI 指向你的 Gateway网关 WS URL（例如 `ws://127.0.0.1:18789`）。
 
 ## 调试/测试：开发服务器 + 远程 Gateway网关控制界面是静态文件；WebSocket 目标可配置，可以
+
 与 HTTP 源不同。当你想在本地使用 Vite 开发服务器但 Gateway网关运行在其他地方时，这很方便。
 
 1. 启动 UI 开发服务器：`pnpm ui:dev`

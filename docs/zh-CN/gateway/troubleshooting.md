@@ -24,15 +24,15 @@ x-i18n:
 
 快速分诊命令（按顺序执行）：
 
-| 命令                               | 告诉你什么                                                                        | 何时使用                         |
-| ---------------------------------- | --------------------------------------------------------------------------------- | -------------------------------- |
+| 命令                               | 告诉你什么                                                                           | 何时使用                         |
+| ---------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------- |
 | `openclaw status`                  | 本地摘要：操作系统 + 更新、Gateway网关可达性/模式、服务、智能体/会话、提供商配置状态 | 首次检查，快速概览               |
-| `openclaw status --all`            | 完整本地诊断（只读、可粘贴、基本安全）包含日志尾部                                | 需要分享调试报告时               |
-| `openclaw status --deep`           | 运行 Gateway网关健康检查（包括提供商探测；需要 Gateway网关可达）                        | 当"已配置"不等于"正常工作"时     |
-| `openclaw gateway probe`           | Gateway网关发现 + 可达性（本地 + 远程目标）                                          | 怀疑探测了错误的 Gateway网关时      |
-| `openclaw channels status --probe` | 向运行中的 Gateway网关查询渠道状态（可选探测）                                       | Gateway网关可达但渠道异常时         |
+| `openclaw status --all`            | 完整本地诊断（只读、可粘贴、基本安全）包含日志尾部                                   | 需要分享调试报告时               |
+| `openclaw status --deep`           | 运行 Gateway网关健康检查（包括提供商探测；需要 Gateway网关可达）                     | 当"已配置"不等于"正常工作"时     |
+| `openclaw gateway probe`           | Gateway网关发现 + 可达性（本地 + 远程目标）                                          | 怀疑探测了错误的 Gateway网关时   |
+| `openclaw channels status --probe` | 向运行中的 Gateway网关查询渠道状态（可选探测）                                       | Gateway网关可达但渠道异常时      |
 | `openclaw gateway status`          | 管理器状态（launchd/systemd/schtasks）、运行时 PID/退出码、最后一次 Gateway网关错误  | 服务"看起来已加载"但实际未运行时 |
-| `openclaw logs --follow`           | 实时日志（运行时问题的最佳信号源）                                                | 需要查看实际失败原因时           |
+| `openclaw logs --follow`           | 实时日志（运行时问题的最佳信号源）                                                   | 需要查看实际失败原因时           |
 
 **分享输出：** 优先使用 `openclaw status --all`（它会脱敏令牌）。如果粘贴 `openclaw status` 的输出，建议先设置 `OPENCLAW_SHOW_SECRETS=0`（令牌预览）。
 
@@ -685,13 +685,13 @@ openclaw channels login --verbose
 
 ## 日志位置
 
-| 日志                       | 位置                                                                                                                                                                                                                                                                                                                      |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Gateway网关文件日志（结构化） | `/tmp/openclaw/openclaw-YYYY-MM-DD.log`（或 `logging.file`）                                                                                                                                                                                                                                                              |
+| 日志                          | 位置                                                                                                                                                                                                                                                                                                                          |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gateway网关文件日志（结构化） | `/tmp/openclaw/openclaw-YYYY-MM-DD.log`（或 `logging.file`）                                                                                                                                                                                                                                                                  |
 | Gateway网关服务日志（管理器） | macOS：`$OPENCLAW_STATE_DIR/logs/gateway.log` + `gateway.err.log`（默认：`~/.openclaw/logs/...`；profile 使用 `~/.openclaw-<profile>/logs/...`）<br />Linux：`journalctl --user -u openclaw-gateway[-<profile>].service -n 200 --no-pager`<br />Windows：`schtasks /Query /TN "OpenClaw Gateway网关 (<profile>)" /V /FO LIST` |
-| 会话文件                   | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                                                                                                                                                                                                                                                                          |
-| 媒体缓存                   | `$OPENCLAW_STATE_DIR/media/`                                                                                                                                                                                                                                                                                              |
-| 凭据                       | `$OPENCLAW_STATE_DIR/credentials/`                                                                                                                                                                                                                                                                                        |
+| 会话文件                      | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                                                                                                                                                                                                                                                                              |
+| 媒体缓存                      | `$OPENCLAW_STATE_DIR/media/`                                                                                                                                                                                                                                                                                                  |
+| 凭据                          | `$OPENCLAW_STATE_DIR/credentials/`                                                                                                                                                                                                                                                                                            |
 
 ## 健康检查
 
