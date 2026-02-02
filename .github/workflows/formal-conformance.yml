@@ -37,6 +37,22 @@ jobs:
           node scripts/extract-tool-groups.mjs
           node scripts/check-tool-group-alias.mjs
 
+      # Drift is about extracted artifacts only; compute it before model checking
+      # to avoid any incidental file touches affecting the result.
+      - name: Compute drift (generated/*)
+        id: drift
+        run: |
+          set -euo pipefail
+          cd clawdbot-formal-models
+
+          if git diff --quiet -- generated; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "drift=true" >> "$GITHUB_OUTPUT"
+          git diff -- generated > "${GITHUB_WORKSPACE}/formal-models-drift.diff"
+
       - name: Model check (green suite)
         run: |
           set -euo pipefail
@@ -78,20 +94,6 @@ jobs:
             no-cross-stream-negative multi-event-eventual-emission-negative \
             dedupe-collision-fallback-negative crash-restart-dedupe-negative two-worker-dedupe-negative openclaw-session-key-conformance-negative \
             routing-thread-parent-channel-override-negative routing-trirule-negative gateway-auth-proxy-header-spoof-negative
-
-      - name: Compute drift
-        id: drift
-        run: |
-          set -euo pipefail
-          cd clawdbot-formal-models
-
-          if git diff --quiet; then
-            echo "drift=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "drift=true" >> "$GITHUB_OUTPUT"
-          git diff > "${GITHUB_WORKSPACE}/formal-models-drift.diff"
 
       - name: Upload drift diff artifact
         if: steps.drift.outputs.drift == 'true'
