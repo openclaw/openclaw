@@ -137,7 +137,10 @@ export function syncExternalCliCredentials(store: AuthProfileStore): boolean {
         mutated = true;
         log.info("synced anthropic token from claude cli", {
           profileId: CLAUDE_CLI_PROFILE_ID,
-          expires: new Date(claudeCreds.expires).toISOString(),
+          expires:
+            typeof claudeCreds.expires === "number"
+              ? new Date(claudeCreds.expires).toISOString()
+              : "none",
         });
       }
     }

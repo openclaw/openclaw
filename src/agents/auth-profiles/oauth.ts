@@ -94,8 +94,10 @@ async function refreshOAuthTokenWithLock(params: {
     };
     saveAuthProfileStore(store, params.agentDir);
 
-    // Keep Claude CLI credentials file in sync after refresh
-    if (params.profileId === CLAUDE_CLI_PROFILE_ID && cred.provider === "anthropic") {
+    // Keep Claude CLI credentials file in sync after refresh.
+    // Check the updated store entry (not pre-refresh cred) in case the provider was relabelled.
+    const refreshedCred = store.profiles[params.profileId];
+    if (params.profileId === CLAUDE_CLI_PROFILE_ID && refreshedCred?.provider === "anthropic") {
       try {
         writeClaudeCliCredentials(result.newCredentials);
       } catch (error) {
