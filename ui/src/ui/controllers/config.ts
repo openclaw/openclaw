@@ -40,6 +40,7 @@ export async function loadConfig(state: ConfigState) {
   state.lastError = null;
   try {
     const res = (await state.client.request("config.get", {})) as ConfigSnapshot;
+    state.configFormDirty = false;
     applyConfigSnapshot(state, res);
   } catch (err) {
     state.lastError = String(err);
