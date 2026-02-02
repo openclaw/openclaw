@@ -155,6 +155,47 @@ describe("RateLimiter", () => {
     expect(limiter.check("burst", 0).allowed).toBe(false);
   });
 
+  it("retryAfterMs accounts for partial interval progress", () => {
+    limiter = makeLimiter({ maxTokens: 1, refillRate: 1, refillIntervalMs: 1000 });
+    limiter.check("ip1", 0); // consume the only token at t=0
+
+    // 700ms later — 70% through the next interval, token arrives at t=1000
+    const denied = limiter.check("ip1", 700);
+    expect(denied.allowed).toBe(false);
+    expect(denied.retryAfterMs).toBe(300); // not 1000
+  });
+
+  it("retryAfterMs is exact when denied at interval boundary", () => {
+    limiter = makeLimiter({ maxTokens: 1, refillRate: 1, refillIntervalMs: 500 });
+    limiter.check("ip1", 0); // consume token at t=0
+
+    // Denied exactly at t=0 (boundary) — should still be a full interval
+    const denied = limiter.check("ip1", 0);
+    expect(denied.allowed).toBe(false);
+    expect(denied.retryAfterMs).toBe(500);
+  });
+
+  it("retryAfterMs is accurate with multi-token deficit mid-interval", () => {
+    limiter = makeLimiter({ maxTokens: 2, refillRate: 1, refillIntervalMs: 500 });
+    limiter.check("ip1", 0);
+    limiter.check("ip1", 0); // bucket empty at t=0
+
+    // 200ms in — need 1 token, next refill at t=500 → wait 300ms
+    const denied = limiter.check("ip1", 200);
+    expect(denied.allowed).toBe(false);
+    expect(denied.retryAfterMs).toBe(300);
+  });
+
+  it("retryAfterMs is 1ms when token arrives in 1ms", () => {
+    limiter = makeLimiter({ maxTokens: 1, refillRate: 1, refillIntervalMs: 60_000 });
+    limiter.check("ip1", 0); // consume token at t=0
+
+    // 59999ms later — 1ms away from refill
+    const denied = limiter.check("ip1", 59_999);
+    expect(denied.allowed).toBe(false);
+    expect(denied.retryAfterMs).toBe(1); // not 60000
+  });
+
   it("partial refill across multiple intervals", () => {
     limiter = makeLimiter({ maxTokens: 10, refillRate: 2, refillIntervalMs: 500 });
     // Consume all

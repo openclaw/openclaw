@@ -67,9 +67,12 @@ export class RateLimiter {
     }
 
     // Denied — compute how long until at least one token is available.
+    // `refill()` already ran, so `now - bucket.lastRefill` is the elapsed
+    // time within the current (incomplete) interval: always in [0, refillIntervalMs).
     const deficit = 1 - bucket.tokens;
     const intervalsNeeded = Math.ceil(deficit / this.config.refillRate);
-    const retryAfterMs = intervalsNeeded * this.config.refillIntervalMs;
+    const elapsedInCurrentInterval = now - bucket.lastRefill;
+    const retryAfterMs = intervalsNeeded * this.config.refillIntervalMs - elapsedInCurrentInterval;
 
     return { allowed: false, retryAfterMs, remaining: 0 };
   }
