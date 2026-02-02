@@ -157,5 +157,5 @@ export async function applyAuthChoiceLmStudio(
     await params.prompter.note(`Default model set to ${modelRef}.`, "Model configured");
     return { config: nextConfig, agentModelOverride: params.agentId ? modelRef : undefined };
   }
-  return { config: nextConfig };
+  return { config: nextConfig, agentModelOverride: params.agentId ? modelRef : undefined };
 }
