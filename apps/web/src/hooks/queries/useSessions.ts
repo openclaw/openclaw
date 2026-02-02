@@ -19,7 +19,8 @@ import {
   type ChatEventPayload,
   type AgentEventPayload,
 } from "@/lib/api/sessions";
-import { getGatewayClient, type GatewayEvent } from "@/lib/api";
+import type { GatewayEvent } from "@/lib/api";
+import { useOptionalGateway } from "@/providers/GatewayProvider";
 import { useUIStore } from "@/stores/useUIStore";
 
 // Query keys factory
@@ -195,6 +196,7 @@ export function useChatEventSubscription(
   }
 ) {
   const queryClient = useQueryClient();
+  const gatewayCtx = useOptionalGateway();
 
   const handleEvent = useCallback(
     (event: GatewayEvent) => {
@@ -235,27 +237,7 @@ export function useChatEventSubscription(
 
   useEffect(() => {
     if (!sessionKey) {return;}
-
-    const client = getGatewayClient();
-    const originalOnEvent = client.isConnected()
-      ? (client as unknown as { config: { onEvent?: (e: GatewayEvent) => void } }).config
-          ?.onEvent
-      : undefined;
-
-    // Subscribe to events
-    // Note: wrappedHandler is prepared for future event subscription implementation
-    const _wrappedHandler = (event: GatewayEvent) => {
-      handleEvent(event);
-      originalOnEvent?.(event);
-    };
-    void _wrappedHandler; // Suppress unused variable warning
-
-    // Note: In a real implementation, you'd use a proper event subscription API
-    // For now, we just log that we'd subscribe
-    console.debug("[useChatEventSubscription] Would subscribe to events for:", sessionKey);
-
-    return () => {
-      console.debug("[useChatEventSubscription] Would unsubscribe from events");
-    };
-  }, [sessionKey, handleEvent]);
+    if (!gatewayCtx) {return;}
+    return gatewayCtx.addEventListener(handleEvent);
+  }, [gatewayCtx, handleEvent, sessionKey]);
 }

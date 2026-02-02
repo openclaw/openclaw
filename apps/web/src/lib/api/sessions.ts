@@ -98,16 +98,13 @@ export interface ChatEventPayload {
 }
 
 export interface AgentEventPayload {
-  runId?: string;
+  runId: string;
+  seq: number;
+  stream: string;
+  ts: number;
+  data: Record<string, unknown>;
+  /** Often present (added by gateway runtime), but not guaranteed by schema. */
   sessionKey?: string;
-  type?: string;
-  toolCallId?: string;
-  toolName?: string;
-  status?: string;
-  progress?: number;
-  input?: unknown;
-  output?: unknown;
-  error?: string;
 }
 
 // Session API functions

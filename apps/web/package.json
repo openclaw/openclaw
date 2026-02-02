@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@clawdbrain/vercel-ai-agent": "workspace:*",
+    "@noble/ed25519": "3.0.0",
     "@hookform/resolvers": "^5.2.2",
     "@noble/ed25519": "3.0.0",
     "@radix-ui/react-avatar": "^1.1.11",

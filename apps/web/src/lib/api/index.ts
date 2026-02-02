@@ -8,16 +8,43 @@ export {
   getGatewayClient,
   createGatewayClient,
   resetGatewayClient,
+  GATEWAY_CLIENT_ID,
+  GATEWAY_CLIENT_MODE,
+  DEFAULT_ROLE,
+  DEFAULT_SCOPES,
   type GatewayConnectionState,
   type GatewayStatus,
   type GatewayEvent,
   type GatewayClientConfig,
   type GatewayRequestOptions,
   type GatewayAuthCredentials,
+  type GatewayEventFrame,
+  type GatewayResponseFrame,
   type GatewayHelloOk,
 } from "./gateway-client";
 
-// Device identity & auth
+// Device auth (token storage and payload builder)
+export {
+  loadDeviceAuthToken,
+  storeDeviceAuthToken,
+  clearDeviceAuthToken,
+  buildDeviceAuthPayload,
+  type DeviceAuthEntry,
+  type DeviceAuthPayloadParams,
+} from "./device-auth";
+
+// Device auth storage (shared tokens, preferences)
+export {
+  clearAllDeviceAuthTokens,
+  loadSharedGatewayToken,
+  storeSharedGatewayToken,
+  clearSharedGatewayToken,
+  loadAuthMethodPreference,
+  storeAuthMethodPreference,
+  type AuthMethod,
+} from "./device-auth-storage";
+
+// Device identity
 export {
   loadOrCreateDeviceIdentity,
   signDevicePayload,
@@ -25,20 +52,6 @@ export {
   isSecureContext,
   type DeviceIdentity,
 } from "./device-identity";
-
-export {
-  loadDeviceAuthToken,
-  storeDeviceAuthToken,
-  clearDeviceAuthToken,
-  clearAllDeviceAuthTokens,
-  loadSharedGatewayToken,
-  storeSharedGatewayToken,
-  clearSharedGatewayToken,
-  loadAuthMethodPreference,
-  storeAuthMethodPreference,
-  type DeviceAuthEntry,
-  type AuthMethod,
-} from "./device-auth-storage";
 
 // API types
 export type {

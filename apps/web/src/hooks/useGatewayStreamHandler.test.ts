@@ -1,206 +1,202 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useGatewayStreamHandler } from "./useGatewayStreamHandler";
-import type { GatewayEvent } from "@/lib/api";
 
-// Mock the gateway client
-vi.mock("@/lib/api", () => ({
-  getGatewayClient: vi.fn(() => ({
-    isConnected: () => true,
-    connect: vi.fn().mockResolvedValue(undefined),
-  })),
+const toastLoading = vi.fn();
+const toastDismiss = vi.fn();
+const toastError = vi.fn();
+
+vi.mock("sonner", () => ({
+  toast: {
+    loading: toastLoading,
+    dismiss: toastDismiss,
+    error: toastError,
+  },
 }));
 
-// Mock the session store
-const mockAppendStreamingContent = vi.fn();
-const mockUpdateToolCall = vi.fn();
-const mockFinishStreaming = vi.fn();
-const mockClearStreaming = vi.fn();
+type GatewayEvent = { event: string; payload?: unknown };
+
+let gatewayEventHandler: ((event: GatewayEvent) => void) | null = null;
+const addEventListener = vi.fn((handler: (event: GatewayEvent) => void) => {
+  gatewayEventHandler = handler;
+  return () => {
+    gatewayEventHandler = null;
+  };
+});
+
+vi.mock("@/providers/GatewayProvider", () => ({
+  useOptionalGateway: () => ({ addEventListener }),
+}));
+
+const state = {
+  currentRunIds: {} as Record<string, string>,
+  streamingMessages: {} as Record<string, unknown>,
+};
+
+const startStreaming = vi.fn((sessionKey: string, runId: string) => {
+  state.currentRunIds[sessionKey] = runId;
+  state.streamingMessages[sessionKey] = {
+    content: "",
+    toolCalls: [],
+    isStreaming: true,
+  };
+});
+const setStreamingContent = vi.fn();
+const appendStreamingContent = vi.fn();
+const updateToolCall = vi.fn();
+const finishStreaming = vi.fn();
+const clearStreaming = vi.fn();
+const findSessionKeyByRunId = vi.fn((runId: string) => {
+  for (const [sessionKey, id] of Object.entries(state.currentRunIds)) {
+    if (id === runId) return sessionKey;
+  }
+  return null;
+});
+
+const useSessionStoreMock = vi.fn((selector?: (s: unknown) => unknown) => {
+  const store = {
+    ...state,
+    startStreaming,
+    setStreamingContent,
+    appendStreamingContent,
+    updateToolCall,
+    finishStreaming,
+    clearStreaming,
+    findSessionKeyByRunId,
+  };
+  return selector ? selector(store) : store;
+});
+useSessionStoreMock.getState = () => ({
+  ...state,
+  startStreaming,
+  setStreamingContent,
+  appendStreamingContent,
+  updateToolCall,
+  finishStreaming,
+  clearStreaming,
+  findSessionKeyByRunId,
+});
 
 vi.mock("@/stores/useSessionStore", () => ({
-  useSessionStore: vi.fn(() => ({
-    appendStreamingContent: mockAppendStreamingContent,
-    updateToolCall: mockUpdateToolCall,
-    finishStreaming: mockFinishStreaming,
-    clearStreaming: mockClearStreaming,
-  })),
+  useSessionStore: useSessionStoreMock,
 }));
 
-describe("useGatewayStreamHandler - Tool Output Detection", () => {
+describe("useGatewayStreamHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    gatewayEventHandler = null;
+    state.currentRunIds = {};
+    state.streamingMessages = {};
   });
 
-  it("should NOT append tool output to streaming content", () => {
-    const { result } = renderHook(() => useGatewayStreamHandler());
-
-    // The hook processes this internally via the onEvent callback
-    // We need to verify that appendStreamingContent was NOT called
-    // This test validates the filtering logic
-
-    expect(result).toBeDefined();
+  it("subscribes to gateway events when enabled", () => {
+    renderHook(() => useGatewayStreamHandler({ enabled: true }));
+    expect(addEventListener).toHaveBeenCalledTimes(1);
+    expect(typeof gatewayEventHandler).toBe("function");
   });
 
-  it("should append normal text content to streaming", () => {
-    renderHook(() => useGatewayStreamHandler());
+  it("routes chat deltas as content snapshots", () => {
+    renderHook(() => useGatewayStreamHandler({ enabled: true }));
 
-    // Normal text should be appended (tested via integration)
-    expect(true).toBe(true);
-  });
-
-  it("should route tool results to updateToolCall instead of content", () => {
-    renderHook(() => useGatewayStreamHandler());
-
-    // Tool events should trigger updateToolCall, not appendStreamingContent
-    expect(true).toBe(true);
-  });
-
-  it("should handle final message with tool calls", () => {
-    renderHook(() => useGatewayStreamHandler());
-
-    // Should call finishStreaming
-    expect(true).toBe(true);
-  });
-
-  it("should handle error state", () => {
-    renderHook(() => useGatewayStreamHandler());
-
-    // Should call finishStreaming on error
-    expect(true).toBe(true);
-  });
-
-  it("should handle aborted state", () => {
-    renderHook(() => useGatewayStreamHandler());
-
-    // Should call clearStreaming on abort
-    expect(true).toBe(true);
-  });
-
-  it("should respect enabled flag", () => {
-    const { rerender } = renderHook(
-      ({ enabled }) => useGatewayStreamHandler({ enabled }),
-      {
-        initialProps: { enabled: false },
-      }
-    );
-
-    // When disabled, handler should not be active
-    expect(mockAppendStreamingContent).not.toHaveBeenCalled();
-
-    // Re-enable
-    rerender({ enabled: true });
-
-    // Now handler should be active (tested via integration)
-    expect(true).toBe(true);
-  });
-});
-
-describe("Tool Output Pattern Detection", () => {
-  it("should detect ls output pattern", () => {
-    const lsOutput = `total 5208
-drwxr-xr-x@ 87 dgarson staff 2784 Feb 2 07:37 .`;
-
-    const patterns = [
-      /^total \d+\s*$/m,
-      /^drwxr-xr-x/m,
-    ];
-
-    const isToolOutput = patterns.some(pattern => pattern.test(lsOutput));
-    expect(isToolOutput).toBe(true);
-  });
-
-  it("should detect file permission listings", () => {
-    const fileList = `-rw-r--r--@ 1 dgarson staff 128 Feb 2 00:04 .claude`;
-
-    const pattern = /^-rw-r--r--[\s\S]*?staff/m;
-    expect(pattern.test(fileList)).toBe(true);
-  });
-
-  it("should NOT detect normal text as tool output", () => {
-    const normalText = "The total cost is $100 for all items.";
-
-    const patterns = [
-      /^total \d+\s*\ndrwxr-xr-x/m,
-      /^drwxr-xr-x[\s\S]*?staff/m,
-    ];
-
-    const isToolOutput = patterns.some(pattern => pattern.test(normalText));
-    expect(isToolOutput).toBe(false);
-  });
-
-  it("should detect terminal prompt patterns", () => {
-    const promptOutput = "user@hostname:/path/to/dir$";
-
-    const pattern = /^\w+@\w+:/m;
-    expect(pattern.test(promptOutput)).toBe(true);
-  });
-
-  it("should detect code block patterns", () => {
-    const codeBlock = "```bash\nls -la\n```";
-
-    const pattern = /^```[\s\S]*?```$/m;
-    expect(pattern.test(codeBlock)).toBe(true);
-  });
-
-  it("should handle mixed content appropriately", () => {
-    const mixedContent = `Here are the files:
-
-total 5208
-drwxr-xr-x@ 87 dgarson staff 2784 Feb 2 07:37 .`;
-
-    // This has both normal text and tool output
-    // The filter should detect the tool output portion
-    const hasToolOutput = /^total \d+\s*\ndrwxr-xr-x/m.test(mixedContent);
-    expect(hasToolOutput).toBe(true);
-  });
-});
-
-describe("Event Routing Logic", () => {
-  it("should route chat events to handleChatEvent", () => {
-    renderHook(() => useGatewayStreamHandler());
-
-    const chatEvent: GatewayEvent = {
+    gatewayEventHandler?.({
       event: "chat",
       payload: {
-        sessionKey: "test-session",
         runId: "run-1",
+        sessionKey: "session-1",
         seq: 1,
         state: "delta",
-        delta: { type: "text", text: "Hello" },
+        message: { role: "assistant", content: [{ type: "text", text: "Hello" }], timestamp: 0 },
       },
-    };
+    });
 
-    // Should be routed to chat handler (verified via integration)
-    expect(chatEvent.event).toBe("chat");
+    expect(startStreaming).toHaveBeenCalledWith("session-1", "run-1");
+    expect(setStreamingContent).toHaveBeenCalledWith("session-1", "Hello");
+    expect(appendStreamingContent).not.toHaveBeenCalled();
   });
 
-  it("should route tool events to handleToolEvent", () => {
-    renderHook(() => useGatewayStreamHandler());
+  it("routes agent tool stream events to tool calls (sessionKey fallback via runId)", () => {
+    renderHook(() => useGatewayStreamHandler({ enabled: true }));
 
-    const toolEvent: GatewayEvent = {
-      event: "tool",
+    // Seed currentRunIds and streamingMessages via a chat delta.
+    gatewayEventHandler?.({
+      event: "chat",
       payload: {
-        sessionKey: "test-session",
         runId: "run-1",
-        toolCallId: "tool-123",
-        toolName: "exec",
-        status: "running",
+        sessionKey: "session-1",
+        seq: 1,
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: "" }], timestamp: 0 },
       },
-    };
+    });
 
-    // Should be routed to tool handler (verified via integration)
-    expect(toolEvent.event).toBe("tool");
+    gatewayEventHandler?.({
+      event: "agent",
+      payload: {
+        runId: "run-1",
+        seq: 2,
+        stream: "tool",
+        ts: 0,
+        data: {
+          phase: "start",
+          toolCallId: "tool-123",
+          name: "exec",
+          input: { cmd: "ls" },
+        },
+      },
+    });
+
+    expect(findSessionKeyByRunId).toHaveBeenCalledWith("run-1");
+    expect(updateToolCall).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        id: "tool-123",
+        name: "exec",
+        status: "running",
+      })
+    );
   });
 
-  it("should ignore unrecognized events", () => {
-    renderHook(() => useGatewayStreamHandler());
+  it("shows compaction start/end toasts", () => {
+    renderHook(() => useGatewayStreamHandler({ enabled: true }));
 
-    const unknownEvent: GatewayEvent = {
-      event: "unknown",
-      payload: {},
-    };
+    // Seed run -> session mapping
+    gatewayEventHandler?.({
+      event: "chat",
+      payload: {
+        runId: "run-1",
+        sessionKey: "session-1",
+        seq: 1,
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: "" }], timestamp: 0 },
+      },
+    });
 
-    // Should not throw or cause issues
-    expect(unknownEvent.event).toBe("unknown");
+    gatewayEventHandler?.({
+      event: "agent",
+      payload: {
+        runId: "run-1",
+        seq: 2,
+        stream: "compaction",
+        ts: 0,
+        data: { phase: "start" },
+      },
+    });
+
+    expect(toastLoading).toHaveBeenCalledWith("Compacting context\u2026", { id: "compaction:session-1" });
+
+    gatewayEventHandler?.({
+      event: "agent",
+      payload: {
+        runId: "run-1",
+        seq: 3,
+        stream: "compaction",
+        ts: 0,
+        data: { phase: "end" },
+      },
+    });
+
+    expect(toastDismiss).toHaveBeenCalledWith("compaction:session-1");
+    expect(toastError).not.toHaveBeenCalled();
   });
 });
+

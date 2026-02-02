@@ -1,10 +1,10 @@
 import * as React from "react";
-import { useOptionalOpenClawGateway } from "@/integrations/openclaw/react";
+import { useOptionalGateway } from "@/providers/GatewayProvider";
 import { useAgentStore } from "@/stores/useAgentStore";
 import { showError, showSuccess, showWarning } from "@/lib/toast";
 
 export function useAgentApprovalActions() {
-  const gateway = useOptionalOpenClawGateway();
+  const gatewayCtx = useOptionalGateway();
   const updateAgentWith = useAgentStore((s) => s.updateAgentWith);
 
   const approvePending = React.useCallback(
@@ -15,13 +15,17 @@ export function useAgentApprovalActions() {
         showWarning("No pending approvals for this agent.");
         return false;
       }
-      if (!gateway) {
+      if (!gatewayCtx?.isConnected) {
         showWarning("Gateway not connected — approval stubbed.");
         return false;
       }
 
       try {
-        await Promise.all(pending.map((toolCallId) => gateway.rpc("tool.approve", { toolCallId })));
+        await Promise.all(
+          pending.map((toolCallId) =>
+            gatewayCtx.client.request("tool.approve", { toolCallId })
+          )
+        );
         updateAgentWith(agentId, (entry) => ({
           ...entry,
           pendingToolCallIds: [],
@@ -35,7 +39,7 @@ export function useAgentApprovalActions() {
         return false;
       }
     },
-    [gateway, updateAgentWith]
+    [gatewayCtx, updateAgentWith]
   );
 
   const denyPending = React.useCallback(
@@ -46,14 +50,16 @@ export function useAgentApprovalActions() {
         showWarning("No pending approvals for this agent.");
         return false;
       }
-      if (!gateway) {
+      if (!gatewayCtx?.isConnected) {
         showWarning("Gateway not connected — denial stubbed.");
         return false;
       }
 
       try {
         await Promise.all(
-          pending.map((toolCallId) => gateway.rpc("tool.reject", { toolCallId, reason: "Denied by operator" }))
+          pending.map((toolCallId) =>
+            gatewayCtx.client.request("tool.reject", { toolCallId, reason: "Denied by operator" })
+          )
         );
         updateAgentWith(agentId, (entry) => ({
           ...entry,
@@ -68,7 +74,7 @@ export function useAgentApprovalActions() {
         return false;
       }
     },
-    [gateway, updateAgentWith]
+    [gatewayCtx, updateAgentWith]
   );
 
   return { approvePending, denyPending };

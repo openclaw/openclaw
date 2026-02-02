@@ -2,15 +2,19 @@
 
 import * as React from "react";
 import { createLazyFileRoute, Navigate } from "@tanstack/react-router";
-import { PlugZap, Plug, Trash2, Terminal as TerminalIcon } from "lucide-react";
+import { PlugZap, Plug, Trash2, Terminal as TerminalIcon, Loader2 } from "lucide-react";
 
 import { useUIStore } from "@/stores/useUIStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import type { WebTerminalRef } from "@/components/composed/WebTerminal";
-import { OpenClawEventBus, OpenClawGatewayClient, type OpenClawEvents } from "@/integrations/openclaw";
-import { Loader2 } from "lucide-react";
+import {
+  createGatewayClient,
+  type GatewayClient,
+  type GatewayEvent,
+  type GatewayStatus,
+} from "@/lib/api";
 
 // Lazy-load WebTerminal and all xterm dependencies
 const LazyWebTerminal = React.lazy(() =>
@@ -26,84 +30,81 @@ export const Route = createLazyFileRoute("/debug/terminal")({
 function DebugTerminalPage() {
   const powerUserMode = useUIStore((s) => s.powerUserMode);
   const terminalRef = React.useRef<WebTerminalRef | null>(null);
-  const eventBusRef = React.useRef<OpenClawEventBus>(new OpenClawEventBus());
-  const clientRef = React.useRef<OpenClawGatewayClient | null>(null);
+  const clientRef = React.useRef<GatewayClient | null>(null);
   const inputBufferRef = React.useRef("");
 
   const [gatewayUrl, setGatewayUrl] = React.useState("ws://127.0.0.1:18789");
-  const [connected, setConnected] = React.useState(false);
+  const [status, setStatus] = React.useState<GatewayStatus>("disconnected");
+
+  const connected = status === "connected";
 
   React.useEffect(() => {
-    if (!powerUserMode) {return;}
-    terminalRef.current?.writeln("Clawdbrain Debug Terminal");
+    if (!powerUserMode) return;
+    terminalRef.current?.writeln("Clawdbrain Debug Terminal (v3 Protocol)");
     terminalRef.current?.writeln("Commands:");
-    terminalRef.current?.writeln("  /connect  - connect to OpenClaw gateway");
+    terminalRef.current?.writeln("  /connect  - connect to gateway");
     terminalRef.current?.writeln("  /disconnect");
     terminalRef.current?.writeln("  /clear");
     terminalRef.current?.writeln("");
     terminalRef.current?.write("> ");
   }, [powerUserMode]);
 
-  React.useEffect(() => {
-    if (!powerUserMode) {return;}
-    const bus = eventBusRef.current;
+  const handleEvent = React.useCallback((event: GatewayEvent) => {
+    terminalRef.current?.writeln("");
+    terminalRef.current?.writeln(`[event] ${event.event}: ${JSON.stringify(event.payload ?? {}, null, 0)}`);
+    terminalRef.current?.write("> ");
+  }, []);
 
-    const onConnected = (_e: OpenClawEvents["gateway:connected"]) => {
-      void _e;
-      setConnected(true);
-      terminalRef.current?.writeln("");
-      terminalRef.current?.writeln(`[gateway] connected (${gatewayUrl})`);
-      terminalRef.current?.write("> ");
-    };
-
-    const onDisconnected = (_e: OpenClawEvents["gateway:disconnected"]) => {
-      void _e;
-      setConnected(false);
-      terminalRef.current?.writeln("");
-      terminalRef.current?.writeln("[gateway] disconnected");
-      terminalRef.current?.write("> ");
-    };
-
-    const onMessage = (e: OpenClawEvents["gateway:message"]) => {
-      terminalRef.current?.writeln("");
-      terminalRef.current?.writeln(`[gateway] ${JSON.stringify(e.data ?? e, null, 0)}`);
-      terminalRef.current?.write("> ");
-    };
-
-    bus.on("gateway:connected", onConnected);
-    bus.on("gateway:disconnected", onDisconnected);
-    bus.on("gateway:message", onMessage);
-
-    return () => {
-      bus.off("gateway:connected", onConnected);
-      bus.off("gateway:disconnected", onDisconnected);
-      bus.off("gateway:message", onMessage);
-    };
-  }, [gatewayUrl, powerUserMode]);
+  const handleStatusChange = React.useCallback((newStatus: GatewayStatus) => {
+    setStatus(newStatus);
+    terminalRef.current?.writeln("");
+    terminalRef.current?.writeln(`[status] ${newStatus}`);
+    terminalRef.current?.write("> ");
+  }, []);
 
   const connect = React.useCallback(async () => {
-    const bus = eventBusRef.current;
-    if (!bus) {return;}
-
     terminalRef.current?.writeln("");
     terminalRef.current?.writeln(`[gateway] connecting... (${gatewayUrl})`);
 
-    clientRef.current?.disconnect();
-    clientRef.current = new OpenClawGatewayClient(bus, { url: gatewayUrl });
+    // Stop existing client
+    clientRef.current?.stop();
+
+    // Create new client with unified v3 protocol
+    const client = createGatewayClient({
+      url: gatewayUrl,
+      onStatusChange: handleStatusChange,
+      onEvent: handleEvent,
+      onError: (err) => {
+        terminalRef.current?.writeln("");
+        terminalRef.current?.writeln(`[error] ${err.message}`);
+        terminalRef.current?.write("> ");
+      },
+      onHello: (hello) => {
+        terminalRef.current?.writeln("");
+        terminalRef.current?.writeln(`[hello] protocol=${hello.protocol}, methods=${hello.features?.methods?.length ?? 0}`);
+        terminalRef.current?.write("> ");
+      },
+      onGap: (info) => {
+        terminalRef.current?.writeln("");
+        terminalRef.current?.writeln(`[gap] expected seq ${info.expected}, got ${info.received}`);
+        terminalRef.current?.write("> ");
+      },
+    });
+    clientRef.current = client;
 
     try {
-      await clientRef.current.connect();
+      await client.connect();
     } catch (err) {
-      setConnected(false);
+      setStatus("error");
       terminalRef.current?.writeln(`[gateway] connect error: ${err instanceof Error ? err.message : String(err)}`);
       terminalRef.current?.write("> ");
     }
-  }, [gatewayUrl]);
+  }, [gatewayUrl, handleStatusChange, handleEvent]);
 
   const disconnect = React.useCallback(() => {
-    clientRef.current?.disconnect();
+    clientRef.current?.stop();
     clientRef.current = null;
-    setConnected(false);
+    setStatus("disconnected");
     terminalRef.current?.writeln("");
     terminalRef.current?.writeln("[gateway] disconnected (manual)");
     terminalRef.current?.write("> ");
@@ -112,11 +113,11 @@ function DebugTerminalPage() {
   const runCommand = React.useCallback(
     async (raw: string) => {
       const trimmed = raw.trim();
-      if (!trimmed) {return;}
+      if (!trimmed) return;
 
       if (trimmed === "/clear") {
         terminalRef.current?.clear();
-        terminalRef.current?.writeln("Clawdbrain Debug Terminal");
+        terminalRef.current?.writeln("Clawdbrain Debug Terminal (v3 Protocol)");
         terminalRef.current?.write("> ");
         return;
       }
@@ -131,7 +132,29 @@ function DebugTerminalPage() {
         return;
       }
 
+      // Try to parse as RPC command
+      if (trimmed.startsWith("/rpc ")) {
+        const method = trimmed.slice(5).trim();
+        if (clientRef.current?.isConnected()) {
+          try {
+            const result = await clientRef.current.request(method, {});
+            terminalRef.current?.writeln("");
+            terminalRef.current?.writeln(`[rpc] ${JSON.stringify(result, null, 2)}`);
+          } catch (err) {
+            terminalRef.current?.writeln("");
+            terminalRef.current?.writeln(`[rpc error] ${err instanceof Error ? err.message : String(err)}`);
+          }
+          terminalRef.current?.write("> ");
+          return;
+        } else {
+          terminalRef.current?.writeln("\n[error] not connected");
+          terminalRef.current?.write("> ");
+          return;
+        }
+      }
+
       terminalRef.current?.writeln(`\nunknown command: ${trimmed}`);
+      terminalRef.current?.writeln("Try: /connect, /disconnect, /clear, /rpc <method>");
       terminalRef.current?.write("> ");
     },
     [connect, disconnect]
@@ -140,7 +163,7 @@ function DebugTerminalPage() {
   const onTerminalData = React.useCallback(
     (data: string) => {
       // Ignore escape sequences (arrows, etc)
-      if (data.startsWith("\u001b")) {return;}
+      if (data.startsWith("\u001b")) return;
 
       // Enter
       if (data === "\r") {
@@ -153,7 +176,7 @@ function DebugTerminalPage() {
 
       // Backspace
       if (data === "\u007f") {
-        if (inputBufferRef.current.length === 0) {return;}
+        if (inputBufferRef.current.length === 0) return;
         inputBufferRef.current = inputBufferRef.current.slice(0, -1);
         terminalRef.current?.write("\b \b");
         return;
@@ -181,12 +204,12 @@ function DebugTerminalPage() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-2xl font-semibold">Terminal</h1>
-                <Badge variant={connected ? "success" : "secondary"}>
-                  {connected ? "Connected" : "Disconnected"}
+                <Badge variant={connected ? "success" : status === "connecting" ? "secondary" : "secondary"}>
+                  {status === "connected" ? "Connected" : status === "connecting" ? "Connecting..." : "Disconnected"}
                 </Badge>
               </div>
               <p className="text-sm text-muted-foreground">
-                Minimal xterm.js wrapper wired to OpenClaw gateway events.
+                Debug terminal with v3 protocol gateway client.
               </p>
             </div>
           </div>

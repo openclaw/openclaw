@@ -40,6 +40,8 @@ export interface SessionActions {
   getCurrentRunId: (sessionKey: string) => string | null;
   /** Start streaming for a session */
   startStreaming: (sessionKey: string, runId: string) => void;
+  /** Set streaming content (snapshot) */
+  setStreamingContent: (sessionKey: string, content: string, kind?: "text" | "reasoning") => void;
   /** Append to streaming content */
   appendStreamingContent: (sessionKey: string, delta: string, kind?: "text" | "reasoning") => void;
   /** Add or update a tool call */
@@ -48,6 +50,8 @@ export interface SessionActions {
   finishStreaming: (sessionKey: string) => void;
   /** Clear streaming state for a session */
   clearStreaming: (sessionKey: string) => void;
+  /** Best-effort mapping for agent events that omit sessionKey */
+  findSessionKeyByRunId: (runId: string) => string | null;
   /** Add a pending message */
   addPendingMessage: (sessionKey: string, message: ChatMessage) => void;
   /** Clear pending messages */
@@ -100,6 +104,19 @@ export const useSessionStore = create<SessionState & SessionActions>()(
           toolCalls: [],
           isStreaming: true,
         };
+      });
+    },
+
+    setStreamingContent: (sessionKey, content, kind = "text") => {
+      set((state) => {
+        const streaming = state.streamingMessages[sessionKey];
+        if (!streaming) {return;}
+
+        if (kind === "reasoning") {
+          streaming.reasoningContent = content;
+        } else {
+          streaming.content = content;
+        }
       });
     },
 
@@ -156,6 +173,16 @@ export const useSessionStore = create<SessionState & SessionActions>()(
         delete state.streamingMessages[sessionKey];
         delete state.currentRunIds[sessionKey];
       });
+    },
+
+    findSessionKeyByRunId: (runId) => {
+      const { currentRunIds } = get();
+      for (const [sessionKey, id] of Object.entries(currentRunIds)) {
+        if (id === runId) {
+          return sessionKey;
+        }
+      }
+      return null;
     },
 
     addPendingMessage: (sessionKey, message) => {
