@@ -122,15 +122,13 @@ export class GatewayBrowserClient {
   private async sendConnect() {
     if (this.connectSent) return;
     this.connectSent = true;
-    if (this.connectTimer !== null) {
-      window.clearTimeout(this.connectTimer);
-      this.connectTimer = null;
-    }
+    this.clearConnectTimer();
 
-    // crypto.subtle is only available in secure contexts (HTTPS, localhost).
-    // Over plain HTTP, we skip device identity and fall back to token-only auth.
-    // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+
+    // crypto.subtle is only available in secure contexts (HTTPS, localhost)
     const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
+    // ... rest of the method continues
 
     const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
     const role = "operator";
@@ -155,7 +153,8 @@ export class GatewayBrowserClient {
           }
         : undefined;
 
-    let device:
+    let device:c
+
       | {
           id: string;
           publicKey: string;
