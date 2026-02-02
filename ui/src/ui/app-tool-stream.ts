@@ -190,6 +190,33 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  // Handle assistant stream events
+  if (payload.stream === "assistant") {
+    const data = payload.data ?? {};
+    const text = data.text;
+
+    if (typeof text === "string" && text.length > 0) {
+      const appHost = host as unknown as {
+        chatStream: string | null;
+        chatStreamStartedAt: number | null;
+        chatRunId: string | null;
+        requestUpdate?: () => void;
+      };
+
+      if (!appHost.chatRunId) {
+        appHost.chatRunId = payload.runId;
+      }
+
+      if (payload.runId === appHost.chatRunId) {
+        appHost.chatStream = text;
+        if (!appHost.chatStreamStartedAt) {
+          appHost.chatStreamStartedAt = payload.ts;
+        }
+      }
+    }
+    return;
+  }
+
   if (payload.stream !== "tool") return;
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && sessionKey !== host.sessionKey) return;
