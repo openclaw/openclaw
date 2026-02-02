@@ -22,6 +22,44 @@ import { resolveSlackBotToken } from "./token.js";
 
 const SLACK_TEXT_LIMIT = 4000;
 
+// Prefix for OpenClaw-generated action IDs to scope interaction handlers
+const OPENCLAW_ACTION_PREFIX = "openclaw:";
+
+/**
+ * Recursively prefix action_ids in Block Kit blocks with the OpenClaw prefix.
+ * This ensures our interaction handler only catches actions we generated.
+ */
+function prefixBlockActionIds(blocks: (Block | KnownBlock)[]): (Block | KnownBlock)[] {
+  return blocks.map((block) => {
+    // Deep clone to avoid mutating original
+    const cloned = JSON.parse(JSON.stringify(block)) as Block | KnownBlock;
+
+    // Handle elements in actions blocks and accessory elements
+    if ("elements" in cloned && Array.isArray(cloned.elements)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (cloned as any).elements = cloned.elements.map((element: unknown) => {
+        if (typeof element === "object" && element !== null && "action_id" in element) {
+          const el = element as { action_id?: string };
+          if (el.action_id && !el.action_id.startsWith(OPENCLAW_ACTION_PREFIX)) {
+            el.action_id = `${OPENCLAW_ACTION_PREFIX}${el.action_id}`;
+          }
+        }
+        return element;
+      });
+    }
+
+    // Handle accessory in section blocks
+    if ("accessory" in cloned && cloned.accessory && typeof cloned.accessory === "object") {
+      const accessory = cloned.accessory as { action_id?: string };
+      if (accessory.action_id && !accessory.action_id.startsWith(OPENCLAW_ACTION_PREFIX)) {
+        accessory.action_id = `${OPENCLAW_ACTION_PREFIX}${accessory.action_id}`;
+      }
+    }
+
+    return cloned;
+  });
+}
+
 type SlackRecipient =
   | {
       kind: "user";
@@ -287,11 +325,13 @@ export async function sendMessageSlack(
   } else if (hasBlocks) {
     // When blocks are provided, send them with the first chunk
     // Blocks are only supported on the first message (Slack limitation)
+    // Prefix action_ids to ensure our interaction handler only catches OpenClaw-generated actions
     const [firstChunk, ...rest] = chunks.length ? chunks : [""];
+    const prefixedBlocks = prefixBlockActionIds(opts.blocks!);
     const response = await client.chat.postMessage({
       channel: channelId,
       text: firstChunk || " ", // Fallback text is required even with blocks
-      blocks: opts.blocks,
+      blocks: prefixedBlocks,
       thread_ts: opts.threadTs,
     });
     lastMessageId = response.ts ?? lastMessageId;
