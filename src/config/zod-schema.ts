@@ -87,7 +87,7 @@ const MemorySchema = z
   .strict()
   .optional();
 
-export const MoltbotSchema = z
+export const OpenClawSchema = z
   .object({
     meta: z
       .object({
