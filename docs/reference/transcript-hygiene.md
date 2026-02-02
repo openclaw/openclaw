@@ -19,7 +19,7 @@ file is backed up alongside the session file.
 Scope includes:
 
 - Tool call id sanitization
-- Tool call input validation (drop malformed tool_use/tool_call blocks missing input or arguments)
+- Tool call input validation
 - Tool result pairing repair
 - Turn validation / ordering
 - Thought signature cleanup
