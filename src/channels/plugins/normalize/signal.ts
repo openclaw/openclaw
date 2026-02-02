@@ -13,7 +13,7 @@ export function normalizeSignalMessagingTarget(raw: string): string | undefined 
   const lower = normalized.toLowerCase();
   if (lower.startsWith("group:")) {
     const id = normalized.slice("group:".length).trim();
-    return id ? `group:${id}`.toLowerCase() : undefined;
+    return id ? `group:${id}` : undefined; // preserve base64 case
   }
   if (lower.startsWith("username:")) {
     const id = normalized.slice("username:".length).trim();
