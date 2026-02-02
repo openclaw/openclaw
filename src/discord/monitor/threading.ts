@@ -358,8 +358,24 @@ export async function maybeCreateDiscordAutoThread(params: {
     return createdId || undefined;
   } catch (err) {
     logVerbose(
-      `discord: autoThread failed for ${params.message.channelId}/${params.message.id}: ${String(err)}`,
+      `discord: autoThread creation failed for ${params.message.channelId}/${params.message.id}: ${String(err)}`,
     );
+    // Race condition: another agent may have already created a thread on this
+    // message. Re-fetch the message to check for an existing thread.
+    try {
+      const msg = (await params.client.rest.get(
+        Routes.channelMessage(params.message.channelId, params.message.id),
+      )) as { thread?: { id?: string } };
+      const existingThreadId = msg?.thread?.id ? String(msg.thread.id) : "";
+      if (existingThreadId) {
+        logVerbose(
+          `discord: autoThread reusing existing thread ${existingThreadId} on ${params.message.channelId}/${params.message.id}`,
+        );
+        return existingThreadId;
+      }
+    } catch {
+      // If the refetch also fails, fall through to return undefined.
+    }
     return undefined;
   }
 }

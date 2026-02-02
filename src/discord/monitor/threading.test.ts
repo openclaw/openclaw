@@ -2,6 +2,7 @@ import type { Client } from "@buape/carbon";
 import { describe, expect, it } from "vitest";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import {
+  maybeCreateDiscordAutoThread,
   resolveDiscordAutoThreadContext,
   resolveDiscordAutoThreadReplyPlan,
   resolveDiscordReplyDeliveryPlan,
@@ -109,6 +110,73 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
     // "first" returns the reference only once.
     expect(plan.replyReference.use()).toBe("m1");
     expect(plan.replyReference.use()).toBeUndefined();
+  });
+});
+
+describe("maybeCreateDiscordAutoThread", () => {
+  it("returns existing thread ID when creation fails due to race condition", async () => {
+    // First call succeeds (simulating another agent creating the thread)
+    let callCount = 0;
+    const client = {
+      rest: {
+        post: async () => {
+          callCount++;
+          throw new Error("A thread has already been created on this message");
+        },
+        get: async () => {
+          // Return message with existing thread (simulating race condition resolution)
+          return { thread: { id: "existing-thread" } };
+        },
+      },
+    } as unknown as Client;
+
+    const result = await maybeCreateDiscordAutoThread({
+      client,
+      message: {
+        id: "m1",
+        channelId: "parent",
+      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
+      isGuildMessage: true,
+      channelConfig: {
+        autoThread: true,
+      } as unknown as import("./allow-list.js").DiscordChannelConfigResolved,
+      threadChannel: null,
+      baseText: "hello",
+      combinedBody: "hello",
+    });
+
+    expect(result).toBe("existing-thread");
+  });
+
+  it("returns undefined when creation fails and no existing thread found", async () => {
+    const client = {
+      rest: {
+        post: async () => {
+          throw new Error("Some other error");
+        },
+        get: async () => {
+          // Message has no thread
+          return { thread: null };
+        },
+      },
+    } as unknown as Client;
+
+    const result = await maybeCreateDiscordAutoThread({
+      client,
+      message: {
+        id: "m1",
+        channelId: "parent",
+      } as unknown as import("./listeners.js").DiscordMessageEvent["message"],
+      isGuildMessage: true,
+      channelConfig: {
+        autoThread: true,
+      } as unknown as import("./allow-list.js").DiscordChannelConfigResolved,
+      threadChannel: null,
+      baseText: "hello",
+      combinedBody: "hello",
+    });
+
+    expect(result).toBeUndefined();
   });
 });
 
