@@ -7,6 +7,22 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 
+function parseRestartDelayMs(value: unknown): number | undefined {
+  // Be liberal in what we accept: callers may pass numbers as strings due to env/flag interpolation.
+  const nRaw =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim() && Number.isFinite(Number(value))
+        ? Number(value)
+        : null;
+  if (nRaw === null || !Number.isFinite(nRaw)) {
+    return undefined;
+  }
+  // Match scheduleGatewaySigusr1Restart clamping (0..60000) so behavior is obvious to callers.
+  const ms = Math.floor(nRaw);
+  return Math.min(Math.max(ms, 0), 60_000);
+}
+
 export const gatewayHandlers: GatewayRequestHandlers = {
   "gateway.restart": async ({ params, respond }) => {
     const reason = typeof params.reason === "string" ? params.reason.trim() : "";
@@ -15,10 +31,7 @@ export const gatewayHandlers: GatewayRequestHandlers = {
       typeof params.sessionKey === "string" ? params.sessionKey.trim() || undefined : undefined;
 
     const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
-    const restartDelayMs =
-      typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
-        ? Math.max(0, Math.floor(restartDelayMsRaw))
-        : undefined;
+    const restartDelayMs = parseRestartDelayMs(restartDelayMsRaw);
 
     const restartReason = reason || "gateway.restart";
 
