@@ -15,7 +15,7 @@ export function createTelegramDraftStream(params: {
   chatId: number;
   draftId: number;
   maxChars?: number;
-  thread?: TelegramThreadSpec | number | null;
+  thread?: TelegramThreadSpec | null;
   throttleMs?: number;
   log?: (message: string) => void;
   warn?: (message: string) => void;
