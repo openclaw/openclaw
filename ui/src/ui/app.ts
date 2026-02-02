@@ -323,7 +323,10 @@ export class OpenClawApp extends LitElement {
 
   scrollToBottom() {
     resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
-    scheduleChatScrollInternal(this as unknown as Parameters<typeof scheduleChatScrollInternal>[0], true);
+    scheduleChatScrollInternal(
+      this as unknown as Parameters<typeof scheduleChatScrollInternal>[0],
+      true,
+    );
   }
 
   async loadAssistantIdentity() {

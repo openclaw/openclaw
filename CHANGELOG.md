@@ -45,7 +45,7 @@ Docs: https://docs.openclaw.ai
 - Streaming: stabilize partial streaming filters.
 - Auto-reply: avoid referencing workspace files in /new greeting prompt. (#5706) Thanks @bravostation.
 - Tools: align tool execute adapters/signatures (legacy + parameter order + arg normalization).
-- Tools: treat "*" tool allowlist entries as valid to avoid spurious unknown-entry warnings.
+- Tools: treat "\*" tool allowlist entries as valid to avoid spurious unknown-entry warnings.
 - Skills: update session-logs paths from .clawdbot to .openclaw. (#4502)
 - Slack: harden media fetch limits and Slack file URL validation. (#6639) Thanks @davidiach.
 - Lint: satisfy curly rule after import sorting. (#6310)

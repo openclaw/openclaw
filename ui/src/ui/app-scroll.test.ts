@@ -6,12 +6,14 @@ import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./app-scr
 /* ------------------------------------------------------------------ */
 
 /** Minimal ScrollHost stub for unit tests. */
-function createScrollHost(overrides: {
-  scrollHeight?: number;
-  scrollTop?: number;
-  clientHeight?: number;
-  overflowY?: string;
-} = {}) {
+function createScrollHost(
+  overrides: {
+    scrollHeight?: number;
+    scrollTop?: number;
+    clientHeight?: number;
+    overflowY?: string;
+  } = {},
+) {
   const {
     scrollHeight = 2000,
     scrollTop = 1500,
