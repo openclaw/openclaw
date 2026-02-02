@@ -13,7 +13,7 @@ AWS Bedrock. This is a separate integration from the Bedrock provider.
 
 Available models:
 
-- `nova-2-lite-v1` - 1M context, 65k output, multimodal (text + image)
+- `nova-2-lite-v1` - 1M context, 65k output, multimodal (text + image), extended thinking
 - `nova-2-pro-v1` - 1M context, 65k output, multimodal (text + image)
 
 ## Setup
@@ -35,6 +35,36 @@ openclaw onboard --auth-choice amazon-nova-api-key
 ```bash
 openclaw agent --model amazon-nova/nova-2-lite-v1
 ```
+
+## Extended Thinking
+
+Nova 2 Lite supports extended reasoning via the `reasoning_effort` parameter. Configure it
+in your model params:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "amazon-nova/nova-2-lite-v1" },
+      models: {
+        "amazon-nova/nova-2-lite-v1": {
+          alias: "Nova 2 Lite",
+          params: {
+            reasoning_effort: "high", // "disabled", "low", "medium", "high"
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+| Level | Behavior |
+|-------|----------|
+| `disabled` | No extended thinking |
+| `low` | Fast, basic reasoning |
+| `medium` | Balanced reasoning and speed |
+| `high` | Deep, thorough analysis |
 
 ## Config snippet
 
@@ -62,7 +92,7 @@ openclaw agent --model amazon-nova/nova-2-lite-v1
           {
             id: "nova-2-lite-v1",
             name: "Amazon Nova 2 Lite",
-            reasoning: false,
+            reasoning: true,
             input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 1000000,

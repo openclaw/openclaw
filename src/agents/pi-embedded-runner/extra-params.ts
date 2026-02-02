@@ -80,6 +80,16 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
   }
+  // Pass through reasoning_effort for models that support extended thinking (e.g., Amazon Nova 2)
+  // Valid values: "disabled", "low", "medium", "high"
+  if (
+    extraParams.reasoning_effort === "disabled" ||
+    extraParams.reasoning_effort === "low" ||
+    extraParams.reasoning_effort === "medium" ||
+    extraParams.reasoning_effort === "high"
+  ) {
+    (streamParams as Record<string, unknown>).reasoning_effort = extraParams.reasoning_effort;
+  }
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
