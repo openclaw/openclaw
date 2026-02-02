@@ -12,16 +12,18 @@ export {
   GATEWAY_CLIENT_MODE,
   DEFAULT_ROLE,
   DEFAULT_SCOPES,
+  type GatewayConnectionState,
   type GatewayStatus,
   type GatewayEvent,
   type GatewayClientConfig,
   type GatewayRequestOptions,
+  type GatewayAuthCredentials,
   type GatewayEventFrame,
   type GatewayResponseFrame,
   type GatewayHelloOk,
 } from "./gateway-client";
 
-// Device auth
+// Device auth (token storage and payload builder)
 export {
   loadDeviceAuthToken,
   storeDeviceAuthToken,
@@ -31,10 +33,23 @@ export {
   type DeviceAuthPayloadParams,
 } from "./device-auth";
 
+// Device auth storage (shared tokens, preferences)
+export {
+  clearAllDeviceAuthTokens,
+  loadSharedGatewayToken,
+  storeSharedGatewayToken,
+  clearSharedGatewayToken,
+  loadAuthMethodPreference,
+  storeAuthMethodPreference,
+  type AuthMethod,
+} from "./device-auth-storage";
+
 // Device identity
 export {
   loadOrCreateDeviceIdentity,
   signDevicePayload,
+  clearDeviceIdentity,
+  isSecureContext,
   type DeviceIdentity,
 } from "./device-identity";
 

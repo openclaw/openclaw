@@ -79,6 +79,7 @@ import { renderChat } from "./views/chat";
 import { renderConfig } from "./views/config";
 import { renderCron } from "./views/cron";
 import { renderDebug } from "./views/debug";
+import { renderAuthModal } from "./components/auth-modal";
 import { renderExecApprovalPrompt } from "./views/exec-approval";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation";
 import { renderInstances } from "./views/instances";
@@ -601,6 +602,17 @@ export function renderApp(state: AppViewState) {
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}
+      ${renderAuthModal({
+        open: state.authRequired,
+        method: state.authMethod,
+        value: state.authValue,
+        error: state.authError,
+        gatewayUrl: state.settings.gatewayUrl,
+        onMethodChange: (method) => state.handleAuthMethodChange(method),
+        onValueChange: (value) => state.handleAuthValueChange(value),
+        onSubmit: () => state.handleAuthSubmit(),
+        onCancel: () => state.handleAuthCancel(),
+      })}
     </div>
   `;
 }

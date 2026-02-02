@@ -536,6 +536,14 @@ export async function resolveImplicitBedrockProvider(params: {
     return null;
   }
   if (enabled !== true && !hasAwsCreds) {
+    console.debug("[bedrock] Skipping implicit registration: no AWS credentials detected");
+    return null;
+  }
+  if (enabled === true && !hasAwsCreds) {
+    console.warn(
+      "[bedrock] Discovery enabled but no AWS credentials found. " +
+        "Set AWS_PROFILE or other AWS SDK environment variables.",
+    );
     return null;
   }
 

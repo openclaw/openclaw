@@ -155,6 +155,46 @@ export const MarkdownConfigSchema = z
   .strict()
   .optional();
 
+// ---------------------------------------------------------------------------
+// MCP (Model Context Protocol) servers
+// ---------------------------------------------------------------------------
+
+const McpServerBaseSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    label: z.string().optional(),
+  })
+  .strict();
+
+const McpStdioServerSchema = McpServerBaseSchema.extend({
+  transport: z.literal("stdio").optional(),
+  command: z.string().min(1),
+  args: z.array(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  cwd: z.string().optional(),
+  stderr: z.enum(["inherit", "pipe"]).optional(),
+}).strict();
+
+const McpSseServerSchema = McpServerBaseSchema.extend({
+  transport: z.literal("sse"),
+  url: z.string().min(1),
+  headers: z.record(z.string(), z.string()).optional(),
+}).strict();
+
+const McpHttpServerSchema = McpServerBaseSchema.extend({
+  transport: z.literal("http"),
+  url: z.string().min(1),
+  headers: z.record(z.string(), z.string()).optional(),
+}).strict();
+
+export const McpServerSchema = z.union([
+  McpStdioServerSchema,
+  McpSseServerSchema,
+  McpHttpServerSchema,
+]);
+
+export const McpServersSchema = z.record(z.string(), McpServerSchema).optional();
+
 export const TtsProviderSchema = z.enum(["elevenlabs", "openai", "edge"]);
 export const TtsModeSchema = z.enum(["final", "all"]);
 export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);

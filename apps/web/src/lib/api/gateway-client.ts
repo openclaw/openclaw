@@ -9,6 +9,7 @@
  * - Standard frame shapes: { type: "req" | "res" | "event" }
  * - Automatic reconnection with exponential backoff
  * - Event subscriptions
+ * - Connection state machine for UI integration
  */
 
 import {
@@ -57,9 +58,18 @@ export type GatewayHelloOk = {
   policy?: { tickIntervalMs?: number };
 };
 
-// Public types
+// =====================================================================
+// Connection State Machine
+// =====================================================================
 
-export type GatewayStatus = "disconnected" | "connecting" | "connected" | "error";
+export type GatewayConnectionState =
+  | { status: "disconnected" }
+  | { status: "connecting" }
+  | { status: "auth_required"; error?: string }
+  | { status: "connected" }
+  | { status: "error"; error: string };
+
+export type GatewayStatus = GatewayConnectionState["status"];
 
 export interface GatewayEvent {
   event: string;
@@ -71,6 +81,11 @@ export interface GatewayRequestOptions {
   timeout?: number;
 }
 
+export interface GatewayAuthCredentials {
+  type: "token" | "password";
+  value: string;
+}
+
 export interface GatewayClientConfig {
   url?: string;
   token?: string;
@@ -78,7 +93,7 @@ export interface GatewayClientConfig {
   clientVersion?: string;
   platform?: string;
   instanceId?: string;
-  onStatusChange?: (status: GatewayStatus) => void;
+  onStateChange?: (state: GatewayConnectionState) => void;
   onEvent?: (event: GatewayEvent) => void;
   onError?: (error: Error) => void;
   onHello?: (hello: GatewayHelloOk) => void;
@@ -136,7 +151,7 @@ function generateUUID(): string {
 class GatewayClient {
   private ws: WebSocket | null = null;
   private config: GatewayClientConfig;
-  private status: GatewayStatus = "disconnected";
+  private connectionState: GatewayConnectionState = { status: "disconnected" };
   private pending = new Map<string, PendingRequest>();
   private backoffMs = INITIAL_BACKOFF;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -151,23 +166,94 @@ class GatewayClient {
   private connectSent = false;
   private lastSeq: number | null = null;
 
+  // State listeners for React integration
+  private stateListeners = new Set<(state: GatewayConnectionState) => void>();
+
+  // Credentials that can be updated from the auth modal
+  private authToken: string | null = null;
+  private authPassword: string | null = null;
+
   constructor(config: GatewayClientConfig = {}) {
     this.config = config;
+    this.authToken = config.token ?? null;
+    this.authPassword = config.password ?? null;
   }
 
-  private setStatus(status: GatewayStatus) {
-    if (this.status !== status) {
-      this.status = status;
-      this.config.onStatusChange?.(status);
+  private setConnectionState(state: GatewayConnectionState) {
+    if (
+      this.connectionState.status !== state.status ||
+      (state.status === "auth_required" &&
+        this.connectionState.status === "auth_required" &&
+        (state as { error?: string }).error !== (this.connectionState as { error?: string }).error) ||
+      (state.status === "error" &&
+        this.connectionState.status === "error" &&
+        (state as { error: string }).error !== (this.connectionState as { error: string }).error)
+    ) {
+      this.connectionState = state;
+      this.config.onStateChange?.(state);
+      this.notifyStateChange();
     }
   }
 
+  private notifyStateChange() {
+    for (const listener of this.stateListeners) {
+      try {
+        listener(this.connectionState);
+      } catch (err) {
+        console.error("[gateway] state listener error:", err);
+      }
+    }
+  }
+
+  getConnectionState(): GatewayConnectionState {
+    return this.connectionState;
+  }
+
   getStatus(): GatewayStatus {
-    return this.status;
+    return this.connectionState.status;
   }
 
   isConnected(): boolean {
-    return this.status === "connected" && this.ws?.readyState === WebSocket.OPEN;
+    return this.connectionState.status === "connected" && this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Subscribe to connection state changes.
+   * Returns an unsubscribe function.
+   */
+  onStateChange(listener: (state: GatewayConnectionState) => void): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
+  }
+
+  /**
+   * Set auth credentials from the auth modal.
+   * Call retryConnect() after setting credentials to attempt connection.
+   */
+  setAuthCredentials(credentials: GatewayAuthCredentials) {
+    if (credentials.type === "token") {
+      this.authToken = credentials.value;
+      this.authPassword = null;
+    } else {
+      this.authPassword = credentials.value;
+    }
+  }
+
+  /**
+   * Clear stored credentials.
+   */
+  clearCredentials() {
+    this.authToken = null;
+    this.authPassword = null;
+  }
+
+  /**
+   * Retry connection after setting credentials.
+   */
+  retryConnect(): Promise<void> {
+    this.connectPromise = null;
+    this.setConnectionState({ status: "connecting" });
+    return this.connect();
   }
 
   connect(): Promise<void> {
@@ -189,7 +275,7 @@ class GatewayClient {
     if (this.stopped) return;
 
     const url = this.config.url || DEFAULT_GATEWAY_URL;
-    this.setStatus("connecting");
+    this.setConnectionState({ status: "connecting" });
     this.connectNonce = null;
     this.connectSent = false;
 
@@ -211,18 +297,32 @@ class GatewayClient {
         this.flushPending(new Error(`Connection closed (${ev.code}): ${reason}`));
         this.config.onClose?.({ code: ev.code, reason });
 
+        // Check if this was an auth failure
+        if (ev.code === CONNECT_FAILED_CLOSE_CODE || reason.includes("auth") || reason.includes("unauthorized")) {
+          this.setConnectionState({
+            status: "auth_required",
+            error: reason || "Authentication failed",
+          });
+          // Don't auto-reconnect on auth failure
+          this.connectPromise = null;
+          this.connectReject?.(new Error(reason || "Authentication failed"));
+          this.connectReject = null;
+          this.connectResolve = null;
+          return;
+        }
+
         if (!this.stopped) {
-          this.setStatus("disconnected");
+          this.setConnectionState({ status: "disconnected" });
           this.scheduleReconnect();
         }
       };
 
       this.ws.onerror = () => {
-        this.setStatus("error");
+        this.setConnectionState({ status: "error", error: "WebSocket error" });
         this.config.onError?.(new Error("WebSocket error"));
       };
     } catch (error) {
-      this.setStatus("error");
+      this.setConnectionState({ status: "error", error: String(error) });
       this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
       this.scheduleReconnect();
     }
@@ -257,7 +357,7 @@ class GatewayClient {
     const scopes = DEFAULT_SCOPES;
     let deviceIdentity: DeviceIdentity | null = null;
     let canFallbackToShared = false;
-    let authToken = this.config.token;
+    let authToken = this.authToken ?? this.config.token;
 
     if (isSecureContext) {
       try {
@@ -268,7 +368,7 @@ class GatewayClient {
         })?.token;
         if (storedToken) {
           authToken = storedToken;
-          canFallbackToShared = Boolean(this.config.token);
+          canFallbackToShared = Boolean(this.authToken ?? this.config.token);
         }
       } catch (err) {
         console.warn("[gateway] failed to load device identity:", err);
@@ -276,10 +376,10 @@ class GatewayClient {
     }
 
     const auth =
-      authToken || this.config.password
+      authToken || this.authPassword || this.config.password
         ? {
             token: authToken,
-            password: this.config.password,
+            password: this.authPassword ?? this.config.password,
           }
         : undefined;
 
@@ -353,7 +453,7 @@ class GatewayClient {
       }
 
       this.backoffMs = INITIAL_BACKOFF;
-      this.setStatus("connected");
+      this.setConnectionState({ status: "connected" });
       this.config.onHello?.(hello);
       this.connectResolve?.();
       this.connectPromise = null;
@@ -363,8 +463,15 @@ class GatewayClient {
       if (canFallbackToShared && deviceIdentity) {
         clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
       }
-      this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
       const error = err instanceof Error ? err : new Error(String(err));
+      const errorMsg = error.message;
+
+      // Check if this is an auth error
+      if (errorMsg.includes("auth") || errorMsg.includes("unauthorized") || errorMsg.includes("token")) {
+        this.setConnectionState({ status: "auth_required", error: errorMsg });
+      }
+
+      this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
       this.config.onError?.(error);
       this.connectReject?.(error);
       this.connectPromise = null;
@@ -471,7 +578,7 @@ class GatewayClient {
     }
 
     this.flushPending(new Error("Client stopped"));
-    this.setStatus("disconnected");
+    this.setConnectionState({ status: "disconnected" });
 
     if (this.connectReject) {
       this.connectReject(new Error("Client stopped"));
@@ -513,7 +620,10 @@ class GatewayClient {
   }
 }
 
-// Singleton instance for the app
+// =====================================================================
+// Singleton & Factory
+// =====================================================================
+
 let gatewayClient: GatewayClient | null = null;
 
 export function getGatewayClient(config?: GatewayClientConfig): GatewayClient {

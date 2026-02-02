@@ -71,6 +71,11 @@ export type AppViewState = {
   execApprovalBusy: boolean;
   execApprovalError: string | null;
   pendingGatewayUrl: string | null;
+  // Auth modal state
+  authRequired: boolean;
+  authError: string | null;
+  authMethod: "token" | "password";
+  authValue: string;
   configLoading: boolean;
   configRaw: string;
   configRawOriginal: string;
@@ -165,6 +170,11 @@ export type AppViewState = {
   handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
   handleGatewayUrlConfirm: () => void;
   handleGatewayUrlCancel: () => void;
+  // Auth modal handlers
+  handleAuthMethodChange: (method: "token" | "password") => void;
+  handleAuthValueChange: (value: string) => void;
+  handleAuthSubmit: () => void;
+  handleAuthCancel: () => void;
   handleConfigLoad: () => Promise<void>;
   handleConfigSave: () => Promise<void>;
   handleConfigApply: () => Promise<void>;

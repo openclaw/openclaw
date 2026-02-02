@@ -123,6 +123,8 @@ export function createOpenClawCodingTools(options?: {
   workspaceDir?: string;
   config?: OpenClawConfig;
   abortSignal?: AbortSignal;
+  /** Extra tools to append before policy filtering (e.g., MCP tools). */
+  extraTools?: AnyAgentTool[];
   /**
    * Provider of the currently selected model (used for provider-specific tool quirks).
    * Example: "anthropic", "openai", "google", "openai-codex".
@@ -316,6 +318,8 @@ export function createOpenClawCodingTools(options?: {
     processTool as unknown as AnyAgentTool,
     // Channel docking: include channel-defined agent tools (login, etc.).
     ...listChannelAgentTools({ cfg: options?.config }),
+    // External/native tool extensions (e.g., MCP server tools).
+    ...(options?.extraTools ?? []),
     ...createOpenClawTools({
       sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
       allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,

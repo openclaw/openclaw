@@ -414,8 +414,9 @@ export function isProviderConfigured(params: {
   }
 
   // Check for special amazon-bedrock case (uses aws-sdk by default)
+  // Only report as configured if AWS credentials are actually available
   if (authOverride === undefined && normalized === "amazon-bedrock") {
-    return true;
+    return resolveAwsSdkEnvVarName() !== undefined;
   }
 
   // Check for auth profiles

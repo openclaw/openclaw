@@ -2,24 +2,25 @@
  * Device Identity Management
  *
  * Manages Ed25519 keypairs for device authentication with the gateway.
+ * Uses @noble/ed25519 for key generation and signing (compatible with Gateway server).
  * The identity is generated once and stored in localStorage.
  */
 
 import { getPublicKeyAsync, signAsync, utils } from "@noble/ed25519";
 
-type StoredIdentity = {
+export interface DeviceIdentity {
+  deviceId: string;
+  publicKey: string;
+  privateKey: string;
+}
+
+interface StoredIdentity {
   version: 1;
   deviceId: string;
   publicKey: string;
   privateKey: string;
   createdAtMs: number;
-};
-
-export type DeviceIdentity = {
-  deviceId: string;
-  publicKey: string;
-  privateKey: string;
-};
+}
 
 const STORAGE_KEY = "clawdbrain-device-identity-v1";
 
@@ -107,9 +108,24 @@ export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {
   return identity;
 }
 
-export async function signDevicePayload(privateKeyBase64Url: string, payload: string) {
+export async function signDevicePayload(privateKeyBase64Url: string, payload: string): Promise<string> {
   const key = base64UrlDecode(privateKeyBase64Url);
   const data = new TextEncoder().encode(payload);
   const sig = await signAsync(data, key);
   return base64UrlEncode(sig);
+}
+
+/**
+ * Clears the stored device identity.
+ * Use with caution - this will require re-pairing with the Gateway.
+ */
+export function clearDeviceIdentity(): void {
+  localStorage.removeItem(STORAGE_KEY);
+}
+
+/**
+ * Checks if crypto.subtle is available (needed for fingerprinting).
+ */
+export function isSecureContext(): boolean {
+  return typeof crypto !== "undefined" && !!crypto.subtle;
 }

@@ -12,6 +12,7 @@ import {
   isFailoverError,
   isTimeoutError,
 } from "./failover-error.js";
+import { isProviderConfigured } from "./model-auth.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -148,6 +149,7 @@ function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   model: string;
+  agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
 }): ModelCandidate[] {
@@ -217,7 +219,17 @@ function resolveFallbackCandidates(params: {
     addCandidate({ provider: primary.provider, model: primary.model }, false);
   }
 
-  return candidates;
+  // Filter out providers without authentication
+  const authenticatedCandidates = candidates.filter((candidate) => {
+    const configured = isProviderConfigured({
+      provider: candidate.provider,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    });
+    return configured;
+  });
+
+  return authenticatedCandidates;
 }
 
 export async function runWithModelFallback<T>(params: {
@@ -245,8 +257,18 @@ export async function runWithModelFallback<T>(params: {
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
+    agentDir: params.agentDir,
     fallbacksOverride: params.fallbacksOverride,
   });
+
+  if (candidates.length === 0) {
+    throw new Error(
+      `No authenticated providers available for model failover. ` +
+        `Primary: ${params.provider}/${params.model}. ` +
+        `Configure authentication using 'clawdbrain login' or set API keys in environment.`,
+    );
+  }
+
   const authStore = params.cfg
     ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
     : null;

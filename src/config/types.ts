@@ -16,6 +16,7 @@ export * from "./types.hooks.js";
 export * from "./types.imessage.js";
 export * from "./types.messages.js";
 export * from "./types.models.js";
+export * from "./types.mcp.js";
 export * from "./types.node-host.js";
 export * from "./types.msteams.js";
 export * from "./types.plugins.js";

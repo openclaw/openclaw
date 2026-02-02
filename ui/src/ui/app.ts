@@ -150,6 +150,12 @@ export class OpenClawApp extends LitElement {
   @state() execApprovalError: string | null = null;
   @state() pendingGatewayUrl: string | null = null;
 
+  // Auth state for Gateway authentication modal
+  @state() authRequired = false;
+  @state() authError: string | null = null;
+  @state() authMethod: "token" | "password" = "token";
+  @state() authValue = "";
+
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";
   @state() configRawOriginal = "";
@@ -435,6 +441,42 @@ export class OpenClawApp extends LitElement {
 
   handleGatewayUrlCancel() {
     this.pendingGatewayUrl = null;
+  }
+
+  // Auth modal handlers
+  handleAuthMethodChange(method: "token" | "password") {
+    this.authMethod = method;
+    this.authValue = "";
+    this.authError = null;
+  }
+
+  handleAuthValueChange(value: string) {
+    this.authValue = value;
+  }
+
+  handleAuthSubmit() {
+    if (!this.authValue.trim()) {
+      this.authError = "Please enter a value";
+      return;
+    }
+    // Update settings with new credentials and reconnect
+    const nextSettings = { ...this.settings };
+    if (this.authMethod === "token") {
+      nextSettings.token = this.authValue.trim();
+    } else {
+      this.password = this.authValue.trim();
+    }
+    this.authRequired = false;
+    this.authError = null;
+    this.authValue = "";
+    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], nextSettings);
+    this.connect();
+  }
+
+  handleAuthCancel() {
+    this.authRequired = false;
+    this.authError = null;
+    this.authValue = "";
   }
 
   // Sidebar handlers for tool output viewing

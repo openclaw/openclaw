@@ -21,6 +21,35 @@ vi.mock("../agents/pi-embedded.js", () => piEmbeddedMock);
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
 }));
+vi.mock("../agents/auth-profiles.js", () => ({
+  ensureAuthProfileStore: vi.fn(() => ({
+    profiles: {
+      "anthropic-default": {
+        id: "anthropic-default",
+        provider: "anthropic",
+        type: "api_key",
+        key: "test-key",
+      },
+      "openai-default": {
+        id: "openai-default",
+        provider: "openai",
+        type: "api_key",
+        key: "test-key",
+      },
+    },
+    usageStats: {},
+  })),
+  resolveAuthProfileOrder: vi.fn((params: { provider: string }) => {
+    if (params.provider === "anthropic") {
+      return ["anthropic-default"];
+    }
+    if (params.provider === "openai") {
+      return ["openai-default"];
+    }
+    return ["default"];
+  }),
+  isProfileInCooldown: vi.fn(() => false),
+}));
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-stream-" });

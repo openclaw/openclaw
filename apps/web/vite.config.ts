@@ -41,7 +41,28 @@ export default defineConfig(({ mode }) => {
         output: {
           manualChunks(id) {
             // Split large vendor libraries into separate chunks
+            // Strategy: Group packages by feature/domain to minimize circular dependencies
             if (id.includes('node_modules')) {
+              // Large animation library
+              if (id.includes('framer-motion')) {
+                return 'vendor-framer';
+              }
+              // Icon library (large with many icons)
+              if (id.includes('lucide-react')) {
+                return 'vendor-lucide';
+              }
+              // Vercel AI SDK
+              if (id.includes('/ai/') || id.includes('node_modules/ai/')) {
+                return 'vendor-ai';
+              }
+              // TanStack ecosystem (check before React to avoid @tanstack/react-* being caught by React check)
+              if (id.includes('@tanstack/')) {
+                return 'vendor-tanstack';
+              }
+              // Radix UI components (check before React to avoid @radix-ui/react-* being caught by React check)
+              if (id.includes('@radix-ui/')) {
+                return 'vendor-radix';
+              }
               // 3D rendering libraries (from reagraph)
               if (id.includes('three') || id.includes('@react-three/') || id.includes('@react-spring/three')) {
                 return 'vendor-three';
@@ -57,17 +78,32 @@ export default defineConfig(({ mode }) => {
               if (id.includes('reagraph') || id.includes('graphology')) {
                 return 'vendor-graph';
               }
-              // React core
-              if (id.includes('react') || id.includes('react-dom')) {
+              // React ecosystem - bundle React core with state management to avoid circular deps
+              // zustand and immer are React-specific, so keep them with React
+              if (
+                id.match(/\/react\//) ||
+                id.match(/\/react-dom\//) ||
+                id.includes('zustand') ||
+                id.includes('immer') ||
+                id.includes('use-sync-external-store')
+              ) {
                 return 'vendor-react';
               }
-              // Radix UI components
-              if (id.includes('@radix-ui/')) {
-                return 'vendor-radix';
+              // Flow diagrams
+              if (id.includes('@xyflow/')) {
+                return 'vendor-xyflow';
               }
-              // TanStack ecosystem
-              if (id.includes('@tanstack/')) {
-                return 'vendor-tanstack';
+              // Form libraries with validation
+              if (id.includes('react-hook-form') || id.includes('@hookform/')) {
+                return 'vendor-forms';
+              }
+              // Date utilities
+              if (id.includes('date-fns')) {
+                return 'vendor-dates';
+              }
+              // Schema validation (Zod v4 is large ~440KB, keep isolated for lazy loading)
+              if (id.includes('zod') || id.includes('node_modules/zod/')) {
+                return 'vendor-zod';
               }
               // Other vendor code
               return 'vendor';

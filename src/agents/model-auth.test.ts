@@ -589,7 +589,7 @@ describe("isProviderConfigured", () => {
     expect(configured).toBe(true);
   });
 
-  it("returns true for amazon-bedrock by default", async () => {
+  it("returns false for amazon-bedrock without AWS credentials", async () => {
     vi.resetModules();
     const { isProviderConfigured } = await import("./model-auth.js");
 
@@ -598,7 +598,31 @@ describe("isProviderConfigured", () => {
       store: { version: 1, profiles: {} },
     });
 
-    expect(configured).toBe(true);
+    expect(configured).toBe(false);
+  });
+
+  it("returns true for amazon-bedrock when AWS env vars are set", async () => {
+    const previousAwsProfile = process.env.AWS_PROFILE;
+
+    try {
+      process.env.AWS_PROFILE = "default";
+
+      vi.resetModules();
+      const { isProviderConfigured } = await import("./model-auth.js");
+
+      const configured = isProviderConfigured({
+        provider: "amazon-bedrock",
+        store: { version: 1, profiles: {} },
+      });
+
+      expect(configured).toBe(true);
+    } finally {
+      if (previousAwsProfile === undefined) {
+        delete process.env.AWS_PROFILE;
+      } else {
+        process.env.AWS_PROFILE = previousAwsProfile;
+      }
+    }
   });
 
   it("returns false when no auth available", async () => {

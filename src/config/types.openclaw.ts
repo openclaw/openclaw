@@ -12,6 +12,7 @@ import type {
   TalkConfig,
 } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
+import type { McpServersConfig } from "./types.mcp.js";
 import type {
   AudioConfig,
   BroadcastConfig,
@@ -78,6 +79,8 @@ export type OpenClawConfig = {
   skills?: SkillsConfig;
   plugins?: PluginsConfig;
   models?: ModelsConfig;
+  /** Global MCP server definitions (available to all agents unless disabled/overridden per-agent). */
+  mcpServers?: McpServersConfig;
   nodeHost?: NodeHostConfig;
   agents?: AgentsConfig;
   tools?: ToolsConfig;

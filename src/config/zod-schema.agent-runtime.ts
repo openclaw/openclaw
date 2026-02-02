@@ -4,6 +4,7 @@ import {
   GroupChatSchema,
   HumanDelaySchema,
   IdentitySchema,
+  McpServersSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
@@ -470,6 +471,7 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    mcpServers: McpServersSchema,
     tools: AgentToolsSchema,
   })
   .strict();

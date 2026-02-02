@@ -16,6 +16,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **amazon-bedrock provider auth checking**: `isProviderConfigured()` now correctly validates AWS credentials instead of always returning `true`. This prevents spurious "No API key found for amazon-bedrock" errors in failover chains when no AWS credentials are configured.
+- **Model failover filtering**: Unauthenticated providers are now filtered from failover chains at candidate resolution time instead of failing during execution, providing clearer error messages when no authenticated providers are available.
 - Auto-reply: avoid referencing workspace files in /new greeting prompt. (#5706) Thanks @bravostation.
 - Process: resolve Windows `spawn()` failures for npm-family CLIs by appending `.cmd` when needed. (#5815) Thanks @thejhinvirtuoso.
 - Discord: resolve PluralKit proxied senders for allowlists and labels. (#5838) Thanks @thewilloftheshadow.

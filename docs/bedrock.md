@@ -51,6 +51,27 @@ Notes:
 - `defaultContextWindow` (default: `32000`) and `defaultMaxTokens` (default: `4096`)
   are used for discovered models (override if you know your model limits).
 
+## Credential Detection
+
+Clawdbrain detects AWS credentials for Bedrock in the following order:
+
+1. **Environment variables** (checked for fast availability):
+   - `AWS_BEARER_TOKEN_BEDROCK`
+   - `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`
+   - `AWS_PROFILE`
+
+2. **AWS SDK credential chain** (used at runtime):
+   - EC2 instance roles (IMDS)
+   - ECS task roles
+   - AWS SSO
+   - Credential process providers
+   - Container credentials
+   - `~/.aws/credentials` file
+
+**Important**: For IAM role-based authentication (EC2/ECS), you must set `AWS_PROFILE=default`
+to signal that credentials are available, as Clawdbrain cannot detect runtime IAM credentials
+during availability checks.
+
 ## Setup (manual)
 
 1. Ensure AWS credentials are available on the **gateway host**:

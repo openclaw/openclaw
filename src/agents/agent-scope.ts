@@ -27,6 +27,7 @@ type ResolvedAgentConfig = {
   subagents?: AgentEntry["subagents"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
+  mcpServers?: AgentEntry["mcpServers"];
   runtime?: any; // TODO: Add proper runtime type
   claudeSdkOptions?: any; // TODO: Add proper ClaudeSdkOptions type
 };
@@ -118,6 +119,7 @@ export function resolveAgentConfig(
     humanDelay: entry.humanDelay,
     heartbeat: entry.heartbeat,
     identity: entry.identity,
+    mcpServers: entry.mcpServers,
     groupChat: entry.groupChat,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
     sandbox: entry.sandbox,

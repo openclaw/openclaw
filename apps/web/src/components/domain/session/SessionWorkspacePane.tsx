@@ -199,18 +199,18 @@ export function SessionWorkspacePane({
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "terminal" | "files")}>
           <TabsList className="h-8 bg-transparent p-0">
             <TabsTrigger
-              value="terminal"
-              className="h-7 px-3 text-xs data-[state=active]:bg-background"
-            >
-              <Terminal className="h-3.5 w-3.5 mr-1.5" />
-              Terminal
-            </TabsTrigger>
-            <TabsTrigger
               value="files"
               className="h-7 px-3 text-xs data-[state=active]:bg-background"
             >
               <FolderOpen className="h-3.5 w-3.5 mr-1.5" />
               Files
+            </TabsTrigger>
+            <TabsTrigger
+              value="terminal"
+              className="h-7 px-3 text-xs data-[state=active]:bg-background"
+            >
+              <Terminal className="h-3.5 w-3.5 mr-1.5" />
+              Terminal
             </TabsTrigger>
           </TabsList>
         </Tabs>
