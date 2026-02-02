@@ -35,10 +35,10 @@ openclaw onboard --auth-choice commonstack-api-key
         baseUrl: "https://api.commonstack.ai/v1",
         api: "openai-completions",
         headers: {
-          "User-Agent": "https://openclaw.ai"
-        }
-      }
-    }
+          "User-Agent": "https://openclaw.ai",
+        },
+      },
+    },
   },
   agents: {
     defaults: {
