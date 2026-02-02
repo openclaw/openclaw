@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import { sleep } from "../utils.js";
 import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createExecTool, createProcessTool, execTool, processTool } from "./bash-tools.js";
 import { buildDockerExecArgs } from "./bash-tools.shared.js";
@@ -45,8 +45,6 @@ const normalizeText = (value?: string) =>
     .map((line) => line.replace(/\s+$/u, ""))
     .join("\n")
     .trim();
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function waitForCompletion(sessionId: string) {
   let status = "running";

@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildFileEntry, listMemoryFiles, type MemoryFileEntry } from "./internal.js";
 

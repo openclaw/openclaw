@@ -1,8 +1,7 @@
-import crypto from "node:crypto";
-
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-
+import crypto from "node:crypto";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   type CameraFacing,
   cameraTempPath,
@@ -17,7 +16,6 @@ import {
   writeScreenRecordToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
@@ -39,6 +37,7 @@ const NODES_TOOL_ACTIONS = [
   "screen_record",
   "location_get",
   "run",
+  "invoke",
 ] as const;
 
 const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
@@ -86,6 +85,9 @@ const NodesToolSchema = Type.Object({
   commandTimeoutMs: Type.Optional(Type.Number()),
   invokeTimeoutMs: Type.Optional(Type.Number()),
   needsScreenRecording: Type.Optional(Type.Boolean()),
+  // invoke
+  invokeCommand: Type.Optional(Type.String()),
+  invokeParamsJson: Type.Optional(Type.String()),
 });
 
 export function createNodesTool(options?: {
@@ -101,7 +103,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location/run).",
+      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location/run/invoke).",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -439,6 +441,33 @@ export function createNodesTool(options?: {
               idempotencyKey: crypto.randomUUID(),
             });
             return jsonResult(raw?.payload ?? {});
+          }
+          case "invoke": {
+            const node = readStringParam(params, "node", { required: true });
+            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const invokeCommand = readStringParam(params, "invokeCommand", { required: true });
+            const invokeParamsJson =
+              typeof params.invokeParamsJson === "string" ? params.invokeParamsJson.trim() : "";
+            let invokeParams: unknown = {};
+            if (invokeParamsJson) {
+              try {
+                invokeParams = JSON.parse(invokeParamsJson);
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                throw new Error(`invokeParamsJson must be valid JSON: ${message}`, {
+                  cause: err,
+                });
+              }
+            }
+            const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
+            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
+              nodeId,
+              command: invokeCommand,
+              params: invokeParams,
+              timeoutMs: invokeTimeoutMs,
+              idempotencyKey: crypto.randomUUID(),
+            });
+            return jsonResult(raw ?? {});
           }
           default:
             throw new Error(`Unknown action: ${action}`);

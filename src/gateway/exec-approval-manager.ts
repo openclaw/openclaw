@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 
 export type ExecApprovalRequestPayload = {

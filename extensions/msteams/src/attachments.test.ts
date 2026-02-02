@@ -1,6 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { PluginRuntime } from "openclaw/plugin-sdk";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
 
 const detectMimeMock = vi.fn(async () => "image/png");
@@ -242,12 +241,48 @@ describe("msteams attachments", () => {
         maxBytes: 1024 * 1024,
         tokenProvider: { getAccessToken: vi.fn(async () => "token") },
         allowHosts: ["x"],
+        authAllowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
       expect(fetchMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
       expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("skips auth retries when the host is not in auth allowlist", async () => {
+      const { downloadMSTeamsAttachments } = await load();
+      const tokenProvider = { getAccessToken: vi.fn(async () => "token") };
+      const fetchMock = vi.fn(async (_url: string, opts?: RequestInit) => {
+        const hasAuth = Boolean(
+          opts &&
+          typeof opts === "object" &&
+          "headers" in opts &&
+          (opts.headers as Record<string, string>)?.Authorization,
+        );
+        if (!hasAuth) {
+          return new Response("forbidden", { status: 403 });
+        }
+        return new Response(Buffer.from("png"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      });
+
+      const media = await downloadMSTeamsAttachments({
+        attachments: [
+          { contentType: "image/png", contentUrl: "https://attacker.azureedge.net/img" },
+        ],
+        maxBytes: 1024 * 1024,
+        tokenProvider,
+        allowHosts: ["azureedge.net"],
+        authAllowHosts: ["graph.microsoft.com"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(media).toHaveLength(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
     });
 
     it("skips urls outside the allowlist", async () => {

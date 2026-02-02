@@ -1,8 +1,8 @@
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
@@ -73,7 +73,7 @@ const applyPatchSchema = Type.Object({
 
 export function createApplyPatchTool(
   options: { cwd?: string; sandboxRoot?: string } = {},
-  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandboxRoot = options.sandboxRoot;

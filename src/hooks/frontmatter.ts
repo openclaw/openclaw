@@ -1,8 +1,4 @@
 import JSON5 from "json5";
-
-import { LEGACY_MANIFEST_KEYS, MANIFEST_KEY } from "../compat/legacy-names.js";
-import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
-import { parseBooleanValue } from "../utils/boolean.js";
 import type {
   OpenClawHookMetadata,
   HookEntry,
@@ -10,6 +6,9 @@ import type {
   HookInvocationPolicy,
   ParsedHookFrontmatter,
 } from "./types.js";
+import { LEGACY_MANIFEST_KEYS, MANIFEST_KEY } from "../compat/legacy-names.js";
+import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 
 export function parseFrontmatter(content: string): ParsedHookFrontmatter {
   return parseFrontmatterBlock(content);

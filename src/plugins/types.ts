@@ -1,22 +1,20 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Command } from "commander";
-
 import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-
+import type { Command } from "commander";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelDock } from "../channels/dock.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.js";
+import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
-import type { ModelProviderConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import type { createVpsAwareOAuthHandlers } from "../commands/oauth-flow.js";
-import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type { PluginRuntime } from "./runtime/types.js";

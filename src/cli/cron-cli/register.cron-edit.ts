@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { danger } from "../../globals.js";
-import { defaultRuntime } from "../../runtime.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
+import { defaultRuntime } from "../../runtime.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
   getCronChannelOptions,

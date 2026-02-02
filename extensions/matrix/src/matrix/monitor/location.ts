@@ -1,5 +1,4 @@
 import type { LocationMessageEventContent } from "@vector-im/matrix-bot-sdk";
-
 import {
   formatLocationText,
   toLocationContext,

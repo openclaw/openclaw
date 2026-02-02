@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import crypto from "node:crypto";
 import { resolveBlueBubblesAccount } from "./accounts.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
 export type BlueBubblesChatOpts = {

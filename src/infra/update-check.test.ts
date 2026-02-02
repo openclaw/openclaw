@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { resolveNpmChannelTag } from "./update-check.js";
 
 describe("resolveNpmChannelTag", () => {

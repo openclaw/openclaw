@@ -1,13 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-
-import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
-import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { CONFIG_PATH } from "../config/config.js";
+import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
+import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -37,6 +34,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const port = await getFreePort();
@@ -63,12 +61,14 @@ describe("POST /tools/invoke", () => {
     // No explicit tool allowlist; rely on profile + alsoAllow.
     testState.agentsConfig = {
       list: [{ id: "main" }],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     // minimal profile does NOT include agents_list, but alsoAllow should.
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       tools: { profile: "minimal", alsoAllow: ["agents_list"] },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
 
     const port = await getFreePort();
@@ -91,8 +91,10 @@ describe("POST /tools/invoke", () => {
   it("supports tools.alsoAllow without allow/profile (implicit allow-all)", async () => {
     testState.agentsConfig = {
       list: [{ id: "main" }],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
+    const { CONFIG_PATH } = await import("../config/config.js");
     await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
     await fs.writeFile(
       CONFIG_PATH,
@@ -127,6 +129,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const port = await getFreePort();
@@ -177,6 +180,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const port = await getFreePort();
@@ -212,6 +216,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const port = await getFreePort();
@@ -241,6 +246,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const port = await getFreePort();
@@ -268,11 +274,13 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       tools: { profile: "minimal" },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
 
     const port = await getFreePort();
@@ -307,6 +315,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     testState.sessionConfig = { mainKey: "primary" };
 

@@ -4,7 +4,6 @@ import type {
   ChannelResolveResult,
   RuntimeEnv,
 } from "openclaw/plugin-sdk";
-
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 
 function pickBestGroupMatch(

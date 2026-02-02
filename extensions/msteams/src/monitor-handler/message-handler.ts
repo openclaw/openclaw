@@ -9,14 +9,15 @@ import {
   formatAllowlistMatchMeta,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
-
+import type { StoredConversationReference } from "../conversation-store.js";
+import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
+import type { MSTeamsTurnContext } from "../sdk-types.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
   type MSTeamsAttachmentLike,
   summarizeMSTeamsHtmlAttachments,
 } from "../attachments.js";
-import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
   extractMSTeamsConversationMessageId,
@@ -25,7 +26,6 @@ import {
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
-import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import {
   isMSTeamsGroupAllowed,
   resolveMSTeamsAllowlistMatch,
@@ -34,10 +34,9 @@ import {
 } from "../policy.js";
 import { extractMSTeamsPollVote } from "../polls.js";
 import { createMSTeamsReplyDispatcher } from "../reply-dispatcher.js";
-import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
-import type { MSTeamsTurnContext } from "../sdk-types.js";
-import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 import { getMSTeamsRuntime } from "../runtime.js";
+import { recordMSTeamsSentMessage, wasMSTeamsMessageSent } from "../sent-message-cache.js";
+import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
@@ -404,6 +403,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       maxBytes: mediaMaxBytes,
       tokenProvider,
       allowHosts: msteamsCfg?.mediaAllowHosts,
+      authAllowHosts: msteamsCfg?.mediaAuthAllowHosts,
       conversationType,
       conversationId,
       conversationMessageId: conversationMessageId ?? undefined,

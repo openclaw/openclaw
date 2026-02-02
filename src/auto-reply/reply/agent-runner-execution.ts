@@ -1,17 +1,22 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import type { TemplateContext } from "../templating.js";
+import type { VerboseLevel } from "../thinking.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { FollowupRun } from "./queue.js";
+import type { TypingSignaler } from "./typing-mode.js";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
+import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveGroupSessionKey,
@@ -27,16 +32,11 @@ import {
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import { createBlockReplyPayloadKey, type BlockReplyPipeline } from "./block-reply-pipeline.js";
-import type { FollowupRun } from "./queue.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
-import type { TypingSignaler } from "./typing-mode.js";
 
 export type AgentRunLoopResult =
   | {
@@ -63,6 +63,7 @@ export async function runAgentTurnWithFallback(params: {
     minChars: number;
     maxChars: number;
     breakPreference: "paragraph" | "newline" | "sentence";
+    flushOnParagraph?: boolean;
   };
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
@@ -171,24 +172,27 @@ export async function runAgentTurnWithFallback(params: {
               },
             });
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
-            return runCliAgent({
-              sessionId: params.followupRun.run.sessionId,
-              sessionKey: params.sessionKey,
-              sessionFile: params.followupRun.run.sessionFile,
-              workspaceDir: params.followupRun.run.workspaceDir,
-              config: params.followupRun.run.config,
-              prompt: params.commandBody,
-              provider,
-              model,
-              thinkLevel: params.followupRun.run.thinkLevel,
-              timeoutMs: params.followupRun.run.timeoutMs,
-              runId,
-              extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-              ownerNumbers: params.followupRun.run.ownerNumbers,
-              cliSessionId,
-              images: params.opts?.images,
-            })
-              .then((result) => {
+            return (async () => {
+              let lifecycleTerminalEmitted = false;
+              try {
+                const result = await runCliAgent({
+                  sessionId: params.followupRun.run.sessionId,
+                  sessionKey: params.sessionKey,
+                  sessionFile: params.followupRun.run.sessionFile,
+                  workspaceDir: params.followupRun.run.workspaceDir,
+                  config: params.followupRun.run.config,
+                  prompt: params.commandBody,
+                  provider,
+                  model,
+                  thinkLevel: params.followupRun.run.thinkLevel,
+                  timeoutMs: params.followupRun.run.timeoutMs,
+                  runId,
+                  extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                  ownerNumbers: params.followupRun.run.ownerNumbers,
+                  cliSessionId,
+                  images: params.opts?.images,
+                });
+
                 // CLI backends don't emit streaming assistant events, so we need to
                 // emit one with the final text so server-chat can populate its buffer
                 // and send the response to TUI/WebSocket clients.
@@ -200,6 +204,7 @@ export async function runAgentTurnWithFallback(params: {
                     data: { text: cliText },
                   });
                 }
+
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
@@ -209,9 +214,10 @@ export async function runAgentTurnWithFallback(params: {
                     endedAt: Date.now(),
                   },
                 });
+                lifecycleTerminalEmitted = true;
+
                 return result;
-              })
-              .catch((err) => {
+              } catch (err) {
                 emitAgentEvent({
                   runId,
                   stream: "lifecycle",
@@ -219,11 +225,28 @@ export async function runAgentTurnWithFallback(params: {
                     phase: "error",
                     startedAt,
                     endedAt: Date.now(),
-                    error: err instanceof Error ? err.message : String(err),
+                    error: String(err),
                   },
                 });
+                lifecycleTerminalEmitted = true;
                 throw err;
-              });
+              } finally {
+                // Defensive backstop: never let a CLI run complete without a terminal
+                // lifecycle event, otherwise downstream consumers can hang.
+                if (!lifecycleTerminalEmitted) {
+                  emitAgentEvent({
+                    runId,
+                    stream: "lifecycle",
+                    data: {
+                      phase: "error",
+                      startedAt,
+                      endedAt: Date.now(),
+                      error: "CLI run completed without lifecycle terminal event",
+                    },
+                  });
+                }
+              }
+            })();
           }
           const authProfileId =
             provider === params.followupRun.run.provider

@@ -1,8 +1,8 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
-
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelRow } from "./list.types.js";
+import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
 import {
   getCustomProviderApiKey,
@@ -10,8 +10,7 @@ import {
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
 import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { ModelRow } from "./list.types.js";
+import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import { modelKey } from "./shared.js";
 
 const isLocalBaseUrl = (baseUrl: string) => {

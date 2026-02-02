@@ -1,7 +1,5 @@
 import path from "node:path";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { pollUntil } from "../../test/helpers/poll.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import {

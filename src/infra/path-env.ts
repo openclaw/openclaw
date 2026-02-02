@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isTruthyEnvValue } from "./env.js";
-
 import { resolveBrewPathDirs } from "./brew.js";
+import { isTruthyEnvValue } from "./env.js";
 
 type EnsureOpenClawPathOpts = {
   execPath?: string;

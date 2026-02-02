@@ -6,6 +6,11 @@ import {
   readTool,
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelAuthMode } from "./model-auth.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
+import type { SandboxContext } from "./sandbox.js";
+import { logWarn } from "../logger.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -17,8 +22,8 @@ import {
 } from "./bash-tools.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import type { ModelAuthMode } from "./model-auth.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
+import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicies,
@@ -38,8 +43,6 @@ import {
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
-import type { AnyAgentTool } from "./pi-tools.types.js";
-import type { SandboxContext } from "./sandbox.js";
 import {
   buildPluginToolGroups,
   collectExplicitAllowlist,
@@ -48,8 +51,6 @@ import {
   resolveToolProfilePolicy,
   stripPluginOnlyAllowlist,
 } from "./tool-policy.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
-import { logWarn } from "../logger.js";
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
@@ -423,9 +424,15 @@ export function createOpenClawCodingTools(options?: {
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   const normalized = subagentFiltered.map(normalizeToolParameters);
+  const withHooks = normalized.map((tool) =>
+    wrapToolWithBeforeToolCallHook(tool, {
+      agentId,
+      sessionKey: options?.sessionKey,
+    }),
+  );
   const withAbort = options?.abortSignal
-    ? normalized.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
-    : normalized;
+    ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
+    : withHooks;
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names

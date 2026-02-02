@@ -1,5 +1,5 @@
-import { createServer } from "node:net";
 import { createServer as createHttpsServer } from "node:https";
+import { createServer } from "node:net";
 import { afterEach, describe, expect, test } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";

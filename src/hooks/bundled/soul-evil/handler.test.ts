@@ -1,12 +1,10 @@
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
-import handler from "./handler.js";
-import { createHookEvent } from "../../hooks.js";
-import type { AgentBootstrapHookContext } from "../../hooks.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { AgentBootstrapHookContext } from "../../hooks.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
+import { createHookEvent } from "../../hooks.js";
+import handler from "./handler.js";
 
 describe("soul-evil hook", () => {
   it("skips subagent sessions", async () => {

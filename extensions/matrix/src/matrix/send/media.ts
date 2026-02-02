@@ -7,8 +7,8 @@ import type {
   VideoFileInfo,
 } from "@vector-im/matrix-bot-sdk";
 import { parseBuffer, type IFileInfo } from "music-metadata";
-
 import { getMatrixRuntime } from "../../runtime.js";
+import { applyMatrixFormatting } from "./formatting.js";
 import {
   type MatrixMediaContent,
   type MatrixMediaInfo,
@@ -16,7 +16,6 @@ import {
   type MatrixRelation,
   type MediaKind,
 } from "./types.js";
-import { applyMatrixFormatting } from "./formatting.js";
 
 const getCore = () => getMatrixRuntime();
 

@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   filterToolsByPolicy,
@@ -22,9 +21,7 @@ import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
-
 import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
-import { getBearerToken, getHeader } from "./http-utils.js";
 import {
   readJsonBodyOrError,
   sendInvalidRequest,
@@ -32,6 +29,7 @@ import {
   sendMethodNotAllowed,
   sendUnauthorized,
 } from "./http-common.js";
+import { getBearerToken, getHeader } from "./http-utils.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -232,12 +230,14 @@ export async function handleToolsInvokeHttpRequest(
 
   const coreToolNames = new Set(
     allTools
+      // oxlint-disable-next-line typescript/no-explicit-any
       .filter((tool) => !getPluginToolMeta(tool as any))
       .map((tool) => normalizeToolName(tool.name))
       .filter(Boolean),
   );
   const pluginGroups = buildPluginToolGroups({
     tools: allTools,
+    // oxlint-disable-next-line typescript/no-explicit-any
     toolMeta: (tool) => getPluginToolMeta(tool as any),
   });
   const resolvePolicy = (policy: typeof profilePolicy, label: string) => {
@@ -308,10 +308,12 @@ export async function handleToolsInvokeHttpRequest(
 
   try {
     const toolArgs = mergeActionIntoArgsIfSupported({
+      // oxlint-disable-next-line typescript/no-explicit-any
       toolSchema: (tool as any).parameters,
       action,
       args,
     });
+    // oxlint-disable-next-line typescript/no-explicit-any
     const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {

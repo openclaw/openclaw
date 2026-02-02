@@ -1,8 +1,7 @@
 import { html, nothing } from "lit";
-
-import { clampText } from "../format";
-import type { SkillStatusEntry, SkillStatusReport } from "../types";
 import type { SkillMessageMap } from "../controllers/skills";
+import type { SkillStatusEntry, SkillStatusReport } from "../types";
+import { clampText } from "../format";
 
 export type SkillsProps = {
   loading: boolean;
@@ -86,8 +85,12 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
     ...skill.missing.os.map((o) => `os:${o}`),
   ];
   const reasons: string[] = [];
-  if (skill.disabled) reasons.push("disabled");
-  if (skill.blockedByAllowlist) reasons.push("blocked by allowlist");
+  if (skill.disabled) {
+    reasons.push("disabled");
+  }
+  if (skill.blockedByAllowlist) {
+    reasons.push("blocked by allowlist");
+  }
   return html`
     <div class="list-item">
       <div class="list-main">

@@ -13,15 +13,18 @@ import {
   resolveBlueBubblesGroupToolPolicy,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk";
-
 import {
   listBlueBubblesAccountIds,
   type ResolvedBlueBubblesAccount,
   resolveBlueBubblesAccount,
   resolveDefaultBlueBubblesAccountId,
 } from "./accounts.js";
+import { bluebubblesMessageActions } from "./actions.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
+import { sendBlueBubblesMedia } from "./media-send.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
+import { monitorBlueBubblesProvider, resolveWebhookPathFromConfig } from "./monitor.js";
+import { blueBubblesOnboardingAdapter } from "./onboarding.js";
 import { probeBlueBubbles, type BlueBubblesProbe } from "./probe.js";
 import { sendMessageBlueBubbles } from "./send.js";
 import {
@@ -31,10 +34,6 @@ import {
   normalizeBlueBubblesMessagingTarget,
   parseBlueBubblesTarget,
 } from "./targets.js";
-import { bluebubblesMessageActions } from "./actions.js";
-import { monitorBlueBubblesProvider, resolveWebhookPathFromConfig } from "./monitor.js";
-import { blueBubblesOnboardingAdapter } from "./onboarding.js";
-import { sendBlueBubblesMedia } from "./media-send.js";
 
 const meta = {
   id: "bluebubbles",

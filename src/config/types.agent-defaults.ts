@@ -1,10 +1,10 @@
+import type { ChannelId } from "../channels/plugins/types.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
   HumanDelayConfig,
   TypingMode,
 } from "./types.base.js";
-import type { ChannelId } from "../channels/plugins/types.js";
 import type {
   SandboxBrowserSettings,
   SandboxDockerSettings,
@@ -122,7 +122,7 @@ export type AgentDefaultsConfig = {
    * Include elapsed time in message envelopes ("on" | "off", default: "on").
    */
   envelopeElapsed?: "on" | "off";
-  /** Optional display-only context window override (used for % in status UIs). */
+  /** Optional context window cap (used for runtime estimates + status %). */
   contextTokens?: number;
   /** Optional CLI backends for text-only fallback (claude-cli, etc.). */
   cliBackends?: Record<string, CliBackendConfig>;
@@ -204,6 +204,8 @@ export type AgentDefaultsConfig = {
     archiveAfterMinutes?: number;
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
+    /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
+    thinking?: string;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {

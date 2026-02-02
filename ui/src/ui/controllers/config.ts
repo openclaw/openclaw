@@ -20,7 +20,7 @@ export type ConfigState = {
   configApplying: boolean;
   updateRunning: boolean;
   configSnapshot: ConfigSnapshot | null;
-  configSchema: unknown | null;
+  configSchema: unknown;
   configSchemaVersion: string | null;
   configSchemaLoading: boolean;
   configUiHints: ConfigUiHints;
@@ -35,11 +35,13 @@ export type ConfigState = {
 };
 
 export async function loadConfig(state: ConfigState) {
-  if (!state.client || !state.connected) return;
+  if (!state.client || !state.connected) {
+    return;
+  }
   state.configLoading = true;
   state.lastError = null;
   try {
-    const res = (await state.client.request("config.get", {})) as ConfigSnapshot;
+    const res = await state.client.request("config.get", {});
     applyConfigSnapshot(state, res);
   } catch (err) {
     state.lastError = String(err);
@@ -49,11 +51,15 @@ export async function loadConfig(state: ConfigState) {
 }
 
 export async function loadConfigSchema(state: ConfigState) {
-  if (!state.client || !state.connected) return;
-  if (state.configSchemaLoading) return;
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (state.configSchemaLoading) {
+    return;
+  }
   state.configSchemaLoading = true;
   try {
-    const res = (await state.client.request("config.schema", {})) as ConfigSchemaResponse;
+    const res = await state.client.request("config.schema", {});
     applyConfigSchema(state, res);
   } catch (err) {
     state.lastError = String(err);
@@ -74,7 +80,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
     typeof snapshot.raw === "string"
       ? snapshot.raw
       : snapshot.config && typeof snapshot.config === "object"
-        ? serializeConfigForm(snapshot.config as Record<string, unknown>)
+        ? serializeConfigForm(snapshot.config)
         : state.configRaw;
   if (!state.configFormDirty || state.configFormMode === "raw") {
     state.configRaw = rawFromSnapshot;
@@ -94,7 +100,9 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
 }
 
 export async function saveConfig(state: ConfigState) {
-  if (!state.client || !state.connected) return;
+  if (!state.client || !state.connected) {
+    return;
+  }
   state.configSaving = true;
   state.lastError = null;
   try {
@@ -118,7 +126,9 @@ export async function saveConfig(state: ConfigState) {
 }
 
 export async function applyConfig(state: ConfigState) {
-  if (!state.client || !state.connected) return;
+  if (!state.client || !state.connected) {
+    return;
+  }
   state.configApplying = true;
   state.lastError = null;
   try {
@@ -146,7 +156,9 @@ export async function applyConfig(state: ConfigState) {
 }
 
 export async function runUpdate(state: ConfigState) {
-  if (!state.client || !state.connected) return;
+  if (!state.client || !state.connected) {
+    return;
+  }
   state.updateRunning = true;
   state.lastError = null;
   try {
