@@ -23,7 +23,7 @@ echo ""
 echo "Configuration:"
 echo "  OpenClaw directory: $OPENCLAW_DIR"
 echo "  OpenClaw user: $OPENCLAW_USER"
-echo "  Redis password: [generated]"
+echo "  Redis password: [generated and saved]"
 echo "  Queue enabled: $QUEUE_ENABLED"
 echo "  Worker concurrency: $WORKER_CONCURRENCY"
 echo ""
@@ -83,7 +83,7 @@ chown -R "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_DIR"
 chown -R "$OPENCLAW_USER:$OPENCLAW_USER" /var/log/openclaw
 echo "  ✓ Directories created and permissions set"
 
-# Step 5: Clone/Update OpenClaw
+# Step 5: Setup OpenClaw
 echo ""
 echo "📦 Step 5: Setting up OpenClaw..."
 
@@ -93,10 +93,15 @@ if [[ -d "$OPENCLAW_DIR/.git" ]]; then
   sudo -u "$OPENCLAW_USER" git fetch origin
   sudo -u "$OPENCLAW_USER" git reset --hard origin/main
 else
-  echo "  Cloning OpenClaw repository..."
-  rm -rf "$OPENCLAW_DIR"
-  git clone https://github.com/mfathy00/openclaw.git "$OPENCLAW_DIR"
-  chown -R "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_DIR"
+  echo "  Please clone OpenClaw manually:"
+  echo "    git clone https://github.com/openclaw/openclaw.git $OPENCLAW_DIR"
+  echo "    chown -R $OPENCLAW_USER:$OPENCLAW_USER $OPENCLAW_DIR"
+  echo "    cd $OPENCLAW_DIR"
+  echo "    npm install"
+  echo "    npm run build"
+  echo ""
+  echo "  Re-run this script after installation"
+  exit 0
 fi
 
 # Step 6: Install dependencies and build
@@ -134,34 +139,33 @@ echo ""
 echo "⚙️  Step 8: Configuring OpenClaw queue..."
 
 CONFIG_FILE="$OPENCLAW_DIR/config.json"
-REDIS_URL="redis://:$REDIS_PASSWORD@localhost:6379"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   echo "  Creating new config..."
-  sudo -u "$OPENCLAW_USER" bash -c "cat > '$CONFIG_FILE' << EOF
+  sudo -u "$OPENCLAW_USER" bash -c "cat > '$CONFIG_FILE' << 'EOFCONFIG'
 {
-  \"messageQueue\": {
-    \"enabled\": $QUEUE_ENABLED,
-    \"redis\": {
-      \"url\": \"$REDIS_URL\",
-      \"keyPrefix\": \"openclaw:queue\"
+  "queue": {
+    "enabled": $QUEUE_ENABLED,
+    "redis": {
+      "url": "redis://localhost:6379",
+      "keyPrefix": "openclaw:queue",
+      "password": "$REDIS_PASSWORD"
     },
-    \"priority\": {
-      \"adminUsers\": [],
-      \"ownerUserIds\": [],
-      \"urgentKeywords\": [\"urgent\", \"asap\", \"emergency\"]
+    "priority": {
+      "adminUsers": [],
+      "ownerUserIds": [],
+      "urgentKeywords": ["urgent", "asap", "emergency"]
     },
-    \"worker\": {
-      \"maxConcurrency\": $WORKER_CONCURRENCY,
-      \"pollIntervalMs\": 100,
-      \"maxRetries\": 3,
-      \"retryDelayMs\": 5000
+    "worker": {
+      "maxConcurrency": $WORKER_CONCURRENCY,
+      "pollIntervalMs": 100,
+      "maxRetries": 3,
+      "retryDelayMs": 5000
     },
-    \"webhooks\": []
+    "webhooks": []
   }
 }
-EOF
-"
+EOFCONFIG"
 else
   echo "  ✓ Config already exists (edit manually to enable queue)"
 fi
@@ -190,6 +194,12 @@ else
   exit 1
 fi
 
+# Save password to file
+PASSWORD_FILE="$OPENCLAW_DIR/.redis-password"
+echo "$REDIS_PASSWORD" > "$PASSWORD_FILE"
+chmod 600 "$PASSWORD_FILE"
+chown "$OPENCLAW_USER:$OPENCLAW_USER" "$PASSWORD_FILE"
+
 # Display summary
 echo ""
 echo "============================================"
@@ -209,6 +219,7 @@ echo ""
 echo "4. Edit configuration:"
 echo "   nano $CONFIG_FILE"
 echo ""
-echo "Redis password (save this!): $REDIS_PASSWORD"
+echo "Redis password saved to: $PASSWORD_FILE"
+echo "  Keep this file secure and backed up!"
 echo ""
 echo "============================================"

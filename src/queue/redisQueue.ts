@@ -6,11 +6,28 @@
 import { createClient, type RedisClientType } from 'redis';
 import type { QueuedMessage, DeadLetterEntry, QueueConfig } from './types.js';
 import { calculatePriorityScore } from './prioritizer.js';
+import { ATOMIC_DEQUEUE_SCRIPT, CLEAR_QUEUE_SCRIPT } from './lua-scripts.js';
 
 const DEFAULT_KEY_PREFIX = 'openclaw:queue';
 const DEFAULT_QUEUE_KEY = 'all';
 const DEFAULT_DLQ_KEY = 'dlq';
 const DEFAULT_PROCESSING_STREAM = 'processing';
+
+/**
+ * Sanitize Redis URL for logging (remove password)
+ */
+function sanitizeRedisUrl(url: string): string {
+  try {
+    const urlObj = new URL(url);
+    if (urlObj.password) {
+      urlObj.password = '***';
+      return urlObj.toString();
+    }
+    return url;
+  } catch {
+    return url;
+  }
+}
 
 export class RedisQueueBackend {
   private client: RedisClientType | null = null;
@@ -35,6 +52,9 @@ export class RedisQueueBackend {
       return;
     }
 
+    const sanitizedUrl = sanitizeRedisUrl(this.config.redis.url);
+    console.log(`[RedisQueue] Connecting to Redis: ${sanitizedUrl}`);
+
     const client = createClient({
       url: this.config.redis.url,
       password: this.config.redis.password,
@@ -47,7 +67,7 @@ export class RedisQueueBackend {
     await client.connect();
     this.client = client;
     this.connected = true;
-    console.log('[RedisQueue] Connected to Redis');
+    console.log('[RedisQueue] Connected');
   }
 
   /**
@@ -108,38 +128,45 @@ export class RedisQueueBackend {
   }
 
   /**
-   * Dequeue the highest priority message
+   * Dequeue the highest priority message (atomic using Lua script)
    */
   async dequeue(): Promise<QueuedMessage | null> {
     if (!this.client || !this.connected) {
       throw new Error('Redis client not connected');
     }
 
-    // Get the highest priority (lowest score) message
-    const result = await this.client.zRangeWithScores(this.queueKey, 0, 0);
+    const timestamp = String(Date.now());
 
-    if (result.length === 0) {
+    // Execute atomic Lua script
+    const result = await this.client.eval(
+      ATOMIC_DEQUEUE_SCRIPT,
+      {
+        keys: [this.queueKey, this.processingStreamKey, `${this.keyPrefix}:message:`],
+        arguments: [timestamp],
+      }
+    );
+
+    if (!result) {
       return null;
     }
 
-    const [{ value: messageId }] = result;
+    // Parse result: [messageId, score, ...messageData]
+    const [messageId, score, ...messageData] = result as any[];
 
-    // Get message data
-    const messageData = await this.client.hGetAll(`${this.keyPrefix}:message:${messageId}`);
+    // Build message data object from flat array
+    const dataMap: Record<string, string> = {};
+    for (let i = 0; i < messageData.length; i += 2) {
+      if (i + 1 < messageData.length) {
+        dataMap[messageData[i]] = messageData[i + 1];
+      }
+    }
 
-    if (!messageData || Object.keys(messageData).length === 0) {
-      // Orphaned queue entry, clean it up
-      await this.client.zRem(this.queueKey, messageId);
+    if (Object.keys(dataMap).length === 0) {
+      // Orphaned queue entry
       return null;
     }
 
-    // Mark as processing
-    await this.addToProcessingStream(messageId, 'processing');
-
-    // Remove from queue
-    await this.client.zRem(this.queueKey, messageId);
-
-    return this.parseMessageData(messageId, messageData);
+    return this.parseMessageData(messageId, dataMap);
   }
 
   /**
@@ -307,17 +334,23 @@ export class RedisQueueBackend {
   }
 
   /**
-   * Clear all queue data (for testing)
+   * Clear all queue data (uses Lua script + SCAN for safety)
    */
-  async clearAll(): Promise<void> {
+  async clearAll(): Promise<number> {
     if (!this.client || !this.connected) {
-      return;
+      return 0;
     }
 
-    const keys = await this.client.keys(`${this.keyPrefix}:*`);
-    if (keys.length > 0) {
-      await this.client.del(keys);
-    }
+    // Execute Lua script to clear queue
+    const result = await this.client.eval(
+      CLEAR_QUEUE_SCRIPT,
+      {
+        keys: [this.queueKey, `${this.keyPrefix}:message:`],
+        arguments: [],
+      }
+    );
+
+    return (result as number) || 0;
   }
 
   /**

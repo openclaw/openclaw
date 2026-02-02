@@ -46,6 +46,11 @@ export {
   formatQueuedMessageForLog,
 } from './agent-dispatcher.js';
 
+export {
+  ATOMIC_DEQUEUE_SCRIPT,
+  CLEAR_QUEUE_SCRIPT,
+} from './lua-scripts.js';
+
 export type {
   ChannelType,
   WebhookEventType,
