@@ -39,7 +39,7 @@ export async function deliverReplies(params: {
   bot: Bot;
   replyToMode: ReplyToMode;
   textLimit: number;
-  thread?: TelegramThreadSpec | number | null;
+  thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
   /** Callback invoked before sending a voice message to switch typing indicator. */
@@ -451,7 +451,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   hasReplied: boolean;
-  thread?: TelegramThreadSpec | number | null;
+  thread?: TelegramThreadSpec | null;
   linkPreview?: boolean;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyQuoteText?: string;
@@ -479,7 +479,7 @@ async function sendTelegramVoiceFallbackText(opts: {
 
 function buildTelegramSendParams(opts?: {
   replyToMessageId?: number;
-  thread?: TelegramThreadSpec | number | null;
+  thread?: TelegramThreadSpec | null;
   replyQuoteText?: string;
 }): Record<string, unknown> {
   const threadParams = buildTelegramThreadParams(opts?.thread);
@@ -509,7 +509,7 @@ async function sendTelegramText(
   opts?: {
     replyToMessageId?: number;
     replyQuoteText?: string;
-    thread?: TelegramThreadSpec | number | null;
+    thread?: TelegramThreadSpec | null;
     textMode?: "markdown" | "html";
     plainText?: string;
     linkPreview?: boolean;
