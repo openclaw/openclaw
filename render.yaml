@@ -3,6 +3,7 @@ services:
     name: openclaw
     runtime: docker
     plan: starter
+    dockerCommand: node dist/index.js gateway --bind lan --port 8080
     healthCheckPath: /health
     envVars:
       - key: PORT
