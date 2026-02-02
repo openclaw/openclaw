@@ -2,6 +2,13 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.2.2
+
+### Fixes
+
+- Security: guard skill installer downloads with SSRF checks (block private/localhost URLs).
+- Media understanding: apply SSRF guardrails to provider fetches; allow private baseUrl overrides explicitly.
+
 ## 2026.2.1
 
 ### Changes
