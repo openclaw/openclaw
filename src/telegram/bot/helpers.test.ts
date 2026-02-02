@@ -34,11 +34,13 @@ describe("resolveTelegramForumThreadId", () => {
 
 describe("buildTelegramThreadParams", () => {
   it("omits General topic thread id for message sends", () => {
-    expect(buildTelegramThreadParams(1)).toBeUndefined();
+    expect(buildTelegramThreadParams({ id: 1, scope: "forum" })).toBeUndefined();
   });
 
   it("includes non-General topic thread ids", () => {
-    expect(buildTelegramThreadParams(99)).toEqual({ message_thread_id: 99 });
+    expect(buildTelegramThreadParams({ id: 99, scope: "forum" })).toEqual({
+      message_thread_id: 99,
+    });
   });
 
   it("keeps thread id=1 for dm threads", () => {
@@ -48,7 +50,9 @@ describe("buildTelegramThreadParams", () => {
   });
 
   it("normalizes thread ids to integers", () => {
-    expect(buildTelegramThreadParams(42.9)).toEqual({ message_thread_id: 42 });
+    expect(buildTelegramThreadParams({ id: 42.9, scope: "forum" })).toEqual({
+      message_thread_id: 42,
+    });
   });
 });
 
