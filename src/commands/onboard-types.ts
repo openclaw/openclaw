@@ -14,6 +14,7 @@ export type AuthChoice =
   | "openrouter-api-key"
   | "ai-gateway-api-key"
   | "moonshot-api-key"
+  | "moonshot-api-key-cn"
   | "kimi-code-api-key"
   | "synthetic-api-key"
   | "venice-api-key"

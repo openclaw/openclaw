@@ -61,6 +61,7 @@ describe("buildAuthChoiceOptions", () => {
     });
 
     expect(options.some((opt) => opt.value === "moonshot-api-key")).toBe(true);
+    expect(options.some((opt) => opt.value === "moonshot-api-key-cn")).toBe(true);
     expect(options.some((opt) => opt.value === "kimi-code-api-key")).toBe(true);
   });
 

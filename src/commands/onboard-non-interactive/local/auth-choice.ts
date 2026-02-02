@@ -14,6 +14,7 @@ import {
   applyMinimaxApiConfig,
   applyMinimaxConfig,
   applyMoonshotConfig,
+  applyMoonshotConfigCn,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
@@ -301,6 +302,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyMoonshotConfig(nextConfig);
+  }
+
+  if (authChoice === "moonshot-api-key-cn") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "moonshot",
+      cfg: baseConfig,
+      flagValue: opts.moonshotApiKey,
+      flagName: "--moonshot-api-key",
+      envVar: "MOONSHOT_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setMoonshotApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "moonshot:default",
+      provider: "moonshot",
+      mode: "api_key",
+    });
+    return applyMoonshotConfigCn(nextConfig);
   }
 
   if (authChoice === "kimi-code-api-key") {
