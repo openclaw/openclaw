@@ -1,4 +1,5 @@
 import { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -8,11 +9,27 @@ function clean(value?: string): string {
   return value?.trim() ?? "";
 }
 
-export function resolveMatrixConfig(
+/**
+ * Resolve Matrix config for a specific account, with fallback to top-level config.
+ * This supports both multi-account (channels.matrix.accounts.*) and
+ * single-account (channels.matrix.*) configurations.
+ */
+export function resolveMatrixConfigForAccount(
   cfg: CoreConfig = getMatrixRuntime().config.loadConfig() as CoreConfig,
+  accountId?: string | null,
   env: NodeJS.ProcessEnv = process.env,
 ): MatrixResolvedConfig {
-  const matrix = cfg.channels?.matrix ?? {};
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const matrixBase = cfg.channels?.matrix ?? {};
+
+  // Try to get account-specific config first
+  const accountConfig = matrixBase.accounts?.[normalizedAccountId];
+
+  // Merge: account-specific values override top-level values
+  // For DEFAULT_ACCOUNT_ID with no accounts, use top-level directly
+  const useAccountConfig = accountConfig !== undefined;
+  const matrix = useAccountConfig ? { ...matrixBase, ...accountConfig } : matrixBase;
+
   const homeserver = clean(matrix.homeserver) || clean(env.MATRIX_HOMESERVER);
   const userId = clean(matrix.userId) || clean(env.MATRIX_USER_ID);
   const accessToken = clean(matrix.accessToken) || clean(env.MATRIX_ACCESS_TOKEN) || undefined;
@@ -34,13 +51,24 @@ export function resolveMatrixConfig(
   };
 }
 
+/**
+ * Single-account function for backward compatibility - resolves default account config.
+ */
+export function resolveMatrixConfig(
+  cfg: CoreConfig = getMatrixRuntime().config.loadConfig() as CoreConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): MatrixResolvedConfig {
+  return resolveMatrixConfigForAccount(cfg, DEFAULT_ACCOUNT_ID, env);
+}
+
 export async function resolveMatrixAuth(params?: {
   cfg?: CoreConfig;
   env?: NodeJS.ProcessEnv;
+  accountId?: string | null;
 }): Promise<MatrixAuth> {
   const cfg = params?.cfg ?? (getMatrixRuntime().config.loadConfig() as CoreConfig);
   const env = params?.env ?? process.env;
-  const resolved = resolveMatrixConfig(cfg, env);
+  const resolved = resolveMatrixConfigForAccount(cfg, params?.accountId, env);
   if (!resolved.homeserver) {
     throw new Error("Matrix homeserver is required (matrix.homeserver)");
   }
@@ -52,7 +80,8 @@ export async function resolveMatrixAuth(params?: {
     touchMatrixCredentials,
   } = await import("../credentials.js");
 
-  const cached = loadMatrixCredentials(env);
+  const accountId = params?.accountId;
+  const cached = loadMatrixCredentials(env, accountId);
   const cachedCredentials =
     cached &&
     credentialsMatchConfig(cached, {
@@ -72,13 +101,17 @@ export async function resolveMatrixAuth(params?: {
       const whoami = await tempClient.getUserId();
       userId = whoami;
       // Save the credentials with the fetched userId
-      saveMatrixCredentials({
-        homeserver: resolved.homeserver,
-        userId,
-        accessToken: resolved.accessToken,
-      });
+      saveMatrixCredentials(
+        {
+          homeserver: resolved.homeserver,
+          userId,
+          accessToken: resolved.accessToken,
+        },
+        env,
+        accountId,
+      );
     } else if (cachedCredentials && cachedCredentials.accessToken === resolved.accessToken) {
-      touchMatrixCredentials(env);
+      touchMatrixCredentials(env, accountId);
     }
     return {
       homeserver: resolved.homeserver,
@@ -91,7 +124,7 @@ export async function resolveMatrixAuth(params?: {
   }
 
   if (cachedCredentials) {
-    touchMatrixCredentials(env);
+    touchMatrixCredentials(env, accountId);
     return {
       homeserver: cachedCredentials.homeserver,
       userId: cachedCredentials.userId,
@@ -149,12 +182,16 @@ export async function resolveMatrixAuth(params?: {
     encryption: resolved.encryption,
   };
 
-  saveMatrixCredentials({
-    homeserver: auth.homeserver,
-    userId: auth.userId,
-    accessToken: auth.accessToken,
-    deviceId: login.device_id,
-  });
+  saveMatrixCredentials(
+    {
+      homeserver: auth.homeserver,
+      userId: auth.userId,
+      accessToken: auth.accessToken,
+      deviceId: login.device_id,
+    },
+    env,
+    accountId,
+  );
 
   return auth;
 }
