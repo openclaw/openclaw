@@ -56,10 +56,8 @@ async function tryClaudeBrowserFetch(
       query: { profile: "chrome" },
       body: {
         targetId: claudeTab.targetId,
-        request: {
-          kind: "evaluate",
-          fn: "async () => { const res = await fetch('https://claude.ai/api/organizations'); return await res.json(); }",
-        },
+        kind: "evaluate",
+        fn: "async () => { const res = await fetch('https://claude.ai/api/organizations'); return await res.json(); }",
       },
     });
 
@@ -75,10 +73,8 @@ async function tryClaudeBrowserFetch(
       query: { profile: "chrome" },
       body: {
         targetId: claudeTab.targetId,
-        request: {
-          kind: "evaluate",
-          fn: `async () => { const res = await fetch('https://claude.ai/api/organizations/${orgId}/usage'); return await res.json(); }`,
-        },
+        kind: "evaluate",
+        fn: `async () => { const res = await fetch('https://claude.ai/api/organizations/${orgId}/usage'); return await res.json(); }`,
       },
     });
 
@@ -217,10 +213,8 @@ export async function refreshClaudeSharedUsage(state: ProviderUsageState): Promi
       query: { profile: "chrome" },
       body: {
         targetId: claudeTab.targetId,
-        request: {
-          kind: "evaluate",
-          fn: "async () => { const res = await fetch('https://claude.ai/api/organizations'); return await res.json(); }",
-        },
+        kind: "evaluate",
+        fn: "async () => { const res = await fetch('https://claude.ai/api/organizations'); return await res.json(); }",
       },
     });
 
@@ -246,10 +240,8 @@ export async function refreshClaudeSharedUsage(state: ProviderUsageState): Promi
       query: { profile: "chrome" },
       body: {
         targetId: claudeTab.targetId,
-        request: {
-          kind: "evaluate",
-          fn: `async () => { const res = await fetch('https://claude.ai/api/organizations/${orgId}/usage'); return await res.json(); }`,
-        },
+        kind: "evaluate",
+        fn: `async () => { const res = await fetch('https://claude.ai/api/organizations/${orgId}/usage'); return await res.json(); }`,
       },
     });
 
