@@ -8,7 +8,9 @@ Docs: https://docs.openclaw.ai
 
 - Telegram: add download timeouts for file fetches. (#6914) Thanks @hclsys.
 - Telegram: enforce thread specs for DM vs forum sends. (#6833) Thanks @obviyus.
- 
+- Streaming: avoid stuck typing indicator after streamed BlueBubbles replies.
+- Streaming: dedupe fence-split handling and cover maxChars fallback for newline chunking.
+
 ## 2026.2.1
 
 ### Changes

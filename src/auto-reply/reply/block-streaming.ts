@@ -69,9 +69,7 @@ export function resolveBlockStreamingChunking(
   flushOnParagraph?: boolean;
 } {
   const providerKey = normalizeChunkProvider(provider);
-  const providerRaw = provider?.trim().toLowerCase();
-  const providerConfigKey =
-    providerKey ?? (providerRaw ? (providerRaw as TextChunkProvider) : undefined);
+  const providerConfigKey = providerKey;
   const providerId = providerKey ? normalizeChannelId(providerKey) : null;
   const providerChunkLimit = providerId
     ? getChannelDock(providerId)?.outbound?.textChunkLimit
@@ -115,9 +113,7 @@ export function resolveBlockStreamingCoalescing(
   opts?: { chunkMode?: "length" | "newline" },
 ): BlockStreamingCoalescing | undefined {
   const providerKey = normalizeChunkProvider(provider);
-  const providerRaw = provider?.trim().toLowerCase();
-  const providerConfigKey =
-    providerKey ?? (providerRaw ? (providerRaw as TextChunkProvider) : undefined);
+  const providerConfigKey = providerKey;
 
   // Resolve the outbound chunkMode so the coalescer can flush on paragraph boundaries
   // when chunkMode="newline", matching the delivery-time splitting behavior.

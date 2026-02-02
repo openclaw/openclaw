@@ -90,37 +90,8 @@ export class EmbeddedBlockChunker {
         return;
       }
 
-      const breakIdx = breakResult.index;
-      let rawChunk = this.#buffer.slice(0, breakIdx);
-      if (rawChunk.trim().length === 0) {
-        this.#buffer = stripLeadingNewlines(this.#buffer.slice(breakIdx)).trimStart();
+      if (!this.#emitBreakResult(breakResult, emit)) {
         continue;
-      }
-
-      let nextBuffer = this.#buffer.slice(breakIdx);
-      const fenceSplit = breakResult.fenceSplit;
-      if (fenceSplit) {
-        const closeFence = rawChunk.endsWith("\n")
-          ? `${fenceSplit.closeFenceLine}\n`
-          : `\n${fenceSplit.closeFenceLine}\n`;
-        rawChunk = `${rawChunk}${closeFence}`;
-
-        const reopenFence = fenceSplit.reopenFenceLine.endsWith("\n")
-          ? fenceSplit.reopenFenceLine
-          : `${fenceSplit.reopenFenceLine}\n`;
-        nextBuffer = `${reopenFence}${nextBuffer}`;
-      }
-
-      emit(rawChunk);
-
-      if (fenceSplit) {
-        this.#buffer = nextBuffer;
-      } else {
-        const nextStart =
-          breakIdx < this.#buffer.length && /\s/.test(this.#buffer[breakIdx])
-            ? breakIdx + 1
-            : breakIdx;
-        this.#buffer = stripLeadingNewlines(this.#buffer.slice(nextStart));
       }
 
       if (this.#buffer.length < minChars && !force) {
@@ -143,38 +114,7 @@ export class EmbeddedBlockChunker {
         if (this.#buffer.length >= maxChars) {
           const breakResult = this.#pickBreakIndex(this.#buffer, 1);
           if (breakResult.index > 0) {
-            const breakIdx = breakResult.index;
-            let rawChunk = this.#buffer.slice(0, breakIdx);
-            if (rawChunk.trim().length === 0) {
-              this.#buffer = stripLeadingNewlines(this.#buffer.slice(breakIdx)).trimStart();
-              continue;
-            }
-
-            let nextBuffer = this.#buffer.slice(breakIdx);
-            const fenceSplit = breakResult.fenceSplit;
-            if (fenceSplit) {
-              const closeFence = rawChunk.endsWith("\n")
-                ? `${fenceSplit.closeFenceLine}\n`
-                : `\n${fenceSplit.closeFenceLine}\n`;
-              rawChunk = `${rawChunk}${closeFence}`;
-
-              const reopenFence = fenceSplit.reopenFenceLine.endsWith("\n")
-                ? fenceSplit.reopenFenceLine
-                : `${fenceSplit.reopenFenceLine}\n`;
-              nextBuffer = `${reopenFence}${nextBuffer}`;
-            }
-
-            emit(rawChunk);
-
-            if (fenceSplit) {
-              this.#buffer = nextBuffer;
-            } else {
-              const nextStart =
-                breakIdx < this.#buffer.length && /\s/.test(this.#buffer[breakIdx])
-                  ? breakIdx + 1
-                  : breakIdx;
-              this.#buffer = stripLeadingNewlines(this.#buffer.slice(nextStart));
-            }
+            this.#emitBreakResult(breakResult, emit);
             continue;
           }
         }
@@ -189,6 +129,47 @@ export class EmbeddedBlockChunker {
         this.#buffer.slice(paragraphBreak.index + paragraphBreak.length),
       );
     }
+  }
+
+  #emitBreakResult(breakResult: BreakResult, emit: (chunk: string) => void): boolean {
+    const breakIdx = breakResult.index;
+    if (breakIdx <= 0) {
+      return false;
+    }
+
+    let rawChunk = this.#buffer.slice(0, breakIdx);
+    if (rawChunk.trim().length === 0) {
+      this.#buffer = stripLeadingNewlines(this.#buffer.slice(breakIdx)).trimStart();
+      return false;
+    }
+
+    let nextBuffer = this.#buffer.slice(breakIdx);
+    const fenceSplit = breakResult.fenceSplit;
+    if (fenceSplit) {
+      const closeFence = rawChunk.endsWith("\n")
+        ? `${fenceSplit.closeFenceLine}\n`
+        : `\n${fenceSplit.closeFenceLine}\n`;
+      rawChunk = `${rawChunk}${closeFence}`;
+
+      const reopenFence = fenceSplit.reopenFenceLine.endsWith("\n")
+        ? fenceSplit.reopenFenceLine
+        : `${fenceSplit.reopenFenceLine}\n`;
+      nextBuffer = `${reopenFence}${nextBuffer}`;
+    }
+
+    emit(rawChunk);
+
+    if (fenceSplit) {
+      this.#buffer = nextBuffer;
+    } else {
+      const nextStart =
+        breakIdx < this.#buffer.length && /\s/.test(this.#buffer[breakIdx])
+          ? breakIdx + 1
+          : breakIdx;
+      this.#buffer = stripLeadingNewlines(this.#buffer.slice(nextStart));
+    }
+
+    return true;
   }
 
   #pickSoftBreakIndex(buffer: string, minCharsOverride?: number): BreakResult {

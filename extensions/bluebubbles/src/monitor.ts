@@ -2327,6 +2327,8 @@ async function processMessage(
       },
     });
   } finally {
+    const shouldStopTyping =
+      Boolean(chatGuidForActions && baseUrl && password) && (streamingActive || !sentMessage);
     streamingActive = false;
     clearTypingRestartTimer();
     if (sentMessage && chatGuidForActions && ackMessageId) {
@@ -2352,8 +2354,8 @@ async function processMessage(
         },
       });
     }
-    if (chatGuidForActions && baseUrl && password && !sentMessage) {
-      // No message was sent; stop typing to avoid a stuck indicator.
+    if (shouldStopTyping) {
+      // Stop typing after streaming completes to avoid a stuck indicator.
       logVerbose(core, runtime, `typing stop sent chatGuid=${chatGuidForActions}`);
       sendBlueBubblesTyping(chatGuidForActions, false, {
         cfg: config,
