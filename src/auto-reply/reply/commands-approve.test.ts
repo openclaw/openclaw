@@ -79,4 +79,23 @@ describe("/approve command", () => {
       }),
     );
   });
+
+  it("rejects gateway clients without approvals scope", async () => {
+    const cfg = {
+      commands: { text: true },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, {
+      Provider: "webchat",
+      Surface: "webchat",
+      GatewayClientScopes: ["operator.write"],
+    });
+
+    const mockCallGateway = vi.mocked(callGateway);
+    mockCallGateway.mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("requires operator.approvals");
+    expect(mockCallGateway).not.toHaveBeenCalled();
+  });
 });
