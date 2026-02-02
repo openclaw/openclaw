@@ -31,6 +31,9 @@ import { matrixOnboardingAdapter } from "./onboarding.js";
 import { matrixOutbound } from "./outbound.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
 
+// Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
+let matrixStartupLock: Promise<void> = Promise.resolve();
+
 const meta = {
   id: "matrix",
   label: "Matrix",
@@ -383,9 +386,12 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       probe: snapshot.probe,
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
-    probeAccount: async ({ timeoutMs, cfg }) => {
+    probeAccount: async ({ account, timeoutMs, cfg }) => {
       try {
-        const auth = await resolveMatrixAuth({ cfg: cfg as CoreConfig });
+        const auth = await resolveMatrixAuth({
+          cfg: cfg as CoreConfig,
+          accountId: account.accountId,
+        });
         return await probeMatrix({
           homeserver: auth.homeserver,
           accessToken: auth.accessToken,
@@ -424,8 +430,32 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         baseUrl: account.homeserver,
       });
       ctx.log?.info(`[${account.accountId}] starting provider (${account.homeserver ?? "matrix"})`);
+
+      // Serialize startup: wait for any previous startup to complete import phase.
+      // This works around a race condition with concurrent dynamic imports.
+      //
+      // INVARIANT: The import() below cannot hang because:
+      // 1. It only loads local ESM modules with no circular awaits
+      // 2. Module initialization is synchronous (no top-level await in ./matrix/index.js)
+      // 3. The lock only serializes the import phase, not the provider startup
+      const previousLock = matrixStartupLock;
+      let releaseLock: () => void = () => {};
+      matrixStartupLock = new Promise<void>((resolve) => {
+        releaseLock = resolve;
+      });
+      await previousLock;
+
       // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-      const { monitorMatrixProvider } = await import("./matrix/index.js");
+      // Wrap in try/finally to ensure lock is released even if import fails.
+      let monitorMatrixProvider: typeof import("./matrix/index.js").monitorMatrixProvider;
+      try {
+        const module = await import("./matrix/index.js");
+        monitorMatrixProvider = module.monitorMatrixProvider;
+      } finally {
+        // Release lock after import completes or fails
+        releaseLock();
+      }
+
       return monitorMatrixProvider({
         runtime: ctx.runtime,
         abortSignal: ctx.abortSignal,
