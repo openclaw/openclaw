@@ -26,6 +26,9 @@ export type SignalSseEvent = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_ATTACHMENT_TIMEOUT_MS = 60_000;
+
+export { DEFAULT_ATTACHMENT_TIMEOUT_MS };
 
 function normalizeBaseUrl(url: string): string {
   const trimmed = url.trim();

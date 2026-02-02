@@ -900,14 +900,6 @@ async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
-    const auth = await resolveApiKeyForProvider({
-      provider: providerId,
-      cfg,
-      profileId: entry.profile,
-      preferredProfile: entry.preferredProfile,
-      agentDir: params.agentDir,
-    });
-    const apiKey = requireApiKey(auth, providerId);
     const providerConfig = cfg.models?.providers?.[providerId];
     const baseUrl = entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
     const mergedHeaders = {
@@ -916,6 +908,21 @@ async function runProviderEntry(params: {
       ...entry.headers,
     };
     const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
+    // Check if Authorization header is already provided (case-insensitive)
+    const hasAuthHeader =
+      headers && Object.keys(headers).some((key) => key.toLowerCase() === "authorization");
+    // Only require API key if no Authorization header is present
+    let apiKey: string | undefined;
+    if (!hasAuthHeader) {
+      const auth = await resolveApiKeyForProvider({
+        provider: providerId,
+        cfg,
+        profileId: entry.profile,
+        preferredProfile: entry.preferredProfile,
+        agentDir: params.agentDir,
+      });
+      apiKey = requireApiKey(auth, providerId);
+    }
     const providerQuery = resolveProviderQuery({
       providerId,
       config: params.config,
@@ -926,7 +933,7 @@ async function runProviderEntry(params: {
       buffer: media.buffer,
       fileName: media.fileName,
       mime: media.mime,
-      apiKey,
+      apiKey: apiKey ?? "", // Empty string OK when Authorization header is present
       baseUrl,
       headers,
       model,

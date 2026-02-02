@@ -9,7 +9,7 @@ import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveSignalAccount } from "./accounts.js";
-import { signalCheck, signalRpcRequest } from "./client.js";
+import { signalCheck, signalRpcRequest, DEFAULT_ATTACHMENT_TIMEOUT_MS } from "./client.js";
 import { spawnSignalDaemon } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
@@ -186,6 +186,7 @@ async function fetchAttachment(params: {
   sender?: string;
   groupId?: string;
   maxBytes: number;
+  timeoutMs?: number;
 }): Promise<{ path: string; contentType?: string } | null> {
   const { attachment } = params;
   if (!attachment?.id) {
@@ -212,6 +213,7 @@ async function fetchAttachment(params: {
 
   const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
     baseUrl: params.baseUrl,
+    timeoutMs: params.timeoutMs ?? DEFAULT_ATTACHMENT_TIMEOUT_MS,
   });
   if (!result?.data) {
     return null;
