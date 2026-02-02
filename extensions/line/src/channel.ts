@@ -349,9 +349,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       let lastResult: { messageId: string; chatId: string } | null = null;
       const quickReplies = lineData.quickReplies ?? [];
       const hasQuickReplies = quickReplies.length > 0;
-      const quickReply = hasQuickReplies
-        ? createQuickReplyItems(quickReplies)
-        : undefined;
+      const quickReply = hasQuickReplies ? createQuickReplyItems(quickReplies) : undefined;
 
       const sendMessageBatch = async (messages: Array<Record<string, unknown>>) => {
         if (messages.length === 0) {

@@ -32,6 +32,32 @@ const MODELS_CONFIG: OpenClawConfig = {
   },
 };
 
+const MODEL_AUTH_ENV_PATTERNS = [/_API_KEY$/, /_OAUTH_TOKEN$/, /_TOKEN$/];
+const MODEL_AUTH_ENV_EXACT = new Set([
+  "AWS_ACCESS_KEY_ID",
+  "AWS_BEARER_TOKEN_BEDROCK",
+  "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+  "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+  "AWS_PROFILE",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_WEB_IDENTITY_TOKEN_FILE",
+  "GCLOUD_PROJECT",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "GOOGLE_CLOUD_LOCATION",
+  "GOOGLE_CLOUD_PROJECT",
+]);
+
+function stubModelAuthEnv(): void {
+  for (const key of Object.keys(process.env)) {
+    if (
+      MODEL_AUTH_ENV_EXACT.has(key) ||
+      MODEL_AUTH_ENV_PATTERNS.some((pattern) => pattern.test(key))
+    ) {
+      vi.stubEnv(key, undefined);
+    }
+  }
+}
+
 describe("models-config", () => {
   let previousHome: string | undefined;
 
@@ -45,26 +71,8 @@ describe("models-config", () => {
 
   it("skips writing models.json when no env token or profile exists", async () => {
     await withTempHome(async (home) => {
-      const previous = process.env.COPILOT_GITHUB_TOKEN;
-      const previousGh = process.env.GH_TOKEN;
-      const previousGithub = process.env.GITHUB_TOKEN;
-      const previousKimiCode = process.env.KIMI_API_KEY;
-      const previousMinimax = process.env.MINIMAX_API_KEY;
-      const previousMoonshot = process.env.MOONSHOT_API_KEY;
-      const previousSynthetic = process.env.SYNTHETIC_API_KEY;
-      const previousVenice = process.env.VENICE_API_KEY;
-      const previousXiaomi = process.env.XIAOMI_API_KEY;
-      delete process.env.COPILOT_GITHUB_TOKEN;
-      delete process.env.GH_TOKEN;
-      delete process.env.GITHUB_TOKEN;
-      delete process.env.KIMI_API_KEY;
-      delete process.env.MINIMAX_API_KEY;
-      delete process.env.MOONSHOT_API_KEY;
-      delete process.env.SYNTHETIC_API_KEY;
-      delete process.env.VENICE_API_KEY;
-      delete process.env.XIAOMI_API_KEY;
-
       try {
+        stubModelAuthEnv();
         vi.resetModules();
         const { ensureOpenClawModelsJson } = await import("./models-config.js");
 
@@ -79,51 +87,7 @@ describe("models-config", () => {
         await expect(fs.stat(path.join(agentDir, "models.json"))).rejects.toThrow();
         expect(result.wrote).toBe(false);
       } finally {
-        if (previous === undefined) {
-          delete process.env.COPILOT_GITHUB_TOKEN;
-        } else {
-          process.env.COPILOT_GITHUB_TOKEN = previous;
-        }
-        if (previousGh === undefined) {
-          delete process.env.GH_TOKEN;
-        } else {
-          process.env.GH_TOKEN = previousGh;
-        }
-        if (previousGithub === undefined) {
-          delete process.env.GITHUB_TOKEN;
-        } else {
-          process.env.GITHUB_TOKEN = previousGithub;
-        }
-        if (previousKimiCode === undefined) {
-          delete process.env.KIMI_API_KEY;
-        } else {
-          process.env.KIMI_API_KEY = previousKimiCode;
-        }
-        if (previousMinimax === undefined) {
-          delete process.env.MINIMAX_API_KEY;
-        } else {
-          process.env.MINIMAX_API_KEY = previousMinimax;
-        }
-        if (previousMoonshot === undefined) {
-          delete process.env.MOONSHOT_API_KEY;
-        } else {
-          process.env.MOONSHOT_API_KEY = previousMoonshot;
-        }
-        if (previousSynthetic === undefined) {
-          delete process.env.SYNTHETIC_API_KEY;
-        } else {
-          process.env.SYNTHETIC_API_KEY = previousSynthetic;
-        }
-        if (previousVenice === undefined) {
-          delete process.env.VENICE_API_KEY;
-        } else {
-          process.env.VENICE_API_KEY = previousVenice;
-        }
-        if (previousXiaomi === undefined) {
-          delete process.env.XIAOMI_API_KEY;
-        } else {
-          process.env.XIAOMI_API_KEY = previousXiaomi;
-        }
+        vi.unstubAllEnvs();
       }
     });
   });
