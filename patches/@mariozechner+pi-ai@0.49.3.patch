@@ -1,0 +1,29 @@
+--- a/dist/providers/anthropic.js
++++ b/dist/providers/anthropic.js
+@@ -1,4 +1,8 @@
+ import Anthropic from "@anthropic-ai/sdk";
++import { ProxyAgent } from "undici";
++const _proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
++const _proxyAgent = _proxyUrl ? new ProxyAgent(_proxyUrl) : undefined;
++const _proxyFetch = _proxyAgent ? (input, init) => fetch(input, { ...init, dispatcher: _proxyAgent }) : undefined;
+ import { calculateCost } from "../models.js";
+ import { getEnvApiKey } from "../stream.js";
+ import { AssistantMessageEventStream } from "../utils/event-stream.js";
+@@ -297,7 +301,7 @@
+             "user-agent": `claude-cli/${claudeCodeVersion} (external, cli)`,
+             "x-app": "cli",
+         }, model.headers, optionsHeaders);
+-        const client = new Anthropic({
++        const client = new Anthropic({ fetch: _proxyFetch,
+             apiKey: null,
+             authToken: apiKey,
+             baseURL: model.baseUrl,
+@@ -311,7 +315,7 @@
+         "anthropic-dangerous-direct-browser-access": "true",
+         "anthropic-beta": betaFeatures.join(","),
+     }, model.headers, optionsHeaders);
+-    const client = new Anthropic({
++    const client = new Anthropic({ fetch: _proxyFetch,
+         apiKey,
+         baseURL: model.baseUrl,
+         dangerouslyAllowBrowser: true,

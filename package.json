@@ -258,7 +258,10 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
-    ]
+    ],
+    "patchedDependencies": {
+      "@mariozechner/pi-ai@0.49.3": "patches/@mariozechner+pi-ai@0.49.3.patch"
+    }
   },
   "vitest": {
     "coverage": {
