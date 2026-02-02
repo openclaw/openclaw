@@ -13,10 +13,10 @@ metadata:
               "id": "pip",
               "kind": "pip",
               "package": "google-api-python-client google-auth-httplib2 google-auth-oauthlib",
-              "label": "Install Google API client libraries"
-            }
-          ]
-      }
+              "label": "Install Google API client libraries",
+            },
+          ],
+      },
   }
 ---
 
