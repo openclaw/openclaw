@@ -73,6 +73,11 @@ public final class GatewayTLSPinningSession: NSObject, WebSocketSessioning, URLS
             if let expected {
                 if fingerprint == expected {
                     completionHandler(.useCredential, URLCredential(trust: trust))
+                } else if params.allowTOFU {
+                    if let storeKey = params.storeKey {
+                        GatewayTLSStore.saveFingerprint(fingerprint, stableID: storeKey)
+                    }
+                    completionHandler(.useCredential, URLCredential(trust: trust))
                 } else {
                     completionHandler(.cancelAuthenticationChallenge, nil)
                 }
