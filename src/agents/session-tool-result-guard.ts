@@ -101,6 +101,9 @@ export function installSessionToolResultGuard(
     if (role === "assistant") {
       const sanitized = sanitizeToolCallInputs([message]);
       if (sanitized.length === 0) {
+        if (allowSyntheticToolResults && pending.size > 0) {
+          flushPendingToolResults();
+        }
         return undefined;
       }
       nextMessage = sanitized[0];
