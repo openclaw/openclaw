@@ -320,7 +320,7 @@ const memoryPlugin = {
         name: "memory_store",
         label: "Memory Store",
         description:
-          "Save important information in long-term memory. Use for preferences, facts, decisions. Use category 'boot' for information that should be loaded at every session start (replaces MEMORY.md).",
+          "Save important information in long-term memory. Use for preferences, facts, decisions. Use category 'core' for persistent essential context loaded at every session start (replaces MEMORY.md).",
         parameters: Type.Object({
           text: Type.String({ description: "Information to remember" }),
           importance: Type.Optional(Type.Number({ description: "Importance 0-1 (default: 0.7)" })),
@@ -609,27 +609,27 @@ const memoryPlugin = {
     }
 
     // ========================================================================
-    // Boot Context Hook
+    // Core Memory Hook
     // ========================================================================
 
-    // Inject boot-category memories as virtual MEMORY.md at bootstrap time
-    if (cfg.bootContext?.enabled) {
+    // Inject core memories as virtual MEMORY.md at bootstrap time
+    if (cfg.coreMemory?.enabled) {
       api.on("agent_bootstrap", async (event) => {
         try {
-          const maxEntries = cfg.bootContext?.maxEntries ?? 50;
-          const minImportance = cfg.bootContext?.minImportance ?? 0.5;
+          const maxEntries = cfg.coreMemory?.maxEntries ?? 50;
+          const minImportance = cfg.coreMemory?.minImportance ?? 0.5;
 
-          // Use category-based query for reliable boot memory retrieval
-          const bootMemories = await db.listByCategory("boot", maxEntries, minImportance);
+          // Use category-based query for reliable core memory retrieval
+          const coreMemories = await db.listByCategory("core", maxEntries, minImportance);
 
-          if (bootMemories.length === 0) {
+          if (coreMemories.length === 0) {
             return;
           }
 
-          // Format boot memories into a MEMORY.md-style document
-          let content = "# Boot Context (from LanceDB)\n\n";
-          content += "*Auto-loaded from long-term memory*\n\n";
-          for (const mem of bootMemories) {
+          // Format core memories into a MEMORY.md-style document
+          let content = "# Core Memory\n\n";
+          content += "*Persistent context loaded from long-term memory*\n\n";
+          for (const mem of coreMemories) {
             content += `- ${mem.text}\n`;
           }
 
@@ -641,7 +641,7 @@ const memoryPlugin = {
 
           const virtualFile = {
             name: "MEMORY.md" as const,
-            path: "memory://lancedb/boot-context",
+            path: "memory://lancedb/core-memory",
             content,
             missing: false,
           };
@@ -653,12 +653,12 @@ const memoryPlugin = {
           }
 
           api.logger.info?.(
-            `memory-lancedb: injected ${bootMemories.length} boot memories into context`,
+            `memory-lancedb: injected ${coreMemories.length} core memories into context`,
           );
 
           return { files };
         } catch (err) {
-          api.logger.warn(`memory-lancedb: boot context injection failed: ${String(err)}`);
+          api.logger.warn(`memory-lancedb: core memory injection failed: ${String(err)}`);
         }
       });
     }

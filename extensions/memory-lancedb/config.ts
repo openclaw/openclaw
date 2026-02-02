@@ -11,11 +11,11 @@ export type MemoryConfig = {
   dbPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
-  bootContext?: {
+  coreMemory?: {
     enabled?: boolean;
-    /** Maximum number of boot memories to load */
+    /** Maximum number of core memories to load */
     maxEntries?: number;
-    /** Minimum importance threshold for boot memories */
+    /** Minimum importance threshold for core memories */
     minImportance?: number;
   };
 };
@@ -26,7 +26,7 @@ export const MEMORY_CATEGORIES = [
   "decision",
   "entity",
   "other",
-  "boot",
+  "core",
 ] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
@@ -105,7 +105,7 @@ export const memoryConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "dbPath", "autoCapture", "autoRecall", "bootContext"],
+      ["embedding", "dbPath", "autoCapture", "autoRecall", "coreMemory"],
       "memory config",
     );
 
@@ -117,12 +117,12 @@ export const memoryConfigSchema = {
 
     const model = resolveEmbeddingModel(embedding);
 
-    // Parse bootContext
-    let bootContext: MemoryConfig["bootContext"];
-    if (cfg.bootContext && typeof cfg.bootContext === "object" && !Array.isArray(cfg.bootContext)) {
-      const bc = cfg.bootContext as Record<string, unknown>;
-      assertAllowedKeys(bc, ["enabled", "maxEntries", "minImportance"], "bootContext config");
-      bootContext = {
+    // Parse coreMemory
+    let coreMemory: MemoryConfig["coreMemory"];
+    if (cfg.coreMemory && typeof cfg.coreMemory === "object" && !Array.isArray(cfg.coreMemory)) {
+      const bc = cfg.coreMemory as Record<string, unknown>;
+      assertAllowedKeys(bc, ["enabled", "maxEntries", "minImportance"], "coreMemory config");
+      coreMemory = {
         enabled: bc.enabled === true,
         maxEntries: typeof bc.maxEntries === "number" ? bc.maxEntries : 50,
         minImportance: typeof bc.minImportance === "number" ? bc.minImportance : 0.5,
@@ -138,7 +138,7 @@ export const memoryConfigSchema = {
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture !== false,
       autoRecall: cfg.autoRecall !== false,
-      bootContext,
+      coreMemory,
     };
   },
   uiHints: {
@@ -166,21 +166,21 @@ export const memoryConfigSchema = {
       label: "Auto-Recall",
       help: "Automatically inject relevant memories into context",
     },
-    "bootContext.enabled": {
-      label: "Boot Context",
-      help: "Inject boot-category memories as virtual MEMORY.md at session start",
+    "coreMemory.enabled": {
+      label: "Core Memory",
+      help: "Inject core memories as virtual MEMORY.md at session start (replaces MEMORY.md file)",
     },
-    "bootContext.maxEntries": {
-      label: "Max Boot Entries",
+    "coreMemory.maxEntries": {
+      label: "Max Core Entries",
       placeholder: "50",
       advanced: true,
-      help: "Maximum number of boot memories to load",
+      help: "Maximum number of core memories to load",
     },
-    "bootContext.minImportance": {
-      label: "Min Boot Importance",
+    "coreMemory.minImportance": {
+      label: "Min Core Importance",
       placeholder: "0.5",
       advanced: true,
-      help: "Minimum importance threshold for boot memories (0-1)",
+      help: "Minimum importance threshold for core memories (0-1)",
     },
   },
 };
