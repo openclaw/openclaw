@@ -128,7 +128,9 @@ export function createMemoryGetTool(options: {
 
 function resolveMemoryCitationsMode(cfg: MoltbotConfig): MemoryCitationsMode {
   const mode = cfg.memory?.citations;
-  if (mode === "on" || mode === "off" || mode === "auto") return mode;
+  if (mode === "on" || mode === "off" || mode === "auto") {
+    return mode;
+  }
   return "auto";
 }
 
@@ -155,11 +157,15 @@ function clampResultsByInjectedChars(
   results: MemorySearchResult[],
   budget?: number,
 ): MemorySearchResult[] {
-  if (!budget || budget <= 0) return results;
+  if (!budget || budget <= 0) {
+    return results;
+  }
   let remaining = budget;
   const clamped: MemorySearchResult[] = [];
   for (const entry of results) {
-    if (remaining <= 0) break;
+    if (remaining <= 0) {
+      break;
+    }
     const snippet = entry.snippet ?? "";
     if (snippet.length <= remaining) {
       clamped.push(entry);
@@ -177,16 +183,26 @@ function shouldIncludeCitations(params: {
   mode: MemoryCitationsMode;
   sessionKey?: string;
 }): boolean {
-  if (params.mode === "on") return true;
-  if (params.mode === "off") return false;
+  if (params.mode === "on") {
+    return true;
+  }
+  if (params.mode === "off") {
+    return false;
+  }
   // auto: show citations in direct chats; suppress in groups/channels by default.
   const chatType = deriveChatTypeFromSessionKey(params.sessionKey);
   return chatType === "direct";
 }
 
 function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" | "channel" {
-  if (!sessionKey) return "direct";
-  if (sessionKey.includes(":group:")) return "group";
-  if (sessionKey.includes(":channel:")) return "channel";
+  if (!sessionKey) {
+    return "direct";
+  }
+  if (sessionKey.includes(":group:")) {
+    return "group";
+  }
+  if (sessionKey.includes(":channel:")) {
+    return "channel";
+  }
   return "direct";
 }
