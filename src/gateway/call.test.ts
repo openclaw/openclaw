@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setLocalGatewayDispatcher } from "./local-dispatch.js";
 
 const loadConfig = vi.fn();
 const resolveGatewayPort = vi.fn();
@@ -74,6 +75,7 @@ describe("callGateway url resolution", () => {
     startMode = "hello";
     closeCode = 1006;
     closeReason = "";
+    setLocalGatewayDispatcher(null);
   });
 
   it("keeps loopback when local bind is auto even if tailnet is present", async () => {
@@ -116,6 +118,23 @@ describe("callGateway url resolution", () => {
     await callGateway({ method: "health", url: "wss://override.example/ws" });
 
     expect(lastClientOptions?.url).toBe("wss://override.example/ws");
+  });
+
+  it("uses local dispatcher when allowLocal is enabled", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    const localCalls: Array<{ method?: string }> = [];
+    setLocalGatewayDispatcher(async (opts) => {
+      localCalls.push({ method: opts.method });
+      return { ok: true, source: "local" };
+    });
+
+    const result = await callGateway({ method: "cron.list", allowLocal: true });
+
+    expect(result).toEqual({ ok: true, source: "local" });
+    expect(localCalls[0]?.method).toBe("cron.list");
+    expect(lastClientOptions).toBeNull();
   });
 });
 

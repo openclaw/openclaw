@@ -7,6 +7,7 @@ export type GatewayCallOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
   timeoutMs?: number;
+  allowLocal?: boolean;
 };
 
 export function resolveGatewayOptions(opts?: GatewayCallOptions) {
@@ -40,6 +41,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     params,
     timeoutMs: gateway.timeoutMs,
     expectFinal: extra?.expectFinal,
+    allowLocal: opts.allowLocal,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,

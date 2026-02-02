@@ -209,6 +209,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
         gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
         gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
         timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+        allowLocal: true,
       };
 
       switch (action) {

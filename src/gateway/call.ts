@@ -16,6 +16,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { getLocalGatewayDispatcher } from "./local-dispatch.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 export type CallGatewayOptions = {
@@ -24,6 +25,7 @@ export type CallGatewayOptions = {
   password?: string;
   tlsFingerprint?: string;
   config?: OpenClawConfig;
+  allowLocal?: boolean;
   method: string;
   params?: unknown;
   expectFinal?: boolean;
@@ -188,6 +190,32 @@ export async function callGateway<T = Record<string, unknown>>(
   };
   const formatTimeoutError = () =>
     `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
+  const localDispatcher = opts.allowLocal ? getLocalGatewayDispatcher() : null;
+  const canDispatchLocally =
+    Boolean(localDispatcher) && !opts.config && !urlOverride && !remoteUrl && !isRemoteMode;
+  if (canDispatchLocally) {
+    const dispatchPromise = localDispatcher?.({
+      method: opts.method,
+      params: opts.params,
+      clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
+      clientDisplayName: opts.clientDisplayName,
+      clientVersion: opts.clientVersion ?? "dev",
+      platform: opts.platform,
+      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      instanceId: opts.instanceId,
+    });
+    if (dispatchPromise) {
+      if (timeoutMs <= 0) {
+        return (await dispatchPromise) as T;
+      }
+      return (await Promise.race([
+        dispatchPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(formatTimeoutError())), timeoutMs),
+        ),
+      ])) as T;
+    }
+  }
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
