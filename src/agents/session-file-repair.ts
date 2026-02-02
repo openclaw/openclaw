@@ -28,11 +28,17 @@ export async function repairSessionFileIfNeeded(params: {
   let content: string;
   try {
     content = await fs.readFile(sessionFile, "utf-8");
-  } catch {
-    return { repaired: false, droppedLines: 0, reason: "missing session file" };
+  } catch (err) {
+    const code = (err as { code?: unknown } | undefined)?.code;
+    if (code === "ENOENT") {
+      return { repaired: false, droppedLines: 0, reason: "missing session file" };
+    }
+    const reason = `failed to read session file: ${err instanceof Error ? err.message : "unknown error"}`;
+    params.warn?.(`session file repair skipped: ${reason} (${path.basename(sessionFile)})`);
+    return { repaired: false, droppedLines: 0, reason };
   }
 
-  const lines = content.split("\n");
+  const lines = content.split(/\r?\n/);
   const entries: unknown[] = [];
   let droppedLines = 0;
 
@@ -53,6 +59,9 @@ export async function repairSessionFileIfNeeded(params: {
   }
 
   if (!isSessionHeader(entries[0])) {
+    params.warn?.(
+      `session file repair skipped: invalid session header (${path.basename(sessionFile)})`,
+    );
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
@@ -77,8 +86,12 @@ export async function repairSessionFileIfNeeded(params: {
   } catch (err) {
     try {
       await fs.unlink(tmpPath);
-    } catch {
-      // ignore cleanup failures
+    } catch (cleanupErr) {
+      params.warn?.(
+        `session file repair cleanup failed: ${cleanupErr instanceof Error ? cleanupErr.message : "unknown error"} (${path.basename(
+          tmpPath,
+        )})`,
+      );
     }
     return {
       repaired: false,
