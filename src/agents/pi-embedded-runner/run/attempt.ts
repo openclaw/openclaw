@@ -814,6 +814,40 @@ export async function runEmbeddedAttempt(
             });
           }
 
+          // Run pre_llm_request hook to allow plugins to modify messages before LLM call
+          if (hookRunner?.hasHooks("pre_llm_request")) {
+            try {
+              const preLlmResult = await hookRunner.runPreLlmRequest(
+                {
+                  prompt: effectivePrompt,
+                  messages: activeSession.messages,
+                  images: imageResult.images,
+                },
+                {
+                  agentId: params.sessionKey?.split(":")[0] ?? "main",
+                  sessionKey: params.sessionKey,
+                  workspaceDir: params.workspaceDir,
+                  provider: params.provider,
+                  modelId: params.modelId,
+                },
+              );
+              if (preLlmResult?.messages) {
+                activeSession.agent.replaceMessages(preLlmResult.messages);
+                log.debug(
+                  `pre_llm_request hook modified messages (${preLlmResult.messages.length} messages)`,
+                );
+              }
+              if (preLlmResult?.prompt) {
+                effectivePrompt = preLlmResult.prompt;
+                log.debug(
+                  `pre_llm_request hook modified prompt (${preLlmResult.prompt.length} chars)`,
+                );
+              }
+            } catch (hookErr) {
+              log.warn(`pre_llm_request hook failed: ${String(hookErr)}`);
+            }
+          }
+
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {

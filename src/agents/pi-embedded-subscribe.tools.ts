@@ -3,14 +3,31 @@ import { normalizeTargetForProvider } from "../infra/outbound/target-normalizati
 import { truncateUtf16Safe } from "../utils.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
 
-const TOOL_RESULT_MAX_CHARS = 8000;
+/** Default max chars for tool results. Can be overridden via setToolResultMaxChars(). */
+let TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
 
-function truncateToolText(text: string): string {
-  if (text.length <= TOOL_RESULT_MAX_CHARS) {
+/**
+ * Configure the maximum characters for tool result truncation.
+ * Call this at startup to override the default (8000 chars).
+ */
+export function setToolResultMaxChars(maxChars: number): void {
+  TOOL_RESULT_MAX_CHARS = maxChars;
+}
+
+/**
+ * Get the current max chars setting for tool results.
+ */
+export function getToolResultMaxChars(): number {
+  return TOOL_RESULT_MAX_CHARS;
+}
+
+function truncateToolText(text: string, maxChars?: number): string {
+  const limit = maxChars ?? TOOL_RESULT_MAX_CHARS;
+  if (text.length <= limit) {
     return text;
   }
-  return `${truncateUtf16Safe(text, TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
+  return `${truncateUtf16Safe(text, limit)}\n…(truncated)…`;
 }
 
 function normalizeToolErrorText(text: string): string | undefined {
@@ -60,7 +77,12 @@ function extractErrorField(value: unknown): string | undefined {
   return status ? normalizeToolErrorText(status) : undefined;
 }
 
-export function sanitizeToolResult(result: unknown): unknown {
+/**
+ * Sanitize tool result content by truncating text and removing image data.
+ * @param result The tool result to sanitize
+ * @param maxChars Optional max chars for text truncation (defaults to TOOL_RESULT_MAX_CHARS)
+ */
+export function sanitizeToolResult(result: unknown, maxChars?: number): unknown {
   if (!result || typeof result !== "object") {
     return result;
   }
@@ -76,7 +98,7 @@ export function sanitizeToolResult(result: unknown): unknown {
     const entry = item as Record<string, unknown>;
     const type = typeof entry.type === "string" ? entry.type : undefined;
     if (type === "text" && typeof entry.text === "string") {
-      return { ...entry, text: truncateToolText(entry.text) };
+      return { ...entry, text: truncateToolText(entry.text, maxChars) };
     }
     if (type === "image") {
       const data = typeof entry.data === "string" ? entry.data : undefined;
