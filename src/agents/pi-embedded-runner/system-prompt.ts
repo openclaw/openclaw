@@ -74,8 +74,11 @@ export function buildEmbeddedSystemPrompt(params: {
   });
 }
 
-export function createSystemPromptOverride(systemPrompt: string): string {
-  return systemPrompt.trim();
+export function createSystemPromptOverride(
+  systemPrompt: string,
+): (defaultPrompt?: string) => string {
+  const override = systemPrompt.trim();
+  return (_defaultPrompt?: string) => override;
 }
 
 export function applySystemPromptOverrideToSession(session: AgentSession, override: string) {
