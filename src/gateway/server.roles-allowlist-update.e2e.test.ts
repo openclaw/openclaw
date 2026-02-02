@@ -16,6 +16,7 @@ vi.mock("../infra/update-runner.js", () => ({
   })),
 }));
 
+import { sleep } from "../utils.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -42,8 +43,6 @@ afterAll(async () => {
   ws.close();
   await server.close();
 });
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const connectNodeClient = async (params: {
   port: number;
