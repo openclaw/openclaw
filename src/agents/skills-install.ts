@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 
@@ -81,6 +82,23 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
   return undefined;
 }
 
+function resolvePackageId(spec: SkillInstallSpec): string | undefined {
+  switch (spec.kind) {
+    case "brew":
+      return spec.formula?.trim();
+    case "node":
+      return spec.package?.trim();
+    case "go":
+      return spec.module?.trim();
+    case "uv":
+      return spec.package?.trim();
+    case "download":
+      return spec.url?.trim();
+    default:
+      return undefined;
+  }
+}
+
 function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
   switch (prefs.nodeManager) {
     case "pnpm":
@@ -144,11 +162,29 @@ function resolveArchiveType(spec: SkillInstallSpec, filename: string): string | 
   return undefined;
 }
 
+const DEFAULT_MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024; // 50MB
+
+function createSizeLimitTransform(maxBytes: number): Transform {
+  let totalBytes = 0;
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        callback(new Error(`Download exceeds size limit (${maxBytes} bytes)`));
+        return;
+      }
+      callback(null, chunk);
+    },
+  });
+}
+
 async function downloadFile(
   url: string,
   destPath: string,
   timeoutMs: number,
-): Promise<{ bytes: number }> {
+  options?: { maxBytes?: number },
+): Promise<{ bytes: number; sha256: string }> {
+  const maxBytes = options?.maxBytes ?? DEFAULT_MAX_DOWNLOAD_SIZE;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), Math.max(1_000, timeoutMs));
   try {
@@ -162,9 +198,17 @@ async function downloadFile(
     const readable = isNodeReadableStream(body)
       ? body
       : Readable.fromWeb(body as NodeReadableStream);
-    await pipeline(readable, file);
+    const hash = createHash("sha256");
+    const sizeLimit = createSizeLimitTransform(maxBytes);
+    const hashTransform = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        hash.update(chunk);
+        callback(null, chunk);
+      },
+    });
+    await pipeline(readable, sizeLimit, hashTransform, file);
     const stat = await fs.promises.stat(destPath);
-    return { bytes: stat.size };
+    return { bytes: stat.size, sha256: hash.digest("hex") };
   } finally {
     clearTimeout(timeout);
   }
@@ -200,8 +244,10 @@ async function installDownloadSpec(params: {
   entry: SkillEntry;
   spec: SkillInstallSpec;
   timeoutMs: number;
+  maxDownloadSize?: number;
 }): Promise<SkillInstallResult> {
   const { entry, spec, timeoutMs } = params;
+  const maxDownloadSize = params.maxDownloadSize ?? DEFAULT_MAX_DOWNLOAD_SIZE;
   const url = spec.url?.trim();
   if (!url) {
     return {
@@ -211,6 +257,22 @@ async function installDownloadSpec(params: {
       stderr: "",
       code: null,
     };
+  }
+
+  // HTTPS enforcement: reject http:// URLs (file:// allowed)
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "http:") {
+      return {
+        ok: false,
+        message: "Insecure download URL rejected: use https:// instead of http://",
+        stdout: "",
+        stderr: "",
+        code: null,
+      };
+    }
+  } catch {
+    // non-URL (local path) — allow
   }
 
   let filename = "";
@@ -227,12 +289,42 @@ async function installDownloadSpec(params: {
 
   const archivePath = path.join(targetDir, filename);
   let downloaded = 0;
+  let actualSha256 = "";
   try {
-    const result = await downloadFile(url, archivePath, timeoutMs);
+    const result = await downloadFile(url, archivePath, timeoutMs, {
+      maxBytes: maxDownloadSize,
+    });
     downloaded = result.bytes;
+    actualSha256 = result.sha256;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // Clean up partial download
+    try {
+      await fs.promises.unlink(archivePath);
+    } catch {
+      /* ignore */
+    }
     return { ok: false, message, stdout: "", stderr: message, code: null };
+  }
+
+  // SHA-256 checksum verification
+  if (spec.sha256) {
+    const expected = spec.sha256.toLowerCase().trim();
+    if (actualSha256 !== expected) {
+      // Delete the downloaded file
+      try {
+        await fs.promises.unlink(archivePath);
+      } catch {
+        /* ignore */
+      }
+      return {
+        ok: false,
+        message: `SHA-256 mismatch: expected ${expected}, got ${actualSha256}`,
+        stdout: "",
+        stderr: "",
+        code: null,
+      };
+    }
   }
 
   const archiveType = resolveArchiveType(spec, filename);
@@ -326,8 +418,28 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       code: null,
     };
   }
+  // Trusted package allowlist check
+  const trustedPackages = params.config?.skills?.install?.trustedPackages;
+  if (trustedPackages && trustedPackages.length > 0) {
+    const packageId = resolvePackageId(spec);
+    if (packageId && !trustedPackages.includes(packageId)) {
+      return {
+        ok: false,
+        message: `Package not in trusted allowlist: ${packageId}`,
+        stdout: "",
+        stderr: "",
+        code: null,
+      };
+    }
+  }
+
   if (spec.kind === "download") {
-    return await installDownloadSpec({ entry, spec, timeoutMs });
+    return await installDownloadSpec({
+      entry,
+      spec,
+      timeoutMs,
+      maxDownloadSize: params.config?.skills?.maxDownloadSize,
+    });
   }
 
   const prefs = resolveSkillsInstallPreferences(params.config);

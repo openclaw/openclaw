@@ -20,6 +20,8 @@ export type SkillsLoadConfig = {
 export type SkillsInstallConfig = {
   preferBrew?: boolean;
   nodeManager?: "npm" | "pnpm" | "yarn" | "bun";
+  /** Trusted package/formula/module allowlist. When set, only listed packages can be installed. */
+  trustedPackages?: string[];
 };
 
 export type SkillsConfig = {
@@ -28,4 +30,6 @@ export type SkillsConfig = {
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   entries?: Record<string, SkillConfig>;
+  /** Max download size in bytes for skill downloads. Default: 50MB. */
+  maxDownloadSize?: number;
 };

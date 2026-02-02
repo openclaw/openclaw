@@ -14,6 +14,8 @@ export type SkillInstallSpec = {
   extract?: boolean;
   stripComponents?: number;
   targetDir?: string;
+  /** Expected SHA-256 hex digest of the downloaded file. */
+  sha256?: string;
 };
 
 export type OpenClawSkillMetadata = {
