@@ -73,6 +73,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["openrouter-api-key"],
   },
   {
+    value: "puter",
+    label: "Puter",
+    hint: "Web Login or API key",
+    choices: ["puter-web", "puter-api-key"],
+  },
+  {
     value: "qwen",
     label: "Qwen",
     hint: "OAuth",
@@ -142,6 +148,10 @@ export function buildAuthChoiceOptions(params: {
   options.push({ value: "chutes", label: "Chutes (OAuth)" });
   options.push({ value: "openai-api-key", label: "OpenAI API key" });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
+  options.push({
+    value: "puter-web",
+    label: "Web login (recommended)",
+  });
   options.push({
     value: "ai-gateway-api-key",
     label: "Vercel AI Gateway API key",

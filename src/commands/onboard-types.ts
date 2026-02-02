@@ -12,6 +12,8 @@ export type AuthChoice =
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
+  | "puter-web"
+  | "puter-api-key"
   | "ai-gateway-api-key"
   | "moonshot-api-key"
   | "kimi-code-api-key"
