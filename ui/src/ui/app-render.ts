@@ -98,8 +98,8 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const agent = list.find((entry) => entry.id === agentId);
   const identity = agent?.identity;
   const candidate = identity?.avatarUrl ?? identity?.avatar;
-  if (!candidate) return undefined;
-  if (AVATAR_DATA_RE.test(candidate) || AVATAR_HTTP_RE.test(candidate)) return candidate;
+  if (!candidate) {return undefined;}
+  if (AVATAR_DATA_RE.test(candidate) || AVATAR_HTTP_RE.test(candidate)) {return candidate;}
   return identity?.avatarUrl;
 }
 
@@ -486,7 +486,7 @@ export function renderApp(state: AppViewState) {
                   return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
                 },
                 onToggleFocusMode: () => {
-                  if (state.onboarding) return;
+                  if (state.onboarding) {return;}
                   state.applySettings({
                     ...state.settings,
                     chatFocusMode: !state.settings.chatFocusMode,

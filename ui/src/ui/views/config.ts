@@ -299,7 +299,7 @@ function resolveSectionMeta(
   description?: string;
 } {
   const meta = SECTION_META[key];
-  if (meta) return meta;
+  if (meta) {return meta;}
   return {
     label: schema?.title ?? humanize(key),
     description: schema?.description ?? "",
@@ -312,7 +312,7 @@ function resolveSubsections(params: {
   uiHints: ConfigUiHints;
 }): SubsectionEntry[] {
   const { key, schema, uiHints } = params;
-  if (!schema || schemaType(schema) !== "object" || !schema.properties) return [];
+  if (!schema || schemaType(schema) !== "object" || !schema.properties) {return [];}
   const entries = Object.entries(schema.properties).map(([subKey, node]) => {
     const hint = hintForPath([key, subKey], uiHints);
     const label = hint?.label ?? node.title ?? humanize(subKey);
@@ -328,11 +328,11 @@ function computeDiff(
   original: Record<string, unknown> | null,
   current: Record<string, unknown> | null,
 ): Array<{ path: string; from: unknown; to: unknown }> {
-  if (!original || !current) return [];
+  if (!original || !current) {return [];}
   const changes: Array<{ path: string; from: unknown; to: unknown }> = [];
 
   function compare(orig: unknown, curr: unknown, path: string) {
-    if (orig === curr) return;
+    if (orig === curr) {return;}
     if (typeof orig !== typeof curr) {
       changes.push({ path, from: orig, to: curr });
       return;
@@ -369,7 +369,7 @@ function truncateValue(value: unknown, maxLen = 40): string {
   } catch {
     str = String(value);
   }
-  if (str.length <= maxLen) return str;
+  if (str.length <= maxLen) {return str;}
   return str.slice(0, maxLen - 3) + "...";
 }
 
@@ -392,7 +392,7 @@ export function renderConfig(props: ConfigProps) {
 
   const activeSectionSchema =
     props.activeSection && analysis.schema && schemaType(analysis.schema) === "object"
-      ? (analysis.schema.properties?.[props.activeSection] as JsonSchema | undefined)
+      ? (analysis.schema.properties?.[props.activeSection])
       : undefined;
   const activeSectionMeta = props.activeSection
     ? resolveSectionMeta(props.activeSection, activeSectionSchema)

@@ -84,10 +84,10 @@ declare global {
 const injectedAssistantIdentity = resolveInjectedAssistantIdentity();
 
 function resolveOnboardingMode(): boolean {
-  if (!window.location.search) return false;
+  if (!window.location.search) {return false;}
   const params = new URLSearchParams(window.location.search);
   const raw = params.get("onboarding");
-  if (!raw) return false;
+  if (!raw) {return false;}
   const normalized = raw.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
@@ -406,7 +406,7 @@ export class OpenClawApp extends LitElement {
 
   async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
     const active = this.execApprovalQueue[0];
-    if (!active || !this.client || this.execApprovalBusy) return;
+    if (!active || !this.client || this.execApprovalBusy) {return;}
     this.execApprovalBusy = true;
     this.execApprovalError = null;
     try {
@@ -424,7 +424,7 @@ export class OpenClawApp extends LitElement {
 
   handleGatewayUrlConfirm() {
     const nextGatewayUrl = this.pendingGatewayUrl;
-    if (!nextGatewayUrl) return;
+    if (!nextGatewayUrl) {return;}
     this.pendingGatewayUrl = null;
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
       ...this.settings,
@@ -455,7 +455,7 @@ export class OpenClawApp extends LitElement {
       window.clearTimeout(this.sidebarCloseTimer);
     }
     this.sidebarCloseTimer = window.setTimeout(() => {
-      if (this.sidebarOpen) return;
+      if (this.sidebarOpen) {return;}
       this.sidebarContent = null;
       this.sidebarError = null;
       this.sidebarCloseTimer = null;

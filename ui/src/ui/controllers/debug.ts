@@ -16,8 +16,8 @@ export type DebugState = {
 };
 
 export async function loadDebug(state: DebugState) {
-  if (!state.client || !state.connected) return;
-  if (state.debugLoading) return;
+  if (!state.client || !state.connected) {return;}
+  if (state.debugLoading) {return;}
   state.debugLoading = true;
   try {
     const [status, health, models, heartbeat] = await Promise.all([
@@ -30,7 +30,7 @@ export async function loadDebug(state: DebugState) {
     state.debugHealth = health as HealthSnapshot;
     const modelPayload = models as { models?: unknown[] } | undefined;
     state.debugModels = Array.isArray(modelPayload?.models) ? modelPayload?.models : [];
-    state.debugHeartbeat = heartbeat as unknown;
+    state.debugHeartbeat = heartbeat;
   } catch (err) {
     state.debugCallError = String(err);
   } finally {
@@ -39,7 +39,7 @@ export async function loadDebug(state: DebugState) {
 }
 
 export async function callDebugMethod(state: DebugState) {
-  if (!state.client || !state.connected) return;
+  if (!state.client || !state.connected) {return;}
   state.debugCallError = null;
   state.debugCallResult = null;
   try {

@@ -63,7 +63,7 @@ describe("cron view", () => {
       container,
     );
 
-    const row = container.querySelector(".list-item-clickable") as HTMLElement | null;
+    const row = container.querySelector(".list-item-clickable");
     expect(row).not.toBeNull();
     row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 

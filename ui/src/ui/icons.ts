@@ -243,6 +243,6 @@ export function renderEmojiIcon(
 }
 
 export function setEmojiIcon(target: HTMLElement | null, icon: string): void {
-  if (!target) return;
+  if (!target) {return;}
   target.textContent = icon;
 }

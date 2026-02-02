@@ -26,8 +26,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     });
 
   const hasToolName =
-    typeof (m as Record<string, unknown>).toolName === "string" ||
-    typeof (m as Record<string, unknown>).tool_name === "string";
+    typeof (m).toolName === "string" ||
+    typeof (m).tool_name === "string";
 
   if (hasToolId || hasToolContent || hasToolName) {
     role = "toolResult";
@@ -61,9 +61,9 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
   // Preserve original casing when it's already a core role.
-  if (role === "user" || role === "User") return role;
-  if (role === "assistant") return "assistant";
-  if (role === "system") return "system";
+  if (role === "user" || role === "User") {return role;}
+  if (role === "assistant") {return "assistant";}
+  if (role === "system") {return "system";}
   // Keep tool-related roles distinct so the UI can style/toggle them.
   if (
     lower === "toolresult" ||

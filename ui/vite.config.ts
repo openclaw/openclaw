@@ -6,9 +6,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 function normalizeBase(input: string): string {
   const trimmed = input.trim();
-  if (!trimmed) return "/";
-  if (trimmed === "./") return "./";
-  if (trimmed.endsWith("/")) return trimmed;
+  if (!trimmed) {return "/";}
+  if (trimmed === "./") {return "./";}
+  if (trimmed.endsWith("/")) {return trimmed;}
   return `${trimmed}/`;
 }
 

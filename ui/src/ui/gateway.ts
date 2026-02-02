@@ -91,7 +91,7 @@ export class GatewayBrowserClient {
   }
 
   private connect() {
-    if (this.closed) return;
+    if (this.closed) {return;}
     this.ws = new WebSocket(this.opts.url);
     this.ws.onopen = () => this.queueConnect();
     this.ws.onmessage = (ev) => this.handleMessage(String(ev.data ?? ""));
@@ -108,19 +108,19 @@ export class GatewayBrowserClient {
   }
 
   private scheduleReconnect() {
-    if (this.closed) return;
+    if (this.closed) {return;}
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
     window.setTimeout(() => this.connect(), delay);
   }
 
   private flushPending(err: Error) {
-    for (const [, p] of this.pending) p.reject(err);
+    for (const [, p] of this.pending) {p.reject(err);}
     this.pending.clear();
   }
 
   private async sendConnect() {
-    if (this.connectSent) return;
+    if (this.connectSent) {return;}
     this.connectSent = true;
     if (this.connectTimer !== null) {
       window.clearTimeout(this.connectTimer);
@@ -265,10 +265,10 @@ export class GatewayBrowserClient {
     if (frame.type === "res") {
       const res = parsed as GatewayResponseFrame;
       const pending = this.pending.get(res.id);
-      if (!pending) return;
+      if (!pending) {return;}
       this.pending.delete(res.id);
-      if (res.ok) pending.resolve(res.payload);
-      else pending.reject(new Error(res.error?.message ?? "request failed"));
+      if (res.ok) {pending.resolve(res.payload);}
+      else {pending.reject(new Error(res.error?.message ?? "request failed"));}
       return;
     }
   }
@@ -289,7 +289,7 @@ export class GatewayBrowserClient {
   private queueConnect() {
     this.connectNonce = null;
     this.connectSent = false;
-    if (this.connectTimer !== null) window.clearTimeout(this.connectTimer);
+    if (this.connectTimer !== null) {window.clearTimeout(this.connectTimer);}
     this.connectTimer = window.setTimeout(() => {
       void this.sendConnect();
     }, 750);

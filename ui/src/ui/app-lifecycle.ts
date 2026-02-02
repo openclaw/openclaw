@@ -77,7 +77,8 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
     const forcedByLoad =
       changed.has("chatLoading") &&
       changed.get("chatLoading") === true &&
-      host.chatLoading === false;
+      !
+      host.chatLoading;
     scheduleChatScroll(
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
       forcedByTab || forcedByLoad || !host.chatHasAutoScrolled,

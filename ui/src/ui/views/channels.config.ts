@@ -18,7 +18,7 @@ function resolveSchemaNode(
 ): JsonSchema | null {
   let current = schema;
   for (const key of path) {
-    if (!current) return null;
+    if (!current) {return null;}
     const type = schemaType(current);
     if (type === "object") {
       const properties = current.properties ?? {};
@@ -28,13 +28,13 @@ function resolveSchemaNode(
       }
       const additional = current.additionalProperties;
       if (typeof key === "string" && additional && typeof additional === "object") {
-        current = additional as JsonSchema;
+        current = additional;
         continue;
       }
       return null;
     }
     if (type === "array") {
-      if (typeof key !== "number") return null;
+      if (typeof key !== "number") {return null;}
       const items = Array.isArray(current.items) ? current.items[0] : current.items;
       current = items ?? null;
       continue;
