@@ -29,6 +29,7 @@ const RECOVERABLE_ERROR_NAMES = new Set([
 
 const RECOVERABLE_MESSAGE_SNIPPETS = [
   "fetch failed",
+  "fetch failed sending request",
   "typeerror: fetch failed",
   "undici",
   "network error",

@@ -407,17 +407,23 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
         }
       }
       ctx.log?.info(`[${account.accountId}] starting provider${telegramBotLabel}`);
-      return getTelegramRuntime().channel.telegram.monitorTelegramProvider({
-        token,
-        accountId: account.accountId,
-        config: ctx.cfg,
-        runtime: ctx.runtime,
-        abortSignal: ctx.abortSignal,
-        useWebhook: Boolean(account.config.webhookUrl),
-        webhookUrl: account.config.webhookUrl,
-        webhookSecret: account.config.webhookSecret,
-        webhookPath: account.config.webhookPath,
-      });
+      try {
+        return await getTelegramRuntime().channel.telegram.monitorTelegramProvider({
+          token,
+          accountId: account.accountId,
+          config: ctx.cfg,
+          runtime: ctx.runtime,
+          abortSignal: ctx.abortSignal,
+          useWebhook: Boolean(account.config.webhookUrl),
+          webhookUrl: account.config.webhookUrl,
+          webhookSecret: account.config.webhookSecret,
+          webhookPath: account.config.webhookPath,
+        });
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        ctx.log?.error?.(`[${account.accountId}] telegram provider failed: ${errMsg}`);
+        throw err;
+      }
     },
     logoutAccount: async ({ accountId, cfg }) => {
       const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";

@@ -167,14 +167,16 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   let restartAttempts = 0;
 
   while (!opts.abortSignal?.aborted) {
-    const runner = run(bot, createTelegramRunnerOptions(cfg));
+    let runner: ReturnType<typeof run> | null = null;
     const stopOnAbort = () => {
-      if (opts.abortSignal?.aborted) {
+      if (opts.abortSignal?.aborted && runner) {
         void runner.stop();
       }
     };
     opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
     try {
+      // Create runner inside try-catch to handle initialization errors
+      runner = run(bot, createTelegramRunnerOptions(cfg));
       // runner.task() returns a promise that resolves when the runner stops
       await runner.task();
       return;
