@@ -240,9 +240,20 @@ export async function handleDiscordMessagingAction(
         Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
 
       // Handle voice message sending
-      if (asVoice && mediaUrl) {
-        // Voice messages require a local file path or downloadable URL
-        // They cannot include text content (Discord limitation)
+      if (asVoice) {
+        if (!mediaUrl) {
+          throw new Error("Voice messages require a media file path (mediaUrl).");
+        }
+        if (content && content.trim()) {
+          throw new Error(
+            "Voice messages cannot include text content (Discord limitation). Remove the content parameter.",
+          );
+        }
+        if (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://")) {
+          throw new Error(
+            "Voice messages require a local file path, not a URL. Download the file first.",
+          );
+        }
         const result = await sendVoiceMessageDiscord(to, mediaUrl, {
           ...(accountId ? { accountId } : {}),
           replyTo,
