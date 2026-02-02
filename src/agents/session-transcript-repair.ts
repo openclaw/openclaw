@@ -114,11 +114,10 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
       continue;
     }
 
-    const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
     const nextContent = [];
     let droppedInMessage = 0;
 
-    for (const block of assistant.content) {
+    for (const block of msg.content) {
       if (isToolCallBlock(block) && !hasToolCallInput(block)) {
         droppedToolCalls += 1;
         droppedInMessage += 1;
@@ -134,7 +133,7 @@ export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRep
         changed = true;
         continue;
       }
-      out.push({ ...assistant, content: nextContent });
+      out.push({ ...msg, content: nextContent });
       continue;
     }
 
