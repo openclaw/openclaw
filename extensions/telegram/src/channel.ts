@@ -68,9 +68,13 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
     notifyApproval: async ({ cfg, id }) => {
       const { token } = getTelegramRuntime().channel.telegram.resolveTelegramToken(cfg);
       if (!token) throw new Error("telegram token not configured");
-      await getTelegramRuntime().channel.telegram.sendMessageTelegram(id, PAIRING_APPROVED_MESSAGE, {
-        token,
-      });
+      await getTelegramRuntime().channel.telegram.sendMessageTelegram(
+        id,
+        PAIRING_APPROVED_MESSAGE,
+        {
+          token,
+        },
+      );
     },
   },
   capabilities: {
@@ -254,8 +258,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     sendText: async ({ to, text, accountId, deps, replyToId, threadId }) => {
-      const send =
-        deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
+      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const replyToMessageId = parseReplyToMessageId(replyToId);
       const messageThreadId = parseThreadId(threadId);
       const result = await send(to, text, {
@@ -267,8 +270,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
       return { channel: "telegram", ...result };
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId }) => {
-      const send =
-        deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
+      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const replyToMessageId = parseReplyToMessageId(replyToId);
       const messageThreadId = parseThreadId(threadId);
       const result = await send(to, text, {

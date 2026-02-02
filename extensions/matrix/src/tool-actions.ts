@@ -76,7 +76,8 @@ export async function handleMatrixAction(
           allowEmpty: true,
         });
         const mediaUrl = readStringParam(params, "mediaUrl");
-        const replyToId = readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
+        const replyToId =
+          readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
         const threadId = readStringParam(params, "threadId");
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,

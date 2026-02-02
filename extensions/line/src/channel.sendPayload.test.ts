@@ -33,18 +33,19 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
   const sendMessageLine = vi.fn(async () => ({ messageId: "m-media", chatId: "c1" }));
   const chunkMarkdownText = vi.fn((text: string) => [text]);
   const resolveTextChunkLimit = vi.fn(() => 123);
-  const resolveLineAccount = vi.fn(({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) => {
-    const resolved = accountId ?? "default";
-    const lineConfig = (cfg.channels?.line ?? {}) as {
-      accounts?: Record<string, Record<string, unknown>>;
-    };
-    const accountConfig =
-      resolved !== "default" ? lineConfig.accounts?.[resolved] ?? {} : {};
-    return {
-      accountId: resolved,
-      config: { ...lineConfig, ...accountConfig },
-    };
-  });
+  const resolveLineAccount = vi.fn(
+    ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) => {
+      const resolved = accountId ?? "default";
+      const lineConfig = (cfg.channels?.line ?? {}) as {
+        accounts?: Record<string, Record<string, unknown>>;
+      };
+      const accountConfig = resolved !== "default" ? (lineConfig.accounts?.[resolved] ?? {}) : {};
+      return {
+        accountId: resolved,
+        config: { ...lineConfig, ...accountConfig },
+      };
+    },
+  );
 
   const runtime = {
     channel: {
@@ -256,12 +257,9 @@ describe("linePlugin outbound.sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.resolveTextChunkLimit).toHaveBeenCalledWith(
-      cfg,
-      "line",
-      "primary",
-      { fallbackLimit: 5000 },
-    );
+    expect(mocks.resolveTextChunkLimit).toHaveBeenCalledWith(cfg, "line", "primary", {
+      fallbackLimit: 5000,
+    });
     expect(mocks.chunkMarkdownText).toHaveBeenCalledWith("Hello world", 123);
   });
 });

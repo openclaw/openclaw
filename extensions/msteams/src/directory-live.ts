@@ -60,7 +60,9 @@ async function fetchGraphJson<T>(params: {
 }
 
 async function resolveGraphToken(cfg: unknown): Promise<string> {
-  const creds = resolveMSTeamsCredentials((cfg as { channels?: { msteams?: unknown } })?.channels?.msteams);
+  const creds = resolveMSTeamsCredentials(
+    (cfg as { channels?: { msteams?: unknown } })?.channels?.msteams,
+  );
   if (!creds) throw new Error("MS Teams credentials missing");
   const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
   const tokenProvider = new sdk.MsalTokenProvider(authConfig);
@@ -138,7 +140,10 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
   const token = await resolveGraphToken(params.cfg);
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
   const [teamQuery, channelQuery] = rawQuery.includes("/")
-    ? rawQuery.split("/", 2).map((part) => part.trim()).filter(Boolean)
+    ? rawQuery
+        .split("/", 2)
+        .map((part) => part.trim())
+        .filter(Boolean)
     : [rawQuery, null];
 
   const teams = await listTeamsByName(token, teamQuery);

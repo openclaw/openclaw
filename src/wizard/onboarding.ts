@@ -42,12 +42,15 @@ import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
 import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
 import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import { installCompletion } from "../cli/completion-cli.js";
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
   prompter: WizardPrompter;
 }) {
-  if (params.opts.acceptRisk === true) return;
+  if (params.opts.acceptRisk === true) {
+    return;
+  }
 
   await params.prompter.note(
     [
@@ -134,14 +137,14 @@ export async function runOnboardingWizard(
       : undefined;
   let flow: WizardFlow =
     explicitFlow ??
-    ((await prompter.select({
+    (await prompter.select({
       message: "Onboarding mode",
       options: [
         { value: "quickstart", label: "QuickStart", hint: quickstartHint },
         { value: "advanced", label: "Manual", hint: manualHint },
       ],
       initialValue: "quickstart",
-    })) as "quickstart" | "advanced");
+    }));
 
   if (opts.mode === "remote" && flow === "quickstart") {
     await prompter.note(
@@ -154,14 +157,14 @@ export async function runOnboardingWizard(
   if (snapshot.exists) {
     await prompter.note(summarizeExistingConfig(baseConfig), "Existing config detected");
 
-    const action = (await prompter.select({
+    const action = await prompter.select({
       message: "Config handling",
       options: [
         { value: "keep", label: "Use existing values" },
         { value: "modify", label: "Update values" },
         { value: "reset", label: "Reset" },
       ],
-    })) as "keep" | "modify" | "reset";
+    });
 
     if (action === "reset") {
       const workspaceDefault = baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE;
@@ -237,19 +240,33 @@ export async function runOnboardingWizard(
 
   if (flow === "quickstart") {
     const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
-      if (value === "loopback") return "Loopback (127.0.0.1)";
-      if (value === "lan") return "LAN";
-      if (value === "custom") return "Custom IP";
-      if (value === "tailnet") return "Tailnet (Tailscale IP)";
+      if (value === "loopback") {
+        return "Loopback (127.0.0.1)";
+      }
+      if (value === "lan") {
+        return "LAN";
+      }
+      if (value === "custom") {
+        return "Custom IP";
+      }
+      if (value === "tailnet") {
+        return "Tailnet (Tailscale IP)";
+      }
       return "Auto";
     };
     const formatAuth = (value: GatewayAuthChoice) => {
-      if (value === "token") return "Token (default)";
+      if (value === "token") {
+        return "Token (default)";
+      }
       return "Password";
     };
     const formatTailscale = (value: "off" | "serve" | "funnel") => {
-      if (value === "off") return "Off";
-      if (value === "serve") return "Serve";
+      if (value === "off") {
+        return "Off";
+      }
+      if (value === "serve") {
+        return "Serve";
+      }
       return "Funnel";
     };
     const quickstartLines = quickstartGateway.hasExisting
@@ -448,4 +465,16 @@ export async function runOnboardingWizard(
     prompter,
     runtime,
   });
+
+  const installShell = await prompter.confirm({
+    message: "Install shell completion script?",
+    initialValue: true,
+  });
+
+  if (installShell) {
+    const shell = process.env.SHELL?.split("/").pop() || "zsh";
+    // We pass 'yes=true' to skip any double-confirmation inside the helper,
+    // as the wizard prompt above serves as confirmation.
+    await installCompletion(shell, true);
+  }
 }

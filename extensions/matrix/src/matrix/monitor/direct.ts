@@ -12,10 +12,7 @@ type DirectRoomTrackerOptions = {
 
 const DM_CACHE_TTL_MS = 30_000;
 
-export function createDirectRoomTracker(
-  client: MatrixClient,
-  opts: DirectRoomTrackerOptions = {},
-) {
+export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTrackerOptions = {}) {
   const log = opts.log ?? (() => {});
   let lastDmUpdateMs = 0;
   let cachedSelfUserId: string | null = null;
@@ -94,11 +91,7 @@ export function createDirectRoomTracker(
         return true;
       }
 
-      log(
-        `matrix: dm check room=${roomId} result=group members=${
-          memberCount ?? "unknown"
-        }`,
-      );
+      log(`matrix: dm check room=${roomId} result=group members=${memberCount ?? "unknown"}`);
       return false;
     },
   };

@@ -94,7 +94,9 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
 async function findSignalCliBinary(root: string): Promise<string | null> {
   const candidates: string[] = [];
   const enqueue = async (dir: string, depth: number) => {
-    if (depth > 3) return;
+    if (depth > 3) {
+      return;
+    }
     const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
       const full = path.join(dir, entry.name);

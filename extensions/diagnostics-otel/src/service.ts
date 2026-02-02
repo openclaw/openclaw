@@ -273,7 +273,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           }
           if (bindings) {
             for (const [key, value] of Object.entries(bindings)) {
-              if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+              if (
+                typeof value === "string" ||
+                typeof value === "number" ||
+                typeof value === "boolean"
+              ) {
                 attributes[`openclaw.${key}`] = value;
               } else if (value != null) {
                 attributes[`openclaw.${key}`] = safeStringify(value);

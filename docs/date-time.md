@@ -28,9 +28,9 @@ You can override this behavior:
     defaults: {
       envelopeTimezone: "local", // "utc" | "local" | "user" | IANA timezone
       envelopeTimestamp: "on", // "on" | "off"
-      envelopeElapsed: "on" // "on" | "off"
-    }
-  }
+      envelopeElapsed: "on", // "on" | "off"
+    },
+  },
 }
 ```
 
@@ -90,9 +90,9 @@ System: [2026-01-12 12:19:17 PST] Model switched.
   agents: {
     defaults: {
       userTimezone: "America/Chicago",
-      timeFormat: "auto" // auto | 12 | 24
-    }
-  }
+      timeFormat: "auto", // auto | 12 | 24
+    },
+  },
 }
 ```
 

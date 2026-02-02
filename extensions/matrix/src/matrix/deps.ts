@@ -52,6 +52,8 @@ export async function ensureMatrixSdkInstalled(params: {
     );
   }
   if (!isMatrixSdkAvailable()) {
-    throw new Error("Matrix dependency install completed but @vector-im/matrix-bot-sdk is still missing.");
+    throw new Error(
+      "Matrix dependency install completed but @vector-im/matrix-bot-sdk is still missing.",
+    );
   }
 }

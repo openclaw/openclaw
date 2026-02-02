@@ -1,6 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import type { ChannelId, ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
+import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -132,7 +132,7 @@ export function resolveOutboundTarget(params: {
     };
   }
 
-  const plugin = getChannelPlugin(params.channel as ChannelId);
+  const plugin = getChannelPlugin(params.channel);
   if (!plugin) {
     return {
       ok: false,
@@ -184,7 +184,9 @@ export function resolveHeartbeatDeliveryTarget(params: {
     target = rawTarget;
   } else if (typeof rawTarget === "string") {
     const normalized = normalizeChannelId(rawTarget);
-    if (normalized) target = normalized;
+    if (normalized) {
+      target = normalized;
+    }
   }
 
   if (target === "none") {
@@ -233,7 +235,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   let reason: string | undefined;
-  const plugin = getChannelPlugin(resolvedTarget.channel as ChannelId);
+  const plugin = getChannelPlugin(resolvedTarget.channel);
   if (plugin?.config.resolveAllowFrom) {
     const explicit = resolveOutboundTarget({
       channel: resolvedTarget.channel,
@@ -279,12 +281,16 @@ function resolveHeartbeatSenderId(params: {
   }
   if (candidates.length > 0 && allowList.length > 0) {
     const matched = candidates.find((candidate) => allowList.includes(candidate));
-    if (matched) return matched;
+    if (matched) {
+      return matched;
+    }
   }
   if (candidates.length > 0 && allowList.length === 0) {
     return candidates[0];
   }
-  if (allowList.length > 0) return allowList[0];
+  if (allowList.length > 0) {
+    return allowList[0];
+  }
   return candidates[0] ?? "heartbeat";
 }
 

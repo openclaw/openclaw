@@ -5,7 +5,6 @@ import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
-  type GatewayDaemonRuntime,
 } from "../commands/daemon-runtime.js";
 import { healthCommand } from "../commands/health.js";
 import { formatHealthCheckFailure } from "../commands/health-format.js";
@@ -111,12 +110,12 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
   if (installDaemon) {
     const daemonRuntime =
       flow === "quickstart"
-        ? (DEFAULT_GATEWAY_DAEMON_RUNTIME as GatewayDaemonRuntime)
-        : ((await prompter.select({
+        ? DEFAULT_GATEWAY_DAEMON_RUNTIME
+        : await prompter.select({
             message: "Gateway service runtime",
             options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
             initialValue: opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME,
-          })) as GatewayDaemonRuntime);
+          });
     if (flow === "quickstart") {
       await prompter.note(
         "QuickStart uses Node for the Gateway service (stable + supported).",
@@ -126,14 +125,14 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
     const service = resolveGatewayService();
     const loaded = await service.isLoaded({ env: process.env });
     if (loaded) {
-      const action = (await prompter.select({
+      const action = await prompter.select({
         message: "Gateway service already installed",
         options: [
           { value: "restart", label: "Restart" },
           { value: "reinstall", label: "Reinstall" },
           { value: "skip", label: "Skip" },
         ],
-      })) as "restart" | "reinstall" | "skip";
+      });
       if (action === "restart") {
         await withWizardProgress(
           "Gateway service",
@@ -158,7 +157,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
       }
     }
 
-    if (!loaded || (loaded && (await service.isLoaded({ env: process.env })) === false)) {
+    if (!loaded || (loaded && !(await service.isLoaded({ env: process.env })))) {
       const progress = prompter.progress("Gateway service");
       let installError: string | null = null;
       try {
@@ -312,7 +311,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
       "Token",
     );
 
-    hatchChoice = (await prompter.select({
+    hatchChoice = await prompter.select({
       message: "How do you want to hatch your bot?",
       options: [
         { value: "tui", label: "Hatch in TUI (recommended)" },
@@ -320,7 +319,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
         { value: "later", label: "Do this later" },
       ],
       initialValue: "tui",
-    })) as "tui" | "web" | "later";
+    });
 
     if (hatchChoice === "tui") {
       await runTui({

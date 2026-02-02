@@ -49,9 +49,7 @@ function replaceBlockLines(
 }
 
 function renderKimiK2Ids(prefix: string) {
-  return MOONSHOT_KIMI_K2_MODELS.map(
-    (model) => `- \`${prefix}${model.id}\``,
-  );
+  return MOONSHOT_KIMI_K2_MODELS.map((model) => `- \`${prefix}${model.id}\``);
 }
 
 function renderMoonshotAliases() {
@@ -85,10 +83,7 @@ function renderMoonshotModels() {
 
 async function syncMoonshotDocs() {
   const moonshotDoc = path.join(repoRoot, "docs/providers/moonshot.md");
-  const conceptsDoc = path.join(
-    repoRoot,
-    "docs/concepts/model-providers.md",
-  );
+  const conceptsDoc = path.join(repoRoot, "docs/concepts/model-providers.md");
 
   let moonshotText = await readFile(moonshotDoc, "utf8");
   moonshotText = replaceBlockLines(

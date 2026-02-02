@@ -4,6 +4,7 @@ read_when:
   - You want to choose a model provider
   - You want quick setup examples for LLM auth + model selection
 ---
+
 # Model Providers
 
 OpenClaw can use many LLM providers. Pick one, authenticate, then set the default
@@ -20,12 +21,12 @@ See [Venice AI](/providers/venice).
 
 ## Quick start (two steps)
 
-1) Authenticate with the provider (usually via `openclaw onboard`).
-2) Set the default model:
+1. Authenticate with the provider (usually via `openclaw onboard`).
+2. Set the default model:
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } }
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
 }
 ```
 
@@ -35,7 +36,7 @@ See [Venice AI](/providers/venice).
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [OpenRouter](/providers/openrouter)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
-- [Moonshot AI (Kimi + Kimi Code)](/providers/moonshot)
+- [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [Synthetic](/providers/synthetic)
 - [OpenCode Zen](/providers/opencode)
 - [Z.AI](/providers/zai)

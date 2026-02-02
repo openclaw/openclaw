@@ -86,9 +86,7 @@ function buildAuthUrl(params: { challenge: string; state: string }): string {
   return url.toString();
 }
 
-function parseCallbackInput(
-  input: string,
-): { code: string; state: string } | { error: string } {
+function parseCallbackInput(input: string): { code: string; state: string } | { error: string } {
   const trimmed = input.trim();
   if (!trimmed) return { error: "No input provided" };
 

@@ -106,10 +106,9 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       baseUrl: account.baseUrl,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveBlueBubblesAccount({ cfg: cfg as OpenClawConfig, accountId }).config.allowFrom ??
-        []).map(
-        (entry) => String(entry),
-      ),
+      (
+        resolveBlueBubblesAccount({ cfg: cfg as OpenClawConfig, accountId }).config.allowFrom ?? []
+      ).map((entry) => String(entry)),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry).trim())

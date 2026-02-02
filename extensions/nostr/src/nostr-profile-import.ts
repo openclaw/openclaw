@@ -84,7 +84,7 @@ function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
  * - Parses and returns the profile
  */
 export async function importProfileFromRelays(
-  opts: ProfileImportOptions
+  opts: ProfileImportOptions,
 ): Promise<ProfileImportResult> {
   const { pubkey, relays, timeoutMs = DEFAULT_TIMEOUT_MS } = opts;
 
@@ -148,7 +148,7 @@ export async function importProfileFromRelays(
                 resolve();
               }
             },
-          }
+          },
         );
 
         // Clean up subscription after timeout
@@ -241,7 +241,7 @@ export async function importProfileFromRelays(
  */
 export function mergeProfiles(
   local: NostrProfile | undefined,
-  imported: NostrProfile | undefined
+  imported: NostrProfile | undefined,
 ): NostrProfile {
   if (!imported) return local ?? {};
   if (!local) return imported;

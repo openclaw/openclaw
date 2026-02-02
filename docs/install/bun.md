@@ -26,7 +26,7 @@ Default:
 bun install
 ```
 
-Note: `bun.lock`/`bun.lockb` are gitignored, so there’s no repo churn either way. If you want *no lockfile writes*:
+Note: `bun.lock`/`bun.lockb` are gitignored, so there’s no repo churn either way. If you want _no lockfile writes_:
 
 ```sh
 bun install --no-save

@@ -10,14 +10,7 @@ export type BlueBubblesReactionOpts = {
   cfg?: OpenClawConfig;
 };
 
-const REACTION_TYPES = new Set([
-  "love",
-  "like",
-  "dislike",
-  "laugh",
-  "emphasize",
-  "question",
-]);
+const REACTION_TYPES = new Set(["love", "like", "dislike", "laugh", "emphasize", "question"]);
 
 const REACTION_ALIASES = new Map<string, string>([
   // General

@@ -10,6 +10,7 @@ read_when:
 Manage cron jobs for the Gateway scheduler.
 
 Related:
+
 - Cron jobs: [Cron jobs](/automation/cron-jobs)
 
 Tip: run `openclaw cron --help` for the full command surface.

@@ -67,10 +67,7 @@ export function resolveTranscriptWaiter(
   waiter.resolve(transcript);
 }
 
-export function waitForFinalTranscript(
-  ctx: CallManagerContext,
-  callId: CallId,
-): Promise<string> {
+export function waitForFinalTranscript(ctx: CallManagerContext, callId: CallId): Promise<string> {
   // Only allow one in-flight waiter per call.
   rejectTranscriptWaiter(ctx, callId, "Transcript waiter replaced");
 

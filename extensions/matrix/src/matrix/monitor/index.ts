@@ -1,10 +1,6 @@
 import { format } from "node:util";
 
-import {
-  mergeAllowlist,
-  summarizeMapping,
-  type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+import { mergeAllowlist, summarizeMapping, type RuntimeEnv } from "openclaw/plugin-sdk";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
@@ -59,9 +55,15 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   };
 
   const normalizeUserEntry = (raw: string) =>
-    raw.replace(/^matrix:/i, "").replace(/^user:/i, "").trim();
+    raw
+      .replace(/^matrix:/i, "")
+      .replace(/^user:/i, "")
+      .trim();
   const normalizeRoomEntry = (raw: string) =>
-    raw.replace(/^matrix:/i, "").replace(/^(room|channel):/i, "").trim();
+    raw
+      .replace(/^matrix:/i, "")
+      .replace(/^(room|channel):/i, "")
+      .trim();
   const isMatrixUserId = (value: string) => value.startsWith("@") && value.includes(":");
 
   const allowlistOnly = cfg.channels?.matrix?.allowlistOnly === true;
@@ -256,7 +258,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         logger.info("matrix: device verification requested - please verify in another client");
       }
     } catch (err) {
-      logger.debug({ error: String(err) }, "Device verification request failed (may already be verified)");
+      logger.debug(
+        { error: String(err) },
+        "Device verification request failed (may already be verified)",
+      );
     }
   }
 

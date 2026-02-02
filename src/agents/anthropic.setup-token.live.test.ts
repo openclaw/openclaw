@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { type Api, completeSimple, type Model } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
+import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { describe, expect, it } from "vitest";
 import { isTruthyEnvValue } from "../infra/env.js";
 import {
@@ -46,8 +46,12 @@ function listSetupTokenProfiles(store: {
 }): string[] {
   return Object.entries(store.profiles)
     .filter(([, cred]) => {
-      if (cred.type !== "token") return false;
-      if (normalizeProviderId(cred.provider) !== "anthropic") return false;
+      if (cred.type !== "token") {
+        return false;
+      }
+      if (normalizeProviderId(cred.provider) !== "anthropic") {
+        return false;
+      }
       return isSetupToken(cred.token);
     })
     .map(([id]) => id);
@@ -56,7 +60,9 @@ function listSetupTokenProfiles(store: {
 function pickSetupTokenProfile(candidates: string[]): string {
   const preferred = ["anthropic:setup-token-test", "anthropic:setup-token", "anthropic:default"];
   for (const id of preferred) {
-    if (candidates.includes(id)) return id;
+    if (candidates.includes(id)) {
+      return id;
+    }
   }
   return candidates[0] ?? "";
 }
@@ -124,7 +130,9 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   const normalized = raw?.trim() ?? "";
   if (normalized) {
     const parsed = parseModelRef(normalized, "anthropic");
-    if (!parsed) return null;
+    if (!parsed) {
+      return null;
+    }
     return (
       models.find(
         (model) =>
@@ -141,7 +149,9 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   ];
   for (const id of preferred) {
     const match = models.find((model) => model.id === id);
-    if (match) return match;
+    if (match) {
+      return match;
+    }
   }
   return models[0] ?? null;
 }

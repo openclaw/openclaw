@@ -4,6 +4,7 @@ read_when:
   - You want Xiaomi MiMo models in OpenClaw
   - You need XIAOMI_API_KEY setup
 ---
+
 # Xiaomi MiMo
 
 Xiaomi MiMo is the API platform for **MiMo** models. It provides REST APIs compatible with
@@ -46,12 +47,12 @@ openclaw onboard --auth-choice xiaomi-api-key --xiaomi-api-key "$XIAOMI_API_KEY"
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 262144,
-            maxTokens: 8192
-          }
-        ]
-      }
-    }
-  }
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
 }
 ```
 

@@ -47,10 +47,7 @@ export function pcmToMulaw(pcm: Buffer): Buffer {
   return mulaw;
 }
 
-export function convertPcmToMulaw8k(
-  pcm: Buffer,
-  inputSampleRate: number,
-): Buffer {
+export function convertPcmToMulaw8k(pcm: Buffer, inputSampleRate: number): Buffer {
   const pcm8k = resamplePcmTo8k(pcm, inputSampleRate);
   return pcmToMulaw(pcm8k);
 }
@@ -58,10 +55,7 @@ export function convertPcmToMulaw8k(
 /**
  * Chunk audio buffer into 20ms frames for streaming (8kHz mono mu-law).
  */
-export function chunkAudio(
-  audio: Buffer,
-  chunkSize = 160,
-): Generator<Buffer, void, unknown> {
+export function chunkAudio(audio: Buffer, chunkSize = 160): Generator<Buffer, void, unknown> {
   return (function* () {
     for (let i = 0; i < audio.length; i += chunkSize) {
       yield audio.subarray(i, Math.min(i + chunkSize, audio.length));

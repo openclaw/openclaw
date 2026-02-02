@@ -4,6 +4,7 @@ read_when:
   - Adjusting heartbeat cadence or messaging
   - Deciding between heartbeat and cron for scheduled tasks
 ---
+
 # Heartbeat (Gateway)
 
 > **Heartbeat vs Cron?** See [Cron vs Heartbeat](/automation/cron-vs-heartbeat) for guidance on when to use each.
@@ -30,9 +31,9 @@ Example config:
         target: "last",
         // activeHours: { start: "08:00", end: "24:00" },
         // includeReasoning: true, // optional: send separate `Reasoning:` message too
-      }
-    }
-  }
+      },
+    },
+  },
 }
 ```
 
@@ -49,6 +50,7 @@ Example config:
 ## What the heartbeat prompt is for
 
 The default prompt is intentionally broad:
+
 - **Background tasks**: “Consider outstanding tasks” nudges the agent to review
   follow-ups (inbox, calendar, reminders, queued work) and surface anything urgent.
 - **Human check-in**: “Checkup sometimes on your human during day time” nudges an
@@ -79,16 +81,16 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
   agents: {
     defaults: {
       heartbeat: {
-        every: "30m",           // default: 30m (0m disables)
+        every: "30m", // default: 30m (0m disables)
         model: "anthropic/claude-opus-4-5",
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
-        target: "last",         // last | none | <channel id> (core or plugin, e.g. "bluebubbles")
-        to: "+15551234567",     // optional channel-specific override
+        target: "last", // last | none | <channel id> (core or plugin, e.g. "bluebubbles")
+        to: "+15551234567", // optional channel-specific override
         prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
-        ackMaxChars: 300         // max chars allowed after HEARTBEAT_OK
-      }
-    }
-  }
+        ackMaxChars: 300, // max chars allowed after HEARTBEAT_OK
+      },
+    },
+  },
 }
 ```
 
@@ -114,8 +116,8 @@ Example: two agents, only the second agent runs heartbeats.
     defaults: {
       heartbeat: {
         every: "30m",
-        target: "last"
-      }
+        target: "last",
+      },
     },
     list: [
       { id: "main", default: true },
@@ -125,11 +127,11 @@ Example: two agents, only the second agent runs heartbeats.
           every: "1h",
           target: "whatsapp",
           to: "+15551234567",
-          prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
-        }
-      }
-    ]
-  }
+          prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
+        },
+      },
+    ],
+  },
 }
 ```
 
@@ -173,12 +175,12 @@ delivered. You can adjust this per channel or per account:
 channels:
   defaults:
     heartbeat:
-      showOk: false      # Hide HEARTBEAT_OK (default)
-      showAlerts: true   # Show alert messages (default)
+      showOk: false # Hide HEARTBEAT_OK (default)
+      showAlerts: true # Show alert messages (default)
       useIndicator: true # Emit indicator events (default)
   telegram:
     heartbeat:
-      showOk: true       # Show OK acknowledgments on Telegram
+      showOk: true # Show OK acknowledgments on Telegram
   whatsapp:
     accounts:
       work:
@@ -219,12 +221,12 @@ channels:
 
 ### Common patterns
 
-| Goal | Config |
-| --- | --- |
-| Default behavior (silent OKs, alerts on) | *(no config needed)* |
+| Goal                                     | Config                                                                                   |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Default behavior (silent OKs, alerts on) | _(no config needed)_                                                                     |
 | Fully silent (no messages, no indicator) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: false }` |
-| Indicator-only (no messages) | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }` |
-| OKs in one channel only | `channels.telegram.heartbeat: { showOk: true }` |
+| Indicator-only (no messages)             | `channels.defaults.heartbeat: { showOk: false, showAlerts: false, useIndicator: true }`  |
+| OKs in one channel only                  | `channels.telegram.heartbeat: { showOk: true }`                                          |
 
 ## HEARTBEAT.md (optional)
 
@@ -245,7 +247,7 @@ Example `HEARTBEAT.md`:
 
 - Quick scan: anything urgent in inboxes?
 - If it’s daytime, do a lightweight check-in if nothing else is pending.
-- If a task is blocked, write down *what is missing* and ask Peter next time.
+- If a task is blocked, write down _what is missing_ and ask Peter next time.
 ```
 
 ### Can the agent update HEARTBEAT.md?
@@ -254,6 +256,7 @@ Yes — if you ask it to.
 
 `HEARTBEAT.md` is just a normal file in the agent workspace, so you can tell the
 agent (in a normal chat) something like:
+
 - “Update `HEARTBEAT.md` to add a daily calendar check.”
 - “Rewrite `HEARTBEAT.md` so it’s shorter and focused on inbox follow-ups.”
 
@@ -282,6 +285,7 @@ Use `--mode next-heartbeat` to wait for the next scheduled tick.
 By default, heartbeats deliver only the final “answer” payload.
 
 If you want transparency, enable:
+
 - `agents.defaults.heartbeat.includeReasoning: true`
 
 When enabled, heartbeats will also deliver a separate message prefixed

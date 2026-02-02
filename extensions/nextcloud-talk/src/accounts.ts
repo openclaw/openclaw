@@ -145,9 +145,7 @@ export function resolveNextcloudTalkAccount(params: {
   return fallback;
 }
 
-export function listEnabledNextcloudTalkAccounts(
-  cfg: CoreConfig,
-): ResolvedNextcloudTalkAccount[] {
+export function listEnabledNextcloudTalkAccounts(cfg: CoreConfig): ResolvedNextcloudTalkAccount[] {
   return listNextcloudTalkAccountIds(cfg)
     .map((accountId) => resolveNextcloudTalkAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

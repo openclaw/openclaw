@@ -1,5 +1,14 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "indentWidth": 2,
-  "printWidth": 100
+  "ignorePatterns": [
+    "apps/",
+    "assets/",
+    "dist/",
+    "docs/_layouts/",
+    "node_modules/",
+    "patches/",
+    "pnpm-lock.yaml/",
+    "Swabble/",
+    "vendor/",
+  ],
 }

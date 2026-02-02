@@ -31,7 +31,7 @@ function setGoogleChatDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
     ...cfg,
     channels: {
       ...cfg.channels,
-      "googlechat": {
+      googlechat: {
         ...(cfg.channels?.["googlechat"] ?? {}),
         dm: {
           ...(cfg.channels?.["googlechat"]?.dm ?? {}),
@@ -67,7 +67,7 @@ async function promptAllowFrom(params: {
     ...params.cfg,
     channels: {
       ...params.cfg.channels,
-      "googlechat": {
+      googlechat: {
         ...(params.cfg.channels?.["googlechat"] ?? {}),
         enabled: true,
         dm: {
@@ -101,7 +101,7 @@ function applyAccountConfig(params: {
       ...cfg,
       channels: {
         ...cfg.channels,
-        "googlechat": {
+        googlechat: {
           ...(cfg.channels?.["googlechat"] ?? {}),
           enabled: true,
           ...patch,
@@ -113,7 +113,7 @@ function applyAccountConfig(params: {
     ...cfg,
     channels: {
       ...cfg.channels,
-      "googlechat": {
+      googlechat: {
         ...(cfg.channels?.["googlechat"] ?? {}),
         enabled: true,
         accounts: {
@@ -137,8 +137,7 @@ async function promptCredentials(params: {
   const { cfg, prompter, accountId } = params;
   const envReady =
     accountId === DEFAULT_ACCOUNT_ID &&
-    (Boolean(process.env[ENV_SERVICE_ACCOUNT]) ||
-      Boolean(process.env[ENV_SERVICE_ACCOUNT_FILE]));
+    (Boolean(process.env[ENV_SERVICE_ACCOUNT]) || Boolean(process.env[ENV_SERVICE_ACCOUNT_FILE]));
   if (envReady) {
     const useEnv = await prompter.confirm({
       message: "Use GOOGLE_CHAT_SERVICE_ACCOUNT env vars?",
@@ -173,7 +172,7 @@ async function promptCredentials(params: {
 
   const json = await prompter.text({
     message: "Service account JSON (single line)",
-    placeholder: "{\"type\":\"service_account\", ... }",
+    placeholder: '{"type":"service_account", ... }',
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
   return applyAccountConfig({
@@ -237,18 +236,11 @@ export const googlechatOnboardingAdapter: ChannelOnboardingAdapter = {
     return {
       channel,
       configured,
-      statusLines: [
-        `Google Chat: ${configured ? "configured" : "needs service account"}`,
-      ],
+      statusLines: [`Google Chat: ${configured ? "configured" : "needs service account"}`],
       selectionHint: configured ? "configured" : "needs auth",
     };
   },
-  configure: async ({
-    cfg,
-    prompter,
-    accountOverrides,
-    shouldPromptAccountIds,
-  }) => {
+  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds }) => {
     const override = accountOverrides["googlechat"]?.trim();
     const defaultAccountId = resolveDefaultGoogleChatAccountId(cfg);
     let accountId = override ? normalizeAccountId(override) : defaultAccountId;

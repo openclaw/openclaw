@@ -17,8 +17,7 @@
   },
   "devDependencies": {
     "@vitest/browser-playwright": "4.0.18",
-    "playwright": "^1.58.0",
-    "typescript": "^5.9.3",
+    "playwright": "^1.58.1",
     "vitest": "4.0.18"
   }
 }

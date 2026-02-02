@@ -12,10 +12,7 @@ function createProvider(): TwilioProvider {
   );
 }
 
-function createContext(
-  rawBody: string,
-  query?: WebhookContext["query"],
-): WebhookContext {
+function createContext(rawBody: string, query?: WebhookContext["query"]): WebhookContext {
   return {
     headers: {},
     rawBody,

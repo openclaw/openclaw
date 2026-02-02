@@ -63,9 +63,13 @@ export async function fetchZaiUsage(
     const percent = clampPercent(limit.percentage || 0);
     const nextReset = limit.nextResetTime ? new Date(limit.nextResetTime).getTime() : undefined;
     let windowLabel = "Limit";
-    if (limit.unit === 1) windowLabel = `${limit.number}d`;
-    else if (limit.unit === 3) windowLabel = `${limit.number}h`;
-    else if (limit.unit === 5) windowLabel = `${limit.number}m`;
+    if (limit.unit === 1) {
+      windowLabel = `${limit.number}d`;
+    } else if (limit.unit === 3) {
+      windowLabel = `${limit.number}h`;
+    } else if (limit.unit === 5) {
+      windowLabel = `${limit.number}m`;
+    }
 
     if (limit.type === "TOKENS_LIMIT") {
       windows.push({

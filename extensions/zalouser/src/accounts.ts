@@ -33,10 +33,7 @@ function resolveAccountConfig(
   return accounts[accountId] as ZalouserAccountConfig | undefined;
 }
 
-function mergeZalouserAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): ZalouserAccountConfig {
+function mergeZalouserAccountConfig(cfg: OpenClawConfig, accountId: string): ZalouserAccountConfig {
   const raw = (cfg.channels?.zalouser ?? {}) as ZalouserConfig;
   const { accounts: _ignored, defaultAccount: _ignored2, ...base } = raw;
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -60,7 +57,8 @@ export async function resolveZalouserAccount(params: {
   accountId?: string | null;
 }): Promise<ResolvedZalouserAccount> {
   const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
+  const baseEnabled =
+    (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
@@ -82,7 +80,8 @@ export function resolveZalouserAccountSync(params: {
   accountId?: string | null;
 }): ResolvedZalouserAccount {
   const accountId = normalizeAccountId(params.accountId);
-  const baseEnabled = (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
+  const baseEnabled =
+    (params.cfg.channels?.zalouser as ZalouserConfig | undefined)?.enabled !== false;
   const merged = mergeZalouserAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
@@ -103,12 +102,14 @@ export async function listEnabledZalouserAccounts(
 ): Promise<ResolvedZalouserAccount[]> {
   const ids = listZalouserAccountIds(cfg);
   const accounts = await Promise.all(
-    ids.map((accountId) => resolveZalouserAccount({ cfg, accountId }))
+    ids.map((accountId) => resolveZalouserAccount({ cfg, accountId })),
   );
   return accounts.filter((account) => account.enabled);
 }
 
-export async function getZcaUserInfo(profile: string): Promise<{ userId?: string; displayName?: string } | null> {
+export async function getZcaUserInfo(
+  profile: string,
+): Promise<{ userId?: string; displayName?: string } | null> {
   const result = await runZca(["me", "info", "-j"], { profile, timeout: 10000 });
   if (!result.ok) return null;
   return parseJsonOutput<{ userId?: string; displayName?: string }>(result.stdout);

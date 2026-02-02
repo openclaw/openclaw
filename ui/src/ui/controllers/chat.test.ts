@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-    handleChatEvent,
-    type ChatEventPayload,
-    type ChatState,
-} from "./chat";
+import { handleChatEvent, type ChatEventPayload, type ChatState } from "./chat";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {

@@ -221,8 +221,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const items = parseListItems(itemsStr || flags.items || "");
             if (items.length === 0) {
               return {
-                text:
-                  'Error: List card requires items. Usage: /card list "Title" "Item1|Desc1,Item2|Desc2"',
+                text: 'Error: List card requires items. Usage: /card list "Title" "Item1|Desc1,Item2|Desc2"',
               };
             }
             const bubble = createListCard(title, items);
@@ -242,8 +241,7 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
 
             if (items.length === 0) {
               return {
-                text:
-                  'Error: Receipt card requires items. Usage: /card receipt "Title" "Item1:$10,Item2:$20" --total "$30"',
+                text: 'Error: Receipt card requires items. Usage: /card receipt "Title" "Item1:$10,Item2:$20" --total "$30"',
               };
             }
 

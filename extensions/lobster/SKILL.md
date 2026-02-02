@@ -8,13 +8,13 @@ Lobster executes multi-step workflows with approval checkpoints. Use it when:
 
 ## When to use Lobster
 
-| User intent | Use Lobster? |
-|-------------|--------------|
-| "Triage my email" | Yes — multi-step, may send replies |
-| "Send a message" | No — single action, use message tool directly |
-| "Check my email every morning and ask before replying" | Yes — scheduled workflow with approval |
-| "What's the weather?" | No — simple query |
-| "Monitor this PR and notify me of changes" | Yes — stateful, recurring |
+| User intent                                            | Use Lobster?                                  |
+| ------------------------------------------------------ | --------------------------------------------- |
+| "Triage my email"                                      | Yes — multi-step, may send replies            |
+| "Send a message"                                       | No — single action, use message tool directly |
+| "Check my email every morning and ask before replying" | Yes — scheduled workflow with approval        |
+| "What's the weather?"                                  | No — simple query                             |
+| "Monitor this PR and notify me of changes"             | Yes — stateful, recurring                     |
 
 ## Basic usage
 
@@ -28,6 +28,7 @@ Lobster executes multi-step workflows with approval checkpoints. Use it when:
 ```
 
 Returns structured result:
+
 ```json
 {
   "protocolVersion": 1,
@@ -41,6 +42,7 @@ Returns structured result:
 ### Handle approval
 
 If the workflow needs approval:
+
 ```json
 {
   "status": "needs_approval",
@@ -54,6 +56,7 @@ If the workflow needs approval:
 ```
 
 Present the prompt to the user. If they approve:
+
 ```json
 {
   "action": "resume",
@@ -65,15 +68,19 @@ Present the prompt to the user. If they approve:
 ## Example workflows
 
 ### Email triage
+
 ```
 gog.gmail.search --query 'newer_than:1d' --max 20 | email.triage
 ```
+
 Fetches recent emails, classifies into buckets (needs_reply, needs_action, fyi).
 
 ### Email triage with approval gate
+
 ```
 gog.gmail.search --query 'newer_than:1d' | email.triage | approve --prompt 'Process these?'
 ```
+
 Same as above, but halts for approval before returning.
 
 ## Key behaviors

@@ -32,9 +32,11 @@ export function renderExecApprovalPrompt(state: AppViewState) {
             <div class="exec-approval-title">Exec approval needed</div>
             <div class="exec-approval-sub">${remaining}</div>
           </div>
-          ${queueCount > 1
-            ? html`<div class="exec-approval-queue">${queueCount} pending</div>`
-            : nothing}
+          ${
+            queueCount > 1
+              ? html`<div class="exec-approval-queue">${queueCount} pending</div>`
+              : nothing
+          }
         </div>
         <div class="exec-approval-command mono">${request.command}</div>
         <div class="exec-approval-meta">
@@ -46,9 +48,11 @@ export function renderExecApprovalPrompt(state: AppViewState) {
           ${renderMetaRow("Security", request.security)}
           ${renderMetaRow("Ask", request.ask)}
         </div>
-        ${state.execApprovalError
-          ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
-          : nothing}
+        ${
+          state.execApprovalError
+            ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
+            : nothing
+        }
         <div class="exec-approval-actions">
           <button
             class="btn primary"

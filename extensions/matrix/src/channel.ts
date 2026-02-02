@@ -12,7 +12,10 @@ import {
 
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
-import { resolveMatrixGroupRequireMention, resolveMatrixGroupToolPolicy } from "./group-mentions.js";
+import {
+  resolveMatrixGroupRequireMention,
+  resolveMatrixGroupToolPolicy,
+} from "./group-mentions.js";
 import type { CoreConfig } from "./types.js";
 import {
   listMatrixAccountIds,
@@ -27,10 +30,7 @@ import { sendMessageMatrix } from "./matrix/send.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import { matrixOutbound } from "./outbound.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
-import {
-  listMatrixDirectoryGroupsLive,
-  listMatrixDirectoryPeersLive,
-} from "./directory-live.js";
+import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 
 const meta = {
   id: "matrix",
@@ -108,8 +108,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
   configSchema: buildChannelConfigSchema(MatrixConfigSchema),
   config: {
     listAccountIds: (cfg) => listMatrixAccountIds(cfg as CoreConfig),
-    resolveAccount: (cfg, accountId) =>
-      resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId }),
+    resolveAccount: (cfg, accountId) => resolveMatrixAccount({ cfg: cfg as CoreConfig, accountId }),
     defaultAccountId: (cfg) => resolveDefaultMatrixAccountId(cfg as CoreConfig),
     setAccountEnabled: ({ cfg, accountId, enabled }) =>
       setAccountEnabledInConfigSection({
@@ -153,15 +152,18 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       policyPath: "channels.matrix.dm.policy",
       allowFromPath: "channels.matrix.dm.allowFrom",
       approveHint: formatPairingApproveHint("matrix"),
-      normalizeEntry: (raw) => raw.replace(/^matrix:/i, "").trim().toLowerCase(),
+      normalizeEntry: (raw) =>
+        raw
+          .replace(/^matrix:/i, "")
+          .trim()
+          .toLowerCase(),
     }),
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = (cfg as CoreConfig).channels?.defaults?.groupPolicy;
-      const groupPolicy =
-        account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
       if (groupPolicy !== "open") return [];
       return [
-        "- Matrix rooms: groupPolicy=\"open\" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy=\"allowlist\" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms.",
+        '- Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms.',
       ];
     },
   },
@@ -170,16 +172,13 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     resolveToolPolicy: resolveMatrixGroupToolPolicy,
   },
   threading: {
-    resolveReplyToMode: ({ cfg }) =>
-      (cfg as CoreConfig).channels?.matrix?.replyToMode ?? "off",
+    resolveReplyToMode: ({ cfg }) => (cfg as CoreConfig).channels?.matrix?.replyToMode ?? "off",
     buildToolContext: ({ context, hasRepliedRef }) => {
       const currentTarget = context.To;
       return {
         currentChannelId: currentTarget?.trim() || undefined,
         currentThreadTs:
-          context.MessageThreadId != null
-            ? String(context.MessageThreadId)
-            : context.ReplyToId,
+          context.MessageThreadId != null ? String(context.MessageThreadId) : context.ReplyToId,
         hasRepliedRef,
       };
     },
@@ -399,9 +398,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
         accountId: account.accountId,
         baseUrl: account.homeserver,
       });
-      ctx.log?.info(
-        `[${account.accountId}] starting provider (${account.homeserver ?? "matrix"})`,
-      );
+      ctx.log?.info(`[${account.accountId}] starting provider (${account.homeserver ?? "matrix"})`);
       // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
       const { monitorMatrixProvider } = await import("./matrix/index.js");
       return monitorMatrixProvider({

@@ -74,10 +74,7 @@ export async function downloadMatrixMedia(params: {
   placeholder: string;
 } | null> {
   let fetched: { buffer: Buffer; headerType?: string } | null;
-  if (
-    typeof params.sizeBytes === "number" &&
-    params.sizeBytes > params.maxBytes
-  ) {
+  if (typeof params.sizeBytes === "number" && params.sizeBytes > params.maxBytes) {
     throw new Error("Matrix media exceeds configured size limit");
   }
 

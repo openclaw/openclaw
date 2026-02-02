@@ -153,7 +153,6 @@ function pushTextMessages(
   out.push({ text: trimmed });
 }
 
-
 function clampMs(value: number, maxMs: number): number {
   if (!Number.isFinite(value) || value < 0) return 0;
   return Math.min(value, maxMs);
@@ -283,12 +282,14 @@ async function buildActivity(
       const isPersonal = conversationType === "personal";
       const isImage = contentType?.startsWith("image/") ?? false;
 
-      if (requiresFileConsent({
-        conversationType,
-        contentType,
-        bufferSize: media.buffer.length,
-        thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
-      })) {
+      if (
+        requiresFileConsent({
+          conversationType,
+          contentType,
+          bufferSize: media.buffer.length,
+          thresholdBytes: FILE_CONSENT_THRESHOLD_BYTES,
+        })
+      ) {
         // Large file or non-image in personal chat: use FileConsentCard flow
         const conversationId = conversationRef.conversation?.id ?? "unknown";
         const { activity: consentActivity } = prepareFileConsentActivity({
@@ -428,7 +429,13 @@ export async function sendMSTeamsMessages(params: {
       const response = await sendWithRetry(
         async () =>
           await ctx.sendActivity(
-            await buildActivity(message, params.conversationRef, params.tokenProvider, params.sharePointSiteId, params.mediaMaxBytes),
+            await buildActivity(
+              message,
+              params.conversationRef,
+              params.tokenProvider,
+              params.sharePointSiteId,
+              params.mediaMaxBytes,
+            ),
           ),
         { messageIndex: idx, messageCount: messages.length },
       );
@@ -449,7 +456,13 @@ export async function sendMSTeamsMessages(params: {
       const response = await sendWithRetry(
         async () =>
           await ctx.sendActivity(
-            await buildActivity(message, params.conversationRef, params.tokenProvider, params.sharePointSiteId, params.mediaMaxBytes),
+            await buildActivity(
+              message,
+              params.conversationRef,
+              params.tokenProvider,
+              params.sharePointSiteId,
+              params.mediaMaxBytes,
+            ),
           ),
         { messageIndex: idx, messageCount: messages.length },
       );

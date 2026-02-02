@@ -87,9 +87,7 @@ export async function resolveNextcloudTalkRoomKind(params: {
         fetchedAt: Date.now(),
         error: `status:${response.status}`,
       });
-      runtime?.log?.(
-        `nextcloud-talk: room lookup failed (${response.status}) token=${roomToken}`,
-      );
+      runtime?.log?.(`nextcloud-talk: room lookup failed (${response.status}) token=${roomToken}`);
       return undefined;
     }
 

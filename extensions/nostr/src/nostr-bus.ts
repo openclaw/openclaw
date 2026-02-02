@@ -15,10 +15,7 @@ import {
   readNostrProfileState,
   writeNostrProfileState,
 } from "./nostr-state-store.js";
-import {
-  publishProfile as publishProfileFn,
-  type ProfilePublishResult,
-} from "./nostr-profile.js";
+import { publishProfile as publishProfileFn, type ProfilePublishResult } from "./nostr-profile.js";
 import type { NostrProfile } from "./config-schema.js";
 import { createSeenTracker, type SeenTracker } from "./seen-tracker.js";
 import {
@@ -66,7 +63,7 @@ export interface NostrBusOptions {
   onMessage: (
     pubkey: string,
     text: string,
-    reply: (text: string) => Promise<void>
+    reply: (text: string) => Promise<void>,
   ) => Promise<void>;
   /** Called on errors (optional) */
   onError?: (error: Error, context: string) => void;
@@ -129,7 +126,7 @@ function createCircuitBreaker(
   relay: string,
   metrics: NostrMetrics,
   threshold: number = CIRCUIT_BREAKER_THRESHOLD,
-  resetMs: number = CIRCUIT_BREAKER_RESET_MS
+  resetMs: number = CIRCUIT_BREAKER_RESET_MS,
 ): CircuitBreaker {
   const state: CircuitBreakerState = {
     state: "closed",
@@ -262,8 +259,7 @@ function createRelayHealthTracker(): RelayHealthTracker {
           : 0;
 
       // Latency penalty (lower is better)
-      const avgLatency =
-        s.latencyCount > 0 ? s.latencySum / s.latencyCount : 1000;
+      const avgLatency = s.latencyCount > 0 ? s.latencySum / s.latencyCount : 1000;
       const latencyPenalty = Math.min(0.2, avgLatency / 10000);
 
       return Math.max(0, Math.min(1, successRate + recencyBonus - latencyPenalty));
@@ -310,9 +306,7 @@ export function validatePrivateKey(key: string): Uint8Array {
 
   // Handle hex format
   if (!/^[0-9a-fA-F]{64}$/.test(trimmed)) {
-    throw new Error(
-      "Private key must be 64 hex characters or nsec bech32 format"
-    );
+    throw new Error("Private key must be 64 hex characters or nsec bech32 format");
   }
 
   // Convert hex string to Uint8Array
@@ -338,9 +332,7 @@ export function getPublicKeyFromPrivate(privateKey: string): string {
 /**
  * Start the Nostr DM bus - subscribes to NIP-04 encrypted DMs
  */
-export async function startNostrBus(
-  options: NostrBusOptions
-): Promise<NostrBusHandle> {
+export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusHandle> {
   const {
     privateKey,
     relays = DEFAULT_RELAYS,
@@ -396,9 +388,7 @@ export async function startNostrBus(
   // Debounced state persistence
   let pendingWrite: ReturnType<typeof setTimeout> | undefined;
   let lastProcessedAt = state?.lastProcessedAt ?? gatewayStartedAt;
-  let recentEventIds = (state?.recentEventIds ?? []).slice(
-    -MAX_PERSISTED_EVENT_IDS
-  );
+  let recentEventIds = (state?.recentEventIds ?? []).slice(-MAX_PERSISTED_EVENT_IDS);
 
   function scheduleStatePersist(eventCreatedAt: number, eventId: string): void {
     lastProcessedAt = Math.max(lastProcessedAt, eventCreatedAt);
@@ -491,7 +481,7 @@ export async function startNostrBus(
           metrics,
           circuitBreakers,
           healthTracker,
-          onError
+          onError,
         );
       };
 
@@ -510,31 +500,24 @@ export async function startNostrBus(
     }
   }
 
-  const sub = pool.subscribeMany(
-    relays,
-    [{ kinds: [4], "#p": [pk], since }],
-    {
-      onevent: handleEvent,
-      oneose: () => {
-        // EOSE handler - called when all stored events have been received
-        for (const relay of relays) {
-          metrics.emit("relay.message.eose", 1, { relay });
-        }
-        onEose?.(relays.join(", "));
-      },
-      onclose: (reason) => {
-        // Handle subscription close
-        for (const relay of relays) {
-          metrics.emit("relay.message.closed", 1, { relay });
-          options.onDisconnect?.(relay);
-        }
-        onError?.(
-          new Error(`Subscription closed: ${reason}`),
-          "subscription"
-        );
-      },
-    }
-  );
+  const sub = pool.subscribeMany(relays, [{ kinds: [4], "#p": [pk], since }], {
+    onevent: handleEvent,
+    oneose: () => {
+      // EOSE handler - called when all stored events have been received
+      for (const relay of relays) {
+        metrics.emit("relay.message.eose", 1, { relay });
+      }
+      onEose?.(relays.join(", "));
+    },
+    onclose: (reason) => {
+      // Handle subscription close
+      for (const relay of relays) {
+        metrics.emit("relay.message.closed", 1, { relay });
+        options.onDisconnect?.(relay);
+      }
+      onError?.(new Error(`Subscription closed: ${reason}`), "subscription");
+    },
+  });
 
   // Public sendDm function
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {
@@ -547,7 +530,7 @@ export async function startNostrBus(
       metrics,
       circuitBreakers,
       healthTracker,
-      onError
+      onError,
     );
   };
 
@@ -629,7 +612,7 @@ async function sendEncryptedDm(
   metrics: NostrMetrics,
   circuitBreakers: Map<string, CircuitBreaker>,
   healthTracker: RelayHealthTracker,
-  onError?: (error: Error, context: string) => void
+  onError?: (error: Error, context: string) => void,
 ): Promise<void> {
   const ciphertext = await encrypt(sk, toPubkey, text);
   const reply = finalizeEvent(
@@ -639,7 +622,7 @@ async function sendEncryptedDm(
       tags: [["p", toPubkey]],
       created_at: Math.floor(Date.now() / 1000),
     },
-    sk
+    sk,
   );
 
   // Sort relays by health score (best first)

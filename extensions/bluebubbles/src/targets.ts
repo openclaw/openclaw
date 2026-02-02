@@ -20,8 +20,7 @@ const SERVICE_PREFIXES: Array<{ prefix: string; service: BlueBubblesService }> =
   { prefix: "sms:", service: "sms" },
   { prefix: "auto:", service: "auto" },
 ];
-const CHAT_IDENTIFIER_UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CHAT_IDENTIFIER_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CHAT_IDENTIFIER_HEX_RE = /^[0-9a-f]{24,64}$/i;
 
 function parseRawChatGuid(value: string): string | null {

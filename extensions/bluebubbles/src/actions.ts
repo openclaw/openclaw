@@ -300,9 +300,7 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       const resolvedChatGuid = await resolveChatGuid();
       const base64Buffer = readStringParam(params, "buffer");
       const filename =
-        readStringParam(params, "filename") ??
-        readStringParam(params, "name") ??
-        "icon.png";
+        readStringParam(params, "filename") ?? readStringParam(params, "name") ?? "icon.png";
       const contentType =
         readStringParam(params, "contentType") ?? readStringParam(params, "mimeType");
 

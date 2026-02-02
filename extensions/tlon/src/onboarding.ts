@@ -66,7 +66,9 @@ function applyAccountConfig(params: {
         accounts: {
           ...(base as { accounts?: Record<string, unknown> }).accounts,
           [accountId]: {
-            ...((base as { accounts?: Record<string, Record<string, unknown>> }).accounts?.[accountId] ?? {}),
+            ...((base as { accounts?: Record<string, Record<string, unknown>> }).accounts?.[
+              accountId
+            ] ?? {}),
             enabled: true,
             ...(input.name ? { name: input.name } : {}),
             ...(input.ship ? { ship: input.ship } : {}),

@@ -90,9 +90,9 @@ export async function monitorMSTeamsProvider(
 
   try {
     const allowEntries =
-      allowFrom?.map((entry) => cleanAllowEntry(String(entry))).filter(
-        (entry) => entry && entry !== "*",
-      ) ?? [];
+      allowFrom
+        ?.map((entry) => cleanAllowEntry(String(entry)))
+        .filter((entry) => entry && entry !== "*") ?? [];
     if (allowEntries.length > 0) {
       const { additions } = await resolveAllowlistUsers("msteams users", allowEntries);
       allowFrom = mergeAllowlist({ existing: allowFrom, additions });

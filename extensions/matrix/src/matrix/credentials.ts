@@ -19,8 +19,7 @@ export function resolveMatrixCredentialsDir(
   env: NodeJS.ProcessEnv = process.env,
   stateDir?: string,
 ): string {
-  const resolvedStateDir =
-    stateDir ?? getMatrixRuntime().state.resolveStateDir(env, os.homedir);
+  const resolvedStateDir = stateDir ?? getMatrixRuntime().state.resolveStateDir(env, os.homedir);
   return path.join(resolvedStateDir, "credentials", "matrix");
 }
 

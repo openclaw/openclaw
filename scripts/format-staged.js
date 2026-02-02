@@ -3,16 +3,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const OXFMT_EXTENSIONS = new Set([
-  ".cjs",
-  ".js",
-  ".json",
-  ".jsonc",
-  ".jsx",
-  ".mjs",
-  ".ts",
-  ".tsx",
-]);
+const OXFMT_EXTENSIONS = new Set([".cjs", ".js", ".json", ".jsonc", ".jsx", ".mjs", ".ts", ".tsx"]);
 
 function getRepoRoot() {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -40,9 +31,10 @@ function normalizeGitPath(filePath) {
 function filterOxfmtTargets(paths) {
   return paths
     .map(normalizeGitPath)
-    .filter((filePath) =>
-      (filePath.startsWith("src/") || filePath.startsWith("test/")) &&
-      OXFMT_EXTENSIONS.has(path.posix.extname(filePath)),
+    .filter(
+      (filePath) =>
+        (filePath.startsWith("src/") || filePath.startsWith("test/")) &&
+        OXFMT_EXTENSIONS.has(path.posix.extname(filePath)),
     );
 }
 
@@ -94,13 +86,10 @@ function stageFiles(repoRoot, files) {
 
 function main() {
   const repoRoot = getRepoRoot();
-  const staged = getGitPaths([
-    "diff",
-    "--cached",
-    "--name-only",
-    "-z",
-    "--diff-filter=ACMR",
-  ], repoRoot);
+  const staged = getGitPaths(
+    ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR"],
+    repoRoot,
+  );
   const targets = filterOxfmtTargets(staged);
   if (targets.length === 0) return;
 

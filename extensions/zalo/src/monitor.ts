@@ -137,9 +137,7 @@ export function registerZaloWebhookTarget(target: WebhookTarget): () => void {
   const next = [...existing, normalizedTarget];
   webhookTargets.set(key, next);
   return () => {
-    const updated = (webhookTargets.get(key) ?? []).filter(
-      (entry) => entry !== normalizedTarget,
-    );
+    const updated = (webhookTargets.get(key) ?? []).filter((entry) => entry !== normalizedTarget);
     if (updated.length > 0) {
       webhookTargets.set(key, updated);
     } else {
@@ -181,12 +179,11 @@ export async function handleZaloWebhookRequest(
 
   // Zalo sends updates directly as { event_name, message, ... }, not wrapped in { ok, result }
   const raw = body.value;
-  const record =
-    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
   const update: ZaloUpdate | undefined =
     record && record.ok === true && record.result
       ? (record.result as ZaloUpdate)
-      : (record as ZaloUpdate | null) ?? undefined;
+      : ((record as ZaloUpdate | null) ?? undefined);
 
   if (!update?.event_name) {
     res.statusCode = 400;
@@ -292,16 +289,7 @@ async function processUpdate(
 
   switch (event_name) {
     case "message.text.received":
-      await handleTextMessage(
-        message,
-        token,
-        account,
-        config,
-        runtime,
-        core,
-        statusSink,
-        fetcher,
-      );
+      await handleTextMessage(message, token, account, config, runtime, core, statusSink, fetcher);
       break;
     case "message.image.received":
       await handleImageMessage(
@@ -439,10 +427,7 @@ async function processMessageWithPipeline(params: {
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
   const rawBody = text?.trim() || (mediaPath ? "<media:image>" : "");
-  const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(
-    rawBody,
-    config,
-  );
+  const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
     !isGroup && (dmPolicy !== "open" || shouldComputeAuth)
       ? await core.channel.pairing.readAllowFromStore("zalo").catch(() => [])
@@ -453,7 +438,9 @@ async function processMessageWithPipeline(params: {
   const commandAuthorized = shouldComputeAuth
     ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups,
-        authorizers: [{ configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands }],
+        authorizers: [
+          { configured: effectiveAllowFrom.length > 0, allowed: senderAllowedForCommands },
+        ],
       })
     : undefined;
 
@@ -649,11 +636,7 @@ async function deliverZaloReply(params: {
 
   if (text) {
     const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
-    const chunks = core.channel.text.chunkMarkdownTextWithMode(
-      text,
-      ZALO_TEXT_LIMIT,
-      chunkMode,
-    );
+    const chunks = core.channel.text.chunkMarkdownTextWithMode(text, ZALO_TEXT_LIMIT, chunkMode);
     for (const chunk of chunks) {
       try {
         await sendMessage(token, { chat_id: chatId, text: chunk }, fetcher);
@@ -665,9 +648,7 @@ async function deliverZaloReply(params: {
   }
 }
 
-export async function monitorZaloProvider(
-  options: ZaloMonitorOptions,
-): Promise<ZaloMonitorResult> {
+export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<ZaloMonitorResult> {
   const {
     token,
     account,

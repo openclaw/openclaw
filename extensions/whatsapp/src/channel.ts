@@ -329,8 +329,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       };
     },
     sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
-      const send =
-        deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
+      const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
       const result = await send(to, text, {
         verbose: false,
         accountId: accountId ?? undefined,
@@ -339,8 +338,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       return { channel: "whatsapp", ...result };
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, deps, gifPlayback }) => {
-      const send =
-        deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
+      const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,
@@ -372,8 +370,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         return { ok: false, reason: "whatsapp-disabled" };
       }
       const account = resolveWhatsAppAccount({ cfg, accountId });
-      const authExists = await (deps?.webAuthExists ??
-        getWhatsAppRuntime().channel.whatsapp.webAuthExists)(account.authDir);
+      const authExists = await (
+        deps?.webAuthExists ?? getWhatsAppRuntime().channel.whatsapp.webAuthExists
+      )(account.authDir);
       if (!authExists) {
         return { ok: false, reason: "whatsapp-not-linked" };
       }
@@ -409,9 +408,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
             ? await getWhatsAppRuntime().channel.whatsapp.webAuthExists(authDir)
             : false;
       const authAgeMs =
-        linked && authDir
-          ? getWhatsAppRuntime().channel.whatsapp.getWebAuthAgeMs(authDir)
-          : null;
+        linked && authDir ? getWhatsAppRuntime().channel.whatsapp.getWebAuthAgeMs(authDir) : null;
       const self =
         linked && authDir
           ? getWhatsAppRuntime().channel.whatsapp.readWebSelfId(authDir)

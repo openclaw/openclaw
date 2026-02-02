@@ -33,9 +33,7 @@ export function isBotMentioned(messageText: string, botShipName: string): boolea
 export function isDmAllowed(senderShip: string, allowlist: string[] | undefined): boolean {
   if (!allowlist || allowlist.length === 0) return true;
   const normalizedSender = normalizeShip(senderShip);
-  return allowlist
-    .map((ship) => normalizeShip(ship))
-    .some((ship) => ship === normalizedSender);
+  return allowlist.map((ship) => normalizeShip(ship)).some((ship) => ship === normalizedSender);
 }
 
 export function extractMessageText(content: unknown): string {

@@ -13,10 +13,7 @@ import {
 
 const getCore = () => getMatrixRuntime();
 
-export function buildTextContent(
-  body: string,
-  relation?: MatrixRelation,
-): MatrixTextContent {
+export function buildTextContent(body: string, relation?: MatrixRelation): MatrixTextContent {
   const content: MatrixTextContent = relation
     ? {
         msgtype: MsgType.Text,
@@ -44,23 +41,17 @@ export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | un
   return { "m.in_reply_to": { event_id: trimmed } };
 }
 
-export function buildThreadRelation(
-  threadId: string,
-  replyToId?: string,
-): MatrixThreadRelation {
+export function buildThreadRelation(threadId: string, replyToId?: string): MatrixThreadRelation {
   const trimmed = threadId.trim();
   return {
     rel_type: RelationType.Thread,
     event_id: trimmed,
     is_falling_back: true,
-    "m.in_reply_to": { event_id: (replyToId?.trim() || trimmed) },
+    "m.in_reply_to": { event_id: replyToId?.trim() || trimmed },
   };
 }
 
-export function resolveMatrixMsgType(
-  contentType?: string,
-  _fileName?: string,
-): MatrixMediaMsgType {
+export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
   const kind = getCore().media.mediaKindFromMime(contentType ?? "");
   switch (kind) {
     case "image":

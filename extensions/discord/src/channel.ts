@@ -33,8 +33,7 @@ const meta = getChatChannelMeta("discord");
 
 const discordMessageActions: ChannelMessageActionAdapter = {
   listActions: (ctx) => getDiscordRuntime().channel.discord.messageActions.listActions(ctx),
-  extractToolSend: (ctx) =>
-    getDiscordRuntime().channel.discord.messageActions.extractToolSend(ctx),
+  extractToolSend: (ctx) => getDiscordRuntime().channel.discord.messageActions.extractToolSend(ctx),
   handleAction: async (ctx) =>
     await getDiscordRuntime().channel.discord.messageActions.handleAction(ctx),
 };
@@ -281,8 +280,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
     textChunkLimit: 2000,
     pollMaxOptions: 10,
     sendText: async ({ to, text, accountId, deps, replyToId }) => {
-      const send =
-        deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
+      const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
         replyTo: replyToId ?? undefined,
@@ -291,8 +289,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount> = {
       return { channel: "discord", ...result };
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId }) => {
-      const send =
-        deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
+      const send = deps?.sendDiscord ?? getDiscordRuntime().channel.discord.sendMessageDiscord;
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,

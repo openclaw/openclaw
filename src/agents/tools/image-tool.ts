@@ -1,14 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import {
-  type Api,
-  type AssistantMessage,
-  type Context,
-  complete,
-  type Model,
-} from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
+import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
+import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { Type } from "@sinclair/typebox";
 
 import type { OpenClawConfig } from "../../config/config.js";
@@ -54,7 +48,9 @@ function resolveDefaultModelRef(cfg?: OpenClawConfig): {
 }
 
 function hasAuthForProvider(params: { provider: string; agentDir: string }): boolean {
-  if (resolveEnvApiKey(params.provider)?.apiKey) return true;
+  if (resolveEnvApiKey(params.provider)?.apiKey) {
+    return true;
+  }
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -95,8 +91,12 @@ export function resolveImageModelConfigForTool(params: {
   const fallbacks: string[] = [];
   const addFallback = (modelRef: string | null) => {
     const ref = (modelRef ?? "").trim();
-    if (!ref) return;
-    if (fallbacks.includes(ref)) return;
+    if (!ref) {
+      return;
+    }
+    if (fallbacks.includes(ref)) {
+      return;
+    }
     fallbacks.push(ref);
   };
 
@@ -123,8 +123,12 @@ export function resolveImageModelConfigForTool(params: {
   }
 
   if (preferred?.trim()) {
-    if (openaiOk) addFallback("openai/gpt-5-mini");
-    if (anthropicOk) addFallback("anthropic/claude-opus-4-5");
+    if (openaiOk) {
+      addFallback("openai/gpt-5-mini");
+    }
+    if (anthropicOk) {
+      addFallback("anthropic/claude-opus-4-5");
+    }
     // Don't duplicate primary in fallbacks.
     const pruned = fallbacks.filter((ref) => ref !== preferred);
     return {
@@ -135,7 +139,9 @@ export function resolveImageModelConfigForTool(params: {
 
   // Cross-provider fallback when we can't pair with the primary provider.
   if (openaiOk) {
-    if (anthropicOk) addFallback("anthropic/claude-opus-4-5");
+    if (anthropicOk) {
+      addFallback("anthropic/claude-opus-4-5");
+    }
     return {
       primary: "openai/gpt-5-mini",
       ...(fallbacks.length ? { fallbacks } : {}),
@@ -267,10 +273,10 @@ async function runImagePrompt(params: {
       }
 
       const context = buildImageContext(params.prompt, params.base64, params.mimeType);
-      const message = (await complete(model, context, {
+      const message = await complete(model, context, {
         apiKey,
         maxTokens: 512,
-      })) as AssistantMessage;
+      });
       const text = coerceImageAssistantText({
         message,
         provider: model.provider,
@@ -311,7 +317,9 @@ export function createImageTool(options?: {
     cfg: options?.config,
     agentDir,
   });
-  if (!imageModelConfig) return null;
+  if (!imageModelConfig) {
+    return null;
+  }
 
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
@@ -335,7 +343,9 @@ export function createImageTool(options?: {
       const imageRaw = imageRawInput.startsWith("@")
         ? imageRawInput.slice(1).trim()
         : imageRawInput;
-      if (!imageRaw) throw new Error("image required");
+      if (!imageRaw) {
+        throw new Error("image required");
+      }
 
       // The tool accepts file paths, file/data URLs, or http(s) URLs. In some
       // agent/model contexts, images can be referenced as pseudo-URIs like
@@ -377,8 +387,12 @@ export function createImageTool(options?: {
       }
 
       const resolvedImage = (() => {
-        if (sandboxRoot) return imageRaw;
-        if (imageRaw.startsWith("~")) return resolveUserPath(imageRaw);
+        if (sandboxRoot) {
+          return imageRaw;
+        }
+        if (imageRaw.startsWith("~")) {
+          return resolveUserPath(imageRaw);
+        }
         return imageRaw;
       })();
       const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl

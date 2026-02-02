@@ -28,7 +28,7 @@ function formatZonedTimestamp(date: Date, timeZone?: string): string {
   const hh = pick("hour");
   const min = pick("minute");
   const tz = [...parts]
-    .reverse()
+    .toReversed()
     .find((part) => part.type === "timeZoneName")
     ?.value?.trim();
 
@@ -41,8 +41,12 @@ function formatZonedTimestamp(date: Date, timeZone?: string): string {
 
 export function formatEnvelopeTimestamp(date: Date, zone: EnvelopeTimestampZone = "utc"): string {
   const normalized = zone.trim().toLowerCase();
-  if (normalized === "utc" || normalized === "gmt") return formatUtcTimestamp(date);
-  if (normalized === "local" || normalized === "host") return formatZonedTimestamp(date);
+  if (normalized === "utc" || normalized === "gmt") {
+    return formatUtcTimestamp(date);
+  }
+  if (normalized === "local" || normalized === "host") {
+    return formatZonedTimestamp(date);
+  }
   return formatZonedTimestamp(date, zone);
 }
 

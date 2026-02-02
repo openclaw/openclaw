@@ -96,7 +96,7 @@ export async function readMatrixMessages(
     const token = opts.before?.trim() || opts.after?.trim() || undefined;
     const dir = opts.after ? "f" : "b";
     // @vector-im/matrix-bot-sdk uses doRequest for room messages
-    const res = await client.doRequest(
+    const res = (await client.doRequest(
       "GET",
       `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/messages`,
       {
@@ -104,7 +104,7 @@ export async function readMatrixMessages(
         limit,
         from: token,
       },
-    ) as { chunk: MatrixRawEvent[]; start?: string; end?: string };
+    )) as { chunk: MatrixRawEvent[]; start?: string; end?: string };
     const messages = res.chunk
       .filter((event) => event.type === EventType.RoomMessage)
       .filter((event) => !event.unsigned?.redacted_because)

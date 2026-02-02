@@ -28,9 +28,7 @@ function setZalouserDmPolicy(
   dmPolicy: "pairing" | "allowlist" | "open" | "disabled",
 ): OpenClawConfig {
   const allowFrom =
-    dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.channels?.zalouser?.allowFrom)
-      : undefined;
+    dmPolicy === "open" ? addWildcardAllowFrom(cfg.channels?.zalouser?.allowFrom) : undefined;
   return {
     ...cfg,
     channels: {
@@ -239,10 +237,13 @@ async function resolveZalouserGroups(params: {
   entries: string[];
 }): Promise<Array<{ input: string; resolved: boolean; id?: string }>> {
   const account = resolveZalouserAccountSync({ cfg: params.cfg, accountId: params.accountId });
-  const result = await runZca(["group", "list", "-j"], { profile: account.profile, timeout: 15000 });
+  const result = await runZca(["group", "list", "-j"], {
+    profile: account.profile,
+    timeout: 15000,
+  });
   if (!result.ok) throw new Error(result.stderr || "Failed to list groups");
-  const groups = (parseJsonOutput<ZcaGroup[]>(result.stdout) ?? []).filter(
-    (group) => Boolean(group.groupId),
+  const groups = (parseJsonOutput<ZcaGroup[]>(result.stdout) ?? []).filter((group) =>
+    Boolean(group.groupId),
   );
   const byName = new Map<string, ZcaGroup[]>();
   for (const group of groups) {
@@ -270,12 +271,13 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   channel,
   policyKey: "channels.zalouser.dmPolicy",
   allowFromKey: "channels.zalouser.allowFrom",
-  getCurrent: (cfg) => ((cfg as OpenClawConfig).channels?.zalouser?.dmPolicy ?? "pairing") as "pairing",
+  getCurrent: (cfg) =>
+    ((cfg as OpenClawConfig).channels?.zalouser?.dmPolicy ?? "pairing") as "pairing",
   setPolicy: (cfg, policy) => setZalouserDmPolicy(cfg as OpenClawConfig, policy),
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
     const id =
       accountId && normalizeAccountId(accountId)
-        ? normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID
+        ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
         : resolveDefaultZalouserAccountId(cfg as OpenClawConfig);
     return promptZalouserAllowFrom({
       cfg: cfg as OpenClawConfig,
@@ -307,7 +309,13 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
       quickstartScore: configured ? 1 : 15,
     };
   },
-  configure: async ({ cfg, prompter, accountOverrides, shouldPromptAccountIds, forceAllowFrom }) => {
+  configure: async ({
+    cfg,
+    prompter,
+    accountOverrides,
+    shouldPromptAccountIds,
+    forceAllowFrom,
+  }) => {
     // Check zca is installed
     const zcaInstalled = await checkZcaInstalled();
     if (!zcaInstalled) {
@@ -325,9 +333,7 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
 
     const zalouserOverride = accountOverrides.zalouser?.trim();
     const defaultAccountId = resolveDefaultZalouserAccountId(cfg as OpenClawConfig);
-    let accountId = zalouserOverride
-      ? normalizeAccountId(zalouserOverride)
-      : defaultAccountId;
+    let accountId = zalouserOverride ? normalizeAccountId(zalouserOverride) : defaultAccountId;
 
     if (shouldPromptAccountIds && !zalouserOverride) {
       accountId = await promptAccountId({
@@ -364,10 +370,7 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
         });
 
         if (!result.ok) {
-          await prompter.note(
-            `Login failed: ${result.stderr || "Unknown error"}`,
-            "Error",
-          );
+          await prompter.note(`Login failed: ${result.stderr || "Unknown error"}`, "Error");
         } else {
           const isNowAuth = await checkZcaAuthenticated(account.profile);
           if (isNowAuth) {
@@ -454,10 +457,7 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
             const unresolved = resolved
               .filter((entry) => !entry.resolved)
               .map((entry) => entry.input);
-            keys = [
-              ...resolvedIds,
-              ...unresolved.map((entry) => entry.trim()).filter(Boolean),
-            ];
+            keys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
             if (resolvedIds.length > 0 || unresolved.length > 0) {
               await prompter.note(
                 [

@@ -38,10 +38,7 @@ export function summarizeMatrixRawEvent(event: MatrixRawEvent): MatrixMessageSum
   };
 }
 
-export async function readPinnedEvents(
-  client: MatrixClient,
-  roomId: string,
-): Promise<string[]> {
+export async function readPinnedEvents(client: MatrixClient, roomId: string): Promise<string[]> {
   try {
     const content = (await client.getRoomStateEvent(
       roomId,

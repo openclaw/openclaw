@@ -16,10 +16,7 @@ function buildArgs(args: string[], options?: ZcaRunOptions): string[] {
   return result;
 }
 
-export async function runZca(
-  args: string[],
-  options?: ZcaRunOptions,
-): Promise<ZcaResult> {
+export async function runZca(args: string[], options?: ZcaRunOptions): Promise<ZcaResult> {
   const fullArgs = buildArgs(args, options);
   const timeout = options?.timeout ?? DEFAULT_TIMEOUT;
 
@@ -79,10 +76,7 @@ export async function runZca(
   });
 }
 
-export function runZcaInteractive(
-  args: string[],
-  options?: ZcaRunOptions,
-): Promise<ZcaResult> {
+export function runZcaInteractive(args: string[], options?: ZcaRunOptions): Promise<ZcaResult> {
   const fullArgs = buildArgs(args, options);
 
   return new Promise((resolve) => {

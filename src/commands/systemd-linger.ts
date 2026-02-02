@@ -20,8 +20,12 @@ export async function ensureSystemdUserLingerInteractive(params: {
   prompt?: boolean;
   requireConfirm?: boolean;
 }): Promise<void> {
-  if (process.platform !== "linux") return;
-  if (params.prompt === false) return;
+  if (process.platform !== "linux") {
+    return;
+  }
+  if (params.prompt === false) {
+    return;
+  }
   const env = params.env ?? process.env;
   const prompter = params.prompter ?? { note };
   const title = params.title ?? "Systemd";
@@ -37,7 +41,9 @@ export async function ensureSystemdUserLingerInteractive(params: {
     );
     return;
   }
-  if (status.linger === "yes") return;
+  if (status.linger === "yes") {
+    return;
+  }
 
   const reason =
     params.reason ??
@@ -87,11 +93,17 @@ export async function ensureSystemdUserLingerNonInteractive(params: {
   runtime: RuntimeEnv;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
-  if (process.platform !== "linux") return;
+  if (process.platform !== "linux") {
+    return;
+  }
   const env = params.env ?? process.env;
-  if (!(await isSystemdUserServiceAvailable())) return;
+  if (!(await isSystemdUserServiceAvailable())) {
+    return;
+  }
   const status = await readSystemdUserLingerStatus(env);
-  if (!status || status.linger === "yes") return;
+  if (!status || status.linger === "yes") {
+    return;
+  }
 
   const result = await enableSystemdUserLinger({
     env,

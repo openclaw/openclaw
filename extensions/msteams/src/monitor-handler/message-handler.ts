@@ -414,24 +414,24 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       preserveFilenames: cfg.media?.preserveFilenames,
     });
 
-	    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
-	    const envelopeFrom = isDirectMessage ? senderName : conversationType;
-	    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-	      agentId: route.agentId,
-	    });
-	    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
-	    const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-	      storePath,
-	      sessionKey: route.sessionKey,
-	    });
-	    const body = core.channel.reply.formatAgentEnvelope({
-	      channel: "Teams",
-	      from: envelopeFrom,
-	      timestamp,
-	      previousTimestamp,
-	      envelope: envelopeOptions,
-	      body: rawBody,
-	    });
+    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
+    const envelopeFrom = isDirectMessage ? senderName : conversationType;
+    const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+      agentId: route.agentId,
+    });
+    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
+    const previousTimestamp = core.channel.session.readSessionUpdatedAt({
+      storePath,
+      sessionKey: route.sessionKey,
+    });
+    const body = core.channel.reply.formatAgentEnvelope({
+      channel: "Teams",
+      from: envelopeFrom,
+      timestamp,
+      previousTimestamp,
+      envelope: envelopeOptions,
+      body: rawBody,
+    });
     let combinedBody = body;
     const isRoomish = !isDirectMessage;
     const historyKey = isRoomish ? conversationId : undefined;
@@ -441,25 +441,25 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         historyKey,
         limit: historyLimit,
         currentMessage: combinedBody,
-	        formatEntry: (entry) =>
-	          core.channel.reply.formatAgentEnvelope({
-	            channel: "Teams",
-	            from: conversationType,
-	            timestamp: entry.timestamp,
-	            body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
-	            envelope: envelopeOptions,
-	          }),
-	      });
-	    }
+        formatEntry: (entry) =>
+          core.channel.reply.formatAgentEnvelope({
+            channel: "Teams",
+            from: conversationType,
+            timestamp: entry.timestamp,
+            body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
+            envelope: envelopeOptions,
+          }),
+      });
+    }
 
-	    const ctxPayload = core.channel.reply.finalizeInboundContext({
-	      Body: combinedBody,
-	      RawBody: rawBody,
-	      CommandBody: rawBody,
-	      From: teamsFrom,
-	      To: teamsTo,
-	      SessionKey: route.sessionKey,
-	      AccountId: route.accountId,
+    const ctxPayload = core.channel.reply.finalizeInboundContext({
+      Body: combinedBody,
+      RawBody: rawBody,
+      CommandBody: rawBody,
+      From: teamsFrom,
+      To: teamsTo,
+      SessionKey: route.sessionKey,
+      AccountId: route.accountId,
       ChatType: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
       ConversationLabel: envelopeFrom,
       GroupSubject: !isDirectMessage ? conversationType : undefined,
@@ -469,12 +469,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       Surface: "msteams" as const,
       MessageSid: activity.id,
       Timestamp: timestamp?.getTime() ?? Date.now(),
-	      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
-	      CommandAuthorized: commandAuthorized,
-	      OriginatingChannel: "msteams" as const,
-	      OriginatingTo: teamsTo,
-	      ...mediaPayload,
-	    });
+      WasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
+      CommandAuthorized: commandAuthorized,
+      OriginatingChannel: "msteams" as const,
+      OriginatingTo: teamsTo,
+      ...mediaPayload,
+    });
 
     await core.channel.session.recordInboundSession({
       storePath,

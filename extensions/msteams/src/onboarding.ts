@@ -123,9 +123,7 @@ async function promptMSTeamsAllowFrom(params: {
     }
 
     const ids = resolved.map((item) => item.id as string);
-    const unique = [
-      ...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids]),
-    ];
+    const unique = [...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids])];
     return setMSTeamsAllowFrom(params.cfg, unique);
   }
 }
@@ -379,9 +377,7 @@ export const msteamsOnboardingAdapter: ChannelOnboardingAdapter = {
               ...resolvedTeams.map((entry) => ({
                 teamKey: entry.teamId as string,
               })),
-              ...unresolved
-                .map((entry) => parseMSTeamsTeamEntry(entry))
-                .filter(Boolean),
+              ...unresolved.map((entry) => parseMSTeamsTeamEntry(entry)).filter(Boolean),
             ] as Array<{ teamKey: string; channelKey?: string }>;
 
             if (resolvedChannels.length > 0 || resolvedTeams.length > 0 || unresolved.length > 0) {

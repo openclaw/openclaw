@@ -34,9 +34,11 @@ export function renderGoogleChatCard(params: {
         <div>
           <span class="label">Audience</span>
           <span>
-            ${googleChat?.audienceType
-              ? `${googleChat.audienceType}${googleChat.audience ? ` · ${googleChat.audience}` : ""}`
-              : "n/a"}
+            ${
+              googleChat?.audienceType
+                ? `${googleChat.audienceType}${googleChat.audience ? ` · ${googleChat.audience}` : ""}`
+                : "n/a"
+            }
           </span>
         </div>
         <div>
@@ -49,18 +51,22 @@ export function renderGoogleChatCard(params: {
         </div>
       </div>
 
-      ${googleChat?.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">
+      ${
+        googleChat?.lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">
             ${googleChat.lastError}
           </div>`
-        : nothing}
+          : nothing
+      }
 
-      ${googleChat?.probe
-        ? html`<div class="callout" style="margin-top: 12px;">
+      ${
+        googleChat?.probe
+          ? html`<div class="callout" style="margin-top: 12px;">
             Probe ${googleChat.probe.ok ? "ok" : "failed"} ·
             ${googleChat.probe.status ?? ""} ${googleChat.probe.error ?? ""}
           </div>`
-        : nothing}
+          : nothing
+      }
 
       ${renderChannelConfigSection({ channelId: "googlechat", props })}
 

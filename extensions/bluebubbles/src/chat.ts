@@ -249,7 +249,9 @@ export async function removeBlueBubblesParticipant(
 
   if (!res.ok) {
     const errorText = await res.text().catch(() => "");
-    throw new Error(`BlueBubbles removeParticipant failed (${res.status}): ${errorText || "unknown"}`);
+    throw new Error(
+      `BlueBubbles removeParticipant failed (${res.status}): ${errorText || "unknown"}`,
+    );
   }
 }
 
@@ -270,11 +272,7 @@ export async function leaveBlueBubblesChat(
     password,
   });
 
-  const res = await blueBubblesFetchWithTimeout(
-    url,
-    { method: "POST" },
-    opts.timeoutMs,
-  );
+  const res = await blueBubblesFetchWithTimeout(url, { method: "POST" }, opts.timeoutMs);
 
   if (!res.ok) {
     const errorText = await res.text().catch(() => "");
@@ -313,9 +311,7 @@ export async function setGroupIconBlueBubbles(
   // Add file field named "icon" as per API spec
   parts.push(encoder.encode(`--${boundary}\r\n`));
   parts.push(
-    encoder.encode(
-      `Content-Disposition: form-data; name="icon"; filename="${filename}"\r\n`,
-    ),
+    encoder.encode(`Content-Disposition: form-data; name="icon"; filename="${filename}"\r\n`),
   );
   parts.push(
     encoder.encode(`Content-Type: ${opts.contentType ?? "application/octet-stream"}\r\n\r\n`),
