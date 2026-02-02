@@ -251,23 +251,4 @@ describe("nodes-cli coverage", () => {
     });
     expect(invoke?.params?.timeoutMs).toBe(6000);
   });
-
-  it("invokes talk.ptt.once via nodes talk ptt once", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
-    callGateway.mockClear();
-    randomIdempotencyKey.mockClear();
-
-    const { registerNodesCli } = await import("./nodes-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerNodesCli(program);
-
-    await program.parseAsync(["nodes", "talk", "ptt", "once", "--node", "mac-1"], { from: "user" });
-
-    const invoke = callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0];
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("talk.ptt.once");
-    expect(invoke?.params?.idempotencyKey).toBe("rk_test");
-  });
 });

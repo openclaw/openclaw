@@ -72,6 +72,12 @@ struct StatusPill: View {
                             .lineLimit(1)
                     }
                     .transition(.opacity.combined(with: .move(edge: .top)))
+                } else {
+                    Image(systemName: self.voiceWakeEnabled ? "mic.fill" : "mic.slash")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(self.voiceWakeEnabled ? .primary : .secondary)
+                        .accessibilityLabel(self.voiceWakeEnabled ? "Voice Wake enabled" : "Voice Wake disabled")
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
             }
             .padding(.vertical, 8)
@@ -104,7 +110,7 @@ struct StatusPill: View {
         if let activity {
             return "\(self.gateway.title), \(activity.title)"
         }
-        return self.gateway.title
+        return "\(self.gateway.title), Voice Wake \(self.voiceWakeEnabled ? "enabled" : "disabled")"
     }
 
     private func updatePulse(for gateway: GatewayState, scenePhase: ScenePhase) {
