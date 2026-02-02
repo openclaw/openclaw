@@ -177,7 +177,9 @@ class FallbackMemoryManager implements MemorySearchManager {
   }
 
   private async ensureFallback(): Promise<MemorySearchManager | null> {
-    if (this.fallback) return this.fallback;
+    if (this.fallback) {
+      return this.fallback;
+    }
     const fallback = await this.deps.fallbackFactory();
     if (!fallback) {
       log.warn("memory fallback requested but builtin index is unavailable");

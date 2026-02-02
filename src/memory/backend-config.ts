@@ -100,7 +100,9 @@ function ensureUniqueName(base: string, existing: Set<string>): string {
 
 function resolvePath(raw: string, workspaceDir: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) throw new Error("path required");
+  if (!trimmed) {
+    throw new Error("path required");
+  }
   if (trimmed.startsWith("~") || path.isAbsolute(trimmed)) {
     return path.normalize(resolveUserPath(trimmed));
   }
@@ -109,7 +111,9 @@ function resolvePath(raw: string, workspaceDir: string): string {
 
 function resolveIntervalMs(raw: string | undefined): number {
   const value = raw?.trim();
-  if (!value) return parseDurationMs(DEFAULT_QMD_INTERVAL, { defaultUnit: "m" });
+  if (!value) {
+    return parseDurationMs(DEFAULT_QMD_INTERVAL, { defaultUnit: "m" });
+  }
   try {
     return parseDurationMs(value, { defaultUnit: "m" });
   } catch {
@@ -119,7 +123,9 @@ function resolveIntervalMs(raw: string | undefined): number {
 
 function resolveEmbedIntervalMs(raw: string | undefined): number {
   const value = raw?.trim();
-  if (!value) return parseDurationMs(DEFAULT_QMD_EMBED_INTERVAL, { defaultUnit: "m" });
+  if (!value) {
+    return parseDurationMs(DEFAULT_QMD_EMBED_INTERVAL, { defaultUnit: "m" });
+  }
   try {
     return parseDurationMs(value, { defaultUnit: "m" });
   } catch {
@@ -136,7 +142,9 @@ function resolveDebounceMs(raw: number | undefined): number {
 
 function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig {
   const parsed: ResolvedQmdLimitsConfig = { ...DEFAULT_QMD_LIMITS };
-  if (raw?.maxResults && raw.maxResults > 0) parsed.maxResults = Math.floor(raw.maxResults);
+  if (raw?.maxResults && raw.maxResults > 0) {
+    parsed.maxResults = Math.floor(raw.maxResults);
+  }
   if (raw?.maxSnippetChars && raw.maxSnippetChars > 0) {
     parsed.maxSnippetChars = Math.floor(raw.maxSnippetChars);
   }
@@ -170,11 +178,15 @@ function resolveCustomPaths(
   workspaceDir: string,
   existing: Set<string>,
 ): ResolvedQmdCollection[] {
-  if (!rawPaths?.length) return [];
+  if (!rawPaths?.length) {
+    return [];
+  }
   const collections: ResolvedQmdCollection[] = [];
   rawPaths.forEach((entry, index) => {
     const trimmedPath = entry?.path?.trim();
-    if (!trimmedPath) return;
+    if (!trimmedPath) {
+      return;
+    }
     let resolved: string;
     try {
       resolved = resolvePath(trimmedPath, workspaceDir);
@@ -199,7 +211,9 @@ function resolveDefaultCollections(
   workspaceDir: string,
   existing: Set<string>,
 ): ResolvedQmdCollection[] {
-  if (!include) return [];
+  if (!include) {
+    return [];
+  }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
     { path: workspaceDir, pattern: "MEMORY.md", base: "memory-root" },
     { path: workspaceDir, pattern: "memory.md", base: "memory-alt" },
