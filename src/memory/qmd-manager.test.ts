@@ -95,4 +95,56 @@ describe("QmdMemoryManager", () => {
 
     await manager.close();
   });
+
+  it("scopes by channel for agent-prefixed session keys", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          scope: {
+            default: "deny",
+            rules: [{ action: "allow", match: { channel: "slack" } }],
+          },
+        },
+      },
+    } as MoltbotConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) throw new Error("manager missing");
+
+    const isAllowed = (key?: string) =>
+      (manager as unknown as { isScopeAllowed: (key?: string) => boolean }).isScopeAllowed(key);
+    expect(isAllowed("agent:main:slack:channel:c123")).toBe(true);
+    expect(isAllowed("agent:main:discord:channel:c123")).toBe(false);
+
+    await manager.close();
+  });
+
+  it("blocks non-markdown or symlink reads for qmd paths", async () => {
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
+    expect(manager).toBeTruthy();
+    if (!manager) throw new Error("manager missing");
+
+    const textPath = path.join(workspaceDir, "secret.txt");
+    await fs.writeFile(textPath, "nope", "utf-8");
+    await expect(manager.readFile({ relPath: "qmd/workspace/secret.txt" })).rejects.toThrow(
+      "path required",
+    );
+
+    const target = path.join(workspaceDir, "target.md");
+    await fs.writeFile(target, "ok", "utf-8");
+    const link = path.join(workspaceDir, "link.md");
+    await fs.symlink(target, link);
+    await expect(manager.readFile({ relPath: "qmd/workspace/link.md" })).rejects.toThrow(
+      "path required",
+    );
+
+    await manager.close();
+  });
 });
