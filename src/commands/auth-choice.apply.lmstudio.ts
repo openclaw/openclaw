@@ -28,16 +28,27 @@ function normalizeLmStudioBaseUrl(raw: string): string | null {
   if (!trimmed) {
     return null;
   }
-  const defaultScheme = isLoopbackHost(trimmed) ? "http" : "https";
-  const withScheme = hasScheme(trimmed) ? trimmed : `${defaultScheme}://${trimmed}`;
+  const hasUrlScheme = hasScheme(trimmed);
+  const hostInput = hasUrlScheme ? trimmed : trimmed.split("/")[0];
+  const defaultScheme = isLoopbackHost(hostInput) ? "http" : "https";
+  const withScheme = hasUrlScheme ? trimmed : `${defaultScheme}://${trimmed}`;
+
   let url: URL;
   try {
     url = new URL(withScheme);
   } catch {
     return null;
   }
+
   const path = url.pathname.replace(/\/+$/g, "");
-  url.pathname = path.endsWith("/v1") ? path : `${path || ""}/v1`;
+  if (!path || path === "/") {
+    url.pathname = "/v1";
+  } else if (path === "/v1" || path.startsWith("/v1/")) {
+    url.pathname = path;
+  } else {
+    url.pathname = `${path}/v1`;
+  }
+
   return url.toString().replace(/\/+$/g, "");
 }
 
