@@ -8,6 +8,7 @@ describe("createSlackThreadTsResolver", () => {
       messages: [{ ts: "1", thread_ts: "9" }],
     });
     const resolver = createSlackThreadTsResolver({
+      // oxlint-disable-next-line typescript/no-explicit-any
       client: { conversations: { history: historyMock } } as any,
       cacheTtlMs: 60_000,
       maxSize: 5,

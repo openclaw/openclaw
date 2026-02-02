@@ -86,6 +86,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     // Send hook messages immediately if present
     if (hookEvent.messages.length > 0) {
       // Use OriginatingChannel/To if available, otherwise fall back to command channel/from
+      // oxlint-disable-next-line typescript/no-explicit-any
       const channel = params.ctx.OriginatingChannel || (params.command.channel as any);
       // For replies, use 'from' (the sender) not 'to' (which might be the bot itself)
       const to = params.ctx.OriginatingTo || params.command.from || params.command.to;

@@ -310,6 +310,7 @@ describe("gateway server auth/connect", () => {
       gateway: {
         trustedProxies: ["127.0.0.1"],
       },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
