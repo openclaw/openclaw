@@ -7,10 +7,12 @@ import { loadCostUsageSummary } from "../../infra/session-cost-usage.js";
 import {
   getTokenUsageSummaries,
   getManusUsageSummary,
+  recordManusTask,
   setSubscriptionTier,
   setMonthlyBudget,
   type SubscriptionTier,
 } from "../../infra/token-usage-tracker.js";
+import { ErrorCodes, errorShape } from "../protocol/index.js";
 
 // Initialize tracker settings from config env vars
 function initTrackerFromConfig(): void {
@@ -118,5 +120,24 @@ export const usageHandlers: GatewayRequestHandlers = {
     const days = parseDays(params?.days);
     const summary = await loadCostUsageSummaryCached({ days, config });
     respond(true, summary, undefined);
+  },
+  "usage.manus.track": async ({ respond, params }) => {
+    // Track a Manus task completion
+    // Params: { taskId: string, credits: number }
+    const taskId = typeof params?.taskId === "string" ? params.taskId : undefined;
+    const credits = typeof params?.credits === "number" ? params.credits : undefined;
+
+    if (!taskId || credits === undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Missing required params: taskId, credits"),
+      );
+      return;
+    }
+
+    recordManusTask(taskId, credits);
+    const manusUsage = getManusUsageSummary();
+    respond(true, { recorded: true, manusUsage }, undefined);
   },
 };

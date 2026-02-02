@@ -433,6 +433,7 @@ export function getTokenUsageSummaries(): TokenUsageSummary[] {
 export function clearTokenUsage(): void {
   store = {
     entries: [],
+    manusTasks: [],
     sessionStartedAt: Date.now(),
   };
   saveStore();
