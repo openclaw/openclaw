@@ -153,21 +153,21 @@ user. This keeps the attack surface small, but it means:
 
 If you want a more full-featured container, use these opt-in knobs:
 
-1) **Persist `/home/node`** so browser downloads and tool caches survive:
+1. **Persist `/home/node`** so browser downloads and tool caches survive:
 
 ```bash
 export OPENCLAW_HOME_VOLUME="openclaw_home"
 ./docker-setup.sh
 ```
 
-2) **Bake system deps into the image** (repeatable + persistent):
+2. **Bake system deps into the image** (repeatable + persistent):
 
 ```bash
 export OPENCLAW_DOCKER_APT_PACKAGES="git curl jq"
 ./docker-setup.sh
 ```
 
-3) **Install Playwright browsers without `npx`** (avoids npm override conflicts):
+3. **Install Playwright browsers without `npx`** (avoids npm override conflicts):
 
 ```bash
 docker compose run --rm openclaw-cli \
@@ -177,7 +177,7 @@ docker compose run --rm openclaw-cli \
 If you need Playwright to install system deps, rebuild the image with
 `OPENCLAW_DOCKER_APT_PACKAGES` instead of using `--with-deps` at runtime.
 
-4) **Persist Playwright browser downloads**:
+4. **Persist Playwright browser downloads**:
 
 - Set `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright` in
   `docker-compose.yml`.
