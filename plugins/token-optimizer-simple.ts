@@ -446,6 +446,60 @@ const tokenOptimizerPlugin = {
       );
     });
 
+    // Register agent_end hook to inject tier badge into chat responses
+    api.on("agent_end", async (event: any, ctx: any) => {
+      const lastClassification = (globalThis as any)
+        .tokenOptimizerLastClassification;
+      if (!lastClassification) return;
+
+      const tierColors: Record<string, string> = {
+        TRIVIAL: "#10b981", // Green
+        LOW: "#3b82f6", // Blue
+        MEDIUM: "#f59e0b", // Orange
+        HIGH: "#ef4444", // Red
+        CRITICAL: "#dc2626", // Dark Red
+      };
+
+      const tierColor =
+        tierColors[lastClassification.effectiveTier] || "#6b7280";
+      const modelName =
+        lastClassification.metadata?.recommendedModel?.split("/").pop() ||
+        "Unknown";
+
+      // Create HTML badge for Control UI chat
+      const badge = `
+
+<div style="margin-top: 12px; padding: 8px 12px; background: ${tierColor}15; border-left: 3px solid ${tierColor}; border-radius: 6px; display: inline-flex; align-items: center; gap: 8px; font-family: system-ui, -apple-system, sans-serif;">
+  <span style="width: 10px; height: 10px; background: ${tierColor}; border-radius: 50%; display: inline-block;"></span>
+  <span style="color: ${tierColor}; font-weight: 600; font-size: 12px; text-transform: uppercase;">${lastClassification.effectiveTier}</span>
+  <span style="color: #64748b; font-size: 11px;">|</span>
+  <span style="color: #475569; font-size: 11px; font-family: monospace;">${modelName}</span>
+</div>`;
+
+      // Append badge to last assistant message if exists
+      const messages = event?.messages || [];
+      const lastAssistantIndex = messages
+        .map((m: any) => m?.role)
+        .lastIndexOf("assistant");
+
+      if (lastAssistantIndex >= 0 && messages[lastAssistantIndex]) {
+        const msg = messages[lastAssistantIndex];
+        if (typeof msg.content === "string") {
+          msg.content = msg.content + badge;
+        } else if (Array.isArray(msg.content)) {
+          // Handle array content format
+          const textContent = msg.content.find((c: any) => c?.type === "text");
+          if (textContent && textContent.text) {
+            textContent.text = textContent.text + badge;
+          }
+        }
+      }
+
+      api.logger.debug(
+        `[Token Optimizer] Injected ${lastClassification.effectiveTier} badge into chat response`,
+      );
+    });
+
     // Register a gateway method to get classification info
     api.registerGatewayMethod(
       "token_optimizer_classify",
