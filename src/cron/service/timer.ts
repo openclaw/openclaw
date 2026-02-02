@@ -6,6 +6,7 @@ import { locked } from "./locked.js";
 import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+const MAX_STALENESS_MS = 5 * 60_000; // Skip one-shot jobs >5 min past due
 
 export function armTimer(state: CronServiceState) {
   if (state.timer) {
@@ -36,9 +37,22 @@ export async function onTimer(state: CronServiceState) {
   }
   state.running = true;
   try {
-    await locked(state, async () => {
+    // Collect due jobs under lock (fast), then release lock for execution.
+    const dueJobs = await locked(state, async () => {
       await ensureLoaded(state);
-      await runDueJobs(state);
+      return collectDueJobs(state);
+    });
+    // Execute each job outside the lock so list/add/remove don't block.
+    for (const job of dueJobs) {
+      const now = state.deps.nowMs();
+      await executeJob(state, job, now, { forced: false });
+      // Persist after each job under lock (brief).
+      await locked(state, async () => {
+        await persist(state);
+      });
+    }
+    // Re-arm timer under lock.
+    await locked(state, async () => {
       await persist(state);
       armTimer(state);
     });
@@ -47,23 +61,44 @@ export async function onTimer(state: CronServiceState) {
   }
 }
 
-export async function runDueJobs(state: CronServiceState) {
+// Collect due jobs (called under lock). Stale one-shot jobs are auto-disabled.
+export function collectDueJobs(state: CronServiceState): CronJob[] {
   if (!state.store) {
-    return;
+    return [];
   }
   const now = state.deps.nowMs();
-  const due = state.store.jobs.filter((j) => {
-    if (!j.enabled) {
-      return false;
-    }
-    if (typeof j.state.runningAtMs === "number") {
-      return false;
-    }
+  const due: CronJob[] = [];
+  for (const j of state.store.jobs) {
+    if (!j.enabled) continue;
+    if (typeof j.state.runningAtMs === "number") continue;
     const next = j.state.nextRunAtMs;
-    return typeof next === "number" && now >= next;
-  });
+    if (typeof next !== "number" || now < next) continue;
+    // Skip & disable stale one-shot jobs to prevent cascade from bad timestamps.
+    if (j.schedule.kind === "at" && now - next > MAX_STALENESS_MS) {
+      j.enabled = false;
+      j.state.nextRunAtMs = undefined;
+      state.deps.log.warn(
+        { jobId: j.id, name: j.name, staleMs: now - next },
+        "cron: auto-disabled stale one-shot job (>5min past due)",
+      );
+      emit(state, {
+        jobId: j.id,
+        action: "finished",
+        status: "skipped",
+        error: "stale one-shot job — scheduled time too far in the past",
+      });
+      continue;
+    }
+    due.push(j);
+  }
+  return due;
+}
+
+// Legacy wrapper kept for any external callers.
+export async function runDueJobs(state: CronServiceState) {
+  const due = collectDueJobs(state);
   for (const job of due) {
-    await executeJob(state, job, now, { forced: false });
+    await executeJob(state, job, state.deps.nowMs(), { forced: false });
   }
 }
 
