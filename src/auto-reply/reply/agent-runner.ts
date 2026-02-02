@@ -377,6 +377,10 @@ export async function runReplyAgent(params: {
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta.agentMeta?.sessionId?.trim()
       : undefined;
+    // Extract Claude SDK session ID for native session resume (SDK runtime only)
+    const claudeSdkSessionId = !isCliProvider(providerUsed, cfg)
+      ? runResult.meta.agentMeta?.claudeSessionId?.trim()
+      : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
       lookupContextTokens(modelUsed) ??
@@ -392,6 +396,7 @@ export async function runReplyAgent(params: {
       contextTokensUsed,
       systemPromptReport: runResult.meta.systemPromptReport,
       cliSessionId,
+      claudeSdkSessionId,
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".

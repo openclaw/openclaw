@@ -17,6 +17,8 @@ export async function persistSessionUsageUpdate(params: {
   contextTokensUsed?: number;
   systemPromptReport?: SessionSystemPromptReport;
   cliSessionId?: string;
+  /** Claude Agent SDK session ID for native session resume. */
+  claudeSdkSessionId?: string;
   logLabel?: string;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
@@ -56,6 +58,13 @@ export async function persistSessionUsageUpdate(params: {
               claudeCliSessionId: nextEntry.claudeCliSessionId,
             };
           }
+          // Persist Claude SDK session ID for native session resume
+          if (params.claudeSdkSessionId) {
+            return {
+              ...patch,
+              claudeSdkSessionId: params.claudeSdkSessionId,
+            };
+          }
           return patch;
         },
       });
@@ -88,6 +97,13 @@ export async function persistSessionUsageUpdate(params: {
               ...patch,
               cliSessionIds: nextEntry.cliSessionIds,
               claudeCliSessionId: nextEntry.claudeCliSessionId,
+            };
+          }
+          // Persist Claude SDK session ID for native session resume
+          if (params.claudeSdkSessionId) {
+            return {
+              ...patch,
+              claudeSdkSessionId: params.claudeSdkSessionId,
             };
           }
           return patch;

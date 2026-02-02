@@ -14,16 +14,16 @@
  * - Supports env-based provider switching (Anthropic, z.AI, etc.)
  */
 
-import { logDebug, logError, logInfo, logWarn } from "../../logger.js";
-import { bridgeClawdbrainToolsToMcpServer } from "./tool-bridge.js";
+import type { SdkRunnerParams, SdkRunnerResult } from "./sdk-runner.types.js";
 import type { SdkRunnerQueryOptions } from "./tool-bridge.types.js";
-import { extractTextFromClaudeAgentSdkEvent } from "./extract.js";
-import { loadClaudeAgentSdk } from "./sdk.js";
-import { isSdkTerminalToolEventType } from "./sdk-event-checks.js";
-import { buildClawdbrainSdkHooks } from "./sdk-hooks.js";
+import { logDebug, logError, logInfo, logWarn } from "../../logger.js";
 import { normalizeToolName } from "../tool-policy.js";
 import { normalizeUsage, type NormalizedUsage, type UsageLike } from "../usage.js";
-import type { SdkRunnerParams, SdkRunnerResult } from "./sdk-runner.types.js";
+import { extractTextFromClaudeAgentSdkEvent } from "./extract.js";
+import { isSdkTerminalToolEventType } from "./sdk-event-checks.js";
+import { buildClawdbrainSdkHooks } from "./sdk-hooks.js";
+import { loadClaudeAgentSdk } from "./sdk.js";
+import { bridgeClawdbrainToolsToMcpServer } from "./tool-bridge.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -211,10 +211,16 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
 
   let sdk;
   try {
+    logDebug("[sdk-runner] Loading Claude Agent SDK...");
     sdk = await loadClaudeAgentSdk();
+    logDebug("[sdk-runner] Claude Agent SDK loaded successfully");
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
     logError(`[sdk-runner] Failed to load Claude Agent SDK: ${message}`);
+    if (stack) {
+      logDebug(`[sdk-runner] Stack trace:\n${stack}`);
+    }
     emitEvent("lifecycle", {
       phase: "error",
       startedAt,
@@ -250,14 +256,22 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
 
   let bridgeResult;
   try {
+    logDebug(
+      `[sdk-runner] Bridging ${params.tools.length} tools to MCP server "${mcpServerName}"...`,
+    );
     bridgeResult = await bridgeClawdbrainToolsToMcpServer({
       name: mcpServerName,
       tools: params.tools,
       abortSignal: params.abortSignal,
     });
+    logDebug(`[sdk-runner] Tool bridge complete: ${bridgeResult.toolCount} tools registered`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? err.stack : undefined;
     logError(`[sdk-runner] Failed to bridge tools to MCP: ${message}`);
+    if (stack) {
+      logDebug(`[sdk-runner] Stack trace:\n${stack}`);
+    }
     emitEvent("lifecycle", {
       phase: "error",
       startedAt,
@@ -269,7 +283,10 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
       payloads: [
         {
           text:
-            "Failed to bridge Clawdbrain tools to the Claude Agent SDK.\n\n" + `Error: ${message}`,
+            "Failed to bridge Clawdbrain tools to the Claude Agent SDK.\n\n" +
+            `This usually means the MCP SDK (@modelcontextprotocol/sdk) is not installed ` +
+            `or is incompatible with the current Claude Agent SDK version.\n\n` +
+            `Error: ${message}`,
           isError: true,
         },
       ],

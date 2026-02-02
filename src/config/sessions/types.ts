@@ -78,6 +78,8 @@ export type SessionEntry = {
   memoryFlushCompactionCount?: number;
   cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
+  /** Claude Agent SDK session ID for native session resume. */
+  claudeSdkSessionId?: string;
   label?: string;
   displayName?: string;
   channel?: string;

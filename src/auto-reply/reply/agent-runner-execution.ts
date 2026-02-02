@@ -242,6 +242,10 @@ export async function runAgentTurnWithFallback(params: {
 
           // If using Claude Code SDK runtime, create and use SDK runtime
           if (runtimeKind === "ccsdk") {
+            // Retrieve Claude SDK session ID from session entry for native session resume
+            const activeEntry = params.getActiveSessionEntry();
+            const claudeSdkSessionId = activeEntry?.claudeSdkSessionId?.trim() || undefined;
+
             const sdkRuntime = await createSdkMainAgentRuntime({
               config: params.followupRun.run.config,
               sessionKey: params.sessionKey,
@@ -261,6 +265,7 @@ export async function runAgentTurnWithFallback(params: {
               senderName: params.sessionCtx.SenderName?.trim() || undefined,
               senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
               senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
+              claudeSessionId: claudeSdkSessionId,
               ...buildThreadingToolContext({
                 sessionCtx: params.sessionCtx,
                 config: params.followupRun.run.config,

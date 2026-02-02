@@ -211,22 +211,37 @@ let cachedMcpServerConstructor: McpServerConstructor | undefined;
  * We import it lazily to avoid build-time deps.
  */
 async function loadMcpServerClass(): Promise<McpServerConstructor> {
-  if (cachedMcpServerConstructor) return cachedMcpServerConstructor;
+  if (cachedMcpServerConstructor) {
+    logDebug("[tool-bridge] Using cached McpServer constructor");
+    return cachedMcpServerConstructor;
+  }
 
   // The MCP SDK exports McpServer from this path.
+  // Note: The SDK's package.json exports "./*" which maps to "./dist/esm/*"
   const moduleName: string = "@modelcontextprotocol/sdk/server/mcp.js";
   try {
+    logDebug(`[tool-bridge] Loading MCP SDK from ${moduleName}`);
     const mod = (await import(moduleName)) as { McpServer?: McpServerConstructor };
     if (!mod.McpServer || typeof mod.McpServer !== "function") {
-      throw new Error("McpServer class not found in @modelcontextprotocol/sdk");
+      const exportedKeys = Object.keys(mod);
+      throw new Error(
+        `McpServer class not found in @modelcontextprotocol/sdk. ` +
+          `Available exports: [${exportedKeys.join(", ")}]. ` +
+          `The MCP SDK version may be incompatible.`,
+      );
     }
     cachedMcpServerConstructor = mod.McpServer;
+    logDebug("[tool-bridge] MCP SDK loaded successfully");
     return mod.McpServer;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const isModuleNotFound =
+      message.includes("Cannot find module") || message.includes("ERR_MODULE_NOT_FOUND");
+    const hint = isModuleNotFound
+      ? "Install with: npm install @modelcontextprotocol/sdk"
+      : "Check MCP SDK version compatibility";
     throw new Error(
-      `Failed to load MCP SDK. Ensure @modelcontextprotocol/sdk is installed ` +
-        `(required for Claude Agent SDK tool bridging).\n\nError: ${message}`,
+      `Failed to load MCP SDK (${hint}).\n` + `Module: ${moduleName}\n` + `Error: ${message}`,
       { cause: err },
     );
   }
@@ -285,11 +300,20 @@ export type BridgeResult = {
 export async function bridgeClawdbrainToolsToMcpServer(
   options: BridgeOptions,
 ): Promise<BridgeResult> {
+  logDebug(`[tool-bridge] Bridging ${options.tools.length} tools to MCP server "${options.name}"`);
+
   const McpServer = await loadMcpServerClass();
-  const server: McpServerLike = new McpServer({
-    name: options.name,
-    version: "1.0.0",
-  });
+
+  let server: McpServerLike;
+  try {
+    server = new McpServer({
+      name: options.name,
+      version: "1.0.0",
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to create MCP server instance: ${message}`, { cause: err });
+  }
 
   const registered: string[] = [];
   const skipped: string[] = [];
@@ -324,9 +348,14 @@ export async function bridgeClawdbrainToolsToMcpServer(
       );
 
       registered.push(toolName);
+      logDebug(`[tool-bridge] Registered tool: ${toolName}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
       logError(`[tool-bridge] Failed to register tool "${toolName}": ${message}`);
+      if (stack) {
+        logDebug(`[tool-bridge] Stack trace for "${toolName}":\n${stack}`);
+      }
       skipped.push(toolName);
     }
   }
@@ -336,6 +365,11 @@ export async function bridgeClawdbrainToolsToMcpServer(
     name: options.name,
     instance: server,
   };
+
+  logDebug(
+    `[tool-bridge] Bridge complete: ${registered.length} registered, ${skipped.length} skipped` +
+      (skipped.length > 0 ? ` (skipped: ${skipped.join(", ")})` : ""),
+  );
 
   return {
     serverConfig,
@@ -357,10 +391,20 @@ export async function bridgeClawdbrainToolsToMcpServer(
 export function bridgeClawdbrainToolsSync(
   options: BridgeOptions & { McpServer: McpServerConstructor },
 ): BridgeResult {
-  const server: McpServerLike = new options.McpServer({
-    name: options.name,
-    version: "1.0.0",
-  });
+  logDebug(
+    `[tool-bridge] Bridging ${options.tools.length} tools (sync) to MCP server "${options.name}"`,
+  );
+
+  let server: McpServerLike;
+  try {
+    server = new options.McpServer({
+      name: options.name,
+      version: "1.0.0",
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to create MCP server instance: ${message}`, { cause: err });
+  }
 
   const registered: string[] = [];
   const skipped: string[] = [];
@@ -371,6 +415,7 @@ export function bridgeClawdbrainToolsSync(
   for (const tool of options.tools) {
     const toolName = tool.name;
     if (!toolName?.trim()) {
+      logDebug("[tool-bridge] Skipping tool with empty name");
       skipped.push("(unnamed)");
       continue;
     }
@@ -386,12 +431,22 @@ export function bridgeClawdbrainToolsSync(
         handler,
       );
       registered.push(toolName);
+      logDebug(`[tool-bridge] Registered tool: ${toolName}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack : undefined;
       logError(`[tool-bridge] Failed to register tool "${toolName}": ${message}`);
+      if (stack) {
+        logDebug(`[tool-bridge] Stack trace for "${toolName}":\n${stack}`);
+      }
       skipped.push(toolName);
     }
   }
+
+  logDebug(
+    `[tool-bridge] Bridge complete (sync): ${registered.length} registered, ${skipped.length} skipped` +
+      (skipped.length > 0 ? ` (skipped: ${skipped.join(", ")})` : ""),
+  );
 
   return {
     serverConfig: { type: "sdk", name: options.name, instance: server },
