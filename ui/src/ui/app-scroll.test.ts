@@ -11,7 +11,7 @@ function createScrollHost(overrides: {
   scrollTop?: number;
   clientHeight?: number;
   overflowY?: string;
-}) {
+} = {}) {
   const {
     scrollHeight = 2000,
     scrollTop = 1500,
