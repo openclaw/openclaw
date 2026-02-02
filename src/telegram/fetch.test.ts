@@ -101,4 +101,24 @@ describe("resolveTelegramFetch", () => {
     expect(capturedSignal).toBeUndefined();
     vi.useRealTimers();
   });
+
+  it("ignores getUpdatesStats paths for timeouts", async () => {
+    vi.useFakeTimers();
+    let capturedSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedSignal = init?.signal as AbortSignal | undefined;
+      return Promise.resolve({ ok: true });
+    });
+    const { resolveTelegramFetch } = await loadModule();
+    const resolved = resolveTelegramFetch(fetchMock as unknown as typeof fetch, {
+      timeoutMs: 25,
+    });
+    if (!resolved) {
+      throw new Error("expected fetch");
+    }
+    await resolved("https://api.telegram.org/bot123/getUpdatesStats?period=day");
+    await vi.advanceTimersByTimeAsync(30);
+    expect(capturedSignal).toBeUndefined();
+    vi.useRealTimers();
+  });
 });

@@ -57,7 +57,12 @@ function isTelegramGetUpdatesRequest(input: RequestInfo | URL): boolean {
   if (!url) {
     return false;
   }
-  return url.toLowerCase().includes("/getupdates");
+  try {
+    const parsed = new URL(url, "http://localhost");
+    return parsed.pathname.toLowerCase().endsWith("/getupdates");
+  } catch {
+    return false;
+  }
 }
 
 function wrapFetchWithTimeout(
