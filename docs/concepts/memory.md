@@ -104,6 +104,7 @@ BM25 + vectors + reranking. Markdown stays the source of truth; Moltbot shells
 out to QMD for retrieval. Key points:
 
 **Prereqs**
+
 - Disabled by default. Opt in per-config (`memory.backend = "qmd"`).
 - Install the QMD CLI separately (`bun install -g github.com/tobi/qmd` or grab
   a release) and make sure the `qmd` binary is on the gateway’s `PATH`.
@@ -118,6 +119,7 @@ out to QMD for retrieval. Key points:
   installed. Windows is best supported via WSL2.
 
 **How the sidecar runs**
+
 - The gateway writes a self-contained QMD home under
   `~/.openclaw/agents/<agentId>/qmd/` (config + cache + sqlite DB).
 - Collections are rewritten from `memory.qmd.paths` (plus default workspace
@@ -160,6 +162,7 @@ out to QMD for retrieval. Key points:
     ```
 
 **Config surface (`memory.qmd.*`)**
+
 - `command` (default `qmd`): override the executable path.
 - `includeDefaultMemory` (default `true`): auto-index `MEMORY.md` + `memory/**/*.md`.
 - `paths[]`: add extra directories/files (`path`, optional `pattern`, optional
@@ -207,6 +210,7 @@ memory: {
 ```
 
 **Citations & fallback**
+
 - `memory.citations` applies regardless of backend (`auto`/`on`/`off`).
 - When `qmd` runs, we tag `status().backend = "qmd"` so diagnostics show which
   engine served the results. If the QMD subprocess exits or JSON output can’t be
