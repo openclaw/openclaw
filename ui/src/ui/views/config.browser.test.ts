@@ -159,14 +159,16 @@ describe("config view", () => {
       container,
     );
 
-    const saveButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Save",
-    ) as HTMLButtonElement | undefined;
-    const applyButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Apply",
-    ) as HTMLButtonElement | undefined;
-    expect(saveButton).not.toBeUndefined();
-    expect(applyButton).not.toBeUndefined();
+    const saveButton =
+      Array.from(container.querySelectorAll("button")).find(
+        (btn) => btn.textContent?.trim() === "Save",
+      ) ?? null;
+    const applyButton =
+      Array.from(container.querySelectorAll("button")).find(
+        (btn) => btn.textContent?.trim() === "Apply",
+      ) ?? null;
+    expect(saveButton).not.toBeNull();
+    expect(applyButton).not.toBeNull();
     expect(saveButton?.disabled).toBe(true);
     expect(applyButton?.disabled).toBe(true);
   });
