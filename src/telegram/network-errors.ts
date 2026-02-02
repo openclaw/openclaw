@@ -36,6 +36,12 @@ const RECOVERABLE_MESSAGE_SNIPPETS = [
   "client network socket disconnected",
   "socket hang up",
   "getaddrinfo",
+  // Added for parity with monitor.ts isNetworkRelatedError (issue #6077)
+  "network",
+  "timeout",
+  "socket",
+  "econnreset",
+  "econnrefused",
 ];
 
 function normalizeCode(code?: string): string {
