@@ -1,12 +1,6 @@
 {
-  "iMac9,1": [
-    "iMac (20-inch, Early 2009)",
-    "iMac (24-inch, Early 2009)"
-  ],
-  "iMac10,1": [
-    "iMac (21.5-inch, Late 2009)",
-    "iMac (27-inch, Late 2009)"
-  ],
+  "iMac9,1": ["iMac (20-inch, Early 2009)", "iMac (24-inch, Early 2009)"],
+  "iMac10,1": ["iMac (21.5-inch, Late 2009)", "iMac (27-inch, Late 2009)"],
   "iMac11,2": "iMac (21.5-inch, Mid 2010)",
   "iMac11,3": "iMac (27-inch, Mid 2010)",
   "iMac12,1": "iMac (21.5-inch, Mid 2011)",
@@ -16,10 +10,7 @@
   "iMac14,1": "iMac (21.5-inch, Late 2013)",
   "iMac14,2": "iMac (27-inch, Late 2013)",
   "iMac14,4": "iMac (21.5-inch, Mid 2014)",
-  "iMac15,1": [
-    "iMac (Retina 5K, 27-inch, Late 2014)",
-    "iMac (Retina 5K, 27-inch, Mid 2015)"
-  ],
+  "iMac15,1": ["iMac (Retina 5K, 27-inch, Late 2014)", "iMac (Retina 5K, 27-inch, Mid 2015)"],
   "iMac16,1": "iMac (21.5-inch, Late 2015)",
   "iMac16,2": "iMac (Retina 4K, 21.5-inch, Late 2015)",
   "iMac17,1": "iMac (Retina 5K, 27-inch, Late 2015)",
@@ -40,10 +31,7 @@
   "Mac14,5": "MacBook Pro (14-inch, 2023)",
   "Mac14,6": "MacBook Pro (16-inch, 2023)",
   "Mac14,7": "MacBook Pro (13-inch, M2, 2022)",
-  "Mac14,8": [
-    "Mac Pro (2023)",
-    "Mac Pro (Rack, 2023)"
-  ],
+  "Mac14,8": ["Mac Pro (2023)", "Mac Pro (Rack, 2023)"],
   "Mac14,9": "MacBook Pro (14-inch, 2023)",
   "Mac14,10": "MacBook Pro (16-inch, 2023)",
   "Mac14,12": "Mac mini (2023)",
@@ -75,10 +63,7 @@
   "Mac16,12": "MacBook Air (13-inch, M4, 2025)",
   "Mac16,13": "MacBook Air (15-inch, M4, 2025)",
   "Mac17,2": "MacBook Pro (14-inch, M5)",
-  "MacBook5,2": [
-    "MacBook (13-inch, Early 2009)",
-    "MacBook (13-inch, Mid 2009)"
-  ],
+  "MacBook5,2": ["MacBook (13-inch, Early 2009)", "MacBook (13-inch, Mid 2009)"],
   "MacBook6,1": "MacBook (13-inch, Late 2009)",
   "MacBook7,1": "MacBook (13-inch, Mid 2010)",
   "MacBook8,1": "MacBook (Retina, 12-inch, Early 2015)",
@@ -91,52 +76,25 @@
   "MacBookAir4,2": "MacBook Air (13-inch, Mid 2011)",
   "MacBookAir5,1": "MacBook Air (11-inch, Mid 2012)",
   "MacBookAir5,2": "MacBook Air (13-inch, Mid 2012)",
-  "MacBookAir6,1": [
-    "MacBook Air (11-inch, Early 2014)",
-    "MacBook Air (11-inch, Mid 2013)"
-  ],
-  "MacBookAir6,2": [
-    "MacBook Air (13-inch, Early 2014)",
-    "MacBook Air (13-inch, Mid 2013)"
-  ],
+  "MacBookAir6,1": ["MacBook Air (11-inch, Early 2014)", "MacBook Air (11-inch, Mid 2013)"],
+  "MacBookAir6,2": ["MacBook Air (13-inch, Early 2014)", "MacBook Air (13-inch, Mid 2013)"],
   "MacBookAir7,1": "MacBook Air (11-inch, Early 2015)",
-  "MacBookAir7,2": [
-    "MacBook Air (13-inch, 2017)",
-    "MacBook Air (13-inch, Early 2015)"
-  ],
+  "MacBookAir7,2": ["MacBook Air (13-inch, 2017)", "MacBook Air (13-inch, Early 2015)"],
   "MacBookAir8,1": "MacBook Air (Retina, 13-inch, 2018)",
   "MacBookAir8,2": "MacBook Air (Retina, 13-inch, 2019)",
   "MacBookAir9,1": "MacBook Air (Retina, 13-inch, 2020)",
   "MacBookAir10,1": "MacBook Air (M1, 2020)",
-  "MacBookPro4,1": [
-    "MacBook Pro (15-inch, Early 2008)",
-    "MacBook Pro (17-inch, Early 2008)"
-  ],
+  "MacBookPro4,1": ["MacBook Pro (15-inch, Early 2008)", "MacBook Pro (17-inch, Early 2008)"],
   "MacBookPro5,1": "MacBook Pro (15-inch, Late 2008)",
-  "MacBookPro5,2": [
-    "MacBook Pro (17-inch, Early 2009)",
-    "MacBook Pro (17-inch, Mid 2009)"
-  ],
-  "MacBookPro5,3": [
-    "MacBook Pro (15-inch, 2.53GHz, Mid 2009)",
-    "MacBook Pro (15-inch, Mid 2009)"
-  ],
+  "MacBookPro5,2": ["MacBook Pro (17-inch, Early 2009)", "MacBook Pro (17-inch, Mid 2009)"],
+  "MacBookPro5,3": ["MacBook Pro (15-inch, 2.53GHz, Mid 2009)", "MacBook Pro (15-inch, Mid 2009)"],
   "MacBookPro5,5": "MacBook Pro (13-inch, Mid 2009)",
   "MacBookPro6,1": "MacBook Pro (17-inch, Mid 2010)",
   "MacBookPro6,2": "MacBook Pro (15-inch, Mid 2010)",
   "MacBookPro7,1": "MacBook Pro (13-inch, Mid 2010)",
-  "MacBookPro8,1": [
-    "MacBook Pro (13-inch, Early 2011)",
-    "MacBook Pro (13-inch, Late 2011)"
-  ],
-  "MacBookPro8,2": [
-    "MacBook Pro (15-inch, Early 2011)",
-    "MacBook Pro (15-inch, Late 2011)"
-  ],
-  "MacBookPro8,3": [
-    "MacBook Pro (17-inch, Early 2011)",
-    "MacBook Pro (17-inch, Late 2011)"
-  ],
+  "MacBookPro8,1": ["MacBook Pro (13-inch, Early 2011)", "MacBook Pro (13-inch, Late 2011)"],
+  "MacBookPro8,2": ["MacBook Pro (15-inch, Early 2011)", "MacBook Pro (15-inch, Late 2011)"],
+  "MacBookPro8,3": ["MacBook Pro (17-inch, Early 2011)", "MacBook Pro (17-inch, Late 2011)"],
   "MacBookPro9,1": "MacBook Pro (15-inch, Mid 2012)",
   "MacBookPro9,2": "MacBook Pro (13-inch, Mid 2012)",
   "MacBookPro10,1": [
@@ -168,10 +126,7 @@
   "MacBookPro14,1": "MacBook Pro (13-inch, 2017, Two Thunderbolt 3 ports)",
   "MacBookPro14,2": "MacBook Pro (13-inch, 2017, Four Thunderbolt 3 ports)",
   "MacBookPro14,3": "MacBook Pro (15-inch, 2017)",
-  "MacBookPro15,1": [
-    "MacBook Pro (15-inch, 2018)",
-    "MacBook Pro (15-inch, 2019)"
-  ],
+  "MacBookPro15,1": ["MacBook Pro (15-inch, 2018)", "MacBook Pro (15-inch, 2019)"],
   "MacBookPro15,2": [
     "MacBook Pro (13-inch, 2018, Four Thunderbolt 3 ports)",
     "MacBook Pro (13-inch, 2019, Four Thunderbolt 3 ports)"
@@ -187,10 +142,7 @@
   "MacBookPro18,2": "MacBook Pro (16-inch, 2021)",
   "MacBookPro18,3": "MacBook Pro (14-inch, 2021)",
   "MacBookPro18,4": "MacBook Pro (14-inch, 2021)",
-  "Macmini3,1": [
-    "Mac mini (Early 2009)",
-    "Mac mini (Late 2009)"
-  ],
+  "Macmini3,1": ["Mac mini (Early 2009)", "Mac mini (Late 2009)"],
   "Macmini4,1": "Mac mini (Mid 2010)",
   "Macmini5,1": "Mac mini (Mid 2011)",
   "Macmini5,2": "Mac mini (Mid 2011)",
@@ -207,8 +159,5 @@
     "Mac Pro Server (Mid 2012)"
   ],
   "MacPro6,1": "Mac Pro (Late 2013)",
-  "MacPro7,1": [
-    "Mac Pro (2019)",
-    "Mac Pro (Rack, 2019)"
-  ]
+  "MacPro7,1": ["Mac Pro (2019)", "Mac Pro (Rack, 2019)"]
 }

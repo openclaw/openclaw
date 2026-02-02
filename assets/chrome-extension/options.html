@@ -12,16 +12,31 @@
         --border: color-mix(in oklab, canvasText 18%, transparent);
         --muted: color-mix(in oklab, canvasText 70%, transparent);
         --shadow: 0 10px 30px color-mix(in oklab, canvasText 18%, transparent);
-        font-family: ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Rounded",
-          "SF Pro Display", "Segoe UI", sans-serif;
+        font-family:
+          ui-rounded,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "SF Pro Rounded",
+          "SF Pro Display",
+          "Segoe UI",
+          sans-serif;
         line-height: 1.4;
       }
       body {
         margin: 0;
         min-height: 100vh;
         background:
-          radial-gradient(1000px 500px at 10% 0%, color-mix(in oklab, var(--accent) 30%, transparent), transparent 70%),
-          radial-gradient(900px 450px at 90% 0%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 75%),
+          radial-gradient(
+            1000px 500px at 10% 0%,
+            color-mix(in oklab, var(--accent) 30%, transparent),
+            transparent 70%
+          ),
+          radial-gradient(
+            900px 450px at 90% 0%,
+            color-mix(in oklab, var(--accent) 18%, transparent),
+            transparent 75%
+          ),
           canvas;
         color: canvasText;
       }
@@ -143,10 +158,10 @@
         color: color-mix(in oklab, var(--accent) 70%, canvasText 30%);
         min-height: 16px;
       }
-      .status[data-kind='ok'] {
+      .status[data-kind="ok"] {
         color: color-mix(in oklab, #16a34a 75%, canvasText 25%);
       }
-      .status[data-kind='error'] {
+      .status[data-kind="error"] {
         color: color-mix(in oklab, #ef4444 75%, canvasText 25%);
       }
     </style>
@@ -167,11 +182,18 @@
         <div class="card">
           <h2>Getting started</h2>
           <p>
-            If you see a red <code>!</code> badge on the extension icon, the relay server is not reachable.
-            Start OpenClaw’s browser relay on this machine (Gateway or node host), then click the toolbar button again.
+            If you see a red <code>!</code> badge on the extension icon, the relay server is not
+            reachable. Start OpenClaw’s browser relay on this machine (Gateway or node host), then
+            click the toolbar button again.
           </p>
           <p>
-            Full guide (install, remote Gateway, security): <a href="https://docs.openclaw.ai/tools/chrome-extension" target="_blank" rel="noreferrer">docs.openclaw.ai/tools/chrome-extension</a>
+            Full guide (install, remote Gateway, security):
+            <a
+              href="https://docs.openclaw.ai/tools/chrome-extension"
+              target="_blank"
+              rel="noreferrer"
+              >docs.openclaw.ai/tools/chrome-extension</a
+            >
           </p>
         </div>
 
@@ -183,8 +205,9 @@
             <button id="save" type="button">Save</button>
           </div>
           <div class="hint">
-            Default: <code>18792</code>. Extension connects to: <code id="relay-url">http://127.0.0.1:&lt;port&gt;/</code>.
-            Only change this if your OpenClaw profile uses a different <code>cdpUrl</code> port.
+            Default: <code>18792</code>. Extension connects to:
+            <code id="relay-url">http://127.0.0.1:&lt;port&gt;/</code>. Only change this if your
+            OpenClaw profile uses a different <code>cdpUrl</code> port.
           </div>
           <div class="status" id="status"></div>
         </div>

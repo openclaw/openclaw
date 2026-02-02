@@ -28,7 +28,8 @@ function applyTheme(theme) {
   const toggle = document.querySelector("[data-theme-toggle]");
   const label = document.querySelector("[data-theme-label]");
 
-  if (toggle instanceof HTMLButtonElement) toggle.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
+  if (toggle instanceof HTMLButtonElement)
+    toggle.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
   if (label) label.textContent = theme === "dark" ? "dark" : "light";
 }
 

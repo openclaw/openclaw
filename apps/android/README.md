@@ -3,11 +3,13 @@
 Modern Android node app: connects to the **Gateway WebSocket** (`_openclaw-gw._tcp`) and exposes **Canvas + Chat + Camera**.
 
 Notes:
+
 - The node keeps the connection alive via a **foreground service** (persistent notification with a Disconnect action).
 - Chat always uses the shared session key **`main`** (same session across iOS/macOS/WebChat/Android).
 - Supports modern Android only (`minSdk 31`, Kotlin + Jetpack Compose).
 
 ## Open in Android Studio
+
 - Open the folder `apps/android`.
 
 ## Build / Run
@@ -23,16 +25,19 @@ cd apps/android
 
 ## Connect / Pair
 
-1) Start the gateway (on your “master” machine):
+1. Start the gateway (on your “master” machine):
+
 ```bash
 pnpm openclaw gateway --port 18789 --verbose
 ```
 
-2) In the Android app:
+2. In the Android app:
+
 - Open **Settings**
 - Either select a discovered gateway under **Discovered Gateways**, or use **Advanced → Manual Gateway** (host + port).
 
-3) Approve pairing (on the gateway machine):
+3. Approve pairing (on the gateway machine):
+
 ```bash
 openclaw nodes pending
 openclaw nodes approve <requestId>

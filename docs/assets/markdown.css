@@ -106,7 +106,10 @@
   visibility: hidden;
   pointer-events: none;
   z-index: 20;
-  transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s ease;
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease,
+    visibility 0.18s ease;
 }
 
 .showcase-preview img {

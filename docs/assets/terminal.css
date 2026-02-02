@@ -1,5 +1,7 @@
 :root {
-  --font-body: "Fragment Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-body:
+    "Fragment Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
   --font-pixel: "Pixelify Sans", system-ui, sans-serif;
   --radius: 14px;
   --radius-sm: 10px;
@@ -83,9 +85,21 @@ body {
   font-family: var(--font-body);
   color: var(--text);
   background:
-    radial-gradient(1100px 700px at 20% -10%, color-mix(in oklab, var(--accent) 18%, transparent), transparent 55%),
-    radial-gradient(900px 600px at 95% 10%, color-mix(in oklab, var(--accent2) 14%, transparent), transparent 60%),
-    radial-gradient(900px 600px at 50% 120%, color-mix(in oklab, var(--link) 10%, transparent), transparent 55%),
+    radial-gradient(
+      1100px 700px at 20% -10%,
+      color-mix(in oklab, var(--accent) 18%, transparent),
+      transparent 55%
+    ),
+    radial-gradient(
+      900px 600px at 95% 10%,
+      color-mix(in oklab, var(--accent2) 14%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      900px 600px at 50% 120%,
+      color-mix(in oklab, var(--link) 10%, transparent),
+      transparent 55%
+    ),
     linear-gradient(180deg, var(--bg0), var(--bg1));
   overflow-x: hidden;
 }
@@ -125,8 +139,11 @@ body::after {
   max-width: 1120px;
   margin: 0 auto;
   border-radius: var(--radius);
-  background:
-    linear-gradient(180deg, color-mix(in oklab, var(--panel2) 88%, transparent), color-mix(in oklab, var(--panel) 92%, transparent));
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--panel2) 88%, transparent),
+    color-mix(in oklab, var(--panel) 92%, transparent)
+  );
   box-shadow: var(--shadow-px);
   border: var(--border) solid var(--frame-border);
   overflow: hidden;
@@ -140,7 +157,11 @@ body::after {
   padding: 14px 14px 12px;
   background:
     linear-gradient(90deg, color-mix(in oklab, var(--accent) 26%, transparent), transparent 42%),
-    linear-gradient(180deg, color-mix(in oklab, var(--panel) 90%, #000 10%), color-mix(in oklab, var(--panel2) 90%, #000 10%));
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--panel) 90%, #000 10%),
+      color-mix(in oklab, var(--panel2) 90%, #000 10%)
+    );
 }
 
 .brand {
@@ -304,7 +325,11 @@ body::after {
   gap: 10px;
   padding: 10px 14px 12px;
   border-top: 1px solid color-mix(in oklab, var(--frame-border) 25%, transparent);
-  background: linear-gradient(180deg, transparent, color-mix(in oklab, var(--panel2) 78%, transparent));
+  background: linear-gradient(
+    180deg,
+    transparent,
+    color-mix(in oklab, var(--panel2) 78%, transparent)
+  );
 }
 
 .nav {
@@ -348,8 +373,14 @@ body::after {
   width: 10px;
   height: 10px;
   border-radius: 999px;
-  background: radial-gradient(circle at 30% 30%, var(--accent2), color-mix(in oklab, var(--accent2) 30%, #000));
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent2) 18%, transparent), 0 0 18px color-mix(in oklab, var(--accent2) 50%, transparent);
+  background: radial-gradient(
+    circle at 30% 30%,
+    var(--accent2),
+    color-mix(in oklab, var(--accent2) 30%, #000)
+  );
+  box-shadow:
+    0 0 0 2px color-mix(in oklab, var(--accent2) 18%, transparent),
+    0 0 18px color-mix(in oklab, var(--accent2) 50%, transparent);
 }
 
 .content {
@@ -362,7 +393,11 @@ body::after {
   margin: 0 auto;
   border-radius: var(--radius);
   border: var(--border) solid var(--frame-border);
-  background: linear-gradient(180deg, color-mix(in oklab, var(--panel) 92%, transparent), color-mix(in oklab, var(--panel2) 86%, transparent));
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--panel) 92%, transparent),
+    color-mix(in oklab, var(--panel2) 86%, transparent)
+  );
   box-shadow: var(--shadow-px);
   padding: 18px 16px 16px;
 }
