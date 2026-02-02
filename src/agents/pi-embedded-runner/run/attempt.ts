@@ -62,6 +62,7 @@ import {
   sanitizeSessionHistory,
   sanitizeToolsForGoogle,
 } from "../google.js";
+import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
 import { buildModelAliasLines } from "../model.js";
@@ -725,7 +726,11 @@ export async function runEmbeddedAttempt(
             sessionManager.resetLeaf();
           }
           const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
+          // Re-sanitize after rebuilding context to maintain tool_use/tool_result pairing.
+          const repairedOrphan = transcriptPolicy.repairToolUseResultPairing
+            ? sanitizeToolUseResultPairing(sessionContext.messages)
+            : sessionContext.messages;
+          activeSession.agent.replaceMessages(repairedOrphan);
           log.warn(
             `Removed orphaned user message to prevent consecutive user turns. ` +
               `runId=${params.runId} sessionId=${params.sessionId}`,

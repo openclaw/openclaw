@@ -116,6 +116,31 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     }
 
     const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
+
+    // Error/terminated assistants may contain partial toolCall blocks from interrupted
+    // streaming. These tools were never executed, so strip them to prevent orphaned
+    // tool_use → tool_result pairing issues (Anthropic API rejects mismatched pairs).
+    if (assistant.stopReason === "error") {
+      const content = assistant.content;
+      if (Array.isArray(content)) {
+        const stripped = content.filter((block) => {
+          if (!block || typeof block !== "object") return true;
+          const rec = block as { type?: unknown };
+          return rec.type !== "toolCall" && rec.type !== "toolUse" && rec.type !== "functionCall";
+        });
+        if (stripped.length === 0) {
+          // Nothing left — drop the entire message
+          changed = true;
+          continue;
+        }
+        if (stripped.length !== content.length) {
+          changed = true;
+          out.push({ ...assistant, content: stripped } as typeof assistant);
+          continue;
+        }
+      }
+    }
+
     const toolCalls = extractToolCallsFromAssistant(assistant);
     if (toolCalls.length === 0) {
       out.push(msg);
