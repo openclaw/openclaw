@@ -12,9 +12,10 @@ import {
 } from "@/components/domain/session";
 import { useAgent } from "@/hooks/queries/useAgents";
 import { useAgentSessions, useChatHistory } from "@/hooks/queries/useSessions";
-import { useSessionStore } from "@/stores/useSessionStore";
-import { sendChatMessage, abortChat, buildAgentSessionKey } from "@/lib/api/sessions";
-import { uuidv7 } from "@/lib/ids";
+import { useChatBackend } from "@/hooks/useChatBackend";
+import { usePreferencesStore } from "@/stores/usePreferencesStore";
+import { useVercelSessionStore } from "@/stores/useVercelSessionStore";
+import { buildAgentSessionKey } from "@/lib/api/sessions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
@@ -76,16 +77,9 @@ function AgentSessionPage() {
   const [workspacePaneMaximized, setWorkspacePaneMaximized] = React.useState(false);
   const [activities] = React.useState<Activity[]>(mockActivities);
 
-  // Session store
-  const {
-    streamingMessages,
-    startStreaming,
-    appendStreamingContent,
-    finishStreaming,
-    clearStreaming,
-    setCurrentRunId,
-    getCurrentRunId,
-  } = useSessionStore();
+  // Preferences (for backend selection)
+  const chatBackend = usePreferencesStore((state) => state.chatBackend);
+  const vercelStore = useVercelSessionStore();
 
   // Queries
   const { data: agent, isLoading: agentLoading, error: agentError } = useAgent(agentId);
@@ -103,66 +97,21 @@ function AgentSessionPage() {
     return sessionKeyParam;
   }, [sessionKeyParam, sessions, agentId, defaults?.mainKey]);
 
-  // Load chat history for the active session
+  // Load chat history for the active session (gateway only)
   const { data: chatHistory, isLoading: chatLoading } = useChatHistory(sessionKey);
 
-  // Get streaming state for this session
-  const streamingMessage = streamingMessages[sessionKey] ?? null;
+  // Use unified chat backend hook
+  const { streamingMessage, handleSend, handleStop, isStreaming } = useChatBackend(sessionKey, agent);
 
-  // Handle sending messages
-  const handleSend = React.useCallback(
-    async (message: string) => {
-      if (!sessionKey) return;
-
-      const idempotencyKey = uuidv7();
-
-      // Start streaming state
-      startStreaming(sessionKey, idempotencyKey);
-
-      try {
-        const result = await sendChatMessage({
-          sessionKey,
-          message,
-          deliver: true,
-          idempotencyKey,
-        });
-
-        if (result.runId) {
-          setCurrentRunId(sessionKey, result.runId);
-        }
-
-        // In a real implementation, streaming would be handled via WebSocket events
-        // For now, simulate completion after a delay
-        setTimeout(() => {
-          appendStreamingContent(
-            sessionKey,
-            "This is a simulated response. In a real implementation, this would stream from the gateway WebSocket events."
-          );
-          setTimeout(() => {
-            finishStreaming(sessionKey);
-          }, 500);
-        }, 1000);
-      } catch (error) {
-        console.error("Failed to send message:", error);
-        finishStreaming(sessionKey);
-      }
-    },
-    [sessionKey, startStreaming, appendStreamingContent, finishStreaming, setCurrentRunId]
-  );
-
-  // Handle stopping the stream
-  const handleStop = React.useCallback(async () => {
-    if (!sessionKey) return;
-
-    const runId = getCurrentRunId(sessionKey);
-    try {
-      await abortChat(sessionKey, runId ?? undefined);
-    } catch (error) {
-      console.error("Failed to abort chat:", error);
-    } finally {
-      clearStreaming(sessionKey);
+  // Get messages based on active backend
+  const messages = React.useMemo(() => {
+    if (chatBackend === "vercel-ai") {
+      // Use Vercel AI local history
+      return vercelStore.getHistory(sessionKey);
     }
-  }, [sessionKey, getCurrentRunId, clearStreaming]);
+    // Use gateway history from server
+    return chatHistory?.messages ?? [];
+  }, [chatBackend, sessionKey, chatHistory?.messages, vercelStore]);
 
   // Handle session change (switching to an existing session)
   const handleSessionChange = React.useCallback(
@@ -241,14 +190,14 @@ function AgentSessionPage() {
           )}
         >
           <SessionChat
-            messages={chatHistory?.messages ?? []}
+            messages={messages}
             streamingMessage={streamingMessage}
             agentName={agent.name}
             agentStatus={agent.status === "online" ? "active" : "ready"}
-            isLoading={chatLoading}
+            isLoading={chatBackend === "gateway" ? chatLoading : false}
             onSend={handleSend}
             onStop={handleStop}
-            disabled={false}
+            disabled={isStreaming}
           />
         </motion.div>
 

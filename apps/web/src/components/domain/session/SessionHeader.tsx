@@ -19,6 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { AgentAvatar, StatusBadge } from "@/components/composed";
+import { ChatBackendToggle } from "./ChatBackendToggle";
 import type { Agent, AgentStatus } from "@/hooks/queries/useAgents";
 import type { GatewaySessionRow } from "@/lib/api/sessions";
 import {
@@ -186,6 +187,7 @@ export function SessionHeader({
 
       {/* Right section: Actions */}
       <div className="flex items-center gap-2 shrink-0">
+        <ChatBackendToggle />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon">

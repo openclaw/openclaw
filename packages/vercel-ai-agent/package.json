@@ -1,0 +1,56 @@
+{
+  "name": "@clawdbrain/vercel-ai-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Conversational agentic chat flow using Vercel AI SDK",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "import": "./dist/agent.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "import": "./dist/tools/index.js"
+    },
+    "./conversation": {
+      "types": "./dist/conversation.d.ts",
+      "import": "./dist/conversation.js"
+    },
+    "./streaming": {
+      "types": "./dist/streaming.d.ts",
+      "import": "./dist/streaming.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:vite": "vite build",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "oxlint --type-aware",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ai": "^4.3.0",
+    "@ai-sdk/openai": "^2.0.0",
+    "@ai-sdk/anthropic": "^2.0.0",
+    "@ai-sdk/google": "^3.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.0.0",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
