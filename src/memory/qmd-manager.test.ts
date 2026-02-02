@@ -1,8 +1,7 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { EventEmitter } from "node:events";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", () => {
@@ -31,7 +30,7 @@ vi.mock("node:child_process", () => {
 });
 
 import { spawn as mockedSpawn } from "node:child_process";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import { QmdMemoryManager } from "./qmd-manager.js";
 
@@ -41,7 +40,7 @@ describe("QmdMemoryManager", () => {
   let tmpRoot: string;
   let workspaceDir: string;
   let stateDir: string;
-  let cfg: MoltbotConfig;
+  let cfg: OpenClawConfig;
   const agentId = "main";
 
   beforeEach(async () => {
@@ -64,7 +63,7 @@ describe("QmdMemoryManager", () => {
           paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
   });
 
   afterEach(async () => {
@@ -111,7 +110,7 @@ describe("QmdMemoryManager", () => {
           },
         },
       },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
     expect(manager).toBeTruthy();

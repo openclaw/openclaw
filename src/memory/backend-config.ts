@@ -1,15 +1,14 @@
 import path from "node:path";
-
-import { parseDurationMs } from "../cli/parse-duration.js";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { SessionSendPolicyConfig } from "../config/types.base.js";
 import type {
   MemoryBackend,
   MemoryCitationsMode,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
 } from "../config/types.memory.js";
-import type { SessionSendPolicyConfig } from "../config/types.base.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import { resolveUserPath } from "../utils.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
@@ -215,7 +214,7 @@ function resolveDefaultCollections(
 }
 
 export function resolveMemoryBackendConfig(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   agentId: string;
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
