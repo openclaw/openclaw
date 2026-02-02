@@ -11,6 +11,10 @@ import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  createSdkMainAgentRuntime,
+  resolveSessionRuntimeKind,
+} from "../agents/main-agent-runtime-factory.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
@@ -412,6 +416,57 @@ export async function agentCommand(
           }
           const authProfileId =
             providerOverride === provider ? sessionEntry?.authProfileOverride : undefined;
+
+          const runtimeKind = resolveSessionRuntimeKind(cfg, sessionAgentId, sessionKey);
+          if (runtimeKind === "claude") {
+            const claudeSdkSessionId = sessionEntry?.claudeSdkSessionId?.trim() || undefined;
+            const sdkRuntime = await createSdkMainAgentRuntime({
+              config: cfg,
+              sessionKey,
+              sessionFile,
+              workspaceDir,
+              agentDir,
+              abortSignal: opts.abortSignal,
+              messageProvider: messageChannel,
+              agentAccountId: runContext.accountId,
+              messageTo: opts.replyTo ?? opts.to,
+              messageThreadId: opts.threadId,
+              groupId: runContext.groupId,
+              groupChannel: runContext.groupChannel,
+              groupSpace: runContext.groupSpace,
+              spawnedBy,
+              currentChannelId: runContext.currentChannelId,
+              currentThreadTs: runContext.currentThreadTs,
+              replyToMode: runContext.replyToMode,
+              hasRepliedRef: runContext.hasRepliedRef,
+              claudeSessionId: claudeSdkSessionId,
+            });
+            return sdkRuntime.run({
+              sessionId,
+              sessionKey,
+              sessionFile,
+              workspaceDir,
+              agentDir,
+              config: cfg,
+              prompt: body,
+              extraSystemPrompt: opts.extraSystemPrompt,
+              ownerNumbers: undefined,
+              timeoutMs,
+              runId,
+              abortSignal: opts.abortSignal,
+              images: opts.images,
+              onAgentEvent: (evt) => {
+                if (
+                  evt.stream === "lifecycle" &&
+                  typeof evt.data?.phase === "string" &&
+                  (evt.data.phase === "end" || evt.data.phase === "error")
+                ) {
+                  lifecycleEnded = true;
+                }
+              },
+            });
+          }
+
           return runEmbeddedPiAgent({
             sessionId,
             sessionKey,

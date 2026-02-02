@@ -8,6 +8,23 @@ vi.mock("../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: vi.fn(),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
+vi.mock("../agents/main-agent-runtime-factory.js", async (importActual) => {
+  const actual = await importActual<typeof import("../agents/main-agent-runtime-factory.js")>();
+  return {
+    ...actual,
+    createSdkMainAgentRuntime: vi.fn(async () => ({
+      kind: "claude",
+      displayName: "Claude SDK",
+      run: vi.fn().mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "anthropic", model: "claude-opus-4-5" },
+        },
+      }),
+    })),
+  };
+});
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
 }));
@@ -18,6 +35,7 @@ import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { createSdkMainAgentRuntime } from "../agents/main-agent-runtime-factory.js";
 import * as configModule from "../config/config.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -108,6 +126,20 @@ describe("agentCommand", () => {
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.thinkLevel).toBe("high");
       expect(callArgs?.verboseLevel).toBe("on");
+    });
+  });
+
+  it("uses SDK runtime when configured for subagent sessions", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, { runtime: "claude" });
+
+      await agentCommand({ message: "hi", sessionKey: "agent:main:subagent:abc" }, runtime);
+
+      expect(createSdkMainAgentRuntime).toHaveBeenCalledTimes(1);
+      const call = vi.mocked(createSdkMainAgentRuntime).mock.calls[0]?.[0];
+      expect(call?.sessionKey).toBe("agent:main:subagent:abc");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
 
