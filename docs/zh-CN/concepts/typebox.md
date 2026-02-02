@@ -49,7 +49,7 @@ Client                    Gateway网关
 | 消息 | `send`、`poll`、`agent`、`agent.wait`                     | 有副作用的操作需要 `idempotencyKey` |
 | 聊天 | `chat.history`、`chat.send`、`chat.abort`、`chat.inject`  | WebChat 使用这些                    |
 | 会话 | `sessions.list`、`sessions.patch`、`sessions.delete`      | 会话管理                            |
-| 节点 | `node.list`、`node.invoke`、`node.pair.*`                 | Gateway网关 WS + 节点操作               |
+| 节点 | `node.list`、`node.invoke`、`node.pair.*`                 | Gateway网关 WS + 节点操作           |
 | 事件 | `tick`、`presence`、`agent`、`chat`、`health`、`shutdown` | 服务器推送                          |
 
 权威列表位于 `src/gateway/server.ts`（`METHODS`、`EVENTS`）。
