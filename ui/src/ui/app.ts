@@ -1,6 +1,7 @@
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import type { EventLogEntry } from "./app-events";
+import type { AppViewState } from "./app-view-state";
 import type { DevicePairingList } from "./controllers/devices";
 import type { ExecApprovalRequest } from "./controllers/exec-approval";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals";
@@ -57,6 +58,7 @@ import {
   handleChatScroll as handleChatScrollInternal,
   handleLogsScroll as handleLogsScrollInternal,
   resetChatScroll as resetChatScrollInternal,
+  scheduleChatScroll as scheduleChatScrollInternal,
 } from "./app-scroll";
 import {
   applySettings as applySettingsInternal,
@@ -319,6 +321,11 @@ export class OpenClawApp extends LitElement {
     resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
   }
 
+  scrollToBottom() {
+    resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
+    scheduleChatScrollInternal(this as unknown as Parameters<typeof scheduleChatScrollInternal>[0], true);
+  }
+
   async loadAssistantIdentity() {
     await loadAssistantIdentityInternal(this);
   }
@@ -480,6 +487,6 @@ export class OpenClawApp extends LitElement {
   }
 
   render() {
-    return renderApp(this);
+    return renderApp(this as unknown as AppViewState);
   }
 }
