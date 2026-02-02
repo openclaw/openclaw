@@ -71,6 +71,20 @@ export function recomputeNextRuns(state: CronServiceState) {
       job.state.runningAtMs = undefined;
     }
     job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+
+    // Catch-up logic: if an "every" job was missed (should have run but didn't), run immediately
+    if (job.schedule.kind === "every") {
+      const lastRan = job.state.lastRunAtMs ?? job.createdAtMs;
+      const interval = job.schedule.everyMs;
+      if (now - lastRan >= interval && job.state.nextRunAtMs && job.state.nextRunAtMs > now) {
+        // Job should have run at least once since lastRan but hasn't - schedule now
+        state.deps.log.info(
+          { jobId: job.id, lastRanAtMs: lastRan, intervalMs: interval },
+          "cron: catch-up scheduling missed job",
+        );
+        job.state.nextRunAtMs = now;
+      }
+    }
   }
 }
 
@@ -89,6 +103,13 @@ export function nextWakeAtMs(state: CronServiceState) {
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
   const id = crypto.randomUUID();
+
+  // For "every" schedules, persist anchorMs at creation time so restarts don't drift the schedule
+  let schedule = input.schedule;
+  if (schedule.kind === "every" && schedule.anchorMs === undefined) {
+    schedule = { ...schedule, anchorMs: now };
+  }
+
   const job: CronJob = {
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
@@ -98,7 +119,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     deleteAfterRun: input.deleteAfterRun,
     createdAtMs: now,
     updatedAtMs: now,
-    schedule: input.schedule,
+    schedule,
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
     payload: input.payload,
