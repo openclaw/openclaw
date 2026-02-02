@@ -8,12 +8,28 @@ const DEFAULT_CONTEXT_WINDOW = 8192;
 const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_MODEL_INPUT = ["text"] satisfies Array<"text" | "image">;
 
+function hasScheme(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized.startsWith("localhost:") ||
+    normalized.startsWith("127.") ||
+    normalized === "::1" ||
+    normalized.startsWith("[::1]")
+  );
+}
+
 function normalizeLmStudioBaseUrl(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
-  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+  const defaultScheme = isLoopbackHost(trimmed) ? "http" : "https";
+  const withScheme = hasScheme(trimmed) ? trimmed : `${defaultScheme}://${trimmed}`;
   let url: URL;
   try {
     url = new URL(withScheme);
@@ -31,9 +47,6 @@ function normalizeLmStudioModelId(raw: string): string | null {
     return null;
   }
   const withoutPrefix = trimmed.replace(/^lmstudio\//i, "");
-  if (!withoutPrefix.includes("/")) {
-    return null;
-  }
   return withoutPrefix;
 }
 
@@ -82,12 +95,10 @@ export async function applyAuthChoiceLmStudio(
   }
 
   const existingProvider = params.config.models?.providers?.lmstudio;
-  const baseUrlDefault = existingProvider?.baseUrl ?? DEFAULT_LMSTUDIO_BASE_URL;
-  const baseUrlDefaultNormalized =
-    normalizeLmStudioBaseUrl(baseUrlDefault) ?? `${DEFAULT_LMSTUDIO_BASE_URL}/v1`;
+  const baseUrlDefault = existingProvider?.baseUrl ?? `${DEFAULT_LMSTUDIO_BASE_URL}/v1`;
   const baseUrlInput = await params.prompter.text({
     message: "LM Studio base URL (host:port or full URL)",
-    initialValue: baseUrlDefaultNormalized,
+    initialValue: baseUrlDefault,
     placeholder: `${DEFAULT_LMSTUDIO_BASE_URL}/v1`,
     validate: (value) =>
       normalizeLmStudioBaseUrl(String(value ?? "")) ? undefined : "Enter a valid host:port or URL",
@@ -106,13 +117,11 @@ export async function applyAuthChoiceLmStudio(
     : providerModelDefault;
 
   const modelInput = await params.prompter.text({
-    message: "LM Studio model (vendor/model)",
+    message: "LM Studio model id",
     initialValue: modelDefault,
-    placeholder: "openai/gpt-oss-20b",
+    placeholder: "gpt-oss-20b",
     validate: (value) =>
-      normalizeLmStudioModelId(String(value ?? ""))
-        ? undefined
-        : "Use vendor/model (e.g. openai/gpt-oss-20b)",
+      normalizeLmStudioModelId(String(value ?? "")) ? undefined : "Enter a model id",
   });
   const modelId = normalizeLmStudioModelId(String(modelInput)) as string;
   const modelRef = `lmstudio/${modelId}`;
