@@ -255,7 +255,7 @@ export function describeReplyTarget(msg: TelegramMessage): TelegramReplyTarget |
     return null;
   }
   const sender = reply ? buildSenderName(reply) : undefined;
-  const senderLabel = sender ? `${sender}` : "unknown sender";
+  const senderLabel = sender ?? "unknown sender";
 
   return {
     id: reply?.message_id ? String(reply.message_id) : undefined,

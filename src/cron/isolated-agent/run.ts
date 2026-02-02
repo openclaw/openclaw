@@ -265,8 +265,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (suspiciousPatterns.length > 0) {
       logWarn(
         `[security] Suspicious patterns detected in external hook content ` +
-          `(session=${baseSessionKey}, patterns=${suspiciousPatterns.length}): ` +
-          `${suspiciousPatterns.slice(0, 3).join(", ")}`,
+          `(session=${baseSessionKey}, patterns=${suspiciousPatterns.length}): ${suspiciousPatterns.slice(0, 3).join(", ")}`,
       );
     }
   }
