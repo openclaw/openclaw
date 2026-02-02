@@ -30,4 +30,38 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunks[0]).not.toContain("After");
     expect(chunker.bufferedText).toMatch(/^After/);
   });
+
+  it("flushes paragraph boundaries before minChars when flushOnParagraph is set", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 100,
+      maxChars: 200,
+      breakPreference: "paragraph",
+      flushOnParagraph: true,
+    });
+
+    chunker.append("First paragraph.\n\nSecond paragraph.");
+
+    const chunks: string[] = [];
+    chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+
+    expect(chunks).toEqual(["First paragraph."]);
+    expect(chunker.bufferedText).toBe("Second paragraph.");
+  });
+
+  it("treats blank lines with whitespace as paragraph boundaries when flushOnParagraph is set", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 100,
+      maxChars: 200,
+      breakPreference: "paragraph",
+      flushOnParagraph: true,
+    });
+
+    chunker.append("First paragraph.\n \nSecond paragraph.");
+
+    const chunks: string[] = [];
+    chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+
+    expect(chunks).toEqual(["First paragraph."]);
+    expect(chunker.bufferedText).toBe("Second paragraph.");
+  });
 });
