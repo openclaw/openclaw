@@ -12,11 +12,9 @@ import { formatLocationText, type NormalizedLocation } from "../../channels/loca
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
-export type TelegramThreadScope = "dm" | "forum" | "none";
-
 export type TelegramThreadSpec = {
   id?: number;
-  scope: TelegramThreadScope;
+  scope: "dm" | "forum" | "none";
 };
 
 /**
