@@ -90,6 +90,7 @@ export function registerOnboardCommand(program: Command) {
   for (const providerFlag of ONBOARD_PROVIDER_AUTH_FLAGS) {
     command.option(providerFlag.cliOption, providerFlag.description);
   }
+  command.option("--commonstack-api-key <key>", "CommonStack API key");
 
   command
     .option("--custom-base-url <url>", "Custom provider base URL")
@@ -148,6 +149,7 @@ export function registerOnboardCommand(program: Command) {
           openaiApiKey: opts.openaiApiKey as string | undefined,
           mistralApiKey: opts.mistralApiKey as string | undefined,
           openrouterApiKey: opts.openrouterApiKey as string | undefined,
+          commonstackApiKey: opts.commonstackApiKey as string | undefined,
           kilocodeApiKey: opts.kilocodeApiKey as string | undefined,
           aiGatewayApiKey: opts.aiGatewayApiKey as string | undefined,
           cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,

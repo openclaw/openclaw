@@ -1,6 +1,10 @@
 import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
-import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
+import {
+  type ModelScanResult,
+  scanCommonstackModels,
+  scanOpenRouterModels,
+} from "../../agents/model-scan.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
@@ -134,6 +138,7 @@ export async function modelsScanCommand(
     minParams?: string;
     maxAgeDays?: string;
     provider?: string;
+    scanProvider?: string;
     maxCandidates?: string;
     timeout?: string;
     concurrency?: string;
@@ -167,13 +172,18 @@ export async function modelsScanCommand(
     throw new Error("--concurrency must be > 0");
   }
 
+  const scanProvider = opts.scanProvider?.toLowerCase() || "openrouter";
+  if (scanProvider !== "openrouter" && scanProvider !== "commonstack") {
+    throw new Error("--scan-provider must be 'openrouter' or 'commonstack'");
+  }
+
   const cfg = await loadModelsConfig({ commandName: "models scan", runtime });
   const probe = opts.probe ?? true;
   let storedKey: string | undefined;
   if (probe) {
     try {
       const resolved = await resolveApiKeyForProvider({
-        provider: "openrouter",
+        provider: scanProvider,
         cfg,
       });
       storedKey = resolved.apiKey;
@@ -181,6 +191,183 @@ export async function modelsScanCommand(
       storedKey = undefined;
     }
   }
+
+  if (scanProvider === "commonstack") {
+    const results = await withProgressTotals(
+      {
+        label: "Scanning CommonStack models...",
+        indeterminate: false,
+        enabled: opts.json !== true,
+      },
+      async (update) =>
+        await scanCommonstackModels({
+          apiKey: storedKey ?? undefined,
+          timeoutMs: timeout,
+          concurrency,
+          probe,
+          onProgress: ({ phase, completed, total }) => {
+            if (phase !== "probe") {
+              return;
+            }
+            const labelBase = probe ? "Probing models" : "Scanning models";
+            update({
+              completed,
+              total,
+              label: `${labelBase} (${completed}/${total})`,
+            });
+          },
+        }),
+    );
+
+    if (!probe) {
+      if (!opts.json) {
+        runtime.log(
+          `Found ${results.length} CommonStack models (metadata only; pass --probe to test tools/images).`,
+        );
+        printScanTable(sortScanResults(results), runtime);
+      } else {
+        runtime.log(JSON.stringify(results, null, 2));
+      }
+      return;
+    }
+
+    const toolOk = results.filter((entry) => entry.tool.ok);
+    if (toolOk.length === 0) {
+      throw new Error("No tool-capable CommonStack models found.");
+    }
+
+    const sorted = sortScanResults(results);
+    const toolSorted = sortScanResults(toolOk);
+    const imageOk = results.filter((entry) => entry.image.ok);
+    const imageSorted = sortImageResults(imageOk);
+    const imagePreferred = toolSorted.filter((entry) => entry.image.ok);
+    const preselectPool = imagePreferred.length > 0 ? imagePreferred : toolSorted;
+    const preselected = preselectPool
+      .slice(0, Math.floor(maxCandidates))
+      .map((entry) => entry.modelRef);
+    const imagePreselected = imageSorted
+      .slice(0, Math.floor(maxCandidates))
+      .map((entry) => entry.modelRef);
+
+    if (!opts.json) {
+      printScanSummary(results, runtime);
+      printScanTable(sorted, runtime);
+    }
+
+    const noInput = opts.input === false;
+    const canPrompt = process.stdin.isTTY && !opts.yes && !noInput && !opts.json;
+    let selected: string[] = preselected;
+    let selectedImages: string[] = imagePreselected;
+
+    if (canPrompt) {
+      const selection = await multiselect({
+        message: "Select fallback models (ordered)",
+        options: toolSorted.map((entry) => ({
+          value: entry.modelRef,
+          label: entry.modelRef,
+          hint: buildScanHint(entry),
+        })),
+        initialValues: preselected,
+      });
+
+      selected = guardPromptCancel(selection, runtime);
+      if (imageSorted.length > 0) {
+        const imageSelection = await multiselect({
+          message: "Select image fallback models (ordered)",
+          options: imageSorted.map((entry) => ({
+            value: entry.modelRef,
+            label: entry.modelRef,
+            hint: buildScanHint(entry),
+          })),
+          initialValues: imagePreselected,
+        });
+
+        selectedImages = guardPromptCancel(imageSelection, runtime);
+      }
+    } else if (!process.stdin.isTTY && !opts.yes && !noInput && !opts.json) {
+      throw new Error("Non-interactive scan: pass --yes to apply defaults.");
+    }
+
+    if (selected.length === 0) {
+      throw new Error("No models selected for fallbacks.");
+    }
+    if (opts.setImage && selectedImages.length === 0) {
+      throw new Error("No image-capable models selected for image model.");
+    }
+
+    await updateConfig((cfg) => {
+      const nextModels = { ...cfg.agents?.defaults?.models };
+      for (const entry of selected) {
+        if (!nextModels[entry]) {
+          nextModels[entry] = {};
+        }
+      }
+      for (const entry of selectedImages) {
+        if (!nextModels[entry]) {
+          nextModels[entry] = {};
+        }
+      }
+      const existingImageModel = toAgentModelListLike(cfg.agents?.defaults?.imageModel);
+      const nextImageModel =
+        selectedImages.length > 0
+          ? {
+              ...(existingImageModel?.primary ? { primary: existingImageModel.primary } : {}),
+              fallbacks: selectedImages,
+              ...(opts.setImage ? { primary: selectedImages[0] } : {}),
+            }
+          : cfg.agents?.defaults?.imageModel;
+      const existingModel = toAgentModelListLike(cfg.agents?.defaults?.model);
+      const defaults = {
+        ...cfg.agents?.defaults,
+        model: {
+          ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
+          fallbacks: selected,
+          ...(opts.setDefault ? { primary: selected[0] } : {}),
+        },
+        ...(nextImageModel ? { imageModel: nextImageModel } : {}),
+        models: nextModels,
+      } satisfies NonNullable<NonNullable<typeof cfg.agents>["defaults"]>;
+      return {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults,
+        },
+      };
+    });
+
+    if (opts.json) {
+      runtime.log(
+        JSON.stringify(
+          {
+            selected,
+            selectedImages,
+            setDefault: Boolean(opts.setDefault),
+            setImage: Boolean(opts.setImage),
+            results,
+            warnings: [],
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+
+    logConfigUpdated(runtime);
+    runtime.log(`Fallbacks: ${selected.join(", ")}`);
+    if (selectedImages.length > 0) {
+      runtime.log(`Image fallbacks: ${selectedImages.join(", ")}`);
+    }
+    if (opts.setDefault) {
+      runtime.log(`Default model: ${selected[0]}`);
+    }
+    if (opts.setImage && selectedImages.length > 0) {
+      runtime.log(`Image model: ${selectedImages[0]}`);
+    }
+    return;
+  }
+
   const results = await withProgressTotals(
     {
       label: "Scanning OpenRouter models...",

@@ -11,6 +11,7 @@ import { Type } from "@sinclair/typebox";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+const COMMONSTACK_MODELS_URL = "https://api.commonstack.ai/api/v1/ai/public/model/query";
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_CONCURRENCY = 3;
 
@@ -46,6 +47,23 @@ type OpenRouterModelPricing = {
   internalReasoning: number;
 };
 
+type CommonstackModelMeta = {
+  ID: string;
+  name: string;
+  model_id: string;
+  context_length: number;
+  supported_parameters: string[];
+  provider: string;
+  runtime_params: Array<{
+    pricing: {
+      inputTokenUnitCost: string;
+      outputTokenUnitCost: string;
+      cacheCreationInputTokenUnitCost?: string;
+      cacheReadInputTokenUnitCost?: string;
+    };
+  }>;
+};
+
 export type ProbeResult = {
   ok: boolean;
   latencyMs: number | null;
@@ -79,6 +97,15 @@ export type OpenRouterScanOptions = {
   minParamB?: number;
   maxAgeDays?: number;
   providerFilter?: string;
+  probe?: boolean;
+  onProgress?: (update: { phase: "catalog" | "probe"; completed: number; total: number }) => void;
+};
+
+export type CommonstackScanOptions = {
+  apiKey?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  concurrency?: number;
   probe?: boolean;
   onProgress?: (update: { phase: "catalog" | "probe"; completed: number; total: number }) => void;
 };
@@ -494,5 +521,182 @@ export async function scanOpenRouterModels(
   );
 }
 
-export { OPENROUTER_MODELS_URL };
-export type { OpenRouterModelMeta, OpenRouterModelPricing };
+async function fetchCommonstackModels(
+  fetchImpl: typeof fetch,
+  apiKey: string,
+): Promise<CommonstackModelMeta[]> {
+  const res = await fetchImpl(COMMONSTACK_MODELS_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({ page: 0, limit: 200 }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`CommonStack /model/query failed: HTTP ${res.status}`);
+  }
+
+  const payload = (await res.json()) as { data?: { models?: unknown } };
+  const entries = Array.isArray(payload?.data?.models) ? payload.data.models : [];
+
+  return entries
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const obj = entry as Record<string, unknown>;
+      const ID = typeof obj.ID === "string" ? obj.ID.trim() : "";
+      const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : "";
+      const model_id =
+        typeof obj.model_id === "string" && obj.model_id.trim() ? obj.model_id.trim() : "";
+      if (!model_id) {
+        return null;
+      }
+      const context_length =
+        typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
+          ? obj.context_length
+          : 0;
+      const supported_parameters = Array.isArray(obj.supported_parameters)
+        ? obj.supported_parameters
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : [];
+      const provider =
+        typeof obj.provider === "string" && obj.provider.trim() ? obj.provider.trim() : "";
+      const runtime_params = Array.isArray(obj.runtime_params) ? obj.runtime_params : [];
+
+      return {
+        ID,
+        name,
+        model_id,
+        context_length,
+        supported_parameters,
+        provider,
+        runtime_params: runtime_params.map((param) => {
+          if (!param || typeof param !== "object") {
+            return { pricing: { inputTokenUnitCost: "0", outputTokenUnitCost: "0" } };
+          }
+          const paramObj = param as Record<string, unknown>;
+          const pricing = paramObj.pricing as Record<string, unknown> | undefined;
+          const cacheCreationCost =
+            typeof pricing?.cacheCreationInputTokenUnitCost === "string"
+              ? pricing.cacheCreationInputTokenUnitCost
+              : undefined;
+          const cacheReadCost =
+            typeof pricing?.cacheReadInputTokenUnitCost === "string"
+              ? pricing.cacheReadInputTokenUnitCost
+              : undefined;
+          return {
+            pricing: {
+              inputTokenUnitCost:
+                typeof pricing?.inputTokenUnitCost === "string" ? pricing.inputTokenUnitCost : "0",
+              outputTokenUnitCost:
+                typeof pricing?.outputTokenUnitCost === "string"
+                  ? pricing.outputTokenUnitCost
+                  : "0",
+              ...(cacheCreationCost !== undefined
+                ? { cacheCreationInputTokenUnitCost: cacheCreationCost }
+                : {}),
+              ...(cacheReadCost !== undefined
+                ? { cacheReadInputTokenUnitCost: cacheReadCost }
+                : {}),
+            },
+          };
+        }),
+      } satisfies CommonstackModelMeta;
+    })
+    .filter((entry): entry is CommonstackModelMeta => Boolean(entry));
+}
+
+export async function scanCommonstackModels(
+  options: CommonstackScanOptions = {},
+): Promise<ModelScanResult[]> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const probe = options.probe ?? true;
+  const apiKey = options.apiKey?.trim() || getEnvApiKey("commonstack") || "";
+
+  if (!apiKey) {
+    throw new Error("Missing CommonStack API key. Set COMMONSTACK_API_KEY to run models scan.");
+  }
+
+  const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
+  const concurrency = Math.max(1, Math.floor(options.concurrency ?? DEFAULT_CONCURRENCY));
+
+  const catalog = await fetchCommonstackModels(fetchImpl, apiKey);
+
+  options.onProgress?.({
+    phase: "probe",
+    completed: 0,
+    total: catalog.length,
+  });
+
+  const baseModel = getModel("openai", "gpt-4o-mini") as unknown as OpenAIModel;
+
+  return mapWithConcurrency(
+    catalog,
+    concurrency,
+    async (entry) => {
+      const model: OpenAIModel = {
+        ...baseModel,
+        id: entry.model_id,
+        name: entry.name || entry.model_id,
+        provider: "commonstack",
+        baseUrl: "https://api.commonstack.ai/v1",
+        contextWindow: entry.context_length || baseModel.contextWindow,
+        input: ["text"],
+      };
+
+      const toolResult = probe
+        ? await probeTool(model, apiKey, timeoutMs)
+        : { ok: false, latencyMs: null, skipped: true };
+
+      const imageResult = { ok: false, latencyMs: null, skipped: true };
+
+      const inputCost = Number.parseFloat(
+        entry.runtime_params[0]?.pricing?.inputTokenUnitCost || "0",
+      );
+      const outputCost = Number.parseFloat(
+        entry.runtime_params[0]?.pricing?.outputTokenUnitCost || "0",
+      );
+
+      return {
+        id: entry.model_id,
+        name: entry.name,
+        provider: "commonstack",
+        modelRef: `commonstack/${entry.model_id}`,
+        contextLength: entry.context_length || null,
+        maxCompletionTokens: null,
+        supportedParametersCount: entry.supported_parameters?.length ?? 0,
+        supportsToolsMeta: entry.supported_parameters?.includes("tools") ?? false,
+        modality: "text",
+        inferredParamB: null,
+        createdAtMs: null,
+        pricing: {
+          prompt: inputCost,
+          completion: outputCost,
+          request: 0,
+          image: 0,
+          webSearch: 0,
+          internalReasoning: 0,
+        },
+        isFree: inputCost === 0 && outputCost === 0,
+        tool: toolResult,
+        image: imageResult,
+      } satisfies ModelScanResult;
+    },
+    {
+      onProgress: (completed, total) =>
+        options.onProgress?.({
+          phase: "probe",
+          completed,
+          total,
+        }),
+    },
+  );
+}
+
+export { OPENROUTER_MODELS_URL, COMMONSTACK_MODELS_URL };
+export type { OpenRouterModelMeta, OpenRouterModelPricing, CommonstackModelMeta };

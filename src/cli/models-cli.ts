@@ -256,14 +256,18 @@ export function registerModelsCli(program: Command) {
 
   models
     .command("scan")
-    .description("Scan OpenRouter free models for tools + images")
-    .option("--min-params <b>", "Minimum parameter size (billions)")
-    .option("--max-age-days <days>", "Skip models older than N days")
-    .option("--provider <name>", "Filter by provider prefix")
+    .description("Scan OpenRouter or CommonStack models for tools + images")
+    .option(
+      "--scan-provider <name>",
+      "Provider to scan: openrouter|commonstack (default: openrouter)",
+    )
+    .option("--min-params <b>", "Minimum parameter size (billions, OpenRouter only)")
+    .option("--max-age-days <days>", "Skip models older than N days (OpenRouter only)")
+    .option("--provider <name>", "Filter by provider prefix (OpenRouter only)")
     .option("--max-candidates <n>", "Max fallback candidates", "6")
     .option("--timeout <ms>", "Per-probe timeout in ms")
     .option("--concurrency <n>", "Probe concurrency")
-    .option("--no-probe", "Skip live probes; list free candidates only")
+    .option("--no-probe", "Skip live probes; list candidates only")
     .option("--yes", "Accept defaults without prompting", false)
     .option("--no-input", "Disable prompts (use defaults)")
     .option("--set-default", "Set agents.defaults.model to the first selection", false)

@@ -1,6 +1,11 @@
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
+import { resolveEnvApiKey } from "../agents/model-auth.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
+import {
+  formatApiKeyPreview,
+  normalizeApiKeyInput,
+  validateApiKeyInput,
+} from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
   createAuthChoiceAgentModelNoter,
@@ -18,6 +23,7 @@ import {
 import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
+  applyCommonstackConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyKilocodeConfig,
@@ -61,6 +67,7 @@ import {
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   setCloudflareAiGatewayConfig,
+  setCommonstackApiKey,
   setQianfanApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
@@ -83,6 +90,7 @@ import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
 
 const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   openrouter: "openrouter-api-key",
+  commonstack: "commonstack-api-key",
   litellm: "litellm-api-key",
   "vercel-ai-gateway": "ai-gateway-api-key",
   "cloudflare-ai-gateway": "cloudflare-ai-gateway-api-key",
@@ -454,6 +462,91 @@ export async function applyAuthChoiceApiProviders(
       applyProviderConfig: applyLitellmProviderConfig,
       noteDefault: LITELLM_DEFAULT_MODEL_REF,
     });
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "commonstack-api-key") {
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const profileOrder = resolveAuthProfileOrder({
+      cfg: nextConfig,
+      store,
+      provider: "commonstack",
+    });
+    const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
+    const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
+    let profileId = "commonstack:default";
+    let mode: "api_key" | "oauth" | "token" = "api_key";
+    let hasCredential = false;
+
+    if (existingProfileId && existingCred?.type) {
+      profileId = existingProfileId;
+      mode =
+        existingCred.type === "oauth"
+          ? "oauth"
+          : existingCred.type === "token"
+            ? "token"
+            : "api_key";
+      hasCredential = true;
+    }
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "commonstack") {
+      await setCommonstackApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir, {
+        secretInputMode: requestedSecretInputMode,
+      });
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("commonstack");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing COMMONSTACK_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setCommonstackApiKey(envKey.apiKey, params.agentDir, {
+            secretInputMode: requestedSecretInputMode,
+          });
+          hasCredential = true;
+        }
+      }
+    }
+
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter CommonStack API key",
+        validate: validateApiKeyInput,
+      });
+      await setCommonstackApiKey(normalizeApiKeyInput(String(key)), params.agentDir, {
+        secretInputMode: requestedSecretInputMode,
+      });
+      hasCredential = true;
+    }
+
+    if (hasCredential) {
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId,
+        provider: "commonstack",
+        mode,
+      });
+    }
+    const { resolveApiKeyForProvider } = await import("../agents/model-auth.js");
+    const resolved = await resolveApiKeyForProvider({
+      provider: "commonstack",
+      cfg: nextConfig,
+      agentDir: params.agentDir,
+    });
+    const commonstackResult = await applyCommonstackConfig(nextConfig, {
+      agentDir: params.agentDir,
+      nonInteractive: false,
+      apiKey: resolved.apiKey,
+      setDefaultModel: params.setDefaultModel,
+      noteAgentModel,
+    });
+    nextConfig = commonstackResult.config;
+    agentModelOverride = commonstackResult.selectedModel ?? agentModelOverride;
     return { config: nextConfig, agentModelOverride };
   }
 
