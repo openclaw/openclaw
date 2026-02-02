@@ -134,7 +134,9 @@ export function renderChatControls(state: AppViewState) {
         class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
         ?disabled=${disableThinkingToggle}
         @click=${() => {
-          if (disableThinkingToggle) return;
+          if (disableThinkingToggle) {
+            return;
+          }
           state.applySettings({
             ...state.settings,
             chatShowThinking: !state.settings.chatShowThinking,
@@ -153,7 +155,9 @@ export function renderChatControls(state: AppViewState) {
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
         ?disabled=${disableFocusToggle}
         @click=${() => {
-          if (disableFocusToggle) return;
+          if (disableFocusToggle) {
+            return;
+          }
           state.applySettings({
             ...state.settings,
             chatFocusMode: !state.settings.chatFocusMode,
@@ -183,18 +187,28 @@ function resolveMainSessionKey(
 ): string | null {
   const snapshot = hello?.snapshot as { sessionDefaults?: SessionDefaultsSnapshot } | undefined;
   const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
-  if (mainSessionKey) return mainSessionKey;
+  if (mainSessionKey) {
+    return mainSessionKey;
+  }
   const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
-  if (mainKey) return mainKey;
-  if (sessions?.sessions?.some((row) => row.key === "main")) return "main";
+  if (mainKey) {
+    return mainKey;
+  }
+  if (sessions?.sessions?.some((row) => row.key === "main")) {
+    return "main";
+  }
   return null;
 }
 
 function resolveSessionDisplayName(key: string, row?: SessionsListResult["sessions"][number]) {
   const label = row?.label?.trim();
-  if (label) return `${label} (${key})`;
+  if (label) {
+    return `${label} (${key})`;
+  }
   const displayName = row?.displayName?.trim();
-  if (displayName) return displayName;
+  if (displayName) {
+    return displayName;
+  }
   return key;
 }
 

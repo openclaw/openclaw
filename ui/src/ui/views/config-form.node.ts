@@ -18,7 +18,9 @@ function isAnySchema(schema: JsonSchema): boolean {
 }
 
 function jsonValue(value: unknown): string {
-  if (value === undefined) return "";
+  if (value === undefined) {
+    return "";
+  }
   try {
     return JSON.stringify(value, null, 2) ?? "";
   } catch {
@@ -130,9 +132,13 @@ export function renderNode(params: {
     }
 
     // Check if it's a set of literal values (enum-like)
-    const extractLiteral = (v: JsonSchema): unknown | undefined => {
-      if (v.const !== undefined) return v.const;
-      if (v.enum && v.enum.length === 1) return v.enum[0];
+    const extractLiteral = (v: JsonSchema): unknown => {
+      if (v.const !== undefined) {
+        return v.const;
+      }
+      if (v.enum && v.enum.length === 1) {
+        return v.enum[0];
+      }
       return undefined;
     };
     const literals = nonNull.map(extractLiteral);
@@ -147,14 +153,20 @@ export function renderNode(params: {
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
           <div class="cfg-segmented">
             ${literals.map(
-              (lit, idx) => html`
+              (lit) => html`
               <button
                 type="button"
-                class="cfg-segmented__btn ${lit === resolvedValue || String(lit) === String(resolvedValue) ? "active" : ""}"
+                class="cfg-segmented__btn ${
+                  // oxlint-disable typescript/no-base-to-string
+                  lit === resolvedValue || String(lit) === String(resolvedValue) ? "active" : ""
+                }"
                 ?disabled=${disabled}
                 @click=${() => onPatch(path, lit)}
               >
-                ${String(lit)}
+                ${
+                  // oxlint-disable typescript/no-base-to-string
+                  String(lit)
+                }
               </button>
             `,
             )}
@@ -298,7 +310,12 @@ function renderTextInput(params: {
   const isSensitive = hint?.sensitive ?? isSensitivePath(path);
   const placeholder =
     hint?.placeholder ??
-    (isSensitive ? "••••" : schema.default !== undefined ? `Default: ${schema.default}` : "");
+    // oxlint-disable typescript/no-base-to-string
+    (isSensitive
+      ? "••••"
+      : schema.default !== undefined
+        ? `Default: ${String(schema.default)}`
+        : "");
   const displayValue = value ?? "";
 
   return html`
@@ -326,7 +343,9 @@ function renderTextInput(params: {
             onPatch(path, raw);
           }}
           @change=${(e: Event) => {
-            if (inputType === "number") return;
+            if (inputType === "number") {
+              return;
+            }
             const raw = (e.target as HTMLInputElement).value;
             onPatch(path, raw.trim());
           }}
@@ -455,7 +474,6 @@ function renderObject(params: {
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
   const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
-  const showLabel = params.showLabel ?? true;
   const hint = hintForPath(path, hints);
   const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
   const help = hint?.help ?? schema.description;
@@ -469,10 +487,12 @@ function renderObject(params: {
   const entries = Object.entries(props);
 
   // Sort by hint order
-  const sorted = entries.sort((a, b) => {
+  const sorted = entries.toSorted((a, b) => {
     const orderA = hintForPath([...path, a[0]], hints)?.order ?? 0;
     const orderB = hintForPath([...path, b[0]], hints)?.order ?? 0;
-    if (orderA !== orderB) return orderA - orderB;
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
     return a[0].localeCompare(b[0]);
   });
 
@@ -498,7 +518,7 @@ function renderObject(params: {
         ${
           allowExtra
             ? renderMapField({
-                schema: additional as JsonSchema,
+                schema: additional,
                 value: obj,
                 path,
                 hints,
@@ -536,7 +556,7 @@ function renderObject(params: {
         ${
           allowExtra
             ? renderMapField({
-                schema: additional as JsonSchema,
+                schema: additional,
                 value: obj,
                 path,
                 hints,
@@ -671,7 +691,7 @@ function renderMapField(params: {
           class="cfg-map__add"
           ?disabled=${disabled}
           @click=${() => {
-            const next = { ...(value ?? {}) };
+            const next = { ...value };
             let index = 1;
             let key = `custom-${index}`;
             while (key in next) {
@@ -708,9 +728,13 @@ function renderMapField(params: {
                     ?disabled=${disabled}
                     @change=${(e: Event) => {
                       const nextKey = (e.target as HTMLInputElement).value.trim();
-                      if (!nextKey || nextKey === key) return;
-                      const next = { ...(value ?? {}) };
-                      if (nextKey in next) return;
+                      if (!nextKey || nextKey === key) {
+                        return;
+                      }
+                      const next = { ...value };
+                      if (nextKey in next) {
+                        return;
+                      }
                       next[nextKey] = next[key];
                       delete next[key];
                       onPatch(path, next);
@@ -760,7 +784,7 @@ function renderMapField(params: {
                   title="Remove entry"
                   ?disabled=${disabled}
                   @click=${() => {
-                    const next = { ...(value ?? {}) };
+                    const next = { ...value };
                     delete next[key];
                     onPatch(path, next);
                   }}

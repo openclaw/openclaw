@@ -43,8 +43,10 @@ export function renderChannels(props: ChannelsProps) {
       enabled: channelEnabled(key, props),
       order: index,
     }))
-    .sort((a, b) => {
-      if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+    .toSorted((a, b) => {
+      if (a.enabled !== b.enabled) {
+        return a.enabled ? -1 : 1;
+      }
       return a.order - b.order;
     });
 
@@ -89,7 +91,7 @@ ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
 
 function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
   if (snapshot?.channelMeta?.length) {
-    return snapshot.channelMeta.map((entry) => entry.id) as ChannelKey[];
+    return snapshot.channelMeta.map((entry) => entry.id);
   }
   if (snapshot?.channelOrder?.length) {
     return snapshot.channelOrder;
@@ -236,7 +238,9 @@ function renderGenericChannelCard(
 function resolveChannelMetaMap(
   snapshot: ChannelsStatusSnapshot | null,
 ): Record<string, ChannelUiMetaEntry> {
-  if (!snapshot?.channelMeta?.length) return {};
+  if (!snapshot?.channelMeta?.length) {
+    return {};
+  }
   return Object.fromEntries(snapshot.channelMeta.map((entry) => [entry.id, entry]));
 }
 
@@ -248,22 +252,34 @@ function resolveChannelLabel(snapshot: ChannelsStatusSnapshot | null, key: strin
 const RECENT_ACTIVITY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 
 function hasRecentActivity(account: ChannelAccountSnapshot): boolean {
-  if (!account.lastInboundAt) return false;
+  if (!account.lastInboundAt) {
+    return false;
+  }
   return Date.now() - account.lastInboundAt < RECENT_ACTIVITY_THRESHOLD_MS;
 }
 
 function deriveRunningStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" {
-  if (account.running) return "Yes";
+  if (account.running) {
+    return "Yes";
+  }
   // If we have recent inbound activity, the channel is effectively running
-  if (hasRecentActivity(account)) return "Active";
+  if (hasRecentActivity(account)) {
+    return "Active";
+  }
   return "No";
 }
 
 function deriveConnectedStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" | "n/a" {
-  if (account.connected === true) return "Yes";
-  if (account.connected === false) return "No";
+  if (account.connected === true) {
+    return "Yes";
+  }
+  if (account.connected === false) {
+    return "No";
+  }
   // If connected is null/undefined but we have recent activity, show as active
-  if (hasRecentActivity(account)) return "Active";
+  if (hasRecentActivity(account)) {
+    return "Active";
+  }
   return "n/a";
 }
 
