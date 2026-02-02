@@ -16,6 +16,7 @@ import {
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
+  applyMoonshotConfigCn,
   applyMoonshotProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
@@ -274,6 +275,61 @@ export async function applyAuthChoiceApiProviders(
       agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
     }
     return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "moonshot-api-key-cn") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "moonshot") {
+      await setMoonshotApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    const envKey = resolveEnvApiKey("moonshot");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing MOONSHOT_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setMoonshotApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Moonshot API key (.cn)",
+        validate: validateApiKeyInput,
+      });
+      await setMoonshotApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "moonshot:default",
+      provider: "moonshot",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyMoonshotConfigCn,
+        applyProviderConfig: (cfg) => applyMoonshotProviderConfigCnShim(cfg),
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  function applyMoonshotProviderConfigCnShim(
+    cfg: Parameters<typeof applyMoonshotProviderConfig>[0],
+  ) {
+    // For now, provider-level CN behavior is fully handled inside applyMoonshotConfigCn.
+    // Keep a thin shim to satisfy the applyDefaultModelChoice signature.
+    return applyMoonshotProviderConfig(cfg);
   }
 
   if (authChoice === "kimi-code-api-key") {
