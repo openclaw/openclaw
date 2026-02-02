@@ -390,7 +390,7 @@ export async function runEmbeddedAttempt(
       tools,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
-    const systemPromptText = systemPromptOverride();
+    const systemPromptText = systemPromptOverride;
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
