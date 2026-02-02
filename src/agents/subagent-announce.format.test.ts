@@ -198,6 +198,85 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.accountId).toBe("kev");
   });
 
+  it("includes threadId when origin has an active topic/thread", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-thread",
+        lastChannel: "telegram",
+        lastTo: "telegram:123",
+        lastThreadId: 42,
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-thread",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("telegram:123");
+    expect(call?.params?.threadId).toBe("42");
+  });
+
+  it("prefers requesterOrigin.threadId over session entry threadId", async () => {
+    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-thread-override",
+        lastChannel: "telegram",
+        lastTo: "telegram:123",
+        lastThreadId: 42,
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-thread-override",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "telegram:123",
+        threadId: 99,
+      },
+      task: "do thing",
+      timeoutMs: 1000,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+    });
+
+    expect(didAnnounce).toBe(true);
+    await expect.poll(() => agentSpy.mock.calls.length).toBe(1);
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.threadId).toBe("99");
+  });
+
   it("splits collect-mode queues when accountId differs", async () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
