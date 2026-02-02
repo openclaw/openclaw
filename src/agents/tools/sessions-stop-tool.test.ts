@@ -108,10 +108,9 @@ describe("sessions_stop tool", () => {
     });
 
     expect(abortEmbeddedPiRunMock).toHaveBeenCalledWith("session-456");
-    expect(clearSessionQueuesMock).toHaveBeenCalledWith([
-      "agent:main:subagent:abc-123",
-      "session-456",
-    ]);
+    expect(clearSessionQueuesMock).toHaveBeenCalledWith(
+      expect.arrayContaining(["agent:main:subagent:abc-123", "session-456"]),
+    );
     expect(result.details).toMatchObject({
       status: "ok",
       aborted: true,
@@ -143,7 +142,7 @@ describe("sessions_stop tool", () => {
     });
 
     expect(abortEmbeddedPiRunMock).not.toHaveBeenCalled();
-    expect(clearSessionQueuesMock).toHaveBeenCalled();
+    expect(clearSessionQueuesMock).toHaveBeenCalledWith(["agent:main:subagent:xyz-789"]);
     expect(result.details).toMatchObject({
       status: "ok",
       aborted: true,

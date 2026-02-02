@@ -106,6 +106,7 @@ export function createSessionsStopTool(opts?: {
       }
 
       // Check agent-to-agent policy for cross-agent stops
+      // Note: resolveAgentIdFromSessionKey handles undefined by defaulting to DEFAULT_AGENT_ID ("main")
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const requesterAgentId = resolveAgentIdFromSessionKey(requesterInternalKey);
       const targetAgentId = resolveAgentIdFromSessionKey(resolvedKey);
@@ -139,8 +140,9 @@ export function createSessionsStopTool(opts?: {
       // Abort the running session
       const aborted = sessionId ? abortEmbeddedPiRun(sessionId) : false;
 
-      // Clear queued work
-      const cleared = clearSessionQueues([resolvedKey, sessionId]);
+      // Clear queued work (filter out undefined to be explicit)
+      const keysToClean = [resolvedKey, sessionId].filter((k): k is string => Boolean(k));
+      const cleared = clearSessionQueues(keysToClean);
 
       if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
         logVerbose(
@@ -150,16 +152,14 @@ export function createSessionsStopTool(opts?: {
 
       // Mark as aborted in session store
       if (entry) {
-        entry.abortedLastRun = true;
-        entry.updatedAt = Date.now();
-        store[resolvedKey] = entry;
+        const now = Date.now();
         await updateSessionStore(storePath, (nextStore) => {
           const nextEntry = nextStore[resolvedKey] ?? entry;
           if (!nextEntry) {
             return;
           }
           nextEntry.abortedLastRun = true;
-          nextEntry.updatedAt = Date.now();
+          nextEntry.updatedAt = now;
           nextStore[resolvedKey] = nextEntry;
         });
       }
