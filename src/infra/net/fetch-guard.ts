@@ -13,13 +13,13 @@ type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Respo
 export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
-  method?: string;
-  headers?: HeadersInit;
+  init?: RequestInit;
   maxRedirects?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
+  pinDns?: boolean;
 };
 
 export type GuardedFetchResult = {
@@ -122,13 +122,14 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
             policy: params.policy,
           })
         : await resolvePinnedHostname(parsedUrl.hostname, params.lookupFn);
-      dispatcher = createPinnedDispatcher(pinned);
+      if (params.pinDns !== false) {
+        dispatcher = createPinnedDispatcher(pinned);
+      }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {
+        ...(params.init ? { ...params.init } : {}),
         redirect: "manual",
-        dispatcher,
-        ...(params.method ? { method: params.method } : {}),
-        ...(params.headers ? { headers: params.headers } : {}),
+        ...(dispatcher ? { dispatcher } : {}),
         ...(signal ? { signal } : {}),
       };
 

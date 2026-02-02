@@ -394,10 +394,12 @@ async function runWebFetch(params: {
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutMs: params.timeoutSeconds * 1000,
-      headers: {
-        Accept: "*/*",
-        "User-Agent": params.userAgent,
-        "Accept-Language": "en-US,en;q=0.9",
+      init: {
+        headers: {
+          Accept: "*/*",
+          "User-Agent": params.userAgent,
+          "Accept-Language": "en-US,en;q=0.9",
+        },
       },
     });
     res = result.response;
