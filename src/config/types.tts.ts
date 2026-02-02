@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "resemble";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,13 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Resemble AI configuration. */
+  resemble?: {
+    apiKey?: string;
+    voiceUuid?: string;
+    sampleRate?: number;
+    outputFormat?: "wav" | "mp3";
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

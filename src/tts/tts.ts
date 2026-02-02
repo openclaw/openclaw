@@ -50,6 +50,9 @@ const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
+const DEFAULT_RESEMBLE_SAMPLE_RATE = 22050;
+const DEFAULT_RESEMBLE_OUTPUT_FORMAT = "mp3";
+
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
@@ -121,6 +124,12 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  resemble: {
+    apiKey?: string;
+    voiceUuid?: string;
+    sampleRate: number;
+    outputFormat: "wav" | "mp3";
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -295,6 +304,12 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    resemble: {
+      apiKey: raw.resemble?.apiKey,
+      voiceUuid: raw.resemble?.voiceUuid,
+      sampleRate: raw.resemble?.sampleRate ?? DEFAULT_RESEMBLE_SAMPLE_RATE,
+      outputFormat: raw.resemble?.outputFormat ?? DEFAULT_RESEMBLE_OUTPUT_FORMAT,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -498,10 +513,13 @@ export function resolveTtsApiKey(
   if (provider === "openai") {
     return config.openai.apiKey || process.env.OPENAI_API_KEY;
   }
+  if (provider === "resemble") {
+    return config.resemble.apiKey || process.env.RESEMBLE_API_KEY;
+  }
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "resemble", "edge"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -1158,6 +1176,50 @@ async function edgeTTS(params: {
   await tts.ttsPromise(text, outputPath);
 }
 
+async function resembleTTS(params: {
+  text: string;
+  apiKey: string;
+  voiceUuid: string;
+  sampleRate: number;
+  outputFormat: "wav" | "mp3";
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, apiKey, voiceUuid, sampleRate, outputFormat, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch("https://f.cluster.resemble.ai/synthesize", {
+      method: "POST",
+      headers: {
+        Authorization: apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        voice_uuid: voiceUuid,
+        data: text,
+        sample_rate: sampleRate,
+        output_format: outputFormat,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Resemble API error (${response.status})`);
+    }
+
+    const result = (await response.json()) as { success: boolean; audio_content?: string };
+    if (!result.success || !result.audio_content) {
+      throw new Error("Resemble synthesis failed");
+    }
+
+    return Buffer.from(result.audio_content, "base64");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -1285,6 +1347,20 @@ export async function textToSpeech(params: {
           voiceSettings,
           timeoutMs: config.timeoutMs,
         });
+      } else if (provider === "resemble") {
+        const voiceUuid = config.resemble.voiceUuid;
+        if (!voiceUuid) {
+          lastError = "resemble: no voice_uuid configured";
+          continue;
+        }
+        audioBuffer = await resembleTTS({
+          text: params.text,
+          apiKey,
+          voiceUuid,
+          sampleRate: config.resemble.sampleRate,
+          outputFormat: config.resemble.outputFormat,
+          timeoutMs: config.timeoutMs,
+        });
       } else {
         const openaiModelOverride = params.overrides?.openai?.model;
         const openaiVoiceOverride = params.overrides?.openai?.voice;
@@ -1354,6 +1430,11 @@ export async function textToSpeechTelephony(params: {
     try {
       if (provider === "edge") {
         lastError = "edge: unsupported for telephony";
+        continue;
+      }
+
+      if (provider === "resemble") {
+        lastError = "resemble: unsupported for telephony";
         continue;
       }
 
