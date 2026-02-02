@@ -600,7 +600,9 @@ function normalizeTtsInput(text: string): string {
 
 function buildTtsPreview(text: string, limit = TTS_PREVIEW_LIMIT): string {
   const trimmed = text.trim();
-  if (trimmed.length <= limit) return trimmed;
+  if (trimmed.length <= limit) {
+    return trimmed;
+  }
   return `${trimmed.slice(0, limit - 3)}...`;
 }
 
@@ -1895,7 +1897,9 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   textForAudio = normalizeTtsInput(textForAudio);
-  if (!textForAudio.trim()) return nextPayload;
+  if (!textForAudio.trim()) {
+    return nextPayload;
+  }
 
   const preview = buildTtsPreview(textForAudio);
   logInfo(
