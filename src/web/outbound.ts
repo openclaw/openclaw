@@ -1,3 +1,4 @@
+import { stripMarkdownFromUrls } from "./whatsapp-url-utils.js";
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
@@ -34,6 +35,7 @@ export async function sendMessageWhatsApp(
     accountId: resolvedAccountId ?? options.accountId,
   });
   text = convertMarkdownTables(text ?? "", tableMode);
+  text = stripMarkdownFromUrls(text ?? "");
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,
