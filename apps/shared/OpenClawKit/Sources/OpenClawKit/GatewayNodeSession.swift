@@ -16,7 +16,6 @@ public actor GatewayNodeSession {
     private let logger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
-    private static let defaultInvokeTimeoutMs = 30_000
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
     private var activeToken: String?
@@ -36,8 +35,8 @@ public actor GatewayNodeSession {
     ) async -> BridgeInvokeResponse {
         let timeoutLogger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
         let timeout: Int = {
-            if let timeoutMs { return max(0, timeoutMs) }
-            return Self.defaultInvokeTimeoutMs
+            guard let timeoutMs else { return 0 }
+            return max(0, timeoutMs)
         }()
         guard timeout > 0 else {
             return await onInvoke(request)
@@ -154,8 +153,10 @@ public actor GatewayNodeSession {
 
         do {
             try await channel.connect()
-            _ = await self.waitForSnapshot(timeoutMs: 500)
-            await self.notifyConnectedIfNeeded()
+            let snapshotReady = await self.waitForSnapshot(timeoutMs: 500)
+            if snapshotReady {
+                await self.notifyConnectedIfNeeded()
+            }
         } catch {
             await onDisconnected(error.localizedDescription)
             throw error
