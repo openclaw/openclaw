@@ -112,14 +112,14 @@ out to QMD for retrieval. Key points:
 - QMD runs fully locally via Bun + `node-llama-cpp` and auto-downloads GGUF
   models from HuggingFace on first use (no separate Ollama daemon required).
 - The gateway runs QMD in a self-contained XDG home under
-  `~/.clawdbot/agents/<agentId>/qmd/` by setting `XDG_CONFIG_HOME` and
+  `~/.openclaw/agents/<agentId>/qmd/` by setting `XDG_CONFIG_HOME` and
   `XDG_CACHE_HOME`.
 - OS support: macOS and Linux work out of the box once Bun + SQLite are
   installed. Windows is best supported via WSL2.
 
 **How the sidecar runs**
 - The gateway writes a self-contained QMD home under
-  `~/.clawdbot/agents/<agentId>/qmd/` (config + cache + sqlite DB).
+  `~/.openclaw/agents/<agentId>/qmd/` (config + cache + sqlite DB).
 - Collections are rewritten from `memory.qmd.paths` (plus default workspace
   memory files) into `index.yml`, then `qmd update` + `qmd embed` run on boot and
   on a configurable interval (`memory.qmd.update.interval`, default 5 m).
@@ -132,15 +132,19 @@ out to QMD for retrieval. Key points:
   - If you want to pre-download models manually (and warm the same index Moltbot
     uses), run a one-off query with the agent’s XDG dirs.
 
-    Moltbot’s QMD state lives under your **state dir** (usually `~/.clawdbot`, or
-    `~/.moltbot` on newer installs). You can point `qmd` at the exact same index
+    Moltbot’s QMD state lives under your **state dir** (usually `~/.openclaw`, or
+    legacy dirs like `~/.clawdbot` and `~/.moltbot`). You can point `qmd` at the exact same index
     by exporting the same XDG vars Moltbot uses:
 
     ```bash
     # Pick the same state dir Moltbot uses
-    STATE_DIR="${MOLTBOT_STATE_DIR:-${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}}"
-    if [ -d "$HOME/.moltbot" ] && [ ! -d "$HOME/.clawdbot" ] \
-      && [ -z "${MOLTBOT_STATE_DIR:-}" ] && [ -z "${CLAWDBOT_STATE_DIR:-}" ]; then
+    STATE_DIR="${OPENCLAW_STATE_DIR:-${CLAWDBOT_STATE_DIR:-$HOME/.openclaw}}"
+    if [ -d "$HOME/.clawdbot" ] && [ ! -d "$HOME/.openclaw" ] \
+      && [ -z "${OPENCLAW_STATE_DIR:-}" ] && [ -z "${CLAWDBOT_STATE_DIR:-}" ]; then
+      STATE_DIR="$HOME/.clawdbot"
+    fi
+    if [ -d "$HOME/.moltbot" ] && [ ! -d "$HOME/.openclaw" ] \
+      && [ -z "${OPENCLAW_STATE_DIR:-}" ] && [ -z "${CLAWDBOT_STATE_DIR:-}" ]; then
       STATE_DIR="$HOME/.moltbot"
     fi
 
@@ -173,7 +177,7 @@ out to QMD for retrieval. Key points:
   understands that prefix and reads from the configured QMD collection root.
 - When `memory.qmd.sessions.enabled = true`, Moltbot exports sanitized session
   transcripts (User/Assistant turns) into a dedicated QMD collection under
-  `~/.clawdbot/agents/<id>/qmd/sessions/`, so `memory_search` can recall recent
+  `~/.openclaw/agents/<id>/qmd/sessions/`, so `memory_search` can recall recent
   conversations without touching the builtin SQLite index.
 - `memory_search` snippets now include a `Source: <path#line>` footer when
   `memory.citations` is `auto`/`on`; set `memory.citations = "off"` to keep
