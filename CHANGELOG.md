@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 
 - fix(agents): validate AbortSignal instances before calling AbortSignal.any() (#7277) (thanks @Elarwei001)
 - fix(webchat): respect user scroll position during streaming and refresh (#7226) (thanks @marcomarandiz)
+- Media understanding: skip binary media from file text extraction. (#7475) Thanks @AlexZhangji.
 - Security: guard skill installer downloads with SSRF checks (block private/localhost URLs).
 - Media understanding: apply SSRF guardrails to provider fetches; allow private baseUrl overrides explicitly.
 - Tests: stub SSRF DNS pinning in web auto-reply + Gemini video coverage. (#6619) Thanks @joshp123.
