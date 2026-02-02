@@ -59,6 +59,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       isGroup: false,
       resolvedThreadId: undefined,
       replyThreadId: 777,
+      threadSpec: { id: 777, scope: "dm" },
       historyKey: undefined,
       historyLimit: 0,
       groupHistories: new Map(),
@@ -88,13 +89,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(createTelegramDraftStream).toHaveBeenCalledWith(
       expect.objectContaining({
         chatId: 123,
-        messageThreadId: 777,
+        thread: { id: 777, scope: "dm" },
       }),
     );
     expect(draftStream.update).toHaveBeenCalledWith("Hello");
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
-        messageThreadId: 777,
+        thread: { id: 777, scope: "dm" },
       }),
     );
   });

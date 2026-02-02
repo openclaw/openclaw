@@ -41,6 +41,12 @@ describe("buildTelegramThreadParams", () => {
     expect(buildTelegramThreadParams(99)).toEqual({ message_thread_id: 99 });
   });
 
+  it("keeps thread id=1 for dm threads", () => {
+    expect(buildTelegramThreadParams({ id: 1, scope: "dm" })).toEqual({
+      message_thread_id: 1,
+    });
+  });
+
   it("normalizes thread ids to integers", () => {
     expect(buildTelegramThreadParams(42.9)).toEqual({ message_thread_id: 42 });
   });
