@@ -40,6 +40,17 @@ describe("fetchWithSlackAuth", () => {
     });
   });
 
+  it("rejects non-Slack hosts to avoid leaking tokens", async () => {
+    const { fetchWithSlackAuth } = await import("./media.js");
+
+    await expect(
+      fetchWithSlackAuth("https://example.com/test.jpg", "xoxb-test-token"),
+    ).rejects.toThrow(/non-Slack host|non-Slack/i);
+
+    // Should fail fast without attempting a fetch.
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("follows redirects without Authorization header", async () => {
     const { fetchWithSlackAuth } = await import("./media.js");
 
