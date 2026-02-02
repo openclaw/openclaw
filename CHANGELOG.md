@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - fix(lobster): block arbitrary exec via lobsterPath/cwd injection (GHSA-4mhr-g7xj-cg8j). (#5335) Thanks @vignesh07.
 - Security: block LD_/DYLD_ env overrides for host exec. (#4896) Thanks @HassanFleyah.
 - Security: harden web tool content wrapping + file parsing safeguards. (#4058) Thanks @VACInc.
+- Security: enforce Twitch `allowFrom` allowlist gating (deny non-allowlisted senders). Thanks @MegaManSec.
 
 ## 2026.1.30
 
