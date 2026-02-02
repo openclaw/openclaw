@@ -75,7 +75,9 @@ describe("QmdMemoryManager", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
     expect(manager).toBeTruthy();
-    if (!manager) throw new Error("manager missing");
+    if (!manager) {
+      throw new Error("manager missing");
+    }
 
     const baselineCalls = spawnMock.mock.calls.length;
 
@@ -114,7 +116,9 @@ describe("QmdMemoryManager", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
     expect(manager).toBeTruthy();
-    if (!manager) throw new Error("manager missing");
+    if (!manager) {
+      throw new Error("manager missing");
+    }
 
     const isAllowed = (key?: string) =>
       (manager as unknown as { isScopeAllowed: (key?: string) => boolean }).isScopeAllowed(key);
@@ -128,7 +132,9 @@ describe("QmdMemoryManager", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId });
     const manager = await QmdMemoryManager.create({ cfg, agentId, resolved });
     expect(manager).toBeTruthy();
-    if (!manager) throw new Error("manager missing");
+    if (!manager) {
+      throw new Error("manager missing");
+    }
 
     const textPath = path.join(workspaceDir, "secret.txt");
     await fs.writeFile(textPath, "nope", "utf-8");
