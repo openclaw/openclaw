@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
 vi.mock("../config/config.js", async () => {
@@ -34,9 +34,6 @@ vi.mock("../gateway/call.js", () => {
 });
 
 describe("sessions_spawn thinking defaults", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
   it("applies agents.defaults.subagents.thinking when thinking is omitted", async () => {
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
     const result = await tool.execute("call-1", { task: "hello" });
@@ -47,7 +44,7 @@ describe("sessions_spawn thinking defaults", () => {
 
     const agentCall = calls
       .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
-      .find((call) => call.method === "agent");
+      .findLast((call) => call.method === "agent");
 
     expect(agentCall?.params?.thinking).toBe("high");
   });
@@ -62,7 +59,7 @@ describe("sessions_spawn thinking defaults", () => {
 
     const agentCall = calls
       .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
-      .find((call) => call.method === "agent");
+      .findLast((call) => call.method === "agent");
 
     expect(agentCall?.params?.thinking).toBe("low");
   });
