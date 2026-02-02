@@ -8,7 +8,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Store received webhooks
-const receivedWebhooks: any[] = [];
+const receivedWebhooks = [];
 
 app.use(express.json());
 
