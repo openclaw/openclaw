@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { ModelApi } from "../config/types.models.js";
 import {
   buildHuggingfaceModelDefinition,
   HUGGINGFACE_BASE_URL,
@@ -28,8 +30,6 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { ModelApi } from "../config/types.models.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
@@ -76,6 +76,9 @@ import {
   MOONSHOT_CN_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
+  PUTER_BASE_URL,
+  PUTER_DEFAULT_MODEL_ID,
+  PUTER_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_ID,
   resolveZaiBaseUrl,
   XAI_BASE_URL,
@@ -189,6 +192,43 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
 export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyOpenrouterProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, OPENROUTER_DEFAULT_MODEL_REF);
+}
+
+export function applyPuterProviderConfig(cfg: OpenClawConfig, modelId?: string): OpenClawConfig {
+  const resolvedModelId = modelId?.trim() || PUTER_DEFAULT_MODEL_ID;
+  const modelRef = `puter/${resolvedModelId}`;
+  const models = { ...cfg.agents?.defaults?.models };
+  models[modelRef] = {
+    ...models[modelRef],
+    alias: models[modelRef]?.alias ?? "Puter",
+  };
+
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "puter",
+    api: "openai-completions",
+    baseUrl: PUTER_BASE_URL,
+    defaultModel: {
+      id: resolvedModelId,
+      name: resolvedModelId,
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    },
+    defaultModelId: resolvedModelId,
+  });
+}
+
+export function applyPuterConfig(cfg: OpenClawConfig, modelId?: string): OpenClawConfig {
+  const resolvedModelId = modelId?.trim() || PUTER_DEFAULT_MODEL_ID;
+  const modelRef =
+    resolvedModelId === PUTER_DEFAULT_MODEL_ID
+      ? PUTER_DEFAULT_MODEL_REF
+      : `puter/${resolvedModelId}`;
+  const next = applyPuterProviderConfig(cfg, resolvedModelId);
+  return applyAgentDefaultModelPrimary(next, modelRef);
 }
 
 export function applyMoonshotProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

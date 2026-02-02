@@ -4,7 +4,9 @@ import type { RuntimeEnv } from "../../../runtime.js";
 import {
   applyAuthProfileConfig,
   applyLitellmConfig,
+  applyPuterConfig,
   setLitellmApiKey,
+  setPuterApiKey,
 } from "../../onboard-auth.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 
@@ -37,8 +39,36 @@ export async function applySimpleNonInteractiveApiKeyChoice(params: {
     setter: (value: SecretInput) => Promise<void> | void,
   ) => Promise<boolean>;
 }): Promise<OpenClawConfig | null | undefined> {
-  if (params.authChoice !== "litellm-api-key") {
+  if (params.authChoice !== "litellm-api-key" && params.authChoice !== "puter-api-key") {
     return undefined;
+  }
+
+  if (params.authChoice === "puter-api-key") {
+    const resolved = await params.resolveApiKey({
+      provider: "puter",
+      cfg: params.baseConfig,
+      flagValue: params.opts.puterApiKey,
+      flagName: "--puter-api-key",
+      envVar: "PUTER_API_KEY",
+      runtime: params.runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await params.maybeSetResolvedApiKey(resolved, (value) =>
+        setPuterApiKey(value, undefined, params.apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    return applyPuterConfig(
+      applyAuthProfileConfig(params.nextConfig, {
+        profileId: "puter:default",
+        provider: "puter",
+        mode: "api_key",
+      }),
+    );
   }
 
   const resolved = await params.resolveApiKey({

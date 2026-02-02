@@ -4,12 +4,16 @@ import {
   normalizeSecretInputModeInput,
   normalizeTokenProviderInput,
 } from "./auth-choice.apply-helpers.js";
-import { applyLiteLlmApiKeyProvider } from "./auth-choice.apply.api-key-providers.js";
+import {
+  applyLiteLlmApiKeyProvider,
+  applyPuterApiKeyProvider,
+} from "./auth-choice.apply.api-key-providers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import type { AuthChoice } from "./onboard-types.js";
 
 const CORE_API_KEY_TOKEN_PROVIDER_AUTH_CHOICES: Partial<Record<string, AuthChoice>> = {
   litellm: "litellm-api-key",
+  puter: "puter-api-key",
 };
 
 export function normalizeApiKeyTokenProviderAuthChoice(params: {
@@ -73,6 +77,21 @@ export async function applyAuthChoiceApiProviders(
   });
   if (litellmResult) {
     return litellmResult;
+  }
+
+  const puterResult = await applyPuterApiKeyProvider({
+    params,
+    authChoice,
+    config: nextConfig,
+    setConfig: (config) => (nextConfig = config),
+    getConfig: () => nextConfig,
+    normalizedTokenProvider,
+    requestedSecretInputMode,
+    applyProviderDefaultModel,
+    getAgentModelOverride: () => agentModelOverride,
+  });
+  if (puterResult) {
+    return puterResult;
   }
 
   return null;

@@ -5,6 +5,8 @@ import type { AuthChoice } from "./onboard-types.js";
 
 const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   chutes: "chutes",
+  "puter-web": "puter",
+  "puter-api-key": "puter",
   "litellm-api-key": "litellm",
   "custom-api-key": "custom",
 };

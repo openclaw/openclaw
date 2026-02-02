@@ -7,8 +7,13 @@ import {
   applyLitellmConfig,
   applyLitellmProviderConfig,
   LITELLM_DEFAULT_MODEL_REF,
+  applyPuterConfig,
+  applyPuterProviderConfig,
+  PUTER_DEFAULT_MODEL_REF,
   setLitellmApiKey,
+  setPuterApiKey,
 } from "./onboard-auth.js";
+import { openUrl } from "./onboard-helpers.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
 type ApiKeyProviderConfigApplier = (
@@ -95,6 +100,70 @@ export async function applyLiteLlmApiKeyProvider({
     applyDefaultConfig: applyLitellmConfig,
     applyProviderConfig: applyLitellmProviderConfig,
     noteDefault: LITELLM_DEFAULT_MODEL_REF,
+  });
+  return { config: getConfig(), agentModelOverride: getAgentModelOverride() };
+}
+
+export async function applyPuterApiKeyProvider({
+  params,
+  authChoice,
+  config,
+  setConfig,
+  getConfig,
+  normalizedTokenProvider,
+  requestedSecretInputMode,
+  applyProviderDefaultModel,
+  getAgentModelOverride,
+}: ApplyApiKeyProviderParams): Promise<ApplyAuthChoiceResult | null> {
+  if (authChoice !== "puter-web" && authChoice !== "puter-api-key") {
+    return null;
+  }
+
+  let nextConfig = config;
+  if (authChoice === "puter-web") {
+    await params.prompter.note(
+      [
+        "Puter web login opens your browser so you can copy an API key.",
+        "After signing in, paste the key back here.",
+      ].join("\n"),
+      "Puter",
+    );
+    const opened = await openUrl("https://puter.com/?action=copyauth");
+    if (!opened) {
+      await params.prompter.note(
+        "Open this URL manually: https://puter.com/?action=copyauth",
+        "Puter",
+      );
+    }
+  }
+
+  await ensureApiKeyFromOptionEnvOrPrompt({
+    token: params.opts?.token,
+    tokenProvider: normalizedTokenProvider,
+    secretInputMode: requestedSecretInputMode,
+    config: nextConfig,
+    expectedProviders: ["puter"],
+    provider: "puter",
+    envLabel: "PUTER_API_KEY",
+    promptMessage: "Enter Puter API key",
+    normalize: normalizeApiKeyInput,
+    validate: validateApiKeyInput,
+    prompter: params.prompter,
+    setCredential: async (apiKey, mode) =>
+      setPuterApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+  });
+
+  nextConfig = applyAuthProfileConfig(nextConfig, {
+    profileId: "puter:default",
+    provider: "puter",
+    mode: "api_key",
+  });
+  setConfig(nextConfig);
+  await applyProviderDefaultModel({
+    defaultModel: PUTER_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyPuterConfig,
+    applyProviderConfig: applyPuterProviderConfig,
+    noteDefault: PUTER_DEFAULT_MODEL_REF,
   });
   return { config: getConfig(), agentModelOverride: getAgentModelOverride() };
 }

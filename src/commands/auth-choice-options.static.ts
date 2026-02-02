@@ -28,6 +28,21 @@ export const CORE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     groupHint: "OAuth",
   },
   {
+    value: "puter-web",
+    label: "Puter web login",
+    hint: "Open browser, sign in, then paste API key",
+    groupId: "puter",
+    groupLabel: "Puter",
+    groupHint: "Web login or API key",
+  },
+  {
+    value: "puter-api-key",
+    label: "Puter API key",
+    groupId: "puter",
+    groupLabel: "Puter",
+    groupHint: "Web login or API key",
+  },
+  {
     value: "litellm-api-key",
     label: "LiteLLM API key",
     hint: "Unified gateway for 100+ LLM providers",

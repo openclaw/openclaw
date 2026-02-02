@@ -2,6 +2,10 @@ import type { ApiKeyCredential } from "../../../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
+import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
+import { upsertAuthProfile } from "../../../agents/auth-profiles.js";
+import { normalizeProviderId } from "../../../agents/model-selection.js";
+import { parseDurationMs } from "../../../cli/parse-duration.js";
 import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "../../auth-choice.apply.api-providers.js";
@@ -16,7 +20,6 @@ import {
   parseNonInteractiveCustomApiFlags,
   resolveCustomProviderId,
 } from "../../onboard-custom.js";
-import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 import { applySimpleNonInteractiveApiKeyChoice } from "./auth-choice.api-key-providers.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
@@ -330,9 +333,12 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     authChoice === "oauth" ||
     authChoice === "chutes" ||
+    authChoice === "puter-web" ||
+    authChoice === "openai-codex" ||
     authChoice === "qwen-portal" ||
     authChoice === "minimax-global-oauth" ||
-    authChoice === "minimax-cn-oauth"
+    authChoice === "minimax-cn-oauth" ||
+    authChoice === "minimax-portal"
   ) {
     runtime.error("OAuth requires interactive mode.");
     runtime.exit(1);

@@ -12,6 +12,8 @@ export type BuiltInAuthChoice =
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
+  | "puter-web"
+  | "puter-api-key"
   | "kilocode-api-key"
   | "litellm-api-key"
   | "ai-gateway-api-key"
@@ -60,6 +62,7 @@ export type BuiltInAuthChoiceGroupId =
   | "google"
   | "copilot"
   | "openrouter"
+  | "puter"
   | "kilocode"
   | "litellm"
   | "ai-gateway"
@@ -114,6 +117,7 @@ export type OnboardOptions = {
   /** API key persistence mode for setup flows (default: plaintext). */
   secretInputMode?: SecretInputMode;
   anthropicApiKey?: string;
+  puterApiKey?: string;
   openaiApiKey?: string;
   mistralApiKey?: string;
   openrouterApiKey?: string;
