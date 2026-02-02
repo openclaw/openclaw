@@ -127,7 +127,7 @@ describe("pruneHistoryForContextShare", () => {
     const allIds = [
       ...pruned.droppedMessagesList.map((m) => m.timestamp),
       ...pruned.messages.map((m) => m.timestamp),
-    ].toSorted((a, b) => a - b);
+    [...]].sort((a, b) => a - b);
     const originalIds = messages.map((m) => m.timestamp).toSorted((a, b) => a - b);
     expect(allIds).toEqual(originalIds);
   });

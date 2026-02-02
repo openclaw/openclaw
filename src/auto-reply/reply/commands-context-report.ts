@@ -42,7 +42,7 @@ function formatListTop(
   entries: Array<{ name: string; value: number }>,
   cap: number,
 ): { lines: string[]; omitted: number } {
-  const sorted = [...entries].toSorted((a, b) => b.value - a.value);
+  const sorted = [...[...entries]].sort((a, b) => b.value - a.value);
   const top = sorted.slice(0, cap);
   const omitted = Math.max(0, sorted.length - top.length);
   const lines = top.map((e) => `- ${e.name}: ${formatCharsAndTokens(e.value)}`);

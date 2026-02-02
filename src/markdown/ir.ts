@@ -722,7 +722,7 @@ function clampLinkSpans(spans: MarkdownLinkSpan[], maxLength: number): MarkdownL
 }
 
 function mergeStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
-  const sorted = [...spans].toSorted((a, b) => {
+  const sorted = [...[...spans]].sort((a, b) => {
     if (a.start !== b.start) {
       return a.start - b.start;
     }

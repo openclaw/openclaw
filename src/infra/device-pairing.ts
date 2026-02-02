@@ -217,7 +217,7 @@ function normalizeScopes(scopes: string[] | undefined): string[] {
       out.add(trimmed);
     }
   }
-  return [...out].toSorted();
+  return [...[...out]].sort();
 }
 
 function scopesAllow(requested: string[], allowed: string[]): boolean {

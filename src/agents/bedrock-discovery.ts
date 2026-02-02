@@ -191,7 +191,7 @@ export async function discoverBedrockModels(params: {
         }),
       );
     }
-    return discovered.toSorted((a, b) => a.name.localeCompare(b.name));
+    return [...discovered].sort((a, b) => a.name.localeCompare(b.name));
   })();
 
   if (refreshIntervalSeconds > 0) {

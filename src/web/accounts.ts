@@ -71,7 +71,7 @@ export function listWhatsAppAccountIds(cfg: OpenClawConfig): string[] {
   if (ids.length === 0) {
     return [DEFAULT_ACCOUNT_ID];
   }
-  return ids.toSorted((a, b) => a.localeCompare(b));
+  return [...ids].sort((a, b) => a.localeCompare(b));
 }
 
 export function resolveDefaultWhatsAppAccountId(cfg: OpenClawConfig): string {

@@ -21,7 +21,7 @@ function normalizeForHash(value: unknown): unknown {
       .filter((item): item is unknown => item !== undefined);
     const primitives = normalized.filter(isPrimitive);
     if (primitives.length === normalized.length) {
-      return [...primitives].toSorted((a, b) =>
+      return [...[...primitives]].sort((a, b) =>
         primitiveToString(a).localeCompare(primitiveToString(b)),
       );
     }

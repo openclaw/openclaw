@@ -130,7 +130,7 @@ export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: 
   if (stickers.length === 0) {
     return { count: 0 };
   }
-  const sorted = [...stickers].toSorted(
+  const sorted = [...[...stickers]].sort(
     (a, b) => new Date(a.cachedAt).getTime() - new Date(b.cachedAt).getTime(),
   );
   return {

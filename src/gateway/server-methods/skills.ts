@@ -58,7 +58,7 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
       }
     }
   }
-  return [...bins].toSorted();
+  return [...[...bins]].sort();
 }
 
 export const skillsHandlers: GatewayRequestHandlers = {
@@ -103,7 +103,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         bins.add(bin);
       }
     }
-    respond(true, { bins: [...bins].toSorted() }, undefined);
+    respond(true, { bins: [...[...bins]].sort() }, undefined);
   },
   "skills.install": async ({ params, respond }) => {
     if (!validateSkillsInstallParams(params)) {

@@ -419,7 +419,7 @@ export async function statusCommand(
     };
     const sevRank = (sev: "critical" | "warn" | "info") =>
       sev === "critical" ? 0 : sev === "warn" ? 1 : 2;
-    const sorted = [...importantFindings].toSorted(
+    const sorted = [...[...importantFindings]].sort(
       (a, b) => sevRank(a.severity) - sevRank(b.severity),
     );
     const shown = sorted.slice(0, 6);

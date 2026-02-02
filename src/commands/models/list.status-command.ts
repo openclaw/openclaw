@@ -310,7 +310,7 @@ export async function modelsStatusCommand(
         remainingMs: unusableUntil - now,
       });
     }
-    return out.toSorted((a, b) => a.remainingMs - b.remainingMs);
+    return [...out].sort((a, b) => a.remainingMs - b.remainingMs);
   })();
 
   const checkStatus = (() => {

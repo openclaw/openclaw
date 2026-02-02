@@ -83,7 +83,7 @@ export function applyExclusiveSlotSelection(params: {
 
   if (disabledIds.length > 0) {
     warnings.push(
-      `Disabled other "${slotKey}" slot plugins: ${disabledIds.toSorted().join(", ")}.`,
+      `Disabled other "${slotKey}" slot plugins: ${[...disabledIds].sort().join(", ")}.`,
     );
   }
 
