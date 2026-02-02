@@ -251,6 +251,7 @@ export function createSessionsSendTool(opts?: {
         requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
         targetSessionKey: displayKey,
+        config: cfg,
       });
       const sendParams = {
         message,
