@@ -71,7 +71,7 @@ export async function appendStatusAllDiagnosis(params: {
   };
 
   lines.push("");
-  lines.push(`${muted("Gateway connection details:")}`);
+  lines.push(muted("Gateway connection details:"));
   for (const line of redactSecrets(params.connectionDetailsForReport)
     .split("\n")
     .map((l) => l.trimEnd())) {
@@ -116,7 +116,7 @@ export async function appendStatusAllDiagnosis(params: {
   const isTrivialLastErr = lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
-    lines.push(`${muted("Gateway last log line:")}`);
+    lines.push(muted("Gateway last log line:"));
     lines.push(`  ${muted(redactSecrets(lastErrClean))}`);
   }
 
@@ -179,7 +179,7 @@ export async function appendStatusAllDiagnosis(params: {
     ]);
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
-      lines.push(`${muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`)}`);
+      lines.push(muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`));
       lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
       for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactSecrets)) {
         lines.push(`  ${muted(line)}`);
@@ -236,7 +236,7 @@ export async function appendStatusAllDiagnosis(params: {
   })();
   if (healthErr) {
     lines.push("");
-    lines.push(`${muted("Gateway health:")}`);
+    lines.push(muted("Gateway health:"));
     lines.push(`  ${muted(redactSecrets(healthErr))}`);
   }
 

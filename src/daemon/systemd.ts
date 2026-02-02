@@ -387,7 +387,7 @@ async function isSystemctlAvailable(): Promise<boolean> {
   if (res.code === 0) {
     return true;
   }
-  const detail = `${res.stderr || res.stdout}`.toLowerCase();
+  const detail = (res.stderr || res.stdout).toLowerCase();
   return !detail.includes("not found");
 }
 
