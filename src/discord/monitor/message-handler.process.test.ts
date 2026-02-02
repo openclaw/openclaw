@@ -105,6 +105,7 @@ describe("processDiscordMessage ack reactions", () => {
       sender: { label: "user" },
     });
 
+    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expect(reactMessageDiscord).not.toHaveBeenCalled();
@@ -117,6 +118,7 @@ describe("processDiscordMessage ack reactions", () => {
       sender: { label: "user" },
     });
 
+    // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
     expect(reactMessageDiscord).toHaveBeenCalledWith("c1", "m1", "👀", { rest: {} });

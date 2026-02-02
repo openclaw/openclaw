@@ -10,7 +10,7 @@ import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
 
-// biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+// oxlint-disable-next-line typescript/no-explicit-any
 type AnyAgentTool = AgentTool<any, unknown>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -36,7 +36,6 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       name,
       label: tool.label ?? name,
       description: tool.description ?? "",
-      // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema from pi-agent-core uses a different module instance.
       parameters: tool.parameters,
       execute: async (
         toolCallId,
@@ -87,6 +86,7 @@ export function toClientToolDefinitions(
       name: func.name,
       label: func.name,
       description: func.description ?? "",
+      // oxlint-disable-next-line typescript/no-explicit-any
       parameters: func.parameters as any,
       execute: async (
         toolCallId,

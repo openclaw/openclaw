@@ -799,7 +799,7 @@ async function runExecProcess(opts: {
 
 export function createExecTool(
   defaults?: ExecToolDefaults,
-  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any, ExecToolDetails> {
   const defaultBackgroundMs = clampNumber(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),

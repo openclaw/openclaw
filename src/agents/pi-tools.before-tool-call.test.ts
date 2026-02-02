@@ -18,12 +18,14 @@ describe("before_tool_call hook integration", () => {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
     };
+    // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
   });
 
   it("executes tool normally when no hook is registered", async () => {
     hookRunner.hasHooks.mockReturnValue(false);
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "Read", execute } as any, {
       agentId: "main",
       sessionKey: "main",
@@ -39,6 +41,7 @@ describe("before_tool_call hook integration", () => {
     hookRunner.hasHooks.mockReturnValue(true);
     hookRunner.runBeforeToolCall.mockResolvedValue({ params: { mode: "safe" } });
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
 
     await tool.execute("call-2", { cmd: "ls" }, undefined, undefined);
@@ -58,6 +61,7 @@ describe("before_tool_call hook integration", () => {
       blockReason: "blocked",
     });
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
 
     await expect(tool.execute("call-3", { cmd: "rm -rf /" }, undefined, undefined)).rejects.toThrow(
@@ -70,6 +74,7 @@ describe("before_tool_call hook integration", () => {
     hookRunner.hasHooks.mockReturnValue(true);
     hookRunner.runBeforeToolCall.mockRejectedValue(new Error("boom"));
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any);
 
     await tool.execute("call-4", { path: "/tmp/file" }, undefined, undefined);
@@ -81,6 +86,7 @@ describe("before_tool_call hook integration", () => {
     hookRunner.hasHooks.mockReturnValue(true);
     hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
     const tool = wrapToolWithBeforeToolCallHook({ name: "ReAd", execute } as any, {
       agentId: "main",
       sessionKey: "main",
@@ -113,6 +119,7 @@ describe("before_tool_call hook integration for client tools", () => {
       hasHooks: vi.fn(),
       runBeforeToolCall: vi.fn(),
     };
+    // oxlint-disable-next-line typescript/no-explicit-any
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as any);
   });
 

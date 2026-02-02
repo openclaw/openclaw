@@ -36,8 +36,9 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
     id: "lobster",
     name: "lobster",
     source: "test",
-    config: {} as any,
+    config: {},
     pluginConfig: {},
+    // oxlint-disable-next-line typescript/no-explicit-any
     runtime: { version: "test" } as any,
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     registerTool() {},
@@ -58,7 +59,7 @@ function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi 
 
 function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPluginToolContext {
   return {
-    config: {} as any,
+    config: {},
     workspaceDir: "/tmp",
     agentDir: "/tmp",
     agentId: "main",

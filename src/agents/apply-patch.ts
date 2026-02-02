@@ -73,7 +73,7 @@ const applyPatchSchema = Type.Object({
 
 export function createApplyPatchTool(
   options: { cwd?: string; sandboxRoot?: string } = {},
-  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandboxRoot = options.sandboxRoot;

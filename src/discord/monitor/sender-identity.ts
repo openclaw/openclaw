@@ -28,6 +28,7 @@ export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): str
 
 export function resolveDiscordSenderIdentity(params: {
   author: User;
+  // oxlint-disable-next-line typescript/no-explicit-any
   member?: any;
   pluralkitInfo?: PluralKitMessageInfo | null;
 }): DiscordSenderIdentity {
@@ -73,6 +74,7 @@ export function resolveDiscordSenderIdentity(params: {
 
 export function resolveDiscordSenderLabel(params: {
   author: User;
+  // oxlint-disable-next-line typescript/no-explicit-any
   member?: any;
   pluralkitInfo?: PluralKitMessageInfo | null;
 }): string {
