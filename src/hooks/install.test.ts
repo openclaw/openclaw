@@ -118,6 +118,100 @@ describe("installHooksFromArchive", () => {
     expect(result.hooks).toContain("tar-hook");
     expect(result.targetDir).toBe(path.join(stateDir, "hooks", "tar-hooks"));
   });
+
+  it("rejects hook packs with traversal-like ids", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const archivePath = path.join(workDir, "hooks.tar");
+    const pkgDir = path.join(workDir, "package");
+
+    fs.mkdirSync(path.join(pkgDir, "hooks", "evil-hook"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@evil/..",
+        version: "0.0.1",
+        openclaw: { hooks: ["./hooks/evil-hook"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", "evil-hook", "HOOK.md"),
+      [
+        "---",
+        "name: evil-hook",
+        "description: Evil hook",
+        'metadata: {"openclaw":{"events":["command:new"]}}',
+        "---",
+        "",
+        "# Evil Hook",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", "evil-hook", "handler.ts"),
+      "export default async () => {};\n",
+      "utf-8",
+    );
+    await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
+
+    const hooksDir = path.join(stateDir, "hooks");
+    const { installHooksFromArchive } = await import("./install.js");
+    const result = await installHooksFromArchive({ archivePath, hooksDir });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("reserved path segment");
+  });
+
+  it("rejects hook packs with reserved ids", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const archivePath = path.join(workDir, "hooks.tar");
+    const pkgDir = path.join(workDir, "package");
+
+    fs.mkdirSync(path.join(pkgDir, "hooks", "reserved-hook"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@evil/.",
+        version: "0.0.1",
+        openclaw: { hooks: ["./hooks/reserved-hook"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", "reserved-hook", "HOOK.md"),
+      [
+        "---",
+        "name: reserved-hook",
+        "description: Reserved hook",
+        'metadata: {"openclaw":{"events":["command:new"]}}',
+        "---",
+        "",
+        "# Reserved Hook",
+      ].join("\n"),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "hooks", "reserved-hook", "handler.ts"),
+      "export default async () => {};\n",
+      "utf-8",
+    );
+    await tar.c({ cwd: workDir, file: archivePath }, ["package"]);
+
+    const hooksDir = path.join(stateDir, "hooks");
+    const { installHooksFromArchive } = await import("./install.js");
+    const result = await installHooksFromArchive({ archivePath, hooksDir });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("reserved path segment");
+  });
 });
 
 describe("installHooksFromPath", () => {
