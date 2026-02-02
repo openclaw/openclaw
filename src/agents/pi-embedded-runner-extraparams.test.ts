@@ -91,4 +91,34 @@ describe("applyExtraParamsToAgent", () => {
       "X-Custom": "1",
     });
   });
+
+  it("injects reasoning_content for assistant tool-call messages on OpenRouter", () => {
+    const seenMessages: unknown[] = [];
+    const baseStreamFn: StreamFn = (_model, context, _options) => {
+      seenMessages.push(...(context.messages ?? []));
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = {
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_1", name: "test", input: "{}" }],
+        } as any,
+      ],
+    };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect((context.messages[0] as any).reasoning_content).toBeUndefined();
+    expect((seenMessages[0] as any).reasoning_content).toBe("");
+  });
 });

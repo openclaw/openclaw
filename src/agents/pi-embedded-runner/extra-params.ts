@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -117,6 +117,72 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
     });
 }
 
+function assistantMessageHasToolCall(msg: AgentMessage): boolean {
+  if (!msg || typeof msg !== "object" || msg.role !== "assistant") {
+    return false;
+  }
+  if (!Array.isArray(msg.content)) {
+    return false;
+  }
+  for (const block of msg.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const type = (block as { type?: unknown }).type;
+    if (type === "toolCall" || type === "toolUse" || type === "functionCall") {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * OpenRouter (and some upstream providers it routes to) may require `reasoning_content` to exist
+ * on assistant tool-call messages when thinking is enabled.
+ *
+ * We set an empty string for compatibility, without mutating the original session transcript.
+ */
+function createOpenRouterReasoningContentWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (model?.provider !== "openrouter" || model?.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+
+    const messages = (context as { messages?: unknown }).messages;
+    if (!Array.isArray(messages) || messages.length === 0) {
+      return underlying(model, context, options);
+    }
+
+    let didChange = false;
+    const nextMessages = messages.map((msg) => {
+      const candidate = msg as AgentMessage;
+      if (!assistantMessageHasToolCall(candidate)) {
+        return msg;
+      }
+      const record = msg as Record<string, unknown>;
+      if (typeof record.reasoning_content === "string") {
+        return msg;
+      }
+      didChange = true;
+      return { ...record, reasoning_content: "" };
+    });
+
+    if (!didChange) {
+      return underlying(model, context, options);
+    }
+
+    return underlying(
+      model,
+      {
+        ...(context as unknown as Record<string, unknown>),
+        messages: nextMessages,
+      } as typeof context,
+      options,
+    );
+  };
+}
+
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
@@ -150,6 +216,7 @@ export function applyExtraParamsToAgent(
   }
 
   if (provider === "openrouter") {
+    agent.streamFn = createOpenRouterReasoningContentWrapper(agent.streamFn);
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
   }
