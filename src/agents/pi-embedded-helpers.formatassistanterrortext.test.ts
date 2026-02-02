@@ -53,4 +53,14 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
+  it("does not misclassify DeepSeek 400 errors mentioning role as ordering conflicts", () => {
+    // DeepSeek may return 400 errors with "role" in the message that are NOT role ordering conflicts
+    // e.g., parameter validation errors. These should not be misclassified as "Message ordering conflict"
+    const msg = makeAssistantError(
+      '{"error":{"message":"400 Bad Request: invalid role parameter","type":"invalid_request_error"}}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).not.toContain("Message ordering conflict");
+    expect(result).toContain("invalid_request_error");
+  });
 });

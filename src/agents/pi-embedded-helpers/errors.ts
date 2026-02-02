@@ -341,7 +341,7 @@ export function formatAssistantErrorText(
 
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
   if (
-    /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
+    /incorrect role information|roles must alternate|400.*incorrect.*role|"message".*role.*information/i.test(
       raw,
     )
   ) {
