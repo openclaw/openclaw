@@ -8,6 +8,7 @@ import { upsertSharedEnvVar } from "../../../infra/env-file.js";
 import { shortenHomePath } from "../../../utils.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "../../auth-token.js";
 import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default.js";
+import { setAimlapiApiKey } from "../../onboard-auth.credentials.js";
 import {
   applyAuthProfileConfig,
   applyKimiCodeConfig,
@@ -36,8 +37,6 @@ import {
   setZaiApiKey,
 } from "../../onboard-auth.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
-import { shortenHomePath } from "../../../utils.js";
-import { setAimlapiApiKey } from "../../onboard-auth.credentials.js";
 
 export async function applyNonInteractiveAuthChoice(params: {
   nextConfig: OpenClawConfig;
@@ -262,9 +261,9 @@ export async function applyNonInteractiveAuthChoice(params: {
 
   if (authChoice === "aimlapi-api-key") {
     const resolved = await resolveNonInteractiveApiKey({
-      provider: "openrouter",
+      provider: "aimlapi",
       cfg: baseConfig,
-      flagValue: opts.openrouterApiKey,
+      flagValue: opts.aimlapiApiKey,
       flagName: "--aimlapi-api-key",
       envVar: "AIMLAPI_API_KEY",
       runtime,

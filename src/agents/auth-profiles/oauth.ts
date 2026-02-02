@@ -20,7 +20,7 @@ const OAUTH_PROVIDER_IDS = new Set<OAuthProvider>(
 );
 
 function isOAuthProvider(provider: string): provider is OAuthProvider {
-  return OAUTH_PROVIDER_IDS.has(provider);
+  return OAUTH_PROVIDER_IDS.has(provider as OAuthProvider);
 }
 
 const resolveOAuthProvider = (provider: string): OAuthProvider | null =>

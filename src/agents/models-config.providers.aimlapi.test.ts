@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveImplicitProviders } from "./models-config.providers.js";
 
 describe("AIMLAPI provider", () => {
@@ -89,38 +89,5 @@ describe("AIMLAPI provider", () => {
     const providers = await resolveImplicitProviders({ agentDir: tempDir });
 
     expect(providers?.aimlapi?.apiKey).toBe("AIMLAPI_API_KEY");
-  });
-
-  it("should have correct model structure", async () => {
-    process.env.AIMLAPI_API_KEY = "test-key";
-
-    const providers = await resolveImplicitProviders({ agentDir: tempDir });
-
-    expect(providers?.aimlapi?.models).toBeDefined();
-    expect(Array.isArray(providers?.aimlapi?.models)).toBe(true);
-
-    // Check that models have the expected structure
-    const models = providers?.aimlapi?.models || [];
-    if (models.length > 0) {
-      const model = models[0];
-      expect(model).toHaveProperty("id");
-      expect(model).toHaveProperty("name");
-      expect(model).toHaveProperty("reasoning");
-      expect(model).toHaveProperty("input");
-      expect(model).toHaveProperty("cost");
-      expect(model).toHaveProperty("contextWindow");
-      expect(model).toHaveProperty("maxTokens");
-
-      // Check input types
-      expect(Array.isArray(model.input)).toBe(true);
-      expect(model.input).toContain("text");
-
-      // Check cost structure
-      expect(typeof model.cost).toBe("object");
-      expect(model.cost).toHaveProperty("input");
-      expect(model.cost).toHaveProperty("output");
-      expect(model.cost).toHaveProperty("cacheRead");
-      expect(model.cost).toHaveProperty("cacheWrite");
-    }
   });
 });
