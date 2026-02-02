@@ -75,7 +75,6 @@ const NodesToolSchema = Type.Object({
   screenIndex: Type.Optional(Type.Number()),
   outPath: Type.Optional(Type.String()),
   // location_get
-  maxAgeMs: Type.Optional(Type.Number()),
   locationTimeoutMs: Type.Optional(Type.Number()),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
   // run
