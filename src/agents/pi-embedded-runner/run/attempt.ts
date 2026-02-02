@@ -432,7 +432,8 @@ export async function runEmbeddedAttempt(
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
       });
 
-      const additionalExtensionPaths = buildEmbeddedExtensionPaths({
+      // Call for side effects (sets compaction/pruning runtime state)
+      buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
@@ -471,7 +472,6 @@ export async function runEmbeddedAttempt(
         thinkingLevel: mapThinkingLevel(params.thinkLevel),
         tools: builtInTools,
         customTools: allCustomTools,
-        additionalExtensionPaths,
         sessionManager,
         settingsManager,
       }));
