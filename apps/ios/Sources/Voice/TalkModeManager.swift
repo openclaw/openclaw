@@ -118,13 +118,17 @@ final class TalkModeManager: NSObject {
         let micOk = await Self.requestMicrophonePermission()
         guard micOk else {
             self.logger.warning("start blocked: microphone permission denied")
-            self.statusText = "Microphone permission denied"
+            self.statusText = Self.permissionMessage(
+                kind: "Microphone",
+                status: AVAudioSession.sharedInstance().recordPermission)
             return
         }
         let speechOk = await Self.requestSpeechPermission()
         guard speechOk else {
             self.logger.warning("start blocked: speech permission denied")
-            self.statusText = "Speech recognition permission denied"
+            self.statusText = Self.permissionMessage(
+                kind: "Speech recognition",
+                status: SFSpeechRecognizer.authorizationStatus())
             return
         }
 
@@ -210,14 +214,18 @@ final class TalkModeManager: NSObject {
         if !self.allowSimulatorCapture {
             let micOk = await Self.requestMicrophonePermission()
             guard micOk else {
-                self.statusText = "Microphone permission denied"
+                self.statusText = Self.permissionMessage(
+                    kind: "Microphone",
+                    status: AVAudioSession.sharedInstance().recordPermission)
                 throw NSError(domain: "TalkMode", code: 4, userInfo: [
                     NSLocalizedDescriptionKey: "Microphone permission denied",
                 ])
             }
             let speechOk = await Self.requestSpeechPermission()
             guard speechOk else {
-                self.statusText = "Speech recognition permission denied"
+                self.statusText = Self.permissionMessage(
+                    kind: "Speech recognition",
+                    status: SFSpeechRecognizer.authorizationStatus())
                 throw NSError(domain: "TalkMode", code: 5, userInfo: [
                     NSLocalizedDescriptionKey: "Speech recognition permission denied",
                 ])
@@ -1301,21 +1309,6 @@ final class TalkModeManager: NSObject {
         try session.setActive(true, options: [])
     }
 
-    private nonisolated static func requestMicrophonePermission() async -> Bool {
-        await withCheckedContinuation(isolation: nil) { cont in
-            AVAudioApplication.requestRecordPermission { ok in
-                cont.resume(returning: ok)
-            }
-        }
-    }
-
-    private nonisolated static func requestSpeechPermission() async -> Bool {
-        await withCheckedContinuation(isolation: nil) { cont in
-            SFSpeechRecognizer.requestAuthorization { status in
-                cont.resume(returning: status == .authorized)
-            }
-        }
-    }
 }
 
 private struct IncrementalSpeechBuffer {
@@ -1438,6 +1431,105 @@ private struct IncrementalSpeechBuffer {
 
     private static func isBoundary(_ ch: Character) -> Bool {
         ch == "." || ch == "!" || ch == "?" || ch == "\n"
+    }
+}
+
+extension TalkModeManager {
+    nonisolated static func requestMicrophonePermission() async -> Bool {
+        let session = AVAudioSession.sharedInstance()
+        switch session.recordPermission {
+        case .granted:
+            return true
+        case .denied:
+            return false
+        case .undetermined:
+            break
+        @unknown default:
+            return false
+        }
+
+        return await self.requestPermissionWithTimeout { completion in
+            AVAudioSession.sharedInstance().requestRecordPermission { ok in
+                completion(ok)
+            }
+        }
+    }
+
+    nonisolated static func requestSpeechPermission() async -> Bool {
+        let status = SFSpeechRecognizer.authorizationStatus()
+        switch status {
+        case .authorized:
+            return true
+        case .denied, .restricted:
+            return false
+        case .notDetermined:
+            break
+        @unknown default:
+            return false
+        }
+
+        return await self.requestPermissionWithTimeout { completion in
+            SFSpeechRecognizer.requestAuthorization { authStatus in
+                completion(authStatus == .authorized)
+            }
+        }
+    }
+
+    private nonisolated static func requestPermissionWithTimeout(
+        _ operation: @escaping @Sendable (@escaping (Bool) -> Void) -> Void) async -> Bool
+    {
+        do {
+            return try await AsyncTimeout.withTimeout(
+                seconds: 8,
+                onTimeout: { NSError(domain: "TalkMode", code: 6, userInfo: [
+                    NSLocalizedDescriptionKey: "permission request timed out",
+                ]) },
+                operation: {
+                    await withCheckedContinuation(isolation: nil) { cont in
+                        Task { @MainActor in
+                            operation { ok in
+                                cont.resume(returning: ok)
+                            }
+                        }
+                    }
+                })
+        } catch {
+            return false
+        }
+    }
+
+    static func permissionMessage(
+        kind: String,
+        status: AVAudioSession.RecordPermission) -> String
+    {
+        switch status {
+        case .denied:
+            return "\(kind) permission denied"
+        case .undetermined:
+            return "\(kind) permission not granted"
+        case .granted:
+            return "\(kind) permission denied"
+        @unknown default:
+            return "\(kind) permission denied"
+        }
+    }
+
+    static func permissionMessage(
+        kind: String,
+        status: SFSpeechRecognizerAuthorizationStatus) -> String
+    {
+        switch status {
+        case .denied:
+            return "\(kind) permission denied"
+        case .restricted:
+            return "\(kind) permission restricted"
+        case .notDetermined:
+            return "\(kind) permission not granted"
+        case .authorized:
+            return "\(kind) permission denied"
+        @unknown default:
+            return "\(kind) permission denied"
+        }
     }
 }
 

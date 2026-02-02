@@ -22,7 +22,6 @@ import {
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import { handlePTTCommand } from "./commands-ptt.js";
-import { handleTtsCommands } from "./commands-tts.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
@@ -32,6 +31,7 @@ import {
   handleUsageCommand,
 } from "./commands-session.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
+import { handleTtsCommands } from "./commands-tts.js";
 import { routeReply } from "./route-reply.js";
 
 let HANDLERS: CommandHandler[] | null = null;
