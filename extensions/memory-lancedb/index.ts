@@ -29,6 +29,7 @@ type MemoryEntry = {
   vector: number[];
   importance: number;
   category: MemoryCategory;
+  agent_id: string;
   createdAt: number;
 };
 
@@ -71,6 +72,8 @@ class MemoryDB {
 
     if (tables.includes(TABLE_NAME)) {
       this.table = await this.db.openTable(TABLE_NAME);
+      // Migrate: add agent_id column if missing (existing rows get "main")
+      await this.migrateAgentId();
     } else {
       this.table = await this.db.createTable(TABLE_NAME, [
         {
@@ -79,10 +82,27 @@ class MemoryDB {
           vector: Array.from({ length: this.vectorDim }).fill(0),
           importance: 0,
           category: "other",
+          agent_id: "main",
           createdAt: 0,
         },
       ]);
       await this.table.delete('id = "__schema__"');
+    }
+  }
+
+  private async migrateAgentId(): Promise<void> {
+    try {
+      const sample = await this.table!.query().limit(1).toArray();
+      if (sample.length > 0 && !("agent_id" in sample[0])) {
+        await this.table!.addColumns([{ name: "agent_id", valueSql: "'main'" }]);
+      }
+    } catch {
+      // If check fails, try adding column anyway (idempotent)
+      try {
+        await this.table!.addColumns([{ name: "agent_id", valueSql: "'main'" }]);
+      } catch {
+        // Column already exists — safe to ignore
+      }
     }
   }
 
@@ -99,10 +119,14 @@ class MemoryDB {
     return fullEntry;
   }
 
-  async search(vector: number[], limit = 5, minScore = 0.5): Promise<MemorySearchResult[]> {
+  async search(vector: number[], limit = 5, minScore = 0.5, agentId?: string): Promise<MemorySearchResult[]> {
     await this.ensureInitialized();
 
-    const results = await this.table!.vectorSearch(vector).limit(limit).toArray();
+    let query = this.table!.vectorSearch(vector);
+    if (agentId) {
+      query = query.where(`agent_id = '${agentId}'`);
+    }
+    const results = await query.limit(limit).toArray();
 
     // LanceDB uses L2 distance by default; convert to similarity score
     const mapped = results.map((row) => {
@@ -116,6 +140,7 @@ class MemoryDB {
           vector: row.vector as number[],
           importance: row.importance as number,
           category: row.category as MemoryEntry["category"],
+          agent_id: (row.agent_id as string) ?? "main",
           createdAt: row.createdAt as number,
         },
         score,
@@ -140,12 +165,17 @@ class MemoryDB {
     category: string,
     limit = 50,
     minImportance = 0,
+    agentId?: string,
   ): Promise<MemoryEntry[]> {
     await this.ensureInitialized();
-    const filter =
-      minImportance > 0
-        ? `category = '${category}' AND importance >= ${minImportance}`
-        : `category = '${category}'`;
+    const conditions: string[] = [`category = '${category}'`];
+    if (minImportance > 0) {
+      conditions.push(`importance >= ${minImportance}`);
+    }
+    if (agentId) {
+      conditions.push(`agent_id = '${agentId}'`);
+    }
+    const filter = conditions.join(" AND ");
     const results = await this.table!.query().where(filter).limit(limit).toArray();
     return results.map((row) => ({
       id: row.id as string,
@@ -153,12 +183,17 @@ class MemoryDB {
       vector: row.vector as number[],
       importance: row.importance as number,
       category: row.category as MemoryEntry["category"],
+      agent_id: (row.agent_id as string) ?? "main",
       createdAt: row.createdAt as number,
     }));
   }
 
-  async count(): Promise<number> {
+  async count(agentId?: string): Promise<number> {
     await this.ensureInitialized();
+    if (agentId) {
+      const rows = await this.table!.query().where(`agent_id = '${agentId}'`).toArray();
+      return rows.length;
+    }
     return this.table!.countRows();
   }
 }
@@ -268,7 +303,7 @@ const memoryPlugin = {
     // ========================================================================
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_recall",
         label: "Memory Recall",
         description:
@@ -278,10 +313,11 @@ const memoryPlugin = {
           limit: Type.Optional(Type.Number({ description: "Max results (default: 5)" })),
         }),
         async execute(_toolCallId, params) {
+          const agentId = ctx.agentId ?? "main";
           const { query, limit = 5 } = params as { query: string; limit?: number };
 
           const vector = await embeddings.embed(query);
-          const results = await db.search(vector, limit, 0.1);
+          const results = await db.search(vector, limit, 0.1, agentId);
 
           if (results.length === 0) {
             return {
@@ -311,12 +347,12 @@ const memoryPlugin = {
             details: { count: results.length, memories: sanitizedResults },
           };
         },
-      },
+      }),
       { name: "memory_recall" },
     );
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_store",
         label: "Memory Store",
         description:
@@ -327,6 +363,7 @@ const memoryPlugin = {
           category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
         }),
         async execute(_toolCallId, params) {
+          const agentId = ctx.agentId ?? "main";
           const {
             text,
             importance = 0.7,
@@ -339,8 +376,8 @@ const memoryPlugin = {
 
           const vector = await embeddings.embed(text);
 
-          // Check for duplicates
-          const existing = await db.search(vector, 1, 0.95);
+          // Check for duplicates within the same agent's namespace
+          const existing = await db.search(vector, 1, 0.95, agentId);
           if (existing.length > 0) {
             return {
               content: [
@@ -362,6 +399,7 @@ const memoryPlugin = {
             vector,
             importance,
             category,
+            agent_id: agentId,
           });
 
           return {
@@ -369,12 +407,12 @@ const memoryPlugin = {
             details: { action: "created", id: entry.id },
           };
         },
-      },
+      }),
       { name: "memory_store" },
     );
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_forget",
         label: "Memory Forget",
         description: "Delete specific memories. GDPR-compliant.",
@@ -383,6 +421,7 @@ const memoryPlugin = {
           memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
         }),
         async execute(_toolCallId, params) {
+          const agentId = ctx.agentId ?? "main";
           const { query, memoryId } = params as { query?: string; memoryId?: string };
 
           if (memoryId) {
@@ -395,7 +434,7 @@ const memoryPlugin = {
 
           if (query) {
             const vector = await embeddings.embed(query);
-            const results = await db.search(vector, 5, 0.7);
+            const results = await db.search(vector, 5, 0.7, agentId);
 
             if (results.length === 0) {
               return {
@@ -440,7 +479,7 @@ const memoryPlugin = {
             details: { error: "missing_param" },
           };
         },
-      },
+      }),
       { name: "memory_forget" },
     );
 
@@ -494,16 +533,17 @@ const memoryPlugin = {
     // Lifecycle Hooks
     // ========================================================================
 
-    // Auto-recall: inject relevant memories before agent starts
+    // Auto-recall: inject relevant memories before agent starts (scoped by agentId)
     if (cfg.autoRecall) {
-      api.on("before_agent_start", async (event) => {
+      api.on("before_agent_start", async (event, ctx) => {
         if (!event.prompt || event.prompt.length < 5) {
           return;
         }
 
         try {
+          const agentId = ctx.agentId ?? "main";
           const vector = await embeddings.embed(event.prompt);
-          const results = await db.search(vector, 3, 0.3);
+          const results = await db.search(vector, 3, 0.3, agentId);
 
           if (results.length === 0) {
             return;
@@ -513,7 +553,7 @@ const memoryPlugin = {
             .map((r) => `- [${r.entry.category}] ${r.entry.text}`)
             .join("\n");
 
-          api.logger.info?.(`memory-lancedb: injecting ${results.length} memories into context`);
+          api.logger.info?.(`memory-lancedb: injecting ${results.length} memories for agent=${agentId}`);
 
           return {
             prependContext: `<relevant-memories>\nThe following memories may be relevant to this conversation:\n${memoryContext}\n</relevant-memories>`,
@@ -524,12 +564,13 @@ const memoryPlugin = {
       });
     }
 
-    // Auto-capture: analyze and store important information after agent ends
+    // Auto-capture: analyze and store important information after agent ends (scoped by agentId)
     if (cfg.autoCapture) {
-      api.on("agent_end", async (event) => {
+      api.on("agent_end", async (event, ctx) => {
         if (!event.success || !event.messages || event.messages.length === 0) {
           return;
         }
+        const agentId = ctx.agentId ?? "main";
 
         try {
           // Extract text content from messages (handling unknown[] type)
@@ -584,8 +625,8 @@ const memoryPlugin = {
             const category = detectCategory(text);
             const vector = await embeddings.embed(text);
 
-            // Check for duplicates (high similarity threshold)
-            const existing = await db.search(vector, 1, 0.95);
+            // Check for duplicates within this agent's namespace
+            const existing = await db.search(vector, 1, 0.95, agentId);
             if (existing.length > 0) {
               continue;
             }
@@ -595,6 +636,7 @@ const memoryPlugin = {
               vector,
               importance: 0.7,
               category,
+              agent_id: agentId,
             });
             stored++;
           }
@@ -612,15 +654,16 @@ const memoryPlugin = {
     // Core Memory Hook
     // ========================================================================
 
-    // Inject core memories as virtual MEMORY.md at bootstrap time
+    // Inject core memories as virtual MEMORY.md at bootstrap time (scoped by agentId)
     if (cfg.coreMemory?.enabled) {
-      api.on("agent_bootstrap", async (event) => {
+      api.on("agent_bootstrap", async (event, ctx) => {
         try {
+          const agentId = ctx.agentId ?? "main";
           const maxEntries = cfg.coreMemory?.maxEntries ?? 50;
           const minImportance = cfg.coreMemory?.minImportance ?? 0.5;
 
-          // Use category-based query for reliable core memory retrieval
-          const coreMemories = await db.listByCategory("core", maxEntries, minImportance);
+          // Use category-based query for reliable core memory retrieval, scoped to this agent
+          const coreMemories = await db.listByCategory("core", maxEntries, minImportance, agentId);
 
           if (coreMemories.length === 0) {
             return;
@@ -653,7 +696,7 @@ const memoryPlugin = {
           }
 
           api.logger.info?.(
-            `memory-lancedb: injected ${coreMemories.length} core memories into context`,
+            `memory-lancedb: injected ${coreMemories.length} core memories for agent=${agentId}`,
           );
 
           return { files };
