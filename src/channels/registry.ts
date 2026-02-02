@@ -13,6 +13,7 @@ export const CHAT_CHANNEL_ORDER = [
   "slack",
   "signal",
   "imessage",
+  "spixi",
 ] as const;
 
 export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
@@ -108,6 +109,16 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     docsLabel: "imessage",
     blurb: "this is still a work in progress.",
     systemImage: "message.fill",
+  },
+  spixi: {
+    id: "spixi",
+    label: "Spixi",
+    selectionLabel: "Spixi (Fully decentralized messaging)",
+    detailLabel: "Spixi P2P",
+    docsPath: "/channels/spixi",
+    docsLabel: "spixi",
+    blurb: "decentralized, privacy-first, post quantum secure messaging via Ixian Platform.",
+    systemImage: "shield.fill",
   },
 };
 

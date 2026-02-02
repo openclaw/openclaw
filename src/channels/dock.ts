@@ -10,6 +10,7 @@ import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
 import { resolveSlackAccount, resolveSlackReplyToMode } from "../slack/accounts.js";
 import { buildSlackThreadingToolContext } from "../slack/threading-tool-context.js";
+import { resolveSpixiAccount } from "../spixi/accounts.js";
 import { resolveTelegramAccount } from "../telegram/accounts.js";
 import { escapeRegExp, normalizeE164 } from "../utils.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
@@ -532,6 +533,32 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     threading: {
       buildToolContext: ({ context, hasRepliedRef }) =>
         buildIMessageThreadToolContext({ context, hasRepliedRef }),
+    },
+  },
+  spixi: {
+    id: "spixi",
+    capabilities: {
+      chatTypes: ["direct"],
+      media: false,
+    },
+    config: {
+      resolveAllowFrom: ({ cfg, accountId }) =>
+        (resolveSpixiAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
+          String(entry),
+        ),
+      formatAllowFrom: ({ allowFrom }) => formatLower(allowFrom),
+    },
+    threading: {
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const isDirect = context.ChatType?.toLowerCase() === "direct";
+        const channelId =
+          (isDirect ? (context.From ?? context.To) : context.To)?.trim() || undefined;
+        return {
+          currentChannelId: channelId,
+          currentThreadTs: context.ReplyToId,
+          hasRepliedRef,
+        };
+      },
     },
   },
 };

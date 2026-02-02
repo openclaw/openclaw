@@ -58,7 +58,7 @@ import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
-import { createAgentEventHandler } from "./server-chat.js";
+import { createAgentEventHandler, createChannelMessageHandler } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
@@ -427,10 +427,34 @@ export async function startGatewayServer(
   });
   let { cron, storePath: cronStorePath } = cronState;
 
+  const handleChannelMessage = createChannelMessageHandler({
+    loadConfig,
+    log,
+    agentRunSeq,
+    chatRunState,
+    nodeSendToSession,
+    broadcast,
+    resolveSessionKey: (channel: string, from: string) => {
+      // Simple deterministic mapping for now
+      // TODO: In future, use a persistent registry
+      return `channel:${channel}:${from}`;
+    },
+    onReply: async (channelId, accountId, to, text) => {
+      const runtime = channelRuntimeEnvs[channelId];
+      if (runtime && (runtime as any).channel && (runtime as any).channel.spixi) {
+        // Spixi specific for now, but generic channels should have standardized send
+        await (runtime as any).channel.spixi.sendMessage(to, text);
+      } else {
+        log.warn(`[${channelId}:${accountId}] No sendMessage capability found on runtime`);
+      }
+    },
+  });
+
   const channelManager = createChannelManager({
     loadConfig,
     channelLogs,
     channelRuntimeEnvs,
+    handleChannelMessage,
   });
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;

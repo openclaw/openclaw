@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/spixi",
+  "version": "0.1.0",
+  "description": "OpenClaw Spixi channel plugin",
+  "type": "module",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "mqtt": "^5.0.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
