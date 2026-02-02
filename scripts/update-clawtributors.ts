@@ -193,7 +193,7 @@ for (const [login, lines] of linesByLogin.entries()) {
   }
   let user = apiByLogin.get(login);
   if (!user) {
-    user = fetchUser(login);
+    user = fetchUser(login) || undefined;
   }
   if (user) {
     const contributions = contributionsByLogin.get(login) ?? 0;
@@ -256,7 +256,9 @@ function run(cmd: string): string {
   }).trim();
 }
 
+// oxlint-disable-next-line typescript/no-explicit-any
 function parsePaginatedJson(raw: string): any[] {
+  // oxlint-disable-next-line typescript/no-explicit-any
   const items: any[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) {
