@@ -12,6 +12,7 @@
 
 import type { RequestClient } from "@buape/carbon";
 import { execFile } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -58,28 +59,10 @@ export async function getAudioDuration(filePath: string): Promise<number> {
  */
 export async function generateWaveform(filePath: string): Promise<string> {
   try {
-    // Use ffmpeg to extract raw audio samples and compute amplitudes
-    // We'll get the peak amplitude for each segment of the audio
-    const { stdout } = await execFileAsync(
-      "ffmpeg",
-      [
-        "-i",
-        filePath,
-        "-af",
-        `aresample=8000,asetnsamples=n=${WAVEFORM_SAMPLES}:p=0,astats=metadata=1:reset=1`,
-        "-f",
-        "null",
-        "-",
-      ],
-      { encoding: "buffer", maxBuffer: 1024 * 1024 },
-    );
-
-    // Fallback: generate a simple waveform by sampling the audio
-    // This is a simplified approach - extract raw PCM and sample it
-    const waveformData = await generateWaveformFromPcm(filePath);
-    return waveformData;
+    // Extract raw PCM and sample amplitude values
+    return await generateWaveformFromPcm(filePath);
   } catch {
-    // If ffmpeg approach fails, generate a placeholder waveform
+    // If PCM extraction fails, generate a placeholder waveform
     return generatePlaceholderWaveform();
   }
 }
@@ -89,7 +72,7 @@ export async function generateWaveform(filePath: string): Promise<string> {
  */
 async function generateWaveformFromPcm(filePath: string): Promise<string> {
   const tempDir = os.tmpdir();
-  const tempPcm = path.join(tempDir, `waveform-${Date.now()}.raw`);
+  const tempPcm = path.join(tempDir, `waveform-${crypto.randomUUID()}.raw`);
 
   try {
     // Convert to raw 16-bit signed PCM, mono, 8kHz
@@ -190,7 +173,7 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
 
   // Convert to OGG/Opus
   const tempDir = os.tmpdir();
-  const outputPath = path.join(tempDir, `voice-${Date.now()}.ogg`);
+  const outputPath = path.join(tempDir, `voice-${crypto.randomUUID()}.ogg`);
 
   await execFileAsync("ffmpeg", [
     "-y",
@@ -246,10 +229,10 @@ export async function sendDiscordVoiceMessage(
   const filename = "voice-message.ogg";
   const fileSize = audioBuffer.byteLength;
 
-  // Step 1: Request upload URL (using fetch directly for proper headers)
-  const uploadUrlRes = await fetch(
-    `https://discord.com/api/v10/channels/${channelId}/attachments`,
-    {
+  // Step 1: Request upload URL (using fetch directly for proper Content-Type header)
+  // Wrapped in retry runner for consistency with other Discord API calls
+  const uploadUrlResponse = await request(async () => {
+    const res = await fetch(`https://discord.com/api/v10/channels/${channelId}/attachments`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -264,15 +247,15 @@ export async function sendDiscordVoiceMessage(
           },
         ],
       }),
-    },
-  );
+    });
 
-  if (!uploadUrlRes.ok) {
-    const errorBody = await uploadUrlRes.text();
-    throw new Error(`Failed to get upload URL: ${uploadUrlRes.status} ${errorBody}`);
-  }
+    if (!res.ok) {
+      const errorBody = await res.text();
+      throw new Error(`Failed to get upload URL: ${res.status} ${errorBody}`);
+    }
 
-  const uploadUrlResponse = (await uploadUrlRes.json()) as UploadUrlResponse;
+    return (await res.json()) as UploadUrlResponse;
+  }, "voice-upload-url");
 
   if (!uploadUrlResponse.attachments?.[0]) {
     throw new Error("Failed to get upload URL for voice message");
@@ -281,6 +264,7 @@ export async function sendDiscordVoiceMessage(
   const { upload_url, upload_filename } = uploadUrlResponse.attachments[0];
 
   // Step 2: Upload the file to Discord's CDN
+  // Note: Not wrapped in retry runner - upload URLs are single-use and CDN behavior differs
   const uploadResponse = await fetch(upload_url, {
     method: "PUT",
     headers: {
