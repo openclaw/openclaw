@@ -155,7 +155,6 @@ export function extractMentions(message: string): string[] {
   const mentions: string[] = [];
   let match: RegExpExecArray | null;
 
-  // biome-ignore lint/suspicious/noAssignInExpressions: Standard regex iteration pattern
   while ((match = mentionRegex.exec(message)) !== null) {
     const username = match[1];
     if (username) {

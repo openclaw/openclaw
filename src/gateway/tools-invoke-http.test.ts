@@ -34,6 +34,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const port = await getFreePort();
@@ -60,12 +61,14 @@ describe("POST /tools/invoke", () => {
     // No explicit tool allowlist; rely on profile + alsoAllow.
     testState.agentsConfig = {
       list: [{ id: "main" }],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     // minimal profile does NOT include agents_list, but alsoAllow should.
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       tools: { profile: "minimal", alsoAllow: ["agents_list"] },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
 
     const port = await getFreePort();
@@ -88,6 +91,7 @@ describe("POST /tools/invoke", () => {
   it("supports tools.alsoAllow without allow/profile (implicit allow-all)", async () => {
     testState.agentsConfig = {
       list: [{ id: "main" }],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const { CONFIG_PATH } = await import("../config/config.js");
@@ -125,6 +129,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const port = await getFreePort();
@@ -175,6 +180,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const port = await getFreePort();
@@ -210,6 +216,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const port = await getFreePort();
@@ -239,6 +246,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const port = await getFreePort();
@@ -266,11 +274,13 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       tools: { profile: "minimal" },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
 
     const port = await getFreePort();
@@ -305,6 +315,7 @@ describe("POST /tools/invoke", () => {
           },
         },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     testState.sessionConfig = { mainKey: "primary" };
 
