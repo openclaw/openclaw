@@ -28,6 +28,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "thread-create": "to",
     "thread-list": "none",
     "thread-reply": "to",
+    "read-thread": "to",
     search: "none",
     sticker: "to",
     "sticker-search": "none",
