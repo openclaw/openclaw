@@ -22,7 +22,11 @@ import {
 import { buildInlineKeyboard } from "../send.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
-import { buildTelegramThreadParams, resolveTelegramReplyId } from "./helpers.js";
+import {
+  buildTelegramThreadParams,
+  resolveTelegramReplyId,
+  type TelegramThreadSpec,
+} from "./helpers.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
@@ -35,7 +39,7 @@ export async function deliverReplies(params: {
   bot: Bot;
   replyToMode: ReplyToMode;
   textLimit: number;
-  messageThreadId?: number;
+  thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
   /** Callback invoked before sending a voice message to switch typing indicator. */
@@ -52,7 +56,7 @@ export async function deliverReplies(params: {
     bot,
     replyToMode,
     textLimit,
-    messageThreadId,
+    thread,
     linkPreview,
     replyQuoteText,
   } = params;
@@ -114,7 +118,7 @@ export async function deliverReplies(params: {
           replyToMessageId:
             replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
           replyQuoteText,
-          messageThreadId,
+          thread,
           textMode: "html",
           plainText: chunk.text,
           linkPreview,
@@ -162,8 +166,8 @@ export async function deliverReplies(params: {
         ...(shouldAttachButtonsToMedia ? { reply_markup: replyMarkup } : {}),
         ...buildTelegramSendParams({
           replyToMessageId,
-          messageThreadId,
           replyQuoteText,
+          thread,
         }),
       };
       if (isGif) {
@@ -227,7 +231,7 @@ export async function deliverReplies(params: {
                 replyToId,
                 replyToMode,
                 hasReplied,
-                messageThreadId,
+                thread,
                 linkPreview,
                 replyMarkup,
                 replyQuoteText,
@@ -268,7 +272,7 @@ export async function deliverReplies(params: {
             replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
           await sendTelegramText(bot, chatId, chunk.html, runtime, {
             replyToMessageId: replyToMessageIdFollowup,
-            messageThreadId,
+            thread,
             textMode: "html",
             plainText: chunk.text,
             linkPreview,
@@ -447,7 +451,7 @@ async function sendTelegramVoiceFallbackText(opts: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   hasReplied: boolean;
-  messageThreadId?: number;
+  thread?: TelegramThreadSpec | null;
   linkPreview?: boolean;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyQuoteText?: string;
@@ -460,7 +464,7 @@ async function sendTelegramVoiceFallbackText(opts: {
       replyToMessageId:
         opts.replyToId && (opts.replyToMode === "all" || !hasReplied) ? opts.replyToId : undefined,
       replyQuoteText: opts.replyQuoteText,
-      messageThreadId: opts.messageThreadId,
+      thread: opts.thread,
       textMode: "html",
       plainText: chunk.text,
       linkPreview: opts.linkPreview,
@@ -475,10 +479,10 @@ async function sendTelegramVoiceFallbackText(opts: {
 
 function buildTelegramSendParams(opts?: {
   replyToMessageId?: number;
-  messageThreadId?: number;
+  thread?: TelegramThreadSpec | null;
   replyQuoteText?: string;
 }): Record<string, unknown> {
-  const threadParams = buildTelegramThreadParams(opts?.messageThreadId);
+  const threadParams = buildTelegramThreadParams(opts?.thread);
   const params: Record<string, unknown> = {};
   const quoteText = opts?.replyQuoteText?.trim();
   if (opts?.replyToMessageId) {
@@ -505,7 +509,7 @@ async function sendTelegramText(
   opts?: {
     replyToMessageId?: number;
     replyQuoteText?: string;
-    messageThreadId?: number;
+    thread?: TelegramThreadSpec | null;
     textMode?: "markdown" | "html";
     plainText?: string;
     linkPreview?: boolean;
@@ -515,7 +519,7 @@ async function sendTelegramText(
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
     replyQuoteText: opts?.replyQuoteText,
-    messageThreadId: opts?.messageThreadId,
+    thread: opts?.thread,
   });
   // Add link_preview_options when link preview is disabled.
   const linkPreviewEnabled = opts?.linkPreview ?? true;
