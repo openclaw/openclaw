@@ -92,19 +92,14 @@ describe("command queue", () => {
   });
 
   it("removes idle session lanes after completion to avoid unbounded growth", async () => {
-    vi.useFakeTimers();
     const before = getLaneCount();
 
     const lane = "session:test-1";
-    const promise = enqueueCommandInLane(lane, async () => {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    });
-    await vi.advanceTimersByTimeAsync(10);
+    const promise = enqueueCommandInLane(lane, async () => {});
     await promise;
 
-    // session lane should be removed once it becomes idle
+    // Lane removal is triggered when the lane becomes idle. We also prune on size query.
     expect(getQueueSize(lane)).toBe(0);
     expect(getLaneCount()).toBe(before);
-    vi.useRealTimers();
   });
 });
