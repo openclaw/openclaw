@@ -38,7 +38,11 @@ export async function handleDiscordMessageAction(
       required: true,
       allowEmpty: true,
     });
-    const mediaUrl = readStringParam(params, "media", { trim: false });
+    // Support media, path, and filePath for media URL
+    const mediaUrl =
+      readStringParam(params, "media", { trim: false }) ??
+      readStringParam(params, "path", { trim: false }) ??
+      readStringParam(params, "filePath", { trim: false });
     const replyTo = readStringParam(params, "replyTo");
     const embeds = Array.isArray(params.embeds) ? params.embeds : undefined;
     const asVoice = params.asVoice === true;

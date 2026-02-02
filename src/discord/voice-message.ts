@@ -241,26 +241,38 @@ export async function sendDiscordVoiceMessage(
   metadata: VoiceMessageMetadata,
   replyTo: string | undefined,
   request: RetryRunner,
+  token: string,
 ): Promise<{ id: string; channel_id: string }> {
   const filename = "voice-message.ogg";
   const fileSize = audioBuffer.byteLength;
 
-  // Step 1: Request upload URL
-  const uploadUrlResponse = (await request(
-    () =>
-      rest.post(`/channels/${channelId}/attachments`, {
-        body: {
-          files: [
-            {
-              filename,
-              file_size: fileSize,
-              id: "0",
-            },
-          ],
-        },
-      }) as Promise<UploadUrlResponse>,
-    "voice-upload-url",
-  )) as UploadUrlResponse;
+  // Step 1: Request upload URL (using fetch directly for proper headers)
+  const uploadUrlRes = await fetch(
+    `https://discord.com/api/v10/channels/${channelId}/attachments`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bot ${token}`,
+      },
+      body: JSON.stringify({
+        files: [
+          {
+            filename,
+            file_size: fileSize,
+            id: "0",
+          },
+        ],
+      }),
+    },
+  );
+
+  if (!uploadUrlRes.ok) {
+    const errorBody = await uploadUrlRes.text();
+    throw new Error(`Failed to get upload URL: ${uploadUrlRes.status} ${errorBody}`);
+  }
+
+  const uploadUrlResponse = (await uploadUrlRes.json()) as UploadUrlResponse;
 
   if (!uploadUrlResponse.attachments?.[0]) {
     throw new Error("Failed to get upload URL for voice message");
