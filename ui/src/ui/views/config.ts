@@ -346,9 +346,10 @@ function applySchemaDefaults(value: unknown, schema: JsonSchema | undefined): un
     return mutated ? next : value;
   }
   if (type === "array" && Array.isArray(value) && schema.items) {
-    const itemSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
     let mutated = false;
-    const next = value.map((entry) => {
+    const next = value.map((entry, index) => {
+      const itemSchema = Array.isArray(schema.items) ? schema.items[index] : schema.items;
+      if (!itemSchema) return entry;
       const normalized = applySchemaDefaults(entry, itemSchema as JsonSchema);
       if (normalized !== entry) mutated = true;
       return normalized;
