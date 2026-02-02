@@ -95,7 +95,7 @@ async function saveToLanceDB(params: {
   ].join("\n");
 
   // Call Gateway API to invoke memory_store
-  const apiUrl = `http://localhost:${gatewayPort}/api/tools/invoke`;
+  const apiUrl = `http://localhost:${gatewayPort}/tools/invoke`;
   const response = await fetch(apiUrl, {
     method: "POST",
     headers: {

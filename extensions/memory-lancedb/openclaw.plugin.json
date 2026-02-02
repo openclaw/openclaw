@@ -25,6 +25,22 @@
     "autoRecall": {
       "label": "Auto-Recall",
       "help": "Automatically inject relevant memories into context"
+    },
+    "coreMemory.enabled": {
+      "label": "Core Memory",
+      "help": "Inject core memories as virtual MEMORY.md at session start (replaces MEMORY.md file)"
+    },
+    "coreMemory.maxEntries": {
+      "label": "Max Core Entries",
+      "placeholder": "50",
+      "advanced": true,
+      "help": "Maximum number of core memories to load"
+    },
+    "coreMemory.minImportance": {
+      "label": "Min Core Importance",
+      "placeholder": "0.5",
+      "advanced": true,
+      "help": "Minimum importance threshold for core memories (0-1)"
     }
   },
   "configSchema": {
@@ -53,6 +69,21 @@
       },
       "autoRecall": {
         "type": "boolean"
+      },
+      "coreMemory": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "maxEntries": {
+            "type": "number"
+          },
+          "minImportance": {
+            "type": "number"
+          }
+        }
       }
     },
     "required": ["embedding"]

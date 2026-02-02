@@ -438,7 +438,7 @@ describe("session-memory hook", () => {
 
       // Verify fetch was called
       expect(fetchCalls.length).toBe(1);
-      expect(fetchCalls[0].url).toBe("http://localhost:18789/api/tools/invoke");
+      expect(fetchCalls[0].url).toBe("http://localhost:18789/tools/invoke");
 
       // Verify headers
       const headers = fetchCalls[0].options.headers as Record<string, string>;
