@@ -136,17 +136,30 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
   return `${base}\n\n${suffix}`.trim();
 }
 
-function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
+function resolveUtf16Charset(
+  buffer?: Buffer,
+  mimeHint?: string,
+): "utf-16le" | "utf-16be" | undefined {
   if (!buffer || buffer.length < 2) {
     return undefined;
   }
   const b0 = buffer[0];
   const b1 = buffer[1];
+  // BOM detection is always reliable
   if (b0 === 0xff && b1 === 0xfe) {
     return "utf-16le";
   }
   if (b0 === 0xfe && b1 === 0xff) {
     return "utf-16be";
+  }
+  // Skip null-byte heuristic for known binary MIME types (#7444)
+  // Binary formats like audio/ogg often have high null-byte density that triggers false positives
+  if (
+    mimeHint?.startsWith("audio/") ||
+    mimeHint?.startsWith("video/") ||
+    mimeHint?.startsWith("image/")
+  ) {
+    return undefined;
   }
   const sampleLen = Math.min(buffer.length, 2048);
   let zeroEven = 0;
@@ -273,12 +286,12 @@ function looksLikeUtf8Text(buffer?: Buffer): boolean {
   }
 }
 
-function decodeTextSample(buffer?: Buffer): string {
+function decodeTextSample(buffer?: Buffer, mimeHint?: string): string {
   if (!buffer || buffer.length === 0) {
     return "";
   }
   const sample = buffer.subarray(0, Math.min(buffer.length, 8192));
-  const utf16Charset = resolveUtf16Charset(sample);
+  const utf16Charset = resolveUtf16Charset(sample, mimeHint);
   if (utf16Charset === "utf-16be") {
     const swapped = Buffer.alloc(sample.length);
     for (let i = 0; i + 1 < sample.length; i += 2) {
@@ -361,8 +374,9 @@ async function extractFileBlocks(params: {
     }
     const nameHint = bufferResult?.fileName ?? attachment.path ?? attachment.url;
     const forcedTextMimeResolved = forcedTextMime ?? resolveTextMimeFromName(nameHint ?? "");
-    const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
-    const textSample = decodeTextSample(bufferResult?.buffer);
+    const rawMime = bufferResult?.mime ?? attachment.mime;
+    const utf16Charset = resolveUtf16Charset(bufferResult?.buffer, rawMime);
+    const textSample = decodeTextSample(bufferResult?.buffer, rawMime);
     const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
     if (!forcedTextMimeResolved && kind === "audio" && !textLike) {
       continue;
@@ -370,7 +384,6 @@ async function extractFileBlocks(params: {
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
     const textHint =
       forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
-    const rawMime = bufferResult?.mime ?? attachment.mime;
     const mimeType = sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
     // Log when MIME type is overridden from non-text to text for auditability
     if (textHint && rawMime && !rawMime.startsWith("text/")) {
