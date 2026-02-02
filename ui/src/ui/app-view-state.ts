@@ -56,6 +56,8 @@ export type AppViewState = {
   chatQueue: ChatQueueItem[];
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
+  chatNewMessagesBelow: boolean;
+  scrollToBottom: () => void;
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;

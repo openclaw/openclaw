@@ -480,6 +480,8 @@ export function renderApp(state: AppViewState) {
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+                showNewMessages: state.chatNewMessagesBelow,
+                onScrollToBottom: () => state.scrollToBottom(),
                 // Sidebar props for tool output viewing
                 sidebarOpen: state.sidebarOpen,
                 sidebarContent: state.sidebarContent,
