@@ -18,7 +18,7 @@ x-i18n:
 
 ## 目标
 
-在 Raspberry Pi 上运行一个持久的、全天候在线的 OpenClaw Gateway，**一次性费用约 $35-80**（无月费）。
+在 Raspberry Pi 上运行一个持久的、全天候在线的 OpenClaw Gateway网关，**一次性费用约 $35-80**（无月费）。
 
 适用场景：
 
@@ -134,7 +134,7 @@ npm link
 
 可修改安装让你可以直接访问日志和代码 — 对调试 ARM 特定问题很有用。
 
-## 7) 运行上手引导
+## 7) 运行新手引导
 
 ```bash
 openclaw onboard --install-daemon
@@ -142,7 +142,7 @@ openclaw onboard --install-daemon
 
 按照向导操作：
 
-1. **Gateway 模式：** 本地
+1. **Gateway网关模式：** 本地
 2. **认证：** 推荐使用 API 密钥（OAuth 在无头 Pi 上可能不太稳定）
 3. **渠道：** Telegram 最容易上手
 4. **守护进程：** 是（systemd）
@@ -238,7 +238,7 @@ htop
 | gog (Gmail CLI)    | ⚠️         | 请检查是否有 ARM 版本               |
 | Chromium (browser) | ✅         | `sudo apt install chromium-browser` |
 
-如果某个技能运行失败，请检查其二进制文件是否有 ARM 构建版本。大多数 Go/Rust 工具有；部分没有。
+如果某个 Skills 运行失败，请检查其二进制文件是否有 ARM 构建版本。大多数 Go/Rust 工具有；部分没有。
 
 ### 32 位 vs 64 位
 
@@ -253,7 +253,7 @@ uname -m
 
 ## 推荐模型配置
 
-由于 Pi 只是 Gateway（模型在云端运行），请使用基于 API 的模型：
+由于 Pi 只是 Gateway网关（模型在云端运行），请使用基于 API 的模型：
 
 ```json
 {
@@ -274,7 +274,7 @@ uname -m
 
 ## 开机自启动
 
-上手引导向导会自动设置，但可以验证一下：
+新手引导向导会自动设置，但可以验证一下：
 
 ```bash
 # 检查服务是否已启用
@@ -321,7 +321,7 @@ sudo systemctl restart openclaw
 
 ### ARM 二进制问题
 
-如果某个技能报错 "exec format error"：
+如果某个 Skills 报错 "exec format error"：
 
 1. 检查该二进制文件是否有 ARM64 构建版本
 2. 尝试从源码编译
@@ -362,4 +362,4 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 - [DigitalOcean 指南](/platforms/digitalocean) — 云端替代方案
 - [Hetzner 指南](/platforms/hetzner) — Docker 设置
 - [Tailscale](/gateway/tailscale) — 远程访问
-- [节点](/nodes) — 将你的笔记本/手机与 Pi Gateway 配对
+- [节点](/nodes) — 将你的笔记本/手机与 Pi Gateway网关配对

@@ -2,7 +2,7 @@
 read_when:
   - 集成使用 OpenResponses API 的客户端
   - 你需要基于 item 的输入、客户端工具调用或 SSE 事件
-summary: 从 Gateway 暴露一个兼容 OpenResponses 的 /v1/responses HTTP 端点
+summary: 从 Gateway网关暴露一个兼容 OpenResponses 的 /v1/responses HTTP 端点
 title: OpenResponses API
 x-i18n:
   generated_at: "2026-02-01T20:35:34Z"
@@ -15,18 +15,18 @@ x-i18n:
 
 # OpenResponses API (HTTP)
 
-OpenClaw 的 Gateway 可以提供一个兼容 OpenResponses 的 `POST /v1/responses` 端点。
+OpenClaw 的 Gateway网关可以提供一个兼容 OpenResponses 的 `POST /v1/responses` 端点。
 
 此端点**默认禁用**。请先在配置中启用。
 
 - `POST /v1/responses`
-- 与 Gateway 使用相同端口（WS + HTTP 多路复用）：`http://<gateway-host>:<port>/v1/responses`
+- 与 Gateway网关使用相同端口（WS + HTTP 多路复用）：`http://<gateway-host>:<port>/v1/responses`
 
-底层实现中，请求作为普通的 Gateway 智能体运行来执行（与 `openclaw agent` 相同的代码路径），因此路由/权限/配置与你的 Gateway 一致。
+底层实现中，请求作为普通的 Gateway网关智能体运行来执行（与 `openclaw agent` 相同的代码路径），因此路由/权限/配置与你的 Gateway网关一致。
 
 ## 认证
 
-使用 Gateway 的认证配置。发送 bearer 令牌：
+使用 Gateway网关的认证配置。发送 bearer 令牌：
 
 - `Authorization: Bearer <token>`
 
@@ -86,7 +86,7 @@ OpenClaw 的 Gateway 可以提供一个兼容 OpenResponses 的 `POST /v1/respon
 
 默认情况下，端点是**每次请求无状态的**（每次调用生成一个新的会话密钥）。
 
-如果请求包含 OpenResponses 的 `user` 字符串，Gateway 会从中派生一个稳定的会话密钥，使重复调用可以共享同一个智能体会话。
+如果请求包含 OpenResponses 的 `user` 字符串，Gateway网关会从中派生一个稳定的会话密钥，使重复调用可以共享同一个智能体会话。
 
 ## 请求结构（已支持）
 
@@ -182,7 +182,7 @@ OpenClaw 的 Gateway 可以提供一个兼容 OpenResponses 的 `POST /v1/respon
 - 文件内容被解码并添加到**系统提示**中，而非用户消息中，因此它是临时的（不会持久化到会话历史中）。
 - PDF 会被解析提取文本。如果发现的文本很少，前几页会被光栅化为图片并传递给模型。
 
-PDF 解析使用对 Node 友好的 `pdfjs-dist` 旧版构建（无 worker）。现代 PDF.js 构建需要浏览器 worker/DOM 全局对象，因此不在 Gateway 中使用。
+PDF 解析使用对 Node 友好的 `pdfjs-dist` 旧版构建（无 worker）。现代 PDF.js 构建需要浏览器 worker/DOM 全局对象，因此不在 Gateway网关中使用。
 
 URL 获取默认值：
 

@@ -17,12 +17,12 @@ x-i18n:
 
 ## 背景
 
-近期 Gateway 日志显示 `cron.add` 反复因无效参数（缺少 `sessionTarget`、`wakeMode`、`payload` 以及格式错误的 `schedule`）而失败。这表明至少有一个客户端（可能是智能体工具调用路径）正在发送包装过的或部分指定的任务载荷。此外，TypeScript、Gateway schema、CLI 标志和 UI 表单类型之间的 cron 提供商枚举存在偏差，同时 `cron.status` 的 UI 也存在不匹配问题（期望 `jobCount`，而 Gateway 返回的是 `jobs`）。
+近期 Gateway网关日志显示 `cron.add` 反复因无效参数（缺少 `sessionTarget`、`wakeMode`、`payload` 以及格式错误的 `schedule`）而失败。这表明至少有一个客户端（可能是智能体工具调用路径）正在发送包装过的或部分指定的任务载荷。此外，TypeScript、Gateway网关 schema、CLI 标志和 UI 表单类型之间的 cron 提供商枚举存在偏差，同时 `cron.status` 的 UI 也存在不匹配问题（期望 `jobCount`，而 Gateway网关返回的是 `jobs`）。
 
 ## 目标
 
 - 通过标准化常见的包装载荷并推断缺失的 `kind` 字段，消除 `cron.add` 的 INVALID_REQUEST 错误。
-- 在 Gateway schema、cron 类型、CLI 文档和 UI 表单之间对齐 cron 提供商列表。
+- 在 Gateway网关 schema、cron 类型、CLI 文档和 UI 表单之间对齐 cron 提供商列表。
 - 明确智能体 cron 工具 schema，使 LLM 生成正确的任务载荷。
 - 修复 Control UI 中 cron 状态的任务计数显示。
 - 添加测试以覆盖标准化和工具行为。
@@ -35,17 +35,17 @@ x-i18n:
 
 ## 发现（当前差距）
 
-- Gateway 中的 `CronPayloadSchema` 不包含 `signal` + `imessage`，而 TS 类型中包含它们。
-- Control UI 的 CronStatus 期望 `jobCount`，但 Gateway 返回的是 `jobs`。
+- Gateway网关中的 `CronPayloadSchema` 不包含 `signal` + `imessage`，而 TS 类型中包含它们。
+- Control UI 的 CronStatus 期望 `jobCount`，但 Gateway网关返回的是 `jobs`。
 - 智能体 cron 工具 schema 允许任意 `job` 对象，导致格式错误的输入。
-- Gateway 严格验证 `cron.add` 且不进行标准化，因此包装过的载荷会失败。
+- Gateway网关严格验证 `cron.add` 且不进行标准化，因此包装过的载荷会失败。
 
 ## 变更内容
 
 - `cron.add` 和 `cron.update` 现在会标准化常见的包装结构并推断缺失的 `kind` 字段。
-- 智能体 cron 工具 schema 与 Gateway schema 保持一致，减少了无效载荷。
-- 提供商枚举已在 Gateway、CLI、UI 和 macOS 选择器之间对齐。
-- Control UI 使用 Gateway 的 `jobs` 计数字段显示状态。
+- 智能体 cron 工具 schema 与 Gateway网关 schema 保持一致，减少了无效载荷。
+- 提供商枚举已在 Gateway网关、CLI、UI 和 macOS 选择器之间对齐。
+- Control UI 使用 Gateway网关的 `jobs` 计数字段显示状态。
 
 ## 当前行为
 
@@ -57,7 +57,7 @@ x-i18n:
 
 ## 验证
 
-- 监控 Gateway 日志，确认 `cron.add` INVALID_REQUEST 错误已减少。
+- 监控 Gateway网关日志，确认 `cron.add` INVALID_REQUEST 错误已减少。
 - 确认 Control UI 的 cron 状态在刷新后显示任务计数。
 
 ## 可选后续工作

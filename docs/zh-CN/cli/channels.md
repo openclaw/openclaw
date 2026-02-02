@@ -15,12 +15,12 @@ x-i18n:
 
 # `openclaw channels`
 
-管理 Gateway 上的聊天渠道账号及其运行时状态。
+管理 Gateway网关上的聊天渠道账号及其运行时状态。
 
 相关文档：
 
 - 渠道指南：[渠道](/channels/index)
-- Gateway 配置：[配置](/gateway/configuration)
+- Gateway网关配置：[配置](/gateway/configuration)
 
 ## 常用命令
 

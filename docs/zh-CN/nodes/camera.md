@@ -17,9 +17,9 @@ x-i18n:
 
 OpenClaw 支持智能体工作流中的**相机捕获**：
 
-- **iOS 节点**（通过 Gateway 配对）：通过 `node.invoke` 捕获**照片**（`jpg`）或**短视频片段**（`mp4`，可选音频）。
-- **Android 节点**（通过 Gateway 配对）：通过 `node.invoke` 捕获**照片**（`jpg`）或**短视频片段**（`mp4`，可选音频）。
-- **macOS 应用**（通过 Gateway 的节点）：通过 `node.invoke` 捕获**照片**（`jpg`）或**短视频片段**（`mp4`，可选音频）。
+- **iOS 节点**（通过 Gateway网关配对）：通过 `node.invoke` 捕获**照片**（`jpg`）或**短视频片段**（`mp4`，可选音频）。
+- **Android 节点**（通过 Gateway网关配对）：通过 `node.invoke` 捕获**照片**（`jpg`）或**短视频片段**（`mp4`，可选音频）。
+- **macOS 应用**（通过 Gateway网关的节点）：通过 `node.invoke` 捕获**照片**（`jpg`）或**短视频片段**（`mp4`，可选音频）。
 
 所有相机访问都受**用户控制的设置**保护。
 
@@ -31,7 +31,7 @@ OpenClaw 支持智能体工作流中的**相机捕获**：
   - 默认：**开启**（缺少该键时视为已启用）。
   - 关闭时：`camera.*` 命令返回 `CAMERA_DISABLED`。
 
-### 命令（通过 Gateway `node.invoke`）
+### 命令（通过 Gateway网关 `node.invoke`）
 
 - `camera.list`
   - 响应载荷：

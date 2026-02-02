@@ -17,7 +17,7 @@ x-i18n:
 
 目标：使用 **Bun** 运行本仓库（可选，不推荐用于 WhatsApp/Telegram），同时不偏离 pnpm 工作流。
 
-⚠️ **不推荐用于 Gateway 运行时**（WhatsApp/Telegram 存在 bug）。生产环境请使用 Node。
+⚠️ **不推荐用于 Gateway网关运行时**（WhatsApp/Telegram 存在 bug）。生产环境请使用 Node。
 
 ## 状态
 

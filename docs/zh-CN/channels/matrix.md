@@ -34,7 +34,7 @@ openclaw plugins install @openclaw/matrix
 openclaw plugins install ./extensions/matrix
 ```
 
-如果你在配置/上手引导期间选择了 Matrix 并检测到 git 检出，OpenClaw 会自动提供本地安装路径。
+如果你在配置/新手引导期间选择了 Matrix 并检测到 git 检出，OpenClaw 会自动提供本地安装路径。
 
 详情：[插件](/plugin)
 
@@ -72,7 +72,7 @@ openclaw plugins install ./extensions/matrix
    - 如果两者都设置了，配置优先。
    - 使用访问 token 时：用户 ID 通过 `/whoami` 自动获取。
    - 设置时，`channels.matrix.userId` 应为完整的 Matrix ID（例如：`@bot:example.org`）。
-5. 重启 Gateway（或完成上手引导）。
+5. 重启 Gateway网关（或完成新手引导）。
 6. 从任何 Matrix 客户端（Element、Beeper 等；参见 https://matrix.org/ecosystem/clients/）与机器人开始私信或邀请它加入房间。Beeper 需要端到端加密，因此请设置 `channels.matrix.encryption: true` 并验证设备。
 
 最小配置（访问 token，用户 ID 自动获取）：

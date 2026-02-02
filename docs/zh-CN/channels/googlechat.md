@@ -31,7 +31,7 @@ x-i18n:
    - 进入 **Keys** 标签页。
    - 点击 **Add Key** > **Create new key**。
    - 选择 **JSON** 并点击 **Create**。
-4. 将下载的 JSON 文件存储在你的 Gateway 主机上（例如 `~/.openclaw/googlechat-service-account.json`）。
+4. 将下载的 JSON 文件存储在你的 Gateway网关主机上（例如 `~/.openclaw/googlechat-service-account.json`）。
 5. 在 [Google Cloud Console Chat 配置](https://console.cloud.google.com/apis/api/chat.googleapis.com/hangouts-chat) 中创建 Google Chat 应用：
    - 填写 **Application info**：
      - **App name**：（例如 `OpenClaw`）
@@ -40,8 +40,8 @@ x-i18n:
    - 启用 **Interactive features**。
    - 在 **Functionality** 下，勾选 **Join spaces and group conversations**。
    - 在 **Connection settings** 下，选择 **HTTP endpoint URL**。
-   - 在 **Triggers** 下，选择 **Use a common HTTP endpoint URL for all triggers** 并将其设置为你的 Gateway 公共 URL 后跟 `/googlechat`。
-     - _提示：运行 `openclaw status` 可查找你的 Gateway 公共 URL。_
+   - 在 **Triggers** 下，选择 **Use a common HTTP endpoint URL for all triggers** 并将其设置为你的 Gateway网关公共 URL 后跟 `/googlechat`。
+     - _提示：运行 `openclaw status` 可查找你的 Gateway网关公共 URL。_
    - 在 **Visibility** 下，勾选 **Make this Chat app available to specific people and groups in &lt;Your Domain&gt;**。
    - 在文本框中输入你的邮箱地址（例如 `user@example.com`）。
    - 点击底部的 **Save**。
@@ -54,11 +54,11 @@ x-i18n:
    - 环境变量：`GOOGLE_CHAT_SERVICE_ACCOUNT_FILE=/path/to/service-account.json`
    - 或配置：`channels.googlechat.serviceAccountFile: "/path/to/service-account.json"`。
 8. 设置 webhook audience 类型 + 值（与你的 Chat 应用配置匹配）。
-9. 启动 Gateway。Google Chat 将向你的 webhook 路径发送 POST 请求。
+9. 启动 Gateway网关。Google Chat 将向你的 webhook 路径发送 POST 请求。
 
 ## 添加到 Google Chat
 
-Gateway 运行且你的邮箱已添加到可见性列表后：
+Gateway网关运行且你的邮箱已添加到可见性列表后：
 
 1. 前往 [Google Chat](https://chat.google.com/)。
 2. 点击 **Direct Messages** 旁边的 **+**（加号）图标。
@@ -76,7 +76,7 @@ Google Chat webhook 需要公共 HTTPS 端点。为安全起见，**仅将 `/goo
 
 使用 Tailscale Serve 用于私有仪表板，Funnel 用于公共 webhook 路径。这样 `/` 保持私有，仅暴露 `/googlechat`。
 
-1. **检查你的 Gateway 绑定在哪个地址上：**
+1. **检查你的 Gateway网关绑定在哪个地址上：**
 
    ```bash
    ss -tlnp | grep 18789
@@ -144,7 +144,7 @@ your-domain.com {
 
 ## 工作原理
 
-1. Google Chat 向 Gateway 发送 webhook POST 请求。每个请求包含一个 `Authorization: Bearer <token>` 头。
+1. Google Chat 向 Gateway网关发送 webhook POST 请求。每个请求包含一个 `Authorization: Bearer <token>` 头。
 2. OpenClaw 根据配置的 `audienceType` + `audience` 验证 token：
    - `audienceType: "app-url"` → audience 是你的 HTTPS webhook URL。
    - `audienceType: "project-number"` → audience 是 Cloud 项目编号。
@@ -231,7 +231,7 @@ status code: 405, reason phrase: HTTP error response: HTTP/1.1 405 Method Not Al
 
    如果显示"disabled"，在配置中添加 `plugins.entries.googlechat.enabled: true`。
 
-3. **Gateway 未重启**：添加配置后，重启 Gateway：
+3. **Gateway网关未重启**：添加配置后，重启 Gateway网关：
    ```bash
    openclaw gateway restart
    ```
@@ -248,10 +248,10 @@ openclaw channels status
 - 检查 `openclaw channels status --probe` 查看认证错误或缺失的 audience 配置。
 - 如果没有消息到达，确认 Chat 应用的 webhook URL + 事件订阅。
 - 如果提及门控阻止了回复，将 `botUser` 设置为应用的用户资源名称并验证 `requireMention`。
-- 发送测试消息时使用 `openclaw logs --follow` 查看请求是否到达 Gateway。
+- 发送测试消息时使用 `openclaw logs --follow` 查看请求是否到达 Gateway网关。
 
 相关文档：
 
-- [Gateway 配置](/gateway/configuration)
+- [Gateway网关配置](/gateway/configuration)
 - [安全](/gateway/security)
 - [回应](/tools/reactions)

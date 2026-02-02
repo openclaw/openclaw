@@ -45,7 +45,7 @@ x-i18n:
 }
 ```
 
-更改标志后需重启 Gateway。
+更改标志后需重启 Gateway网关。
 
 ## 环境变量覆盖（一次性）
 
@@ -89,7 +89,7 @@ rg "telegram http error" /tmp/openclaw/openclaw-*.log
 tail -f /tmp/openclaw/openclaw-$(date +%F).log | rg "telegram http error"
 ```
 
-对于远程 Gateway，你也可以使用 `openclaw logs --follow`（参见 [/cli/logs](/cli/logs)）。
+对于远程 Gateway网关，你也可以使用 `openclaw logs --follow`（参见 [/cli/logs](/cli/logs)）。
 
 ## 注意事项
 

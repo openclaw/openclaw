@@ -15,18 +15,18 @@ x-i18n:
 
 # Linux 应用
 
-Gateway 在 Linux 上完全受支持。**推荐使用 Node 作为运行时**。
-不建议将 Bun 用于 Gateway（WhatsApp/Telegram 存在 bug）。
+Gateway网关在 Linux 上完全受支持。**推荐使用 Node 作为运行时**。
+不建议将 Bun 用于 Gateway网关（WhatsApp/Telegram 存在 bug）。
 
-原生 Linux 伴侣应用已在计划中。如果您想帮助构建，欢迎贡献。
+原生 Linux 伴侣应用已在计划中。如果你想帮助构建，欢迎贡献。
 
 ## 新手快速路径（VPS）
 
 1. 安装 Node 22+
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
-4. 从您的笔记本电脑：`ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
-5. 打开 `http://127.0.0.1:18789/` 并粘贴您的令牌
+4. 从你的笔记本电脑：`ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
+5. 打开 `http://127.0.0.1:18789/` 并粘贴你的令牌
 
 分步 VPS 指南：[exe.dev](/platforms/exe-dev)
 
@@ -36,12 +36,12 @@ Gateway 在 Linux 上完全受支持。**推荐使用 Node 作为运行时**。
 - [安装与更新](/install/updating)
 - 可选流程：[Bun（实验性）](/install/bun)、[Nix](/install/nix)、[Docker](/install/docker)
 
-## Gateway
+## Gateway网关
 
-- [Gateway 运维手册](/gateway)
+- [Gateway网关运维手册](/gateway)
 - [配置](/gateway/configuration)
 
-## Gateway 服务安装（CLI）
+## Gateway网关服务安装（CLI）
 
 使用以下任一方式：
 
@@ -61,7 +61,7 @@ openclaw gateway install
 openclaw configure
 ```
 
-出现提示时选择 **Gateway 服务**。
+出现提示时选择 **Gateway网关服务**。
 
 修复/迁移：
 
@@ -71,7 +71,7 @@ openclaw doctor
 
 ## 系统控制（systemd 用户单元）
 
-OpenClaw 默认安装 systemd **用户**服务。对于共享或常驻服务器，请使用**系统**服务。完整的单元示例和指南请参阅 [Gateway 运维手册](/gateway)。
+OpenClaw 默认安装 systemd **用户**服务。对于共享或常驻服务器，请使用**系统**服务。完整的单元示例和指南请参阅 [Gateway网关运维手册](/gateway)。
 
 最小化设置：
 
@@ -79,7 +79,7 @@ OpenClaw 默认安装 systemd **用户**服务。对于共享或常驻服务器�
 
 ```
 [Unit]
-Description=OpenClaw Gateway (profile: <profile>, v<version>)
+Description=OpenClaw Gateway网关 (profile: <profile>, v<version>)
 After=network-online.target
 Wants=network-online.target
 

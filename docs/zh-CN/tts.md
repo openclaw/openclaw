@@ -61,7 +61,7 @@ TTS 开启后，Edge TTS 默认**已启用**，当没有 OpenAI 或 ElevenLabs A
 ## 配置
 
 TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。
-完整 schema 请参见 [Gateway 配置](/gateway/configuration)。
+完整 schema 请参见 [Gateway网关配置](/gateway/configuration)。
 
 ### 最小配置（启用 + 提供商）
 
@@ -368,9 +368,9 @@ Discord 说明：`/tts` 是 Discord 的内置命令，因此 OpenClaw 在该平�
 
 `tts` 工具将文本转换为语音并返回 `MEDIA:` 路径。当结果兼容 Telegram 时，工具会包含 `[[audio_as_voice]]`，使 Telegram 发送语音气泡。
 
-## Gateway RPC
+## Gateway网关 RPC
 
-Gateway 方法：
+Gateway网关方法：
 
 - `tts.status`
 - `tts.enable`

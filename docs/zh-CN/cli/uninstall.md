@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 您想移除 Gateway 服务和/或本地状态
-  - 您想先进行试运行
-summary: "`openclaw uninstall`（移除 Gateway 服务 + 本地数据）的 CLI 参考"
+  - 你想移除 Gateway网关服务和/或本地状态
+  - 你想先进行试运行
+summary: "`openclaw uninstall`（移除 Gateway网关服务 + 本地数据）的 CLI 参考"
 title: uninstall
 x-i18n:
   generated_at: "2026-02-01T20:21:33Z"
@@ -15,7 +15,7 @@ x-i18n:
 
 # `openclaw uninstall`
 
-卸载 Gateway 服务 + 本地数据（CLI 保留）。
+卸载 Gateway网关服务 + 本地数据（CLI 保留）。
 
 ```bash
 openclaw uninstall

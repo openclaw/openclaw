@@ -23,7 +23,7 @@ Qwen 提供免费版 OAuth 流程，可访问 Qwen Coder 和 Qwen Vision 模型�
 openclaw plugins enable qwen-portal-auth
 ```
 
-启用后重启 Gateway。
+启用后重启 Gateway网关。
 
 ## 认证
 

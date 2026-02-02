@@ -19,9 +19,9 @@ x-i18n:
 
 ## 推荐默认方案（大多数用户）
 
-- **小型 Linux VPS**，用于始终在线的 Gateway，成本低廉。参阅 [VPS 托管](/vps)。
+- **小型 Linux VPS**，用于始终在线的 Gateway网关，成本低廉。参阅 [VPS 托管](/vps)。
 - **专用硬件**（Mac mini 或 Linux 主机），如果你需要完全控制和**住宅 IP** 以进行浏览器自动化。许多网站会屏蔽数据中心 IP，因此本地浏览通常效果更好。
-- **混合方案：** 将 Gateway 部署在廉价 VPS 上，需要浏览器/UI 自动化时将你的 Mac 作为**节点**连接。参阅 [节点](/nodes) 和 [Gateway 远程控制](/gateway/remote)。
+- **混合方案：** 将 Gateway网关部署在廉价 VPS 上，需要浏览器/UI 自动化时将你的 Mac 作为**节点**连接。参阅 [节点](/nodes) 和 [Gateway网关远程控制](/gateway/remote)。
 
 当你特别需要 macOS 专有功能（iMessage/BlueBubbles）或希望与日常使用的 Mac 严格隔离时，请使用 macOS 虚拟机。
 
@@ -148,7 +148,7 @@ npm install -g openclaw@latest
 openclaw onboard --install-daemon
 ```
 
-按照上手引导提示设置你的模型提供商（Anthropic、OpenAI 等）。
+按照新手引导提示设置你的模型提供商（Anthropic、OpenAI 等）。
 
 ---
 
@@ -193,7 +193,7 @@ lume stop openclaw
 lume run openclaw --no-display
 ```
 
-虚拟机将在后台运行。OpenClaw 的守护进程会保持 Gateway 运行。
+虚拟机将在后台运行。OpenClaw 的守护进程会保持 Gateway网关运行。
 
 检查状态：
 
@@ -212,7 +212,7 @@ ssh youruser@192.168.64.X "openclaw status"
 1. 从 bluebubbles.app 下载 BlueBubbles
 2. 使用你的 Apple ID 登录
 3. 启用 Web API 并设置密码
-4. 将 BlueBubbles webhook 指向你的 Gateway（示例：`https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`）
+4. 将 BlueBubbles webhook 指向你的 Gateway网关（示例：`https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`）
 
 添加到你的 OpenClaw 配置：
 
@@ -228,7 +228,7 @@ ssh youruser@192.168.64.X "openclaw status"
 }
 ```
 
-重启 Gateway。现在你的智能体可以收发 iMessage 了。
+重启 Gateway网关。现在你的智能体可以收发 iMessage 了。
 
 完整设置详情：[BlueBubbles 渠道](/channels/bluebubbles)
 
@@ -280,7 +280,7 @@ lume run openclaw --no-display
 
 - [VPS 托管](/vps)
 - [节点](/nodes)
-- [Gateway 远程控制](/gateway/remote)
+- [Gateway网关远程控制](/gateway/remote)
 - [BlueBubbles 渠道](/channels/bluebubbles)
 - [Lume 快速入门](https://cua.ai/docs/lume/guide/getting-started/quickstart)
 - [Lume CLI 参考](https://cua.ai/docs/lume/reference/cli-reference)

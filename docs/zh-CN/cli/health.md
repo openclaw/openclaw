@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您想快速检查正在运行的 Gateway 的健康状态
-summary: "`openclaw health` 的 CLI 参考（通过 RPC 访问 Gateway 健康端点）"
+  - 你想快速检查正在运行的 Gateway网关的健康状态
+summary: "`openclaw health` 的 CLI 参考（通过 RPC 访问 Gateway网关健康端点）"
 title: health
 x-i18n:
   generated_at: "2026-02-01T19:58:57Z"
@@ -14,7 +14,7 @@ x-i18n:
 
 # `openclaw health`
 
-从正在运行的 Gateway 获取健康状态。
+从正在运行的 Gateway网关获取健康状态。
 
 ```bash
 openclaw health

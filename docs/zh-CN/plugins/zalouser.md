@@ -25,9 +25,9 @@ x-i18n:
 
 ## 运行位置
 
-此插件运行在 **Gateway 进程内部**。
+此插件运行在 **Gateway网关进程内部**。
 
-如果你使用远程 Gateway，请在**运行 Gateway 的机器上**安装和配置此插件，然后重启 Gateway。
+如果你使用远程 Gateway网关，请在**运行 Gateway网关的机器上**安装和配置此插件，然后重启 Gateway网关。
 
 ## 安装
 
@@ -37,7 +37,7 @@ x-i18n:
 openclaw plugins install @openclaw/zalouser
 ```
 
-安装后重启 Gateway。
+安装后重启 Gateway网关。
 
 ### 方式 B：从本地文件夹安装（开发模式）
 
@@ -46,11 +46,11 @@ openclaw plugins install ./extensions/zalouser
 cd ./extensions/zalouser && pnpm install
 ```
 
-安装后重启 Gateway。
+安装后重启 Gateway网关。
 
 ## 前提条件：zca-cli
 
-Gateway 所在机器必须将 `zca` 添加到 `PATH` 中：
+Gateway网关所在机器必须将 `zca` 添加到 `PATH` 中：
 
 ```bash
 zca --version

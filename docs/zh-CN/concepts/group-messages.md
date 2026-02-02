@@ -81,7 +81,7 @@ x-i18n:
 - 手动冒烟测试：
   - 在群组中发送 `@openclaw` 提及，确认回复中引用了发送者名称。
   - 再次发送提及，验证历史消息块已包含并在下一轮清除。
-- 检查 Gateway 日志（使用 `--verbose` 运行）查看 `inbound web message` 条目，确认其显示 `from: <groupJid>` 和 `[from: …]` 后缀。
+- 检查 Gateway网关日志（使用 `--verbose` 运行）查看 `inbound web message` 条目，确认其显示 `from: <groupJid>` 和 `[from: …]` 后缀。
 
 ## 已知注意事项
 

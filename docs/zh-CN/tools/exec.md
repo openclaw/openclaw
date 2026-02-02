@@ -42,7 +42,7 @@ x-i18n:
 - `node` 需要已配对的节点（伴侣应用或无头节点主机）。
 - 如果有多个节点可用，请设置 `exec.node` 或 `tools.exec.node` 来选择一个。
 - 在非 Windows 主机上，exec 在设置了 `SHELL` 时使用该 shell；如果 `SHELL` 是 `fish`，它会优先从 `PATH` 中选择 `bash`（或 `sh`）以避免 fish 不兼容的脚本，如果两者都不存在则回退到 `SHELL`。
-- 重要：沙箱**默认关闭**。如果沙箱关闭，`host=sandbox` 将直接在 Gateway 主机上运行（无容器）且**不需要审批**。要启用审批，请使用 `host=gateway` 并配置 exec 审批（或启用沙箱）。
+- 重要：沙箱**默认关闭**。如果沙箱关闭，`host=sandbox` 将直接在 Gateway网关主机上运行（无容器）且**不需要审批**。要启用审批，请使用 `host=gateway` 并配置 exec 审批（或启用沙箱）。
 
 ## 配置
 
@@ -69,11 +69,11 @@ x-i18n:
 
 ### PATH 处理
 
-- `host=gateway`：将您的登录 shell `PATH` 合并到 exec 环境中（除非 exec 调用已设置 `env.PATH`）。守护进程本身仍使用最小 `PATH` 运行：
+- `host=gateway`：将你的登录 shell `PATH` 合并到 exec 环境中（除非 exec 调用已设置 `env.PATH`）。守护进程本身仍使用最小 `PATH` 运行：
   - macOS：`/opt/homebrew/bin`、`/usr/local/bin`、`/usr/bin`、`/bin`
   - Linux：`/usr/local/bin`、`/usr/bin`、`/bin`
 - `host=sandbox`：在容器内运行 `sh -lc`（登录 shell），因此 `/etc/profile` 可能会重置 `PATH`。OpenClaw 在 profile 加载后通过内部环境变量添加 `env.PATH`（无 shell 插值）；`tools.exec.pathPrepend` 在此同样适用。
-- `host=node`：仅发送您传递的 env 覆盖到节点。`tools.exec.pathPrepend` 仅在 exec 调用已设置 `env.PATH` 时适用。无头节点主机仅在 `PATH` 为节点主机 PATH 前缀时接受 `PATH` 覆盖（不支持替换）。macOS 节点完全忽略 `PATH` 覆盖。
+- `host=node`：仅发送你传递的 env 覆盖到节点。`tools.exec.pathPrepend` 仅在 exec 调用已设置 `env.PATH` 时适用。无头节点主机仅在 `PATH` 为节点主机 PATH 前缀时接受 `PATH` 覆盖（不支持替换）。macOS 节点完全忽略 `PATH` 覆盖。
 
 按智能体绑定节点（在配置中使用智能体列表索引）：
 
@@ -98,14 +98,14 @@ openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
 ## 授权模型
 
 `/exec` 仅对**已授权的发送者**生效（渠道允许列表/配对加 `commands.useAccessGroups`）。
-它仅更新**会话状态**，不会写入配置。要彻底禁用 exec，请通过工具策略拒绝它（`tools.deny: ["exec"]` 或按智能体设置）。除非您显式设置 `security=full` 和 `ask=off`，否则主机审批仍然适用。
+它仅更新**会话状态**，不会写入配置。要彻底禁用 exec，请通过工具策略拒绝它（`tools.deny: ["exec"]` 或按智能体设置）。除非你显式设置 `security=full` 和 `ask=off`，否则主机审批仍然适用。
 
 ## Exec 审批（伴侣应用 / 节点主机）
 
-沙箱化的智能体可以要求在 `exec` 于 Gateway 或节点主机上运行前进行逐次审批。
+沙箱隔离的智能体可以要求在 `exec` 于 Gateway网关或节点主机上运行前进行逐次审批。
 请参阅 [Exec 审批](/tools/exec-approvals) 了解策略、允许列表和 UI 流程。
 
-当需要审批时，exec 工具会立即返回 `status: "approval-pending"` 和一个审批 ID。一旦被批准（或拒绝/超时），Gateway 会发出系统事件（`Exec finished` / `Exec denied`）。如果命令在 `tools.exec.approvalRunningNoticeMs` 之后仍在运行，会发出一条 `Exec running` 通知。
+当需要审批时，exec 工具会立即返回 `status: "approval-pending"` 和一个审批 ID。一旦被批准（或拒绝/超时），Gateway网关会发出系统事件（`Exec finished` / `Exec denied`）。如果命令在 `tools.exec.approvalRunningNoticeMs` 之后仍在运行，会发出一条 `Exec running` 通知。
 
 ## 允许列表与安全二进制文件
 

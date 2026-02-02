@@ -15,7 +15,7 @@ x-i18n:
 
 ## 概述
 
-OpenClaw 使用 pi SDK 将 AI 编程智能体嵌入其消息 Gateway 架构中。OpenClaw 不是将 pi 作为子进程启动或使用 RPC 模式，而是直接导入并通过 `createAgentSession()` 实例化 pi 的 `AgentSession`。这种嵌入式方法提供了：
+OpenClaw 使用 pi SDK 将 AI 编程智能体嵌入其消息 Gateway网关架构中。OpenClaw 不是将 pi 作为子进程启动或使用 RPC 模式，而是直接导入并通过 `createAgentSession()` 实例化 pi 的 `AgentSession`。这种嵌入式方法提供了：
 
 - 对会话生命周期和事件处理的完全控制
 - 自定义工具注入（消息、沙箱、渠道特定操作）
@@ -110,8 +110,8 @@ src/agents/
 ├── tool-summaries.ts              # 工具描述摘要
 ├── tool-policy.ts                 # 工具策略解析
 ├── transcript-policy.ts           # 转录验证策略
-├── skills.ts                      # 技能快照/提示词构建
-├── skills/                        # 技能子系统
+├── skills.ts                      # Skills 快照/提示词构建
+├── skills/                        # Skills 子系统
 ├── sandbox.ts                     # 沙箱上下文解析
 ├── sandbox/                       # 沙箱子系统
 ├── channel-tools.ts               # 渠道特定工具注入
@@ -229,7 +229,7 @@ SDK 处理完整的智能体循环：发送到 LLM、执行工具调用、流式
 
 1. **基础工具**：pi 的 `codingTools`（read、bash、edit、write）
 2. **自定义替换**：OpenClaw 用 `exec`/`process` 替换 bash，为沙箱自定义 read/edit/write
-3. **OpenClaw 工具**：消息、浏览器、画布、会话、定时任务、Gateway 等
+3. **OpenClaw 工具**：消息、浏览器、画布、会话、定时任务、Gateway网关等
 4. **渠道工具**：Discord/Telegram/Slack/WhatsApp 特定操作工具
 5. **策略过滤**：通过配置文件、提供商、智能体、群组、沙箱策略过滤工具
 6. **Schema 规范化**：为 Gemini/OpenAI 的特殊要求清理 schema
@@ -271,7 +271,7 @@ export function splitSdkTools(options: { tools: AnyAgentTool[]; sandboxEnabled: 
 
 ## 系统提示词构建
 
-系统提示词在 `buildAgentSystemPrompt()`（`system-prompt.ts`）中构建。它组装一个包含以下部分的完整提示词：工具、工具调用风格、安全防护、OpenClaw CLI 参考、技能、文档、工作区、沙箱、消息、回复标签、语音、静默回复、心跳、运行时元数据，以及启用时的记忆和反应，还有可选的上下文文件和额外系统提示词内容。子智能体使用的最小提示词模式会裁剪部分章节。
+系统提示词在 `buildAgentSystemPrompt()`（`system-prompt.ts`）中构建。它组装一个包含以下部分的完整提示词：工具、工具调用风格、安全防护、OpenClaw CLI 参考、Skills、文档、工作区、沙箱、消息、回复标签、语音、静默回复、心跳、运行时元数据，以及启用时的记忆和反应，还有可选的上下文文件和额外系统提示词内容。子智能体使用的最小提示词模式会裁剪部分章节。
 
 提示词通过 `systemPrompt` 覆盖传递给 pi：
 
@@ -468,7 +468,7 @@ const sandbox = await resolveSandboxContext({
 });
 
 if (sandboxRoot) {
-  // 使用沙箱化的 read/edit/write 工具
+  // 使用沙箱隔离的 read/edit/write 工具
   // exec 在容器中运行
   // 浏览器使用桥接 URL
 }

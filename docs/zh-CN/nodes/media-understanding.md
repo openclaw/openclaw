@@ -120,7 +120,7 @@ CLI 模板还可以使用：
 推荐默认值：
 
 - `maxChars`：图片/视频为 **500**（简短，适合命令解析）
-- `maxChars`：音频**未设置**（完整转录，除非您设置限制）
+- `maxChars`：音频**未设置**（完整转录，除非你设置限制）
 - `maxBytes`：
   - 图片：**10MB**
   - 音频：**20MB**
@@ -135,7 +135,7 @@ CLI 模板还可以使用：
 
 ### 自动检测媒体理解（默认）
 
-如果 `tools.media.<capability>.enabled` **未**设置为 `false` 且您未配置模型，OpenClaw 会按以下顺序自动检测，并在**找到第一个可用选项时停止**：
+如果 `tools.media.<capability>.enabled` **未**设置为 `false` 且你未配置模型，OpenClaw 会按以下顺序自动检测，并在**找到第一个可用选项时停止**：
 
 1. **本地 CLI**（仅音频；如已安装）
    - `sherpa-onnx-offline`（需要 `SHERPA_ONNX_MODEL_DIR` 包含 encoder/decoder/joiner/tokens）
@@ -165,7 +165,7 @@ CLI 模板还可以使用：
 
 ## 能力（可选）
 
-如果您设置了 `capabilities`，该条目仅针对指定的媒体类型运行。对于共享列表，OpenClaw 可以推断默认值：
+如果你设置了 `capabilities`，该条目仅针对指定的媒体类型运行。对于共享列表，OpenClaw 可以推断默认值：
 
 - `openai`、`anthropic`、`minimax`：**图片**
 - `google`（Gemini API）：**图片 + 音频 + 视频**

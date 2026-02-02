@@ -1,9 +1,9 @@
 ---
 read_when:
-  - 您想全面了解 OpenClaw 的 OAuth 流程
-  - 您遇到了令牌失效/登出问题
-  - 您想了解 setup-token 或 OAuth 认证流程
-  - 您想使用多账户或配置文件路由
+  - 你想全面了解 OpenClaw 的 OAuth 流程
+  - 你遇到了令牌失效/登出问题
+  - 你想了解 setup-token 或 OAuth 认证流程
+  - 你想使用多账户或配置文件路由
 summary: OpenClaw 中的 OAuth：令牌交换、存储和多账户模式
 title: OAuth
 x-i18n:
@@ -35,7 +35,7 @@ OAuth 提供商通常在登录/刷新流程中发放**新的刷新令牌**。某
 
 实际症状：
 
-- 您通过 OpenClaw _和_ Claude Code / Codex CLI 登录 → 其中一个稍后会随机"登出"
+- 你通过 OpenClaw _和_ Claude Code / Codex CLI 登录 → 其中一个稍后会随机"登出"
 
 为减少这种情况，OpenClaw 将 `auth-profiles.json` 视为**令牌汇聚点**：
 
@@ -63,7 +63,7 @@ OAuth 提供商通常在登录/刷新流程中发放**新的刷新令牌**。某
 openclaw models auth setup-token --provider anthropic
 ```
 
-如果您在其他地方生成了令牌，可以手动粘贴：
+如果你在其他地方生成了令牌，可以手动粘贴：
 
 ```bash
 openclaw models auth paste-token --provider anthropic
@@ -96,7 +96,7 @@ OpenClaw 的交互式登录流程在 `@mariozechner/pi-ai` 中实现，并集成
 1. 生成 PKCE 验证器/质询 + 随机 `state`
 2. 打开 `https://auth.openai.com/oauth/authorize?...`
 3. 尝试在 `http://127.0.0.1:1455/auth/callback` 捕获回调
-4. 如果回调无法绑定（或您在远程/无头环境中），手动粘贴重定向 URL/代码
+4. 如果回调无法绑定（或你在远程/无头环境中），手动粘贴重定向 URL/代码
 5. 在 `https://auth.openai.com/oauth/token` 进行交换
 6. 从访问令牌中提取 `accountId` 并存储 `{ access, refresh, expires, accountId }`
 
@@ -111,7 +111,7 @@ OpenClaw 的交互式登录流程在 `@mariozechner/pi-ai` 中实现，并集成
 - 如果 `expires` 在未来 → 使用已存储的访问令牌
 - 如果已过期 → 刷新（在文件锁下）并覆盖已存储的凭据
 
-刷新流程是自动的；您通常不需要手动管理令牌。
+刷新流程是自动的；你通常不需要手动管理令牌。
 
 ## 多账户（配置文件）+ 路由
 
@@ -119,7 +119,7 @@ OpenClaw 的交互式登录流程在 `@mariozechner/pi-ai` 中实现，并集成
 
 ### 1）推荐：独立智能体
 
-如果您希望"个人"和"工作"永远不交叉，请使用隔离的智能体（独立的会话 + 凭据 + 工作区）：
+如果你希望"个人"和"工作"永远不交叉，请使用隔离的智能体（独立的会话 + 凭据 + 工作区）：
 
 ```bash
 openclaw agents add work

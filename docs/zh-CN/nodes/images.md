@@ -1,7 +1,7 @@
 ---
 read_when:
   - 修改媒体处理管道或附件
-summary: 发送、Gateway 和智能体回复的图片与媒体处理规则
+summary: 发送、Gateway网关和智能体回复的图片与媒体处理规则
 title: 图片与媒体支持
 x-i18n:
   generated_at: "2026-02-01T21:17:54Z"
@@ -14,7 +14,7 @@ x-i18n:
 
 # 图片与媒体支持 — 2025-12-05
 
-WhatsApp 渠道通过 **Baileys Web** 运行。本文档记录了发送、Gateway 和智能体回复的当前媒体处理规则。
+WhatsApp 渠道通过 **Baileys Web** 运行。本文档记录了发送、Gateway网关和智能体回复的当前媒体处理规则。
 
 ## 目标
 

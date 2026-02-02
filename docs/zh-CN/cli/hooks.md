@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您想管理智能体钩子
-  - 您想安装或更新钩子
+  - 你想管理智能体钩子
+  - 你想安装或更新钩子
 summary: "`openclaw hooks` 的 CLI 参考（智能体钩子）"
 title: hooks
 x-i18n:
@@ -15,7 +15,7 @@ x-i18n:
 
 # `openclaw hooks`
 
-管理智能体钩子（用于 `/new`、`/reset` 等命令以及 Gateway 启动的事件驱动自动化）。
+管理智能体钩子（用于 `/new`、`/reset` 等命令以及 Gateway网关启动的事件驱动自动化）。
 
 相关内容：
 
@@ -160,7 +160,7 @@ openclaw hooks enable session-memory
 
 **启用后：**
 
-- 重启 Gateway 以重新加载钩子（macOS 上重启菜单栏应用，或在开发环境中重启 Gateway 进程）。
+- 重启 Gateway网关以重新加载钩子（macOS 上重启菜单栏应用，或在开发环境中重启 Gateway网关进程）。
 
 ## 禁用钩子
 
@@ -188,7 +188,7 @@ openclaw hooks disable command-logger
 
 **禁用后：**
 
-- 重启 Gateway 以重新加载钩子
+- 重启 Gateway网关以重新加载钩子
 
 ## 安装钩子
 
@@ -244,7 +244,7 @@ openclaw hooks update --all
 
 ### session-memory
 
-在您执行 `/new` 时将会话上下文保存到记忆中。
+在你执行 `/new` 时将会话上下文保存到记忆中。
 
 **启用：**
 
@@ -297,7 +297,7 @@ openclaw hooks enable soul-evil
 
 ### boot-md
 
-在 Gateway 启动时（渠道启动之后）运行 `BOOT.md`。
+在 Gateway网关启动时（渠道启动之后）运行 `BOOT.md`。
 
 **事件**：`gateway:startup`
 

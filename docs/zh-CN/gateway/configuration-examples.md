@@ -393,7 +393,7 @@ x-i18n:
     },
   },
 
-  // Gateway + 网络
+  // Gateway网关 + 网络
   gateway: {
     mode: "local",
     port: 18789,

@@ -15,13 +15,13 @@ x-i18n:
 
 # 聊天渠道
 
-OpenClaw 可以在你已经使用的任何聊天应用上与你对话。每个渠道通过 Gateway 连接。所有渠道都支持文本；媒体和回应功能因渠道而异。
+OpenClaw 可以在你已经使用的任何聊天应用上与你对话。每个渠道通过 Gateway网关连接。所有渠道都支持文本；媒体和回应功能因渠道而异。
 
 ## 支持的渠道
 
 - [WhatsApp](/channels/whatsapp) — 最受欢迎；使用 Baileys 并需要二维码配对。
 - [Telegram](/channels/telegram) — 通过 grammY 使用 Bot API；支持群组。
-- [Discord](/channels/discord) — Discord Bot API + Gateway；支持服务器、频道和私信。
+- [Discord](/channels/discord) — Discord Bot API + Gateway网关；支持服务器、频道和私信。
 - [Slack](/channels/slack) — Bolt SDK；工作区应用。
 - [Google Chat](/channels/googlechat) — 通过 HTTP webhook 使用 Google Chat API 应用。
 - [Mattermost](/channels/mattermost) — Bot API + WebSocket；频道、群组、私信（插件，需单独安装）。
@@ -37,7 +37,7 @@ OpenClaw 可以在你已经使用的任何聊天应用上与你对话。每个�
 - [Twitch](/channels/twitch) — 通过 IRC 连接的 Twitch 聊天（插件，需单独安装）。
 - [Zalo](/channels/zalo) — Zalo Bot API；越南流行的通讯工具（插件，需单独安装）。
 - [Zalo Personal](/channels/zalouser) — 通过二维码登录的 Zalo 个人账户（插件，需单独安装）。
-- [WebChat](/web/webchat) — 通过 WebSocket 的 Gateway WebChat UI。
+- [WebChat](/web/webchat) — 通过 WebSocket 的 Gateway网关 WebChat UI。
 
 ## 注意事项
 

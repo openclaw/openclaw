@@ -54,7 +54,7 @@ openclaw doctor --non-interactive
 openclaw doctor --deep
 ```
 
-扫描系统服务以查找额外的 Gateway 安装（launchd/systemd/schtasks）。
+扫描系统服务以查找额外的 Gateway网关安装（launchd/systemd/schtasks）。
 
 如果你想在写入前查看更改，请先打开配置文件：
 
@@ -67,7 +67,7 @@ cat ~/.openclaw/openclaw.json
 - 可选的 git 安装预检更新（仅交互模式）。
 - UI 协议新鲜度检查（当协议 schema 更新时重建控制 UI）。
 - 健康检查 + 重启提示。
-- 技能状态摘要（可用/缺失/受阻）。
+- Skills 状态摘要（可用/缺失/受阻）。
 - 遗留值的配置规范化。
 - OpenCode Zen 提供商覆盖警告（`models.providers.opencode`）。
 - 遗留磁盘状态迁移（会话/智能体目录/WhatsApp 认证）。
@@ -76,14 +76,14 @@ cat ~/.openclaw/openclaw.json
 - 模型认证健康：检查 OAuth 过期、可刷新即将过期的令牌、报告认证配置的冷却/禁用状态。
 - 额外工作区目录检测（`~/openclaw`）。
 - 启用沙箱时的沙箱镜像修复。
-- 遗留服务迁移和额外 Gateway 检测。
-- Gateway 运行时检查（服务已安装但未运行；缓存的 launchd 标签）。
-- 渠道状态警告（从运行中的 Gateway 探测）。
+- 遗留服务迁移和额外 Gateway网关检测。
+- Gateway网关运行时检查（服务已安装但未运行；缓存的 launchd 标签）。
+- 渠道状态警告（从运行中的 Gateway网关探测）。
 - Supervisor 配置审计（launchd/systemd/schtasks）及可选修复。
-- Gateway 运行时最佳实践检查（Node vs Bun、版本管理器路径）。
-- Gateway 端口冲突诊断（默认 `18789`）。
-- 开放 DM 策略的安全警告。
-- 未设置 `gateway.auth.token` 时的 Gateway 认证警告（本地模式；提供令牌生成）。
+- Gateway网关运行时最佳实践检查（Node vs Bun、版本管理器路径）。
+- Gateway网关端口冲突诊断（默认 `18789`）。
+- 开放 私信 策略的安全警告。
+- 未设置 `gateway.auth.token` 时的 Gateway网关认证警告（本地模式；提供令牌生成）。
 - Linux 上的 systemd linger 检查。
 - 源码安装检查（pnpm workspace 不匹配、缺失 UI 资源、缺失 tsx 二进制文件）。
 - 写入更新后的配置 + 向导元数据。
@@ -108,7 +108,7 @@ Doctor 将：
 - 显示它应用的迁移。
 - 使用更新后的 schema 重写 `~/.openclaw/openclaw.json`。
 
-Gateway 在启动时检测到遗留配置格式时也会自动运行 doctor 迁移，因此过时的配置无需手动干预即可修复。
+Gateway网关在启动时检测到遗留配置格式时也会自动运行 doctor 迁移，因此过时的配置无需手动干预即可修复。
 
 当前迁移：
 
@@ -143,7 +143,7 @@ Doctor 可以将旧版磁盘布局迁移到当前结构：
   - 从遗留的 `~/.openclaw/credentials/*.json`（`oauth.json` 除外）
   - 到 `~/.openclaw/credentials/whatsapp/<accountId>/...`（默认账户 ID：`default`）
 
-这些迁移尽力执行且幂等；当 doctor 保留任何遗留文件夹作为备份时会发出警告。Gateway/CLI 在启动时也会自动迁移遗留会话 + 智能体目录，使历史/认证/模型落入每个智能体的路径中，无需手动运行 doctor。WhatsApp 认证仅通过 `openclaw doctor` 进行迁移。
+这些迁移尽力执行且幂等；当 doctor 保留任何遗留文件夹作为备份时会发出警告。Gateway网关/CLI 在启动时也会自动迁移遗留会话 + 智能体目录，使历史/认证/模型落入每个智能体的路径中，无需手动运行 doctor。WhatsApp 认证仅通过 `openclaw doctor` 进行迁移。
 
 ### 4) 状态完整性检查（会话持久化、路由和安全性）
 
@@ -177,33 +177,33 @@ Doctor 还会报告由于以下原因暂时不可用的认证配置：
 
 当启用沙箱时，doctor 检查 Docker 镜像，并在当前镜像缺失时提供构建或切换到遗留名称的选项。
 
-### 8) Gateway 服务迁移和清理提示
+### 8) Gateway网关服务迁移和清理提示
 
-Doctor 检测遗留 Gateway 服务（launchd/systemd/schtasks），并提供删除它们并使用当前 Gateway 端口安装 OpenClaw 服务的选项。它还可以扫描额外的类 Gateway 服务并打印清理提示。以配置文件命名的 OpenClaw Gateway 服务被视为一等公民，不会被标记为"额外"。
+Doctor 检测遗留 Gateway网关服务（launchd/systemd/schtasks），并提供删除它们并使用当前 Gateway网关端口安装 OpenClaw 服务的选项。它还可以扫描额外的类 Gateway网关服务并打印清理提示。以配置文件命名的 OpenClaw Gateway网关服务被视为一等公民，不会被标记为"额外"。
 
 ### 9) 安全警告
 
-当提供商对 DM 开放且没有允许列表时，或当策略以危险方式配置时，doctor 会发出警告。
+当提供商对 私信 开放且没有允许列表时，或当策略以危险方式配置时，doctor 会发出警告。
 
 ### 10) systemd linger（Linux）
 
-如果作为 systemd 用户服务运行，doctor 确保 linger 已启用，以便 Gateway 在注销后保持运行。
+如果作为 systemd 用户服务运行，doctor 确保 linger 已启用，以便 Gateway网关在注销后保持运行。
 
-### 11) 技能状态
+### 11) Skills 状态
 
-Doctor 打印当前工作区可用/缺失/受阻技能的快速摘要。
+Doctor 打印当前工作区可用/缺失/受阻 Skills 的快速摘要。
 
-### 12) Gateway 认证检查（本地令牌）
+### 12) Gateway网关认证检查（本地令牌）
 
-当本地 Gateway 缺少 `gateway.auth` 时，doctor 发出警告并提供生成令牌的选项。使用 `openclaw doctor --generate-gateway-token` 在自动化中强制创建令牌。
+当本地 Gateway网关缺少 `gateway.auth` 时，doctor 发出警告并提供生成令牌的选项。使用 `openclaw doctor --generate-gateway-token` 在自动化中强制创建令牌。
 
-### 13) Gateway 健康检查 + 重启
+### 13) Gateway网关健康检查 + 重启
 
-Doctor 运行健康检查，并在 Gateway 看起来不健康时提供重启选项。
+Doctor 运行健康检查，并在 Gateway网关看起来不健康时提供重启选项。
 
 ### 14) 渠道状态警告
 
-如果 Gateway 健康，doctor 运行渠道状态探测并报告警告及建议的修复方案。
+如果 Gateway网关健康，doctor 运行渠道状态探测并报告警告及建议的修复方案。
 
 ### 15) Supervisor 配置审计 + 修复
 
@@ -217,13 +217,13 @@ Doctor 检查已安装的 supervisor 配置（launchd/systemd/schtasks）是否�
 - `openclaw doctor --repair --force` 覆盖自定义 supervisor 配置。
 - 你始终可以通过 `openclaw gateway install --force` 强制完全重写。
 
-### 16) Gateway 运行时 + 端口诊断
+### 16) Gateway网关运行时 + 端口诊断
 
-Doctor 检查服务运行时（PID、上次退出状态），并在服务已安装但实际未运行时发出警告。它还检查 Gateway 端口（默认 `18789`）上的端口冲突并报告可能的原因（Gateway 已在运行、SSH 隧道）。
+Doctor 检查服务运行时（PID、上次退出状态），并在服务已安装但实际未运行时发出警告。它还检查 Gateway网关端口（默认 `18789`）上的端口冲突并报告可能的原因（Gateway网关已在运行、SSH 隧道）。
 
-### 17) Gateway 运行时最佳实践
+### 17) Gateway网关运行时最佳实践
 
-当 Gateway 服务运行在 Bun 或版本管理器管理的 Node 路径（`nvm`、`fnm`、`volta`、`asdf` 等）上时，doctor 会发出警告。WhatsApp + Telegram 渠道需要 Node，而版本管理器路径在升级后可能会失效，因为服务不会加载你的 shell 初始化文件。Doctor 会在系统 Node 安装可用时提供迁移选项（Homebrew/apt/choco）。
+当 Gateway网关服务运行在 Bun 或版本管理器管理的 Node 路径（`nvm`、`fnm`、`volta`、`asdf` 等）上时，doctor 会发出警告。WhatsApp + Telegram 渠道需要 Node，而版本管理器路径在升级后可能会失效，因为服务不会加载你的 shell 初始化文件。Doctor 会在系统 Node 安装可用时提供迁移选项（Homebrew/apt/choco）。
 
 ### 18) 配置写入 + 向导元数据
 

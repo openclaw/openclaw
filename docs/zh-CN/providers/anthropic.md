@@ -97,7 +97,7 @@ Setup-token 由 **Claude Code CLI** 创建，而非 Anthropic Console。你可�
 claude setup-token
 ```
 
-将令牌粘贴到 OpenClaw 中（向导中选择：**Anthropic token (paste setup-token)**），或在 Gateway 主机上运行：
+将令牌粘贴到 OpenClaw 中（向导中选择：**Anthropic token (paste setup-token)**），或在 Gateway网关主机上运行：
 
 ```bash
 openclaw models auth setup-token --provider anthropic
@@ -112,7 +112,7 @@ openclaw models auth paste-token --provider anthropic
 ### CLI 设置
 
 ```bash
-# 在上手引导过程中粘贴 setup-token
+# 在新手引导过程中粘贴 setup-token
 openclaw onboard --auth-choice setup-token
 ```
 
@@ -126,7 +126,7 @@ openclaw onboard --auth-choice setup-token
 
 ## 注意事项
 
-- 使用 `claude setup-token` 生成令牌并粘贴，或在 Gateway 主机上运行 `openclaw models auth setup-token`。
+- 使用 `claude setup-token` 生成令牌并粘贴，或在 Gateway网关主机上运行 `openclaw models auth setup-token`。
 - 如果在 Claude 订阅上看到 "OAuth token refresh failed …" 错误，请使用 setup-token 重新认证。参见 [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription)。
 - 认证详情和重用规则请参阅 [/concepts/oauth](/concepts/oauth)。
 
@@ -135,20 +135,20 @@ openclaw onboard --auth-choice setup-token
 **401 错误 / 令牌突然失效**
 
 - Claude 订阅认证可能会过期或被撤销。重新运行 `claude setup-token`
-  并将其粘贴到 **Gateway 主机**上。
-- 如果 Claude CLI 登录在另一台机器上，请在 Gateway 主机上使用
+  并将其粘贴到 **Gateway网关主机**上。
+- 如果 Claude CLI 登录在另一台机器上，请在 Gateway网关主机上使用
   `openclaw models auth paste-token --provider anthropic`。
 
 **No API key found for provider "anthropic"**
 
 - 认证是**按智能体**设置的。新智能体不会继承主智能体的密钥。
-- 为该智能体重新运行上手引导，或在 Gateway 主机上粘贴 setup-token / API 密钥，
+- 为该智能体重新运行新手引导，或在 Gateway网关主机上粘贴 setup-token / API 密钥，
   然后使用 `openclaw models status` 验证。
 
 **No credentials found for profile `anthropic:default`**
 
 - 运行 `openclaw models status` 查看当前活跃的认证配置文件。
-- 重新运行上手引导，或为该配置文件粘贴 setup-token / API 密钥。
+- 重新运行新手引导，或为该配置文件粘贴 setup-token / API 密钥。
 
 **No available auth profile (all in cooldown/unavailable)**
 

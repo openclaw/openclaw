@@ -2,8 +2,8 @@
 read_when:
   - 配对或重新连接 iOS 节点
   - 从源码运行 iOS 应用
-  - 调试 Gateway 发现或画布命令
-summary: iOS 节点应用：连接 Gateway、配对、画布及故障排除
+  - 调试 Gateway网关发现或画布命令
+summary: iOS 节点应用：连接 Gateway网关、配对、画布及故障排除
 title: iOS 应用
 x-i18n:
   generated_at: "2026-02-01T21:32:23Z"
@@ -20,13 +20,13 @@ x-i18n:
 
 ## 功能说明
 
-- 通过 WebSocket 连接到 Gateway（局域网或 tailnet）。
+- 通过 WebSocket 连接到 Gateway网关（局域网或 tailnet）。
 - 暴露节点能力：画布、屏幕快照、摄像头捕获、位置、对话模式、语音唤醒。
 - 接收 `node.invoke` 命令并上报节点状态事件。
 
 ## 要求
 
-- Gateway 运行在另一台设备上（macOS、Linux 或通过 WSL2 的 Windows）。
+- Gateway网关运行在另一台设备上（macOS、Linux 或通过 WSL2 的 Windows）。
 - 网络路径：
   - 通过 Bonjour 的同一局域网，**或**
   - 通过单播 DNS-SD 的 Tailnet（示例域名：`openclaw.internal.`），**或**
@@ -34,15 +34,15 @@ x-i18n:
 
 ## 快速开始（配对 + 连接）
 
-1. 启动 Gateway：
+1. 启动 Gateway网关：
 
 ```bash
 openclaw gateway --port 18789
 ```
 
-2. 在 iOS 应用中，打开设置并选择已发现的 Gateway（或启用手动主机并输入主机/端口）。
+2. 在 iOS 应用中，打开设置并选择已发现的 Gateway网关（或启用手动主机并输入主机/端口）。
 
-3. 在 Gateway 主机上批准配对请求：
+3. 在 Gateway网关主机上批准配对请求：
 
 ```bash
 openclaw nodes pending
@@ -60,7 +60,7 @@ openclaw gateway call node.list --params "{}"
 
 ### Bonjour（局域网）
 
-Gateway 在 `local.` 上广播 `_openclaw-gw._tcp`。iOS 应用会自动列出这些服务。
+Gateway网关在 `local.` 上广播 `_openclaw-gw._tcp`。iOS 应用会自动列出这些服务。
 
 ### Tailnet（跨网络）
 
@@ -69,7 +69,7 @@ Gateway 在 `local.` 上广播 `_openclaw-gw._tcp`。iOS 应用会自动列出�
 
 ### 手动主机/端口
 
-在设置中，启用**手动主机**并输入 Gateway 主机 + 端口（默认 `18789`）。
+在设置中，启用**手动主机**并输入 Gateway网关主机 + 端口（默认 `18789`）。
 
 ## 画布 + A2UI
 
@@ -81,7 +81,7 @@ openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"ur
 
 注意事项：
 
-- Gateway 画布主机提供 `/__openclaw__/canvas/` 和 `/__openclaw__/a2ui/` 服务。
+- Gateway网关画布主机提供 `/__openclaw__/canvas/` 和 `/__openclaw__/a2ui/` 服务。
 - iOS 节点在连接时如果画布主机 URL 已广播，会自动导航到 A2UI。
 - 使用 `canvas.navigate` 和 `{"url":""}` 返回内置脚手架页面。
 
@@ -103,7 +103,7 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 ## 常见错误
 
 - `NODE_BACKGROUND_UNAVAILABLE`：将 iOS 应用切换到前台（画布/摄像头/屏幕命令需要前台运行）。
-- `A2UI_HOST_NOT_CONFIGURED`：Gateway 未广播画布主机 URL；请检查 [Gateway 配置](/gateway/configuration) 中的 `canvasHost`。
+- `A2UI_HOST_NOT_CONFIGURED`：Gateway网关未广播画布主机 URL；请检查 [Gateway网关配置](/gateway/configuration) 中的 `canvasHost`。
 - 配对提示始终未出现：运行 `openclaw nodes pending` 并手动批准。
 - 重新安装后重连失败：钥匙串中的配对令牌已被清除；请重新配对节点。
 

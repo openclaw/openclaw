@@ -2,7 +2,7 @@
 read_when:
   - 构建或调试节点客户端（iOS/Android/macOS 节点模式）
   - 排查配对或桥接认证故障
-  - 审计 Gateway 暴露的节点接口
+  - 审计 Gateway网关暴露的节点接口
 summary: 桥接协议（旧版节点）：TCP JSONL、配对、作用域 RPC
 title: 桥接协议
 x-i18n:
@@ -16,18 +16,18 @@ x-i18n:
 
 # 桥接协议（旧版节点传输）
 
-桥接协议是一种**旧版**节点传输方式（TCP JSONL）。新的节点客户端应改用统一的 Gateway WebSocket 协议。
+桥接协议是一种**旧版**节点传输方式（TCP JSONL）。新的节点客户端应改用统一的 Gateway网关 WebSocket 协议。
 
-如果你正在构建操作端或节点客户端，请使用 [Gateway 协议](/gateway/protocol)。
+如果你正在构建操作端或节点客户端，请使用 [Gateway网关协议](/gateway/protocol)。
 
 **注意：** 当前版本的 OpenClaw 不再附带 TCP 桥接监听器；本文档仅作历史参考保留。旧版 `bridge.*` 配置键已不再属于配置模式的一部分。
 
 ## 为什么有两种协议
 
-- **安全边界**：桥接仅暴露一个小型允许列表，而非完整的 Gateway API 接口。
-- **配对与节点身份**：节点准入由 Gateway 管理，并与每个节点的令牌绑定。
-- **发现体验**：节点可以通过局域网上的 Bonjour 发现 Gateway，或通过 tailnet 直接连接。
-- **回环 WS**：完整的 WS 控制平面保持在本地，除非通过 SSH 隧道转发。
+- **安全边界**：桥接仅暴露一个小型允许列表，而非完整的 Gateway网关 API 接口。
+- **配对与节点身份**：节点准入由 Gateway网关管理，并与每个节点的令牌绑定。
+- **发现体验**：节点可以通过局域网上的 Bonjour 发现 Gateway网关，或通过 tailnet 直接连接。
+- **local loopback WS**：完整的 WS 控制平面保持在本地，除非通过 SSH 隧道转发。
 
 ## 传输方式
 
@@ -40,20 +40,20 @@ x-i18n:
 ## 握手与配对
 
 1. 客户端发送 `hello`，附带节点元数据和令牌（如果已配对）。
-2. 如果未配对，Gateway 回复 `error`（`NOT_PAIRED`/`UNAUTHORIZED`）。
+2. 如果未配对，Gateway网关回复 `error`（`NOT_PAIRED`/`UNAUTHORIZED`）。
 3. 客户端发送 `pair-request`。
-4. Gateway 等待审批，然后发送 `pair-ok` 和 `hello-ok`。
+4. Gateway网关等待审批，然后发送 `pair-ok` 和 `hello-ok`。
 
 `hello-ok` 返回 `serverName`，可能包含 `canvasHostUrl`。
 
 ## 帧类型
 
-客户端 → Gateway：
+客户端 → Gateway网关：
 
-- `req` / `res`：作用域 Gateway RPC（聊天、会话、配置、健康检查、语音唤醒、skills.bins）
+- `req` / `res`：作用域 Gateway网关 RPC（聊天、会话、配置、健康检查、语音唤醒、skills.bins）
 - `event`：节点信号（语音转录、智能体请求、聊天订阅、执行生命周期）
 
-Gateway → 客户端：
+Gateway网关 → 客户端：
 
 - `invoke` / `invoke-res`：节点命令（`canvas.*`、`camera.*`、`screen.record`、`location.get`、`sms.send`）
 - `event`：已订阅会话的聊天更新
@@ -63,7 +63,7 @@ Gateway → 客户端：
 
 ## 执行生命周期事件
 
-节点可以发出 `exec.finished` 或 `exec.denied` 事件以展示 system.run 活动。这些会映射为 Gateway 中的系统事件。（旧版节点可能仍会发出 `exec.started`。）
+节点可以发出 `exec.finished` 或 `exec.denied` 事件以展示 system.run 活动。这些会映射为 Gateway网关中的系统事件。（旧版节点可能仍会发出 `exec.started`。）
 
 有效载荷字段（除特别说明外均为可选）：
 

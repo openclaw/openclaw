@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 您想通过交互方式调整凭据、设备或智能体默认设置
+  - 你想通过交互方式调整凭据、设备或智能体默认设置
 summary: "`openclaw configure` 的 CLI 参考（交互式配置提示）"
 title: configure
 x-i18n:
@@ -24,13 +24,13 @@ x-i18n:
 
 相关内容：
 
-- Gateway 配置参考：[配置](/gateway/configuration)
+- Gateway网关配置参考：[配置](/gateway/configuration)
 - Config CLI：[Config](/cli/config)
 
 注意事项：
 
-- 选择 Gateway 运行位置时会始终更新 `gateway.mode`。如果您只需要修改这一项，可以直接选择"继续"而无需配置其他部分。
-- 面向渠道的服务（Slack/Discord/Matrix/Microsoft Teams）在设置过程中会提示配置渠道/房间允许列表。您可以输入名称或 ID；向导会尽可能将名称解析为 ID。
+- 选择 Gateway网关运行位置时会始终更新 `gateway.mode`。如果你只需要修改这一项，可以直接选择"继续"而无需配置其他部分。
+- 面向渠道的服务（Slack/Discord/Matrix/Microsoft Teams）在设置过程中会提示配置渠道/房间允许列表。你可以输入名称或 ID；向导会尽可能将名称解析为 ID。
 
 ## 示例
 

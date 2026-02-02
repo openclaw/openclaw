@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 您需要一份面向初学者的日志概览
-  - 您想配置日志级别或格式
-  - 您正在故障排除，需要快速找到日志
+  - 你需要一份面向初学者的日志概览
+  - 你想配置日志级别或格式
+  - 你正在故障排除，需要快速找到日志
 summary: 日志概览：文件日志、控制台输出、CLI 实时追踪和控制界面
 title: 日志
 x-i18n:
@@ -18,20 +18,20 @@ x-i18n:
 
 OpenClaw 在两个地方记录日志：
 
-- **文件日志**（JSON 行格式），由 Gateway 写入。
+- **文件日志**（JSON 行格式），由 Gateway网关写入。
 - **控制台输出**，显示在终端和控制界面中。
 
 本页说明日志的存储位置、如何读取日志，以及如何配置日志级别和格式。
 
 ## 日志存储位置
 
-默认情况下，Gateway 会在以下路径写入滚动日志文件：
+默认情况下，Gateway网关会在以下路径写入滚动日志文件：
 
 `/tmp/openclaw/openclaw-YYYY-MM-DD.log`
 
-日期使用 Gateway 主机的本地时区。
+日期使用 Gateway网关主机的本地时区。
 
-您可以在 `~/.openclaw/openclaw.json` 中覆盖此设置：
+你可以在 `~/.openclaw/openclaw.json` 中覆盖此设置：
 
 ```json
 {
@@ -45,7 +45,7 @@ OpenClaw 在两个地方记录日志：
 
 ### CLI：实时追踪（推荐）
 
-使用 CLI 通过 RPC 追踪 Gateway 日志文件：
+使用 CLI 通过 RPC 追踪 Gateway网关日志文件：
 
 ```bash
 openclaw logs --follow
@@ -66,7 +66,7 @@ openclaw logs --follow
 - `notice`：截断/轮转提示
 - `raw`：未解析的日志行
 
-如果 Gateway 不可达，CLI 会打印简短提示，建议运行：
+如果 Gateway网关不可达，CLI 会打印简短提示，建议运行：
 
 ```bash
 openclaw doctor
@@ -185,7 +185,7 @@ openclaw channels logs --channel whatsapp
 
 ### 启用诊断（无导出器）
 
-如果您希望诊断事件可供插件或自定义接收器使用，请使用此配置：
+如果你希望诊断事件可供插件或自定义接收器使用，请使用此配置：
 
 ```json
 {
@@ -252,11 +252,11 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 
 注意事项：
 
-- 您也可以使用 `openclaw plugins enable diagnostics-otel` 来启用插件。
+- 你也可以使用 `openclaw plugins enable diagnostics-otel` 来启用插件。
 - `protocol` 目前仅支持 `http/protobuf`。`grpc` 会被忽略。
 - 指标包括令牌使用、成本、上下文大小、运行持续时间，以及消息流计数器/直方图（webhook、队列、会话状态、队列深度/等待时间）。
 - 追踪/指标可以通过 `traces` / `metrics` 切换（默认：开启）。启用时，追踪包括模型使用 span 以及 webhook/消息处理 span。
-- 当您的收集器需要认证时，请设置 `headers`。
+- 当你的收集器需要认证时，请设置 `headers`。
 - 支持的环境变量：`OTEL_EXPORTER_OTLP_ENDPOINT`、`OTEL_SERVICE_NAME`、`OTEL_EXPORTER_OTLP_PROTOCOL`。
 
 ### 导出的指标（名称 + 类型）
@@ -323,6 +323,6 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 
 ## 故障排除提示
 
-- **Gateway 不可达？** 先运行 `openclaw doctor`。
-- **日志为空？** 检查 Gateway 是否正在运行并写入 `logging.file` 中指定的文件路径。
+- **Gateway网关不可达？** 先运行 `openclaw doctor`。
+- **日志为空？** 检查 Gateway网关是否正在运行并写入 `logging.file` 中指定的文件路径。
 - **需要更多细节？** 将 `logging.level` 设置为 `debug` 或 `trace` 并重试。

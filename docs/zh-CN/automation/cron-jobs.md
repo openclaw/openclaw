@@ -3,7 +3,7 @@ read_when:
   - 调度后台任务或唤醒
   - 配置需要与心跳一起或并行运行的自动化
   - 在心跳和定时任务之间做选择
-summary: Gateway 调度器的定时任务与唤醒
+summary: Gateway网关调度器的定时任务与唤醒
 title: 定时任务
 x-i18n:
   generated_at: "2026-02-01T19:37:32Z"
@@ -14,17 +14,17 @@ x-i18n:
   workflow: 14
 ---
 
-# 定时任务（Gateway 调度器）
+# 定时任务（Gateway网关调度器）
 
 > **定时任务还是心跳？** 请参阅[定时任务与心跳对比](/automation/cron-vs-heartbeat)了解何时使用哪种方式。
 
-定时任务是 Gateway 内置的调度器。它持久化任务、在合适的时间唤醒智能体，并可选择将输出发送回聊天。
+定时任务是 Gateway网关内置的调度器。它持久化任务、在合适的时间唤醒智能体，并可选择将输出发送回聊天。
 
 如果你想要 _"每天早上运行"_ 或 _"20 分钟后提醒智能体"_，定时任务就是对应的机制。
 
 ## 简要概述
 
-- 定时任务运行在 **Gateway 内部**（而非模型内部）。
+- 定时任务运行在 **Gateway网关内部**（而非模型内部）。
 - 任务持久化存储在 `~/.openclaw/cron/` 下，因此重启不会丢失计划。
 - 两种执行方式：
   - **主会话**：入队一个系统事件，然后在下一次心跳时运行。
@@ -63,13 +63,13 @@ openclaw cron add \
   --to "channel:C1234567890"
 ```
 
-## 工具调用等价形式（Gateway 定时任务工具）
+## 工具调用等价形式（Gateway网关定时任务工具）
 
 有关规范的 JSON 结构和示例，请参阅[工具调用的 JSON 模式](/automation/cron-jobs#json-schema-for-tool-calls)。
 
 ## 定时任务的存储位置
 
-定时任务默认持久化存储在 Gateway 主机的 `~/.openclaw/cron/jobs.json` 中。Gateway 将文件加载到内存中，并在更改时写回，因此仅在 Gateway 停止时手动编辑才是安全的。请优先使用 `openclaw cron add/edit` 或定时任务工具调用 API 进行更改。
+定时任务默认持久化存储在 Gateway网关主机的 `~/.openclaw/cron/jobs.json` 中。Gateway网关将文件加载到内存中，并在更改时写回，因此仅在 Gateway网关停止时手动编辑才是安全的。请优先使用 `openclaw cron add/edit` 或定时任务工具调用 API 进行更改。
 
 ## 新手友好概述
 
@@ -99,9 +99,9 @@ openclaw cron add \
 - 一个**调度计划**（何时运行），
 - 一个**负载**（做什么），
 - 可选的**投递**（输出发送到哪里）。
-- 可选的**智能体绑定**（`agentId`）：在指定智能体下运行任务；如果缺失或未知，Gateway 会回退到默认智能体。
+- 可选的**智能体绑定**（`agentId`）：在指定智能体下运行任务；如果缺失或未知，Gateway网关会回退到默认智能体。
 
-任务通过稳定的 `jobId` 标识（用于 CLI/Gateway API）。
+任务通过稳定的 `jobId` 标识（用于 CLI/Gateway网关 API）。
 在智能体工具调用中，`jobId` 是规范字段；旧版 `id` 仍可兼容使用。
 任务可以通过 `deleteAfterRun: true` 在一次性任务成功运行后自动删除。
 
@@ -109,11 +109,11 @@ openclaw cron add \
 
 定时任务支持三种调度类型：
 
-- `at`：一次性时间戳（自纪元起的毫秒数）。Gateway 接受 ISO 8601 格式并转换为 UTC。
+- `at`：一次性时间戳（自纪元起的毫秒数）。Gateway网关接受 ISO 8601 格式并转换为 UTC。
 - `every`：固定间隔（毫秒）。
 - `cron`：5 字段 cron 表达式，可选 IANA 时区。
 
-Cron 表达式使用 `croner`。如果省略时区，将使用 Gateway 主机的本地时区。
+Cron 表达式使用 `croner`。如果省略时区，将使用 Gateway网关主机的本地时区。
 
 ### 主会话与隔离式执行
 
@@ -212,7 +212,7 @@ Telegram 通过 `message_thread_id` 支持论坛主题。对于定时任务投�
 
 ## 工具调用的 JSON 模式
 
-直接调用 Gateway `cron.*` 工具（智能体工具调用或 RPC）时使用这些结构。CLI 标志接受人类可读的时间格式如 `20m`，但工具调用对 `atMs` 和 `everyMs` 使用纪元毫秒数（`at` 时间接受 ISO 时间戳）。
+直接调用 Gateway网关 `cron.*` 工具（智能体工具调用或 RPC）时使用这些结构。CLI 标志接受人类可读的时间格式如 `20m`，但工具调用对 `atMs` 和 `everyMs` 使用纪元毫秒数（`at` 时间接受 ISO 时间戳）。
 
 ### cron.add 参数
 
@@ -286,7 +286,7 @@ Telegram 通过 `message_thread_id` 支持论坛主题。对于定时任务投�
 
 ## 存储与历史
 
-- 任务存储：`~/.openclaw/cron/jobs.json`（Gateway 管理的 JSON）。
+- 任务存储：`~/.openclaw/cron/jobs.json`（Gateway网关管理的 JSON）。
 - 运行历史：`~/.openclaw/cron/runs/<jobId>.jsonl`（JSONL，自动清理）。
 - 覆盖存储路径：配置中的 `cron.store`。
 
@@ -414,7 +414,7 @@ openclaw cron runs --id <jobId> --limit 50
 openclaw system event --mode now --text "Next heartbeat: check battery."
 ```
 
-## Gateway API 接口
+## Gateway网关 API 接口
 
 - `cron.list`、`cron.status`、`cron.add`、`cron.update`、`cron.remove`
 - `cron.run`（强制或到期）、`cron.runs`
@@ -425,7 +425,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 ### "没有任何任务运行"
 
 - 检查定时任务是否已启用：`cron.enabled` 和 `OPENCLAW_SKIP_CRON`。
-- 检查 Gateway 是否持续运行（定时任务运行在 Gateway 进程内部）。
+- 检查 Gateway网关是否持续运行（定时任务运行在 Gateway网关进程内部）。
 - 对于 `cron` 调度：确认时区（`--tz`）与主机时区的关系。
 
 ### Telegram 投递到了错误的位置

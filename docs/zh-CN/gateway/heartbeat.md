@@ -13,7 +13,7 @@ x-i18n:
   workflow: 14
 ---
 
-# 心跳（Gateway）
+# 心跳（Gateway网关）
 
 > **心跳还是定时任务？** 参见 [定时任务与心跳对比](/automation/cron-vs-heartbeat) 了解何时使用哪种方式。
 
@@ -59,7 +59,7 @@ x-i18n:
 - **后台任务**："Consider outstanding tasks" 促使智能体检查待办事项（收件箱、日历、提醒、排队工作）并呈现紧急事项。
 - **关怀用户**："Checkup sometimes on your human during day time" 促使偶尔发送一条轻量级的"需要什么帮助吗？"消息，但通过使用你配置的本地时区避免夜间打扰（参见 [/concepts/timezone](/concepts/timezone)）。
 
-如果你希望心跳执行非常具体的任务（例如"检查 Gmail PubSub 统计"或"验证 Gateway 健康状态"），请将 `agents.defaults.heartbeat.prompt`（或 `agents.list[].heartbeat.prompt`）设置为自定义内容（原样发送）。
+如果你希望心跳执行非常具体的任务（例如"检查 Gmail PubSub 统计"或"验证 Gateway网关健康状态"），请将 `agents.defaults.heartbeat.prompt`（或 `agents.list[].heartbeat.prompt`）设置为自定义内容（原样发送）。
 
 ## 响应约定
 

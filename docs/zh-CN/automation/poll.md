@@ -1,8 +1,8 @@
 ---
 read_when:
   - 添加或修改投票支持
-  - 调试从 CLI 或 Gateway 发送的投票
-summary: 通过 Gateway + CLI 发送投票
+  - 调试从 CLI 或 Gateway网关发送的投票
+summary: 通过 Gateway网关 + CLI 发送投票
 title: 投票
 x-i18n:
   generated_at: "2026-02-01T19:38:57Z"
@@ -47,7 +47,7 @@ openclaw message poll --channel msteams --target conversation:19:abc@thread.tacv
 - `--poll-multi`：允许选择多个选项
 - `--poll-duration-hours`：仅限 Discord（省略时默认为 24）
 
-## Gateway RPC
+## Gateway网关 RPC
 
 方法：`poll`
 
@@ -72,4 +72,4 @@ openclaw message poll --channel msteams --target conversation:19:abc@thread.tacv
 使用 `message` 工具的 `poll` 操作（`to`、`pollQuestion`、`pollOption`，可选 `pollMulti`、`pollDurationHours`、`channel`）。
 
 注意：Discord 没有"精确选择 N 个"模式；`pollMulti` 映射为多选。
-Teams 投票以 Adaptive Cards 形式渲染，需要 Gateway 保持在线以在 `~/.openclaw/msteams-polls.json` 中记录投票结果。
+Teams 投票以 Adaptive Cards 形式渲染，需要 Gateway网关保持在线以在 `~/.openclaw/msteams-polls.json` 中记录投票结果。

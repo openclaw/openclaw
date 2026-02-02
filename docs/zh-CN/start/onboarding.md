@@ -1,9 +1,9 @@
 ---
 read_when:
-  - 设计 macOS 上手引导助手
+  - 设计 macOS 新手引导助手
   - 实现认证或身份设置
-summary: OpenClaw 首次运行上手引导流程（macOS 应用）
-title: 上手引导
+summary: OpenClaw 首次运行新手引导流程（macOS 应用）
+title: 新手引导
 x-i18n:
   generated_at: "2026-02-01T21:38:45Z"
   model: claude-opus-4-5
@@ -13,16 +13,16 @@ x-i18n:
   workflow: 15
 ---
 
-# 上手引导（macOS 应用）
+# 新手引导（macOS 应用）
 
-本文档描述了**当前**的首次运行上手引导流程。目标是打造流畅的"第 0 天"体验：选择 Gateway 运行位置、连接认证、运行向导，然后让智能体自行完成引导。
+本文档描述了**当前**的首次运行新手引导流程。目标是打造流畅的"第 0 天"体验：选择 Gateway网关运行位置、连接认证、运行向导，然后让智能体自行完成引导。
 
 ## 页面顺序（当前）
 
 1. 欢迎 + 安全提示
-2. **Gateway 选择**（本地 / 远程 / 稍后配置）
+2. **Gateway网关选择**（本地 / 远程 / 稍后配置）
 3. **认证（Anthropic OAuth）** — 仅限本地
-4. **设置向导**（Gateway 驱动）
+4. **设置向导**（Gateway网关驱动）
 5. **权限**（TCC 提示）
 6. **CLI**（可选）
 7. **引导聊天**（专用会话）
@@ -34,17 +34,17 @@ x-i18n:
 
 ## 2) 本地 vs 远程
 
-**Gateway** 在哪里运行？
+**Gateway网关** 在哪里运行？
 
-- **本地（本机 Mac）：** 上手引导可以运行 OAuth 流程并在本地写入凭据。
-- **远程（通过 SSH/Tailnet）：** 上手引导**不会**在本地运行 OAuth；凭据必须存在于 Gateway 主机上。
+- **本地（本机 Mac）：** 新手引导可以运行 OAuth 流程并在本地写入凭据。
+- **远程（通过 SSH/Tailnet）：** 新手引导**不会**在本地运行 OAuth；凭据必须存在于 Gateway网关主机上。
 - **稍后配置：** 跳过设置，保持应用未配置状态。
 
-Gateway 认证提示：
+Gateway网关认证提示：
 
-- 向导现在即使对回环地址也会生成**令牌**，因此本地 WS 客户端必须进行认证。
+- 向导现在即使对 local loopback 也会生成**令牌**，因此本地 WS 客户端必须进行认证。
 - 如果禁用认证，任何本地进程都可以连接；仅在完全可信的机器上使用此选项。
-- 对于多机访问或非回环地址绑定，请使用**令牌**。
+- 对于多机访问或非 local loopback 绑定，请使用**令牌**。
 
 ## 3) 仅限本地的认证（Anthropic OAuth）
 
@@ -56,13 +56,13 @@ macOS 应用支持 Anthropic OAuth（Claude Pro/Max）。流程如下：
 
 其他提供商（OpenAI、自定义 API）目前通过环境变量或配置文件进行配置。
 
-## 4) 设置向导（Gateway 驱动）
+## 4) 设置向导（Gateway网关驱动）
 
-应用可以运行与 CLI 相同的设置向导。这使上手引导与 Gateway 端的行为保持同步，避免在 SwiftUI 中重复逻辑。
+应用可以运行与 CLI 相同的设置向导。这使新手引导与 Gateway网关端的行为保持同步，避免在 SwiftUI 中重复逻辑。
 
 ## 5) 权限
 
-上手引导会请求以下所需的 TCC 权限：
+新手引导会请求以下所需的 TCC 权限：
 
 - 通知
 - 辅助功能
@@ -99,7 +99,7 @@ openclaw webhooks gmail setup --account you@gmail.com
 
 ## 远程模式说明
 
-当 Gateway 在另一台机器上运行时，凭据和工作区文件位于**该主机上**。如果你需要在远程模式下使用 OAuth，请在 Gateway 主机上创建：
+当 Gateway网关在另一台机器上运行时，凭据和工作区文件位于**该主机上**。如果你需要在远程模式下使用 OAuth，请在 Gateway网关主机上创建：
 
 - `~/.openclaw/credentials/oauth.json`
 - `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`

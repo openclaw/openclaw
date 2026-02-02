@@ -1,9 +1,9 @@
 ---
 read_when:
-  - 您希望在 GCP 上全天候运行 OpenClaw
-  - 您希望在自己的虚拟机上运行生产级、始终在线的 Gateway
-  - 您希望完全掌控持久化、二进制文件和重启行为
-summary: 在 GCP Compute Engine 虚拟机上全天候运行 OpenClaw Gateway（Docker），并实现持久化状态存储
+  - 你希望在 GCP 上全天候运行 OpenClaw
+  - 你希望在自己的虚拟机上运行生产级、始终在线的 Gateway网关
+  - 你希望完全掌控持久化、二进制文件和重启行为
+summary: 在 GCP Compute Engine 虚拟机上全天候运行 OpenClaw Gateway网关（Docker），并实现持久化状态存储
 title: GCP
 x-i18n:
   generated_at: "2026-02-01T21:33:10Z"
@@ -18,24 +18,24 @@ x-i18n:
 
 ## 目标
 
-使用 Docker 在 GCP Compute Engine 虚拟机上运行持久化的 OpenClaw Gateway，实现持久状态存储、内置二进制文件和安全的重启行为。
+使用 Docker 在 GCP Compute Engine 虚拟机上运行持久化的 OpenClaw Gateway网关，实现持久状态存储、内置二进制文件和安全的重启行为。
 
-如果您想"以每月约 $5-12 的成本全天候运行 OpenClaw"，这是在 Google Cloud 上的可靠方案。
-价格因机器类型和区域而异；选择适合您工作负载的最小虚拟机，如果遇到 OOM 再进行扩容。
+如果你想"以每月约 $5-12 的成本全天候运行 OpenClaw"，这是在 Google Cloud 上的可靠方案。
+价格因机器类型和区域而异；选择适合你工作负载的最小虚拟机，如果遇到 OOM 再进行扩容。
 
 ## 我们要做什么（简单说明）？
 
 - 创建 GCP 项目并启用计费
 - 创建 Compute Engine 虚拟机
 - 安装 Docker（隔离的应用运行时）
-- 在 Docker 中启动 OpenClaw Gateway
+- 在 Docker 中启动 OpenClaw Gateway网关
 - 将 `~/.openclaw` + `~/.openclaw/workspace` 持久化到宿主机（重启/重建后数据不丢失）
 - 通过 SSH 隧道从笔记本电脑访问控制界面
 
-Gateway 可通过以下方式访问：
+Gateway网关可通过以下方式访问：
 
 - 从笔记本电脑进行 SSH 端口转发
-- 如果您自行管理防火墙和令牌，可直接暴露端口
+- 如果你自行管理防火墙和令牌，可直接暴露端口
 
 本指南使用 GCP Compute Engine 上的 Debian。
 Ubuntu 同样适用；请相应地映射软件包。
@@ -96,7 +96,7 @@ gcloud auth login
 **CLI：**
 
 ```bash
-gcloud projects create my-openclaw-project --name="OpenClaw Gateway"
+gcloud projects create my-openclaw-project --name="OpenClaw Gateway网关"
 gcloud config set project my-openclaw-project
 ```
 
@@ -201,7 +201,7 @@ git clone https://github.com/openclaw/openclaw.git
 cd openclaw
 ```
 
-本指南假设您将构建自定义镜像以确保二进制文件的持久化。
+本指南假设你将构建自定义镜像以确保二进制文件的持久化。
 
 ---
 
@@ -270,11 +270,11 @@ services:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     ports:
-      # 推荐：在虚拟机上保持 Gateway 仅监听回环地址；通过 SSH 隧道访问。
+      # 推荐：在虚拟机上保持 Gateway网关仅监听 local loopback；通过 SSH 隧道访问。
       # 如需公开暴露，移除 `127.0.0.1:` 前缀并相应配置防火墙。
       - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
 
-      # 可选：仅当您对此虚拟机运行 iOS/Android 节点并需要 Canvas 主机时使用。
+      # 可选：仅当你对此虚拟机运行 iOS/Android 节点并需要 Canvas 主机时使用。
       # 如果公开暴露此端口，请阅读 /gateway/security 并相应配置防火墙。
       # - "18793:18793"
     command:
@@ -296,7 +296,7 @@ services:
 在运行中的容器内安装二进制文件是一个陷阱。
 运行时安装的任何内容在重启后都会丢失。
 
-所有技能所需的外部二进制文件必须在镜像构建时安装。
+所有 Skills 所需的外部二进制文件必须在镜像构建时安装。
 
 以下示例仅展示三个常见的二进制文件：
 
@@ -305,9 +305,9 @@ services:
 - `wacli` 用于 WhatsApp
 
 这些只是示例，并非完整列表。
-您可以使用相同的模式安装所需的任意数量的二进制文件。
+你可以使用相同的模式安装所需的任意数量的二进制文件。
 
-如果之后添加了依赖其他二进制文件的新技能，您必须：
+如果之后添加了依赖其他二进制文件的新 Skills，你必须：
 
 1. 更新 Dockerfile
 2. 重新构建镜像
@@ -379,7 +379,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 12）验证 Gateway
+## 12）验证 Gateway网关
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -395,7 +395,7 @@ docker compose logs -f openclaw-gateway
 
 ## 13）从笔记本电脑访问
 
-创建 SSH 隧道以转发 Gateway 端口：
+创建 SSH 隧道以转发 Gateway网关端口：
 
 ```bash
 gcloud compute ssh openclaw-gateway --zone=us-central1-a -- -L 18789:127.0.0.1:18789
@@ -405,7 +405,7 @@ gcloud compute ssh openclaw-gateway --zone=us-central1-a -- -L 18789:127.0.0.1:1
 
 `http://127.0.0.1:18789/`
 
-粘贴您的 Gateway 令牌。
+粘贴你的 Gateway网关令牌。
 
 ---
 
@@ -416,9 +416,9 @@ OpenClaw 在 Docker 中运行，但 Docker 并非数据来源。
 
 | 组件           | 位置                              | 持久化机制      | 备注                        |
 | -------------- | --------------------------------- | --------------- | --------------------------- |
-| Gateway 配置   | `/home/node/.openclaw/`           | 宿主机卷挂载    | 包含 `openclaw.json`、令牌  |
+| Gateway网关配置   | `/home/node/.openclaw/`           | 宿主机卷挂载    | 包含 `openclaw.json`、令牌  |
 | 模型认证配置   | `/home/node/.openclaw/`           | 宿主机卷挂载    | OAuth 令牌、API 密钥        |
-| 技能配置       | `/home/node/.openclaw/skills/`    | 宿主机卷挂载    | 技能级别状态                |
+| Skills配置       | `/home/node/.openclaw/skills/`    | 宿主机卷挂载    | Skills 级别状态                |
 | 智能体工作区   | `/home/node/.openclaw/workspace/` | 宿主机卷挂载    | 代码和智能体产物            |
 | WhatsApp 会话  | `/home/node/.openclaw/`           | 宿主机卷挂载    | 保留二维码登录              |
 | Gmail 密钥环   | `/home/node/.openclaw/`           | 宿主机卷 + 密码 | 需要 `GOG_KEYRING_PASSWORD` |
@@ -450,13 +450,13 @@ docker compose up -d
 
 **OS Login 问题**
 
-检查您的 OS Login 配置：
+检查你的 OS Login 配置：
 
 ```bash
 gcloud compute os-login describe-profile
 ```
 
-确保您的账户具有所需的 IAM 权限（Compute OS Login 或 Compute OS Admin Login）。
+确保你的账户具有所需的 IAM 权限（Compute OS Login 或 Compute OS Admin Login）。
 
 **内存不足 (OOM)**
 
@@ -507,4 +507,4 @@ gcloud compute instances start openclaw-gateway --zone=us-central1-a
 
 - 设置消息渠道：[渠道](/channels)
 - 将本地设备配对为节点：[节点](/nodes)
-- 配置 Gateway：[Gateway 配置](/gateway/configuration)
+- 配置 Gateway网关：[Gateway网关配置](/gateway/configuration)

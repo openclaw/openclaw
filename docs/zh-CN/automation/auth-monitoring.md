@@ -33,7 +33,7 @@ openclaw models status --check
 
 ## 可选脚本（运维/手机工作流）
 
-这些脚本位于 `scripts/` 目录下，属于**可选项**。它们假定你可以通过 SSH 访问 Gateway 主机，并针对 systemd + Termux 进行了调优。
+这些脚本位于 `scripts/` 目录下，属于**可选项**。它们假定你可以通过 SSH 访问 Gateway网关主机，并针对 systemd + Termux 进行了调优。
 
 - `scripts/claude-auth-status.sh` 现在使用 `openclaw models status --json` 作为数据源（如果 CLI 不可用则回退到直接读取文件），因此请确保定时器中 `openclaw` 在 `PATH` 中。
 - `scripts/auth-monitor.sh`：cron/systemd 定时器目标；发送告警（ntfy 或手机）。

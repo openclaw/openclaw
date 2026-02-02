@@ -30,11 +30,11 @@ OpenClaw 从 `~/.openclaw/openclaw.json` 读取可选的 **JSON5** 配置（支�
 ## 严格配置验证
 
 OpenClaw 只接受完全匹配 schema 的配置。
-未知键、类型错误或无效值会导致 Gateway **拒绝启动**以确保安全。
+未知键、类型错误或无效值会导致 Gateway网关 **拒绝启动**以确保安全。
 
 验证失败时：
 
-- Gateway 不会启动。
+- Gateway网关不会启动。
 - 只允许诊断命令（例如：`openclaw doctor`、`openclaw logs`、`openclaw health`、`openclaw status`、`openclaw service`、`openclaw help`）。
 - 运行 `openclaw doctor` 查看具体问题。
 - 运行 `openclaw doctor --fix`（或 `--yes`）应用迁移/修复。
@@ -43,7 +43,7 @@ Doctor 不会写入任何更改，除非你明确选择了 `--fix`/`--yes`。
 
 ## Schema + UI 提示
 
-Gateway 通过 `config.schema` 暴露配置的 JSON Schema 表示，供 UI 编辑器使用。
+Gateway网关通过 `config.schema` 暴露配置的 JSON Schema 表示，供 UI 编辑器使用。
 控制台 UI 根据此 schema 渲染表单，并提供 **Raw JSON** 编辑器作为应急手段。
 
 渠道插件和扩展可以为其配置注册 schema + UI 提示，因此渠道设置
@@ -53,8 +53,8 @@ Gateway 通过 `config.schema` 暴露配置的 JSON Schema 表示，供 UI 编�
 
 ## 应用 + 重启（RPC）
 
-使用 `config.apply` 在一步中验证 + 写入完整配置并重启 Gateway。
-它会写入重启哨兵文件，并在 Gateway 恢复后 ping 最后活跃的会话。
+使用 `config.apply` 在一步中验证 + 写入完整配置并重启 Gateway网关。
+它会写入重启哨兵文件，并在 Gateway网关恢复后 ping 最后活跃的会话。
 
 警告：`config.apply` 会替换**整个配置**。如果你只想更改部分键，
 请使用 `config.patch` 或 `openclaw config set`。请备份 `~/.openclaw/openclaw.json`。
@@ -88,7 +88,7 @@ openclaw gateway call config.apply --params '{
 - `null` 删除键
 - 数组替换
   与 `config.apply` 类似，它会验证、写入配置、存储重启哨兵，并调度
-  Gateway 重启（当提供 `sessionKey` 时可选择唤醒）。
+  Gateway网关重启（当提供 `sessionKey` 时可选择唤醒）。
 
 参数：
 
@@ -294,7 +294,7 @@ OpenClaw 从父进程（shell、launchd/systemd、CI 等）读取环境变量。
 }
 ```
 
-参见 [/environment](/environment) 了解完整的优先级和来源。
+参见 [/environment](/environment) 了解全部优先级和来源。
 
 ### `env.shellEnv`（可选）
 
@@ -406,7 +406,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 ### `agents.list[].identity`
 
-用于默认值和用户体验的可选每智能体身份标识。由 macOS 上手引导助手写入。
+用于默认值和用户体验的可选每智能体身份标识。由 macOS 新手引导助手写入。
 
 如果设置了，OpenClaw 会推导默认值（仅在你未明确设置时）：
 
@@ -484,7 +484,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 ### `channels.whatsapp.dmPolicy`
 
-控制 WhatsApp 私聊（DM）的处理方式：
+控制 WhatsApp 私聊（私信）的处理方式：
 
 - `"pairing"`（默认）：未知发送者会收到配对码；所有者必须批准
 - `"allowlist"`：仅允许 `channels.whatsapp.allowFrom`（或已配对的允许存储）中的发送者
@@ -536,7 +536,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 ### `channels.whatsapp.accounts`（多账号）
 
-在一个 Gateway 中运行多个 WhatsApp 账号：
+在一个 Gateway网关中运行多个 WhatsApp 账号：
 
 ```json5
 {
@@ -734,7 +734,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 ### 多智能体路由（`agents.list` + `bindings`）
 
-在一个 Gateway 中运行多个隔离的智能体（独立的工作区、`agentDir`、会话）。
+在一个 Gateway网关中运行多个隔离的智能体（独立的工作区、`agentDir`、会话）。
 入站消息通过绑定路由到智能体。
 
 - `agents.list[]`：每智能体覆盖。
@@ -783,7 +783,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 #### 每智能体访问配置（多智能体）
 
-每个智能体可以携带自己的沙盒 + 工具策略。用于在一个 Gateway 中混合访问级别：
+每个智能体可以携带自己的沙盒 + 工具策略。用于在一个 Gateway网关中混合访问级别：
 
 - **完全访问**（个人智能体）
 - **只读**工具 + 工作区
@@ -1011,7 +1011,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 ### `web`（WhatsApp Web 渠道运行时）
 
-WhatsApp 通过 Gateway 的 Web 渠道（Baileys Web）运行。当存在已链接的会话时自动启动。
+WhatsApp 通过 Gateway网关的 Web 渠道（Baileys Web）运行。当存在已链接的会话时自动启动。
 设置 `web.enabled: false` 使其默认关闭。
 
 ```json5
@@ -1099,7 +1099,7 @@ OpenClaw 仅在存在 `channels.telegram` 配置段时启动 Telegram。机器�
 草稿流式传输说明：
 
 - 使用 Telegram `sendMessageDraft`（草稿气泡，不是真正的消息）。
-- 需要**私聊话题**（DM 中的 message_thread_id；机器人已启用话题）。
+- 需要**私聊话题**（私信 中的 message_thread_id；机器人已启用话题）。
 - `/reasoning stream` 将推理过程流式传输到草稿中，然后发送最终答案。
   重试策略默认值和行为记录在[重试策略](/concepts/retry)中。
 
@@ -1611,7 +1611,7 @@ WhatsApp 入站前缀通过 `channels.whatsapp.messagePrefix` 配置（已弃用
 ### `talk`
 
 Talk 模式（macOS/iOS/Android）的默认值。语音 ID 在未设置时回退到 `ELEVENLABS_VOICE_ID` 或 `SAG_VOICE_ID`。
-`apiKey` 在未设置时回退到 `ELEVENLABS_API_KEY`（或 Gateway 的 shell 配置文件）。
+`apiKey` 在未设置时回退到 `ELEVENLABS_API_KEY`（或 Gateway网关的 shell 配置文件）。
 `voiceAliases` 允许 Talk 指令使用友好名称（例如 `"voice":"Clawd"`）。
 
 ```json5
@@ -2721,7 +2721,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
   - `per-account-channel-peer`：按账号 + 渠道 + 发送者隔离私聊（推荐用于多账号收件箱）。
 - `identityLinks`：将规范 id 映射到提供商前缀的对等方，以便在使用 `per-peer`、`per-channel-peer` 或 `per-account-channel-peer` 时同一人跨渠道共享私聊会话。
   - 示例：`alice: ["telegram:123456789", "discord:987654321012345678"]`。
-- `reset`：主重置策略。默认为 Gateway 主机上本地时间凌晨 4:00 每日重置。
+- `reset`：主重置策略。默认为 Gateway网关主机上本地时间凌晨 4:00 每日重置。
   - `mode`：`daily` 或 `idle`（当存在 `reset` 时默认：`daily`）。
   - `atHour`：本地小时（0-23）作为每日重置边界。
   - `idleMinutes`：滑动空闲窗口（分钟）。当 daily + idle 都配置时，先到期的获胜。
@@ -2732,23 +2732,23 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 - `sendPolicy.default`：无规则匹配时的 `allow` 或 `deny` 回退。
 - `sendPolicy.rules[]`：按 `channel`、`chatType`（`direct|group|room`）或 `keyPrefix`（例如 `cron:`）匹配。第一个 deny 获胜；否则 allow。
 
-### `skills`（技能配置）
+### `skills`（Skills配置）
 
-控制内置白名单、安装偏好、额外技能文件夹和每技能覆盖。适用于**内置**技能和 `~/.openclaw/skills`（工作区技能在名称冲突时仍然优先）。
+控制内置白名单、安装偏好、额外 Skills 文件夹和每 Skills 覆盖。适用于**内置**Skills 和 `~/.openclaw/skills`（工作区 Skills 在名称冲突时仍然优先）。
 
 字段：
 
-- `allowBundled`：可选的**仅内置**技能白名单。如果设置，仅那些内置技能符合条件（管理/工作区技能不受影响）。
-- `load.extraDirs`：额外要扫描的技能目录（最低优先级）。
+- `allowBundled`：可选的**仅内置**Skills 白名单。如果设置，仅那些内置 Skills 符合条件（管理/工作区 Skills 不受影响）。
+- `load.extraDirs`：额外要扫描的 Skills 目录（最低优先级）。
 - `install.preferBrew`：可用时优先使用 brew 安装程序（默认：true）。
 - `install.nodeManager`：node 安装偏好（`npm` | `pnpm` | `yarn`，默认：npm）。
-- `entries.<skillKey>`：每技能配置覆盖。
+- `entries.<skillKey>`：每 Skills配置覆盖。
 
-每技能字段：
+每 Skills 字段：
 
-- `enabled`：设为 `false` 禁用技能，即使它是内置/已安装的。
+- `enabled`：设为 `false` 禁用 Skills，即使它是内置/已安装的。
 - `env`：为智能体运行注入的环境变量（仅在尚未设置时）。
-- `apiKey`：对于声明了主环境变量的技能的可选便利字段（例如 `nano-banana-pro` → `GEMINI_API_KEY`）。
+- `apiKey`：对于声明了主环境变量的 Skills 的可选便利字段（例如 `nano-banana-pro` → `GEMINI_API_KEY`）。
 
 示例：
 
@@ -2779,8 +2779,8 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 
 ### `plugins`（扩展）
 
-控制插件发现、允许/拒绝和每插件配置。插件从 `~/.openclaw/extensions`、`<workspace>/.openclaw/extensions` 以及任何 `plugins.load.paths` 条目加载。**配置更改需要重启 Gateway。**
-参见 [/plugin](/plugin) 了解完整用法。
+控制插件发现、允许/拒绝和每插件配置。插件从 `~/.openclaw/extensions`、`<workspace>/.openclaw/extensions` 以及任何 `plugins.load.paths` 条目加载。**配置更改需要重启 Gateway网关。**
+参见 [/plugin](/plugin) 了解全部用法。
 
 字段：
 
@@ -2816,7 +2816,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 
 ### `browser`（OpenClaw 管理的浏览器）
 
-OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge/Chromium 实例并暴露一个小型回环控制服务。
+OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge/Chromium 实例并暴露一个小型 local loopback 控制服务。
 配置文件可以通过 `profiles.<name>.cdpUrl` 指向**远程** Chromium 浏览器。远程配置文件为仅附加模式（start/stop/reset 被禁用）。
 
 `browser.cdpUrl` 保留用于旧版单配置文件配置，以及作为仅设置 `cdpPort` 的配置文件的基础 scheme/host。
@@ -2825,10 +2825,10 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 
 - enabled：`true`
 - evaluateEnabled：`true`（设为 `false` 禁用 `act:evaluate` 和 `wait --fn`）
-- 控制服务：仅回环（端口从 `gateway.port` 派生，默认 `18791`）
+- 控制服务：仅 local loopback（端口从 `gateway.port` 派生，默认 `18791`）
 - CDP URL：`http://127.0.0.1:18792`（控制服务 + 1，旧版单配置文件）
 - 配置文件颜色：`#FF4500`（龙虾橙）
-- 注意：控制服务器由运行中的 Gateway（OpenClaw.app 菜单栏或 `openclaw gateway`）启动。
+- 注意：控制服务器由运行中的 Gateway网关（OpenClaw.app 菜单栏或 `openclaw gateway`）启动。
 - 自动检测顺序：如果为 Chromium 内核则使用默认浏览器；否则 Chrome → Brave → Edge → Chromium → Chrome Canary。
 
 ```json5
@@ -2873,9 +2873,9 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 }
 ```
 
-### `gateway`（Gateway 服务器模式 + 绑定）
+### `gateway`（Gateway网关服务器模式 + 绑定）
 
-使用 `gateway.mode` 明确声明此机器是否应运行 Gateway。
+使用 `gateway.mode` 明确声明此机器是否应运行 Gateway网关。
 
 默认值：
 
@@ -2913,7 +2913,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 
 信任的代理：
 
-- `gateway.trustedProxies`：在 Gateway 前面终止 TLS 的反向代理 IP 列表。
+- `gateway.trustedProxies`：在 Gateway网关前面终止 TLS 的反向代理 IP 列表。
 - 当连接来自这些 IP 之一时，OpenClaw 使用 `x-forwarded-for`（或 `x-real-ip`）来确定客户端 IP，用于本地配对检查和 HTTP 认证/本地检查。
 - 仅列出你完全控制的代理，并确保它们**覆盖**传入的 `x-forwarded-for`。
 
@@ -2923,8 +2923,8 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 - `gateway.port` 控制用于 WebSocket + HTTP（控制台 UI、hooks、A2UI）的单一多路复用端口。
 - OpenAI Chat Completions 端点：**默认禁用**；通过 `gateway.http.endpoints.chatCompletions.enabled: true` 启用。
 - 优先级：`--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > 默认 `18789`。
-- 默认需要 Gateway 认证（token/密码或 Tailscale Serve 身份）。非回环绑定需要共享 token/密码。
-- 上手引导向导默认生成 gateway token（即使在回环上）。
+- 默认需要 Gateway网关认证（token/密码或 Tailscale Serve 身份）。非 local loopback 绑定需要共享 token/密码。
+- 新手引导向导默认生成 gateway token（即使在 local loopback 上）。
 - `gateway.remote.token` **仅**用于远程 CLI 调用；它不启用本地 gateway 认证。`gateway.token` 被忽略。
 
 认证和 Tailscale：
@@ -2934,18 +2934,18 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 - 当设置了 `gateway.auth.mode` 时，仅接受该方法（加上可选的 Tailscale 头部）。
 - `gateway.auth.password` 可在此设置，或通过 `OPENCLAW_GATEWAY_PASSWORD`（推荐）。
 - `gateway.auth.allowTailscale` 允许 Tailscale Serve 身份头部
-  （`tailscale-user-login`）在请求通过回环到达且带有 `x-forwarded-for`、
+  （`tailscale-user-login`）在请求通过 local loopback 到达且带有 `x-forwarded-for`、
   `x-forwarded-proto` 和 `x-forwarded-host` 时满足认证。OpenClaw 在接受之前
   通过 `tailscale whois` 解析 `x-forwarded-for` 地址来验证身份。为 `true` 时，
   Serve 请求不需要 token/密码；设为 `false` 要求显式凭据。当
   `tailscale.mode = "serve"` 且认证模式不是 `password` 时默认为 `true`。
-- `gateway.tailscale.mode: "serve"` 使用 Tailscale Serve（仅 tailnet，回环绑定）。
+- `gateway.tailscale.mode: "serve"` 使用 Tailscale Serve（仅 tailnet，local loopback 绑定）。
 - `gateway.tailscale.mode: "funnel"` 公开暴露仪表板；需要认证。
 - `gateway.tailscale.resetOnExit` 在关闭时重置 Serve/Funnel 配置。
 
 远程客户端默认值（CLI）：
 
-- `gateway.remote.url` 设置 `gateway.mode = "remote"` 时 CLI 调用的默认 Gateway WebSocket URL。
+- `gateway.remote.url` 设置 `gateway.mode = "remote"` 时 CLI 调用的默认 Gateway网关 WebSocket URL。
 - `gateway.remote.transport` 选择 macOS 远程传输（`ssh` 默认，`direct` 用于 ws/wss）。使用 `direct` 时，`gateway.remote.url` 必须为 `ws://` 或 `wss://`。`ws://host` 默认端口 `18789`。
 - `gateway.remote.token` 提供远程调用的 token（不需要认证时留空）。
 - `gateway.remote.password` 提供远程调用的密码（不需要认证时留空）。
@@ -2986,13 +2986,13 @@ macOS 应用行为：
 
 ### `gateway.reload`（配置热重载）
 
-Gateway 监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）并自动应用更改。
+Gateway网关监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）并自动应用更改。
 
 模式：
 
-- `hybrid`（默认）：安全更改热应用；关键更改重启 Gateway。
+- `hybrid`（默认）：安全更改热应用；关键更改重启 Gateway网关。
 - `hot`：仅应用热安全更改；需要重启时记录日志。
-- `restart`：任何配置更改都重启 Gateway。
+- `restart`：任何配置更改都重启 Gateway网关。
 - `off`：禁用热重载。
 
 ```json5
@@ -3012,7 +3012,7 @@ Gateway 监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）并自
 
 - `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）
 
-热应用（无需完全重启 Gateway）：
+热应用（无需完全重启 Gateway网关）：
 
 - `hooks`（webhook 认证/路径/映射）+ `hooks.gmail`（Gmail 监视器重启）
 - `browser`（浏览器控制服务器重启）
@@ -3022,7 +3022,7 @@ Gateway 监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）并自
 - `telegram`、`discord`、`signal`、`imessage`（渠道重启）
 - `agent`、`models`、`routing`、`messages`、`session`、`whatsapp`、`logging`、`skills`、`ui`、`talk`、`identity`、`wizard`（动态读取）
 
-需要完全重启 Gateway：
+需要完全重启 Gateway网关：
 
 - `gateway`（端口/绑定/认证/控制台 UI/tailscale）
 - `bridge`（旧版）
@@ -3033,7 +3033,7 @@ Gateway 监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）并自
 
 ### 多实例隔离
 
-要在一台主机上运行多个 Gateway（用于冗余或救援机器人），请隔离每个实例的状态 + 配置并使用唯一端口：
+要在一台主机上运行多个 Gateway网关（用于冗余或救援机器人），请隔离每个实例的状态 + 配置并使用唯一端口：
 
 - `OPENCLAW_CONFIG_PATH`（每实例配置）
 - `OPENCLAW_STATE_DIR`（会话/凭据）
@@ -3045,8 +3045,8 @@ Gateway 监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）并自
 - `openclaw --dev …` → 使用 `~/.openclaw-dev` + 端口从基础 `19001` 偏移
 - `openclaw --profile <name> …` → 使用 `~/.openclaw-<name>`（端口通过配置/环境变量/标志）
 
-参见 [Gateway 运维手册](/gateway) 了解派生的端口映射（gateway/browser/canvas）。
-参见[多 Gateway](/gateway/multiple-gateways) 了解浏览器/CDP 端口隔离细节。
+参见 [Gateway网关运维手册](/gateway) 了解派生的端口映射（gateway/browser/canvas）。
+参见[多 Gateway网关](/gateway/multiple-gateways) 了解浏览器/CDP 端口隔离细节。
 
 示例：
 
@@ -3056,9 +3056,9 @@ OPENCLAW_STATE_DIR=~/.openclaw-a \
 openclaw gateway --port 19001
 ```
 
-### `hooks`（Gateway webhook）
+### `hooks`（Gateway网关 webhook）
 
-在 Gateway HTTP 服务器上启用简单的 HTTP webhook 端点。
+在 Gateway网关 HTTP 服务器上启用简单的 HTTP webhook 端点。
 
 默认值：
 
@@ -3151,12 +3151,12 @@ Gmail hook 的模型覆盖：
 - 启动时，如果配置的模型不在模型目录或白名单中，会发出警告。
 - `hooks.gmail.thinking` 设置 Gmail hook 的默认思考级别，被每 hook 的 `thinking` 覆盖。
 
-Gateway 自动启动：
+Gateway网关自动启动：
 
-- 如果 `hooks.enabled=true` 且 `hooks.gmail.account` 已设置，Gateway 在启动时
+- 如果 `hooks.enabled=true` 且 `hooks.gmail.account` 已设置，Gateway网关在启动时
   启动 `gog gmail watch serve` 并自动续期监视。
 - 设置 `OPENCLAW_SKIP_GMAIL_WATCHER=1` 禁用自动启动（用于手动运行）。
-- 避免在 Gateway 旁边单独运行 `gog gmail watch serve`；它会
+- 避免在 Gateway网关旁边单独运行 `gog gmail watch serve`；它会
   因 `listen tcp 127.0.0.1:8788: bind: address already in use` 而失败。
 
 注意：当 `tailscale.mode` 开启时，OpenClaw 将 `serve.path` 默认为 `/`，以便
@@ -3166,11 +3166,11 @@ Tailscale 可以正确代理 `/gmail-pubsub`（它会去除设置的路径前缀
 
 ### `canvasHost`（LAN/tailnet Canvas 文件服务器 + 实时重载）
 
-Gateway 通过 HTTP 提供 HTML/CSS/JS 目录服务，以便 iOS/Android 节点可以简单地 `canvas.navigate` 到它。
+Gateway网关通过 HTTP 提供 HTML/CSS/JS 目录服务，以便 iOS/Android 节点可以简单地 `canvas.navigate` 到它。
 
 默认根目录：`~/.openclaw/workspace/canvas`
 默认端口：`18793`（选择此端口以避免 OpenClaw 浏览器 CDP 端口 `18792`）
-服务器监听 **Gateway 绑定主机**（LAN 或 Tailnet），以便节点可以访问。
+服务器监听 **Gateway网关绑定主机**（LAN 或 Tailnet），以便节点可以访问。
 
 服务器：
 
@@ -3195,7 +3195,7 @@ Gateway 通过 HTTP 提供 HTML/CSS/JS 目录服务，以便 iOS/Android 节点�
 }
 ```
 
-`canvasHost.*` 的更改需要重启 Gateway（配置重载会触发重启）。
+`canvasHost.*` 的更改需要重启 Gateway网关（配置重载会触发重启）。
 
 禁用方式：
 
@@ -3205,11 +3205,11 @@ Gateway 通过 HTTP 提供 HTML/CSS/JS 目录服务，以便 iOS/Android 节点�
 ### `bridge`（旧版 TCP 桥接，已移除）
 
 当前版本不再包含 TCP 桥接监听器；`bridge.*` 配置键会被忽略。
-节点通过 Gateway WebSocket 连接。此部分仅保留供历史参考。
+节点通过 Gateway网关 WebSocket 连接。此部分仅保留供历史参考。
 
 旧版行为：
 
-- Gateway 可以为节点（iOS/Android）暴露简单的 TCP 桥接，通常在端口 `18790`。
+- Gateway网关可以为节点（iOS/Android）暴露简单的 TCP 桥接，通常在端口 `18790`。
 
 默认值：
 
@@ -3231,7 +3231,7 @@ TLS：
 - `bridge.tls.certPath` / `bridge.tls.keyPath`：桥接证书 + 私钥的 PEM 路径。
 - `bridge.tls.caPath`：可选的 PEM CA 捆绑包（自定义根证书或未来的 mTLS）。
 
-启用 TLS 后，Gateway 在发现 TXT 记录中通告 `bridgeTls=1` 和 `bridgeTlsSha256`，以便节点可以固定证书。如果尚未存储指纹，手动连接使用首次信任。
+启用 TLS 后，Gateway网关在发现 TXT 记录中通告 `bridgeTls=1` 和 `bridgeTlsSha256`，以便节点可以固定证书。如果尚未存储指纹，手动连接使用首次信任。
 自动生成的证书需要 PATH 中有 `openssl`；如果生成失败，桥接不会启动。
 
 ```json5
@@ -3267,14 +3267,14 @@ TLS：
 
 ### `discovery.wideArea`（广域 Bonjour / 单播 DNS‑SD）
 
-启用后，Gateway 在 `~/.openclaw/dns/` 下使用配置的发现域（示例：`openclaw.internal.`）为 `_openclaw-gw._tcp` 写入单播 DNS-SD 区域。
+启用后，Gateway网关在 `~/.openclaw/dns/` 下使用配置的发现域（示例：`openclaw.internal.`）为 `_openclaw-gw._tcp` 写入单播 DNS-SD 区域。
 
 要使 iOS/Android 跨网络发现（跨地域访问），请配合以下使用：
 
-- 在 Gateway 主机上运行 DNS 服务器，为你选择的域名提供服务（推荐 CoreDNS）
-- Tailscale **split DNS**，使客户端通过 Gateway DNS 服务器解析该域名
+- 在 Gateway网关主机上运行 DNS 服务器，为你选择的域名提供服务（推荐 CoreDNS）
+- Tailscale **split DNS**，使客户端通过 Gateway网关 DNS 服务器解析该域名
 
-一次性设置助手（Gateway 主机）：
+一次性设置助手（Gateway网关主机）：
 
 ```bash
 openclaw dns setup --apply
@@ -3313,9 +3313,9 @@ openclaw dns setup --apply
 | `{{SenderE164}}`   | 发送者电话号码（尽力而为）                            |
 | `{{Provider}}`     | 提供商提示（whatsapp                                  | telegram | discord | googlechat | slack | signal | imessage | msteams | webchat | …） |
 
-## Cron（Gateway 调度器）
+## Cron（Gateway网关调度器）
 
-Cron 是 Gateway 自有的唤醒和定时任务调度器。参见 [Cron 任务](/automation/cron-jobs) 了解功能概述和 CLI 示例。
+Cron 是 Gateway网关自有的唤醒和定时任务调度器。参见 [Cron 任务](/automation/cron-jobs) 了解功能概述和 CLI 示例。
 
 ```json5
 {

@@ -46,10 +46,10 @@ x-i18n:
      },
    }
    ```
-4. 将 BlueBubbles webhooks 指向你的 Gateway（示例：`https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`）。
-5. 启动 Gateway；它将注册 webhook 处理器并开始配对。
+4. 将 BlueBubbles webhooks 指向你的 Gateway网关（示例：`https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`）。
+5. 启动 Gateway网关；它将注册 webhook 处理器并开始配对。
 
-## 上手引导
+## 新手引导
 
 BlueBubbles 可在交互式设置向导中使用：
 
@@ -255,12 +255,12 @@ OpenClaw 可能会呈现*短*消息 ID（例如 `1`、`2`）以节省 token。
 
 - Webhook 请求通过将 `guid`/`password` 查询参数或请求头与 `channels.bluebubbles.password` 比较来进行认证。来自 `localhost` 的请求也会被接受。
 - 请保密 API 密码和 webhook 端点（将其视为凭证）。
-- localhost 信任意味着同主机的反向代理可能会无意间绕过密码。如果你为 Gateway 设置了代理，请在代理层要求认证并配置 `gateway.trustedProxies`。参见 [Gateway 安全](/gateway/security#reverse-proxy-configuration)。
+- localhost 信任意味着同主机的反向代理可能会无意间绕过密码。如果你为 Gateway网关设置了代理，请在代理层要求认证并配置 `gateway.trustedProxies`。参见 [Gateway网关安全](/gateway/security#reverse-proxy-configuration)。
 - 如果将 BlueBubbles 服务器暴露到局域网外部，请启用 HTTPS + 防火墙规则。
 
 ## 故障排除
 
-- 如果输入/已读事件停止工作，请检查 BlueBubbles webhook 日志并验证 Gateway 路径是否与 `channels.bluebubbles.webhookPath` 匹配。
+- 如果输入/已读事件停止工作，请检查 BlueBubbles webhook 日志并验证 Gateway网关路径是否与 `channels.bluebubbles.webhookPath` 匹配。
 - 配对码在一小时后过期；使用 `openclaw pairing list bluebubbles` 和 `openclaw pairing approve bluebubbles <code>`。
 - 回应功能需要 BlueBubbles private API（`POST /api/v1/message/react`）；请确保服务器版本已暴露该接口。
 - 编辑/撤回需要 macOS 13+ 和兼容的 BlueBubbles 服务器版本。在 macOS 26（Tahoe）上，由于 private API 变更，编辑功能目前不可用。

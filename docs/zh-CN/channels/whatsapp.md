@@ -14,14 +14,14 @@ x-i18n:
 
 # WhatsApp（网页渠道）
 
-状态：仅支持通过 Baileys 的 WhatsApp Web。Gateway 拥有会话。
+状态：仅支持通过 Baileys 的 WhatsApp Web。Gateway网关拥有会话。
 
 ## 快速设置（入门）
 
 1. 如果可能，使用**单独的手机号码**（推荐）。
 2. 在 `~/.openclaw/openclaw.json` 中配置 WhatsApp。
 3. 运行 `openclaw channels login` 扫描二维码（已关联设备）。
-4. 启动 Gateway。
+4. 启动 Gateway网关。
 
 最小配置：
 
@@ -38,7 +38,7 @@ x-i18n:
 
 ## 目标
 
-- 单个 Gateway 进程中支持多个 WhatsApp 账号（多账号）。
+- 单个 Gateway网关进程中支持多个 WhatsApp 账号（多账号）。
 - 确定性路由：回复返回到 WhatsApp，无模型路由。
 - 模型获得足够的上下文以理解引用回复。
 
@@ -56,8 +56,8 @@ x-i18n:
 
 ## 架构（职责划分）
 
-- **Gateway** 拥有 Baileys socket 和收件箱循环。
-- **CLI / macOS 应用** 与 Gateway 通信；不直接使用 Baileys。
+- **Gateway网关** 拥有 Baileys socket 和收件箱循环。
+- **CLI / macOS 应用** 与 Gateway网关通信；不直接使用 Baileys。
 - **活跃监听器** 是出站发送的必要条件；否则发送会快速失败。
 
 ## 获取手机号码（两种模式）
@@ -161,7 +161,7 @@ WhatsApp 需要真实的手机号码进行验证。VoIP 和虚拟号码通常会
 
 ## 已读回执
 
-默认情况下，Gateway 会在接受入站 WhatsApp 消息后将其标记为已读（蓝色对勾）。
+默认情况下，Gateway网关会在接受入站 WhatsApp 消息后将其标记为已读（蓝色对勾）。
 
 全局禁用：
 
@@ -242,7 +242,7 @@ WhatsApp 需要真实的手机号码进行验证。VoIP 和虚拟号码通常会
 
 ## 回复投递（线程）
 
-- WhatsApp Web 发送标准消息（当前 Gateway 中无引用回复线程）。
+- WhatsApp Web 发送标准消息（当前 Gateway网关中无引用回复线程）。
 - 此渠道忽略回复标签。
 
 ## 确认反应（收到消息时自动反应）
@@ -266,7 +266,7 @@ WhatsApp 可以在收到消息时立即自动发送表情反应，在机器人�
 **选项：**
 
 - `emoji`（字符串）：用于确认的表情（例如 "👀"、"✅"、"📨"）。为空或省略 = 功能禁用。
-- `direct`（布尔值，默认：`true`）：在私聊/DM 中发送反应。
+- `direct`（布尔值，默认：`true`）：在私聊/私信 中发送反应。
 - `group`（字符串，默认：`"mentions"`）：群聊行为：
   - `"always"`：对所有群聊消息做出反应（即使没有 @提及）
   - `"mentions"`：仅在机器人被 @提及时做出反应
@@ -314,7 +314,7 @@ WhatsApp 可以在收到消息时立即自动发送表情反应，在机器人�
 
 ## 出站发送（文本 + 媒体）
 
-- 使用活跃的网页监听器；如果 Gateway 未运行则报错。
+- 使用活跃的网页监听器；如果 Gateway网关未运行则报错。
 - 文本分块：每条消息最大 4k（可通过 `channels.whatsapp.textChunkLimit` 配置，可选 `channels.whatsapp.chunkMode`）。
 - 媒体：
   - 支持图片/视频/音频/文档。
@@ -323,7 +323,7 @@ WhatsApp 可以在收到消息时立即自动发送表情反应，在机器人�
   - 媒体获取支持 HTTP(S) 和本地路径。
   - 动态 GIF：WhatsApp 期望带 `gifPlayback: true` 的 MP4 以实现内联循环播放。
     - CLI：`openclaw message send --media <mp4> --gif-playback`
-    - Gateway：`send` 参数包含 `gifPlayback: true`
+    - Gateway网关：`send` 参数包含 `gifPlayback: true`
 
 ## 语音消息（PTT 音频）
 
@@ -341,7 +341,7 @@ WhatsApp 以**语音消息**（PTT 气泡）发送音频。
 
 ## 心跳
 
-- **Gateway 心跳** 记录连接健康状态（`web.heartbeatSeconds`，默认 60 秒）。
+- **Gateway网关心跳** 记录连接健康状态（`web.heartbeatSeconds`，默认 60 秒）。
 - **智能体心跳** 可按智能体配置（`agents.list[].heartbeat`）或通过
   `agents.defaults.heartbeat` 全局配置（未设置每智能体条目时的回退）。
   - 使用配置的心跳提示（默认：`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`）+ `HEARTBEAT_OK` 跳过行为。
@@ -390,21 +390,21 @@ WhatsApp 以**语音消息**（PTT 气泡）发送音频。
 
 - 子系统：`whatsapp/inbound`、`whatsapp/outbound`、`web-heartbeat`、`web-reconnect`。
 - 日志文件：`/tmp/openclaw/openclaw-YYYY-MM-DD.log`（可配置）。
-- 故障排除指南：[Gateway 故障排除](/gateway/troubleshooting)。
+- 故障排除指南：[Gateway网关故障排除](/gateway/troubleshooting)。
 
 ## 故障排除（快速）
 
 **未关联 / 需要二维码登录**
 
 - 症状：`channels status` 显示 `linked: false` 或警告"未关联"。
-- 修复：在 Gateway 主机上运行 `openclaw channels login` 并扫描二维码（WhatsApp → 设置 → 已关联设备）。
+- 修复：在 Gateway网关主机上运行 `openclaw channels login` 并扫描二维码（WhatsApp → 设置 → 已关联设备）。
 
 **已关联但断开连接 / 重连循环**
 
 - 症状：`channels status` 显示 `running, disconnected` 或警告"已关联但断开连接"。
-- 修复：`openclaw doctor`（或重启 Gateway）。如果问题持续，通过 `channels login` 重新关联并检查 `openclaw logs --follow`。
+- 修复：`openclaw doctor`（或重启 Gateway网关）。如果问题持续，通过 `channels login` 重新关联并检查 `openclaw logs --follow`。
 
 **Bun 运行时**
 
 - **不推荐**使用 Bun。WhatsApp（Baileys）和 Telegram 在 Bun 上不稳定。
-  请使用 **Node** 运行 Gateway。（参见入门指南运行时说明。）
+  请使用 **Node** 运行 Gateway网关。（参见入门指南运行时说明。）

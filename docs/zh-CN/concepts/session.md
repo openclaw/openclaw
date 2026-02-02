@@ -24,16 +24,16 @@ OpenClaw 将**每个智能体一个私聊会话**视为主会话。私聊归并�
 - `per-account-channel-peer`：按账号 + 渠道 + 发送者隔离（推荐用于多账号收件箱）。
   使用 `session.identityLinks` 将带提供商前缀的对端 ID 映射到规范身份，这样在使用 `per-peer`、`per-channel-peer` 或 `per-account-channel-peer` 时，同一个人可以跨渠道共享私信会话。
 
-## Gateway 是权威数据源
+## Gateway网关是权威数据源
 
-所有会话状态均由 **Gateway**（"主" OpenClaw）管理。UI 客户端（macOS 应用、WebChat 等）必须向 Gateway 查询会话列表和令牌计数，而不是读取本地文件。
+所有会话状态均由 **Gateway网关**（"主" OpenClaw）管理。UI 客户端（macOS 应用、WebChat 等）必须向 Gateway网关查询会话列表和令牌计数，而不是读取本地文件。
 
-- 在**远程模式**下，你关心的会话存储位于远程 Gateway 主机上，而不是你的 Mac 上。
-- UI 中显示的令牌计数来自 Gateway 存储字段（`inputTokens`、`outputTokens`、`totalTokens`、`contextTokens`）。客户端不会解析 JSONL 记录来"修正"总数。
+- 在**远程模式**下，你关心的会话存储位于远程 Gateway网关主机上，而不是你的 Mac 上。
+- UI 中显示的令牌计数来自 Gateway网关存储字段（`inputTokens`、`outputTokens`、`totalTokens`、`contextTokens`）。客户端不会解析 JSONL 记录来"修正"总数。
 
 ## 状态存储位置
 
-- 在 **Gateway 主机**上：
+- 在 **Gateway网关主机**上：
   - 存储文件：`~/.openclaw/agents/<agentId>/sessions/sessions.json`（每个智能体）。
 - 对话记录：`~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`（Telegram 话题会话使用 `.../<SessionId>-topic-<threadId>.jsonl`）。
 - 存储是一个 `sessionKey -> { sessionId, updatedAt, ... }` 的映射。删除条目是安全的；它们会按需重新创建。
@@ -71,7 +71,7 @@ OpenClaw 默认在 LLM 调用之前从内存上下文中修剪**旧的工具结�
 ## 生命周期
 
 - 重置策略：会话持续复用直到过期，过期在下一条入站消息时评估。
-- 每日重置：默认为 **Gateway 主机本地时间凌晨 4:00**。当会话的最后更新早于最近一次每日重置时间时，会话即为过期。
+- 每日重置：默认为 **Gateway网关主机本地时间凌晨 4:00**。当会话的最后更新早于最近一次每日重置时间时，会话即为过期。
 - 空闲重置（可选）：`idleMinutes` 添加一个滑动空闲窗口。当同时配置了每日重置和空闲重置时，**先到期的那个**强制创建新会话。
 - 旧版仅空闲模式：如果设置了 `session.idleMinutes` 但没有任何 `session.reset`/`resetByType` 配置，OpenClaw 会保持仅空闲模式以向后兼容。
 - 按类型覆盖（可选）：`resetByType` 允许你为 `dm`、`group` 和 `thread` 会话覆盖策略（thread = Slack/Discord 线程、Telegram 话题、连接器提供的 Matrix 线程）。
@@ -117,7 +117,7 @@ OpenClaw 默认在 LLM 调用之前从内存上下文中修剪**旧的工具结�
       alice: ["telegram:123456789", "discord:987654321012345678"],
     },
     reset: {
-      // 默认值：mode=daily，atHour=4（Gateway 主机本地时间）。
+      // 默认值：mode=daily，atHour=4（Gateway网关主机本地时间）。
       // 如果同时设置了 idleMinutes，先到期的优先。
       mode: "daily",
       atHour: 4,
@@ -142,7 +142,7 @@ OpenClaw 默认在 LLM 调用之前从内存上下文中修剪**旧的工具结�
 
 - `openclaw status` — 显示存储路径和最近的会话。
 - `openclaw sessions --json` — 转储所有条目（使用 `--active <minutes>` 进行筛选）。
-- `openclaw gateway call sessions.list --params '{}'` — 从运行中的 Gateway 获取会话（使用 `--url`/`--token` 访问远程 Gateway）。
+- `openclaw gateway call sessions.list --params '{}'` — 从运行中的 Gateway网关获取会话（使用 `--url`/`--token` 访问远程 Gateway网关）。
 - 在聊天中发送 `/status` 作为独立消息，可查看智能体是否可达、会话上下文使用了多少、当前的思考/详细模式开关，以及 WhatsApp 网页凭证的最后刷新时间（有助于发现需要重新链接的情况）。
 - 发送 `/context list` 或 `/context detail` 查看系统提示词和注入的工作区文件中的内容（以及最大的上下文贡献者）。
 - 发送 `/stop` 作为独立消息，可中止当前运行、清除该会话的排队后续消息，并停止由其生成的任何子智能体运行（回复中包含已停止的数量）。

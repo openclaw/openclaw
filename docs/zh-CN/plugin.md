@@ -17,7 +17,7 @@ x-i18n:
 
 ## 快速入门（初次接触插件？）
 
-插件就是一个**小型代码模块**，用于为 OpenClaw 扩展额外功能（命令、工具和 Gateway RPC）。
+插件就是一个**小型代码模块**，用于为 OpenClaw 扩展额外功能（命令、工具和 Gateway网关 RPC）。
 
 大多数情况下，当你需要某个尚未内置到 OpenClaw 核心的功能（或希望将可选功能从主安装中分离出来）时，就会使用插件。
 
@@ -35,7 +35,7 @@ openclaw plugins list
 openclaw plugins install @openclaw/voice-call
 ```
 
-3. 重启 Gateway，然后在 `plugins.entries.<id>.config` 下进行配置。
+3. 重启 Gateway网关，然后在 `plugins.entries.<id>.config` 下进行配置。
 
 参见 [Voice Call](/plugins/voice-call) 了解具体的插件示例。
 
@@ -59,16 +59,16 @@ OpenClaw 插件是**TypeScript 模块**，在运行时通过 jiti 加载。**配
 
 插件可以注册：
 
-- Gateway RPC 方法
-- Gateway HTTP 处理器
+- Gateway网关 RPC 方法
+- Gateway网关 HTTP 处理器
 - 智能体工具
 - CLI 命令
 - 后台服务
 - 可选的配置验证
-- **技能**（通过在插件清单中列出 `skills` 目录）
+- **Skills**（通过在插件清单中列出 `skills` 目录）
 - **自动回复命令**（无需调用 AI 智能体即可执行）
 
-插件与 Gateway **在同一进程**中运行，因此请将其视为可信代码。
+插件与 Gateway网关 **在同一进程**中运行，因此请将其视为可信代码。
 工具编写指南：[插件智能体工具](/plugins/agent-tools)。
 
 ## 运行时辅助工具
@@ -135,7 +135,7 @@ OpenClaw 按以下顺序扫描：
 
 ### 渠道目录元数据
 
-渠道插件可以通过 `openclaw.channel` 公布上手引导元数据，并通过 `openclaw.install` 提供安装提示。这使核心目录保持无数据状态。
+渠道插件可以通过 `openclaw.channel` 公布新手引导元数据，并通过 `openclaw.install` 提供安装提示。这使核心目录保持无数据状态。
 
 示例：
 
@@ -204,7 +204,7 @@ OpenClaw 还可以合并**外部渠道目录**（例如，MPM 注册表导出）
 - `load.paths`：额外的插件文件/目录
 - `entries.<id>`：每个插件的开关 + 配置
 
-配置更改**需要重启 Gateway**。
+配置更改**需要重启 Gateway网关**。
 
 验证规则（严格）：
 
@@ -483,17 +483,17 @@ export default function (api) {
 }
 ```
 
-加载插件（扩展目录或 `plugins.load.paths`），重启 Gateway，然后在配置中设置 `channels.<id>`。
+加载插件（扩展目录或 `plugins.load.paths`），重启 Gateway网关，然后在配置中设置 `channels.<id>`。
 
 ### 智能体工具
 
 参见专门的指南：[插件智能体工具](/plugins/agent-tools)。
 
-### 注册 Gateway RPC 方法
+### 注册 Gateway网关 RPC 方法
 
 ```ts
 export default function (api) {
-  api.registerGatewayMethod("myplugin.status", ({ respond }) => {
+  api.registerGateway网关Method("myplugin.status", ({ respond }) => {
     respond(true, { ok: true });
   });
 }
@@ -586,14 +586,14 @@ export default function (api) {
 
 ## 命名约定
 
-- Gateway 方法：`pluginId.action`（示例：`voicecall.status`）
+- Gateway网关方法：`pluginId.action`（示例：`voicecall.status`）
 - 工具：`snake_case`（示例：`voice_call`）
 - CLI 命令：kebab 或 camel 风格，但避免与核心命令冲突
 
-## 技能
+## Skills
 
-插件可以在仓库中附带技能（`skills/<name>/SKILL.md`）。
-通过 `plugins.entries.<id>.enabled`（或其他配置门控）启用它，并确保它存在于你的工作区/托管技能位置中。
+插件可以在仓库中附带 Skills（`skills/<name>/SKILL.md`）。
+通过 `plugins.entries.<id>.enabled`（或其他配置门控）启用它，并确保它存在于你的工作区/托管 Skills 位置中。
 
 ## 分发（npm）
 
@@ -614,7 +614,7 @@ export default function (api) {
 本仓库包含一个语音通话插件（Twilio 或日志回退）：
 
 - 源码：`extensions/voice-call`
-- 技能：`skills/voice-call`
+- Skills：`skills/voice-call`
 - CLI：`openclaw voicecall start|status`
 - 工具：`voice_call`
 - RPC：`voicecall.start`、`voicecall.status`
@@ -625,11 +625,11 @@ export default function (api) {
 
 ## 安全注意事项
 
-插件与 Gateway 在同一进程中运行。请将其视为可信代码：
+插件与 Gateway网关在同一进程中运行。请将其视为可信代码：
 
 - 仅安装你信任的插件。
 - 优先使用 `plugins.allow` 允许列表。
-- 更改后重启 Gateway。
+- 更改后重启 Gateway网关。
 
 ## 测试插件
 

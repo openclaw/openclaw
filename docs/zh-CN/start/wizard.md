@@ -1,9 +1,9 @@
 ---
 read_when:
-  - 运行或配置上手引导向导
+  - 运行或配置新手引导向导
   - 设置新机器
-summary: CLI 上手引导向导：Gateway、工作区、渠道和技能的引导式设置
-title: 上手引导向导
+summary: CLI 新手引导向导：Gateway网关、工作区、渠道和 Skills 的引导式设置
+title: 新手引导向导
 x-i18n:
   generated_at: "2026-02-01T13:49:20Z"
   model: claude-opus-4-5
@@ -13,9 +13,9 @@ x-i18n:
   workflow: 9
 ---
 
-# 上手引导向导 (CLI)
+# 新手引导向导 (CLI)
 
-上手引导向导是 **推荐的** 在 macOS、Linux 或 Windows（通过 WSL2；强烈推荐）上设置 OpenClaw 的方式。它通过一个引导式流程配置本地 Gateway 或远程 Gateway 连接，以及渠道、技能和工作区默认设置。
+新手引导向导是 **推荐的** 在 macOS、Linux 或 Windows（通过 WSL2；强烈推荐）上设置 OpenClaw 的方式。它通过一个引导式流程配置本地 Gateway网关或远程 Gateway网关连接，以及渠道、Skills 和工作区默认设置。
 
 主要入口：
 
@@ -42,28 +42,28 @@ openclaw configure
 
 **快速入门** 保留默认设置：
 
-- 本地 Gateway（回环地址）
+- 本地 Gateway网关（local loopback）
 - 默认工作区（或现有工作区）
-- Gateway 端口 **18789**
-- Gateway 认证 **令牌** （自动生成，即使在回环地址上也是如此）
+- Gateway网关端口 **18789**
+- Gateway网关认证 **令牌** （自动生成，即使在 local loopback 上也是如此）
 - Tailscale 暴露 **关闭**
-- Telegram + WhatsApp 私信默认为 **允许名单** （系统会提示您输入手机号码）
+- Telegram + WhatsApp 私信默认为 **允许名单** （系统会提示你输入手机号码）
 
-**高级** 展示每个步骤（模式、工作区、Gateway、渠道、守护进程、技能）。
+**高级** 展示每个步骤（模式、工作区、Gateway网关、渠道、守护进程、Skills）。
 
 ## 向导的功能
 
-**本地模式（默认）** 引导您完成：
+**本地模式（默认）** 引导你完成：
 
 - 模型/认证（OpenAI Code (Codex) 订阅 OAuth、Anthropic API 密钥（推荐）或 setup-token（粘贴），以及 MiniMax/GLM/Moonshot/AI Gateway 选项）
 - 工作区位置 + 引导文件
-- Gateway 设置（端口/绑定/认证/Tailscale）
+- Gateway网关设置（端口/绑定/认证/Tailscale）
 - 提供商（Telegram、WhatsApp、Discord、Google Chat、Mattermost（插件）、Signal）
 - 守护进程安装（LaunchAgent / systemd 用户单元）
 - 健康检查
-- 技能（推荐）
+- Skills（推荐）
 
-**远程模式** 仅配置本地客户端以连接到其他位置的 Gateway。它 **不会** 在远程主机上安装或更改任何内容。
+**远程模式** 仅配置本地客户端以连接到其他位置的 Gateway网关。它 **不会** 在远程主机上安装或更改任何内容。
 
 要添加更多隔离的智能体（独立的工作区 + 会话 + 认证），请使用：
 
@@ -77,9 +77,9 @@ openclaw agents add <name>
 
 1. **现有配置检测**
    - 如果 `~/.openclaw/openclaw.json` 存在，请选择 **保留 / 修改 / 重置**。
-   - 重新运行向导 **不会** 不会删除任何内容，除非您明确选择 **重置**
+   - 重新运行向导 **不会** 不会删除任何内容，除非你明确选择 **重置**
      （或传入 `--reset`）。
-   - 如果配置无效或包含遗留键，向导会停止并要求您运行 `openclaw doctor` 后再继续。
+   - 如果配置无效或包含遗留键，向导会停止并要求你运行 `openclaw doctor` 后再继续。
    - 重置使用 `trash` （绝不使用 `rm`）并提供作用域：
      - 仅配置
      - 配置 + 凭据 + 会话
@@ -94,7 +94,7 @@ openclaw agents add <name>
      - 设置 `agents.defaults.model` 为 `openai-codex/gpt-5.2` （当模型未设置或为 `openai/*`。
    - **OpenAI API 密钥**：使用 `OPENAI_API_KEY` （如果存在）或提示输入密钥，然后保存到 `~/.openclaw/.env` 以便 launchd 可以读取。
    - **OpenCode Zen（多模型代理）**：提示输入 `OPENCODE_API_KEY` （或 `OPENCODE_ZEN_API_KEY`，请在 https://opencode.ai/auth)。
-   - **API 密钥**：为您存储密钥。
+   - **API 密钥**：为你存储密钥。
    - **Vercel AI Gateway（多模型代理）**：提示输入 `AI_GATEWAY_API_KEY`。
    - 更多详情： [Vercel AI Gateway](/providers/vercel-ai-gateway)
    - **MiniMax M2.1**：配置会自动写入。
@@ -116,11 +116,11 @@ openclaw agents add <name>
    - 生成智能体引导启动仪式所需的工作区文件。
    - 完整工作区布局 + 备份指南： [智能体工作区](/concepts/agent-workspace)
 
-4. **Gateway**
-   - 端口、绑定、认证模式、Tailscale 暴露。
-   - 认证建议：保持 **令牌** 即使在回环地址上也使用，以确保本地 WS 客户端必须进行认证。
-   - 仅在您完全信任每个本地进程时才禁用认证。
-   - 非回环绑定仍需认证。
+4. **Gateway网关**
+   - 端口、绑定、认证模式、网关仪表板暴露。
+   - 认证建议：保持 **令牌** 即使在 local loopback 上也使用，以确保本地 WS 客户端必须进行认证。
+   - 仅在你完全信任每个本地进程时才禁用认证。
+   - 非 local loopback 绑定仍需认证。
 
 5. **渠道**
    - [WhatsApp](/channels/whatsapp)：可选二维码登录。
@@ -136,17 +136,17 @@ openclaw agents add <name>
    - macOS：LaunchAgent
      - 需要已登录的用户会话；对于无头模式，请使用自定义 LaunchDaemon（未随附）。
    - Linux（以及通过 WSL2 的 Windows）：systemd 用户单元
-     - 向导会尝试通过 `loginctl enable-linger <user>` 启用驻留，以便在注销后 Gateway 保持运行。
+     - 向导会尝试通过 `loginctl enable-linger <user>` 启用驻留，以便在注销后 Gateway网关保持运行。
      - 可能会提示输入 sudo（写入 `/var/lib/systemd/linger`）；它会先尝试不使用 sudo。
    - **运行时选择：** Node（推荐；WhatsApp/Telegram 需要）。Bun **不推荐**。
 
 7. **健康检查**
-   - 启动 Gateway（如需）并运行 `openclaw health`。
-   - 提示： `openclaw status --deep` 将 Gateway 健康探测添加到状态输出中（需要可达的 Gateway）。
+   - 启动 Gateway网关（如需）并运行 `openclaw health`。
+   - 提示： `openclaw status --deep` 将 Gateway网关健康探测添加到状态输出中（需要可达的 Gateway网关）。
 
-8. **技能（推荐）**
-   - 读取可用技能并检查依赖条件。
-   - 让您选择一个 Node 管理器： **npm / pnpm** （不推荐 bun）。
+8. **Skills（推荐）**
+   - 读取可用 Skills 并检查依赖条件。
+   - 让你选择一个 Node 管理器： **npm / pnpm** （不推荐 bun）。
    - 安装可选依赖项（部分在 macOS 上使用 Homebrew）。
 
 9. **完成**
@@ -157,17 +157,17 @@ openclaw agents add <name>
 
 ## 远程模式
 
-远程模式配置本地客户端以连接到其他位置的 Gateway。
+远程模式配置本地客户端以连接到其他位置的 Gateway网关。
 
-您需要设置的内容：
+你需要设置的内容：
 
-- 远程 Gateway URL（`ws://...`）
-- 如果远程 Gateway 需要认证，则需提供令牌（推荐）
+- 远程 Gateway网关 URL（`ws://...`）
+- 如果远程 Gateway网关需要认证，则需提供令牌（推荐）
 
 注意事项：
 
 - 不会执行远程安装或守护进程更改。
-- 如果 Gateway 仅绑定回环地址，请使用 SSH 隧道或 tailnet。
+- 如果 Gateway网关仅绑定 local loopback，请使用 SSH 隧道或 tailnet。
 - 发现提示：
   - macOS：Bonjour（`dns-sd`）
   - Linux：Avahi（`avahi-browse`）
@@ -190,7 +190,7 @@ openclaw agents add <name>
 
 ## 非交互模式
 
-使用 `--non-interactive` 用于自动化或脚本化上手引导：
+使用 `--non-interactive` 用于自动化或脚本化新手引导：
 
 ```bash
 openclaw onboard --non-interactive \
@@ -283,9 +283,9 @@ openclaw agents add work \
   --json
 ```
 
-## Gateway 向导 RPC
+## Gateway网关向导 RPC
 
-Gateway 通过 RPC 暴露向导流程（`wizard.start`， `wizard.next`， `wizard.cancel`， `wizard.status`）。客户端（macOS 应用、Control UI）可以渲染步骤而无需重新实现上手引导逻辑。
+Gateway网关通过 RPC 暴露向导流程（`wizard.start`， `wizard.next`， `wizard.cancel`， `wizard.status`）。客户端（macOS 应用、Control UI）可以渲染步骤而无需重新实现新手引导逻辑。
 
 ## Signal 设置 (signal-cli)
 
@@ -293,7 +293,7 @@ Gateway 通过 RPC 暴露向导流程（`wizard.start`， `wizard.next`， `wiza
 
 - 下载相应的发布资源。
 - 将其存储在 `~/.openclaw/tools/signal-cli/<version>/`。
-- 写入 `channels.signal.cliPath` 到您的配置中。
+- 写入 `channels.signal.cliPath` 到你的配置中。
 
 注意事项：
 
@@ -321,11 +321,11 @@ Gateway 通过 RPC 暴露向导流程（`wizard.start`， `wizard.next`， `wiza
 
 WhatsApp 凭据存储在 `~/.openclaw/credentials/whatsapp/<accountId>/`下。会话存储在 `~/.openclaw/agents/<agentId>/sessions/`。
 
-部分渠道以插件形式提供。当您在上手引导期间选择某个渠道时，向导会提示先安装它（通过 npm 或本地路径），然后才能进行配置。
+部分渠道以插件形式提供。当你在新手引导期间选择某个渠道时，向导会提示先安装它（通过 npm 或本地路径），然后才能进行配置。
 
 ## 相关文档
 
-- macOS 应用上手引导： [上手引导](/start/onboarding)
-- 配置参考： [Gateway 配置](/gateway/configuration)
+- macOS 应用新手引导： [新手引导](/start/onboarding)
+- 配置参考： [Gateway网关配置](/gateway/configuration)
 - 提供商： [WhatsApp](/channels/whatsapp)， [Telegram](/channels/telegram)， [Discord](/channels/discord)， [Google Chat](/channels/googlechat)， [Signal](/channels/signal)， [iMessage](/channels/imessage)
-- 技能： [技能](/tools/skills)， [技能配置](/tools/skills-config)
+- Skills： [Skills](/tools/skills)， [Skills配置](/tools/skills-config)

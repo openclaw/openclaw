@@ -1,8 +1,8 @@
 ---
 read_when:
   - 开始新的 OpenClaw 智能体会话
-  - 启用或审查默认技能
-summary: 默认 OpenClaw 智能体指令及个人助手设置的技能清单
+  - 启用或审查默认 Skills
+summary: 默认 OpenClaw 智能体指令及个人助手设置的 Skills 清单
 x-i18n:
   generated_at: "2026-02-01T21:36:58Z"
   model: claude-opus-4-5
@@ -32,7 +32,7 @@ cp docs/reference/templates/SOUL.md ~/.openclaw/workspace/SOUL.md
 cp docs/reference/templates/TOOLS.md ~/.openclaw/workspace/TOOLS.md
 ```
 
-3. 可选：如果您需要个人助手技能清单，请用此文件替换 AGENTS.md：
+3. 可选：如果你需要个人助手 Skills 清单，请用此文件替换 AGENTS.md：
 
 ```bash
 cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
@@ -60,12 +60,12 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 ## 灵魂文件（必需）
 
 - `SOUL.md` 定义身份、语气和边界。保持其内容最新。
-- 如果您修改了 `SOUL.md`，请告知用户。
-- 每次会话您都是一个全新实例；连续性存储在这些文件中。
+- 如果你修改了 `SOUL.md`，请告知用户。
+- 每次会话你都是一个全新实例；连续性存储在这些文件中。
 
 ## 共享空间（推荐）
 
-- 您不是用户的代言人；在群聊或公开渠道中请谨慎发言。
+- 你不是用户的代言人；在群聊或公开渠道中请谨慎发言。
 - 不要分享私人数据、联系信息或内部笔记。
 
 ## 记忆系统（推荐）
@@ -76,14 +76,14 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 - 记录：决策、偏好、约束条件、待处理事项。
 - 除非被明确要求，避免记录密钥。
 
-## 工具与技能
+## 工具与 Skills
 
-- 工具位于技能中；需要时请遵循每个技能的 `SKILL.md`。
-- 将环境相关的备注保存在 `TOOLS.md`（技能备注）中。
+- 工具位于 Skills 中；需要时请遵循每个 Skills 的 `SKILL.md`。
+- 将环境相关的备注保存在 `TOOLS.md`（Skills 备注）中。
 
 ## 备份提示（推荐）
 
-如果您将此工作区视为 Clawd 的"记忆"，请将其设为 git 仓库（最好是私有的），以便备份 `AGENTS.md` 和记忆文件。
+如果你将此工作区视为 Clawd 的"记忆"，请将其设为 git 仓库（最好是私有的），以便备份 `AGENTS.md` 和记忆文件。
 
 ```bash
 cd ~/.openclaw/workspace
@@ -95,17 +95,17 @@ git commit -m "Add Clawd workspace"
 
 ## OpenClaw 的功能
 
-- 运行 WhatsApp Gateway + Pi 编程智能体，使助手可以读写聊天、获取上下文，并通过宿主 Mac 运行技能。
+- 运行 WhatsApp Gateway网关 + Pi 编程智能体，使助手可以读写聊天、获取上下文，并通过宿主 Mac 运行 Skills。
 - macOS 应用管理权限（屏幕录制、通知、麦克风），并通过其内置二进制文件提供 `openclaw` CLI。
 - 直接聊天默认合并到智能体的 `main` 会话；群组保持隔离，格式为 `agent:<agentId>:<channel>:group:<id>`（房间/频道：`agent:<agentId>:<channel>:channel:<id>`）；心跳机制保持后台任务存活。
 
-## 核心技能（在设置 → 技能中启用）
+## 核心 Skills（在设置 → Skills 中启用）
 
-- **mcporter** — 用于管理外部技能后端的工具服务器运行时/CLI。
+- **mcporter** — 用于管理外部 Skills 后端的工具服务器运行时/CLI。
 - **Peekaboo** — 支持可选 AI 视觉分析的快速 macOS 截图工具。
 - **camsnap** — 从 RTSP/ONVIF 安防摄像头捕获帧、片段或运动警报。
 - **oracle** — 支持会话回放和浏览器控制的 OpenAI 就绪智能体 CLI。
-- **eightctl** — 从终端控制您的睡眠。
+- **eightctl** — 从终端控制你的睡眠。
 - **imsg** — 发送、读取、流式传输 iMessage 和短信。
 - **wacli** — WhatsApp CLI：同步、搜索、发送。
 - **discord** — Discord 操作：表情反应、贴纸、投票。使用 `user:<id>` 或 `channel:<id>` 目标（纯数字 ID 有歧义）。
@@ -123,7 +123,7 @@ git commit -m "Add Clawd workspace"
 ## 使用说明
 
 - 脚本编写优先使用 `openclaw` CLI；mac 应用负责处理权限。
-- 从技能标签页运行安装；如果二进制文件已存在，安装按钮会自动隐藏。
+- 从 Skills 标签页运行安装；如果二进制文件已存在，安装按钮会自动隐藏。
 - 保持心跳启用，以便助手可以安排提醒、监控收件箱和触发摄像头捕获。
 - Canvas UI 以全屏方式运行并带有原生叠加层。避免将关键控件放置在左上/右上/底部边缘；在布局中添加明确的边距，不要依赖安全区域内边距。
 - 对于浏览器驱动的验证，请使用 `openclaw browser`（tabs/status/screenshot），配合 OpenClaw 管理的 Chrome 配置文件。

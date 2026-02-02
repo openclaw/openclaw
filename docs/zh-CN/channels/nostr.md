@@ -17,13 +17,13 @@ x-i18n:
 
 **状态：** 可选插件（默认禁用）。
 
-Nostr 是一个去中心化的社交网络协议。此渠道使 OpenClaw 能够通过 NIP-04 接收和回复加密私信（DM）。
+Nostr 是一个去中心化的社交网络协议。此渠道使 OpenClaw 能够通过 NIP-04 接收和回复加密私信（私信）。
 
 ## 安装（按需）
 
-### 上手引导（推荐）
+### 新手引导（推荐）
 
-- 上手引导向导（`openclaw onboard`）和 `openclaw channels add` 会列出可选的渠道插件。
+- 新手引导向导（`openclaw onboard`）和 `openclaw channels add` 会列出可选的渠道插件。
 - 选择 Nostr 时会提示你按需安装插件。
 
 安装默认行为：
@@ -45,7 +45,7 @@ openclaw plugins install @openclaw/nostr
 openclaw plugins install --link <path-to-openclaw>/extensions/nostr
 ```
 
-安装或启用插件后请重启 Gateway。
+安装或启用插件后请重启 Gateway网关。
 
 ## 快速设置
 
@@ -74,7 +74,7 @@ nak key generate
 export NOSTR_PRIVATE_KEY="nsec1..."
 ```
 
-4. 重启 Gateway。
+4. 重启 Gateway网关。
 
 ## 配置参考
 
@@ -214,7 +214,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 - 验证私钥是否有效。
 - 确保中继 URL 可达并使用 `wss://`（本地使用 `ws://`）。
 - 确认 `enabled` 未设为 `false`。
-- 检查 Gateway 日志中的中继连接错误。
+- 检查 Gateway网关日志中的中继连接错误。
 
 ### 无法发送回复
 

@@ -1,5 +1,5 @@
 ---
-read_when: 你希望在一个 Gateway 进程中运行多个隔离的智能体（工作区 + 认证）。
+read_when: 你希望在一个 Gateway网关进程中运行多个隔离的智能体（工作区 + 认证）。
 status: active
 summary: 多智能体路由：隔离的智能体、渠道账户和绑定
 title: 多智能体路由
@@ -14,7 +14,7 @@ x-i18n:
 
 # 多智能体路由
 
-目标：在一个运行中的 Gateway 中托管多个*隔离的*智能体（独立的工作区 + `agentDir` + 会话），以及多个渠道账户（例如两个 WhatsApp）。入站消息通过绑定路由到对应的智能体。
+目标：在一个运行中的 Gateway网关中托管多个*隔离的*智能体（独立的工作区 + `agentDir` + 会话），以及多个渠道账户（例如两个 WhatsApp）。入站消息通过绑定路由到对应的智能体。
 
 ## 什么是"一个智能体"？
 
@@ -32,9 +32,9 @@ x-i18n:
 
 主智能体的凭证**不会**自动共享。切勿在智能体之间复用 `agentDir`（会导致认证/会话冲突）。如果你想共享凭证，请将 `auth-profiles.json` 复制到另一个智能体的 `agentDir` 中。
 
-技能通过每个工作区的 `skills/` 文件夹按智能体隔离，共享技能可从 `~/.openclaw/skills` 获取。参阅[技能：按智能体 vs 共享](/tools/skills#per-agent-vs-shared-skills)。
+Skills 通过每个工作区的 `skills/` 文件夹按智能体隔离，共享 Skills 可从 `~/.openclaw/skills` 获取。参阅[Skills：按智能体 vs 共享](/tools/skills#per-agent-vs-shared-skills)。
 
-Gateway 可以托管**一个智能体**（默认）或**多个智能体**并行运行。
+Gateway网关可以托管**一个智能体**（默认）或**多个智能体**并行运行。
 
 **工作区说明：** 每个智能体的工作区是**默认工作目录**，而非严格的沙箱。相对路径在工作区内解析，但绝对路径可以访问主机上的其他位置，除非启用了沙箱。参阅[沙箱](/gateway/sandboxing)。
 
@@ -79,7 +79,7 @@ openclaw agents list --bindings
 - **不同的性格**（按智能体工作区文件，如 `AGENTS.md` 和 `SOUL.md`）。
 - **独立的认证 + 会话**（除非显式启用，否则无串扰）。
 
-这使得**多个用户**可以共享一台 Gateway 服务器，同时保持各自的 AI "大脑"和数据隔离。
+这使得**多个用户**可以共享一台 Gateway网关服务器，同时保持各自的 AI "大脑"和数据隔离。
 
 ## 一个 WhatsApp 号码，多个用户（私聊分流）
 
@@ -316,7 +316,7 @@ openclaw agents list --bindings
 
 说明：
 
-- 工具允许/拒绝列表针对的是**工具**，而非技能。如果某个技能需要运行二进制文件，请确保允许 `exec` 并且该二进制文件存在于沙箱中。
+- 工具允许/拒绝列表针对的是**工具**，而非 Skills。如果某个 Skills 需要运行二进制文件，请确保允许 `exec` 并且该二进制文件存在于沙箱中。
 - 要实现更严格的控制，请设置 `agents.list[].groupChat.mentionPatterns` 并为渠道启用群组白名单。
 
 ## 按智能体的沙箱和工具配置
@@ -339,7 +339,7 @@ openclaw agents list --bindings
         id: "family",
         workspace: "~/.openclaw/workspace-family",
         sandbox: {
-          mode: "all",     // 始终沙箱化
+          mode: "all",     // 始终沙箱隔离
           scope: "agent",  // 每个智能体一个容器
           docker: {
             // 容器创建后的可选一次性设置
@@ -361,7 +361,7 @@ openclaw agents list --bindings
 **优势：**
 
 - **安全隔离**：限制不受信任的智能体的工具
-- **资源控制**：沙箱化特定智能体，同时让其他智能体在主机上运行
+- **资源控制**：沙箱隔离特定智能体，同时让其他智能体在主机上运行
 - **灵活策略**：按智能体设置不同权限
 
 注意：`tools.elevated` 是**全局的**且基于发送者；不能按智能体配置。如果你需要按智能体的边界，请使用 `agents.list[].tools` 来拒绝 `exec`。对于群组定向，请使用 `agents.list[].groupChat.mentionPatterns`，以便 @提及能准确映射到目标智能体。

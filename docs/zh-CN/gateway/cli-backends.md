@@ -39,7 +39,7 @@ Codex CLI 同样开箱即用：
 openclaw agent --message "hi" --model codex-cli/gpt-5.2-codex
 ```
 
-如果你的 Gateway 在 launchd/systemd 下运行且 PATH 较精简，只需添加命令路径：
+如果你的 Gateway网关在 launchd/systemd 下运行且 PATH 较精简，只需添加命令路径：
 
 ```json5
 {

@@ -18,13 +18,13 @@ OpenClaw 在各平台上统一处理群聊：WhatsApp、Telegram、Discord、Sla
 
 ## 入门简介（2 分钟）
 
-OpenClaw "运行"在您自己的消息账户上。没有单独的 WhatsApp 机器人用户。
-如果**您**在某个群组中，OpenClaw 就能看到该群组并在其中回复。
+OpenClaw "运行"在你自己的消息账户上。没有单独的 WhatsApp 机器人用户。
+如果**你**在某个群组中，OpenClaw 就能看到该群组并在其中回复。
 
 默认行为：
 
 - 群组受限（`groupPolicy: "allowlist"`）。
-- 除非您显式禁用提及门控，否则回复需要 @提及。
+- 除非你显式禁用提及门控，否则回复需要 @提及。
 
 含义：允许列表中的发送者可以通过提及 OpenClaw 来触发它。
 
@@ -45,13 +45,13 @@ otherwise -> reply
 
 ![群消息流程](/images/groups-flow.svg)
 
-如果您想要...
+如果你想要...
 | 目标 | 需要设置的内容 |
 |------|-------------|
 | 允许所有群组但仅在 @提及时回复 | `groups: { "*": { requireMention: true } }` |
 | 禁用所有群组回复 | `groupPolicy: "disabled"` |
 | 仅特定群组 | `groups: { "<group-id>": { ... } }`（无 `"*"` 键） |
-| 仅您可以在群组中触发 | `groupPolicy: "allowlist"`、`groupAllowFrom: ["+1555..."]` |
+| 仅你可以在群组中触发 | `groupPolicy: "allowlist"`、`groupAllowFrom: ["+1555..."]` |
 
 ## 会话键
 
@@ -62,18 +62,18 @@ otherwise -> reply
 
 ## 模式：个人私聊 + 公开群组（单智能体）
 
-可以——如果您的"个人"流量是**私聊**，"公开"流量是**群组**，这种方式效果很好。
+可以——如果你的"个人"流量是**私聊**，"公开"流量是**群组**，这种方式效果很好。
 
-原因：在单智能体模式下，私聊通常落在**主**会话键（`agent:main:main`）上，而群组始终使用**非主**会话键（`agent:main:<channel>:group:<id>`）。如果您启用沙箱并设置 `mode: "non-main"`，这些群组会话将在 Docker 中运行，而您的主私聊会话留在主机上。
+原因：在单智能体模式下，私聊通常落在**主**会话键（`agent:main:main`）上，而群组始终使用**非主**会话键（`agent:main:<channel>:group:<id>`）。如果你启用沙箱并设置 `mode: "non-main"`，这些群组会话将在 Docker 中运行，而你的主私聊会话留在主机上。
 
-这为您提供了一个智能体"大脑"（共享工作区 + 记忆），但有两种执行姿态：
+这为你提供了一个智能体"大脑"（共享工作区 + 记忆），但有两种执行姿态：
 
 - **私聊**：完整工具（主机）
 - **群组**：沙箱 + 受限工具（Docker）
 
-> 如果您需要真正独立的工作区/角色（"个人"和"公开"绝不能混合），请使用第二个智能体 + 绑定。参见[多智能体路由](/concepts/multi-agent)。
+> 如果你需要真正独立的工作区/角色（"个人"和"公开"绝不能混合），请使用第二个智能体 + 绑定。参见[多智能体路由](/concepts/multi-agent)。
 
-示例（私聊在主机上，群组沙箱化 + 仅消息工具）：
+示例（私聊在主机上，群组沙箱隔离 + 仅消息工具）：
 
 ```json5
 {
@@ -122,9 +122,9 @@ otherwise -> reply
 
 相关内容：
 
-- 配置键和默认值：[Gateway 配置](/gateway/configuration#agentsdefaultssandbox)
+- 配置键和默认值：[Gateway网关配置](/gateway/configuration#agentsdefaultssandbox)
 - 调试工具被阻止的原因：[沙箱 vs 工具策略 vs 提权](/gateway/sandbox-vs-tool-policy-vs-elevated)
-- 绑定挂载详情：[沙箱化](/gateway/sandboxing#custom-bind-mounts)
+- 绑定挂载详情：[沙箱隔离](/gateway/sandboxing#custom-bind-mounts)
 
 ## 显示标签
 
@@ -195,7 +195,7 @@ otherwise -> reply
 - Matrix：允许列表使用 `channels.matrix.groups`（房间 ID、别名或名称）。使用 `channels.matrix.groupAllowFrom` 限制发送者；也支持按房间的 `users` 允许列表。
 - 群组私聊单独控制（`channels.discord.dm.*`、`channels.slack.dm.*`）。
 - Telegram 允许列表可以匹配用户 ID（`"123456789"`、`"telegram:123456789"`、`"tg:123456789"`）或用户名（`"@alice"` 或 `"alice"`）；前缀不区分大小写。
-- 默认为 `groupPolicy: "allowlist"`；如果您的群组允许列表为空，群组消息将被阻止。
+- 默认为 `groupPolicy: "allowlist"`；如果你的群组允许列表为空，群组消息将被阻止。
 
 快速心智模型（群消息的评估顺序）：
 

@@ -16,7 +16,7 @@ x-i18n:
 
 # LINE（插件）
 
-LINE 通过 LINE Messaging API 连接到 OpenClaw。插件作为 Gateway 上的 webhook 接收器运行，使用你的频道访问 token + 频道密钥进行认证。
+LINE 通过 LINE Messaging API 连接到 OpenClaw。插件作为 Gateway网关上的 webhook 接收器运行，使用你的频道访问 token + 频道密钥进行认证。
 
 状态：通过插件支持。支持私信、群聊、媒体、位置、Flex 消息、模板消息和快速回复。不支持回应和线程。
 
@@ -41,13 +41,13 @@ openclaw plugins install ./extensions/line
 2. 创建（或选择）一个 Provider 并添加一个 **Messaging API** 频道。
 3. 从频道设置中复制 **Channel access token** 和 **Channel secret**。
 4. 在 Messaging API 设置中启用 **Use webhook**。
-5. 将 webhook URL 设置为你的 Gateway 端点（需要 HTTPS）：
+5. 将 webhook URL 设置为你的 Gateway网关端点（需要 HTTPS）：
 
 ```
 https://gateway-host/line/webhook
 ```
 
-Gateway 响应 LINE 的 webhook 验证（GET）和入站事件（POST）。如果你需要自定义路径，请设置 `channels.line.webhookPath` 或 `channels.line.accounts.<id>.webhookPath` 并相应更新 URL。
+Gateway网关响应 LINE 的 webhook 验证（GET）和入站事件（POST）。如果你需要自定义路径，请设置 `channels.line.webhookPath` 或 `channels.line.accounts.<id>.webhookPath` 并相应更新 URL。
 
 ## 配置
 
@@ -176,5 +176,5 @@ LINE 插件还附带一个 `/card` 命令用于 Flex 消息预设：
 ## 故障排除
 
 - **Webhook 验证失败：** 确保 webhook URL 为 HTTPS 且 `channelSecret` 与 LINE 控制台匹配。
-- **没有入站事件：** 确认 webhook 路径与 `channels.line.webhookPath` 匹配且 Gateway 可从 LINE 访问。
+- **没有入站事件：** 确认 webhook 路径与 `channels.line.webhookPath` 匹配且 Gateway网关可从 LINE 访问。
 - **媒体下载错误：** 如果媒体超过默认限制，请增大 `channels.line.mediaMaxMb`。

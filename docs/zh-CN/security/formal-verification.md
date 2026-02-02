@@ -55,9 +55,9 @@ cd openclaw-formal-models
 make <target>
 ```
 
-### Gateway 暴露与开放 Gateway 错误配置
+### Gateway网关暴露与开放 Gateway网关错误配置
 
-**声明：** 在没有认证的情况下绑定到非本地回环地址可能导致远程入侵/增加暴露面；令牌/密码可以阻止未经授权的攻击者（在模型假设下）。
+**声明：** 在没有认证的情况下绑定到非本地 local loopback 可能导致远程入侵/增加暴露面；令牌/密码可以阻止未经授权的攻击者（在模型假设下）。
 
 - 绿色运行：
   - `make gateway-exposure-v2`

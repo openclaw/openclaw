@@ -17,7 +17,7 @@ x-i18n:
 # 浏览器（openclaw 托管）
 
 OpenClaw 可以运行一个由智能体控制的**专用 Chrome/Brave/Edge/Chromium 配置文件**。
-它与你的个人浏览器隔离，通过 Gateway 内部的一个小型本地控制服务进行管理（仅限回环地址）。
+它与你的个人浏览器隔离，通过 Gateway网关内部的一个小型本地控制服务进行管理（仅限 local loopback）。
 
 初学者视角：
 
@@ -44,7 +44,7 @@ openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
 ```
 
-如果出现 "Browser disabled"，请在配置中启用它（见下文）并重启 Gateway。
+如果出现 "Browser disabled"，请在配置中启用它（见下文）并重启 Gateway网关。
 
 ## 配置文件：`openclaw` 与 `chrome`
 
@@ -81,10 +81,10 @@ openclaw browser --browser-profile openclaw snapshot
 
 说明：
 
-- 浏览器控制服务绑定到回环地址的端口，该端口由 `gateway.port` 派生（默认值：`18791`，即 gateway + 2）。中继使用下一个端口（`18792`）。
-- 如果你覆盖了 Gateway 端口（`gateway.port` 或 `OPENCLAW_GATEWAY_PORT`），派生的浏览器端口会相应偏移以保持在同一"族"内。
+- 浏览器控制服务绑定到 local loopback 的端口，该端口由 `gateway.port` 派生（默认值：`18791`，即 gateway + 2）。中继使用下一个端口（`18792`）。
+- 如果你覆盖了 Gateway网关端口（`gateway.port` 或 `OPENCLAW_GATEWAY_PORT`），派生的浏览器端口会相应偏移以保持在同一"族"内。
 - `cdpUrl` 未设置时默认为中继端口。
-- `remoteCdpTimeoutMs` 适用于远程（非回环）CDP 可达性检查。
+- `remoteCdpTimeoutMs` 适用于远程（非 local loopback）CDP 可达性检查。
 - `remoteCdpHandshakeTimeoutMs` 适用于远程 CDP WebSocket 可达性检查。
 - `attachOnly: true` 表示"永远不启动本地浏览器；仅在已运行时附加"。
 - `color` + 每个配置文件的 `color` 为浏览器 UI 着色，以便你识别当前活动的配置文件。
@@ -127,8 +127,8 @@ openclaw config set browser.executablePath "/usr/bin/google-chrome"
 
 ## 本地控制与远程控制
 
-- **本地控制（默认）：** Gateway 启动回环控制服务，并可启动本地浏览器。
-- **远程控制（节点主机）：** 在拥有浏览器的机器上运行节点主机；Gateway 将浏览器操作代理到该节点。
+- **本地控制（默认）：** Gateway网关启动 local loopback 控制服务，并可启动本地浏览器。
+- **远程控制（节点主机）：** 在拥有浏览器的机器上运行节点主机；Gateway网关将浏览器操作代理到该节点。
 - **远程 CDP：** 设置 `browser.profiles.<name>.cdpUrl`（或 `browser.cdpUrl`）以附加到远程基于 Chromium 的浏览器。在这种情况下，OpenClaw 不会启动本地浏览器。
 
 远程 CDP URL 可以包含认证信息：
@@ -140,7 +140,7 @@ OpenClaw 在调用 `/json/*` 端点和连接 CDP WebSocket 时会保留认证信
 
 ## 节点浏览器代理（零配置默认）
 
-如果你在拥有浏览器的机器上运行了**节点主机**，OpenClaw 可以自动将浏览器工具调用路由到该节点，无需额外的浏览器配置。这是远程 Gateway 的默认路径。
+如果你在拥有浏览器的机器上运行了**节点主机**，OpenClaw 可以自动将浏览器工具调用路由到该节点，无需额外的浏览器配置。这是远程 Gateway网关的默认路径。
 
 说明：
 
@@ -148,7 +148,7 @@ OpenClaw 在调用 `/json/*` 端点和连接 CDP WebSocket 时会保留认证信
 - 配置文件来自节点自身的 `browser.profiles` 配置（与本地相同）。
 - 如果不需要可以禁用：
   - 在节点上：`nodeHost.browserProxy.enabled=false`
-  - 在 Gateway 上：`gateway.nodes.browser.mode="off"`
+  - 在 Gateway网关上：`gateway.nodes.browser.mode="off"`
 
 ## Browserless（托管远程 CDP）
 
@@ -182,8 +182,8 @@ OpenClaw 在调用 `/json/*` 端点和连接 CDP WebSocket 时会保留认证信
 
 核心要点：
 
-- 浏览器控制仅限回环地址；访问通过 Gateway 的认证或节点配对进行。
-- 保持 Gateway 和所有节点主机在私有网络上（Tailscale）；避免公开暴露。
+- 浏览器控制仅限 local loopback；访问通过 Gateway网关的认证或节点配对进行。
+- 保持 Gateway网关和所有节点主机在私有网络上（Tailscale）；避免公开暴露。
 - 将远程 CDP URL/令牌视为敏感信息；建议使用环境变量或密钥管理器。
 
 远程 CDP 建议：
@@ -216,12 +216,12 @@ OpenClaw 也可以通过本地 CDP 中继 + Chrome 扩展驱动**你现有的 Ch
 
 流程：
 
-- Gateway 在本地运行（同一台机器）或节点主机在浏览器所在机器上运行。
-- 本地**中继服务器**在回环 `cdpUrl` 上监听（默认：`http://127.0.0.1:18792`）。
+- Gateway网关在本地运行（同一台机器）或节点主机在浏览器所在机器上运行。
+- 本地**中继服务器**在 local loopback `cdpUrl` 上监听（默认：`http://127.0.0.1:18792`）。
 - 你点击标签页上的 **OpenClaw Browser Relay** 扩展图标以附加（不会自动附加）。
 - 智能体通过普通的 `browser` 工具控制该标签页，选择正确的配置文件即可。
 
-如果 Gateway 在其他地方运行，请在浏览器所在机器上运行节点主机，以便 Gateway 可以代理浏览器操作。
+如果 Gateway网关在其他地方运行，请在浏览器所在机器上运行节点主机，以便 Gateway网关可以代理浏览器操作。
 
 ### 沙箱会话
 
@@ -289,7 +289,7 @@ openclaw browser create-profile \
 
 ## 控制 API（可选）
 
-仅用于本地集成，Gateway 暴露一个小型回环 HTTP API：
+仅用于本地集成，Gateway网关暴露一个小型 local loopback HTTP API：
 
 - 状态/启动/停止：`GET /`、`POST /start`、`POST /stop`
 - 标签页：`GET /tabs`、`POST /tabs/open`、`POST /tabs/focus`、`DELETE /tabs/:targetId`
@@ -310,7 +310,7 @@ openclaw browser create-profile \
 
 部分功能（导航/操作/AI 快照/角色快照、元素截图、PDF）需要 Playwright。如果未安装 Playwright，这些端点会返回明确的 501 错误。ARIA 快照和基本截图在 openclaw 托管的 Chrome 上仍然可用。对于 Chrome 扩展中继驱动，ARIA 快照和截图需要 Playwright。
 
-如果你看到 `Playwright is not available in this gateway build`，请安装完整的 Playwright 包（而非 `playwright-core`）并重启 Gateway，或者重新安装带浏览器支持的 OpenClaw。
+如果你看到 `Playwright is not available in this gateway build`，请安装完整的 Playwright 包（而非 `playwright-core`）并重启 Gateway网关，或者重新安装带浏览器支持的 OpenClaw。
 
 ## 工作原理（内部）
 
@@ -412,7 +412,7 @@ openclaw browser create-profile \
   - `--format ai`（安装 Playwright 时的默认值）：返回带有数字引用（`aria-ref="<n>"`）的 AI 快照。
   - `--format aria`：返回无障碍树（无引用；仅供检查）。
   - `--efficient`（或 `--mode efficient`）：紧凑角色快照预设（交互式 + 紧凑 + 深度 + 更低的 maxChars）。
-  - 配置默认值（仅限工具/CLI）：设置 `browser.snapshotDefaults.mode: "efficient"` 以在调用者未传递模式时使用高效快照（参见 [Gateway 配置](/gateway/configuration#browser-openclaw-managed-browser)）。
+  - 配置默认值（仅限工具/CLI）：设置 `browser.snapshotDefaults.mode: "efficient"` 以在调用者未传递模式时使用高效快照（参见 [Gateway网关配置](/gateway/configuration#browser-openclaw-managed-browser)）。
   - 角色快照选项（`--interactive`、`--compact`、`--depth`、`--selector`）强制使用基于角色的快照，引用格式如 `ref=e12`。
   - `--frame "<iframe 选择器>"` 将角色快照限定在 iframe 范围内（配合角色引用如 `e12` 使用）。
   - `--interactive` 输出扁平的、易于选取的交互式元素列表（最适合驱动操作）。
@@ -514,7 +514,7 @@ JSON 格式的角色快照包含 `refs` 以及一个小型 `stats` 块（行数/
 - openclaw 浏览器配置文件可能包含已登录的会话；请将其视为敏感数据。
 - `browser act kind=evaluate` / `openclaw browser evaluate` 和 `wait --fn` 在页面上下文中执行任意 JavaScript。提示注入可能操纵此功能。如果不需要，请通过 `browser.evaluateEnabled=false` 禁用。
 - 有关登录和反机器人注意事项（X/Twitter 等），请参阅[浏览器登录 + X/Twitter 发帖](/tools/browser-login)。
-- 保持 Gateway/节点主机为私有（仅限回环地址或 tailnet）。
+- 保持 Gateway网关/节点主机为私有（仅限 local loopback 或 tailnet）。
 - 远程 CDP 端点功能强大；请通过隧道保护它们。
 
 ## 故障排除

@@ -2,7 +2,7 @@
 read_when:
   - 更改语音唤醒词行为或默认值
   - 添加需要唤醒词同步的新节点平台
-summary: 全局语音唤醒词（Gateway 拥有）及其在节点间的同步方式
+summary: 全局语音唤醒词（Gateway网关拥有）及其在节点间的同步方式
 title: 语音唤醒
 x-i18n:
   generated_at: "2026-02-01T21:19:01Z"
@@ -15,15 +15,15 @@ x-i18n:
 
 # 语音唤醒（全局唤醒词）
 
-OpenClaw 将**唤醒词视为由 Gateway 拥有的单一全局列表**。
+OpenClaw 将**唤醒词视为由 Gateway网关拥有的单一全局列表**。
 
 - **没有按节点自定义的唤醒词**。
-- **任何节点/应用界面均可编辑**该列表；更改由 Gateway 持久化并广播给所有人。
+- **任何节点/应用界面均可编辑**该列表；更改由 Gateway网关持久化并广播给所有人。
 - 每个设备仍保留自己的**语音唤醒 启用/禁用**开关（本地用户体验和权限各异）。
 
-## 存储（Gateway 主机）
+## 存储（Gateway网关主机）
 
-唤醒词存储在 Gateway 机器上：
+唤醒词存储在 Gateway网关机器上：
 
 - `~/.openclaw/settings/voicewake.json`
 
@@ -64,9 +64,9 @@ OpenClaw 将**唤醒词视为由 Gateway 拥有的单一全局列表**。
 ### iOS 节点
 
 - 使用全局列表进行 `VoiceWakeManager` 触发词检测。
-- 在设置中编辑唤醒词会调用 `voicewake.set`（通过 Gateway WS），同时保持本地唤醒词检测的即时响应。
+- 在设置中编辑唤醒词会调用 `voicewake.set`（通过 Gateway网关 WS），同时保持本地唤醒词检测的即时响应。
 
 ### Android 节点
 
 - 在设置中提供唤醒词编辑器。
-- 通过 Gateway WS 调用 `voicewake.set`，使编辑在所有设备间同步。
+- 通过 Gateway网关 WS 调用 `voicewake.set`，使编辑在所有设备间同步。

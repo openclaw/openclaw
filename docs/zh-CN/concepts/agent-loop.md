@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 您需要智能体循环或生命周期事件的详细说明
+  - 你需要智能体循环或生命周期事件的详细说明
 summary: 智能体循环生命周期、流和等待语义
 title: 智能体循环
 x-i18n:
@@ -21,7 +21,7 @@ x-i18n:
 
 ## 入口点
 
-- Gateway RPC：`agent` 和 `agent.wait`。
+- Gateway网关 RPC：`agent` 和 `agent.wait`。
 - CLI：`agent` 命令。
 
 ## 工作原理（高层概述）
@@ -29,7 +29,7 @@ x-i18n:
 1. `agent` RPC 验证参数，解析会话（sessionKey/sessionId），持久化会话元数据，立即返回 `{ runId, acceptedAt }`。
 2. `agentCommand` 运行智能体：
    - 解析模型 + thinking/verbose 默认值
-   - 加载技能快照
+   - 加载 Skills 快照
    - 调用 `runEmbeddedPiAgent`（pi-agent-core 运行时）
    - 如果嵌入式循环未发出**生命周期 end/error** 事件，则补充发出
 3. `runEmbeddedPiAgent`：
@@ -56,13 +56,13 @@ x-i18n:
 ## 会话 + 工作区准备
 
 - 工作区被解析并创建；沙箱运行可能会重定向到沙箱工作区根目录。
-- 技能被加载（或从快照中复用）并注入到环境和提示中。
+- Skills 被加载（或从快照中复用）并注入到环境和提示中。
 - 引导/上下文文件被解析并注入到系统提示报告中。
 - 获取会话写锁；在流式传输之前打开并准备 `SessionManager`。
 
 ## 提示组装 + 系统提示
 
-- 系统提示由 OpenClaw 的基础提示、技能提示、引导上下文和每次运行的覆盖项构建而成。
+- 系统提示由 OpenClaw 的基础提示、Skills 提示、引导上下文和每次运行的覆盖项构建而成。
 - 强制执行模型特定的限制和压缩预留令牌数。
 - 参见[系统提示](/concepts/system-prompt)了解模型所看到的内容。
 
@@ -70,10 +70,10 @@ x-i18n:
 
 OpenClaw 有两个钩子系统：
 
-- **内部钩子**（Gateway 钩子）：用于命令和生命周期事件的事件驱动脚本。
-- **插件钩子**：智能体/工具生命周期和 Gateway 管道中的扩展点。
+- **内部钩子**（Gateway网关钩子）：用于命令和生命周期事件的事件驱动脚本。
+- **插件钩子**：智能体/工具生命周期和 Gateway网关管道中的扩展点。
 
-### 内部钩子（Gateway 钩子）
+### 内部钩子（Gateway网关钩子）
 
 - **`agent:bootstrap`**：在系统提示最终确定之前构建引导文件时运行。
   用于添加/移除引导上下文文件。
@@ -81,9 +81,9 @@ OpenClaw 有两个钩子系统：
 
 参见[钩子](/hooks)了解设置和示例。
 
-### 插件钩子（智能体 + Gateway 生命周期）
+### 插件钩子（智能体 + Gateway网关生命周期）
 
-这些在智能体循环或 Gateway 管道内运行：
+这些在智能体循环或 Gateway网关管道内运行：
 
 - **`before_agent_start`**：在运行开始前注入上下文或覆盖系统提示。
 - **`agent_end`**：在完成后检查最终消息列表和运行元数据。
@@ -92,7 +92,7 @@ OpenClaw 有两个钩子系统：
 - **`tool_result_persist`**：在工具结果写入会话记录之前同步转换工具结果。
 - **`message_received` / `message_sending` / `message_sent`**：入站 + 出站消息钩子。
 - **`session_start` / `session_end`**：会话生命周期边界。
-- **`gateway_start` / `gateway_stop`**：Gateway 生命周期事件。
+- **`gateway_start` / `gateway_stop`**：Gateway网关生命周期事件。
 
 参见[插件](/plugin#plugin-hooks)了解钩子 API 和注册详情。
 
@@ -146,5 +146,5 @@ OpenClaw 有两个钩子系统：
 
 - 智能体超时（中止）
 - AbortSignal（取消）
-- Gateway 断开连接或 RPC 超时
+- Gateway网关断开连接或 RPC 超时
 - `agent.wait` 超时（仅等待阶段，不会停止智能体）

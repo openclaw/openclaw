@@ -14,31 +14,31 @@ x-i18n:
 
 # OpenClaw macOS IPC 架构
 
-**当前模型：** 本地 Unix 套接字将**节点宿主服务**连接到 **macOS 应用**，用于执行审批和 `system.run`。存在一个 `openclaw-mac` 调试 CLI 用于发现/连接检查；智能体操作仍通过 Gateway WebSocket 和 `node.invoke` 传递。UI 自动化使用 PeekabooBridge。
+**当前模型：** 本地 Unix 套接字将**节点宿主服务**连接到 **macOS 应用**，用于执行审批和 `system.run`。存在一个 `openclaw-mac` 调试 CLI 用于发现/连接检查；智能体操作仍通过 Gateway网关 WebSocket 和 `node.invoke` 传递。UI 自动化使用 PeekabooBridge。
 
 ## 目标
 
 - 单个 GUI 应用实例负责所有面向 TCC 的工作（通知、屏幕录制、麦克风、语音、AppleScript）。
-- 精简的自动化接口：Gateway + 节点命令，加上用于 UI 自动化的 PeekabooBridge。
+- 精简的自动化接口：Gateway网关 + 节点命令，加上用于 UI 自动化的 PeekabooBridge。
 - 可预测的权限：始终使用相同的已签名 bundle ID，由 launchd 启动，确保 TCC 授权持久有效。
 
 ## 工作原理
 
-### Gateway + 节点传输
+### Gateway网关 + 节点传输
 
-- 应用运行 Gateway（本地模式）并作为节点连接到它。
+- 应用运行 Gateway网关（本地模式）并作为节点连接到它。
 - 智能体操作通过 `node.invoke` 执行（例如 `system.run`、`system.notify`、`canvas.*`）。
 
 ### 节点服务 + 应用 IPC
 
-- 无界面的节点宿主服务通过 WebSocket 连接到 Gateway。
+- 无界面的节点宿主服务通过 WebSocket 连接到 Gateway网关。
 - `system.run` 请求通过本地 Unix 套接字转发到 macOS 应用。
 - 应用在 UI 上下文中执行操作，必要时提示用户确认，并返回输出。
 
 架构图（SCI）：
 
 ```
-Agent -> Gateway -> Node Service (WS)
+Agent -> Gateway网关 -> Node Service (WS)
                       |  IPC (UDS + token + HMAC + TTL)
                       v
                   Mac App (UI + TCC + system.run)

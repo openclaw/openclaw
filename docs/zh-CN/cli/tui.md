@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 想要使用 Gateway 的终端 UI（支持远程）
+  - 想要使用 Gateway网关的终端 UI（支持远程）
   - 想要从脚本传递 url/token/session
-summary: 连接到 Gateway 的终端 UI 的 `openclaw tui` CLI 参考
+summary: 连接到 Gateway网关的终端 UI 的 `openclaw tui` CLI 参考
 title: tui
 x-i18n:
   generated_at: "2026-02-01T20:21:31Z"
@@ -15,7 +15,7 @@ x-i18n:
 
 # `openclaw tui`
 
-打开连接到 Gateway 的终端 UI。
+打开连接到 Gateway网关的终端 UI。
 
 相关内容：
 

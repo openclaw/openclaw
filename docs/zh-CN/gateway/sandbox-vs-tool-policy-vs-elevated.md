@@ -43,10 +43,10 @@ openclaw sandbox explain --json
 沙箱由 `agents.defaults.sandbox.mode` 控制：
 
 - `"off"`：所有内容在宿主机上运行。
-- `"non-main"`：仅非主会话被沙箱化（对群组/渠道来说常常出乎意料）。
-- `"all"`：所有内容都被沙箱化。
+- `"non-main"`：仅非主会话被沙箱隔离（对群组/渠道来说常常出乎意料）。
+- `"all"`：所有内容都被沙箱隔离。
 
-完整的配置矩阵（范围、工作区挂载、镜像）请参阅[沙箱化](/gateway/sandboxing)。
+完整的配置矩阵（范围、工作区挂载、镜像）请参阅[沙箱隔离](/gateway/sandboxing)。
 
 ### 绑定挂载（安全快速检查）
 
@@ -64,7 +64,7 @@ openclaw sandbox explain --json
 - **提供商工具配置文件**：`tools.byProvider[provider].profile` 和 `agents.list[].tools.byProvider[provider].profile`
 - **全局/每智能体工具策略**：`tools.allow`/`tools.deny` 和 `agents.list[].tools.allow`/`agents.list[].tools.deny`
 - **提供商工具策略**：`tools.byProvider[provider].allow/deny` 和 `agents.list[].tools.byProvider[provider].allow/deny`
-- **沙箱工具策略**（仅在沙箱化时适用）：`tools.sandbox.tools.allow`/`tools.sandbox.tools.deny` 和 `agents.list[].tools.sandbox.tools.*`
+- **沙箱工具策略**（仅在沙箱隔离时适用）：`tools.sandbox.tools.allow`/`tools.sandbox.tools.deny` 和 `agents.list[].tools.sandbox.tools.*`
 
 经验法则：
 
@@ -109,7 +109,7 @@ openclaw sandbox explain --json
 - 如果你处于沙箱中，`/elevated on`（或带 `elevated: true` 的 `exec`）会在宿主机上运行（审批可能仍然适用）。
 - 使用 `/elevated full` 可跳过当前会话的 exec 审批。
 - 如果你已经在直接运行模式下，提权实际上是无操作（仍然受门控限制）。
-- 提权模式**不是**技能范围的，也**不会**覆盖工具允许/拒绝策略。
+- 提权模式**不是**Skills 范围的，也**不会**覆盖工具允许/拒绝策略。
 - `/exec` 与提权模式是分开的。它仅为授权发送者调整每会话的 exec 默认设置。
 
 门控：
@@ -130,6 +130,6 @@ openclaw sandbox explain --json
   - 从 `tools.sandbox.tools.deny`（或每智能体 `agents.list[].tools.sandbox.tools.deny`）中移除它
   - 或将其添加到 `tools.sandbox.tools.allow`（或每智能体允许列表）
 
-### "我以为这是主会话，为什么被沙箱化了？"
+### "我以为这是主会话，为什么被沙箱隔离了？"
 
 在 `"non-main"` 模式下，群组/渠道键*不是*主会话。请使用主会话键（通过 `sandbox explain` 查看）或将模式切换为 `"off"`。

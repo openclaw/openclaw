@@ -17,7 +17,7 @@ x-i18n:
 
 ## 目标
 
-在 DigitalOcean 上运行持久化的 OpenClaw Gateway，费用为**每月 $6**（预留定价为每月 $4）。
+在 DigitalOcean 上运行持久化的 OpenClaw Gateway网关，费用为**每月 $6**（预留定价为每月 $4）。
 
 如果你想要每月 $0 的方案且不介意 ARM + 特定提供商的设置，请参阅 [Oracle Cloud 指南](/platforms/oracle)。
 
@@ -80,7 +80,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 openclaw --version
 ```
 
-## 4）运行上手引导
+## 4）运行新手引导
 
 ```bash
 openclaw onboard --install-daemon
@@ -90,10 +90,10 @@ openclaw onboard --install-daemon
 
 - 模型认证（API 密钥或 OAuth）
 - 渠道设置（Telegram、WhatsApp、Discord 等）
-- Gateway 令牌（自动生成）
+- Gateway网关令牌（自动生成）
 - 守护进程安装（systemd）
 
-## 5）验证 Gateway
+## 5）验证 Gateway网关
 
 ```bash
 # 检查状态
@@ -108,7 +108,7 @@ journalctl --user -u openclaw-gateway.service -f
 
 ## 6）访问控制面板
 
-Gateway 默认绑定到回环地址。要访问控制面板 UI：
+Gateway网关默认绑定到 local loopback。要访问控制面板 UI：
 
 **方案 A：SSH 隧道（推荐）**
 
@@ -119,14 +119,14 @@ ssh -L 18789:localhost:18789 root@YOUR_DROPLET_IP
 # 然后打开：http://localhost:18789
 ```
 
-**方案 B：Tailscale Serve（HTTPS，仅回环）**
+**方案 B：Tailscale Serve（HTTPS，仅 local loopback）**
 
 ```bash
 # 在 Droplet 上
 curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up
 
-# 配置 Gateway 使用 Tailscale Serve
+# 配置 Gateway网关使用 Tailscale Serve
 openclaw config set gateway.tailscale.mode serve
 openclaw gateway restart
 ```
@@ -135,7 +135,7 @@ openclaw gateway restart
 
 注意事项：
 
-- Serve 保持 Gateway 仅绑定回环地址，并通过 Tailscale 身份头进行认证。
+- Serve 保持 Gateway网关仅绑定 local loopback，并通过 Tailscale 身份头进行认证。
 - 如需使用令牌/密码认证，请设置 `gateway.auth.allowTailscale: false` 或使用 `gateway.auth.mode: "password"`。
 
 **方案 C：Tailnet 绑定（不使用 Serve）**
@@ -234,7 +234,7 @@ Oracle Cloud 提供 **Always Free** ARM 实例，性能远超此处任何付费�
 
 ## 故障排除
 
-### Gateway 无法启动
+### Gateway网关无法启动
 
 ```bash
 openclaw gateway status

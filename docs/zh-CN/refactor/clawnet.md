@@ -42,7 +42,7 @@ x-i18n:
 ## 非目标（明确声明）
 
 - 移除能力隔离（仍需最小权限）。
-- 在无作用域检查的情况下暴露完整 Gateway 控制平面。
+- 在无作用域检查的情况下暴露完整 Gateway网关控制平面。
 - 让认证依赖人类标签（别名仍为非安全性要素）。
 
 ---
@@ -51,12 +51,12 @@ x-i18n:
 
 ## 两套协议
 
-### 1) Gateway WebSocket（控制平面）
+### 1) Gateway网关 WebSocket（控制平面）
 
 - 完整 API 接口：配置、渠道、模型、会话、智能体运行、日志、节点等。
-- 默认绑定：回环地址。远程访问通过 SSH/Tailscale。
+- 默认绑定：local loopback。远程访问通过 SSH/Tailscale。
 - 认证：通过 `connect` 使用令牌/密码。
-- 无 TLS 固定（依赖回环/隧道）。
+- 无 TLS 固定（依赖 local loopback/隧道）。
 - 代码：
   - `src/gateway/server/ws-connection/message-handler.ts`
   - `src/gateway/client.ts`
@@ -75,30 +75,30 @@ x-i18n:
 
 ## 当前控制平面客户端
 
-- CLI → 通过 `callGateway` 连接 Gateway WS（`src/gateway/call.ts`）。
-- macOS 应用 UI → Gateway WS（`GatewayConnection`）。
-- Web 控制 UI → Gateway WS。
-- ACP → Gateway WS。
+- CLI → 通过 `callGateway网关` 连接 Gateway网关 WS（`src/gateway/call.ts`）。
+- macOS 应用 UI → Gateway网关 WS（`Gateway网关Connection`）。
+- Web 控制 UI → Gateway网关 WS。
+- ACP → Gateway网关 WS。
 - 浏览器控制使用独立的 HTTP 控制服务器。
 
 ## 当前节点
 
-- macOS 应用在节点模式下连接 Gateway bridge（`MacNodeBridgeSession`）。
-- iOS/Android 应用连接 Gateway bridge。
-- 配对 + 每节点令牌存储在 Gateway。
+- macOS 应用在节点模式下连接 Gateway网关 bridge（`MacNodeBridgeSession`）。
+- iOS/Android 应用连接 Gateway网关 bridge。
+- 配对 + 每节点令牌存储在 Gateway网关。
 
 ## 当前审批流程（执行）
 
-- 智能体通过 Gateway 使用 `system.run`。
-- Gateway 通过 bridge 调用节点。
+- 智能体通过 Gateway网关使用 `system.run`。
+- Gateway网关通过 bridge 调用节点。
 - 节点运行时决定审批。
 - UI 提示在 mac 应用上显示（当节点 == mac 应用时）。
-- 节点向 Gateway 返回 `invoke-res`。
+- 节点向 Gateway网关返回 `invoke-res`。
 - 多跳，UI 绑定在节点主机上。
 
 ## 当前在线状态 + 身份
 
-- Gateway 在线状态条目来自 WS 客户端。
+- Gateway网关在线状态条目来自 WS 客户端。
 - 节点在线状态条目来自 bridge。
 - mac 应用可能为同一台机器显示两个条目（UI + 节点）。
 - 节点身份存储在配对存储中；UI 身份独立存储。
@@ -162,9 +162,9 @@ x-i18n:
 ## 配对流程（统一）
 
 - 客户端未认证连接。
-- Gateway 为该 `deviceId` 创建**配对请求**。
+- Gateway网关为该 `deviceId` 创建**配对请求**。
 - 操作者收到提示；批准/拒绝。
-- Gateway 签发绑定以下信息的凭据：
+- Gateway网关签发绑定以下信息的凭据：
   - 设备公钥
   - 角色
   - 作用域
@@ -177,7 +177,7 @@ x-i18n:
 
 - 设备一次性生成密钥对。
 - `deviceId = fingerprint(publicKey)`。
-- Gateway 发送 nonce；设备签名；Gateway 验证。
+- Gateway网关发送 nonce；设备签名；Gateway网关验证。
 - 令牌签发给公钥（持有证明），而非字符串。
 
 替代方案：
@@ -189,9 +189,9 @@ x-i18n:
 
 需精确定义以避免薄弱环节。推荐以下方案之一：
 
-- **仅限本地**：客户端通过回环/Unix socket 连接时自动配对。
-- **SSH 验证**：Gateway 签发 nonce；客户端通过获取 nonce 证明 SSH 访问。
-- **物理存在窗口**：在 Gateway 主机 UI 上进行本地审批后，在短时间窗口内（如 10 分钟）允许自动配对。
+- **仅限本地**：客户端通过 local loopback/Unix socket 连接时自动配对。
+- **SSH 验证**：Gateway网关签发 nonce；客户端通过获取 nonce 证明 SSH 访问。
+- **物理存在窗口**：在 Gateway网关主机 UI 上进行本地审批后，在短时间窗口内（如 10 分钟）允许自动配对。
 
 始终记录自动审批日志。
 
@@ -228,21 +228,21 @@ x-i18n:
 
 ## 新方案
 
-审批由 **Gateway 托管**，UI 推送到操作者客户端。
+审批由 **Gateway网关托管**，UI 推送到操作者客户端。
 
 ### 新流程
 
-1. Gateway 收到 `system.run` 意图（智能体）。
-2. Gateway 创建审批记录：`approval.requested`。
+1. Gateway网关收到 `system.run` 意图（智能体）。
+2. Gateway网关创建审批记录：`approval.requested`。
 3. 操作者 UI 显示提示。
-4. 审批决定发送到 Gateway：`approval.resolve`。
-5. 如果批准，Gateway 调用节点命令。
+4. 审批决定发送到 Gateway网关：`approval.resolve`。
+5. 如果批准，Gateway网关调用节点命令。
 6. 节点执行，返回 `invoke-res`。
 
 ### 审批语义（加固）
 
 - 广播给所有操作者；仅活跃 UI 显示模态框（其他显示通知提示）。
-- 首个决定生效；Gateway 拒绝后续的重复决定。
+- 首个决定生效；Gateway网关拒绝后续的重复决定。
 - 默认超时：N 秒后拒绝（如 60 秒），记录原因。
 - 决定需要 `operator.approvals` 作用域。
 
@@ -293,7 +293,7 @@ x-i18n:
 仅作为人类标签。
 
 - 示例：`scarlet-claw`、`saltwave`、`mantis-pinch`。
-- 存储在 Gateway 注册表中，可编辑。
+- 存储在 Gateway网关注册表中，可编辑。
 - 冲突处理：`-2`、`-3`。
 
 ## UI 分组
@@ -348,7 +348,7 @@ x-i18n:
 
 # 安全说明
 
-- 角色/白名单在 Gateway 边界强制执行。
+- 角色/白名单在 Gateway网关边界强制执行。
 - 无操作者作用域的客户端无法获得"完整"API。
 - 所有连接均需配对。
 - TLS + 固定降低移动端中间人攻击风险。
@@ -375,7 +375,7 @@ WS 控制平面适合小消息，但节点还需要处理：
 # 能力 + 命令策略
 
 - 节点报告的 caps/commands 视为**声明**。
-- Gateway 执行按平台的白名单。
+- Gateway网关执行按平台的白名单。
 - 任何新命令需要操作者审批或显式白名单变更。
 - 带时间戳审计变更。
 
@@ -412,7 +412,7 @@ WS 控制平面适合小消息，但节点还需要处理：
 
 5. 跨网络审批
    - 广播给所有操作者客户端；活跃 UI 显示模态框。
-   - 首个响应生效；Gateway 保证原子性。
+   - 首个响应生效；Gateway网关保证原子性。
 
 ---
 
@@ -420,5 +420,5 @@ WS 控制平面适合小消息，但节点还需要处理：
 
 - 现状：WS 控制平面 + Bridge 节点传输。
 - 痛点：审批 + 重复 + 两套协议栈。
-- 方案：带显式角色 + 作用域的单一 WS 协议，统一配对 + TLS 固定，Gateway 托管审批，稳定设备 ID + 可爱别名。
+- 方案：带显式角色 + 作用域的单一 WS 协议，统一配对 + TLS 固定，Gateway网关托管审批，稳定设备 ID + 可爱别名。
 - 成果：更简洁的用户体验、更强的安全性、更少的重复、更好的移动端路由。

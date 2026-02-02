@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 你想要一个便宜的常驻 Linux 主机来运行 Gateway
+  - 你想要一个便宜的常驻 Linux 主机来运行 Gateway网关
   - 你想在不自行运维 VPS 的情况下远程访问控制面板 UI
-summary: 在 exe.dev 上运行 OpenClaw Gateway（虚拟机 + HTTPS 代理）以实现远程访问
+summary: 在 exe.dev 上运行 OpenClaw Gateway网关（虚拟机 + HTTPS 代理）以实现远程访问
 title: exe.dev
 x-i18n:
   generated_at: "2026-02-01T21:20:17Z"
@@ -15,7 +15,7 @@ x-i18n:
 
 # exe.dev
 
-目标：在 exe.dev 虚拟机上运行 OpenClaw Gateway，通过以下地址从你的笔记本访问：`https://<vm-name>.exe.xyz`
+目标：在 exe.dev 虚拟机上运行 OpenClaw Gateway网关，通过以下地址从你的笔记本访问：`https://<vm-name>.exe.xyz`
 
 本页假设使用 exe.dev 的默认 **exeuntu** 镜像。如果你选择了其他发行版，请相应调整软件包。
 

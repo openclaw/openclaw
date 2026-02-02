@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您正在审批设备配对请求
-  - 您需要轮换或吊销设备令牌
+  - 你正在审批设备配对请求
+  - 你需要轮换或吊销设备令牌
 summary: "`openclaw devices` 的 CLI 参考（设备配对 + 令牌轮换/吊销）"
 title: devices
 x-i18n:
@@ -62,9 +62,9 @@ openclaw devices revoke --device <deviceId> --role node
 
 ## 通用选项
 
-- `--url <url>`：Gateway WebSocket URL（配置后默认使用 `gateway.remote.url`）。
-- `--token <token>`：Gateway 令牌（如需要）。
-- `--password <password>`：Gateway 密码（密码认证）。
+- `--url <url>`：Gateway网关 WebSocket URL（配置后默认使用 `gateway.remote.url`）。
+- `--token <token>`：Gateway网关令牌（如需要）。
+- `--password <password>`：Gateway网关密码（密码认证）。
 - `--timeout <ms>`：RPC 超时时间。
 - `--json`：JSON 输出（推荐用于脚本）。
 

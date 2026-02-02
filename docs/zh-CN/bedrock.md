@@ -55,7 +55,7 @@ OpenClaw 可以通过 pi‑ai 的 **Bedrock Converse** 流式提供商使用 **A
 
 ## 设置（手动）
 
-1. 确保 AWS 凭证在 **Gateway 主机**上可用：
+1. 确保 AWS 凭证在 **Gateway网关主机**上可用：
 
 ```bash
 export AWS_ACCESS_KEY_ID="AKIA..."
@@ -164,7 +164,7 @@ openclaw models list
 
 - Bedrock 需要在你的 AWS 账户/区域中启用**模型访问**。
 - 自动发现需要 `bedrock:ListFoundationModels` 权限。
-- 如果你使用配置文件，请在 Gateway 主机上设置 `AWS_PROFILE`。
+- 如果你使用配置文件，请在 Gateway网关主机上设置 `AWS_PROFILE`。
 - OpenClaw 按以下顺序检测凭证来源：`AWS_BEARER_TOKEN_BEDROCK`，然后 `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY`，然后 `AWS_PROFILE`，最后是默认的 AWS SDK 链。
 - 推理支持取决于模型；请查看 Bedrock 模型卡了解当前功能。
 - 如果你偏好托管密钥流程，也可以在 Bedrock 前面放置一个兼容 OpenAI 的代理，将其配置为 OpenAI 提供商。

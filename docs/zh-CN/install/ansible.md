@@ -57,7 +57,7 @@ Ansible playbook 会安装并配置以下组件：
 5. **OpenClaw**（基于主机安装，非容器化）
 6. **Systemd 服务**（带安全加固的自动启动）
 
-注意：Gateway **直接运行在主机上**（不在 Docker 中），但智能体沙箱使用 Docker 进行隔离。详见 [沙箱](/gateway/sandboxing)。
+注意：Gateway网关 **直接运行在主机上**（不在 Docker 中），但智能体沙箱使用 Docker 进行隔离。详见 [沙箱](/gateway/sandboxing)。
 
 ## 安装后设置
 
@@ -69,9 +69,9 @@ sudo -i -u openclaw
 
 安装后脚本将引导你完成：
 
-1. **上手引导向导**：配置 OpenClaw 设置
+1. **新手引导向导**：配置 OpenClaw 设置
 2. **提供商登录**：连接 WhatsApp/Telegram/Discord/Signal
-3. **Gateway 测试**：验证安装
+3. **Gateway网关测试**：验证安装
 4. **Tailscale 设置**：连接到你的 VPN mesh 网络
 
 ### 常用命令
@@ -83,7 +83,7 @@ sudo systemctl status openclaw
 # 查看实时日志
 sudo journalctl -u openclaw -f
 
-# 重启 Gateway
+# 重启 Gateway网关
 sudo systemctl restart openclaw
 
 # 提供商登录（以 openclaw 用户运行）
@@ -96,7 +96,7 @@ openclaw channels login
 ### 4 层防御
 
 1. **防火墙（UFW）**：仅公开暴露 SSH (22) + Tailscale (41641/udp)
-2. **VPN（Tailscale）**：Gateway 仅可通过 VPN mesh 网络访问
+2. **VPN（Tailscale）**：Gateway网关仅可通过 VPN mesh 网络访问
 3. **Docker 隔离**：DOCKER-USER iptables 链阻止外部端口暴露
 4. **Systemd 加固**：NoNewPrivileges、PrivateTmp、非特权用户
 
@@ -108,11 +108,11 @@ openclaw channels login
 nmap -p- YOUR_SERVER_IP
 ```
 
-应当仅显示**端口 22**（SSH）为开放状态。所有其他服务（Gateway、Docker）均已锁定。
+应当仅显示**端口 22**（SSH）为开放状态。所有其他服务（Gateway网关、Docker）均已锁定。
 
 ### Docker 可用性
 
-Docker 用于**智能体沙箱**（隔离的工具执行），而非运行 Gateway 本身。Gateway 仅绑定到 localhost，通过 Tailscale VPN 访问。
+Docker 用于**智能体沙箱**（隔离的工具执行），而非运行 Gateway网关本身。Gateway网关仅绑定到 localhost，通过 Tailscale VPN 访问。
 
 沙箱配置详见 [多智能体沙箱与工具](/multi-agent-sandbox-tools)。
 
@@ -159,7 +159,7 @@ cd openclaw-ansible
 
 - 确保先通过 Tailscale VPN 访问
 - SSH 访问（端口 22）始终是允许的
-- Gateway **仅**可通过 Tailscale 访问，这是设计如此
+- Gateway网关 **仅**可通过 Tailscale 访问，这是设计如此
 
 ### 服务无法启动
 
@@ -210,6 +210,6 @@ openclaw channels login
 ## 相关内容
 
 - [openclaw-ansible](https://github.com/openclaw/openclaw-ansible) — 完整部署指南
-- [Docker](/install/docker) — 容器化 Gateway 设置
+- [Docker](/install/docker) — 容器化 Gateway网关设置
 - [沙箱](/gateway/sandboxing) — 智能体沙箱配置
 - [多智能体沙箱与工具](/multi-agent-sandbox-tools) — 按智能体隔离

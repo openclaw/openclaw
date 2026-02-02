@@ -90,7 +90,7 @@ Brave 提供免费额度和付费计划；请查看 Brave API 门户了解
 **推荐：**运行 `openclaw configure --section web`。它会将密钥存储在
 `~/.openclaw/openclaw.json` 的 `tools.web.search.apiKey` 下。
 
-**环境变量替代方案：**在 Gateway 进程环境中设置 `BRAVE_API_KEY`。对于 Gateway 安装，将其放入 `~/.openclaw/.env`（或你的
+**环境变量替代方案：**在 Gateway网关进程环境中设置 `BRAVE_API_KEY`。对于 Gateway网关安装，将其放入 `~/.openclaw/.env`（或你的
 服务环境）。参见[环境变量](/help/faq#how-does-openclaw-load-environment-variables)。
 
 ## 使用 Perplexity（直连或通过 OpenRouter）
@@ -128,7 +128,7 @@ Perplexity Sonar 模型内置网页搜索功能，并返回带有引用来源的
 }
 ```
 
-**环境变量替代方案：**在 Gateway 环境中设置 `OPENROUTER_API_KEY` 或 `PERPLEXITY_API_KEY`。对于 Gateway 安装，将其放入 `~/.openclaw/.env`。
+**环境变量替代方案：**在 Gateway网关环境中设置 `OPENROUTER_API_KEY` 或 `PERPLEXITY_API_KEY`。对于 Gateway网关安装，将其放入 `~/.openclaw/.env`。
 
 如果未设置基础 URL，OpenClaw 会根据 API 密钥来源选择默认值：
 

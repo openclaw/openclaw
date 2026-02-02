@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您需要通过 Tailscale + CoreDNS 实现广域发现（DNS-SD）
-  - 您正在为自定义发现域名设置分离 DNS（例如：openclaw.internal）
+  - 你需要通过 Tailscale + CoreDNS 实现广域发现（DNS-SD）
+  - 你正在为自定义发现域名设置分离 DNS（例如：openclaw.internal）
 summary: "`openclaw dns` 的 CLI 参考（广域发现辅助工具）"
 title: dns
 x-i18n:
@@ -19,7 +19,7 @@ x-i18n:
 
 相关内容：
 
-- Gateway 发现：[发现](/gateway/discovery)
+- Gateway网关发现：[发现](/gateway/discovery)
 - 广域发现配置：[配置](/gateway/configuration)
 
 ## 设置

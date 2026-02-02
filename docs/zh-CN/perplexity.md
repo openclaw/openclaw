@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您想使用 Perplexity Sonar 进行网络搜索
-  - 您需要设置 PERPLEXITY_API_KEY 或 OpenRouter
+  - 你想使用 Perplexity Sonar 进行网络搜索
+  - 你需要设置 PERPLEXITY_API_KEY 或 OpenRouter
 summary: Perplexity Sonar 的 web_search 设置
 title: Perplexity Sonar
 x-i18n:
@@ -15,7 +15,7 @@ x-i18n:
 
 # Perplexity Sonar
 
-OpenClaw 可以使用 Perplexity Sonar 作为 `web_search` 工具。您可以通过 Perplexity 的直连 API 或通过 OpenRouter 连接。
+OpenClaw 可以使用 Perplexity Sonar 作为 `web_search` 工具。你可以通过 Perplexity 的直连 API 或通过 OpenRouter 连接。
 
 ## API 选项
 
@@ -81,4 +81,4 @@ OpenClaw 可以使用 Perplexity Sonar 作为 `web_search` 工具。您可以通
 - `perplexity/sonar-pro`（默认） — 多步推理 + 网络搜索
 - `perplexity/sonar-reasoning-pro` — 深度研究
 
-请参阅 [Web 工具](/tools/web) 了解完整的 web_search 配置。
+请参阅 [Web 工具](/tools/web) 了解全部 web_search 配置。

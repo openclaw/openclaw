@@ -43,7 +43,7 @@ Reference the nix-openclaw README for module options.
 
 ## 你将获得
 
-- Gateway + macOS 应用 + 工具（whisper、spotify、cameras）— 全部固定版本
+- Gateway网关 + macOS 应用 + 工具（whisper、spotify、cameras）— 全部固定版本
 - 可在重启后保持运行的 Launchd 服务
 - 带声明式配置的插件系统
 - 即时回滚：`home-manager switch --rollback`

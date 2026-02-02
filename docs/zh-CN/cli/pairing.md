@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 您正在使用配对模式的私信功能，需要批准发送者
+  - 你正在使用配对模式的私信功能，需要批准发送者
 summary: "`openclaw pairing`（批准/列出配对请求）的 CLI 参考"
 title: pairing
 x-i18n:

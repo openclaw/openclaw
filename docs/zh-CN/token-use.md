@@ -22,7 +22,7 @@ OpenClaw 跟踪的是 **token**，而非字符。Token 因模型而异，但大�
 OpenClaw 在每次运行时组装自己的系统提示。它包括：
 
 - 工具列表 + 简短描述
-- 技能列表（仅元数据；指令通过 `read` 按需加载）
+- Skills 列表（仅元数据；指令通过 `read` 按需加载）
 - 自更新指令
 - 工作区 + 引导文件（`AGENTS.md`、`SOUL.md`、`TOOLS.md`、`IDENTITY.md`、`USER.md`、`HEARTBEAT.md`、`BOOTSTRAP.md`（仅新会话时加载））。大文件会被 `agents.defaults.bootstrapMaxChars`（默认值：20000）截断。
 - 时间（UTC + 用户时区）
@@ -42,7 +42,7 @@ OpenClaw 在每次运行时组装自己的系统提示。它包括：
 - 压缩摘要和裁剪产物
 - 提供商包装器或安全头部（不可见，但仍然计入）
 
-如需了解实际分解（按注入文件、工具、技能和系统提示大小），请使用 `/context list` 或 `/context detail`。参见[上下文](/concepts/context)。
+如需了解实际分解（按注入文件、工具、Skills 和系统提示大小），请使用 `/context list` 或 `/context detail`。参见[上下文](/concepts/context)。
 
 ## 如何查看当前 token 使用量
 
@@ -73,7 +73,7 @@ models.providers.<provider>.models[].cost
 
 提供商的提示缓存仅在缓存 TTL 窗口内有效。OpenClaw 可以选择性地运行**缓存 TTL 裁剪**：在缓存 TTL 过期后裁剪会话，然后重置缓存窗口，使后续请求可以复用新缓存的上下文，而不是重新缓存完整历史。这可以在会话空闲超过 TTL 后降低缓存写入费用。
 
-在 [Gateway 配置](/gateway/configuration)中进行配置，并在[会话裁剪](/concepts/session-pruning)中查看行为详情。
+在 [Gateway网关配置](/gateway/configuration)中进行配置，并在[会话裁剪](/concepts/session-pruning)中查看行为详情。
 
 心跳可以在空闲间隙中保持缓存**热活**。如果你的模型缓存 TTL 为 `1h`，将心跳间隔设置为略短于此的值（例如 `55m`），可以避免重新缓存完整提示，从而降低缓存写入费用。
 
@@ -99,7 +99,7 @@ agents:
 
 - 使用 `/compact` 来摘要长会话。
 - 在工作流中裁剪大型工具输出。
-- 保持技能描述简短（技能列表会注入到提示中）。
+- 保持 Skills 描述简短（Skills 列表会注入到提示中）。
 - 对于冗长的探索性工作，优先选择较小的模型。
 
-技能列表开销的精确计算公式请参阅[技能](/tools/skills)。
+Skills 列表开销的精确计算公式请参阅[Skills](/tools/skills)。

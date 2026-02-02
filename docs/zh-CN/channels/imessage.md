@@ -15,7 +15,7 @@ x-i18n:
 
 # iMessage（imsg）
 
-状态：外部 CLI 集成。Gateway 启动 `imsg rpc`（基于 stdio 的 JSON-RPC）。
+状态：外部 CLI 集成。Gateway网关启动 `imsg rpc`（基于 stdio 的 JSON-RPC）。
 
 ## 快速设置（新手）
 
@@ -23,7 +23,7 @@ x-i18n:
 2. 安装 `imsg`：
    - `brew install steipete/tap/imsg`
 3. 配置 OpenClaw 的 `channels.imessage.cliPath` 和 `channels.imessage.dbPath`。
-4. 启动 Gateway 并批准所有 macOS 提示（自动化 + 完全磁盘访问权限）。
+4. 启动 Gateway网关并批准所有 macOS 提示（自动化 + 完全磁盘访问权限）。
 
 最小配置：
 
@@ -68,7 +68,7 @@ x-i18n:
 ## 设置（快速路径）
 
 1. 确保此 Mac 上的"信息"已登录。
-2. 配置 iMessage 并启动 Gateway。
+2. 配置 iMessage 并启动 Gateway网关。
 
 ### 专用机器人 macOS 用户（用于隔离身份）
 
@@ -149,13 +149,13 @@ exec ssh -T gateway-host imsg "$@"
 
 #### 通过 Tailscale 连接远程 Mac（示例）
 
-如果 Gateway 运行在 Linux 主机/虚拟机上但 iMessage 必须运行在 Mac 上，Tailscale 是最简单的桥接方案：Gateway 通过 tailnet 与 Mac 通信，通过 SSH 运行 `imsg`，并通过 SCP 传回附件。
+如果 Gateway网关运行在 Linux 主机/虚拟机上但 iMessage 必须运行在 Mac 上，Tailscale 是最简单的桥接方案：Gateway网关通过 tailnet 与 Mac 通信，通过 SSH 运行 `imsg`，并通过 SCP 传回附件。
 
 架构：
 
 ```
 ┌──────────────────────────────┐          SSH (imsg rpc)          ┌──────────────────────────┐
-│ Gateway 主机（Linux/VM）      │──────────────────────────────────▶│ 装有 Messages + imsg 的 Mac │
+│ Gateway网关主机（Linux/VM）      │──────────────────────────────────▶│ 装有 Messages + imsg 的 Mac │
 │ - openclaw gateway           │          SCP（附件）              │ - Messages 已登录         │
 │ - channels.imessage.cliPath  │◀──────────────────────────────────│ - 远程登录已启用          │
 └──────────────────────────────┘                                   └──────────────────────────┘
@@ -216,7 +216,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 
 ## 工作原理（行为）
 
-- `imsg` 流式传输消息事件；Gateway 将其标准化为共享的渠道信封。
+- `imsg` 流式传输消息事件；Gateway网关将其标准化为共享的渠道信封。
 - 回复始终路由回同一个 chat id 或用户名。
 
 ## 类群组线程（`is_group=false`）

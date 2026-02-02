@@ -145,7 +145,7 @@ OpenClaw 会将其标记为冷却状态并移至下一个配置文件。
 
 ## 相关配置
 
-参阅 [Gateway 配置](/gateway/configuration) 了解：
+参阅 [Gateway网关配置](/gateway/configuration) 了解：
 
 - `auth.profiles` / `auth.order`
 - `auth.cooldowns.billingBackoffHours` / `auth.cooldowns.billingBackoffHoursByProvider`

@@ -15,7 +15,7 @@ x-i18n:
 
 # 斜杠命令
 
-命令由 Gateway 处理。大多数命令必须作为以 `/` 开头的**独立**消息发送。
+命令由 Gateway网关处理。大多数命令必须作为以 `/` 开头的**独立**消息发送。
 仅限主机使用的 bash 聊天命令使用 `! <cmd>`（`/bash <cmd>` 为别名）。
 
 有两个相关系统：
@@ -55,8 +55,8 @@ x-i18n:
   - Auto：Discord/Telegram 启用；Slack 关闭（直到你添加斜杠命令）；不支持原生命令的提供商忽略此项。
   - 设置 `channels.discord.commands.native`、`channels.telegram.commands.native` 或 `channels.slack.commands.native` 可按提供商覆盖（布尔值或 `"auto"`）。
   - `false` 会在启动时清除 Discord/Telegram 上之前注册的命令。Slack 命令在 Slack 应用中管理，不会自动移除。
-- `commands.nativeSkills`（默认 `"auto"`）在支持的平台上将**技能**命令注册为原生命令。
-  - Auto：Discord/Telegram 启用；Slack 关闭（Slack 需要为每个技能创建一个斜杠命令）。
+- `commands.nativeSkills`（默认 `"auto"`）在支持的平台上将**Skills**命令注册为原生命令。
+  - Auto：Discord/Telegram 启用；Slack 关闭（Slack 需要为每个 Skills 创建一个斜杠命令）。
   - 设置 `channels.discord.commands.nativeSkills`、`channels.telegram.commands.nativeSkills` 或 `channels.slack.commands.nativeSkills` 可按提供商覆盖（布尔值或 `"auto"`）。
 - `commands.bash`（默认 `false`）启用 `! <cmd>` 来运行主机 shell 命令（`/bash <cmd>` 为别名；需要 `tools.elevated` 允许列表）。
 - `commands.bashForegroundMs`（默认 `2000`）控制 bash 在切换到后台模式之前等待的时长（`0` 表示立即后台执行）。
@@ -70,11 +70,11 @@ x-i18n:
 
 - `/help`
 - `/commands`
-- `/skill <name> [input]`（按名称运行技能）
+- `/skill <name> [input]`（按名称运行 Skills）
 - `/status`（显示当前状态；在可用时包含当前模型提供商的用量/配额信息）
 - `/allowlist`（列出/添加/移除允许列表条目）
 - `/approve <id> allow-once|allow-always|deny`（处理执行审批提示）
-- `/context [list|detail|json]`（解释"上下文"；`detail` 显示每个文件 + 每个工具 + 每个技能 + 系统提示的大小）
+- `/context [list|detail|json]`（解释"上下文"；`detail` 显示每个文件 + 每个工具 + 每个 Skills + 系统提示的大小）
 - `/whoami`（显示你的发送者 ID；别名：`/id`）
 - `/subagents list|stop|log|info|send`（检查、停止、查看日志或向当前会话的子智能体运行发送消息）
 - `/config show|get|set|unset`（将配置持久化到磁盘，仅所有者可用；需要 `commands.config: true`）
@@ -122,10 +122,10 @@ x-i18n:
   - 示例：`hey /status` 会触发状态回复，剩余文本继续通过正常流程处理。
 - 目前支持：`/help`、`/commands`、`/status`、`/whoami`（`/id`）。
 - 未授权的纯命令消息会被静默忽略，内联的 `/...` 标记会被当作纯文本处理。
-- **技能命令：**`user-invocable` 技能会作为斜杠命令暴露。名称会被规范化为 `a-z0-9_`（最多 32 个字符）；冲突时会添加数字后缀（例如 `_2`）。
-  - `/skill <name> [input]` 按名称运行技能（在原生命令限制阻止创建逐技能命令时很有用）。
-  - 默认情况下，技能命令会作为普通请求转发给模型。
-  - 技能可以选择性地声明 `command-dispatch: tool` 将命令直接路由到工具（确定性执行，无需模型）。
+- **Skills 命令：**`user-invocable` Skills 会作为斜杠命令暴露。名称会被规范化为 `a-z0-9_`（最多 32 个字符）；冲突时会添加数字后缀（例如 `_2`）。
+  - `/skill <name> [input]` 按名称运行 Skills（在原生命令限制阻止创建逐 Skills 命令时很有用）。
+  - 默认情况下，Skills 命令会作为普通请求转发给模型。
+  - Skills 可以选择性地声明 `command-dispatch: tool` 将命令直接路由到工具（确定性执行，无需模型）。
   - 示例：`/prose`（OpenProse 插件）——参见 [OpenProse](/prose)。
 - **原生命令参数：**Discord 使用自动补全来处理动态选项（省略必需参数时使用按钮菜单）。Telegram 和 Slack 在命令支持选项且省略参数时显示按钮菜单。
 

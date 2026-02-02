@@ -43,7 +43,7 @@ openclaw plugins install ./extensions/tlon
 1. 安装 Tlon 插件。
 2. 获取你的 ship URL 和登录代码。
 3. 配置 `channels.tlon`。
-4. 重启 Gateway。
+4. 重启 Gateway网关。
 5. 向机器人发送私信或在群组渠道中提及它。
 
 最小配置（单账户）：

@@ -16,9 +16,9 @@ x-i18n:
 
 ## 功能说明
 
-- `/elevated on` 在 Gateway 主机上运行并保留 exec 审批（与 `/elevated ask` 相同）。
-- `/elevated full` 在 Gateway 主机上运行**并且**自动批准 exec（跳过 exec 审批）。
-- `/elevated ask` 在 Gateway 主机上运行但保留 exec 审批（与 `/elevated on` 相同）。
+- `/elevated on` 在 Gateway网关主机上运行并保留 exec 审批（与 `/elevated ask` 相同）。
+- `/elevated full` 在 Gateway网关主机上运行**并且**自动批准 exec（跳过 exec 审批）。
+- `/elevated ask` 在 Gateway网关主机上运行但保留 exec 审批（与 `/elevated on` 相同）。
 - `on`/`ask` **不会**强制设置 `exec.security=full`；已配置的安全/审批策略仍然适用。
 - 仅在智能体处于**沙箱环境**时改变行为（否则 exec 已经在主机上运行）。
 - 指令形式：`/elevated on|off|ask|full`、`/elev on|off|ask|full`。
@@ -30,7 +30,7 @@ x-i18n:
 - **每会话状态**：`/elevated on|off|ask|full` 为当前会话密钥设置提升级别。
 - **内联指令**：消息中的 `/elevated on|ask|full` 仅对该条消息生效。
 - **群组**：在群聊中，仅当智能体被提及时才响应提升指令。绕过提及要求的纯命令消息视为已提及。
-- **主机执行**：提升模式将 `exec` 强制在 Gateway 主机上执行；`full` 还会设置 `security=full`。
+- **主机执行**：提升模式将 `exec` 强制在 Gateway网关主机上执行；`full` 还会设置 `security=full`。
 - **审批**：`full` 跳过 exec 审批；`on`/`ask` 在允许列表/审批规则要求时遵守审批流程。
 - **非沙箱智能体**：对执行位置无影响；仅影响门控、日志和状态。
 - **工具策略仍然适用**：如果 `exec` 被工具策略拒绝，则无法使用提升模式。

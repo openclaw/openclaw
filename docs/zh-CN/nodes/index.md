@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 将 iOS/Android 节点配对到 Gateway
+  - 将 iOS/Android 节点配对到 Gateway网关
   - 使用节点 canvas/相机为智能体提供上下文
   - 添加新的节点命令或 CLI 辅助工具
 summary: 节点：配对、能力、权限，以及 canvas/相机/屏幕/系统的 CLI 辅助工具
@@ -16,20 +16,20 @@ x-i18n:
 
 # 节点
 
-**节点**是一个伴侣设备（macOS/iOS/Android/无头），通过 **WebSocket**（与操作员相同的端口）以 `role: "node"` 连接到 Gateway，并通过 `node.invoke` 暴露命令接口（例如 `canvas.*`、`camera.*`、`system.*`）。协议详情：[Gateway 协议](/gateway/protocol)。
+**节点**是一个伴侣设备（macOS/iOS/Android/无头），通过 **WebSocket**（与操作员相同的端口）以 `role: "node"` 连接到 Gateway网关，并通过 `node.invoke` 暴露命令接口（例如 `canvas.*`、`camera.*`、`system.*`）。协议详情：[Gateway网关协议](/gateway/protocol)。
 
 旧版传输：[Bridge 协议](/gateway/bridge-protocol)（TCP JSONL；当前节点已弃用/移除）。
 
-macOS 也可以在**节点模式**下运行：菜单栏应用连接到 Gateway 的 WS 服务器，并将其本地 canvas/相机命令作为节点暴露（因此 `openclaw nodes …` 可以对该 Mac 使用）。
+macOS 也可以在**节点模式**下运行：菜单栏应用连接到 Gateway网关的 WS 服务器，并将其本地 canvas/相机命令作为节点暴露（因此 `openclaw nodes …` 可以对该 Mac 使用）。
 
 注意事项：
 
-- 节点是**外围设备**，不是 Gateway。它们不运行 Gateway 服务。
-- Telegram/WhatsApp 等消息到达的是 **Gateway**，而非节点。
+- 节点是**外围设备**，不是 Gateway网关。它们不运行 Gateway网关服务。
+- Telegram/WhatsApp 等消息到达的是 **Gateway网关**，而非节点。
 
 ## 配对 + 状态
 
-**WS 节点使用设备配对。** 节点在 `connect` 时提供设备身份；Gateway 为 `role: node` 创建设备配对请求。通过设备 CLI（或 UI）审批。
+**WS 节点使用设备配对。** 节点在 `connect` 时提供设备身份；Gateway网关为 `role: node` 创建设备配对请求。通过设备 CLI（或 UI）审批。
 
 快速 CLI：
 
@@ -44,15 +44,15 @@ openclaw nodes describe --node <idOrNameOrIp>
 注意事项：
 
 - `nodes status` 在设备配对角色包含 `node` 时将节点标记为**已配对**。
-- `node.pair.*`（CLI：`openclaw nodes pending/approve/reject`）是一个独立的 Gateway 拥有的节点配对存储；它**不会**拦截 WS `connect` 握手。
+- `node.pair.*`（CLI：`openclaw nodes pending/approve/reject`）是一个独立的 Gateway网关拥有的节点配对存储；它**不会**拦截 WS `connect` 握手。
 
 ## 远程节点主机（system.run）
 
-当你的 Gateway 运行在一台机器上而你希望命令在另一台机器上执行时，使用**节点主机**。模型仍然与 **Gateway** 通信；当选择 `host=node` 时，Gateway 将 `exec` 调用转发给**节点主机**。
+当你的 Gateway网关运行在一台机器上而你希望命令在另一台机器上执行时，使用**节点主机**。模型仍然与 **Gateway网关** 通信；当选择 `host=node` 时，Gateway网关将 `exec` 调用转发给**节点主机**。
 
 ### 各部分运行位置
 
-- **Gateway 主机**：接收消息，运行模型，路由工具调用。
+- **Gateway网关主机**：接收消息，运行模型，路由工具调用。
 - **节点主机**：在节点机器上执行 `system.run`/`system.which`。
 - **审批**：通过节点主机上的 `~/.openclaw/exec-approvals.json` 执行。
 
@@ -73,7 +73,7 @@ openclaw node restart
 
 ### 配对 + 命名
 
-在 Gateway 主机上：
+在 Gateway网关主机上：
 
 ```bash
 openclaw nodes pending
@@ -84,11 +84,11 @@ openclaw nodes list
 命名选项：
 
 - 在 `openclaw node run` / `openclaw node install` 上使用 `--display-name`（持久保存在节点的 `~/.openclaw/node.json` 中）。
-- `openclaw nodes rename --node <id|name|ip> --name "Build Node"`（Gateway 覆盖）。
+- `openclaw nodes rename --node <id|name|ip> --name "Build Node"`（Gateway网关覆盖）。
 
 ### 将命令加入允许列表
 
-执行审批是**按节点主机**的。从 Gateway 添加允许列表条目：
+执行审批是**按节点主机**的。从 Gateway网关添加允许列表条目：
 
 ```bash
 openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/uname"
@@ -99,7 +99,7 @@ openclaw approvals allowlist add --node <id|name|ip> "/usr/bin/sw_vers"
 
 ### 将执行指向节点
 
-配置默认值（Gateway 配置）：
+配置默认值（Gateway网关配置）：
 
 ```bash
 openclaw config set tools.exec.host node
@@ -249,7 +249,7 @@ macOS 节点暴露 `system.run`、`system.notify` 和 `system.execApprovals.get/
 
 ```bash
 openclaw nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
-openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
+openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway网关 ready"
 ```
 
 注意事项：
@@ -294,7 +294,7 @@ openclaw config unset agents.list[0].tools.exec.node
 
 ## 无头节点主机（跨平台）
 
-OpenClaw 可以运行**无头节点主机**（无 UI），它连接到 Gateway WebSocket 并暴露 `system.run` / `system.which`。这适用于 Linux/Windows 或在服务器旁运行一个最小节点。
+OpenClaw 可以运行**无头节点主机**（无 UI），它连接到 Gateway网关 WebSocket 并暴露 `system.run` / `system.which`。这适用于 Linux/Windows 或在服务器旁运行一个最小节点。
 
 启动方式：
 
@@ -304,13 +304,13 @@ openclaw node run --host <gateway-host> --port 18789
 
 注意事项：
 
-- 仍然需要配对（Gateway 会显示节点审批提示）。
-- 节点主机将其节点 ID、令牌、显示名称和 Gateway 连接信息存储在 `~/.openclaw/node.json` 中。
+- 仍然需要配对（Gateway网关会显示节点审批提示）。
+- 节点主机将其节点 ID、令牌、显示名称和 Gateway网关连接信息存储在 `~/.openclaw/node.json` 中。
 - 执行审批通过 `~/.openclaw/exec-approvals.json` 在本地执行（参见[执行审批](/tools/exec-approvals)）。
 - 在 macOS 上，无头节点主机在伴侣应用执行主机可达时优先使用它，不可用时回退到本地执行。设置 `OPENCLAW_NODE_EXEC_HOST=app` 以要求使用应用，或设置 `OPENCLAW_NODE_EXEC_FALLBACK=0` 以禁用回退。
-- 当 Gateway WS 使用 TLS 时，添加 `--tls` / `--tls-fingerprint`。
+- 当 Gateway网关 WS 使用 TLS 时，添加 `--tls` / `--tls-fingerprint`。
 
 ## Mac 节点模式
 
-- macOS 菜单栏应用作为节点连接到 Gateway WS 服务器（因此 `openclaw nodes …` 可以对该 Mac 使用）。
-- 在远程模式下，应用为 Gateway 端口打开 SSH 隧道并连接到 `localhost`。
+- macOS 菜单栏应用作为节点连接到 Gateway网关 WS 服务器（因此 `openclaw nodes …` 可以对该 Mac 使用）。
+- 在远程模式下，应用为 Gateway网关端口打开 SSH 隧道并连接到 `localhost`。

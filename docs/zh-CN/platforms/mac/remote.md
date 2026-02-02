@@ -1,7 +1,7 @@
 ---
 read_when:
   - 设置或调试远程 Mac 控制
-summary: macOS 应用通过 SSH 远程控制 OpenClaw Gateway 的流程
+summary: macOS 应用通过 SSH 远程控制 OpenClaw Gateway网关的流程
 title: 远程控制
 x-i18n:
   generated_at: "2026-02-01T21:33:20Z"
@@ -14,20 +14,20 @@ x-i18n:
 
 # 远程 OpenClaw（macOS ⇄ 远程主机）
 
-此流程让 macOS 应用充当运行在另一台主机（桌面/服务器）上的 OpenClaw Gateway 的完整远程控制器。这是应用的 **Remote over SSH**（远程运行）功能。所有功能——健康检查、语音唤醒转发和 Web Chat——都复用 _设置 → 通用_ 中相同的远程 SSH 配置。
+此流程让 macOS 应用充当运行在另一台主机（桌面/服务器）上的 OpenClaw Gateway网关的完整远程控制器。这是应用的 **Remote over SSH**（远程运行）功能。所有功能——健康检查、语音唤醒转发和 Web Chat——都复用 _设置 → 通用_ 中相同的远程 SSH 配置。
 
 ## 模式
 
 - **本地（此 Mac）**：所有内容在笔记本电脑上运行，无需 SSH。
 - **Remote over SSH（默认）**：OpenClaw 命令在远程主机上执行。Mac 应用使用 `-o BatchMode` 加上你选择的身份/密钥打开 SSH 连接，并进行本地端口转发。
-- **Remote direct (ws/wss)**：无 SSH 隧道。Mac 应用直接连接到 Gateway URL（例如通过 Tailscale Serve 或公共 HTTPS 反向代理）。
+- **Remote direct (ws/wss)**：无 SSH 隧道。Mac 应用直接连接到 Gateway网关 URL（例如通过 Tailscale Serve 或公共 HTTPS 反向代理）。
 
 ## 远程传输方式
 
 远程模式支持两种传输方式：
 
-- **SSH 隧道**（默认）：使用 `ssh -N -L ...` 将 Gateway 端口转发到 localhost。由于隧道是回环的，Gateway 会将节点 IP 识别为 `127.0.0.1`。
-- **Direct (ws/wss)**：直接连接到 Gateway URL。Gateway 会看到真实的客户端 IP。
+- **SSH 隧道**（默认）：使用 `ssh -N -L ...` 将 Gateway网关端口转发到 localhost。由于隧道是 local loopback 的，Gateway网关会将节点 IP 识别为 `127.0.0.1`。
+- **Direct (ws/wss)**：直接连接到 Gateway网关 URL。Gateway网关会看到真实的客户端 IP。
 
 ## 远程主机的前提条件
 
@@ -41,8 +41,8 @@ x-i18n:
 2. 在 **OpenClaw runs** 下，选择 **Remote over SSH** 并设置：
    - **传输方式**：**SSH 隧道** 或 **Direct (ws/wss)**。
    - **SSH 目标**：`user@host`（可选 `:port`）。
-     - 如果 Gateway 在同一局域网中并通过 Bonjour 广播，可从发现列表中选择以自动填充此字段。
-   - **Gateway URL**（仅 Direct 模式）：`wss://gateway.example.ts.net`（或局域网使用 `ws://...`）。
+     - 如果 Gateway网关在同一局域网中并通过 Bonjour 广播，可从发现列表中选择以自动填充此字段。
+   - **Gateway网关 URL**（仅 Direct 模式）：`wss://gateway.example.ts.net`（或局域网使用 `ws://...`）。
    - **身份文件**（高级）：密钥路径。
    - **项目根目录**（高级）：用于命令执行的远程代码仓库路径。
    - **CLI 路径**（高级）：可选的 `openclaw` 可执行入口/二进制文件路径（广播时自动填充）。
@@ -51,19 +51,19 @@ x-i18n:
 
 ## Web Chat
 
-- **SSH 隧道**：Web Chat 通过转发的 WebSocket 控制端口（默认 18789）连接到 Gateway。
-- **Direct (ws/wss)**：Web Chat 直接连接到配置的 Gateway URL。
+- **SSH 隧道**：Web Chat 通过转发的 WebSocket 控制端口（默认 18789）连接到 Gateway网关。
+- **Direct (ws/wss)**：Web Chat 直接连接到配置的 Gateway网关 URL。
 - 不再有单独的 WebChat HTTP 服务器。
 
 ## 权限
 
-- 远程主机需要与本地相同的 TCC 授权（自动化、辅助功能、屏幕录制、麦克风、语音识别、通知）。在该机器上运行上手引导以一次性授予权限。
+- 远程主机需要与本地相同的 TCC 授权（自动化、辅助功能、屏幕录制、麦克风、语音识别、通知）。在该机器上运行新手引导以一次性授予权限。
 - 节点通过 `node.list` / `node.describe` 广播其权限状态，以便智能体了解可用功能。
 
 ## 安全注意事项
 
-- 建议在远程主机上绑定回环地址，并通过 SSH 或 Tailscale 连接。
-- 如果将 Gateway 绑定到非回环接口，请要求令牌/密码认证。
+- 建议在远程主机上绑定 local loopback，并通过 SSH 或 Tailscale 连接。
+- 如果将 Gateway网关绑定到非 local loopback 接口，请要求令牌/密码认证。
 - 参阅 [安全](/gateway/security) 和 [Tailscale](/gateway/tailscale)。
 
 ## WhatsApp 登录流程（远程）
@@ -75,8 +75,8 @@ x-i18n:
 
 - **exit 127 / not found**：`openclaw` 不在非登录 shell 的 PATH 中。将其添加到 `/etc/paths`、你的 shell rc 文件中，或创建符号链接到 `/usr/local/bin`/`/opt/homebrew/bin`。
 - **健康探测失败**：检查 SSH 可达性、PATH，以及 Baileys 是否已登录（`openclaw status --json`）。
-- **Web Chat 卡住**：确认 Gateway 在远程主机上正在运行，且转发端口与 Gateway WS 端口匹配；界面需要健康的 WS 连接。
-- **节点 IP 显示 127.0.0.1**：使用 SSH 隧道时这是预期行为。如果你希望 Gateway 看到真实客户端 IP，请将**传输方式**切换为 **Direct (ws/wss)**。
+- **Web Chat 卡住**：确认 Gateway网关在远程主机上正在运行，且转发端口与 Gateway网关 WS 端口匹配；界面需要健康的 WS 连接。
+- **节点 IP 显示 127.0.0.1**：使用 SSH 隧道时这是预期行为。如果你希望 Gateway网关看到真实客户端 IP，请将**传输方式**切换为 **Direct (ws/wss)**。
 - **语音唤醒**：触发短语在远程模式下会自动转发；无需单独的转发器。
 
 ## 通知声音

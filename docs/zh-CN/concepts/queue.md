@@ -82,7 +82,7 @@ summarize 会保留一个被丢弃消息的简短要点列表，并将其作为�
 
 ## 作用范围与保证
 
-- 适用于所有使用 Gateway 回复管道的入站渠道的自动回复智能体运行（WhatsApp 网页版、Telegram、Slack、Discord、Signal、iMessage、网页聊天等）。
+- 适用于所有使用 Gateway网关回复管道的入站渠道的自动回复智能体运行（WhatsApp 网页版、Telegram、Slack、Discord、Signal、iMessage、网页聊天等）。
 - 默认通道（`main`）在进程范围内适用于入站消息和主心跳；设置 `agents.defaults.maxConcurrent` 以允许多个会话并行。
 - 可能存在其他通道（如 `cron`、`subagent`），以便后台任务可以并行运行而不阻塞入站回复。
 - 按会话通道保证同一时间只有一个智能体运行接触给定会话。

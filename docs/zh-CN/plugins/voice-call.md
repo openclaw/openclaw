@@ -27,15 +27,15 @@ x-i18n:
 快速理解模型：
 
 - 安装插件
-- 重启 Gateway
+- 重启 Gateway网关
 - 在 `plugins.entries.voice-call.config` 下进行配置
 - 使用 `openclaw voicecall ...` 或 `voice_call` 工具
 
 ## 运行位置（本地 vs 远程）
 
-语音通话插件运行在 **Gateway 进程内部**。
+语音通话插件运行在 **Gateway网关进程内部**。
 
-如果你使用远程 Gateway，请在**运行 Gateway 的机器**上安装和配置插件，然后重启 Gateway 以加载它。
+如果你使用远程 Gateway网关，请在**运行 Gateway网关的机器**上安装和配置插件，然后重启 Gateway网关以加载它。
 
 ## 安装
 
@@ -45,7 +45,7 @@ x-i18n:
 openclaw plugins install @openclaw/voice-call
 ```
 
-安装后重启 Gateway。
+安装后重启 Gateway网关。
 
 ### 方式 B：从本地文件夹安装（开发环境，不复制文件）
 
@@ -54,7 +54,7 @@ openclaw plugins install ./extensions/voice-call
 cd ./extensions/voice-call && pnpm install
 ```
 
-安装后重启 Gateway。
+安装后重启 Gateway网关。
 
 ## 配置
 
@@ -114,7 +114,7 @@ cd ./extensions/voice-call && pnpm install
 - `mock` 是本地开发提供商（不进行网络调用）。
 - `skipSignatureVerification` 仅用于本地测试。
 - 如果你使用 ngrok 免费版，请将 `publicUrl` 设置为精确的 ngrok URL；签名验证始终强制执行。
-- `tunnel.allowNgrokFreeTierLoopbackBypass: true` 允许在 `tunnel.provider="ngrok"` 且 `serve.bind` 为回环地址（ngrok 本地代理）时，接受签名无效的 Twilio webhook。**仅用于本地开发**。
+- `tunnel.allowNgrokFreeTierLoopbackBypass: true` 允许在 `tunnel.provider="ngrok"` 且 `serve.bind` 为 local loopback（ngrok 本地代理）时，接受签名无效的 Twilio webhook。**仅用于本地开发**。
 - Ngrok 免费版 URL 可能会变化或出现插页行为；如果 `publicUrl` 偏移，Twilio 签名将会失败。生产环境建议使用稳定域名或 Tailscale funnel。
 
 ## 通话的 TTS
@@ -239,9 +239,9 @@ openclaw voicecall expose --mode funnel
 - `end_call`（callId）
 - `get_status`（callId）
 
-本仓库附带了对应的技能文档，位于 `skills/voice-call/SKILL.md`。
+本仓库附带了对应的 Skills 文档，位于 `skills/voice-call/SKILL.md`。
 
-## Gateway RPC
+## Gateway网关 RPC
 
 - `voicecall.initiate`（`to?`、`message`、`mode?`）
 - `voicecall.continue`（`callId`、`message`）

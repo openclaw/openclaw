@@ -1,10 +1,10 @@
 ---
 read_when:
-  - 实现或更新 Gateway WebSocket 客户端
+  - 实现或更新 Gateway网关 WebSocket 客户端
   - 调试协议不匹配或连接失败问题
   - 重新生成协议 schema/模型
-summary: Gateway WebSocket 协议：握手、帧、版本控制
-title: Gateway 协议
+summary: Gateway网关 WebSocket 协议：握手、帧、版本控制
+title: Gateway网关协议
 x-i18n:
   generated_at: "2026-02-01T20:35:39Z"
   model: claude-opus-4-5
@@ -14,9 +14,9 @@ x-i18n:
   workflow: 14
 ---
 
-# Gateway 协议 (WebSocket)
+# Gateway网关协议 (WebSocket)
 
-Gateway WebSocket 协议是 OpenClaw 的**统一控制平面 + 节点传输层**。所有客户端（CLI、Web UI、macOS 应用、iOS/Android 节点、无头节点）均通过 WebSocket 连接，并在握手时声明其**角色** + **作用域**。
+Gateway网关 WebSocket 协议是 OpenClaw 的**统一控制平面 + 节点传输层**。所有客户端（CLI、Web UI、macOS 应用、iOS/Android 节点、无头节点）均通过 WebSocket 连接，并在握手时声明其**角色** + **作用域**。
 
 ## 传输
 
@@ -25,7 +25,7 @@ Gateway WebSocket 协议是 OpenClaw 的**统一控制平面 + 节点传输层**
 
 ## 握手 (connect)
 
-Gateway → 客户端（连接前挑战）：
+Gateway网关 → 客户端（连接前挑战）：
 
 ```json
 {
@@ -35,7 +35,7 @@ Gateway → 客户端（连接前挑战）：
 }
 ```
 
-客户端 → Gateway：
+客户端 → Gateway网关：
 
 ```json
 {
@@ -70,7 +70,7 @@ Gateway → 客户端（连接前挑战）：
 }
 ```
 
-Gateway → 客户端：
+Gateway网关 → 客户端：
 
 ```json
 {
@@ -161,7 +161,7 @@ Gateway → 客户端：
 - `commands`：允许调用的命令白名单。
 - `permissions`：细粒度开关（例如 `screen.record`、`camera.capture`）。
 
-Gateway 将这些视为**声明**，并在服务端执行白名单校验。
+Gateway网关将这些视为**声明**，并在服务端执行白名单校验。
 
 ## 在线状态
 
@@ -170,11 +170,11 @@ Gateway 将这些视为**声明**，并在服务端执行白名单校验。
 
 ### 节点辅助方法
 
-- 节点可以调用 `skills.bins` 获取当前技能可执行文件列表，用于自动允许检查。
+- 节点可以调用 `skills.bins` 获取当前 Skills 可执行文件列表，用于自动允许检查。
 
 ## 执行审批
 
-- 当执行请求需要审批时，Gateway 会广播 `exec.approval.requested`。
+- 当执行请求需要审批时，Gateway网关会广播 `exec.approval.requested`。
 - Operator 客户端通过调用 `exec.approval.resolve` 进行处理（需要 `operator.approvals` 作用域）。
 
 ## 版本控制
@@ -189,23 +189,23 @@ Gateway 将这些视为**声明**，并在服务端执行白名单校验。
 ## 认证
 
 - 如果设置了 `OPENCLAW_GATEWAY_TOKEN`（或 `--token`），`connect.params.auth.token` 必须匹配，否则连接将被关闭。
-- 配对完成后，Gateway 会签发一个**设备令牌**，其作用域限定为连接的角色 + 作用域。该令牌在 `hello-ok.auth.deviceToken` 中返回，客户端应持久化保存以供后续连接使用。
+- 配对完成后，Gateway网关会签发一个**设备令牌**，其作用域限定为连接的角色 + 作用域。该令牌在 `hello-ok.auth.deviceToken` 中返回，客户端应持久化保存以供后续连接使用。
 - 设备令牌可通过 `device.token.rotate` 和 `device.token.revoke` 进行轮换/撤销（需要 `operator.pairing` 作用域）。
 
 ## 设备身份 + 配对
 
 - 节点应包含一个稳定的设备身份（`device.id`），由密钥对指纹派生。
-- Gateway 按设备 + 角色签发令牌。
+- Gateway网关按设备 + 角色签发令牌。
 - 新设备 ID 需要配对审批，除非启用了本地自动审批。
-- **本地**连接包括回环地址和 Gateway 主机自身的 tailnet 地址（因此同一主机的 tailnet 绑定仍可自动审批）。
+- **本地**连接包括 local loopback 和 Gateway网关主机自身的 tailnet 地址（因此同一主机的 tailnet 绑定仍可自动审批）。
 - 所有 WebSocket 客户端在 `connect` 时必须包含 `device` 身份（operator + node）。控制 UI 仅在启用 `gateway.controlUi.allowInsecureAuth` 时可以省略（或使用 `gateway.controlUi.dangerouslyDisableDeviceAuth` 作为紧急措施）。
 - 非本地连接必须对服务端提供的 `connect.challenge` nonce 进行签名。
 
 ## TLS + 证书固定
 
 - WebSocket 连接支持 TLS。
-- 客户端可选择固定 Gateway 证书指纹（参见 `gateway.tls` 配置以及 `gateway.remote.tlsFingerprint` 或 CLI `--tls-fingerprint`）。
+- 客户端可选择固定 Gateway网关证书指纹（参见 `gateway.tls` 配置以及 `gateway.remote.tlsFingerprint` 或 CLI `--tls-fingerprint`）。
 
 ## 范围
 
-此协议暴露了**完整的 Gateway API**（状态、渠道、模型、聊天、智能体、会话、节点、审批等）。确切的 API 接口由 `src/gateway/protocol/schema.ts` 中的 TypeBox schema 定义。
+此协议暴露了**完整的 Gateway网关 API**（状态、渠道、模型、聊天、智能体、会话、节点、审批等）。确切的 API 接口由 `src/gateway/protocol/schema.ts` 中的 TypeBox schema 定义。

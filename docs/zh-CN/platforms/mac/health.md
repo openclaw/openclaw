@@ -1,7 +1,7 @@
 ---
 read_when:
   - 调试 Mac 应用健康指示器
-summary: macOS 应用如何报告 Gateway/Baileys 健康状态
+summary: macOS 应用如何报告 Gateway网关/Baileys 健康状态
 title: 健康检查
 x-i18n:
   generated_at: "2026-02-01T21:32:43Z"
@@ -38,4 +38,4 @@ x-i18n:
 
 ## 不确定时
 
-- 您仍然可以使用 [Gateway 健康检查](/gateway/health) 中的 CLI 流程（`openclaw status`、`openclaw status --deep`、`openclaw health --json`），并跟踪 `/tmp/openclaw/openclaw-*.log` 中的 `web-heartbeat` / `web-reconnect`。
+- 你仍然可以使用 [Gateway网关健康检查](/gateway/health) 中的 CLI 流程（`openclaw status`、`openclaw status --deep`、`openclaw health --json`），并跟踪 `/tmp/openclaw/openclaw-*.log` 中的 `web-heartbeat` / `web-reconnect`。

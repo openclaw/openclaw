@@ -1,7 +1,7 @@
 ---
 read_when:
   - 你需要按提供商查阅模型设置参考
-  - 你需要模型提供商的示例配置或 CLI 上手引导命令
+  - 你需要模型提供商的示例配置或 CLI 新手引导命令
 summary: 模型提供商概览，包含示例配置和 CLI 流程
 title: 模型提供商
 x-i18n:
@@ -97,7 +97,7 @@ OpenClaw 自带 pi‑ai 目录。这些提供商**无需**配置 `models.provide
 - Gemini CLI OAuth 作为捆绑插件提供（`google-gemini-cli-auth`，默认禁用）。
   - 启用：`openclaw plugins enable google-gemini-cli-auth`
   - 登录：`openclaw models auth login --provider google-gemini-cli --set-default`
-  - 注意：你**无需**将客户端 ID 或密钥粘贴到 `openclaw.json` 中。CLI 登录流程会将令牌存储在 Gateway 主机的认证配置文件中。
+  - 注意：你**无需**将客户端 ID 或密钥粘贴到 `openclaw.json` 中。CLI 登录流程会将令牌存储在 Gateway网关主机的认证配置文件中。
 
 ### Z.AI (GLM)
 
@@ -314,4 +314,4 @@ openclaw models set opencode/claude-opus-4-5
 openclaw models list
 ```
 
-另请参见：[/gateway/configuration](/gateway/configuration) 了解完整的配置示例。
+另请参见：[/gateway/configuration](/gateway/configuration) 了解全部配置示例。

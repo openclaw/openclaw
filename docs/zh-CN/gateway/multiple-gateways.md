@@ -1,9 +1,9 @@
 ---
 read_when:
-  - 在同一台机器上运行多个 Gateway
-  - 需要为每个 Gateway 提供独立的配置/状态/端口
-summary: 在同一主机上运行多个 OpenClaw Gateway（隔离、端口和配置文件）
-title: 多个 Gateway
+  - 在同一台机器上运行多个 Gateway网关
+  - 需要为每个 Gateway网关提供独立的配置/状态/端口
+summary: 在同一主机上运行多个 OpenClaw Gateway网关（隔离、端口和配置文件）
+title: 多个 Gateway网关
 x-i18n:
   generated_at: "2026-02-01T20:35:02Z"
   model: claude-opus-4-5
@@ -13,9 +13,9 @@ x-i18n:
   workflow: 14
 ---
 
-# 多个 Gateway（同一主机）
+# 多个 Gateway网关（同一主机）
 
-大多数场景只需使用一个 Gateway，因为单个 Gateway 可以处理多个消息连接和智能体。如果您需要更强的隔离性或冗余能力（例如救援机器人），请使用独立的配置文件/端口运行多个 Gateway。
+大多数场景只需使用一个 Gateway网关，因为单个 Gateway网关可以处理多个消息连接和智能体。如果你需要更强的隔离性或冗余能力（例如救援机器人），请使用独立的配置文件/端口运行多个 Gateway网关。
 
 ## 隔离检查清单（必需）
 
@@ -50,7 +50,7 @@ openclaw --profile rescue gateway install
 
 ## 救援机器人指南
 
-在同一主机上运行第二个 Gateway，为其配置独立的：
+在同一主机上运行第二个 Gateway网关，为其配置独立的：
 
 - 配置文件/配置
 - 状态目录
@@ -75,9 +75,9 @@ openclaw --profile rescue onboard
 # - 工作区名称默认会添加 -rescue 后缀
 # - 端口至少应为 18789 + 20 个端口，
 #   建议选择完全不同的基础端口，如 19789
-# - 其余上手引导步骤与正常流程相同
+# - 其余新手引导流程与正常流程相同
 
-# 安装服务（如果在上手引导过程中未自动安装）
+# 安装服务（如果在新手引导过程中未自动安装）
 openclaw --profile rescue gateway install
 ```
 
@@ -85,16 +85,16 @@ openclaw --profile rescue gateway install
 
 基础端口 = `gateway.port`（或 `OPENCLAW_GATEWAY_PORT` / `--port`）。
 
-- 浏览器控制服务端口 = 基础端口 + 2（仅限回环地址）
+- 浏览器控制服务端口 = 基础端口 + 2（仅限 local loopback）
 - `canvasHost.port = 基础端口 + 4`
 - 浏览器配置文件 CDP 端口从 `browser.controlPort + 9 .. + 108` 自动分配
 
-如果您在配置或环境变量中覆盖了这些值，必须确保每个实例的值唯一。
+如果你在配置或环境变量中覆盖了这些值，必须确保每个实例的值唯一。
 
 ## 浏览器/CDP 注意事项（常见陷阱）
 
 - **不要**在多个实例上将 `browser.cdpUrl` 设置为相同的值。
-- 每个实例需要独立的浏览器控制端口和 CDP 端口范围（从其 Gateway 端口派生）。
+- 每个实例需要独立的浏览器控制端口和 CDP 端口范围（从其 Gateway网关端口派生）。
 - 如需显式指定 CDP 端口，请为每个实例设置 `browser.profiles.<name>.cdpPort`。
 - 远程 Chrome：使用 `browser.profiles.<name>.cdpUrl`（按配置文件、按实例设置）。
 

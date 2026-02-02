@@ -15,7 +15,7 @@ x-i18n:
 
 # 安装
 
-除非有特殊原因，否则请使用安装器。它会设置 CLI 并运行上手引导。
+除非有特殊原因，否则请使用安装器。它会设置 CLI 并运行新手引导。
 
 ## 快速安装（推荐）
 
@@ -29,7 +29,7 @@ Windows (PowerShell)：
 iwr -useb https://openclaw.ai/install.ps1 | iex
 ```
 
-下一步（如果你跳过了上手引导）：
+下一步（如果你跳过了新手引导）：
 
 ```bash
 openclaw onboard --install-daemon
@@ -45,7 +45,7 @@ openclaw onboard --install-daemon
 
 ### 1) 安装器脚本（推荐）
 
-通过 npm 全局安装 `openclaw` 并运行上手引导。
+通过 npm 全局安装 `openclaw` 并运行新手引导。
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash
@@ -59,7 +59,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --help
 
 详情：[安装器内部机制](/install/installer)。
 
-非交互式（跳过上手引导）：
+非交互式（跳过新手引导）：
 
 ```bash
 curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
@@ -119,9 +119,9 @@ openclaw onboard --install-daemon
 
 ## 安装后
 
-- 运行上手引导：`openclaw onboard --install-daemon`
+- 运行新手引导：`openclaw onboard --install-daemon`
 - 快速检查：`openclaw doctor`
-- 检查 Gateway 健康状态：`openclaw status` + `openclaw health`
+- 检查 Gateway网关健康状态：`openclaw status` + `openclaw health`
 - 打开仪表盘：`openclaw dashboard`
 
 ## 安装方式：npm vs git（安装器）
@@ -148,7 +148,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git
 - `--no-git-update`（使用已有检出时跳过 `git pull`）
 - `--no-prompt`（禁用提示；CI/自动化中必需）
 - `--dry-run`（打印将要执行的操作；不做任何更改）
-- `--no-onboard`（跳过上手引导）
+- `--no-onboard`（跳过新手引导）
 
 ### 环境变量
 

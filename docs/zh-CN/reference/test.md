@@ -16,9 +16,9 @@ x-i18n:
 
 - 完整测试套件（套件、实时测试、Docker）：[测试](/testing)
 
-- `pnpm test:force`：终止任何占用默认控制端口的残留 Gateway 进程，然后使用隔离的 Gateway 端口运行完整的 Vitest 套件，避免服务器测试与正在运行的实例冲突。当之前的 Gateway 运行导致端口 18789 被占用时使用此命令。
+- `pnpm test:force`：终止任何占用默认控制端口的残留 Gateway网关进程，然后使用隔离的 Gateway网关端口运行完整的 Vitest 套件，避免服务器测试与正在运行的实例冲突。当之前的 Gateway网关运行导致端口 18789 被占用时使用此命令。
 - `pnpm test:coverage`：使用 V8 覆盖率运行 Vitest。全局阈值为 70% 的行/分支/函数/语句覆盖率。覆盖率排除了集成度较高的入口文件（CLI 连接、gateway/telegram 桥接、webchat 静态服务器），以保持目标聚焦于可单元测试的逻辑。
-- `pnpm test:e2e`：运行 Gateway 端到端冒烟测试（多实例 WS/HTTP/节点配对）。
+- `pnpm test:e2e`：运行 Gateway网关端到端冒烟测试（多实例 WS/HTTP/节点配对）。
 - `pnpm test:live`：运行提供商实时测试（minimax/zai）。需要 API 密钥和 `LIVE=1`（或提供商特定的 `*_LIVE_TEST=1`）才能取消跳过。
 
 ## 模型延迟基准测试（本地密钥）
@@ -36,9 +36,9 @@ x-i18n:
 - minimax 中位数 1279ms（最小 1114，最大 2431）
 - opus 中位数 2454ms（最小 1224，最大 3170）
 
-## 上手引导端到端测试（Docker）
+## 新手引导端到端测试（Docker）
 
-Docker 是可选的；仅在需要容器化上手引导冒烟测试时使用。
+Docker 是可选的；仅在需要容器化新手引导冒烟测试时使用。
 
 在干净的 Linux 容器中执行完整的冷启动流程：
 
@@ -46,7 +46,7 @@ Docker 是可选的；仅在需要容器化上手引导冒烟测试时使用。
 scripts/e2e/onboard-docker.sh
 ```
 
-此脚本通过伪终端驱动交互式向导，验证配置/工作区/会话文件，然后启动 Gateway 并运行 `openclaw health`。
+此脚本通过伪终端驱动交互式向导，验证配置/工作区/会话文件，然后启动 Gateway网关并运行 `openclaw health`。
 
 ## QR 导入冒烟测试（Docker）
 

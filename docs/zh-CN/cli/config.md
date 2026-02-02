@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 您想以非交互方式读取或编辑配置
+  - 你想以非交互方式读取或编辑配置
 summary: "`openclaw config` 的 CLI 参考（获取/设置/删除配置值）"
 title: config
 x-i18n:
@@ -53,4 +53,4 @@ openclaw config set gateway.port 19001 --json
 openclaw config set channels.whatsapp.groups '["*"]' --json
 ```
 
-编辑后请重启 Gateway。
+编辑后请重启 Gateway网关。

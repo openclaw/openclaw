@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您需要定时任务和唤醒功能
-  - 您正在调试定时任务的执行和日志
+  - 你需要定时任务和唤醒功能
+  - 你正在调试定时任务的执行和日志
 summary: "`openclaw cron` 的 CLI 参考（调度和运行后台任务）"
 title: cron
 x-i18n:
@@ -15,7 +15,7 @@ x-i18n:
 
 # `openclaw cron`
 
-管理 Gateway 调度器的定时任务。
+管理 Gateway网关调度器的定时任务。
 
 相关内容：
 

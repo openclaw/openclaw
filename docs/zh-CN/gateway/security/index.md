@@ -26,7 +26,7 @@ openclaw security audit --deep
 openclaw security audit --fix
 ```
 
-它会标记常见的安全隐患（Gateway 认证暴露、浏览器控制暴露、提升的允许列表、文件系统权限）。
+它会标记常见的安全隐患（Gateway网关认证暴露、浏览器控制暴露、提升的允许列表、文件系统权限）。
 
 `--fix` 会应用安全防护措施：
 
@@ -48,13 +48,13 @@ OpenClaw 既是一个产品也是一个实验：你正在将前沿模型的行�
 
 - **入站访问**（私聊策略、群组策略、允许列表）：陌生人能否触发机器人？
 - **工具影响范围**（提升的工具 + 开放房间）：提示注入是否可能转化为 shell/文件/网络操作？
-- **网络暴露**（Gateway 绑定/认证、Tailscale Serve/Funnel、弱/短认证令牌）。
+- **网络暴露**（Gateway网关绑定/认证、Tailscale Serve/Funnel、弱/短认证令牌）。
 - **浏览器控制暴露**（远程节点、中继端口、远程 CDP 端点）。
 - **本地磁盘卫生**（权限、符号链接、配置包含、"同步文件夹"路径）。
 - **插件**（存在扩展但没有显式允许列表）。
 - **模型卫生**（当配置的模型看起来是旧版时发出警告；非硬性阻止）。
 
-如果运行 `--deep`，OpenClaw 还会尝试对 Gateway 进行尽力而为的实时探测。
+如果运行 `--deep`，OpenClaw 还会尝试对 Gateway网关进行尽力而为的实时探测。
 
 ## 凭据存储映射
 
@@ -89,9 +89,9 @@ OpenClaw 既是一个产品也是一个实验：你正在将前沿模型的行�
 
 ## 反向代理配置
 
-如果你在反向代理（nginx、Caddy、Traefik 等）后面运行 Gateway，应配置 `gateway.trustedProxies` 以实现正确的客户端 IP 检测。
+如果你在反向代理（nginx、Caddy、Traefik 等）后面运行 Gateway网关，应配置 `gateway.trustedProxies` 以实现正确的客户端 IP 检测。
 
-当 Gateway 检测到来自**不在** `trustedProxies` 中的地址的代理头（`X-Forwarded-For` 或 `X-Real-IP`）时，它**不会**将连接视为本地客户端。如果 Gateway 认证已禁用，这些连接将被拒绝。这可以防止认证绕过，否则代理连接会看起来像来自 localhost 并获得自动信任。
+当 Gateway网关检测到来自**不在** `trustedProxies` 中的地址的代理头（`X-Forwarded-For` 或 `X-Real-IP`）时，它**不会**将连接视为本地客户端。如果 Gateway网关认证已禁用，这些连接将被拒绝。这可以防止认证绕过，否则代理连接会看起来像来自 localhost 并获得自动信任。
 
 ```yaml
 gateway:
@@ -102,7 +102,7 @@ gateway:
     password: ${OPENCLAW_GATEWAY_PASSWORD}
 ```
 
-配置 `trustedProxies` 后，Gateway 将使用 `X-Forwarded-For` 头来确定真实客户端 IP 以进行本地客户端检测。请确保你的代理覆写（而非追加）传入的 `X-Forwarded-For` 头以防止欺骗。
+配置 `trustedProxies` 后，Gateway网关将使用 `X-Forwarded-For` 头来确定真实客户端 IP 以进行本地客户端检测。请确保你的代理覆写（而非追加）传入的 `X-Forwarded-For` 头以防止欺骗。
 
 ## 本地会话日志存储在磁盘上
 
@@ -110,20 +110,20 @@ OpenClaw 将会话记录存储在 `~/.openclaw/agents/<agentId>/sessions/*.jsonl
 
 ## 节点执行（system.run）
 
-如果 macOS 节点已配对，Gateway 可以在该节点上调用 `system.run`。这是在 Mac 上的**远程代码执行**：
+如果 macOS 节点已配对，Gateway网关可以在该节点上调用 `system.run`。这是在 Mac 上的**远程代码执行**：
 
 - 需要节点配对（批准 + 令牌）。
 - 在 Mac 上通过**设置 → 执行审批**（安全 + 询问 + 允许列表）控制。
 - 如果你不想要远程执行，请将安全级别设为**拒绝**并移除该 Mac 的节点配对。
 
-## 动态技能（监视器/远程节点）
+## 动态 Skills（监视器/远程节点）
 
-OpenClaw 可以在会话中刷新技能列表：
+OpenClaw 可以在会话中刷新 Skills 列表：
 
-- **技能监视器**：对 `SKILL.md` 的更改可以在下一个智能体回合更新技能快照。
-- **远程节点**：连接 macOS 节点可以使 macOS 专属技能变为可用（基于二进制探测）。
+- **Skills 监视器**：对 `SKILL.md` 的更改可以在下一个智能体回合更新 Skills 快照。
+- **远程节点**：连接 macOS 节点可以使 macOS 专属 Skills 变为可用（基于二进制探测）。
 
-将技能文件夹视为**受信任的代码**，并限制谁可以修改它们。
+将 Skills 文件夹视为**受信任的代码**，并限制谁可以修改它们。
 
 ## 威胁模型
 
@@ -158,12 +158,12 @@ OpenClaw 的立场：
 
 ## 插件/扩展
 
-插件在 Gateway **进程内**运行。将它们视为受信任的代码：
+插件在 Gateway网关 **进程内**运行。将它们视为受信任的代码：
 
 - 只安装来自你信任的来源的插件。
 - 优先使用显式的 `plugins.allow` 允许列表。
 - 启用前检查插件配置。
-- 插件更改后重启 Gateway。
+- 插件更改后重启 Gateway网关。
 - 如果你从 npm 安装插件（`openclaw plugins install <npm-spec>`），请视同运行不受信任的代码：
   - 安装路径为 `~/.openclaw/extensions/<pluginId>/`（或 `$OPENCLAW_STATE_DIR/extensions/<pluginId>/`）。
   - OpenClaw 使用 `npm pack` 然后在该目录中运行 `npm install --omit=dev`（npm 生命周期脚本可以在安装期间执行代码）。
@@ -226,7 +226,7 @@ OpenClaw 有两个独立的"谁可以触发我？"层级：
 - 在群组中优先使用提及门控；避免在公共房间中使用"始终在线"的机器人。
 - 默认将链接、附件和粘贴的指令视为敌意内容。
 - 在沙箱中运行敏感的工具执行；将密钥放在智能体可达文件系统之外。
-- 注意：沙箱是选择加入的。如果沙箱模式关闭，即使 tools.exec.host 默认为 sandbox，exec 也会在 Gateway 主机上运行，且主机 exec 不需要审批，除非你设置 host=gateway 并配置执行审批。
+- 注意：沙箱是选择加入的。如果沙箱模式关闭，即使 tools.exec.host 默认为 sandbox，exec 也会在 Gateway网关主机上运行，且主机 exec 不需要审批，除非你设置 host=gateway 并配置执行审批。
 - 将高风险工具（`exec`、`browser`、`web_fetch`、`web_search`）限制在受信任的智能体或显式允许列表中。
 - **模型选择很重要：** 较旧/旧版模型对提示注入和工具滥用的抵抗力可能较弱。对于启用工具的机器人，优先使用现代的、经过指令强化的模型。我们推荐 Anthropic Opus 4.5，因为它在识别提示注入方面表现出色（参见["安全方面的进步"](https://www.anthropic.com/news/claude-opus-4-5)）。
 
@@ -246,7 +246,7 @@ OpenClaw 有两个独立的"谁可以触发我？"层级：
 - 使用只读或工具禁用的**阅读器智能体**来总结不受信任的内容，然后将摘要传递给你的主智能体。
 - 除非需要，否则为启用工具的智能体关闭 `web_search` / `web_fetch` / `browser`。
 - 为任何接触不受信任输入的智能体启用沙箱和严格的工具允许列表。
-- 将密钥保存在提示之外；通过 Gateway 主机上的环境变量/配置传递。
+- 将密钥保存在提示之外；通过 Gateway网关主机上的环境变量/配置传递。
 
 ### 模型强度（安全提示）
 
@@ -275,14 +275,14 @@ OpenClaw 有两个独立的"谁可以触发我？"层级：
 假设"被入侵"意味着：有人进入了可以触发机器人的房间，或者令牌泄露了，或者插件/工具做了意外的事情。
 
 1. **阻止影响扩散**
-   - 禁用提升的工具（或停止 Gateway）直到你了解发生了什么。
+   - 禁用提升的工具（或停止 Gateway网关）直到你了解发生了什么。
    - 锁定入站接口（私聊策略、群组允许列表、提及门控）。
 2. **轮换密钥**
    - 轮换 `gateway.auth` 令牌/密码。
    - 轮换 `hooks.token`（如果使用）并撤销任何可疑的节点配对。
    - 撤销/轮换模型提供商凭据（API 密钥/OAuth）。
 3. **检查产物**
-   - 检查 Gateway 日志和最近的会话/记录，查找意外的工具调用。
+   - 检查 Gateway网关日志和最近的会话/记录，查找意外的工具调用。
    - 检查 `extensions/` 并移除任何你不完全信任的内容。
 4. **重新运行审计**
    - `openclaw security audit --deep` 并确认报告是干净的。
@@ -307,7 +307,7 @@ OpenClaw 有两个独立的"谁可以触发我？"层级：
 
 ### 0) 文件权限
 
-在 Gateway 主机上保持配置和状态私有：
+在 Gateway网关主机上保持配置和状态私有：
 
 - `~/.openclaw/openclaw.json`：`600`（仅用户可读写）
 - `~/.openclaw`：`700`（仅用户）
@@ -316,25 +316,25 @@ OpenClaw 有两个独立的"谁可以触发我？"层级：
 
 ### 0.4) 网络暴露（绑定 + 端口 + 防火墙）
 
-Gateway 在单个端口上复用 **WebSocket + HTTP**：
+Gateway网关在单个端口上复用 **WebSocket + HTTP**：
 
 - 默认：`18789`
 - 配置/标志/环境变量：`gateway.port`、`--port`、`OPENCLAW_GATEWAY_PORT`
 
-绑定模式控制 Gateway 监听的位置：
+绑定模式控制 Gateway网关监听的位置：
 
 - `gateway.bind: "loopback"`（默认）：只有本地客户端可以连接。
-- 非回环绑定（`"lan"`、`"tailnet"`、`"custom"`）扩大了攻击面。仅在使用共享令牌/密码和真实防火墙时使用。
+- 非 local loopback 绑定（`"lan"`、`"tailnet"`、`"custom"`）扩大了攻击面。仅在使用共享令牌/密码和真实防火墙时使用。
 
 经验法则：
 
-- 优先使用 Tailscale Serve 而非 LAN 绑定（Serve 将 Gateway 保持在回环上，Tailscale 处理访问）。
+- 优先使用 Tailscale Serve 而非 LAN 绑定（Serve 将 Gateway网关保持在 local loopback 上，Tailscale 处理访问）。
 - 如果必须绑定到 LAN，将端口防火墙限制到严格的源 IP 允许列表；不要广泛地进行端口转发。
-- 永远不要在 `0.0.0.0` 上未认证地暴露 Gateway。
+- 永远不要在 `0.0.0.0` 上未认证地暴露 Gateway网关。
 
 ### 0.4.1) mDNS/Bonjour 发现（信息泄露）
 
-Gateway 通过 mDNS（端口 5353 上的 `_openclaw-gw._tcp`）广播其存在以供本地设备发现。在完整模式下，这包括可能暴露运营细节的 TXT 记录：
+Gateway网关通过 mDNS（端口 5353 上的 `_openclaw-gw._tcp`）广播其存在以供本地设备发现。在完整模式下，这包括可能暴露运营细节的 TXT 记录：
 
 - `cliPath`：CLI 二进制文件的完整文件系统路径（暴露用户名和安装位置）
 - `sshPort`：公布主机上的 SSH 可用性
@@ -344,7 +344,7 @@ Gateway 通过 mDNS（端口 5353 上的 `_openclaw-gw._tcp`）广播其存在�
 
 **建议：**
 
-1. **最小模式**（默认，推荐用于暴露的 Gateway）：从 mDNS 广播中省略敏感字段：
+1. **最小模式**（默认，推荐用于暴露的 Gateway网关）：从 mDNS 广播中省略敏感字段：
 
    ```json5
    {
@@ -376,13 +376,13 @@ Gateway 通过 mDNS（端口 5353 上的 `_openclaw-gw._tcp`）广播其存在�
 
 4. **环境变量**（替代方案）：设置 `OPENCLAW_DISABLE_BONJOUR=1` 以在不更改配置的情况下禁用 mDNS。
 
-在最小模式下，Gateway 仍然广播足够的设备发现信息（`role`、`gatewayPort`、`transport`），但省略 `cliPath` 和 `sshPort`。需要 CLI 路径信息的应用可以通过已认证的 WebSocket 连接获取。
+在最小模式下，Gateway网关仍然广播足够的设备发现信息（`role`、`gatewayPort`、`transport`），但省略 `cliPath` 和 `sshPort`。需要 CLI 路径信息的应用可以通过已认证的 WebSocket 连接获取。
 
-### 0.5) 锁定 Gateway WebSocket（本地认证）
+### 0.5) 锁定 Gateway网关 WebSocket（本地认证）
 
-Gateway 认证**默认启用**。如果未配置令牌/密码，Gateway 会拒绝 WebSocket 连接（失败即关闭）。
+Gateway网关认证**默认启用**。如果未配置令牌/密码，Gateway网关会拒绝 WebSocket 连接（失败即关闭）。
 
-上手引导向导默认生成令牌（即使对于回环），因此本地客户端也必须进行认证。
+新手引导向导默认生成令牌（即使对于 local loopback），因此本地客户端也必须进行认证。
 
 设置令牌以使**所有** WS 客户端必须认证：
 
@@ -401,7 +401,7 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 
 本地设备配对：
 
-- 对于**本地**连接（回环或 Gateway 主机自身的 tailnet 地址），设备配对会自动批准，以保持同主机客户端的流畅。
+- 对于**本地**连接（local loopback 或 Gateway网关主机自身的 tailnet 地址），设备配对会自动批准，以保持同主机客户端的流畅。
 - 其他 tailnet 对等节点**不被**视为本地；它们仍然需要配对批准。
 
 认证模式：
@@ -412,31 +412,31 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 轮换检查清单（令牌/密码）：
 
 1. 生成/设置新密钥（`gateway.auth.token` 或 `OPENCLAW_GATEWAY_PASSWORD`）。
-2. 重启 Gateway（如果 macOS 应用管理 Gateway，则重启 macOS 应用）。
-3. 更新所有远程客户端（调用 Gateway 的机器上的 `gateway.remote.token` / `.password`）。
+2. 重启 Gateway网关（如果 macOS 应用管理 Gateway网关，则重启 macOS 应用）。
+3. 更新所有远程客户端（调用 Gateway网关的机器上的 `gateway.remote.token` / `.password`）。
 4. 验证你无法再使用旧凭据连接。
 
 ### 0.6) Tailscale Serve 身份头
 
-当 `gateway.auth.allowTailscale` 为 `true`（Serve 的默认值）时，OpenClaw 接受 Tailscale Serve 身份头（`tailscale-user-login`）作为认证。OpenClaw 通过本地 Tailscale 守护进程（`tailscale whois`）解析 `x-forwarded-for` 地址并将其与头匹配来验证身份。这仅在请求命中回环且包含由 Tailscale 注入的 `x-forwarded-for`、`x-forwarded-proto` 和 `x-forwarded-host` 时触发。
+当 `gateway.auth.allowTailscale` 为 `true`（Serve 的默认值）时，OpenClaw 接受 Tailscale Serve 身份头（`tailscale-user-login`）作为认证。OpenClaw 通过本地 Tailscale 守护进程（`tailscale whois`）解析 `x-forwarded-for` 地址并将其与头匹配来验证身份。这仅在请求命中 local loopback 且包含由 Tailscale 注入的 `x-forwarded-for`、`x-forwarded-proto` 和 `x-forwarded-host` 时触发。
 
-**安全规则：** 不要从你自己的反向代理转发这些头。如果你在 Gateway 前面终止 TLS 或做代理，请禁用 `gateway.auth.allowTailscale` 并改用令牌/密码认证。
+**安全规则：** 不要从你自己的反向代理转发这些头。如果你在 Gateway网关前面终止 TLS 或做代理，请禁用 `gateway.auth.allowTailscale` 并改用令牌/密码认证。
 
 受信任的代理：
 
-- 如果你在 Gateway 前面终止 TLS，请将 `gateway.trustedProxies` 设置为你的代理 IP。
+- 如果你在 Gateway网关前面终止 TLS，请将 `gateway.trustedProxies` 设置为你的代理 IP。
 - OpenClaw 将信任来自这些 IP 的 `x-forwarded-for`（或 `x-real-ip`）来确定客户端 IP，用于本地配对检查和 HTTP 认证/本地检查。
-- 确保你的代理**覆写** `x-forwarded-for` 并阻止对 Gateway 端口的直接访问。
+- 确保你的代理**覆写** `x-forwarded-for` 并阻止对 Gateway网关端口的直接访问。
 
 参见 [Tailscale](/gateway/tailscale) 和 [Web 概述](/web)。
 
 ### 0.6.1) 通过节点主机进行浏览器控制（推荐）
 
-如果你的 Gateway 是远程的但浏览器在另一台机器上运行，请在浏览器机器上运行**节点主机**并让 Gateway 代理浏览器操作（参见[浏览器工具](/tools/browser)）。将节点配对视为管理员级别的访问。
+如果你的 Gateway网关是远程的但浏览器在另一台机器上运行，请在浏览器机器上运行**节点主机**并让 Gateway网关代理浏览器操作（参见[浏览器工具](/tools/browser)）。将节点配对视为管理员级别的访问。
 
 推荐模式：
 
-- 将 Gateway 和节点主机保持在同一个 tailnet（Tailscale）上。
+- 将 Gateway网关和节点主机保持在同一个 tailnet（Tailscale）上。
 - 有意配对节点；如果不需要，禁用浏览器代理路由。
 
 避免：
@@ -448,7 +448,7 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 
 假设 `~/.openclaw/`（或 `$OPENCLAW_STATE_DIR/`）下的任何内容都可能包含密钥或私有数据：
 
-- `openclaw.json`：配置可能包含令牌（Gateway、远程 Gateway）、提供商设置和允许列表。
+- `openclaw.json`：配置可能包含令牌（Gateway网关、远程 Gateway网关）、提供商设置和允许列表。
 - `credentials/**`：渠道凭据（例如：WhatsApp 凭据）、配对允许列表、旧版 OAuth 导入。
 - `agents/<agentId>/agent/auth-profiles.json`：API 密钥 + OAuth 令牌（从旧版 `credentials/oauth.json` 导入）。
 - `agents/<agentId>/sessions/**`：会话记录（`*.jsonl`）+ 路由元数据（`sessions.json`），可能包含私人消息和工具输出。
@@ -458,14 +458,14 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 加固建议：
 
 - 保持权限收紧（目录 `700`，文件 `600`）。
-- 在 Gateway 主机上使用全盘加密。
-- 如果主机是共享的，优先为 Gateway 使用专用的操作系统用户账户。
+- 在 Gateway网关主机上使用全盘加密。
+- 如果主机是共享的，优先为 Gateway网关使用专用的操作系统用户账户。
 
 ### 0.8) 日志 + 记录（脱敏 + 保留）
 
 即使访问控制正确，日志和记录也可能泄露敏感信息：
 
-- Gateway 日志可能包含工具摘要、错误和 URL。
+- Gateway网关日志可能包含工具摘要、错误和 URL。
 - 会话记录可能包含粘贴的密钥、文件内容、命令输出和链接。
 
 建议：
@@ -527,7 +527,7 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 
 ### 5) 安全基线（复制/粘贴）
 
-一个"安全默认"配置，保持 Gateway 私有，要求私聊配对，并避免始终在线的群组机器人：
+一个"安全默认"配置，保持 Gateway网关私有，要求私聊配对，并避免始终在线的群组机器人：
 
 ```json5
 {
@@ -554,8 +554,8 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 
 两种互补方法：
 
-- **在 Docker 中运行完整 Gateway**（容器边界）：[Docker](/install/docker)
-- **工具沙箱**（`agents.defaults.sandbox`，主机 Gateway + Docker 隔离的工具）：[沙箱](/gateway/sandboxing)
+- **在 Docker 中运行完整 Gateway网关**（容器边界）：[Docker](/install/docker)
+- **工具沙箱**（`agents.defaults.sandbox`，主机 Gateway网关 + Docker 隔离的工具）：[沙箱](/gateway/sandboxing)
 
 注意：为防止跨智能体访问，保持 `agents.defaults.sandbox.scope` 为 `"agent"`（默认）或 `"session"` 以实现更严格的按会话隔离。`scope: "shared"` 使用单个容器/工作区。
 
@@ -576,15 +576,15 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 - 除非你信任沙箱智能体，否则为其禁用主机浏览器控制。
 - 将浏览器下载视为不受信任的输入；优先使用隔离的下载目录。
 - 如果可能，在智能体配置文件中禁用浏览器同步/密码管理器（减小影响范围）。
-- 对于远程 Gateway，假设"浏览器控制"等同于对该配置文件可达内容的"操作员访问"。
-- 将 Gateway 和节点主机保持在仅 tailnet 内；避免将中继/控制端口暴露到 LAN 或公共互联网。
+- 对于远程 Gateway网关，假设"浏览器控制"等同于对该配置文件可达内容的"操作员访问"。
+- 将 Gateway网关和节点主机保持在仅 tailnet 内；避免将中继/控制端口暴露到 LAN 或公共互联网。
 - Chrome 扩展中继的 CDP 端点有认证保护；只有 OpenClaw 客户端可以连接。
 - 不需要时禁用浏览器代理路由（`gateway.nodes.browser.mode="off"`）。
 - Chrome 扩展中继模式**并非**"更安全"；它可以接管你现有的 Chrome 标签页。假设它可以在该标签页/配置文件可达的范围内以你的身份行事。
 
 ## 每个智能体的访问配置（多智能体）
 
-通过多智能体路由，每个智能体可以拥有自己的沙箱 + 工具策略：使用这个来为每个智能体提供**完全访问**、**只读**或**无访问**。参见[多智能体沙箱与工具](/multi-agent-sandbox-tools)了解完整详情和优先级规则。
+通过多智能体路由，每个智能体可以拥有自己的沙箱 + 工具策略：使用这个来为每个智能体提供**完全访问**、**只读**或**无访问**。参见[多智能体沙箱与工具](/multi-agent-sandbox-tools)了解详情和优先级规则。
 
 常见用例：
 
@@ -698,28 +698,28 @@ Doctor 可以为你生成一个：`openclaw doctor --generate-gateway-token`。
 
 ### 遏制
 
-1. **停止它：** 停止 macOS 应用（如果它管理 Gateway）或终止你的 `openclaw gateway` 进程。
+1. **停止它：** 停止 macOS 应用（如果它管理 Gateway网关）或终止你的 `openclaw gateway` 进程。
 2. **关闭暴露：** 设置 `gateway.bind: "loopback"`（或禁用 Tailscale Funnel/Serve），直到你了解发生了什么。
 3. **冻结访问：** 将有风险的私聊/群组切换为 `dmPolicy: "disabled"` / 要求提及，并移除 `"*"` 全部允许条目（如果有的话）。
 
 ### 轮换（如果密钥泄露则假设已被入侵）
 
-1. 轮换 Gateway 认证（`gateway.auth.token` / `OPENCLAW_GATEWAY_PASSWORD`）并重启。
-2. 轮换远程客户端密钥（任何可以调用 Gateway 的机器上的 `gateway.remote.token` / `.password`）。
+1. 轮换 Gateway网关认证（`gateway.auth.token` / `OPENCLAW_GATEWAY_PASSWORD`）并重启。
+2. 轮换远程客户端密钥（任何可以调用 Gateway网关的机器上的 `gateway.remote.token` / `.password`）。
 3. 轮换提供商/API 凭据（WhatsApp 凭据、Slack/Discord 令牌、`auth-profiles.json` 中的模型/API 密钥）。
 
 ### 审计
 
-1. 检查 Gateway 日志：`/tmp/openclaw/openclaw-YYYY-MM-DD.log`（或 `logging.file`）。
+1. 检查 Gateway网关日志：`/tmp/openclaw/openclaw-YYYY-MM-DD.log`（或 `logging.file`）。
 2. 审查相关的记录：`~/.openclaw/agents/<agentId>/sessions/*.jsonl`。
 3. 审查最近的配置更改（任何可能扩大访问的更改：`gateway.bind`、`gateway.auth`、私聊/群组策略、`tools.elevated`、插件更改）。
 
 ### 收集报告
 
-- 时间戳、Gateway 主机操作系统 + OpenClaw 版本
+- 时间戳、Gateway网关主机操作系统 + OpenClaw 版本
 - 会话记录 + 简短的日志尾部（脱敏后）
 - 攻击者发送了什么 + 智能体做了什么
-- Gateway 是否暴露在回环之外（LAN/Tailscale Funnel/Serve）
+- Gateway网关是否暴露在 local loopback 之外（LAN/Tailscale Funnel/Serve）
 
 ## 密钥扫描（detect-secrets）
 
