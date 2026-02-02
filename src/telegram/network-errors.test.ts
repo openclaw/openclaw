@@ -30,24 +30,35 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(new Error("Undici: socket failure"))).toBe(true);
   });
 
-  it("detects message snippets added for monitor.ts parity (#6077)", () => {
-    // These snippets were added to match the old isNetworkRelatedError behavior
-    expect(isRecoverableTelegramNetworkError(new Error("network unreachable"))).toBe(true);
-    expect(isRecoverableTelegramNetworkError(new Error("connection timeout"))).toBe(true);
-    expect(isRecoverableTelegramNetworkError(new Error("socket closed"))).toBe(true);
+  it("detects specific network failure message patterns (#6077)", () => {
+    // These patterns are specific enough to avoid false positives
+    expect(isRecoverableTelegramNetworkError(new Error("network error"))).toBe(true);
+    expect(isRecoverableTelegramNetworkError(new Error("connection timed out"))).toBe(true);
+    expect(isRecoverableTelegramNetworkError(new Error("socket closed unexpectedly"))).toBe(true);
+    expect(isRecoverableTelegramNetworkError(new Error("connection reset by peer"))).toBe(true);
     expect(isRecoverableTelegramNetworkError(new Error("econnreset occurred"))).toBe(true);
     expect(isRecoverableTelegramNetworkError(new Error("econnrefused by server"))).toBe(true);
+    expect(isRecoverableTelegramNetworkError(new Error("connection refused"))).toBe(true);
   });
 
-  it("skips #6077 message snippets for send context", () => {
+  it("rejects generic messages that are no longer matched (#7141)", () => {
+    // These overly-broad patterns were removed to prevent false positives
+    // "timeout" alone - could be "API timeout configuration" (not network)
+    expect(isRecoverableTelegramNetworkError(new Error("invalid timeout value"))).toBe(false);
+    // "socket" alone - could be "WebSocket protocol error" (not network)
+    expect(isRecoverableTelegramNetworkError(new Error("WebSocket parse error"))).toBe(false);
+    // "network" alone is still matched, but only when part of "network error" pattern
+  });
+
+  it("skips message snippets for send context", () => {
     // Message-only matching is disabled for send context to avoid false positives
     expect(isRecoverableTelegramNetworkError(new Error("network error"), { context: "send" })).toBe(
       false,
     );
-    expect(isRecoverableTelegramNetworkError(new Error("timeout"), { context: "send" })).toBe(
-      false,
-    );
-    expect(isRecoverableTelegramNetworkError(new Error("socket issue"), { context: "send" })).toBe(
+    expect(
+      isRecoverableTelegramNetworkError(new Error("connection reset"), { context: "send" }),
+    ).toBe(false);
+    expect(isRecoverableTelegramNetworkError(new Error("socket closed"), { context: "send" })).toBe(
       false,
     );
   });
