@@ -6,7 +6,7 @@ If you are running via podman as non-root and want to use bind mounts from your 
 OPENCLAW_VOLUME_OPTS
 ```
 
-## Values you many want to use depending on your needs
+## Values you may want to use depending on your needs
 
 - `OPENCLAW_VOLUME_OPTS=":rw"` (mount as read/write, may have issues with user id mismatch between container and host)
 - `OPENCLAW_VOLUME_OPTS=":U"` (mount with UIDs translated from host into container, this is probably what you want to use)
