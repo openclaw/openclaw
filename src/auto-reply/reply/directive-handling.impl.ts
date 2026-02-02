@@ -194,6 +194,20 @@ export async function handleDirectiveOnly(params: {
       text: `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`,
     };
   }
+  if (directives.hasReasoningEffortDirective && !directives.reasoningEffort) {
+    if (!directives.rawReasoningEffortLevel) {
+      const level = sessionEntry.modelReasoningEffort ?? "medium";
+      return {
+        text: withOptions(
+          `Current reasoning effort level: ${level}.`,
+          "none, low, medium, high, xhigh",
+        ),
+      };
+    }
+    return {
+      text: `Unrecognized reasoning effort level "${directives.rawReasoningEffortLevel}". Valid levels: none, low, medium, high, xhigh.`,
+    };
+  }
   if (directives.hasElevatedDirective && !directives.elevatedLevel) {
     if (!directives.rawElevatedLevel) {
       if (!elevatedEnabled || !elevatedAllowed) {
