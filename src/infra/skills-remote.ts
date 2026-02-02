@@ -18,6 +18,15 @@ type RemoteNodeRecord = {
 };
 
 const log = createSubsystemLogger("gateway/skills-remote");
+
+/**
+ * Maximum number of remote node records to retain.
+ * Keyed by nodeId, so reconnecting nodes reuse their slot.
+ * This cap only matters if many *distinct* nodeIds connect over
+ * time (e.g. ephemeral containers).  1 000 entries ≈ a few KB.
+ */
+const MAX_REMOTE_NODES = 1_000;
+
 const remoteNodes = new Map<string, RemoteNodeRecord>();
 let remoteRegistry: NodeRegistry | null = null;
 
@@ -112,6 +121,16 @@ function upsertNode(record: {
 }) {
   const existing = remoteNodes.get(record.nodeId);
   const bins = new Set<string>(record.bins ?? existing?.bins ?? []);
+
+  // Evict the oldest entry (Map insertion order) when at capacity,
+  // but only if this is a genuinely new node (updates reuse the slot).
+  if (!existing && remoteNodes.size >= MAX_REMOTE_NODES) {
+    const oldest = remoteNodes.keys().next().value as string | undefined;
+    if (oldest) {
+      remoteNodes.delete(oldest);
+    }
+  }
+
   remoteNodes.set(record.nodeId, {
     nodeId: record.nodeId,
     displayName: record.displayName ?? existing?.displayName,
