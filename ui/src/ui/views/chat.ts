@@ -53,6 +53,9 @@ export type ChatProps = {
   // Image attachments
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  // Scroll control
+  showNewMessages?: boolean;
+  onScrollToBottom?: () => void;
   // Event handlers
   onRefresh: () => void;
   onToggleFocusMode: () => void;
@@ -336,6 +339,20 @@ export function renderChat(props: ChatProps) {
                 )}
               </div>
             </div>
+          `
+          : nothing
+      }
+
+      ${
+        props.showNewMessages
+          ? html`
+            <button
+              class="chat-new-messages"
+              type="button"
+              @click=${props.onScrollToBottom}
+            >
+              New messages ${icons.arrowDown}
+            </button>
           `
           : nothing
       }
