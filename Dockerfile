@@ -21,7 +21,7 @@ COPY ui/package.json ./ui/package.json
 COPY patches ./patches
 COPY scripts ./scripts
 
-RUN pnpm install --frozen-lockfile
+RUN pnpm install
 
 COPY . .
 RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build
