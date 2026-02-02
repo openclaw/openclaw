@@ -61,7 +61,7 @@ describe("cron tool", () => {
     expect(call?.params).toEqual({ id: "job-primary" });
   });
 
-  it("normalizes cron.add job payloads", async () => {
+  it("normalizes cron.add job payloads (wrapped in data)", async () => {
     const tool = createCronTool();
     await tool.execute("call2", {
       action: "add",
@@ -86,6 +86,30 @@ describe("cron tool", () => {
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "hello" },
+    });
+  });
+
+  it("normalizes cron.add job payloads (flat arguments)", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-flat", {
+      action: "add",
+      name: "flat-job",
+      schedule: { kind: "at", atMs: 456 },
+      payload: { kind: "systemEvent", text: "flat" },
+    });
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: unknown;
+    };
+    expect(call.method).toBe("cron.add");
+    expect(call.params).toEqual({
+      name: "flat-job",
+      schedule: { kind: "at", atMs: 456 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "flat" },
     });
   });
 

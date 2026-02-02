@@ -250,6 +250,31 @@ describe("gateway server cron", () => {
       expect(disableUpdateRes.ok).toBe(true);
       const disabled = disableUpdateRes.payload as { enabled?: unknown } | undefined;
       expect(disabled?.enabled).toBe(false);
+
+      const jobWrappedRes = await rpcReq(ws, "cron.add", {
+        job: {
+          name: "wrapped job test",
+          enabled: true,
+          schedule: { kind: "at", atMs: Date.now() + 1000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "wrapped" },
+        },
+      });
+      expect(jobWrappedRes.ok).toBe(true);
+      expect((jobWrappedRes.payload as { name?: string })?.name).toBe("wrapped job test");
+
+      const actionLeakedRes = await rpcReq(ws, "cron.add", {
+        name: "leaked action test",
+        action: "add", // This should be stripped
+        enabled: true,
+        schedule: { kind: "at", atMs: Date.now() + 1000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "leaked" },
+      });
+      expect(actionLeakedRes.ok).toBe(true);
+      expect((actionLeakedRes.payload as { name?: string })?.name).toBe("leaked action test");
     } finally {
       ws.close();
       await server.close();

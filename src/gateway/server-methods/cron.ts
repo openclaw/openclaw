@@ -70,7 +70,24 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, status, undefined);
   },
   "cron.add": async ({ params, respond, context }) => {
-    const normalized = normalizeCronJobCreate(params) ?? params;
+    const jobInput =
+      (params as { job?: unknown; data?: unknown } | null)?.job ??
+      (params as { job?: unknown; data?: unknown } | null)?.data ??
+      params;
+    let normalized = normalizeCronJobCreate(jobInput) ?? jobInput;
+
+    // Strip tool-level metadata if it leaked through from the root params or unwrapped object.
+    // This is safe because CronAddParamsSchema has additionalProperties: false.
+    if (normalized && typeof normalized === "object" && normalized !== null) {
+      const candidate = { ...(normalized as Record<string, unknown>) } as Record<string, unknown>;
+      delete candidate.action;
+      delete candidate.gatewayUrl;
+      delete candidate.gatewayToken;
+      delete candidate.timeoutMs;
+      delete candidate.contextMessages;
+      normalized = candidate;
+    }
+
     if (!validateCronAddParams(normalized)) {
       respond(
         false,

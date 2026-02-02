@@ -221,10 +221,24 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             }),
           );
         case "add": {
-          if (!params.job || typeof params.job !== "object") {
-            throw new Error("job required");
+          const jobInput = (params.job ?? params.data) as Record<string, unknown> | undefined;
+          let job: Record<string, unknown>;
+          if (jobInput) {
+            job = (normalizeCronJobCreate(jobInput) as Record<string, unknown>) ?? jobInput;
+          } else {
+            const {
+              action: _a,
+              gatewayUrl: _gu,
+              gatewayToken: _gt,
+              timeoutMs: _tm,
+              contextMessages: _cm,
+              ...rest
+            } = params;
+            job =
+              (normalizeCronJobCreate(rest) as Record<string, unknown>) ??
+              (rest as Record<string, unknown>);
           }
-          const job = normalizeCronJobCreate(params.job) ?? params.job;
+
           if (job && typeof job === "object" && !("agentId" in job)) {
             const cfg = loadConfig();
             const agentId = opts?.agentSessionKey
