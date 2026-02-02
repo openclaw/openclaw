@@ -6,7 +6,7 @@ import { analyzeConfigSchema, renderNode, schemaType, type JsonSchema } from "./
 type ChannelConfigFormProps = {
   channelId: string;
   configValue: Record<string, unknown> | null;
-  schema: unknown | null;
+  schema: unknown;
   uiHints: ConfigUiHints;
   disabled: boolean;
   onPatch: (path: Array<string | number>, value: unknown) => void;

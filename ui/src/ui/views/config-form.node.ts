@@ -132,7 +132,7 @@ export function renderNode(params: {
     }
 
     // Check if it's a set of literal values (enum-like)
-    const extractLiteral = (v: JsonSchema): unknown | undefined => {
+    const extractLiteral = (v: JsonSchema): unknown => {
       if (v.const !== undefined) {
         return v.const;
       }
