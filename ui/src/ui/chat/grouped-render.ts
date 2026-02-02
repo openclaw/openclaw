@@ -30,13 +30,19 @@ function extractImages(message: unknown): ImageBlock[] {
       const b = block as Record<string, unknown>;
 
       if (b.type === "image") {
-        // Handle source object format (from sendChatMessage)
+        // Handle source object format (from sendChatMessage - Anthropic format)
         const source = b.source as Record<string, unknown> | undefined;
         if (source?.type === "base64" && typeof source.data === "string") {
           const data = source.data;
           const mediaType = (source.media_type as string) || "image/png";
           // If data is already a data URL, use it directly
           const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+          images.push({ url });
+        } else if (typeof b.data === "string" && b.data.length > 0) {
+          // Handle tool result format: { type: "image", data: base64, mimeType: "image/png" }
+          const data = b.data as string;
+          const mimeType = (b.mimeType as string) || "image/png";
+          const url = data.startsWith("data:") ? data : `data:${mimeType};base64,${data}`;
           images.push({ url });
         } else if (typeof b.url === "string") {
           images.push({ url: b.url });
