@@ -47,7 +47,7 @@ OpenClaw 使用与 **[AgentSkills](https://agentskills.io) 兼容**的技能文�
 
 ## ClawHub（安装 + 同步）
 
-ClawHub 是 OpenClaw 的公共技能注册中心。浏览地址：https://clawhub.com。使用它来发现、安装、更新和备份技能。完整指南：[ClawHub](/tools/clawhub)。
+ClawHub 是 OpenClaw 的公共技能注册中心。浏览地址：<https://clawhub.com>。使用它来发现、安装、更新和备份技能。完整指南：[ClawHub](/tools/clawhub)。
 
 常用流程：
 
