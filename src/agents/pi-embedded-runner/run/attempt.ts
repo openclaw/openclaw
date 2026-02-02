@@ -475,7 +475,7 @@ export async function runEmbeddedAttempt(
         sessionManager,
         settingsManager,
       }));
-      applySystemPromptOverrideToSession(session, systemPromptOverride);
+      applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
         throw new Error("Embedded agent session missing");
       }

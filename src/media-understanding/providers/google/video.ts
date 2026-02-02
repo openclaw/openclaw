@@ -1,6 +1,6 @@
 import type { VideoDescriptionRequest, VideoDescriptionResult } from "../../types.js";
 import { normalizeGoogleModelId } from "../../../agents/models-config.providers.js";
-import { fetchWithTimeout, normalizeBaseUrl, readErrorResponse } from "../shared.js";
+import { fetchWithTimeoutGuarded, normalizeBaseUrl, readErrorResponse } from "../shared.js";
 
 export const DEFAULT_GOOGLE_VIDEO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_GOOGLE_VIDEO_MODEL = "gemini-3-flash-preview";
@@ -24,6 +24,7 @@ export async function describeGeminiVideo(
 ): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
   const baseUrl = normalizeBaseUrl(params.baseUrl, DEFAULT_GOOGLE_VIDEO_BASE_URL);
+  const allowPrivate = Boolean(params.baseUrl?.trim());
   const model = resolveModel(params.model);
   const url = `${baseUrl}/models/${model}:generateContent`;
 
@@ -52,7 +53,7 @@ export async function describeGeminiVideo(
     ],
   };
 
-  const res = await fetchWithTimeout(
+  const { response: res, release } = await fetchWithTimeoutGuarded(
     url,
     {
       method: "POST",
@@ -61,26 +62,31 @@ export async function describeGeminiVideo(
     },
     params.timeoutMs,
     fetchFn,
+    allowPrivate ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
   );
 
-  if (!res.ok) {
-    const detail = await readErrorResponse(res);
-    const suffix = detail ? `: ${detail}` : "";
-    throw new Error(`Video description failed (HTTP ${res.status})${suffix}`);
-  }
+  try {
+    if (!res.ok) {
+      const detail = await readErrorResponse(res);
+      const suffix = detail ? `: ${detail}` : "";
+      throw new Error(`Video description failed (HTTP ${res.status})${suffix}`);
+    }
 
-  const payload = (await res.json()) as {
-    candidates?: Array<{
-      content?: { parts?: Array<{ text?: string }> };
-    }>;
-  };
-  const parts = payload.candidates?.[0]?.content?.parts ?? [];
-  const text = parts
-    .map((part) => part?.text?.trim())
-    .filter(Boolean)
-    .join("\n");
-  if (!text) {
-    throw new Error("Video description response missing text");
+    const payload = (await res.json()) as {
+      candidates?: Array<{
+        content?: { parts?: Array<{ text?: string }> };
+      }>;
+    };
+    const parts = payload.candidates?.[0]?.content?.parts ?? [];
+    const text = parts
+      .map((part) => part?.text?.trim())
+      .filter(Boolean)
+      .join("\n");
+    if (!text) {
+      throw new Error("Video description response missing text");
+    }
+    return { text, model };
+  } finally {
+    await release();
   }
-  return { text, model };
 }
