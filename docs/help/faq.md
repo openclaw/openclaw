@@ -1156,6 +1156,19 @@ You still need to click the extension button on the tab you want to control (it 
 
 Yes. See [Sandboxing](/gateway/sandboxing). For Docker-specific setup (full gateway in Docker or sandbox images), see [Docker](/install/docker).
 
+### Docker feels limited How do I enable full features
+
+The default image is security-first and runs as the `node` user, so it does not
+include system packages, Homebrew, or bundled browsers. For a fuller setup:
+
+- Persist `/home/node` with `OPENCLAW_HOME_VOLUME` so caches survive.
+- Bake system deps into the image with `OPENCLAW_DOCKER_APT_PACKAGES`.
+- Install Playwright browsers via the bundled CLI:
+  `node /app/node_modules/playwright-core/cli.js install chromium`
+- Set `PLAYWRIGHT_BROWSERS_PATH` and ensure the path is persisted.
+
+Docs: [Docker](/install/docker), [Browser](/tools/browser).
+
 **Can I keep DMs personal but make groups public sandboxed with one agent**
 
 Yes - if your private traffic is **DMs** and your public traffic is **groups**.

@@ -142,6 +142,61 @@ Notes:
 - If you change `OPENCLAW_DOCKER_APT_PACKAGES`, rerun `docker-setup.sh` to rebuild
   the image.
 
+### Power-user / full-featured container (opt-in)
+
+The default Docker image is **security-first** and runs as the non-root `node`
+user. This keeps the attack surface small, but it means:
+
+- no system package installs at runtime
+- no Homebrew by default
+- no bundled Chromium/Playwright browsers
+
+If you want a more full-featured container, use these opt-in knobs:
+
+1) **Persist `/home/node`** so browser downloads and tool caches survive:
+
+```bash
+export OPENCLAW_HOME_VOLUME="openclaw_home"
+./docker-setup.sh
+```
+
+2) **Bake system deps into the image** (repeatable + persistent):
+
+```bash
+export OPENCLAW_DOCKER_APT_PACKAGES="git curl jq"
+./docker-setup.sh
+```
+
+3) **Install Playwright browsers without `npx`** (avoids npm override conflicts):
+
+```bash
+docker compose run --rm openclaw-cli \
+  node /app/node_modules/playwright-core/cli.js install chromium
+```
+
+If you need Playwright to install system deps, rebuild the image with
+`OPENCLAW_DOCKER_APT_PACKAGES` instead of using `--with-deps` at runtime.
+
+4) **Persist Playwright browser downloads**:
+
+- Set `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright` in
+  `docker-compose.yml`.
+- Ensure `/home/node` persists via `OPENCLAW_HOME_VOLUME`, or mount
+  `/home/node/.cache/ms-playwright` via `OPENCLAW_EXTRA_MOUNTS`.
+
+### Permissions + EACCES
+
+The image runs as `node` (uid 1000). If you see permission errors on
+`/home/node/.openclaw`, make sure your host bind mounts are owned by uid 1000.
+
+Example (Linux host):
+
+```bash
+sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
+```
+
+If you choose to run as root for convenience, you accept the security tradeoff.
+
 ### Faster rebuilds (recommended)
 
 To speed up rebuilds, order your Dockerfile so dependency layers are cached.
