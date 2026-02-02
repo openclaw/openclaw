@@ -15,14 +15,14 @@ Kimi Coding with `kimi-coding/k2p5`.
 
 Current Kimi K2 model IDs:
 
-<!-- moonshot-kimi-k2-ids:start -->
+{/* moonshot-kimi-k2-ids:start */}
 
 - `kimi-k2.5`
 - `kimi-k2-0905-preview`
 - `kimi-k2-turbo-preview`
 - `kimi-k2-thinking`
 - `kimi-k2-thinking-turbo`
-<!-- moonshot-kimi-k2-ids:end -->
+{/* moonshot-kimi-k2-ids:end */}
 
 ```bash
 openclaw onboard --auth-choice moonshot-api-key
