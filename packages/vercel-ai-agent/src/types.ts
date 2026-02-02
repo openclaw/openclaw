@@ -1,4 +1,4 @@
-import type { CoreMessage, CoreTool, ToolExecutionOptions } from "ai";
+import type { UIMessage } from "ai";
 import { z } from "zod";
 
 /**
@@ -12,7 +12,13 @@ export type ModelProvider = "openai" | "anthropic" | "google" | "custom";
 export interface ModelConfig {
 	provider: ModelProvider;
 	modelId: string;
+	/**
+	 * API key for authentication. Can be:
+	 * - A Clawdbrain AI API key (when using Clawdbrain backend)
+	 * - A direct provider API key (for testing/development)
+	 */
 	apiKey?: string;
+	/** Base URL for API requests */
 	baseUrl?: string;
 	/** Custom headers to include in API requests */
 	headers?: Record<string, string>;
@@ -24,20 +30,19 @@ export interface ModelConfig {
 export type ToolParameters = z.ZodObject<z.ZodRawShape>;
 
 /**
- * Tool definition for the agent
+ * Legacy tool definition interface.
+ * In v5, tools are created using the tool() helper from 'ai' package.
+ * This interface is kept for backward compatibility with existing code.
  */
 export interface AgentToolDefinition<TParams extends ToolParameters = ToolParameters> {
 	/** Unique identifier for the tool */
 	name: string;
 	/** Human-readable description of what the tool does */
 	description: string;
-	/** Zod schema defining the tool's parameters */
-	parameters: TParams;
+	/** Zod schema defining the tool's input parameters */
+	inputSchema: TParams;
 	/** Function to execute when the tool is called */
-	execute: (
-		params: z.infer<TParams>,
-		options: ToolExecutionOptions
-	) => Promise<unknown>;
+	execute: (params: z.infer<TParams>) => Promise<unknown>;
 	/** Optional: Whether this tool requires user confirmation before execution */
 	requiresConfirmation?: boolean;
 }
@@ -302,8 +307,12 @@ export interface AgentConfig {
 	model: ModelConfig;
 	/** System prompt for the agent */
 	systemPrompt?: string;
-	/** Tools available to the agent */
-	tools?: AgentToolDefinition[];
+	/**
+	 * Tools available to the agent.
+	 * In v5, pass tools created with tool() helper from 'ai' package.
+	 * Example: { weatherTool, calculatorTool }
+	 */
+	tools?: Record<string, any>;
 	/** Default execution configuration */
 	defaultExecutionConfig?: AgentExecutionConfig;
 	/** Default callbacks */
@@ -317,24 +326,11 @@ export interface AgentConfig {
  */
 export interface AgentRunInput {
 	/** User message or messages */
-	messages: CoreMessage[] | string;
+	messages: UIMessage[] | string;
 	/** Override execution config for this run */
 	executionConfig?: AgentExecutionConfig;
 	/** Override callbacks for this run */
 	callbacks?: AgentCallbacks;
-}
-
-/**
- * Converts internal tool definitions to AI SDK format
- */
-export function toCoreTool(def: AgentToolDefinition): CoreTool {
-	return {
-		description: def.description,
-		parameters: def.parameters,
-		execute: async (args, options) => {
-			return def.execute(args as z.infer<typeof def.parameters>, options);
-		},
-	};
 }
 
 /**

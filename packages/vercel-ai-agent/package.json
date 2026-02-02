@@ -1,9 +1,9 @@
 {
   "name": "@clawdbrain/vercel-ai-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Conversational agentic chat flow using Vercel AI SDK",
+  "description": "Conversational agentic chat flow using Vercel AI SDK v5",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "exports": {
@@ -38,9 +38,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "ai": "^4.3.0",
-    "@ai-sdk/openai": "^2.0.0",
-    "@ai-sdk/anthropic": "^2.0.0",
+    "ai": "^5.0.0",
+    "@ai-sdk/openai": "^3.0.0",
+    "@ai-sdk/anthropic": "^3.0.0",
     "@ai-sdk/google": "^3.0.0",
     "zod": "^3.24.0"
   },

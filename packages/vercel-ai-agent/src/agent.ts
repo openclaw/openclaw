@@ -1,14 +1,12 @@
 import {
-	generateText,
 	streamText,
-	type CoreMessage,
-	type CoreTool,
-	type StepResult as AIStepResult,
-	type TextStreamPart,
+	generateText,
+	convertToModelMessages,
+	type UIMessage,
 } from "ai";
-import { createOpenAI } from "@ai-sdk/openai";
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { openai, createOpenAI } from "@ai-sdk/openai";
+import { anthropic, createAnthropic } from "@ai-sdk/anthropic";
+import { google, createGoogleGenerativeAI } from "@ai-sdk/google";
 import type {
 	AgentConfig,
 	AgentRunInput,
@@ -19,17 +17,12 @@ import type {
 	ConversationMessage,
 	StepResult,
 	StreamChunk,
-	ToolCall,
-	ToolResult,
 	TokenUsage,
 	FinishReason,
-	StopCondition,
 	ModelConfig,
-	AgentToolDefinition,
 	ErrorContext,
 } from "./types.js";
-import { createMessageId, toCoreTool } from "./types.js";
-import { ToolRegistry, createToolRegistry } from "./tools/registry.js";
+import { createMessageId } from "./types.js";
 
 /**
  * Creates a language model instance from configuration
@@ -39,33 +32,42 @@ function createModel(config: ModelConfig) {
 
 	switch (provider) {
 		case "openai": {
-			const openai = createOpenAI({
-				apiKey,
-				baseURL: baseUrl,
-				headers,
-			});
+			if (apiKey || baseUrl || headers) {
+				const customOpenai = createOpenAI({
+					apiKey,
+					baseURL: baseUrl,
+					headers,
+				});
+				return customOpenai(modelId);
+			}
 			return openai(modelId);
 		}
 		case "anthropic": {
-			const anthropic = createAnthropic({
-				apiKey,
-				baseURL: baseUrl,
-				headers,
-			});
+			if (apiKey || baseUrl || headers) {
+				const customAnthropic = createAnthropic({
+					apiKey,
+					baseURL: baseUrl,
+					headers,
+				});
+				return customAnthropic(modelId);
+			}
 			return anthropic(modelId);
 		}
 		case "google": {
-			const google = createGoogleGenerativeAI({
-				apiKey,
-				baseURL: baseUrl,
-				headers,
-			});
+			if (apiKey || baseUrl || headers) {
+				const customGoogle = createGoogleGenerativeAI({
+					apiKey,
+					baseURL: baseUrl,
+					headers,
+				});
+				return customGoogle(modelId);
+			}
 			return google(modelId);
 		}
 		case "custom": {
 			// For custom providers, use OpenAI-compatible API
 			const custom = createOpenAI({
-				apiKey: apiKey || "custom",
+				apiKey: apiKey || "required",
 				baseURL: baseUrl,
 				headers,
 			});
@@ -77,99 +79,36 @@ function createModel(config: ModelConfig) {
 }
 
 /**
- * Converts AI SDK step result to our internal format
+ * Convert UIMessage to ConversationMessage
  */
-function convertStepResult(
-	step: AIStepResult<Record<string, CoreTool>>,
-	stepNumber: number,
-	isFinal: boolean
-): StepResult {
-	const toolCalls: ToolCall[] = (step.toolCalls || []).map((tc) => ({
-		id: tc.toolCallId,
-		name: tc.toolName,
-		arguments: tc.args as Record<string, unknown>,
-	}));
-
-	const toolResults: ToolResult[] = (step.toolResults || []).map((tr) => ({
-		toolCallId: tr.toolCallId,
-		toolName: tr.toolName,
-		result: tr.result,
-		isSuccess: true, // AI SDK doesn't distinguish success/failure in results
-	}));
-
-	// Determine step type
-	let stepType: "initial" | "tool-result" | "continue" = "initial";
-	if (stepNumber > 0) {
-		stepType = toolResults.length > 0 ? "tool-result" : "continue";
+function toConversationMessage(msg: UIMessage): ConversationMessage {
+	// Extract text content from parts array
+	let content = "";
+	if (msg.parts) {
+		for (const part of msg.parts) {
+			if (part.type === "text") {
+				content += part.text;
+			}
+		}
 	}
 
 	return {
-		stepNumber,
-		stepType,
-		text: step.text || "",
-		toolCalls,
-		toolResults,
-		finishReason: step.finishReason as FinishReason,
-		usage: {
-			promptTokens: step.usage?.promptTokens || 0,
-			completionTokens: step.usage?.completionTokens || 0,
-			totalTokens: step.usage?.totalTokens || 0,
-		},
-		isFinalStep: isFinal,
-	};
-}
-
-/**
- * Converts messages to CoreMessage format
- */
-function toCoreMessages(
-	input: CoreMessage[] | string
-): CoreMessage[] {
-	if (typeof input === "string") {
-		return [{ role: "user", content: input }];
-	}
-	return input;
-}
-
-/**
- * Converts CoreMessage to ConversationMessage
- */
-function toConversationMessage(msg: CoreMessage): ConversationMessage {
-	return {
-		id: createMessageId(),
-		role: msg.role as ConversationMessage["role"],
-		content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
+		id: msg.id || createMessageId(),
+		role: msg.role === "system" ? "system" : msg.role === "user" ? "user" : "assistant",
+		content,
 		createdAt: new Date(),
 	};
 }
 
 /**
- * Checks if any stop condition is met
+ * Convert ConversationMessage to UIMessage
  */
-function checkStopConditions(
-	step: StepResult,
-	conditions: StopCondition[]
-): boolean {
-	for (const condition of conditions) {
-		switch (condition.type) {
-			case "maxSteps":
-				if (step.stepNumber >= condition.value - 1) {
-					return true;
-				}
-				break;
-			case "toolResult":
-				if (step.toolResults.some((tr) => tr.toolName === condition.toolName)) {
-					return true;
-				}
-				break;
-			case "custom":
-				if (condition.predicate(step)) {
-					return true;
-				}
-				break;
-		}
-	}
-	return false;
+function toUIMessage(msg: ConversationMessage): UIMessage {
+	return {
+		id: msg.id,
+		role: msg.role as "user" | "assistant" | "system",
+		parts: [{ type: "text", text: msg.content }],
+	};
 }
 
 /**
@@ -209,29 +148,23 @@ function mergeCallbacks(
 }
 
 /**
- * Conversational AI Agent using Vercel AI SDK
+ * Conversational AI Agent using Vercel AI SDK v5
  *
- * This agent implements a complete agentic chat flow with:
- * - Multi-step tool calling with maxSteps
- * - Streaming support with onChunk callbacks
- * - Step-by-step callbacks (onStepStart, onStepFinish)
- * - Human-in-the-loop tool approval
- * - Configurable stop conditions
+ * Uses stable streamText/generateText APIs with custom multi-step loop.
+ * Provides:
+ * - Multi-step tool calling
+ * - Streaming support
+ * - Step-by-step callbacks
  * - Full conversation history tracking
  */
 export class ConversationalAgent {
 	private config: AgentConfig;
-	private toolRegistry: ToolRegistry;
 	private conversationHistory: ConversationMessage[] = [];
+	private tools: Record<string, any>;
 
 	constructor(config: AgentConfig) {
 		this.config = config;
-		this.toolRegistry = createToolRegistry();
-
-		// Register any tools from config
-		if (config.tools) {
-			this.toolRegistry.registerMany(config.tools);
-		}
+		this.tools = config.tools || {};
 	}
 
 	/**
@@ -256,17 +189,18 @@ export class ConversationalAgent {
 	}
 
 	/**
-	 * Get the tool registry for adding/removing tools
+	 * Register a new tool
 	 */
-	getToolRegistry(): ToolRegistry {
-		return this.toolRegistry;
+	registerTool(name: string, tool: any): this {
+		this.tools[name] = tool;
+		return this;
 	}
 
 	/**
-	 * Register a new tool
+	 * Register multiple tools
 	 */
-	registerTool(tool: AgentToolDefinition): this {
-		this.toolRegistry.register(tool);
+	registerTools(tools: Record<string, any>): this {
+		this.tools = { ...this.tools, ...tools };
 		return this;
 	}
 
@@ -284,26 +218,31 @@ export class ConversationalAgent {
 		);
 
 		const model = createModel(this.config.model);
-		const messages = toCoreMessages(input.messages);
 
-		// Build the full message array including history
-		const fullMessages: CoreMessage[] = [
-			...this.conversationHistory.map((m) => ({
-				role: m.role,
-				content: m.content,
-			})) as CoreMessage[],
-			...messages,
-		];
+		// Build messages array
+		const inputMessages: UIMessage[] =
+			typeof input.messages === "string"
+				? [{ id: createMessageId(), role: "user", parts: [{ type: "text", text: input.messages }] }]
+				: input.messages.map((m) =>
+						typeof m === "string"
+							? { id: createMessageId(), role: "user" as const, parts: [{ type: "text", text: m }] }
+							: m
+				  );
 
-		// Add user messages to history
-		for (const msg of messages) {
+		// Add to history
+		for (const msg of inputMessages) {
 			this.conversationHistory.push(toConversationMessage(msg));
 		}
 
-		// Get tools as CoreTool format
-		const tools = this.toolRegistry.toCoreTools();
+		// Get history as UIMessages
+		const historyMessages = this.conversationHistory
+			.slice(0, -inputMessages.length)
+			.map(toUIMessage);
 
-		// Track all steps
+		// Combine for model input
+		const allMessages = [...historyMessages, ...inputMessages];
+
+		// Track state
 		const allSteps: StepResult[] = [];
 		let stepNumber = 0;
 		let totalUsage: TokenUsage = {
@@ -313,79 +252,95 @@ export class ConversationalAgent {
 		};
 
 		try {
-			// Notify step start
-			await callbacks.onStepStart?.(stepNumber);
+			// Multi-step loop
+			let currentMessages = allMessages;
+			let shouldContinue = true;
 
-			const result = await generateText({
-				model,
-				messages: fullMessages,
-				system: this.config.systemPrompt,
-				tools: Object.keys(tools).length > 0 ? tools : undefined,
-				maxSteps: executionConfig.maxSteps,
-				maxTokens: executionConfig.maxTokens,
-				temperature: executionConfig.temperature,
-				topP: executionConfig.topP,
-				stopSequences: executionConfig.stopSequences,
-				abortSignal: executionConfig.abortSignal,
+			while (shouldContinue && stepNumber < (executionConfig.maxSteps || 10)) {
+				await callbacks.onStepStart?.(stepNumber);
 
-				// Step finish callback
-				onStepFinish: async (stepResult) => {
-					const isFinal =
-						stepResult.finishReason === "stop" ||
-						stepResult.finishReason === "length" ||
-						stepNumber >= (executionConfig.maxSteps || 10) - 1;
+				// Generate with v5 API
+				const result = await generateText({
+					model: model as any,
+					messages: convertToModelMessages(currentMessages),
+					system: this.config.systemPrompt,
+					tools: Object.keys(this.tools).length > 0 ? this.tools : undefined,
+					maxOutputTokens: executionConfig.maxTokens,
+					temperature: executionConfig.temperature,
+					topP: executionConfig.topP,
+					});
 
-					const step = convertStepResult(stepResult, stepNumber, isFinal);
-					allSteps.push(step);
+				// Build step result
+				const step: StepResult = {
+					stepNumber,
+					stepType: stepNumber === 0 ? "initial" : result.toolCalls.length > 0 ? "tool-result" : "continue",
+					text: result.text,
+					toolCalls: result.toolCalls.map((tc) => ({
+						id: tc.toolCallId,
+						name: tc.toolName,
+						arguments: tc.input as Record<string, unknown>,
+					})),
+					toolResults: result.toolResults.map((tr) => ({
+						toolCallId: tr.toolCallId,
+						toolName: tr.toolName,
+						result: tr.output,
+						isSuccess: true,
+					})),
+					finishReason: result.finishReason as FinishReason,
+					usage: {
+						promptTokens: result.usage.inputTokens || 0,
+						completionTokens: result.usage.outputTokens || 0,
+						totalTokens: result.usage.totalTokens || 0,
+					},
+					isFinalStep: result.finishReason === "stop" || result.finishReason === "length",
+				};
 
-					// Update total usage
-					totalUsage.promptTokens += step.usage.promptTokens;
-					totalUsage.completionTokens += step.usage.completionTokens;
-					totalUsage.totalTokens += step.usage.totalTokens;
+				allSteps.push(step);
 
-					// Invoke callbacks
-					await callbacks.onStepFinish?.(step);
-					await callbacks.onUsage?.(step.usage);
+				// Update total usage
+				totalUsage.promptTokens += step.usage.promptTokens;
+				totalUsage.completionTokens += step.usage.completionTokens;
+				totalUsage.totalTokens += step.usage.totalTokens;
 
-					// Check custom stop conditions
-					if (
-						this.config.stopWhen &&
-						checkStopConditions(step, this.config.stopWhen)
-					) {
-						// Note: We can't actually abort here in generateText,
-						// but we track that we would have stopped
-					}
+				await callbacks.onStepFinish?.(step);
+				await callbacks.onUsage?.(step.usage);
 
-					stepNumber++;
+				// Check if we should continue
+				shouldContinue = result.toolCalls.length > 0 && !step.isFinalStep;
 
-					// Notify next step start if not final
-					if (!isFinal) {
-						await callbacks.onStepStart?.(stepNumber);
-					}
-				},
-			});
+				// Add assistant message to current messages for next iteration
+				if (shouldContinue) {
+					currentMessages = [
+						...currentMessages,
+						{
+							id: createMessageId(),
+							role: "assistant" as const,
+							parts: [{ type: "text", text: result.text }],
+						},
+					];
+				}
 
-			// Build the response
+				stepNumber++;
+			}
+
+			// Get final text from last step
+			const finalText = allSteps.length > 0 ? allSteps[allSteps.length - 1].text : "";
+
+			// Add assistant response to history
 			const assistantMessage: ConversationMessage = {
 				id: createMessageId(),
 				role: "assistant",
-				content: result.text,
-				toolCalls:
-					result.toolCalls?.map((tc) => ({
-						id: tc.toolCallId,
-						name: tc.toolName,
-						arguments: tc.args as Record<string, unknown>,
-					})) || undefined,
+				content: finalText,
 				createdAt: new Date(),
 			};
 
 			this.conversationHistory.push(assistantMessage);
 
 			const response: AgentResponse = {
-				text: result.text,
+				text: finalText,
 				messages: this.getConversationHistory(),
 				steps: allSteps,
-				finishReason: result.finishReason as FinishReason,
+				finishReason: allSteps.length > 0 ? allSteps[allSteps.length - 1].finishReason : "stop",
 				usage: totalUsage,
 				isComplete: true,
 			};
@@ -429,24 +384,29 @@ export class ConversationalAgent {
 		);
 
 		const model = createModel(this.config.model);
-		const messages = toCoreMessages(input.messages);
 
-		// Build the full message array including history
-		const fullMessages: CoreMessage[] = [
-			...this.conversationHistory.map((m) => ({
-				role: m.role,
-				content: m.content,
-			})) as CoreMessage[],
-			...messages,
-		];
+		// Build messages array
+		const inputMessages: UIMessage[] =
+			typeof input.messages === "string"
+				? [{ id: createMessageId(), role: "user", parts: [{ type: "text", text: input.messages }] }]
+				: input.messages.map((m) =>
+						typeof m === "string"
+							? { id: createMessageId(), role: "user" as const, parts: [{ type: "text", text: m }] }
+							: m
+				  );
 
-		// Add user messages to history
-		for (const msg of messages) {
+		// Add to history
+		for (const msg of inputMessages) {
 			this.conversationHistory.push(toConversationMessage(msg));
 		}
 
-		// Get tools as CoreTool format
-		const tools = this.toolRegistry.toCoreTools();
+		// Get history as UIMessages
+		const historyMessages = this.conversationHistory
+			.slice(0, -inputMessages.length)
+			.map(toUIMessage);
+
+		// Combine for model input
+		const allMessages = [...historyMessages, ...inputMessages];
 
 		// Track state
 		const allSteps: StepResult[] = [];
@@ -457,10 +417,11 @@ export class ConversationalAgent {
 			totalTokens: 0,
 		};
 		let fullText = "";
-		let finalResponse: AgentResponse | null = null;
-		let streamError: Error | null = null;
 
-		// Create deferred promises for async access
+		// Capture class instance for use in async iterator
+		const self = this;
+
+		// Create deferred promises
 		let resolveText: (value: string) => void;
 		let resolveSteps: (value: StepResult[]) => void;
 		let resolveUsage: (value: TokenUsage) => void;
@@ -471,127 +432,182 @@ export class ConversationalAgent {
 			resolveText = resolve;
 			rejectAll = reject;
 		});
-		const stepsPromise = new Promise<StepResult[]>((resolve, reject) => {
+		const stepsPromise = new Promise<StepResult[]>((resolve) => {
 			resolveSteps = resolve;
 		});
-		const usagePromise = new Promise<TokenUsage>((resolve, reject) => {
+		const usagePromise = new Promise<TokenUsage>((resolve) => {
 			resolveUsage = resolve;
 		});
-		const responsePromise = new Promise<AgentResponse>((resolve, reject) => {
+		const responsePromise = new Promise<AgentResponse>((resolve) => {
 			resolveResponse = resolve;
 		});
 
-		// Notify step start
-		callbacks.onStepStart?.(stepNumber);
-
-		const result = streamText({
-			model,
-			messages: fullMessages,
-			system: this.config.systemPrompt,
-			tools: Object.keys(tools).length > 0 ? tools : undefined,
-			maxSteps: executionConfig.maxSteps,
-			maxTokens: executionConfig.maxTokens,
-			temperature: executionConfig.temperature,
-			topP: executionConfig.topP,
-			stopSequences: executionConfig.stopSequences,
-			abortSignal: executionConfig.abortSignal,
-
-			// Chunk callback
-			onChunk: async (chunk) => {
-				const streamChunk = convertChunkToStreamChunk(chunk.chunk);
-				if (streamChunk) {
-					await callbacks.onChunk?.(streamChunk);
-				}
-			},
-
-			// Step finish callback
-			onStepFinish: async (stepResult) => {
-				const isFinal =
-					stepResult.finishReason === "stop" ||
-					stepResult.finishReason === "length" ||
-					stepNumber >= (executionConfig.maxSteps || 10) - 1;
-
-				const step = convertStepResult(stepResult, stepNumber, isFinal);
-				allSteps.push(step);
-
-				// Update total usage
-				totalUsage.promptTokens += step.usage.promptTokens;
-				totalUsage.completionTokens += step.usage.completionTokens;
-				totalUsage.totalTokens += step.usage.totalTokens;
-
-				await callbacks.onStepFinish?.(step);
-				await callbacks.onUsage?.(step.usage);
-
-				stepNumber++;
-
-				if (!isFinal) {
-					await callbacks.onStepStart?.(stepNumber);
-				}
-			},
-
-			// Finish callback
-			onFinish: async (event) => {
-				fullText = event.text;
-
-				const assistantMessage: ConversationMessage = {
-					id: createMessageId(),
-					role: "assistant",
-					content: event.text,
-					createdAt: new Date(),
-				};
-
-				this.conversationHistory.push(assistantMessage);
-
-				finalResponse = {
-					text: event.text,
-					messages: this.getConversationHistory(),
-					steps: allSteps,
-					finishReason: event.finishReason as FinishReason,
-					usage: totalUsage,
-					isComplete: true,
-				};
-
-				await callbacks.onFinish?.(finalResponse);
-
-				resolveText(fullText);
-				resolveSteps(allSteps);
-				resolveUsage(totalUsage);
-				resolveResponse(finalResponse);
-			},
-		});
-
-		// Create the async iterator
-		const self = this;
-
+		// Create async iterator for streaming
 		const streamResponse: AgentStreamResponse = {
 			async *[Symbol.asyncIterator](): AsyncIterableIterator<StreamChunk> {
 				try {
-					for await (const part of result.fullStream) {
-						const chunk = convertStreamPartToChunk(part);
-						if (chunk) {
-							if (chunk.type === "text-delta" && chunk.textDelta) {
-								fullText += chunk.textDelta;
+					let currentMessages = allMessages;
+					let shouldContinue = true;
+
+					while (shouldContinue && stepNumber < (executionConfig.maxSteps || 10)) {
+						await callbacks.onStepStart?.(stepNumber);
+
+						// Stream with v5 API
+						const result = streamText({
+							model: model as any,
+							messages: convertToModelMessages(currentMessages),
+							system: self.config.systemPrompt,
+							tools: Object.keys(self.tools).length > 0 ? self.tools : undefined,
+							maxOutputTokens: executionConfig.maxTokens,
+							temperature: executionConfig.temperature,
+							topP: executionConfig.topP,
+									});
+
+						// Stream chunks
+						let stepText = "";
+						const stepToolCalls: any[] = [];
+						const stepToolResults: any[] = [];
+
+						for await (const chunk of result.fullStream) {
+							if (chunk.type === "text-delta") {
+								const streamChunk: StreamChunk = {
+									type: "text-delta",
+									textDelta: chunk.text,
+								};
+								stepText += chunk.text;
+								fullText += chunk.text;
+								await callbacks.onChunk?.(streamChunk);
+								yield streamChunk;
+							} else if (chunk.type === "tool-call") {
+								stepToolCalls.push(chunk);
+								const streamChunk: StreamChunk = {
+									type: "tool-call",
+									toolCall: {
+										id: chunk.toolCallId,
+										name: chunk.toolName,
+										arguments: chunk.input as Record<string, unknown>,
+									},
+								};
+								await callbacks.onChunk?.(streamChunk);
+								yield streamChunk;
+							} else if (chunk.type === "tool-result") {
+								stepToolResults.push(chunk);
+								const streamChunk: StreamChunk = {
+									type: "tool-result",
+									toolResult: {
+										toolCallId: chunk.toolCallId,
+										toolName: chunk.toolName,
+										result: chunk.output,
+										isSuccess: true,
+									},
+								};
+								await callbacks.onChunk?.(streamChunk);
+								yield streamChunk;
 							}
-							yield chunk;
 						}
+
+						// Get final result
+						const usage = await result.usage;
+						const finishReason = await result.finishReason;
+
+						// Build step result
+						const step: StepResult = {
+							stepNumber,
+							stepType: stepNumber === 0 ? "initial" : stepToolCalls.length > 0 ? "tool-result" : "continue",
+							text: stepText,
+							toolCalls: stepToolCalls.map((tc) => ({
+								id: tc.toolCallId,
+								name: tc.toolName,
+								arguments: tc.input as Record<string, unknown>,
+							})),
+							toolResults: stepToolResults.map((tr) => ({
+								toolCallId: tr.toolCallId,
+								toolName: tr.toolName,
+								result: tr.output,
+								isSuccess: true,
+							})),
+							finishReason: finishReason as FinishReason,
+							usage: {
+								promptTokens: usage.inputTokens || 0,
+								completionTokens: usage.outputTokens || 0,
+								totalTokens: usage.totalTokens || 0,
+							},
+							isFinalStep: finishReason === "stop" || finishReason === "length",
+						};
+
+						allSteps.push(step);
+
+						// Update total usage
+						totalUsage.promptTokens += step.usage.promptTokens;
+						totalUsage.completionTokens += step.usage.completionTokens;
+						totalUsage.totalTokens += step.usage.totalTokens;
+
+						await callbacks.onStepFinish?.(step);
+						await callbacks.onUsage?.(step.usage);
+
+						yield { type: "step-finish" };
+
+						// Check if we should continue
+						shouldContinue = stepToolCalls.length > 0 && !step.isFinalStep;
+
+						// Add assistant message for next iteration
+						if (shouldContinue) {
+							currentMessages = [
+								...currentMessages,
+								{
+									id: createMessageId(),
+									role: "assistant" as const,
+									parts: [{ type: "text", text: stepText }],
+								},
+							];
+						}
+
+						stepNumber++;
 					}
+
+					// Finalize
+					yield { type: "finish" };
+
+					const assistantMessage: ConversationMessage = {
+						id: createMessageId(),
+						role: "assistant",
+						content: fullText,
+						createdAt: new Date(),
+					};
+
+					self.conversationHistory.push(assistantMessage);
+
+					const finalResponse: AgentResponse = {
+						text: fullText,
+						messages: self.getConversationHistory(),
+						steps: allSteps,
+						finishReason: allSteps.length > 0 ? allSteps[allSteps.length - 1].finishReason : "stop",
+						usage: totalUsage,
+						isComplete: true,
+					};
+
+					await callbacks.onFinish?.(finalResponse);
+
+					resolveText(fullText);
+					resolveSteps(allSteps);
+					resolveUsage(totalUsage);
+					resolveResponse(finalResponse);
 				} catch (error) {
-					streamError =
-						error instanceof Error ? error : new Error(String(error));
+					const err = error instanceof Error ? error : new Error(String(error));
 
 					const errorContext: ErrorContext = {
 						stepNumber,
 						phase: "generation",
 					};
 
-					await callbacks.onError?.(streamError, errorContext);
+					await callbacks.onError?.(err, errorContext);
 
 					yield {
 						type: "error",
-						error: streamError,
+						error: err,
 					};
 
-					rejectAll(streamError);
+					rejectAll(err);
 				}
 			},
 			get text() {
@@ -639,66 +655,6 @@ export class ConversationalAgent {
 	}
 
 	/**
-	 * Run with human-in-the-loop tool approval
-	 * Tools marked with requiresConfirmation will trigger the onToolApproval callback
-	 */
-	async runWithApproval(input: AgentRunInput): Promise<AgentResponse> {
-		const callbacks = mergeCallbacks(
-			this.config.defaultCallbacks,
-			input.callbacks
-		);
-
-		if (!callbacks.onToolApproval) {
-			throw new Error(
-				"onToolApproval callback is required for runWithApproval"
-			);
-		}
-
-		// Wrap tools that require confirmation
-		const originalTools = this.toolRegistry.getAll();
-		const wrappedTools: AgentToolDefinition[] = originalTools.map((tool) => {
-			if (!tool.requiresConfirmation) {
-				return tool;
-			}
-
-			return {
-				...tool,
-				execute: async (params, options) => {
-					const toolCall: ToolCall = {
-						id: `pending_${Date.now()}`,
-						name: tool.name,
-						arguments: params as Record<string, unknown>,
-					};
-
-					const approved = await callbacks.onToolApproval!(toolCall);
-
-					if (!approved) {
-						return {
-							error: "Tool execution was rejected by user",
-							rejected: true,
-						};
-					}
-
-					return tool.execute(params, options);
-				},
-			};
-		});
-
-		// Temporarily replace tools
-		const tempRegistry = createToolRegistry();
-		tempRegistry.registerMany(wrappedTools);
-
-		const originalRegistry = this.toolRegistry;
-		this.toolRegistry = tempRegistry;
-
-		try {
-			return await this.run(input);
-		} finally {
-			this.toolRegistry = originalRegistry;
-		}
-	}
-
-	/**
 	 * Get the current configuration
 	 */
 	getConfig(): AgentConfig {
@@ -717,121 +673,6 @@ export class ConversationalAgent {
 	 */
 	setModel(model: ModelConfig): void {
 		this.config.model = model;
-	}
-}
-
-/**
- * Convert AI SDK chunk to our StreamChunk format
- */
-function convertChunkToStreamChunk(chunk: unknown): StreamChunk | null {
-	if (!chunk || typeof chunk !== "object") {
-		return null;
-	}
-
-	const c = chunk as Record<string, unknown>;
-
-	if (c.type === "text-delta") {
-		return {
-			type: "text-delta",
-			textDelta: c.textDelta as string,
-		};
-	}
-
-	if (c.type === "tool-call") {
-		return {
-			type: "tool-call",
-			toolCall: {
-				id: c.toolCallId as string,
-				name: c.toolName as string,
-				arguments: c.args as Record<string, unknown>,
-			},
-		};
-	}
-
-	if (c.type === "tool-result") {
-		return {
-			type: "tool-result",
-			toolResult: {
-				toolCallId: c.toolCallId as string,
-				toolName: c.toolName as string,
-				result: c.result,
-				isSuccess: true,
-			},
-		};
-	}
-
-	return null;
-}
-
-/**
- * Convert AI SDK stream part to our StreamChunk format
- */
-function convertStreamPartToChunk(part: TextStreamPart<Record<string, CoreTool>>): StreamChunk | null {
-	switch (part.type) {
-		case "text-delta":
-			return {
-				type: "text-delta",
-				textDelta: part.textDelta,
-			};
-
-		case "tool-call":
-			return {
-				type: "tool-call",
-				toolCall: {
-					id: part.toolCallId,
-					name: part.toolName,
-					arguments: part.args as Record<string, unknown>,
-				},
-			};
-
-		case "tool-result":
-			return {
-				type: "tool-result",
-				toolResult: {
-					toolCallId: part.toolCallId,
-					toolName: part.toolName,
-					result: part.result,
-					isSuccess: true,
-				},
-			};
-
-		case "tool-call-streaming-start":
-			return {
-				type: "tool-call-streaming-start",
-				toolCall: {
-					id: part.toolCallId,
-					name: part.toolName,
-					arguments: {},
-				},
-			};
-
-		case "tool-call-delta":
-			return {
-				type: "tool-call-delta",
-				toolCallDelta: {
-					toolCallId: part.toolCallId,
-					argsTextDelta: part.argsTextDelta,
-				},
-			};
-
-		case "step-finish":
-			return {
-				type: "step-finish",
-			};
-
-		case "finish":
-			return {
-				type: "finish",
-			};
-
-		case "error":
-			return {
-				type: "error",
-				error: part.error instanceof Error ? part.error : new Error(String(part.error)),
-			};
-
-		default:
-			return null;
 	}
 }
 

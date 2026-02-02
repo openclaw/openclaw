@@ -40,7 +40,7 @@ export type {
 	AgentRunInput,
 } from "./types.js";
 
-export { createMessageId, toCoreTool } from "./types.js";
+export { createMessageId } from "./types.js";
 
 // Tool registry and built-in tools
 export {
@@ -92,5 +92,5 @@ export type {
 	StreamEventHandler,
 } from "./streaming.js";
 
-// Re-export useful types from AI SDK for convenience
-export type { CoreMessage, CoreTool, ToolExecutionOptions } from "ai";
+// Re-export useful types from AI SDK v5 for convenience
+export type { UIMessage } from "ai";

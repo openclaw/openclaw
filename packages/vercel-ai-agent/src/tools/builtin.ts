@@ -1,23 +1,20 @@
+import { tool } from "ai";
 import { z } from "zod";
-import type { AgentToolDefinition } from "../types.js";
 
 /**
  * Calculator tool for basic arithmetic operations
  */
-export const calculatorTool: AgentToolDefinition<
-	typeof calculatorTool.parameters
-> = {
-	name: "calculator",
+export const calculatorTool = tool({
 	description:
 		"Perform basic arithmetic calculations. Supports addition, subtraction, multiplication, and division.",
-	parameters: z.object({
+	inputSchema: z.object({
 		operation: z
 			.enum(["add", "subtract", "multiply", "divide"])
 			.describe("The arithmetic operation to perform"),
 		a: z.number().describe("The first operand"),
 		b: z.number().describe("The second operand"),
 	}),
-	async execute({ operation, a, b }) {
+	execute: async ({ operation, a, b }) => {
 		switch (operation) {
 			case "add":
 				return { result: a + b };
@@ -32,71 +29,68 @@ export const calculatorTool: AgentToolDefinition<
 				return { result: a / b };
 		}
 	},
-};
+});
 
 /**
  * Current date/time tool
  */
-export const dateTimeTool: AgentToolDefinition<typeof dateTimeTool.parameters> =
-	{
-		name: "get_current_datetime",
-		description:
-			"Get the current date and time in various formats and timezones",
-		parameters: z.object({
-			timezone: z
-				.string()
-				.optional()
-				.describe(
-					'IANA timezone name (e.g., "America/New_York", "Europe/London"). Defaults to UTC.'
-				),
-			format: z
-				.enum(["iso", "unix", "human", "date_only", "time_only"])
-				.optional()
-				.describe("Output format. Defaults to iso."),
-		}),
-		async execute({ timezone = "UTC", format = "iso" }) {
-			const now = new Date();
-			const options: Intl.DateTimeFormatOptions = { timeZone: timezone };
+export const dateTimeTool = tool({
+	description:
+		"Get the current date and time in various formats and timezones",
+	inputSchema: z.object({
+		timezone: z
+			.string()
+			.optional()
+			.describe(
+				'IANA timezone name (e.g., "America/New_York", "Europe/London"). Defaults to UTC.'
+			),
+		format: z
+			.enum(["iso", "unix", "human", "date_only", "time_only"])
+			.optional()
+			.describe("Output format. Defaults to iso."),
+	}),
+	execute: async ({ timezone = "UTC", format = "iso" }) => {
+		const now = new Date();
+		const options: Intl.DateTimeFormatOptions = { timeZone: timezone };
 
-			switch (format) {
-				case "unix":
-					return { timestamp: Math.floor(now.getTime() / 1000) };
-				case "human":
-					return {
-						datetime: now.toLocaleString("en-US", {
-							...options,
-							dateStyle: "full",
-							timeStyle: "long",
-						}),
-					};
-				case "date_only":
-					return {
-						date: now.toLocaleDateString("en-US", {
-							...options,
-							dateStyle: "full",
-						}),
-					};
-				case "time_only":
-					return {
-						time: now.toLocaleTimeString("en-US", {
-							...options,
-							timeStyle: "long",
-						}),
-					};
-				case "iso":
-				default:
-					return { iso: now.toISOString(), timezone };
-			}
-		},
-	};
+		switch (format) {
+			case "unix":
+				return { timestamp: Math.floor(now.getTime() / 1000) };
+			case "human":
+				return {
+					datetime: now.toLocaleString("en-US", {
+						...options,
+						dateStyle: "full",
+						timeStyle: "long",
+					}),
+				};
+			case "date_only":
+				return {
+					date: now.toLocaleDateString("en-US", {
+						...options,
+						dateStyle: "full",
+					}),
+				};
+			case "time_only":
+				return {
+					time: now.toLocaleTimeString("en-US", {
+						...options,
+						timeStyle: "long",
+					}),
+				};
+			case "iso":
+			default:
+				return { iso: now.toISOString(), timezone };
+		}
+	},
+});
 
 /**
  * JSON parser/validator tool
  */
-export const jsonTool: AgentToolDefinition<typeof jsonTool.parameters> = {
-	name: "json_parse",
+export const jsonTool = tool({
 	description: "Parse and validate JSON strings, or convert objects to JSON",
-	parameters: z.object({
+	inputSchema: z.object({
 		action: z
 			.enum(["parse", "stringify", "validate"])
 			.describe("The action to perform"),
@@ -106,7 +100,7 @@ export const jsonTool: AgentToolDefinition<typeof jsonTool.parameters> = {
 			.optional()
 			.describe("Whether to pretty-print the output (for stringify)"),
 	}),
-	async execute({ action, input, pretty = false }) {
+	execute: async ({ action, input, pretty = false }) => {
 		switch (action) {
 			case "parse":
 				try {
@@ -143,16 +137,15 @@ export const jsonTool: AgentToolDefinition<typeof jsonTool.parameters> = {
 				}
 		}
 	},
-};
+});
 
 /**
  * String manipulation tool
  */
-export const stringTool: AgentToolDefinition<typeof stringTool.parameters> = {
-	name: "string_utils",
+export const stringTool = tool({
 	description:
 		"Perform various string manipulation operations like case conversion, trimming, splitting, etc.",
-	parameters: z.object({
+	inputSchema: z.object({
 		operation: z
 			.enum([
 				"uppercase",
@@ -175,7 +168,7 @@ export const stringTool: AgentToolDefinition<typeof stringTool.parameters> = {
 			),
 		arg2: z.string().optional().describe("Second argument (replacement for replace)"),
 	}),
-	async execute({ operation, input, arg, arg2 }) {
+	execute: async ({ operation, input, arg, arg2 }) => {
 		switch (operation) {
 			case "uppercase":
 				return { result: input.toUpperCase() };
@@ -211,49 +204,45 @@ export const stringTool: AgentToolDefinition<typeof stringTool.parameters> = {
 				return { result: input.split("").reverse().join("") };
 		}
 	},
-};
+});
 
 /**
  * Wait/delay tool for testing async behavior
  */
-export const waitTool: AgentToolDefinition<typeof waitTool.parameters> = {
-	name: "wait",
+export const waitTool = tool({
 	description:
 		"Wait for a specified number of milliseconds. Useful for testing or rate limiting.",
-	parameters: z.object({
+	inputSchema: z.object({
 		milliseconds: z
 			.number()
 			.min(0)
 			.max(30000)
 			.describe("Number of milliseconds to wait (max 30 seconds)"),
 	}),
-	async execute({ milliseconds }) {
+	execute: async ({ milliseconds }) => {
 		await new Promise((resolve) => setTimeout(resolve, milliseconds));
 		return { waited: milliseconds, message: `Waited ${milliseconds}ms` };
 	},
-};
+});
 
 /**
  * Memory/state tool for persisting data across tool calls
+ * Returns a tool creator function that maintains its own memory Map
  */
-export function createMemoryTool(): AgentToolDefinition<
-	ReturnType<typeof createMemoryTool>["parameters"]
-> & { memory: Map<string, unknown> } {
+export function createMemoryTool() {
 	const memory = new Map<string, unknown>();
 
-	const tool: AgentToolDefinition & { memory: Map<string, unknown> } = {
-		name: "memory",
+	return tool({
 		description:
 			"Store and retrieve key-value pairs in memory. Useful for persisting data across tool calls within a session.",
-		parameters: z.object({
+		inputSchema: z.object({
 			action: z
 				.enum(["get", "set", "delete", "list", "clear"])
 				.describe("The memory operation to perform"),
 			key: z.string().optional().describe("The key to get/set/delete"),
 			value: z.unknown().optional().describe("The value to store (for set action)"),
 		}),
-		memory,
-		async execute({ action, key, value }) {
+		execute: async ({ action, key, value }) => {
 			switch (action) {
 				case "get":
 					if (!key) {
@@ -282,25 +271,26 @@ export function createMemoryTool(): AgentToolDefinition<
 					return { success: true, message: "Memory cleared" };
 			}
 		},
-	};
-
-	return tool;
+	});
 }
 
 /**
- * All built-in tools as an array
+ * All built-in tools as an object for use with v5 Agent
  */
-export const builtinTools: AgentToolDefinition[] = [
-	calculatorTool,
-	dateTimeTool,
-	jsonTool,
-	stringTool,
-	waitTool,
-];
+export const builtinTools = {
+	calculator: calculatorTool,
+	datetime: dateTimeTool,
+	json: jsonTool,
+	string: stringTool,
+	wait: waitTool,
+};
 
 /**
  * Create a full set of built-in tools including stateful ones
  */
-export function createBuiltinTools(): AgentToolDefinition[] {
-	return [...builtinTools, createMemoryTool()];
+export function createBuiltinTools() {
+	return {
+		...builtinTools,
+		memory: createMemoryTool(),
+	};
 }
