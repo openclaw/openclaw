@@ -47,7 +47,7 @@ scripts/pi/run-tests.sh --live
 
 推荐流程：
 
-- 以开发模式运行 Gateway：
+- 以开发模式运行 Gateway网关：
   - `pnpm gateway:dev`
 - 直接触发智能体：
   - `pnpm openclaw agent --message "Hello" --thinking low`

@@ -1,8 +1,8 @@
 ---
 read_when:
   - 添加或修改智能体工具
-  - 停用或更改 `openclaw-*` 技能
-summary: OpenClaw 的智能体工具集（browser、canvas、nodes、message、cron），替代旧版 `openclaw-*` 技能
+  - 停用或更改 `openclaw-*` Skills
+summary: OpenClaw 的智能体工具集（browser、canvas、nodes、message、cron），替代旧版 `openclaw-*` Skills
 title: 工具
 x-i18n:
   generated_at: "2026-02-01T21:44:06Z"
@@ -16,7 +16,7 @@ x-i18n:
 # 工具（OpenClaw）
 
 OpenClaw 提供**一等智能体工具**，涵盖 browser、canvas、nodes 和 cron。
-这些工具替代了旧的 `openclaw-*` 技能：工具是类型化的，无需 shell 调用，
+这些工具替代了旧的 `openclaw-*` Skills：工具是类型化的，无需 shell 调用，
 智能体应直接依赖这些工具。
 
 ## 禁用工具
@@ -173,11 +173,11 @@ OpenClaw 提供**一等智能体工具**，涵盖 browser、canvas、nodes 和 c
 ## 插件 + 工具
 
 插件可以在核心工具集之外注册**额外的工具**（和 CLI 命令）。
-参见[插件](/plugin)了解安装和配置，以及[技能](/tools/skills)了解工具使用指导如何注入到提示词中。某些插件会随工具一起提供自己的技能（例如语音通话插件）。
+参见[插件](/plugin)了解安装和配置，以及[Skills](/tools/skills)了解工具使用指导如何注入到提示词中。某些插件会随工具一起提供自己的 Skills（例如语音通话插件）。
 
 可选插件工具：
 
-- [Lobster](/tools/lobster)：类型化工作流运行时，支持可恢复的审批（需要 Gateway 主机上安装 Lobster CLI）。
+- [Lobster](/tools/lobster)：类型化工作流运行时，支持可恢复的审批（需要 Gateway网关主机上安装 Lobster CLI）。
 - [LLM Task](/tools/llm-task)：用于结构化工作流输出的纯 JSON LLM 步骤（可选 schema 验证）。
 
 ## 工具清单
@@ -212,7 +212,7 @@ OpenClaw 提供**一等智能体工具**，涵盖 browser、canvas、nodes 和 c
 - `elevated` 受 `tools.elevated` 以及任何 `agents.list[].tools.elevated` 覆盖的门控（两者都必须允许），且是 `host=gateway` + `security=full` 的别名。
 - `elevated` 仅在智能体处于沙箱时改变行为（否则为空操作）。
 - `host=node` 可以指向 macOS 伴侣应用或无头节点主机（`openclaw node run`）。
-- Gateway/节点审批和允许列表：[Exec 审批](/tools/exec-approvals)。
+- Gateway网关/节点审批和允许列表：[Exec 审批](/tools/exec-approvals)。
 
 ### `process`
 
@@ -313,7 +313,7 @@ OpenClaw 提供**一等智能体工具**，涵盖 browser、canvas、nodes 和 c
 
 说明：
 
-- 底层使用 Gateway 的 `node.invoke`。
+- 底层使用 Gateway网关的 `node.invoke`。
 - 如果未提供 `node`，工具会选择默认值（单个已连接节点或本地 mac 节点）。
 - A2UI 仅支持 v0.8（无 `createSurface`）；CLI 会拒绝 v0.9 JSONL 并报告行错误。
 - 快速测试：`openclaw nodes canvas a2ui push --node <id> --text "Hello from A2UI"`。
@@ -393,13 +393,13 @@ OpenClaw 提供**一等智能体工具**，涵盖 browser、canvas、nodes 和 c
 
 说明：
 
-- `send` 通过 Gateway 路由 WhatsApp；其他渠道直接发送。
-- `poll` 对 WhatsApp 和 MS Teams 使用 Gateway；Discord 投票直接发送。
+- `send` 通过 Gateway网关路由 WhatsApp；其他渠道直接发送。
+- `poll` 对 WhatsApp 和 MS Teams 使用 Gateway网关；Discord 投票直接发送。
 - 当消息工具调用绑定到活跃的聊天会话时，发送将被限制在该会话的目标范围内，以避免跨上下文泄露。
 
 ### `cron`
 
-管理 Gateway 定时任务和唤醒。
+管理 Gateway网关定时任务和唤醒。
 
 核心操作：
 
@@ -414,7 +414,7 @@ OpenClaw 提供**一等智能体工具**，涵盖 browser、canvas、nodes 和 c
 
 ### `gateway`
 
-重启或向正在运行的 Gateway 进程应用更新（原地更新）。
+重启或向正在运行的 Gateway网关进程应用更新（原地更新）。
 
 核心操作：
 
@@ -463,7 +463,7 @@ OpenClaw 提供**一等智能体工具**，涵盖 browser、canvas、nodes 和 c
 
 ## 参数（通用）
 
-Gateway 支持的工具（`canvas`、`nodes`、`cron`）：
+Gateway网关支持的工具（`canvas`、`nodes`、`cron`）：
 
 - `gatewayUrl`（默认 `ws://127.0.0.1:18789`）
 - `gatewayToken`（如果启用了认证）

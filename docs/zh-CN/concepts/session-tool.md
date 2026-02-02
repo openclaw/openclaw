@@ -48,7 +48,7 @@ x-i18n:
 
 - `messageLimit > 0` 时会获取每个会话的 `chat.history` 并包含最近 N 条消息。
 - 列表输出中会过滤工具结果；使用 `sessions_history` 获取工具消息。
-- 在**沙箱化**的智能体会话中运行时，会话工具默认为**仅已生成可见**（见下文）。
+- 在**沙箱隔离**的智能体会话中运行时，会话工具默认为**仅已生成可见**（见下文）。
 
 行结构（JSON）：
 
@@ -99,7 +99,7 @@ x-i18n:
 - 如果等待超时：`{ runId, status: "timeout", error }`。运行继续；稍后调用 `sessions_history`。
 - 如果运行失败：`{ runId, status: "error", error }`。
 - 通知投递在主运行完成后运行，属于尽力而为；`status: "ok"` 不保证通知已成功投递。
-- 通过 Gateway `agent.wait`（服务器端）等待，因此重连不会中断等待。
+- 通过 Gateway网关 `agent.wait`（服务器端）等待，因此重连不会中断等待。
 - 智能体间消息上下文会注入到主运行中。
 - 主运行完成后，OpenClaw 运行**回复往返循环**：
   - 第 2 轮及之后在请求方和目标智能体之间交替。
@@ -144,7 +144,7 @@ x-i18n:
 
 执行点：
 
-- `chat.send` / `agent`（Gateway）
+- `chat.send` / `agent`（Gateway网关）
 - 自动回复投递逻辑
 
 ## sessions_spawn
@@ -182,7 +182,7 @@ x-i18n:
 
 ## 沙箱会话可见性
 
-沙箱化的会话可以使用会话工具，但默认只能看到通过 `sessions_spawn` 生成的会话。
+沙箱隔离的会话可以使用会话工具，但默认只能看到通过 `sessions_spawn` 生成的会话。
 
 配置：
 

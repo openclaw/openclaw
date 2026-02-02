@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 使用开发 Gateway 模板时
+  - 使用开发 Gateway网关模板时
   - 更新默认的开发智能体身份时
 summary: 开发智能体用户资料 (C-3PO)
 x-i18n:

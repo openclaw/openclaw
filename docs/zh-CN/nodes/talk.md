@@ -73,7 +73,7 @@ x-i18n:
 - `interruptOnSpeech`：true
 - `voiceId`：回退到 `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID`（或在 API 密钥可用时使用第一个 ElevenLabs 语音）
 - `modelId`：未设置时默认为 `eleven_v3`
-- `apiKey`：回退到 `ELEVENLABS_API_KEY`（或 Gateway shell 配置文件，如可用）
+- `apiKey`：回退到 `ELEVENLABS_API_KEY`（或 Gateway网关 shell 配置文件，如可用）
 - `outputFormat`：macOS/iOS 默认为 `pcm_44100`，Android 默认为 `pcm_24000`（设置 `mp3_*` 以强制 MP3 流式传输）
 
 ## macOS UI

@@ -114,9 +114,9 @@ openclaw webhooks gmail setup \
 
 平台说明：在 macOS 上，向导通过 Homebrew 安装 `gcloud`、`gogcli` 和 `tailscale`；在 Linux 上请先手动安装它们。
 
-Gateway 自动启动（推荐）：
+Gateway网关自动启动（推荐）：
 
-- 当 `hooks.enabled=true` 且设置了 `hooks.gmail.account` 时，Gateway 会在启动时运行 `gog gmail watch serve` 并自动续期 watch。
+- 当 `hooks.enabled=true` 且设置了 `hooks.gmail.account` 时，Gateway网关会在启动时运行 `gog gmail watch serve` 并自动续期 watch。
 - 设置 `OPENCLAW_SKIP_GMAIL_WATCHER=1` 可退出自动启动（如果你自行运行守护进程则很有用）。
 - 不要同时运行手动守护进程，否则会遇到 `listen tcp 127.0.0.1:8788: bind: address already in use`。
 

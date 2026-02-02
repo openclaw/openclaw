@@ -24,7 +24,7 @@ OpenClaw 使用单一智能体工作区目录（`agents.defaults.workspace`）�
 
 完整的工作区布局 + 备份指南：[智能体工作区](/concepts/agent-workspace)
 
-如果启用了 `agents.defaults.sandbox`，非主会话可以使用 `agents.defaults.sandbox.workspaceRoot` 下的按会话工作区覆盖此设置（参见 [Gateway 配置](/gateway/configuration)）。
+如果启用了 `agents.defaults.sandbox`，非主会话可以使用 `agents.defaults.sandbox.workspaceRoot` 下的按会话工作区覆盖此设置（参见 [Gateway网关配置](/gateway/configuration)）。
 
 ## 引导文件（注入）
 
@@ -43,7 +43,7 @@ OpenClaw 使用单一智能体工作区目录（`agents.defaults.workspace`）�
 
 如果文件缺失，OpenClaw 会注入一行"文件缺失"标记（`openclaw setup` 会创建安全的默认模板）。
 
-`BOOTSTRAP.md` 仅在**全新工作区**（没有其他引导文件存在）时创建。如果您在完成仪式后删除了它，后续重启时不会重新创建。
+`BOOTSTRAP.md` 仅在**全新工作区**（没有其他引导文件存在）时创建。如果你在完成仪式后删除了它，后续重启时不会重新创建。
 
 要完全禁用引导文件创建（用于预填充的工作区），请设置：
 
@@ -53,17 +53,17 @@ OpenClaw 使用单一智能体工作区目录（`agents.defaults.workspace`）�
 
 ## 内置工具
 
-核心工具（read/exec/edit/write 及相关系统工具）始终可用，受工具策略约束。`apply_patch` 是可选的，由 `tools.exec.applyPatch` 控制。`TOOLS.md` **不**控制哪些工具存在；它是关于您希望如何使用这些工具的指导。
+核心工具（read/exec/edit/write 及相关系统工具）始终可用，受工具策略约束。`apply_patch` 是可选的，由 `tools.exec.applyPatch` 控制。`TOOLS.md` **不**控制哪些工具存在；它是关于你希望如何使用这些工具的指导。
 
-## 技能
+## Skills
 
-OpenClaw 从三个位置加载技能（名称冲突时工作区优先）：
+OpenClaw 从三个位置加载 Skills（名称冲突时工作区优先）：
 
 - 内置（随安装包附带）
 - 托管/本地：`~/.openclaw/skills`
 - 工作区：`<workspace>/skills`
 
-技能可以通过配置/环境变量进行控制（参见 [Gateway 配置](/gateway/configuration) 中的 `skills`）。
+Skills 可以通过配置/环境变量进行控制（参见 [Gateway网关配置](/gateway/configuration) 中的 `skills`）。
 
 ## pi-mono 集成
 

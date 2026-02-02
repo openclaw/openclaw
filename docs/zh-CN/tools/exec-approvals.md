@@ -16,7 +16,7 @@ x-i18n:
 
 # 执行审批
 
-执行审批是**伴侣应用 / 节点主机的安全护栏**，用于允许沙箱化的智能体在真实主机（`gateway` 或 `node`）上运行命令。可以将其理解为一种安全联锁机制：只有当策略 + 允许列表 +（可选的）用户审批全部通过时，命令才会被允许执行。
+执行审批是**伴侣应用 / 节点主机的安全护栏**，用于允许沙箱隔离的智能体在真实主机（`gateway` 或 `node`）上运行命令。可以将其理解为一种安全联锁机制：只有当策略 + 允许列表 +（可选的）用户审批全部通过时，命令才会被允许执行。
 执行审批是在工具策略和提权网关**之上**的额外检查（除非提权设置为 `full`，此时会跳过审批）。
 生效策略取 `tools.exec.*` 和审批默认值中**更严格**的一个；如果审批字段被省略，则使用 `tools.exec` 的值。
 
@@ -26,7 +26,7 @@ x-i18n:
 
 执行审批在执行主机上本地强制执行：
 
-- **Gateway 主机** → Gateway 机器上的 `openclaw` 进程
+- **Gateway网关主机** → Gateway网关机器上的 `openclaw` 进程
 - **节点主机** → 节点运行器（macOS 伴侣应用或无头节点主机）
 
 macOS 拆分：
@@ -116,16 +116,16 @@ macOS 拆分：
 - **最近使用的命令**
 - **最近解析的路径**
 
-## 自动允许技能 CLI
+## 自动允许 Skills CLI
 
-启用**自动允许技能 CLI** 后，已知技能引用的可执行文件在节点上（macOS 节点或无头节点主机）会被视为已列入允许列表。此功能通过 Gateway RPC 的 `skills.bins` 获取技能二进制列表。如果需要严格的手动允许列表，请禁用此选项。
+启用**自动允许 Skills CLI** 后，已知 Skills 引用的可执行文件在节点上（macOS 节点或无头节点主机）会被视为已列入允许列表。此功能通过 Gateway网关 RPC 的 `skills.bins` 获取 Skills 二进制列表。如果需要严格的手动允许列表，请禁用此选项。
 
 ## 安全二进制（仅限标准输入）
 
 `tools.exec.safeBins` 定义了一小组**仅限标准输入**的二进制文件（例如 `jq`），它们可以在允许列表模式下运行，**无需**显式添加到允许列表中。安全二进制会拒绝位置文件参数和类路径标记，因此只能操作传入的数据流。
 Shell 链式调用和重定向在允许列表模式下不会被自动允许。
 
-当每个顶层段都满足允许列表（包括安全二进制或技能自动允许）时，Shell 链式调用（`&&`、`||`、`;`）是被允许的。重定向在允许列表模式下仍不受支持。
+当每个顶层段都满足允许列表（包括安全二进制或 Skills 自动允许）时，Shell 链式调用（`&&`、`||`、`;`）是被允许的。重定向在允许列表模式下仍不受支持。
 
 默认安全二进制：`jq`、`grep`、`cut`、`sort`、`uniq`、`head`、`tail`、`tr`、`wc`。
 
@@ -133,15 +133,15 @@ Shell 链式调用和重定向在允许列表模式下不会被自动允许。
 
 使用**控制 UI → 节点 → 执行审批**卡片来编辑默认值、按智能体的覆盖配置和允许列表。选择一个范围（默认值或某个智能体），调整策略，添加/删除允许列表模式，然后点击**保存**。UI 会显示每个模式的**最近使用**元数据，方便你保持列表整洁。
 
-目标选择器可选择 **Gateway**（本地审批）或**节点**。节点必须广播 `system.execApprovals.get/set`（macOS 应用或无头节点主机）。
+目标选择器可选择 **Gateway网关**（本地审批）或**节点**。节点必须广播 `system.execApprovals.get/set`（macOS 应用或无头节点主机）。
 如果某个节点尚未广播执行审批功能，请直接编辑其本地的 `~/.openclaw/exec-approvals.json` 文件。
 
-CLI：`openclaw approvals` 支持 Gateway 或节点编辑（参见 [审批 CLI](/cli/approvals)）。
+CLI：`openclaw approvals` 支持 Gateway网关或节点编辑（参见 [审批 CLI](/cli/approvals)）。
 
 ## 审批流程
 
-当需要提示时，Gateway 向操作员客户端广播 `exec.approval.requested`。
-控制 UI 和 macOS 应用通过 `exec.approval.resolve` 进行处理，然后 Gateway 将已批准的请求转发至节点主机。
+当需要提示时，Gateway网关向操作员客户端广播 `exec.approval.requested`。
+控制 UI 和 macOS 应用通过 `exec.approval.resolve` 进行处理，然后 Gateway网关将已批准的请求转发至节点主机。
 
 当需要审批时，执行工具会立即返回一个审批 ID。使用该 ID 来关联后续的系统事件（`Exec finished` / `Exec denied`）。如果在超时前未收到决定，该请求将被视为审批超时并以拒绝原因呈现。
 
@@ -193,7 +193,7 @@ CLI：`openclaw approvals` 支持 Gateway 或节点编辑（参见 [审批 CLI](
 ### macOS IPC 流程
 
 ```
-Gateway -> Node Service (WS)
+Gateway网关 -> Node Service (WS)
                  |  IPC (UDS + token + HMAC + TTL)
                  v
              Mac App (UI + approvals + system.run)
@@ -214,7 +214,7 @@ Gateway -> Node Service (WS)
 - `Exec denied`
 
 这些消息在节点报告事件后发布到智能体的会话中。
-Gateway 主机执行审批在命令完成时（以及可选地在运行时间超过阈值时）发出相同的生命周期事件。
+Gateway网关主机执行审批在命令完成时（以及可选地在运行时间超过阈值时）发出相同的生命周期事件。
 经过审批网关的执行会复用审批 ID 作为这些消息中的 `runId`，便于关联。
 
 ## 影响
@@ -230,4 +230,4 @@ Gateway 主机执行审批在命令完成时（以及可选地在运行时间超
 
 - [执行工具](/tools/exec)
 - [提权模式](/tools/elevated)
-- [技能](/tools/skills)
+- [Skills](/tools/skills)

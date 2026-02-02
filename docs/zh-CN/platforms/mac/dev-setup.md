@@ -21,7 +21,7 @@ x-i18n:
 在构建应用之前，请确保已安装以下内容：
 
 1.  **Xcode 26.2+**：Swift 开发所需。
-2.  **Node.js 22+ & pnpm**：Gateway、CLI 和打包脚本所需。
+2.  **Node.js 22+ & pnpm**：Gateway网关、CLI 和打包脚本所需。
 
 ## 1. 安装依赖
 
@@ -94,9 +94,9 @@ xcrun swift --version
    ```
 2. 如果仍然无效，在 [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) 中临时更改 `BUNDLE_ID`，以强制 macOS 使用"全新状态"。
 
-### Gateway 持续显示"Starting..."
+### Gateway网关持续显示"Starting..."
 
-如果 Gateway 状态一直停留在"Starting..."，请检查是否有僵尸进程占用了端口：
+如果 Gateway网关状态一直停留在"Starting..."，请检查是否有僵尸进程占用了端口：
 
 ```bash
 openclaw gateway status

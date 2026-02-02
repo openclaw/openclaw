@@ -40,7 +40,7 @@ OpenClaw 按以下顺序选择模型：
 
 ## 设置向导（推荐）
 
-如果不想手动编辑配置，可以运行上手引导向导：
+如果不想手动编辑配置，可以运行新手引导向导：
 
 ```bash
 openclaw onboard
@@ -152,7 +152,7 @@ OAuth 状态始终显示（并包含在 `--json` 输出中）。如果已配置�
 JSON 包含 `auth.oauth`（警告窗口 + 配置文件）和 `auth.providers`（每个提供商的有效认证）。
 使用 `--check` 进行自动化检测（缺失/过期时退出码为 `1`，即将过期时为 `2`）。
 
-推荐的 Anthropic 认证方式是 Claude Code CLI setup-token（可在任何地方运行；如有需要可粘贴到 Gateway 主机上）：
+推荐的 Anthropic 认证方式是 Claude Code CLI setup-token（可在任何地方运行；如有需要可粘贴到 Gateway网关主机上）：
 
 ```bash
 claude setup-token

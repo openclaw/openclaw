@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 上手引导新的助手实例
+  - 新手引导新的助手实例
   - 审查安全/权限影响
 summary: 将 OpenClaw 作为个人助手运行的端到端指南，包含安全注意事项
 title: 个人助手设置
@@ -15,7 +15,7 @@ x-i18n:
 
 # 使用 OpenClaw 构建个人助手
 
-OpenClaw 是一个面向 **Pi** 智能体的 WhatsApp + Telegram + Discord + iMessage Gateway。插件可添加 Mattermost 支持。本指南介绍"个人助手"设置：一个专用的 WhatsApp 号码，作为你始终在线的智能体。
+OpenClaw 是一个面向 **Pi** 智能体的 WhatsApp + Telegram + Discord + iMessage Gateway网关。插件可添加 Mattermost 支持。本指南介绍"个人助手"设置：一个专用的 WhatsApp 号码，作为你始终在线的智能体。
 
 ## ⚠️ 安全第一
 
@@ -82,7 +82,7 @@ pnpm link --global
 openclaw channels login
 ```
 
-2. 启动 Gateway（保持运行）：
+2. 启动 Gateway网关（保持运行）：
 
 ```bash
 openclaw gateway --port 18789
@@ -98,7 +98,7 @@ openclaw gateway --port 18789
 
 现在从你的允许列表手机给助手号码发消息。
 
-上手引导完成后，我们会自动打开带有 Gateway 令牌的仪表盘并打印令牌化链接。以后重新打开：`openclaw dashboard`。
+新手引导完成后，我们会自动打开带有 Gateway网关令牌的仪表盘并打印令牌化链接。以后重新打开：`openclaw dashboard`。
 
 ## 给智能体一个工作区（AGENTS）
 
@@ -229,8 +229,8 @@ OpenClaw 会提取这些内容并将其作为媒体与文本一起发送。
 ```bash
 openclaw status          # 本地状态（凭证、会话、排队事件）
 openclaw status --all    # 完整诊断（只读，可粘贴）
-openclaw status --deep   # 添加 Gateway 健康探测（Telegram + Discord）
-openclaw health --json   # Gateway 健康快照（WS）
+openclaw status --deep   # 添加 Gateway网关健康探测（Telegram + Discord）
+openclaw health --json   # Gateway网关健康快照（WS）
 ```
 
 日志位于 `/tmp/openclaw/`（默认：`openclaw-YYYY-MM-DD.log`）。
@@ -238,7 +238,7 @@ openclaw health --json   # Gateway 健康快照（WS）
 ## 后续步骤
 
 - 网页聊天：[网页聊天](/web/webchat)
-- Gateway 运维：[Gateway 运维手册](/gateway)
+- Gateway网关运维：[Gateway网关运维手册](/gateway)
 - 定时任务 + 唤醒：[定时任务](/automation/cron-jobs)
 - macOS 菜单栏伴侣应用：[OpenClaw macOS 应用](/platforms/macos)
 - iOS 节点应用：[iOS 应用](/platforms/ios)

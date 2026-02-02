@@ -159,7 +159,7 @@ steps:
 
 ## 安装 Lobster
 
-在运行 OpenClaw Gateway 的**同一主机**上安装 Lobster CLI（参见 [Lobster 仓库](https://github.com/openclaw/lobster)），并确保 `lobster` 在 `PATH` 中。
+在运行 OpenClaw Gateway网关的**同一主机**上安装 Lobster CLI（参见 [Lobster 仓库](https://github.com/openclaw/lobster)），并确保 `lobster` 在 `PATH` 中。
 如果你想使用自定义二进制文件位置，请在工具调用中传入**绝对路径** `lobsterPath`。
 
 ## 启用工具

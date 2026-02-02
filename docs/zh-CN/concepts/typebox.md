@@ -1,7 +1,7 @@
 ---
 read_when:
   - 更新协议模式或代码生成
-summary: TypeBox 模式作为 Gateway 协议的唯一事实来源
+summary: TypeBox 模式作为 Gateway网关协议的唯一事实来源
 title: TypeBox
 x-i18n:
   generated_at: "2026-02-01T20:24:36Z"
@@ -16,13 +16,13 @@ x-i18n:
 
 最后更新：2026-01-10
 
-TypeBox 是一个 TypeScript 优先的模式库。我们用它来定义 **Gateway WebSocket 协议**（握手、请求/响应、服务器事件）。这些模式驱动**运行时验证**、**JSON Schema 导出**以及 macOS 应用的 **Swift 代码生成**。一个事实来源；其他一切都是生成的。
+TypeBox 是一个 TypeScript 优先的模式库。我们用它来定义 **Gateway网关 WebSocket 协议**（握手、请求/响应、服务器事件）。这些模式驱动**运行时验证**、**JSON Schema 导出**以及 macOS 应用的 **Swift 代码生成**。一个事实来源；其他一切都是生成的。
 
-如果您想了解更高层次的协议上下文，请从 [Gateway 架构](/concepts/architecture) 开始。
+如果你想了解更高层次的协议上下文，请从 [Gateway网关架构](/concepts/architecture) 开始。
 
 ## 心智模型（30 秒）
 
-每条 Gateway WS 消息都是以下三种帧之一：
+每条 Gateway网关 WS 消息都是以下三种帧之一：
 
 - **请求**：`{ type: "req", id, method, params }`
 - **响应**：`{ type: "res", id, ok, payload | error }`
@@ -33,7 +33,7 @@ TypeBox 是一个 TypeScript 优先的模式库。我们用它来定义 **Gatewa
 连接流程（最简）：
 
 ```
-Client                    Gateway
+Client                    Gateway网关
   |---- req:connect -------->|
   |<---- res:hello-ok --------|
   |<---- event:tick ----------|
@@ -49,7 +49,7 @@ Client                    Gateway
 | 消息 | `send`、`poll`、`agent`、`agent.wait`                     | 有副作用的操作需要 `idempotencyKey` |
 | 聊天 | `chat.history`、`chat.send`、`chat.abort`、`chat.inject`  | WebChat 使用这些                    |
 | 会话 | `sessions.list`、`sessions.patch`、`sessions.delete`      | 会话管理                            |
-| 节点 | `node.list`、`node.invoke`、`node.pair.*`                 | Gateway WS + 节点操作               |
+| 节点 | `node.list`、`node.invoke`、`node.pair.*`                 | Gateway网关 WS + 节点操作               |
 | 事件 | `tick`、`presence`、`agent`、`chat`、`health`、`shutdown` | 服务器推送                          |
 
 权威列表位于 `src/gateway/server.ts`（`METHODS`、`EVENTS`）。
@@ -61,14 +61,14 @@ Client                    Gateway
 - 服务器握手 + 方法分发：`src/gateway/server.ts`
 - 节点客户端：`src/gateway/client.ts`
 - 生成的 JSON Schema：`dist/protocol.schema.json`
-- 生成的 Swift 模型：`apps/macos/Sources/OpenClawProtocol/GatewayModels.swift`
+- 生成的 Swift 模型：`apps/macos/Sources/OpenClawProtocol/Gateway网关Models.swift`
 
 ## 当前流水线
 
 - `pnpm protocol:gen`
   - 将 JSON Schema（draft‑07）写入 `dist/protocol.schema.json`
 - `pnpm protocol:gen:swift`
-  - 生成 Swift Gateway 模型
+  - 生成 Swift Gateway网关模型
 - `pnpm protocol:check`
   - 运行两个生成器并验证输出已提交
 
@@ -76,7 +76,7 @@ Client                    Gateway
 
 - **服务器端**：每个入站帧都通过 AJV 验证。握手仅接受参数匹配 `ConnectParams` 的 `connect` 请求。
 - **客户端**：JS 客户端在使用事件和响应帧之前进行验证。
-- **方法接口**：Gateway 在 `hello-ok` 中公布支持的 `methods` 和 `events`。
+- **方法接口**：Gateway网关在 `hello-ok` 中公布支持的 `methods` 和 `events`。
 
 ## 示例帧
 
@@ -228,7 +228,7 @@ export const validateSystemEchoParams = ajv.compile<SystemEchoParams>(SystemEcho
 在 `src/gateway/server-methods/system.ts` 中添加处理器：
 
 ```ts
-export const systemHandlers: GatewayRequestHandlers = {
+export const systemHandlers: Gateway网关RequestHandlers = {
   "system.echo": ({ params, respond }) => {
     const text = String(params.text ?? "");
     respond(true, { ok: true, text });
@@ -252,7 +252,7 @@ pnpm protocol:check
 
 Swift 生成器输出：
 
-- 包含 `req`、`res`、`event` 和 `unknown` case 的 `GatewayFrame` 枚举
+- 包含 `req`、`res`、`event` 和 `unknown` case 的 `Gateway网关Frame` 枚举
 - 强类型的 payload 结构体/枚举
 - `ErrorCode` 值和 `GATEWAY_PROTOCOL_VERSION`
 
@@ -268,7 +268,7 @@ Swift 生成器输出：
 
 - 大多数对象使用 `additionalProperties: false` 以实现严格的 payload。
 - `NonEmptyString` 是 ID 和方法/事件名称的默认类型。
-- 顶层 `GatewayFrame` 在 `type` 上使用**鉴别器**。
+- 顶层 `Gateway网关Frame` 在 `type` 上使用**鉴别器**。
 - 有副作用的方法通常需要在参数中包含 `idempotencyKey`（示例：`send`、`poll`、`agent`、`chat.send`）。
 
 ## 实时 Schema JSON
@@ -277,7 +277,7 @@ Swift 生成器输出：
 
 - https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json
 
-## 当您更改模式时
+## 当你更改模式时
 
 1. 更新 TypeBox 模式。
 2. 运行 `pnpm protocol:check`。

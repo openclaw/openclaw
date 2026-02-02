@@ -1,7 +1,7 @@
 ---
 read_when:
   - 集成需要 OpenAI Chat Completions 的工具
-summary: 从 Gateway 暴露一个兼容 OpenAI 的 /v1/chat/completions HTTP 端点
+summary: 从 Gateway网关暴露一个兼容 OpenAI 的 /v1/chat/completions HTTP 端点
 title: OpenAI Chat Completions
 x-i18n:
   generated_at: "2026-02-01T20:35:14Z"
@@ -14,18 +14,18 @@ x-i18n:
 
 # OpenAI Chat Completions (HTTP)
 
-OpenClaw 的 Gateway 可以提供一个小型的兼容 OpenAI 的 Chat Completions 端点。
+OpenClaw 的 Gateway网关可以提供一个小型的兼容 OpenAI 的 Chat Completions 端点。
 
 此端点**默认禁用**。请先在配置中启用它。
 
 - `POST /v1/chat/completions`
-- 与 Gateway 使用相同端口（WS + HTTP 多路复用）：`http://<gateway-host>:<port>/v1/chat/completions`
+- 与 Gateway网关使用相同端口（WS + HTTP 多路复用）：`http://<gateway-host>:<port>/v1/chat/completions`
 
-在底层，请求会作为普通的 Gateway 智能体运行来执行（与 `openclaw agent` 相同的代码路径），因此路由/权限/配置与您的 Gateway 保持一致。
+在底层，请求会作为普通的 Gateway网关智能体运行来执行（与 `openclaw agent` 相同的代码路径），因此路由/权限/配置与你的 Gateway网关保持一致。
 
 ## 认证
 
-使用 Gateway 的认证配置。发送 Bearer 令牌：
+使用 Gateway网关的认证配置。发送 Bearer 令牌：
 
 - `Authorization: Bearer <token>`
 
@@ -85,7 +85,7 @@ OpenClaw 的 Gateway 可以提供一个小型的兼容 OpenAI 的 Chat Completio
 
 默认情况下，端点**每次请求无状态**（每次调用生成一个新的会话密钥）。
 
-如果请求中包含 OpenAI 的 `user` 字符串，Gateway 会根据它派生一个稳定的会话密钥，这样重复调用可以共享同一个智能体会话。
+如果请求中包含 OpenAI 的 `user` 字符串，Gateway网关会根据它派生一个稳定的会话密钥，这样重复调用可以共享同一个智能体会话。
 
 ## 流式传输 (SSE)
 

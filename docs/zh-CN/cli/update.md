@@ -2,7 +2,7 @@
 read_when:
   - 你想安全地更新源码检出
   - 你需要了解 `--update` 简写行为
-summary: "`openclaw update`（安全的源码更新 + Gateway 自动重启）的 CLI 参考"
+summary: "`openclaw update`（安全的源码更新 + Gateway网关自动重启）的 CLI 参考"
 title: update
 x-i18n:
   generated_at: "2026-02-01T20:21:45Z"
@@ -35,7 +35,7 @@ openclaw --update
 
 ## 选项
 
-- `--no-restart`：成功更新后跳过重启 Gateway 服务。
+- `--no-restart`：成功更新后跳过重启 Gateway网关服务。
 - `--channel <stable|beta|dev>`：设置更新渠道（git + npm；持久化到配置中）。
 - `--tag <dist-tag|version>`：仅为本次更新覆盖 npm dist-tag 或版本。
 - `--json`：输出机器可读的 `UpdateRunResult` JSON。
@@ -60,7 +60,7 @@ openclaw update status --timeout 10
 
 ## `update wizard`
 
-交互式流程，用于选择更新渠道并确认更新后是否重启 Gateway（默认重启）。如果你选择 `dev` 但没有 git 检出，它会提供创建一个的选项。
+交互式流程，用于选择更新渠道并确认更新后是否重启 Gateway网关（默认重启）。如果你选择 `dev` 但没有 git 检出，它会提供创建一个的选项。
 
 ## 工作原理
 

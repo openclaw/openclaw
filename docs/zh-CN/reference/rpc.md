@@ -2,7 +2,7 @@
 read_when:
   - 添加或修改外部 CLI 集成
   - 调试 RPC 适配器（signal-cli、imsg）
-summary: 外部 CLI（signal-cli、imsg）的 RPC 适配器及 Gateway 模式
+summary: 外部 CLI（signal-cli、imsg）的 RPC 适配器及 Gateway网关模式
 title: RPC 适配器
 x-i18n:
   generated_at: "2026-02-01T21:37:06Z"
@@ -43,6 +43,6 @@ OpenClaw 通过 JSON-RPC 集成外部 CLI。目前使用两种模式。
 
 ## 适配器指南
 
-- Gateway 管理进程（启动/停止与提供商生命周期绑定）。
+- Gateway网关管理进程（启动/停止与提供商生命周期绑定）。
 - 保持 RPC 客户端的弹性：超时、退出时重启。
 - 优先使用稳定 ID（例如 `chat_id`）而非显示字符串。

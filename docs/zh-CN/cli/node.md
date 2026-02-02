@@ -15,7 +15,7 @@ x-i18n:
 
 # `openclaw node`
 
-运行一个**无头节点主机**，连接到 Gateway WebSocket 并在本机上暴露
+运行一个**无头节点主机**，连接到 Gateway网关 WebSocket 并在本机上暴露
 `system.run` / `system.which`。
 
 ## 为什么使用节点主机？
@@ -25,7 +25,7 @@ x-i18n:
 常见用例：
 
 - 在远程 Linux/Windows 机器上运行命令（构建服务器、实验室机器、NAS）。
-- 在 Gateway 上保持执行**沙箱化**，但将已批准的运行委派给其他主机。
+- 在 Gateway网关上保持执行**沙箱隔离**，但将已批准的运行委派给其他主机。
 - 为自动化或 CI 节点提供轻量级、无头的执行目标。
 
 执行仍受**执行审批**和节点主机上的按智能体白名单保护，因此你可以保持命令访问的范围明确可控。
@@ -54,9 +54,9 @@ openclaw node run --host <gateway-host> --port 18789
 
 选项：
 
-- `--host <host>`：Gateway WebSocket 主机（默认：`127.0.0.1`）
-- `--port <port>`：Gateway WebSocket 端口（默认：`18789`）
-- `--tls`：为 Gateway 连接使用 TLS
+- `--host <host>`：Gateway网关 WebSocket 主机（默认：`127.0.0.1`）
+- `--port <port>`：Gateway网关 WebSocket 端口（默认：`18789`）
+- `--tls`：为 Gateway网关连接使用 TLS
 - `--tls-fingerprint <sha256>`：预期的 TLS 证书指纹（sha256）
 - `--node-id <id>`：覆盖节点 ID（清除配对令牌）
 - `--display-name <name>`：覆盖节点显示名称
@@ -71,9 +71,9 @@ openclaw node install --host <gateway-host> --port 18789
 
 选项：
 
-- `--host <host>`：Gateway WebSocket 主机（默认：`127.0.0.1`）
-- `--port <port>`：Gateway WebSocket 端口（默认：`18789`）
-- `--tls`：为 Gateway 连接使用 TLS
+- `--host <host>`：Gateway网关 WebSocket 主机（默认：`127.0.0.1`）
+- `--port <port>`：Gateway网关 WebSocket 端口（默认：`18789`）
+- `--tls`：为 Gateway网关连接使用 TLS
 - `--tls-fingerprint <sha256>`：预期的 TLS 证书指纹（sha256）
 - `--node-id <id>`：覆盖节点 ID（清除配对令牌）
 - `--display-name <name>`：覆盖节点显示名称
@@ -95,7 +95,7 @@ openclaw node uninstall
 
 ## 配对
 
-首次连接会在 Gateway 上创建一个待处理的节点配对请求。
+首次连接会在 Gateway网关上创建一个待处理的节点配对请求。
 通过以下方式批准：
 
 ```bash
@@ -103,7 +103,7 @@ openclaw nodes pending
 openclaw nodes approve <requestId>
 ```
 
-节点主机将其节点 ID、令牌、显示名称和 Gateway 连接信息存储在
+节点主机将其节点 ID、令牌、显示名称和 Gateway网关连接信息存储在
 `~/.openclaw/node.json` 中。
 
 ## 执行审批
@@ -112,4 +112,4 @@ openclaw nodes approve <requestId>
 
 - `~/.openclaw/exec-approvals.json`
 - [执行审批](/tools/exec-approvals)
-- `openclaw approvals --node <id|name|ip>`（从 Gateway 编辑）
+- `openclaw approvals --node <id|name|ip>`（从 Gateway网关编辑）

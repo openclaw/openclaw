@@ -1,10 +1,10 @@
 ---
 read_when:
   - 你希望 OpenClaw 在云端 VPS（而非笔记本电脑）上全天候运行
-  - 你需要在自己的 VPS 上部署一个生产级、始终在线的 Gateway
+  - 你需要在自己的 VPS 上部署一个生产级、始终在线的 Gateway网关
   - 你希望完全掌控持久化、二进制文件和重启行为
   - 你正在 Hetzner 或类似提供商上通过 Docker 运行 OpenClaw
-summary: 在廉价的 Hetzner VPS 上通过 Docker 全天候运行 OpenClaw Gateway，支持持久化状态和内置二进制文件
+summary: 在廉价的 Hetzner VPS 上通过 Docker 全天候运行 OpenClaw Gateway网关，支持持久化状态和内置二进制文件
 title: Hetzner
 x-i18n:
   generated_at: "2026-02-01T21:32:45Z"
@@ -19,7 +19,7 @@ x-i18n:
 
 ## 目标
 
-使用 Docker 在 Hetzner VPS 上运行持久化的 OpenClaw Gateway，支持持久化状态、内置二进制文件和安全的重启行为。
+使用 Docker 在 Hetzner VPS 上运行持久化的 OpenClaw Gateway网关，支持持久化状态、内置二进制文件和安全的重启行为。
 
 如果你想要"每月约 $5 实现 OpenClaw 全天候运行"，这是最简单可靠的方案。
 Hetzner 定价会变动；选择最小的 Debian/Ubuntu VPS，如果遇到内存不足（OOM）再扩容。
@@ -28,11 +28,11 @@ Hetzner 定价会变动；选择最小的 Debian/Ubuntu VPS，如果遇到内存
 
 - 租一台小型 Linux 服务器（Hetzner VPS）
 - 安装 Docker（隔离的应用运行时）
-- 在 Docker 中启动 OpenClaw Gateway
+- 在 Docker 中启动 OpenClaw Gateway网关
 - 将 `~/.openclaw` + `~/.openclaw/workspace` 持久化到宿主机（重启/重建后数据不丢失）
 - 通过 SSH 隧道从笔记本电脑访问控制界面
 
-Gateway 可通过以下方式访问：
+Gateway网关可通过以下方式访问：
 
 - 从笔记本电脑进行 SSH 端口转发
 - 如果你自行管理防火墙和令牌，也可以直接暴露端口
@@ -52,7 +52,7 @@ Gateway 可通过以下方式访问：
 5. 配置 `.env` 和 `docker-compose.yml`
 6. 将所需二进制文件内置到镜像中
 7. `docker compose up -d`
-8. 验证持久化和 Gateway 访问
+8. 验证持久化和 Gateway网关访问
 
 ---
 
@@ -183,7 +183,7 @@ services:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
     ports:
-      # 推荐：在 VPS 上仅绑定回环地址；通过 SSH 隧道访问。
+      # 推荐：在 VPS 上仅绑定 local loopback；通过 SSH 隧道访问。
       # 如需公开暴露，移除 `127.0.0.1:` 前缀并相应配置防火墙。
       - "127.0.0.1:${OPENCLAW_GATEWAY_PORT}:18789"
 
@@ -209,7 +209,7 @@ services:
 在运行中的容器内安装二进制文件是一个陷阱。
 任何在运行时安装的内容都会在重启后丢失。
 
-技能所需的所有外部二进制文件必须在镜像构建时安装。
+Skills 所需的所有外部二进制文件必须在镜像构建时安装。
 
 以下示例仅展示三个常见的二进制文件：
 
@@ -220,7 +220,7 @@ services:
 这些只是示例，并非完整列表。
 你可以使用相同的模式安装任意数量的二进制文件。
 
-如果你后续添加了依赖额外二进制文件的新技能，你必须：
+如果你后续添加了依赖额外二进制文件的新 Skills，你必须：
 
 1. 更新 Dockerfile
 2. 重新构建镜像
@@ -292,7 +292,7 @@ docker compose exec openclaw-gateway which wacli
 
 ---
 
-## 9) 验证 Gateway
+## 9) 验证 Gateway网关
 
 ```bash
 docker compose logs -f openclaw-gateway
@@ -314,7 +314,7 @@ ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
 
 `http://127.0.0.1:18789/`
 
-粘贴你的 Gateway 令牌。
+粘贴你的 Gateway网关令牌。
 
 ---
 
@@ -325,9 +325,9 @@ OpenClaw 在 Docker 中运行，但 Docker 不是数据源。
 
 | 组件           | 位置                              | 持久化机制      | 备注                        |
 | -------------- | --------------------------------- | --------------- | --------------------------- |
-| Gateway 配置   | `/home/node/.openclaw/`           | 宿主机卷挂载    | 包含 `openclaw.json`、令牌  |
+| Gateway网关配置   | `/home/node/.openclaw/`           | 宿主机卷挂载    | 包含 `openclaw.json`、令牌  |
 | 模型认证配置   | `/home/node/.openclaw/`           | 宿主机卷挂载    | OAuth 令牌、API 密钥        |
-| 技能配置       | `/home/node/.openclaw/skills/`    | 宿主机卷挂载    | 技能级别状态                |
+| Skills配置       | `/home/node/.openclaw/skills/`    | 宿主机卷挂载    | Skills 级别状态                |
 | 智能体工作区   | `/home/node/.openclaw/workspace/` | 宿主机卷挂载    | 代码和智能体产物            |
 | WhatsApp 会话  | `/home/node/.openclaw/`           | 宿主机卷挂载    | 保留二维码登录状态          |
 | Gmail 密钥环   | `/home/node/.openclaw/`           | 宿主机卷 + 密码 | 需要 `GOG_KEYRING_PASSWORD` |

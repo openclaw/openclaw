@@ -1,6 +1,6 @@
 ---
 read_when:
-  - 你想在云端运行 Gateway
+  - 你想在云端运行 Gateway网关
   - 你需要一份 VPS/托管指南的快速索引
 summary: OpenClaw 的 VPS 托管中心（Oracle/Fly/Hetzner/GCP/exe.dev）
 title: VPS 托管
@@ -31,17 +31,17 @@ x-i18n:
 
 ## 云端设置的工作方式
 
-- **Gateway 运行在 VPS 上**，拥有状态和工作区。
+- **Gateway网关运行在 VPS 上**，拥有状态和工作区。
 - 你通过**控制 UI** 或 **Tailscale/SSH** 从笔记本电脑/手机连接。
 - 将 VPS 视为数据源，并**备份**状态和工作区。
-- 安全默认设置：将 Gateway 绑定在回环地址上，通过 SSH 隧道或 Tailscale Serve 访问。
+- 安全默认设置：将 Gateway网关绑定在 local loopback 上，通过 SSH 隧道或 Tailscale Serve 访问。
   如果绑定到 `lan`/`tailnet`，请设置 `gateway.auth.token` 或 `gateway.auth.password`。
 
-远程访问：[Gateway 远程访问](/gateway/remote)
+远程访问：[Gateway网关远程访问](/gateway/remote)
 平台中心：[平台](/platforms)
 
 ## 在 VPS 上使用节点
 
-你可以将 Gateway 保留在云端，并在本地设备（Mac/iOS/Android/无头设备）上配对**节点**。节点提供本地屏幕/摄像头/画布和 `system.run` 功能，而 Gateway 保持在云端运行。
+你可以将 Gateway网关保留在云端，并在本地设备（Mac/iOS/Android/无头设备）上配对**节点**。节点提供本地屏幕/摄像头/画布和 `system.run` 功能，而 Gateway网关保持在云端运行。
 
 文档：[节点](/nodes)、[节点 CLI](/cli/nodes)

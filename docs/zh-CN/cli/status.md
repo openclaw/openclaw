@@ -28,6 +28,6 @@ openclaw status --usage
 
 - `--deep` 会运行实时探测（WhatsApp Web + Telegram + Discord + Google Chat + Slack + Signal）。
 - 当配置了多个智能体时，输出包含每个智能体的会话存储。
-- 概览包含 Gateway 和节点主机服务的安装/运行状态（如可用）。
+- 概览包含 Gateway网关和节点主机服务的安装/运行状态（如可用）。
 - 概览包含更新渠道和 git SHA（适用于源码检出）。
 - 更新信息会显示在概览中；如果有可用更新，状态会提示运行 `openclaw update`（参见[更新](/install/updating)）。

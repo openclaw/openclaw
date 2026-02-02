@@ -1,7 +1,7 @@
 ---
 read_when:
   - 更改日志输出或格式
-  - 调试 CLI 或 Gateway 输出
+  - 调试 CLI 或 Gateway网关输出
 summary: 日志界面、文件日志、WebSocket 日志样式和控制台格式化
 title: 日志
 x-i18n:
@@ -20,19 +20,19 @@ x-i18n:
 OpenClaw 有两个日志"界面"：
 
 - **控制台输出**（你在终端 / 调试界面中看到的内容）。
-- **文件日志**（JSON 行），由 Gateway 日志记录器写入。
+- **文件日志**（JSON 行），由 Gateway网关日志记录器写入。
 
 ## 基于文件的日志记录器
 
 - 默认滚动日志文件位于 `/tmp/openclaw/` 下（每天一个文件）：`openclaw-YYYY-MM-DD.log`
-  - 日期使用 Gateway 主机的本地时区。
+  - 日期使用 Gateway网关主机的本地时区。
 - 日志文件路径和级别可通过 `~/.openclaw/openclaw.json` 配置：
   - `logging.file`
   - `logging.level`
 
 文件格式为每行一个 JSON 对象。
 
-控制界面的日志标签页通过 Gateway（`logs.tail`）实时追踪此文件。
+控制界面的日志标签页通过 Gateway网关（`logs.tail`）实时追踪此文件。
 CLI 也可以执行相同操作：
 
 ```bash
@@ -64,9 +64,9 @@ CLI 捕获 `console.log/info/warn/error/debug/trace` 并将其写入文件日志
   - 匹配项通过保留前 6 个和后 4 个字符进行掩码（长度 >= 18），否则显示 `***`。
   - 默认覆盖常见的键赋值、CLI 标志、JSON 字段、bearer 头、PEM 块和常见的令牌前缀。
 
-## Gateway WebSocket 日志
+## Gateway网关 WebSocket 日志
 
-Gateway 以两种模式打印 WebSocket 协议日志：
+Gateway网关以两种模式打印 WebSocket 协议日志：
 
 - **普通模式（无 `--verbose`）**：仅打印"有意义的" RPC 结果：
   - 错误（`ok=false`）
@@ -76,7 +76,7 @@ Gateway 以两种模式打印 WebSocket 协议日志：
 
 ### WebSocket 日志样式
 
-`openclaw gateway` 支持按 Gateway 设置的样式开关：
+`openclaw gateway` 支持按 Gateway网关设置的样式开关：
 
 - `--ws-log auto`（默认）：普通模式经过优化；详细模式使用紧凑输出
 - `--ws-log compact`：详细模式下使用紧凑输出（配对的请求/响应）

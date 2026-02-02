@@ -12,7 +12,7 @@ x-i18n:
 
 # Fly.io 部署
 
-**目标：** 在 [Fly.io](https://fly.io) 机器上运行 OpenClaw Gateway，配备持久化存储、自动 HTTPS 和 Discord/渠道访问。
+**目标：** 在 [Fly.io](https://fly.io) 机器上运行 OpenClaw Gateway网关，配备持久化存储、自动 HTTPS 和 Discord/渠道访问。
 
 ## 你需要什么
 
@@ -87,7 +87,7 @@ primary_region = "iad"
 
 | 设置                           | 原因                                                                      |
 | ------------------------------ | ------------------------------------------------------------------------- |
-| `--bind lan`                   | 绑定到 `0.0.0.0`，使 Fly 的代理能够访问 Gateway                           |
+| `--bind lan`                   | 绑定到 `0.0.0.0`，使 Fly 的代理能够访问 Gateway网关                           |
 | `--allow-unconfigured`         | 无需配置文件即可启动（之后再创建）                                        |
 | `internal_port = 3000`         | 必须与 `--port 3000`（或 `OPENCLAW_GATEWAY_PORT`）匹配，用于 Fly 健康检查 |
 | `memory = "2048mb"`            | 512MB 太小；推荐 2GB                                                      |
@@ -96,7 +96,7 @@ primary_region = "iad"
 ## 3）设置密钥
 
 ```bash
-# 必需：Gateway 令牌（用于非回环绑定）
+# 必需：Gateway网关令牌（用于非 local loopback 绑定）
 fly secrets set OPENCLAW_GATEWAY_TOKEN=$(openssl rand -hex 32)
 
 # 模型提供商 API 密钥
@@ -112,7 +112,7 @@ fly secrets set DISCORD_BOT_TOKEN=MTQ...
 
 **注意事项：**
 
-- 非回环绑定（`--bind lan`）出于安全需要 `OPENCLAW_GATEWAY_TOKEN`。
+- 非 local loopback 绑定（`--bind lan`）出于安全需要 `OPENCLAW_GATEWAY_TOKEN`。
 - 请像对待密码一样对待这些令牌。
 - **所有 API 密钥和令牌优先使用环境变量而非配置文件**。这样可以避免密钥出现在 `openclaw.json` 中，防止意外暴露或被记录到日志。
 
@@ -209,7 +209,7 @@ EOF
 - 环境变量：`DISCORD_BOT_TOKEN`（推荐用于密钥）
 - 配置文件：`channels.discord.token`
 
-如果使用环境变量，无需在配置中添加令牌。Gateway 会自动读取 `DISCORD_BOT_TOKEN`。
+如果使用环境变量，无需在配置中添加令牌。Gateway网关会自动读取 `DISCORD_BOT_TOKEN`。
 
 重启以应用配置：
 
@@ -218,7 +218,7 @@ exit
 fly machine restart <machine-id>
 ```
 
-## 6）访问 Gateway
+## 6）访问 Gateway网关
 
 ### 控制面板 UI
 
@@ -230,7 +230,7 @@ fly open
 
 或访问 `https://my-openclaw.fly.dev/`
 
-粘贴你的 Gateway 令牌（即 `OPENCLAW_GATEWAY_TOKEN` 的值）进行认证。
+粘贴你的 Gateway网关令牌（即 `OPENCLAW_GATEWAY_TOKEN` 的值）进行认证。
 
 ### 日志
 
@@ -249,15 +249,15 @@ fly ssh console
 
 ### "App is not listening on expected address"
 
-Gateway 绑定到了 `127.0.0.1` 而不是 `0.0.0.0`。
+Gateway网关绑定到了 `127.0.0.1` 而不是 `0.0.0.0`。
 
 **修复：** 在 `fly.toml` 的进程命令中添加 `--bind lan`。
 
 ### 健康检查失败 / 连接被拒绝
 
-Fly 无法通过配置的端口访问 Gateway。
+Fly 无法通过配置的端口访问 Gateway网关。
 
-**修复：** 确保 `internal_port` 与 Gateway 端口匹配（设置 `--port 3000` 或 `OPENCLAW_GATEWAY_PORT=3000`）。
+**修复：** 确保 `internal_port` 与 Gateway网关端口匹配（设置 `--port 3000` 或 `OPENCLAW_GATEWAY_PORT=3000`）。
 
 ### 内存不足（OOM）/ 内存问题
 
@@ -278,9 +278,9 @@ fly machine update <machine-id> --vm-memory 2048 -y
 
 **注意：** 512MB 太小。1GB 可能可以工作但在负载或详细日志记录下可能 OOM。**推荐 2GB。**
 
-### Gateway 锁文件问题
+### Gateway网关锁文件问题
 
-Gateway 拒绝启动并报"already running"错误。
+Gateway网关拒绝启动并报"already running"错误。
 
 这发生在容器重启但 PID 锁文件在卷上持久保留时。
 
@@ -295,7 +295,7 @@ fly machine restart <machine-id>
 
 ### 配置未被读取
 
-如果使用 `--allow-unconfigured`，Gateway 会创建一个最小配置。你在 `/data/openclaw.json` 的自定义配置应在重启后被读取。
+如果使用 `--allow-unconfigured`，Gateway网关会创建一个最小配置。你在 `/data/openclaw.json` 的自定义配置应在重启后被读取。
 
 验证配置是否存在：
 
@@ -361,7 +361,7 @@ fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js g
 
 ## 私有部署（加固）
 
-默认情况下，Fly 分配公网 IP，使你的 Gateway 可通过 `https://your-app.fly.dev` 访问。这很方便，但意味着你的部署可被互联网扫描器（Shodan、Censys 等）发现。
+默认情况下，Fly 分配公网 IP，使你的 Gateway网关可通过 `https://your-app.fly.dev` 访问。这很方便，但意味着你的部署可被互联网扫描器（Shodan、Censys 等）发现。
 
 如需**无公网暴露**的加固部署，请使用私有模板。
 
@@ -369,7 +369,7 @@ fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js g
 
 - 你只进行**出站**调用/消息（无入站 webhook）
 - 你使用 **ngrok 或 Tailscale** 隧道处理 webhook 回调
-- 你通过 **SSH、代理或 WireGuard** 访问 Gateway 而非浏览器
+- 你通过 **SSH、代理或 WireGuard** 访问 Gateway网关而非浏览器
 - 你希望部署**对互联网扫描器不可见**
 
 ### 设置
@@ -476,7 +476,7 @@ ngrok 隧道在容器内运行，提供公共 webhook URL 而不暴露 Fly 应�
 
 - Fly.io 使用 **x86 架构**（非 ARM）
 - Dockerfile 兼容两种架构
-- WhatsApp/Telegram 上手引导请使用 `fly ssh console`
+- WhatsApp/Telegram 新手引导请使用 `fly ssh console`
 - 持久化数据存储在 `/data` 卷上
 - Signal 需要 Java + signal-cli；请使用自定义镜像并保持内存在 2GB+ 以上。
 

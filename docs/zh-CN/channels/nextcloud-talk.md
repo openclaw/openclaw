@@ -32,7 +32,7 @@ openclaw plugins install @openclaw/nextcloud-talk
 openclaw plugins install ./extensions/nextcloud-talk
 ```
 
-如果你在配置/上手引导期间选择了 Nextcloud Talk 并检测到 git 检出，OpenClaw 会自动提供本地安装路径。
+如果你在配置/新手引导期间选择了 Nextcloud Talk 并检测到 git 检出，OpenClaw 会自动提供本地安装路径。
 
 详情：[插件](/plugin)
 
@@ -47,7 +47,7 @@ openclaw plugins install ./extensions/nextcloud-talk
 4. 配置 OpenClaw：
    - 配置：`channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
    - 或环境变量：`NEXTCLOUD_TALK_BOT_SECRET`（仅默认账户）
-5. 重启 Gateway（或完成上手引导）。
+5. 重启 Gateway网关（或完成新手引导）。
 
 最小配置：
 
@@ -67,7 +67,7 @@ openclaw plugins install ./extensions/nextcloud-talk
 ## 注意事项
 
 - 机器人无法主动发起私信。用户必须先给机器人发消息。
-- Webhook URL 必须能被 Gateway 访问；如果在代理后面，请设置 `webhookPublicUrl`。
+- Webhook URL 必须能被 Gateway网关访问；如果在代理后面，请设置 `webhookPublicUrl`。
 - 机器人 API 不支持媒体上传；媒体以 URL 形式发送。
 - Webhook 负载不区分私信和房间；设置 `apiUser` + `apiPassword` 以启用房间类型查询（否则私信会被视为房间）。
 

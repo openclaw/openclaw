@@ -46,7 +46,7 @@ MiniMax 在 M2.1 中重点改进了以下方面：
 
 ```bash
 openclaw plugins enable minimax-portal-auth  # 如已加载则跳过
-openclaw gateway restart  # 如 Gateway 已在运行则重启
+openclaw gateway restart  # 如 Gateway网关已在运行则重启
 openclaw onboard --auth-choice minimax-portal
 ```
 
@@ -189,7 +189,7 @@ openclaw onboard --auth-choice minimax-portal
 
 这通常意味着 **MiniMax 提供商未配置**（没有提供商条目，也未找到 MiniMax 认证配置文件/环境变量密钥）。此检测的修复包含在 **2026.1.12** 版本中（撰写本文时尚未发布）。修复方法：
 
-- 升级到 **2026.1.12**（或从源码 `main` 分支运行），然后重启 Gateway。
+- 升级到 **2026.1.12**（或从源码 `main` 分支运行），然后重启 Gateway网关。
 - 运行 `openclaw configure` 并选择 **MiniMax M2.1**，或
 - 手动添加 `models.providers.minimax` 配置块，或
 - 设置 `MINIMAX_API_KEY`（或 MiniMax 认证配置文件）以便注入提供商。

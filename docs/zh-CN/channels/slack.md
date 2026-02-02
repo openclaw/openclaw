@@ -19,7 +19,7 @@ x-i18n:
 
 1. 创建一个 Slack 应用并启用 **Socket Mode**。
 2. 创建一个 **App Token**（`xapp-...`）和 **Bot Token**（`xoxb-...`）。
-3. 为 OpenClaw 设置 token 并启动 Gateway。
+3. 为 OpenClaw 设置 token 并启动 Gateway网关。
 
 最小配置：
 
@@ -126,14 +126,14 @@ OpenClaw 可以使用 Slack 用户 token（`xoxp-...`）进行读取操作（历
 
 ## HTTP 模式（Events API）
 
-当你的 Gateway 可通过 HTTPS 被 Slack 访问时使用 HTTP webhook 模式（适用于服务器部署）。HTTP 模式使用 Events API + Interactivity + Slash Commands，共享请求 URL。
+当你的 Gateway网关可通过 HTTPS 被 Slack 访问时使用 HTTP webhook 模式（适用于服务器部署）。HTTP 模式使用 Events API + Interactivity + Slash Commands，共享请求 URL。
 
 ### 设置
 
 1. 创建 Slack 应用并**禁用 Socket Mode**（如果你只使用 HTTP 则可选）。
 2. **Basic Information** → 复制 **Signing Secret**。
 3. **OAuth & Permissions** → 安装应用并复制 **Bot User OAuth Token**（`xoxb-...`）。
-4. **Event Subscriptions** → 启用事件并将 **Request URL** 设置为你的 Gateway webhook 路径（默认 `/slack/events`）。
+4. **Event Subscriptions** → 启用事件并将 **Request URL** 设置为你的 Gateway网关 webhook 路径（默认 `/slack/events`）。
 5. **Interactivity & Shortcuts** → 启用并设置相同的 **Request URL**。
 6. **Slash Commands** → 为你的命令设置相同的 **Request URL**。
 
@@ -490,7 +490,7 @@ Token 也可以通过环境变量提供：
 - `toolsBySender`：可选的频道内按发送者工具策略覆盖（键为发送者 ID/@用户名/邮箱；支持 `"*"` 通配符）。
 - `allowBots`：允许此频道中机器人发送的消息（默认：false）。
 - `users`：可选的按频道用户允许列表。
-- `skills`：技能过滤器（省略 = 所有技能，空 = 无）。
+- `skills`：Skills 过滤器（省略 = 所有 Skills，空 = 无）。
 - `systemPrompt`：频道的额外系统提示（与主题/目的合并）。
 - `enabled`：设置 `false` 可禁用频道。
 

@@ -25,8 +25,8 @@ x-i18n:
 
 ## 常用标志
 
-- `--url <gatewayWsUrl>`：Gateway WebSocket URL（默认使用配置值）。
-- `--token <token>`：Gateway 令牌（如需要）。
+- `--url <gatewayWsUrl>`：Gateway网关 WebSocket URL（默认使用配置值）。
+- `--token <token>`：Gateway网关令牌（如需要）。
 - `--timeout <ms>`：请求超时时间（毫秒）。
 - `--browser-profile <name>`：选择浏览器配置文件（默认使用配置值）。
 - `--json`：机器可读输出（在支持的情况下）。
@@ -107,7 +107,7 @@ openclaw browser extension path
 
 ## 远程浏览器控制（节点主机代理）
 
-如果 Gateway 与浏览器运行在不同的机器上，请在安装了 Chrome/Brave/Edge/Chromium 的机器上运行**节点主机**。Gateway 会将浏览器操作代理到该节点（无需单独的浏览器控制服务器）。
+如果 Gateway网关与浏览器运行在不同的机器上，请在安装了 Chrome/Brave/Edge/Chromium 的机器上运行**节点主机**。Gateway网关会将浏览器操作代理到该节点（无需单独的浏览器控制服务器）。
 
 使用 `gateway.nodes.browser.mode` 控制自动路由，使用 `gateway.nodes.browser.node` 在多个节点连接时固定到特定节点。
 

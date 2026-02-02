@@ -1,9 +1,9 @@
 ---
 read_when:
-  - 您需要了解网络架构和安全概览
-  - 您正在调试本地访问与 tailnet 访问或配对问题
-  - 您想获取网络文档的权威列表
-summary: 网络中心：Gateway 接口、配对、发现和安全
+  - 你需要了解网络架构和安全概览
+  - 你正在调试本地访问与 tailnet 访问或配对问题
+  - 你想获取网络文档的权威列表
+summary: 网络中心：Gateway网关接口、配对、发现和安全
 title: 网络
 x-i18n:
   generated_at: "2026-02-01T21:17:17Z"
@@ -20,21 +20,21 @@ x-i18n:
 
 ## 核心模型
 
-- [Gateway 架构](/concepts/architecture)
-- [Gateway 协议](/gateway/protocol)
-- [Gateway 运维手册](/gateway)
+- [Gateway网关架构](/concepts/architecture)
+- [Gateway网关协议](/gateway/protocol)
+- [Gateway网关运维手册](/gateway)
 - [Web 接口 + 绑定模式](/web)
 
 ## 配对 + 身份
 
-- [配对概览（DM + 节点）](/start/pairing)
-- [Gateway 拥有的节点配对](/gateway/pairing)
+- [配对概览（私信 + 节点）](/start/pairing)
+- [Gateway网关拥有的节点配对](/gateway/pairing)
 - [设备 CLI（配对 + 令牌轮换）](/cli/devices)
-- [配对 CLI（DM 审批）](/cli/pairing)
+- [配对 CLI（私信 审批）](/cli/pairing)
 
 本地信任：
 
-- 本地连接（回环地址或 Gateway 主机自身的 tailnet 地址）可以自动批准配对，以保持同主机用户体验的流畅性。
+- 本地连接（local loopback 或 Gateway网关主机自身的 tailnet 地址）可以自动批准配对，以保持同主机用户体验的流畅性。
 - 非本地的 tailnet/局域网客户端仍需要明确的配对审批。
 
 ## 发现 + 传输
@@ -54,6 +54,6 @@ x-i18n:
 ## 安全
 
 - [安全概览](/gateway/security)
-- [Gateway 配置参考](/gateway/configuration)
+- [Gateway网关配置参考](/gateway/configuration)
 - [故障排除](/gateway/troubleshooting)
 - [Doctor](/gateway/doctor)

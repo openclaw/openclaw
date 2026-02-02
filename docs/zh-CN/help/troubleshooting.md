@@ -27,7 +27,7 @@ openclaw logs --follow
 openclaw doctor
 ```
 
-如果 Gateway 可达，进行深度探测：
+如果 Gateway网关可达，进行深度探测：
 
 ```bash
 openclaw status --deep
@@ -57,14 +57,14 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --beta --verbose
 
 你也可以设置 `OPENCLAW_VERBOSE=1` 来代替该标志。
 
-### Gateway "unauthorized"、无法连接或持续重连
+### Gateway网关 "unauthorized"、无法连接或持续重连
 
-- [Gateway 故障排除](/gateway/troubleshooting)
-- [Gateway 认证](/gateway/authentication)
+- [Gateway网关故障排除](/gateway/troubleshooting)
+- [Gateway网关认证](/gateway/authentication)
 
 ### 控制 UI 在 HTTP 上失败（需要设备身份）
 
-- [Gateway 故障排除](/gateway/troubleshooting)
+- [Gateway网关故障排除](/gateway/troubleshooting)
 - [控制 UI](/web/control-ui#insecure-http)
 
 ### `docs.openclaw.ai` 显示 SSL 错误（Comcast/Xfinity）
@@ -77,7 +77,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --beta --verbose
 
 ### 服务显示运行中，但 RPC 探测失败
 
-- [Gateway 故障排除](/gateway/troubleshooting)
+- [Gateway网关故障排除](/gateway/troubleshooting)
 - [后台进程/服务](/gateway/background-process)
 
 ### 模型/认证失败（速率限制、计费、"所有模型均失败"）

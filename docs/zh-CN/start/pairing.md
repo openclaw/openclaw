@@ -20,7 +20,7 @@ x-i18n:
 它用于两个场景：
 
 1. **私信配对**（谁被允许与机器人对话）
-2. **节点配对**（哪些设备/节点被允许加入 Gateway 网络）
+2. **节点配对**（哪些设备/节点被允许加入 Gateway网关网络）
 
 安全上下文：[安全](/gateway/security)
 
@@ -56,7 +56,7 @@ openclaw pairing approve telegram <CODE>
 
 ## 2) 节点设备配对（iOS/Android/macOS/无头节点）
 
-节点以 `role: node` 的**设备**身份连接到 Gateway。Gateway 会创建一个需要批准的设备配对请求。
+节点以 `role: node` 的**设备**身份连接到 Gateway网关。Gateway网关会创建一个需要批准的设备配对请求。
 
 ### 批准节点设备
 
@@ -75,7 +75,7 @@ openclaw devices reject <requestId>
 
 ### 注意事项
 
-- 旧版 `node.pair.*` API（CLI：`openclaw nodes pending/approve`）是一个独立的 Gateway 所拥有的配对存储。WebSocket 节点仍然需要设备配对。
+- 旧版 `node.pair.*` API（CLI：`openclaw nodes pending/approve`）是一个独立的 Gateway网关所拥有的配对存储。WebSocket 节点仍然需要设备配对。
 
 ## 相关文档
 

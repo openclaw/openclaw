@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您想要将 Vercel AI Gateway 与 OpenClaw 配合使用
-  - 您需要 API 密钥环境变量或 CLI 认证选项
+  - 你想要将 Vercel AI Gateway 与 OpenClaw 配合使用
+  - 你需要 API 密钥环境变量或 CLI 认证选项
 summary: Vercel AI Gateway 设置（认证 + 模型选择）
 title: Vercel AI Gateway
 x-i18n:
@@ -23,7 +23,7 @@ x-i18n:
 
 ## 快速开始
 
-1. 设置 API 密钥（推荐：为 Gateway 存储密钥）：
+1. 设置 API 密钥（推荐：为 Gateway网关存储密钥）：
 
 ```bash
 openclaw onboard --auth-choice ai-gateway-api-key
@@ -52,6 +52,6 @@ openclaw onboard --non-interactive \
 
 ## 环境说明
 
-如果 Gateway 以守护进程（launchd/systemd）方式运行，请确保 `AI_GATEWAY_API_KEY`
+如果 Gateway网关以守护进程（launchd/systemd）方式运行，请确保 `AI_GATEWAY_API_KEY`
 对该进程可用（例如，在 `~/.openclaw/.env` 中或通过
 `env.shellEnv` 设置）。

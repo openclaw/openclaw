@@ -249,7 +249,7 @@ openclaw [--dev] [--profile <name>] <command>
 ## 安全
 
 - `openclaw security audit` — 审计配置和本地状态中常见的安全隐患。
-- `openclaw security audit --deep` — 尽力进行实时 Gateway 探测。
+- `openclaw security audit --deep` — 尽力进行实时 Gateway网关探测。
 - `openclaw security audit --fix` — 收紧安全默认设置并修改状态/配置文件权限。
 
 ## 插件
@@ -262,7 +262,7 @@ openclaw [--dev] [--profile <name>] <command>
 - `openclaw plugins enable <id>` / `disable <id>` — 切换 `plugins.entries.<id>.enabled`。
 - `openclaw plugins doctor` — 报告插件加载错误。
 
-大多数插件变更需要重启 Gateway。参见 [/plugin](/plugin)。
+大多数插件变更需要重启 Gateway网关。参见 [/plugin](/plugin)。
 
 ## 记忆
 
@@ -282,7 +282,7 @@ openclaw [--dev] [--profile <name>] <command>
 - `/config` 用于持久化配置更改。
 - `/debug` 用于仅运行时的配置覆盖（内存中，不写入磁盘；需要 `commands.debug: true`）。
 
-## 设置与上手引导
+## 设置与新手引导
 
 ### `setup`
 
@@ -291,17 +291,17 @@ openclaw [--dev] [--profile <name>] <command>
 选项：
 
 - `--workspace <dir>`：智能体工作区路径（默认 `~/.openclaw/workspace`）。
-- `--wizard`：运行上手引导向导。
+- `--wizard`：运行新手引导向导。
 - `--non-interactive`：无提示运行向导。
 - `--mode <local|remote>`：向导模式。
-- `--remote-url <url>`：远程 Gateway URL。
-- `--remote-token <token>`：远程 Gateway 令牌。
+- `--remote-url <url>`：远程 Gateway网关 URL。
+- `--remote-token <token>`：远程 Gateway网关令牌。
 
 当存在任何向导参数（`--non-interactive`、`--mode`、`--remote-url`、`--remote-token`）时，向导会自动运行。
 
 ### `onboard`
 
-交互式向导，用于设置 Gateway、工作区和技能。
+交互式向导，用于设置 Gateway网关、工作区和 Skills。
 
 选项：
 
@@ -341,12 +341,12 @@ openclaw [--dev] [--profile <name>] <command>
 - `--skip-skills`
 - `--skip-health`
 - `--skip-ui`
-- `--node-manager <npm|pnpm|bun>`（推荐 pnpm；不建议将 bun 用于 Gateway 运行时）
+- `--node-manager <npm|pnpm|bun>`（推荐 pnpm；不建议将 bun 用于 Gateway网关运行时）
 - `--json`
 
 ### `configure`
 
-交互式配置向导（模型、渠道、技能、Gateway）。
+交互式配置向导（模型、渠道、Skills、Gateway网关）。
 
 ### `config`
 
@@ -360,14 +360,14 @@ openclaw [--dev] [--profile <name>] <command>
 
 ### `doctor`
 
-健康检查和快速修复（配置 + Gateway + 旧版服务）。
+健康检查和快速修复（配置 + Gateway网关 + 旧版服务）。
 
 选项：
 
 - `--no-workspace-suggestions`：禁用工作区记忆提示。
 - `--yes`：无需提示接受默认值（无头模式）。
 - `--non-interactive`：跳过提示；仅应用安全迁移。
-- `--deep`：扫描系统服务以查找额外的 Gateway 安装。
+- `--deep`：扫描系统服务以查找额外的 Gateway网关安装。
 
 ## 渠道辅助工具
 
@@ -378,9 +378,9 @@ openclaw [--dev] [--profile <name>] <command>
 子命令：
 
 - `channels list`：显示已配置的渠道和认证配置。
-- `channels status`：检查 Gateway 可达性和渠道健康状态（`--probe` 运行额外检查；使用 `openclaw health` 或 `openclaw status --deep` 进行 Gateway 健康探测）。
+- `channels status`：检查 Gateway网关可达性和渠道健康状态（`--probe` 运行额外检查；使用 `openclaw health` 或 `openclaw status --deep` 进行 Gateway网关健康探测）。
 - 提示：`channels status` 在检测到常见配置错误时会打印警告并提供修复建议（然后引导你使用 `openclaw doctor`）。
-- `channels logs`：显示来自 Gateway 日志文件的最近渠道日志。
+- `channels logs`：显示来自 Gateway网关日志文件的最近渠道日志。
 - `channels add`：不传参数时以向导模式设置；传入参数则切换为非交互模式。
 - `channels remove`：默认仅禁用；传入 `--delete` 可无提示删除配置条目。
 - `channels login`：交互式渠道登录（仅限 WhatsApp Web）。
@@ -428,21 +428,21 @@ openclaw status --deep
 
 ### `skills`
 
-列出和检查可用技能及就绪信息。
+列出和检查可用 Skills 及就绪信息。
 
 子命令：
 
-- `skills list`：列出技能（无子命令时的默认行为）。
-- `skills info <name>`：显示某个技能的详情。
+- `skills list`：列出 Skills（无子命令时的默认行为）。
+- `skills info <name>`：显示某个 Skills 的详情。
 - `skills check`：就绪与缺失需求的摘要。
 
 选项：
 
-- `--eligible`：仅显示就绪的技能。
+- `--eligible`：仅显示就绪的 Skills。
 - `--json`：输出 JSON（无样式）。
 - `-v`、`--verbose`：包含缺失需求的详情。
 
-提示：使用 `npx clawhub` 搜索、安装和同步技能。
+提示：使用 `npx clawhub` 搜索、安装和同步 Skills。
 
 ### `pairing`
 
@@ -497,7 +497,7 @@ Gmail Pub/Sub 钩子设置与运行。参见 [/automation/gmail-pubsub](/automat
 
 ### `agent`
 
-通过 Gateway（或 `--local` 嵌入模式）运行一个智能体回合。
+通过 Gateway网关（或 `--local` 嵌入模式）运行一个智能体回合。
 
 必需：
 
@@ -554,7 +554,7 @@ Gmail Pub/Sub 钩子设置与运行。参见 [/automation/gmail-pubsub](/automat
 
 ### `acp`
 
-运行将 IDE 连接到 Gateway 的 ACP 桥接。
+运行将 IDE 连接到 Gateway网关的 ACP 桥接。
 
 参见 [`acp`](/cli/acp) 获取完整选项和示例。
 
@@ -574,7 +574,7 @@ Gmail Pub/Sub 钩子设置与运行。参见 [/automation/gmail-pubsub](/automat
 
 说明：
 
-- 概览在可用时包含 Gateway + 节点主机服务状态。
+- 概览在可用时包含 Gateway网关 + 节点主机服务状态。
 
 ### 用量追踪
 
@@ -595,7 +595,7 @@ Gmail Pub/Sub 钩子设置与运行。参见 [/automation/gmail-pubsub](/automat
 
 ### `health`
 
-从运行中的 Gateway 获取健康状态。
+从运行中的 Gateway网关获取健康状态。
 
 选项：
 
@@ -633,7 +633,7 @@ Gmail Pub/Sub 钩子设置与运行。参见 [/automation/gmail-pubsub](/automat
 
 ### `uninstall`
 
-卸载 Gateway 服务和本地数据（CLI 保留）。
+卸载 Gateway网关服务和本地数据（CLI 保留）。
 
 选项：
 
@@ -650,11 +650,11 @@ Gmail Pub/Sub 钩子设置与运行。参见 [/automation/gmail-pubsub](/automat
 
 - `--non-interactive` 需要 `--yes` 和明确的范围（或 `--all`）。
 
-## Gateway
+## Gateway网关
 
 ### `gateway`
 
-运行 WebSocket Gateway。
+运行 WebSocket Gateway网关。
 
 选项：
 
@@ -678,11 +678,11 @@ Gmail Pub/Sub 钩子设置与运行。参见 [/automation/gmail-pubsub](/automat
 
 ### `gateway service`
 
-管理 Gateway 服务（launchd/systemd/schtasks）。
+管理 Gateway网关服务（launchd/systemd/schtasks）。
 
 子命令：
 
-- `gateway status`（默认探测 Gateway RPC）
+- `gateway status`（默认探测 Gateway网关 RPC）
 - `gateway install`（服务安装）
 - `gateway uninstall`
 - `gateway start`
@@ -691,9 +691,9 @@ Gmail Pub/Sub 钩子设置与运行。参见 [/automation/gmail-pubsub](/automat
 
 说明：
 
-- `gateway status` 默认使用服务解析的端口/配置探测 Gateway RPC（可通过 `--url/--token/--password` 覆盖）。
+- `gateway status` 默认使用服务解析的端口/配置探测 Gateway网关 RPC（可通过 `--url/--token/--password` 覆盖）。
 - `gateway status` 支持 `--no-probe`、`--deep` 和 `--json` 用于脚本编写。
-- `gateway status` 还会在检测到旧版或额外的 Gateway 服务时展示（`--deep` 添加系统级扫描）。以配置文件命名的 OpenClaw 服务被视为正式服务，不会被标记为"额外"。
+- `gateway status` 还会在检测到旧版或额外的 Gateway网关服务时展示（`--deep` 添加系统级扫描）。以配置文件命名的 OpenClaw 服务被视为正式服务，不会被标记为"额外"。
 - `gateway status` 会打印 CLI 使用的配置路径与服务可能使用的配置（服务环境变量），以及解析后的探测目标 URL。
 - `gateway install|uninstall|start|stop|restart` 支持 `--json` 用于脚本编写（默认输出保持人类可读）。
 - `gateway install` 默认使用 Node 运行时；**不建议**使用 bun（WhatsApp/Telegram 存在 bug）。
@@ -701,7 +701,7 @@ Gmail Pub/Sub 钩子设置与运行。参见 [/automation/gmail-pubsub](/automat
 
 ### `logs`
 
-通过 RPC 追踪 Gateway 文件日志。
+通过 RPC 追踪 Gateway网关文件日志。
 
 说明：
 
@@ -720,7 +720,7 @@ openclaw logs --no-color
 
 ### `gateway <subcommand>`
 
-Gateway CLI 辅助工具（RPC 子命令使用 `--url`、`--token`、`--password`、`--timeout`、`--expect-final`）。
+Gateway网关 CLI 辅助工具（RPC 子命令使用 `--url`、`--token`、`--password`、`--timeout`、`--expect-final`）。
 
 子命令：
 
@@ -859,7 +859,7 @@ openclaw models status
 
 ### `system event`
 
-入队系统事件并可选触发心跳（Gateway RPC）。
+入队系统事件并可选触发心跳（Gateway网关 RPC）。
 
 必需：
 
@@ -873,7 +873,7 @@ openclaw models status
 
 ### `system heartbeat last|enable|disable`
 
-心跳控制（Gateway RPC）。
+心跳控制（Gateway网关 RPC）。
 
 选项：
 
@@ -882,7 +882,7 @@ openclaw models status
 
 ### `system presence`
 
-列出系统存在条目（Gateway RPC）。
+列出系统存在条目（Gateway网关 RPC）。
 
 选项：
 
@@ -891,7 +891,7 @@ openclaw models status
 
 ## 定时任务
 
-管理调度作业（Gateway RPC）。参见 [/automation/cron-jobs](/automation/cron-jobs)。
+管理调度作业（Gateway网关 RPC）。参见 [/automation/cron-jobs](/automation/cron-jobs)。
 
 子命令：
 
@@ -922,7 +922,7 @@ openclaw models status
 
 ## 节点
 
-`nodes` 与 Gateway 通信并操作已配对的节点。参见 [/nodes](/nodes)。
+`nodes` 与 Gateway网关通信并操作已配对的节点。参见 [/nodes](/nodes)。
 
 通用选项：
 
@@ -1018,7 +1018,7 @@ openclaw models status
 
 ### `tui`
 
-打开连接到 Gateway 的终端 UI。
+打开连接到 Gateway网关的终端 UI。
 
 选项：
 

@@ -23,7 +23,7 @@ x-i18n:
    - 环境变量：`TELEGRAM_BOT_TOKEN=...`
    - 或配置：`channels.telegram.botToken: "..."`。
    - 如果两者都设置了，配置优先（环境变量回退仅适用于默认账户）。
-3. 启动 Gateway。
+3. 启动 Gateway网关。
 4. 私聊访问默认为配对模式；首次联系时需批准配对码。
 
 最小配置：
@@ -42,7 +42,7 @@ x-i18n:
 
 ## 简介
 
-- 由 Gateway 管理的 Telegram Bot API 渠道。
+- 由 Gateway网关管理的 Telegram Bot API 渠道。
 - 确定性路由：回复始终发回 Telegram；模型不会选择渠道。
 - 私聊共享智能体的主会话；群组保持隔离（`agent:<agentId>:telegram:group:<chatId>`）。
 
@@ -81,7 +81,7 @@ x-i18n:
 
 多账户支持：使用 `channels.telegram.accounts`，为每个账户设置令牌和可选的 `name`。请参阅 [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) 了解通用模式。
 
-3. 启动 Gateway。当令牌被解析后（配置优先，环境变量回退），Telegram 即启动。
+3. 启动 Gateway网关。当令牌被解析后（配置优先，环境变量回退），Telegram 即启动。
 4. 私聊访问默认为配对模式。机器人首次被联系时需批准配对码。
 5. 对于群组：添加机器人，决定隐私/管理员行为（见下文），然后设置 `channels.telegram.groups` 来控制提及门控 + 白名单。
 
@@ -365,7 +365,7 @@ Telegram 功能可在两个层级配置（上面展示了对象形式；旧版�
 
 更安全的方式（无需第三方机器人）：
 
-1. 启动 Gateway 并私聊你的机器人。
+1. 启动 Gateway网关并私聊你的机器人。
 2. 运行 `openclaw logs --follow` 并查找 `from.id`。
 
 替代方式（官方 Bot API）：
@@ -682,7 +682,7 @@ Telegram 表情回应作为**独立的 `message_reaction` 事件**到达，而�
 - 如果设置了 `channels.telegram.groups`，群组必须被列出或使用 `"*"`
 - 在 @BotFather 中检查隐私设置 → "Group Privacy" 应为 **OFF**
 - 确认机器人确实是成员（而非只是没有读取权限的管理员）
-- 检查 Gateway 日志：`openclaw logs --follow`（查找 "skipping group message"）
+- 检查 Gateway网关日志：`openclaw logs --follow`（查找 "skipping group message"）
 
 **机器人响应提及但不响应 `/activation always`：**
 
@@ -697,12 +697,12 @@ Telegram 表情回应作为**独立的 `message_reaction` 事件**到达，而�
 **长轮询在 Node 22+ 上立即中止（通常涉及代理/自定义 fetch）：**
 
 - Node 22+ 对 `AbortSignal` 实例更严格；外部信号可能会立即中止 `fetch` 调用。
-- 升级到规范化 abort 信号的 OpenClaw 版本，或在 Node 20 上运行 Gateway 直到可以升级。
+- 升级到规范化 abort 信号的 OpenClaw 版本，或在 Node 20 上运行 Gateway网关直到可以升级。
 
 **机器人启动后静默停止响应（或日志中出现 `HttpError: Network request ... failed`）：**
 
 - 某些主机优先将 `api.telegram.org` 解析为 IPv6。如果你的服务器没有可用的 IPv6 出口，grammY 可能会卡在仅 IPv6 的请求上。
-- 修复方法：启用 IPv6 出口**或者**强制 `api.telegram.org` 使用 IPv4 解析（例如，使用 IPv4 A 记录添加 `/etc/hosts` 条目，或在操作系统 DNS 栈中优先使用 IPv4），然后重启 Gateway。
+- 修复方法：启用 IPv6 出口**或者**强制 `api.telegram.org` 使用 IPv4 解析（例如，使用 IPv4 A 记录添加 `/etc/hosts` 条目，或在操作系统 DNS 栈中优先使用 IPv4），然后重启 Gateway网关。
 - 快速检查：`dig +short api.telegram.org A` 和 `dig +short api.telegram.org AAAA` 确认 DNS 返回的内容。
 
 ## 配置参考（Telegram）
@@ -720,7 +720,7 @@ Telegram 表情回应作为**独立的 `message_reaction` 事件**到达，而�
 - `channels.telegram.groupAllowFrom`：群组发送者白名单（ID/用户名）。
 - `channels.telegram.groups`：按群组的默认设置 + 白名单（使用 `"*"` 作为全局默认）。
   - `channels.telegram.groups.<id>.requireMention`：提及门控默认值。
-  - `channels.telegram.groups.<id>.skills`：技能过滤（省略 = 所有技能，空 = 无技能）。
+  - `channels.telegram.groups.<id>.skills`：Skills 过滤（省略 = 所有 Skills，空 = 无 Skills）。
   - `channels.telegram.groups.<id>.allowFrom`：按群组的发送者白名单覆盖。
   - `channels.telegram.groups.<id>.systemPrompt`：群组的额外系统提示词。
   - `channels.telegram.groups.<id>.enabled`：设为 `false` 时禁用该群组。

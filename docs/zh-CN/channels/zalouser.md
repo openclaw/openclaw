@@ -29,7 +29,7 @@ Zalo Personal 以插件形式提供，不包含在核心安装包中。
 
 ## 前置条件：zca-cli
 
-Gateway 所在机器必须在 `PATH` 中包含 `zca` 可执行文件。
+Gateway网关所在机器必须在 `PATH` 中包含 `zca` 可执行文件。
 
 - 验证：`zca --version`
 - 如果缺失，请安装 zca-cli（参见 `extensions/zalouser/README.md` 或上游 zca-cli 文档）。
@@ -37,7 +37,7 @@ Gateway 所在机器必须在 `PATH` 中包含 `zca` 可执行文件。
 ## 快速设置（入门）
 
 1. 安装插件（见上文）。
-2. 登录（二维码方式，在 Gateway 机器上操作）：
+2. 登录（二维码方式，在 Gateway网关机器上操作）：
    - `openclaw channels login --channel zalouser`
    - 使用 Zalo 手机应用扫描终端中的二维码。
 3. 启用渠道：
@@ -53,7 +53,7 @@ Gateway 所在机器必须在 `PATH` 中包含 `zca` 可执行文件。
 }
 ```
 
-4. 重启 Gateway（或完成上手引导）。
+4. 重启 Gateway网关（或完成新手引导）。
 5. 私信访问默认为配对模式；首次联系时需批准配对码。
 
 ## 功能说明
@@ -139,7 +139,7 @@ openclaw directory groups list --channel zalouser --query "work"
 
 **找不到 `zca`：**
 
-- 安装 zca-cli 并确保 Gateway 进程的 `PATH` 中包含该命令。
+- 安装 zca-cli 并确保 Gateway网关进程的 `PATH` 中包含该命令。
 
 **登录状态无法保持：**
 

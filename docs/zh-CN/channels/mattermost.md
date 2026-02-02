@@ -33,7 +33,7 @@ openclaw plugins install @openclaw/mattermost
 openclaw plugins install ./extensions/mattermost
 ```
 
-如果你在配置/上手引导期间选择了 Mattermost 并检测到 git 检出，OpenClaw 会自动提供本地安装路径。
+如果你在配置/新手引导期间选择了 Mattermost 并检测到 git 检出，OpenClaw 会自动提供本地安装路径。
 
 详情：[插件](/plugin)
 
@@ -42,7 +42,7 @@ openclaw plugins install ./extensions/mattermost
 1. 安装 Mattermost 插件。
 2. 创建一个 Mattermost 机器人账户并复制 **bot token**。
 3. 复制 Mattermost **基础 URL**（例如 `https://chat.example.com`）。
-4. 配置 OpenClaw 并启动 Gateway。
+4. 配置 OpenClaw 并启动 Gateway网关。
 
 最小配置：
 
@@ -61,7 +61,7 @@ openclaw plugins install ./extensions/mattermost
 
 ## 环境变量（默认账户）
 
-如果你偏好使用环境变量，请在 Gateway 主机上设置：
+如果你偏好使用环境变量，请在 Gateway网关主机上设置：
 
 - `MATTERMOST_BOT_TOKEN=...`
 - `MATTERMOST_URL=https://chat.example.com`

@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 将 Mac 应用与 Gateway 生命周期集成
-summary: macOS 上的 Gateway 生命周期（launchd）
-title: Gateway 生命周期
+  - 将 Mac 应用与 Gateway网关生命周期集成
+summary: macOS 上的 Gateway网关生命周期（launchd）
+title: Gateway网关生命周期
 x-i18n:
   generated_at: "2026-02-01T21:32:36Z"
   model: claude-opus-4-5
@@ -12,17 +12,17 @@ x-i18n:
   workflow: 15
 ---
 
-# macOS 上的 Gateway 生命周期
+# macOS 上的 Gateway网关生命周期
 
-macOS 应用默认**通过 launchd 管理 Gateway**，不会将 Gateway 作为子进程启动。它首先尝试连接到已在配置端口上运行的 Gateway；如果无法连接，则通过外部 `openclaw` CLI（无内嵌运行时）启用 launchd 服务。这为你提供了可靠的登录自启动和崩溃后自动重启。
+macOS 应用默认**通过 launchd 管理 Gateway网关**，不会将 Gateway网关作为子进程启动。它首先尝试连接到已在配置端口上运行的 Gateway网关；如果无法连接，则通过外部 `openclaw` CLI（无内嵌运行时）启用 launchd 服务。这为你提供了可靠的登录自启动和崩溃后自动重启。
 
-子进程模式（由应用直接启动 Gateway）**目前未使用**。如果你需要与 UI 更紧密的耦合，请在终端中手动运行 Gateway。
+子进程模式（由应用直接启动 Gateway网关）**目前未使用**。如果你需要与 UI 更紧密的耦合，请在终端中手动运行 Gateway网关。
 
 ## 默认行为（launchd）
 
 - 应用安装一个标签为 `bot.molt.gateway` 的用户级 LaunchAgent（使用 `--profile`/`OPENCLAW_PROFILE` 时为 `bot.molt.<profile>`；兼容旧版 `com.openclaw.*`）。
-- 当启用本地模式时，应用会确保 LaunchAgent 已加载，并在需要时启动 Gateway。
-- 日志写入 launchd Gateway 日志路径（可在调试设置中查看）。
+- 当启用本地模式时，应用会确保 LaunchAgent 已加载，并在需要时启动 Gateway网关。
+- 日志写入 launchd Gateway网关日志路径（可在调试设置中查看）。
 
 常用命令：
 
@@ -47,11 +47,11 @@ rm ~/.openclaw/disable-launchagent
 
 ## 仅连接模式
 
-要强制 macOS 应用**永不安装或管理 launchd**，请使用 `--attach-only`（或 `--no-launchd`）启动。这会设置 `~/.openclaw/disable-launchagent`，使应用仅连接到已运行的 Gateway。你也可以在调试设置中切换相同的行为。
+要强制 macOS 应用**永不安装或管理 launchd**，请使用 `--attach-only`（或 `--no-launchd`）启动。这会设置 `~/.openclaw/disable-launchagent`，使应用仅连接到已运行的 Gateway网关。你也可以在调试设置中切换相同的行为。
 
 ## 远程模式
 
-远程模式不会启动本地 Gateway。应用使用 SSH 隧道连接到远程主机，并通过该隧道进行通信。
+远程模式不会启动本地 Gateway网关。应用使用 SSH 隧道连接到远程主机，并通过该隧道进行通信。
 
 ## 为何优先选择 launchd
 

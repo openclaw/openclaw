@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您希望通过智能体进行后台/并行工作
-  - 您正在修改 sessions_spawn 或子智能体工具策略
+  - 你希望通过智能体进行后台/并行工作
+  - 你正在修改 sessions_spawn 或子智能体工具策略
 summary: 子智能体：生成独立的智能体运行并将结果回报给请求者聊天
 title: 子智能体
 x-i18n:
@@ -44,7 +44,7 @@ x-i18n:
 
 - 启动子智能体运行（`deliver: false`，全局队列：`subagent`）
 - 然后运行回报步骤，将回报回复发布到请求者的聊天渠道
-- 默认模型：继承调用者，除非您设置了 `agents.defaults.subagents.model`（或按智能体 `agents.list[].subagents.model`）；显式的 `sessions_spawn.model` 仍然优先。
+- 默认模型：继承调用者，除非你设置了 `agents.defaults.subagents.model`（或按智能体 `agents.list[].subagents.model`）；显式的 `sessions_spawn.model` 仍然优先。
 
 工具参数：
 
@@ -69,7 +69,7 @@ x-i18n:
 - 子智能体会话在 `agents.defaults.subagents.archiveAfterMinutes`（默认：60）后自动归档。
 - 归档使用 `sessions.delete` 并将转录重命名为 `*.deleted.<timestamp>`（同一文件夹）。
 - `cleanup: "delete"` 在回报后立即归档（仍通过重命名保留转录）。
-- 自动归档为尽力而为；如果 Gateway 重启，待处理的定时器会丢失。
+- 自动归档为尽力而为；如果 Gateway网关重启，待处理的定时器会丢失。
 - `runTimeoutSeconds` **不会**自动归档；它仅停止运行。会话保留直到自动归档。
 
 ## 认证
@@ -149,7 +149,7 @@ x-i18n:
 
 ## 限制
 
-- 子智能体回报为**尽力而为**。如果 Gateway 重启，待处理的"回报"工作会丢失。
-- 子智能体仍共享相同的 Gateway 进程资源；将 `maxConcurrent` 视为安全阀。
+- 子智能体回报为**尽力而为**。如果 Gateway网关重启，待处理的"回报"工作会丢失。
+- 子智能体仍共享相同的 Gateway网关进程资源；将 `maxConcurrent` 视为安全阀。
 - `sessions_spawn` 始终是非阻塞的：它会立即返回 `{ status: "accepted", runId, childSessionKey }`。
 - 子智能体上下文仅注入 `AGENTS.md` + `TOOLS.md`（不包含 `SOUL.md`、`IDENTITY.md`、`USER.md`、`HEARTBEAT.md` 或 `BOOTSTRAP.md`）。

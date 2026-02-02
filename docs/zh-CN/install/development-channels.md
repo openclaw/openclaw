@@ -53,7 +53,7 @@ openclaw update --channel dev
 - `dev` 确保存在 git checkout（默认 `~/openclaw`，可通过 `OPENCLAW_GIT_DIR` 覆盖），更新它，并从该 checkout 安装全局 CLI。
 - `stable`/`beta` 使用匹配的 dist-tag 从 npm 安装。
 
-提示：如果你想同时使用 stable 和 dev，可以保留两个克隆，并将 Gateway 指向 stable 的那个。
+提示：如果你想同时使用 stable 和 dev，可以保留两个克隆，并将 Gateway网关指向 stable 的那个。
 
 ## 插件与渠道
 

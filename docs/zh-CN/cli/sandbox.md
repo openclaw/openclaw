@@ -1,5 +1,5 @@
 ---
-read_when: 您正在管理沙箱容器或调试沙箱/工具策略行为。
+read_when: 你正在管理沙箱容器或调试沙箱/工具策略行为。
 status: active
 summary: 管理沙箱容器并检查生效的沙箱策略
 title: Sandbox CLI
@@ -18,7 +18,7 @@ x-i18n:
 
 ## 概述
 
-OpenClaw 可以在隔离的 Docker 容器中运行智能体以确保安全性。`sandbox` 命令帮助您管理这些容器，尤其是在更新或配置变更之后。
+OpenClaw 可以在隔离的 Docker 容器中运行智能体以确保安全性。`sandbox` 命令帮助你管理这些容器，尤其是在更新或配置变更之后。
 
 ## 命令
 
@@ -115,7 +115,7 @@ openclaw sandbox recreate --agent alfred
 
 ## 为什么需要这样做？
 
-**问题：** 当您更新沙箱 Docker 镜像或配置时：
+**问题：** 当你更新沙箱 Docker 镜像或配置时：
 
 - 现有容器会继续使用旧设置运行
 - 容器仅在空闲 24 小时后才会被清理
@@ -123,7 +123,7 @@ openclaw sandbox recreate --agent alfred
 
 **解决方案：** 使用 `openclaw sandbox recreate` 强制移除旧容器。它们会在下次需要时自动使用当前设置重新创建。
 
-提示：建议使用 `openclaw sandbox recreate` 而非手动执行 `docker rm`。它使用 Gateway 的容器命名规则，避免在作用域/会话键发生变化时出现不匹配问题。
+提示：建议使用 `openclaw sandbox recreate` 而非手动执行 `docker rm`。它使用 Gateway网关的容器命名规则，避免在作用域/会话键发生变化时出现不匹配问题。
 
 ## 配置
 

@@ -46,7 +46,7 @@ openclaw plugins install ./extensions/twitch
    - 环境变量：`OPENCLAW_TWITCH_ACCESS_TOKEN=...`（仅限默认账号）
    - 或配置文件：`channels.twitch.accessToken`
    - 如果两者都设置了，配置文件优先（环境变量回退仅适用于默认账号）。
-5. 启动 Gateway。
+5. 启动 Gateway网关。
 
 **⚠️ 重要：** 添加访问控制（`allowFrom` 或 `allowedRoles`）以防止未授权用户触发机器人。`requireMention` 默认为 `true`。
 
@@ -69,7 +69,7 @@ openclaw plugins install ./extensions/twitch
 
 ## 工作原理
 
-- 由 Gateway 拥有的 Twitch 渠道。
+- 由 Gateway网关拥有的 Twitch 渠道。
 - 确定性路由：回复始终返回到 Twitch。
 - 每个账号映射到一个隔离的会话键 `agent:<agentId>:twitch:<accountName>`。
 - `username` 是机器人的账号（用于认证），`channel` 是要加入的聊天室。
@@ -375,7 +375,7 @@ Access token refreshed for user 123456 (expires in 14400s)
 - **使用用户 ID 允许列表** 而非用户名进行访问控制
 - **监控日志** 关注令牌刷新事件和连接状态
 - **最小化令牌权限范围** - 仅请求 `chat:read` 和 `chat:write`
-- **如遇问题**：确认没有其他进程占用会话后，重启 Gateway
+- **如遇问题**：确认没有其他进程占用会话后，重启 Gateway网关
 
 ## 限制
 

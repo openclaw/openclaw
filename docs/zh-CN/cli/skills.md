@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 想要查看哪些技能可用且可以运行
-  - 想要调试技能缺失的二进制文件/环境变量/配置
-summary: 技能列表/信息/检查及技能资格的 `openclaw skills` CLI 参考
+  - 想要查看哪些 Skills 可用且可以运行
+  - 想要调试 Skills 缺失的二进制文件/环境变量/配置
+summary: Skills 列表/信息/检查及 Skills 资格的 `openclaw skills` CLI 参考
 title: skills
 x-i18n:
   generated_at: "2026-02-01T20:21:28Z"
@@ -15,12 +15,12 @@ x-i18n:
 
 # `openclaw skills`
 
-检查技能（内置 + 工作区 + 托管覆盖），查看哪些符合条件以及哪些缺少依赖。
+检查 Skills（内置 + 工作区 + 托管覆盖），查看哪些符合条件以及哪些缺少依赖。
 
 相关内容：
 
-- 技能系统：[技能](/tools/skills)
-- 技能配置：[技能配置](/tools/skills-config)
+- Skills 系统：[Skills](/tools/skills)
+- Skills配置：[Skills配置](/tools/skills-config)
 - ClawHub 安装：[ClawHub](/tools/clawhub)
 
 ## 命令

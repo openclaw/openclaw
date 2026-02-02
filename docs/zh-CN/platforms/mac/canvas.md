@@ -47,7 +47,7 @@ Canvas 面板通过**自定义 URL scheme** 提供这些文件：
 
 ## 智能体 API 接口
 
-Canvas 通过 **Gateway WebSocket** 暴露，因此智能体可以：
+Canvas 通过 **Gateway网关 WebSocket** 暴露，因此智能体可以：
 
 - 显示/隐藏面板
 - 导航到路径或 URL
@@ -70,7 +70,7 @@ openclaw nodes canvas snapshot --node <id>
 
 ## Canvas 中的 A2UI
 
-A2UI 由 Gateway canvas 主机托管，并在 Canvas 面板内渲染。当 Gateway 广播 Canvas 主机时，macOS 应用在首次打开时会自动导航到 A2UI 主机页面。
+A2UI 由 Gateway网关 canvas 主机托管，并在 Canvas 面板内渲染。当 Gateway网关广播 Canvas 主机时，macOS 应用在首次打开时会自动导航到 A2UI 主机页面。
 
 默认 A2UI 主机 URL：
 
@@ -123,5 +123,5 @@ window.location.href = "openclaw://agent?message=Review%20this%20design";
 ## 安全注意事项
 
 - Canvas scheme 阻止目录遍历；文件必须位于会话根目录下。
-- 本地 Canvas 内容使用自定义 scheme（无需回环服务器）。
+- 本地 Canvas 内容使用自定义 scheme（无需 local loopback 服务器）。
 - 仅在显式导航时才允许外部 `http(s)` URL。

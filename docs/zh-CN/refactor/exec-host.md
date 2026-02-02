@@ -29,7 +29,7 @@ x-i18n:
 
 - 不进行旧版允许列表迁移或旧版 schema 支持。
 - 不为节点执行提供 PTY/流式输出（仅支持聚合输出）。
-- 不在现有 Bridge + Gateway 之外新增网络层。
+- 不在现有 Bridge + Gateway网关之外新增网络层。
 
 ## 决策（已锁定）
 
@@ -194,7 +194,7 @@ x-i18n:
 ### 图示（SCI）
 
 ```
-Agent -> Gateway -> Bridge -> Node Service (TS)
+Agent -> Gateway网关 -> Bridge -> Node Service (TS)
                          |  IPC (UDS + token + HMAC + TTL)
                          v
                      Mac App (UI + TCC + system.run)
@@ -230,11 +230,11 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 方案 A（推荐）：
 
 - 运行器发送 Bridge `event` 帧 `exec.started` / `exec.finished`。
-- Gateway `handleBridgeEvent` 将其映射为 `enqueueSystemEvent`。
+- Gateway网关 `handleBridgeEvent` 将其映射为 `enqueueSystemEvent`。
 
 方案 B：
 
-- Gateway `exec` 工具直接处理生命周期（仅同步）。
+- Gateway网关 `exec` 工具直接处理生命周期（仅同步）。
 
 ## 执行流程
 
@@ -243,14 +243,14 @@ Agent -> Gateway -> Bridge -> Node Service (TS)
 - 现有 `exec` 行为（Docker 或非沙箱时的主机执行）。
 - 仅在非沙箱模式下支持 PTY。
 
-### Gateway 主机
+### Gateway网关主机
 
-- Gateway 进程在自身机器上执行。
+- Gateway网关进程在自身机器上执行。
 - 强制执行本地 `exec-approvals.json`（安全/询问/允许列表）。
 
 ### Node 主机
 
-- Gateway 通过 `node.invoke` 调用 `system.run`。
+- Gateway网关通过 `node.invoke` 调用 `system.run`。
 - 运行器强制执行本地审批。
 - 运行器返回聚合的 stdout/stderr。
 - 可选的 Bridge 事件用于启动/完成/拒绝。

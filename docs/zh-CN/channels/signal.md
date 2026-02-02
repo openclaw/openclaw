@@ -15,7 +15,7 @@ x-i18n:
 
 # Signal（signal-cli）
 
-状态：外部 CLI 集成。Gateway 通过 HTTP JSON-RPC + SSE 与 `signal-cli` 通信。
+状态：外部 CLI 集成。Gateway网关通过 HTTP JSON-RPC + SSE 与 `signal-cli` 通信。
 
 ## 快速设置（新手）
 
@@ -23,7 +23,7 @@ x-i18n:
 2. 安装 `signal-cli`（需要 Java）。
 3. 链接机器人设备并启动守护进程：
    - `signal-cli link -n "OpenClaw"`
-4. 配置 OpenClaw 并启动 Gateway。
+4. 配置 OpenClaw 并启动 Gateway网关。
 
 最小配置：
 
@@ -61,7 +61,7 @@ x-i18n:
 
 ## 号码模型（重要）
 
-- Gateway 连接到一个 **Signal 设备**（`signal-cli` 账户）。
+- Gateway网关连接到一个 **Signal 设备**（`signal-cli` 账户）。
 - 如果你在**个人 Signal 账户**上运行机器人，它会忽略你自己的消息（循环保护）。
 - 要实现"我给机器人发消息它回复我"，请使用一个**单独的机器人号码**。
 
@@ -70,7 +70,7 @@ x-i18n:
 1. 安装 `signal-cli`（需要 Java）。
 2. 链接机器人账户：
    - `signal-cli link -n "OpenClaw"` 然后在 Signal 中扫描二维码。
-3. 配置 Signal 并启动 Gateway。
+3. 配置 Signal 并启动 Gateway网关。
 
 示例：
 
@@ -126,7 +126,7 @@ x-i18n:
 
 ## 工作原理（行为）
 
-- `signal-cli` 作为守护进程运行；Gateway 通过 SSE 读取事件。
+- `signal-cli` 作为守护进程运行；Gateway网关通过 SSE 读取事件。
 - 入站消息被标准化为共享的渠道信封。
 - 回复始终路由回同一个号码或群组。
 

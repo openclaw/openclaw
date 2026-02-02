@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您在不使用完整上手引导向导的情况下进行首次设置
-  - 您想设置默认工作区路径
+  - 你在不使用完整新手引导向导的情况下进行首次设置
+  - 你想设置默认工作区路径
 summary: "`openclaw setup` 的 CLI 参考（初始化配置 + 工作区）"
 title: setup
 x-i18n:
@@ -20,7 +20,7 @@ x-i18n:
 相关内容：
 
 - 快速开始：[快速开始](/start/getting-started)
-- 向导：[上手引导](/start/onboarding)
+- 向导：[新手引导](/start/onboarding)
 
 ## 示例
 

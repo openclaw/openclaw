@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 处理 Gateway 协议、客户端或传输层相关工作时
-summary: WebSocket Gateway 架构、组件和客户端流程
-title: Gateway 架构
+  - 处理 Gateway网关协议、客户端或传输层相关工作时
+summary: WebSocket Gateway网关架构、组件和客户端流程
+title: Gateway网关架构
 x-i18n:
   generated_at: "2026-02-01T20:22:27Z"
   model: claude-opus-4-5
@@ -12,21 +12,21 @@ x-i18n:
   workflow: 14
 ---
 
-# Gateway 架构
+# Gateway网关架构
 
 最后更新：2026-01-22
 
 ## 概述
 
-- 单个长生命周期的 **Gateway** 管理所有消息接入面（通过 Baileys 接入 WhatsApp、通过 grammY 接入 Telegram、Slack、Discord、Signal、iMessage、WebChat）。
-- 控制面客户端（macOS 应用、CLI、Web UI、自动化）通过 **WebSocket** 连接到 Gateway，使用配置的绑定地址（默认 `127.0.0.1:18789`）。
+- 单个长生命周期的 **Gateway网关** 管理所有消息接入面（通过 Baileys 接入 WhatsApp、通过 grammY 接入 Telegram、Slack、Discord、Signal、iMessage、WebChat）。
+- 控制面客户端（macOS 应用、CLI、Web UI、自动化）通过 **WebSocket** 连接到 Gateway网关，使用配置的绑定地址（默认 `127.0.0.1:18789`）。
 - **节点**（macOS/iOS/Android/无头模式）也通过 **WebSocket** 连接，但声明 `role: node` 并显式指定能力/命令。
-- 每台主机一个 Gateway；它是唯一打开 WhatsApp 会话的位置。
+- 每台主机一个 Gateway网关；它是唯一打开 WhatsApp 会话的位置。
 - **画布主机**（默认 `18793`）提供智能体可编辑的 HTML 和 A2UI。
 
 ## 组件和流程
 
-### Gateway（守护进程）
+### Gateway网关（守护进程）
 
 - 维护提供商连接。
 - 暴露类型化的 WS API（请求、响应、服务端推送事件）。
@@ -47,17 +47,17 @@ x-i18n:
 
 协议详情：
 
-- [Gateway 协议](/gateway/protocol)
+- [Gateway网关协议](/gateway/protocol)
 
 ### WebChat
 
-- 静态 UI，使用 Gateway WS API 获取聊天历史和发送消息。
+- 静态 UI，使用 Gateway网关 WS API 获取聊天历史和发送消息。
 - 在远程设置中，通过与其他客户端相同的 SSH/Tailscale 隧道连接。
 
 ## 连接生命周期（单个客户端）
 
 ```
-Client                    Gateway
+Client                    Gateway网关
   |                          |
   |---- req:connect -------->|
   |<------ res (ok) ---------|   （或 res error + 关闭）
@@ -87,12 +87,12 @@ Client                    Gateway
 ## 配对与本地信任
 
 - 所有 WS 客户端（操作员 + 节点）在 `connect` 时包含**设备身份**。
-- 新设备 ID 需要配对审批；Gateway 颁发**设备令牌**用于后续连接。
-- **本地**连接（回环地址或 Gateway 主机自身的 tailnet 地址）可以自动审批，以保持同主机用户体验的流畅性。
+- 新设备 ID 需要配对审批；Gateway网关颁发**设备令牌**用于后续连接。
+- **本地**连接（local loopback 或 Gateway网关主机自身的 tailnet 地址）可以自动审批，以保持同主机用户体验的流畅性。
 - **非本地**连接必须对 `connect.challenge` nonce 签名，并需要显式审批。
-- Gateway 认证（`gateway.auth.*`）仍适用于**所有**连接，无论本地还是远程。
+- Gateway网关认证（`gateway.auth.*`）仍适用于**所有**连接，无论本地还是远程。
 
-详情：[Gateway 协议](/gateway/protocol)、[配对](/start/pairing)、[安全](/gateway/security)。
+详情：[Gateway网关协议](/gateway/protocol)、[配对](/start/pairing)、[安全](/gateway/security)。
 
 ## 协议类型定义与代码生成
 
@@ -118,6 +118,6 @@ Client                    Gateway
 
 ## 不变量
 
-- 每台主机恰好一个 Gateway 控制单个 Baileys 会话。
+- 每台主机恰好一个 Gateway网关控制单个 Baileys 会话。
 - 握手是强制的；任何非 JSON 或非 connect 的首帧将导致硬关闭。
 - 事件不会重放；客户端必须在出现间隙时刷新。

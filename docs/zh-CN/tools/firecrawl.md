@@ -21,7 +21,7 @@ OpenClaw 可以使用 **Firecrawl** 作为 `web_fetch` 的备用提取器。它�
 ## 获取 API 密钥
 
 1. 创建 Firecrawl 账户并生成 API 密钥。
-2. 将其存储在配置中，或在 Gateway 环境中设置 `FIRECRAWL_API_KEY`。
+2. 将其存储在配置中，或在 Gateway网关环境中设置 `FIRECRAWL_API_KEY`。
 
 ## 配置 Firecrawl
 
@@ -62,4 +62,4 @@ OpenClaw 对 Firecrawl 请求始终使用 `proxy: "auto"` 加上 `storeInCache: 
 2. Firecrawl（如已配置）
 3. 基本 HTML 清理（最终备用方案）
 
-参阅[网页工具](/tools/web)了解完整的网页工具设置。
+参阅[网页工具](/tools/web)了解全部网页工具设置。

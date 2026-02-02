@@ -40,7 +40,7 @@ openclaw plugins install @openclaw/msteams
 openclaw plugins install ./extensions/msteams
 ```
 
-如果你在配置/上手引导期间选择了 Teams 并检测到 git 检出，OpenClaw 会自动提供本地安装路径。
+如果你在配置/新手引导期间选择了 Teams 并检测到 git 检出，OpenClaw 会自动提供本地安装路径。
 
 详情：[插件](/plugin)
 
@@ -50,7 +50,7 @@ openclaw plugins install ./extensions/msteams
 2. 创建一个 **Azure Bot**（App ID + 客户端密钥 + 租户 ID）。
 3. 使用这些凭据配置 OpenClaw。
 4. 通过公共 URL 或隧道暴露 `/api/messages`（默认端口 3978）。
-5. 安装 Teams 应用包并启动 Gateway。
+5. 安装 Teams 应用包并启动 Gateway网关。
 
 最小配置：
 
@@ -148,8 +148,8 @@ openclaw plugins install ./extensions/msteams
 2. 创建一个 **Azure Bot**（App ID + 密钥 + 租户 ID）。
 3. 构建一个引用该机器人并包含下方 RSC 权限的 **Teams 应用包**。
 4. 将 Teams 应用上传/安装到团队（或私人范围用于私信）。
-5. 在 `~/.openclaw/openclaw.json`（或环境变量）中配置 `msteams` 并启动 Gateway。
-6. Gateway 默认在 `/api/messages` 上监听 Bot Framework webhook 流量。
+5. 在 `~/.openclaw/openclaw.json`（或环境变量）中配置 `msteams` 并启动 Gateway网关。
+6. Gateway网关默认在 `/api/messages` 上监听 Bot Framework webhook 流量。
 
 ## Azure Bot 设置（前提条件）
 
@@ -239,7 +239,7 @@ tailscale funnel 3978
 
 1. 安装 Teams 应用（旁加载或组织目录）
 2. 在 Teams 中找到机器人并发送私信
-3. 检查 Gateway 日志中的传入活动
+3. 检查 Gateway网关日志中的传入活动
 
 ## 设置（最小纯文本）
 
@@ -284,7 +284,7 @@ tailscale funnel 3978
    - 将 Azure Bot 消息端点设置为：
      - `https://<host>:3978/api/messages`（或你选择的路径/端口）。
 
-6. **运行 Gateway**
+6. **运行 Gateway网关**
    - 当插件已安装且 `msteams` 配置存在凭据时，Teams 渠道会自动启动。
 
 ## 历史上下文
@@ -434,7 +434,7 @@ tailscale funnel 3978
 
 Teams 通过 HTTP webhook 投递消息。如果处理时间过长（例如 LLM 响应缓慢），你可能会看到：
 
-- Gateway 超时
+- Gateway网关超时
 - Teams 重试消息（导致重复）
 - 回复丢失
 
@@ -598,8 +598,8 @@ Teams 最近在相同的底层数据模型上引入了两种频道 UI 样式：
 OpenClaw 通过 Adaptive Cards 发送 Teams 投票（没有原生 Teams 投票 API）。
 
 - CLI：`openclaw message poll --channel msteams --target conversation:<id> ...`
-- 投票由 Gateway 记录在 `~/.openclaw/msteams-polls.json` 中。
-- Gateway 必须保持在线以记录投票。
+- 投票由 Gateway网关记录在 `~/.openclaw/msteams-polls.json` 中。
+- Gateway网关必须保持在线以记录投票。
 - 投票尚不会自动发布结果摘要（如需要请查看存储文件）。
 
 ## Adaptive Cards（任意）

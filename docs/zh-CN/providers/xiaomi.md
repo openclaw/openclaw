@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您想在 OpenClaw 中使用 Xiaomi MiMo 模型
-  - 您需要设置 XIAOMI_API_KEY
+  - 你想在 OpenClaw 中使用 Xiaomi MiMo 模型
+  - 你需要设置 XIAOMI_API_KEY
 summary: 在 OpenClaw 中使用 Xiaomi MiMo (mimo-v2-flash)
 title: Xiaomi MiMo
 x-i18n:
@@ -15,7 +15,7 @@ x-i18n:
 
 # Xiaomi MiMo
 
-Xiaomi MiMo 是 **MiMo** 模型的 API 平台。它提供与 OpenAI 和 Anthropic 格式兼容的 REST API，并使用 API 密钥进行身份验证。请在 [Xiaomi MiMo 控制台](https://platform.xiaomimimo.com/#/console/api-keys) 中创建您的 API 密钥。OpenClaw 使用 `xiaomi` 提供商配合 Xiaomi MiMo API 密钥。
+Xiaomi MiMo 是 **MiMo** 模型的 API 平台。它提供与 OpenAI 和 Anthropic 格式兼容的 REST API，并使用 API 密钥进行身份验证。请在 [Xiaomi MiMo 控制台](https://platform.xiaomimimo.com/#/console/api-keys) 中创建你的 API 密钥。OpenClaw 使用 `xiaomi` 提供商配合 Xiaomi MiMo API 密钥。
 
 ## 模型概览
 

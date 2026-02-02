@@ -27,7 +27,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 
 注意事项：
 
-- 如果不想再次运行上手引导向导，请添加 `--no-onboard`。
+- 如果不想再次运行新手引导向导，请添加 `--no-onboard`。
 - 对于**源码安装**，请使用：
   ```bash
   curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
@@ -39,7 +39,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 ## 更新前的准备
 
 - 了解你的安装方式：**全局安装**（npm/pnpm）还是**源码安装**（git clone）。
-- 了解你的 Gateway 运行方式：**前台终端**还是**受监控服务**（launchd/systemd）。
+- 了解你的 Gateway网关运行方式：**前台终端**还是**受监控服务**（launchd/systemd）。
 - 备份你的自定义配置：
   - 配置文件：`~/.openclaw/openclaw.json`
   - 凭据：`~/.openclaw/credentials/`
@@ -57,7 +57,7 @@ npm i -g openclaw@latest
 pnpm add -g openclaw@latest
 ```
 
-我们**不建议**使用 Bun 作为 Gateway 运行时（存在 WhatsApp/Telegram 相关 bug）。
+我们**不建议**使用 Bun 作为 Gateway网关运行时（存在 WhatsApp/Telegram 相关 bug）。
 
 切换更新渠道（git + npm 安装）：
 
@@ -71,7 +71,7 @@ openclaw update --channel stable
 
 有关渠道语义和发布说明，请参阅[开发渠道](/install/development-channels)。
 
-注意：在 npm 安装中，Gateway 启动时会记录更新提示（检查当前渠道标签）。可通过 `update.checkOnStart: false` 禁用。
+注意：在 npm 安装中，Gateway网关启动时会记录更新提示（检查当前渠道标签）。可通过 `update.checkOnStart: false` 禁用。
 
 然后：
 
@@ -83,7 +83,7 @@ openclaw health
 
 注意事项：
 
-- 如果你的 Gateway 作为服务运行，建议使用 `openclaw gateway restart` 而非直接终止 PID。
+- 如果你的 Gateway网关作为服务运行，建议使用 `openclaw gateway restart` 而非直接终止 PID。
 - 如果你固定在特定版本，请参阅下方的"回滚/版本固定"。
 
 ## 更新（`openclaw update`）
@@ -100,7 +100,7 @@ openclaw update
 - 切换到所选渠道（标签或分支）。
 - 从配置的上游（dev 渠道）拉取并变基。
 - 安装依赖、构建、构建控制面板 UI，并运行 `openclaw doctor`。
-- 默认重启 Gateway（使用 `--no-restart` 跳过）。
+- 默认重启 Gateway网关（使用 `--no-restart` 跳过）。
 
 如果你通过 **npm/pnpm** 安装（无 git 元数据），`openclaw update` 会尝试通过你的包管理器进行更新。如果无法检测到安装方式，请改用"更新（全局安装）"。
 
@@ -110,9 +110,9 @@ openclaw update
 
 1. 执行与 `openclaw update` 相同的源码更新流程（仅限 git checkout）。
 2. 写入重启哨兵文件及结构化报告（stdout/stderr 尾部内容）。
-3. 重启 Gateway 并向最近活跃的会话发送报告。
+3. 重启 Gateway网关并向最近活跃的会话发送报告。
 
-如果变基失败，Gateway 会中止并在不应用更新的情况下重启。
+如果变基失败，Gateway网关会中止并在不应用更新的情况下重启。
 
 ## 更新（源码安装）
 
@@ -140,7 +140,7 @@ openclaw health
 - 当你运行打包后的 `openclaw` 二进制文件（[`openclaw.mjs`](https://github.com/openclaw/openclaw/blob/main/openclaw.mjs)）或使用 Node 运行 `dist/` 时，`pnpm build` 很重要。
 - 如果你从仓库检出运行而没有全局安装，请使用 `pnpm openclaw ...` 执行 CLI 命令。
 - 如果你直接从 TypeScript 运行（`pnpm openclaw ...`），通常不需要重新构建，但**配置迁移仍然适用** → 运行 doctor。
-- 在全局安装和 git 安装之间切换很容易：安装另一种方式，然后运行 `openclaw doctor`，这样 Gateway 服务入口点会被重写为当前安装。
+- 在全局安装和 git 安装之间切换很容易：安装另一种方式，然后运行 `openclaw doctor`，这样 Gateway网关服务入口点会被重写为当前安装。
 
 ## 必须执行：`openclaw doctor`
 
@@ -152,13 +152,13 @@ Doctor 是"安全更新"命令。它有意设计得很朴素：修复 + 迁移 +
 
 - 迁移已弃用的配置键 / 旧版配置文件位置。
 - 审核私信策略并对高风险的"开放"设置发出警告。
-- 检查 Gateway 健康状态并可建议重启。
-- 检测并将旧版 Gateway 服务（launchd/systemd；旧版 schtasks）迁移到当前的 OpenClaw 服务。
-- 在 Linux 上，确保 systemd 用户 lingering（使 Gateway 在登出后继续运行）。
+- 检查 Gateway网关健康状态并可建议重启。
+- 检测并将旧版 Gateway网关服务（launchd/systemd；旧版 schtasks）迁移到当前的 OpenClaw 服务。
+- 在 Linux 上，确保 systemd 用户 lingering（使 Gateway网关在登出后继续运行）。
 
 详情：[Doctor](/gateway/doctor)
 
-## 启动/停止/重启 Gateway
+## 启动/停止/重启 Gateway网关
 
 CLI（适用于所有操作系统）：
 
@@ -177,7 +177,7 @@ openclaw logs --follow
 - Windows（WSL2）：`systemctl --user restart openclaw-gateway[-<profile>].service`
   - `launchctl`/`systemctl` 仅在服务已安装时有效；否则请运行 `openclaw gateway install`。
 
-运维手册及完整服务标签：[Gateway 运维手册](/gateway)
+运维手册及完整服务标签：[Gateway网关运维手册](/gateway)
 
 ## 回滚/版本固定（出现问题时）
 

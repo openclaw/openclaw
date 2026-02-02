@@ -101,12 +101,12 @@ OpenCode 完成修改 → 提交 PR → OpenClaw 审查差异并在 Telegram 中
   <img src="/assets/showcase/pr-review-telegram.jpg" alt="OpenClaw PR 审查反馈通过 Telegram 发送" />
 </Card>
 
-<Card title="几分钟内创建酒窖技能" icon="wine-glass" href="https://x.com/i/status/2010916352454791216">
+<Card title="几分钟内创建酒窖 Skills" icon="wine-glass" href="https://x.com/i/status/2010916352454791216">
   **@prades_maxime** • `skills` `local` `csv`
 
-让"Robby"（@openclaw）创建一个本地酒窖技能。它请求一个 CSV 导出样本和存储位置，然后快速构建并测试技能（示例中有 962 瓶酒）。
+让"Robby"（@openclaw）创建一个本地酒窖 Skills。它请求一个 CSV 导出样本和存储位置，然后快速构建并测试 Skills（示例中有 962 瓶酒）。
 
-  <img src="/assets/showcase/wine-cellar-skill.jpg" alt="OpenClaw 从 CSV 构建本地酒窖技能" />
+  <img src="/assets/showcase/wine-cellar-skill.jpg" alt="OpenClaw 从 CSV 构建本地酒窖 Skills" />
 </Card>
 
 <Card title="Tesco 购物自动化" icon="cart-shopping" href="https://x.com/i/status/2009724862470689131">
@@ -128,7 +128,7 @@ OpenCode 完成修改 → 提交 PR → OpenClaw 审查差异并在 Telegram 中
 <Card title="Agents UI" icon="window-maximize" href="https://releaseflow.net/kitze/agents-ui">
   **@kitze** • `ui` `skills` `sync`
 
-桌面应用，用于跨 Agents、Claude、Codex 和 OpenClaw 管理技能/命令。
+桌面应用，用于跨 Agents、Claude、Codex 和 OpenClaw 管理 Skills/命令。
 
   <img src="/assets/showcase/agents-ui.jpg" alt="Agents UI 应用" />
 </Card>
@@ -154,7 +154,7 @@ OpenCode 完成修改 → 提交 PR → OpenClaw 审查差异并在 Telegram 中
 
 控制和排查 BambuLab 打印机：状态、任务、摄像头、AMS、校准等。
 
-  <img src="/assets/showcase/bambu-cli.png" alt="ClawHub 上的 Bambu CLI 技能" />
+  <img src="/assets/showcase/bambu-cli.png" alt="ClawHub 上的 Bambu CLI Skills" />
 </Card>
 
 <Card title="维也纳公共交通（Wiener Linien）" icon="train" href="https://clawhub.com/hjanuschka/wienerlinien">
@@ -162,7 +162,7 @@ OpenCode 完成修改 → 提交 PR → OpenClaw 审查差异并在 Telegram 中
 
 维也纳公共交通的实时出发信息、中断情况、电梯状态和路线规划。
 
-  <img src="/assets/showcase/wienerlinien.png" alt="ClawHub 上的 Wiener Linien 技能" />
+  <img src="/assets/showcase/wienerlinien.png" alt="ClawHub 上的 Wiener Linien Skills" />
 </Card>
 
 <Card title="ParentPay 学校餐食" icon="utensils" href="#">
@@ -195,7 +195,7 @@ OpenCode 完成修改 → 提交 PR → OpenClaw 审查差异并在 Telegram 中
 <Card title="Kev 的梦之队（14+ 智能体）" icon="robot" href="https://github.com/adam91holt/orchestrated-ai-articles">
   **@adam91holt** • `multi-agent` `orchestration` `architecture` `manifesto`
 
-一个 Gateway 下管理 14+ 智能体，由 Opus 4.5 编排器将任务委派给 Codex 工作节点。包含详尽的[技术文档](https://github.com/adam91holt/orchestrated-ai-articles)，涵盖梦之队成员、模型选择、沙箱、Webhook、心跳检测和委派流程。用于智能体沙箱隔离的 [Clawdspace](https://github.com/adam91holt/clawdspace)。[博客文章](https://adams-ai-journey.ghost.io/2026-the-year-of-the-orchestrator/)。
+一个 Gateway网关下管理 14+ 智能体，由 Opus 4.5 编排器将任务委派给 Codex 工作节点。包含详尽的[技术文档](https://github.com/adam91holt/orchestrated-ai-articles)，涵盖梦之队成员、模型选择、沙箱、Webhook、心跳检测和委派流程。用于智能体沙箱隔离的 [Clawdspace](https://github.com/adam91holt/clawdspace)。[博客文章](https://adams-ai-journey.ghost.io/2026-the-year-of-the-orchestrator/)。
 </Card>
 
 <Card title="Linear CLI" icon="terminal" href="https://github.com/Finesssee/linear-cli">
@@ -227,7 +227,7 @@ Claude Code 发现并确认了净化器控制方式，然后 OpenClaw 接管并�
 <Card title="美丽天空相机抓拍" icon="camera" href="https://x.com/signalgaining/status/2010523120604746151">
   **@signalgaining** • `automation` `camera` `skill` `images`
 
-由屋顶摄像头触发：当天空看起来很美时，让 OpenClaw 拍一张天空照片——它设计了一个技能并完成了拍摄。
+由屋顶摄像头触发：当天空看起来很美时，让 OpenClaw 拍一张天空照片——它设计了一个 Skills 并完成了拍摄。
 
   <img src="/assets/showcase/roof-camera-sky.jpg" alt="OpenClaw 捕获的屋顶摄像头天空快照" />
 </Card>
@@ -264,16 +264,16 @@ Claude Code 发现并确认了净化器控制方式，然后 OpenClaw 接管并�
 搜索职位列表，与简历关键词匹配，返回相关机会和链接。使用 JSearch API 在 30 分钟内构建完成。
 </Card>
 
-<Card title="Jira 技能构建器" icon="diagram-project" href="https://x.com/jdrhyne/status/2008336434827002232">
+<Card title="Jira Skills 构建器" icon="diagram-project" href="https://x.com/jdrhyne/status/2008336434827002232">
   **@jdrhyne** • `automation` `jira` `skill` `devtools`
 
-OpenClaw 连接到 Jira，然后即时生成了一个新技能（在 ClawHub 上还不存在时）。
+OpenClaw 连接到 Jira，然后即时生成了一个新 Skills（在 ClawHub 上还不存在时）。
 </Card>
 
-<Card title="通过 Telegram 创建 Todoist 技能" icon="list-check" href="https://x.com/iamsubhrajyoti/status/2009949389884920153">
+<Card title="通过 Telegram 创建 Todoist Skills" icon="list-check" href="https://x.com/iamsubhrajyoti/status/2009949389884920153">
   **@iamsubhrajyoti** • `automation` `todoist` `skill` `telegram`
 
-自动化 Todoist 任务，并让 OpenClaw 直接在 Telegram 聊天中生成技能。
+自动化 Todoist 任务，并让 OpenClaw 直接在 Telegram 聊天中生成 Skills。
 </Card>
 
 <Card title="TradingView 分析" icon="chart-line">
@@ -347,10 +347,10 @@ OpenClaw 连接到 Jira，然后即时生成了一个新技能（在 ClawHub 上
 <Card title="Home Assistant 插件" icon="home" href="https://github.com/ngutman/openclaw-ha-addon">
   **@ngutman** • `homeassistant` `docker` `raspberry-pi`
   
-  在 Home Assistant OS 上运行 OpenClaw Gateway，支持 SSH 隧道和持久化状态。
+  在 Home Assistant OS 上运行 OpenClaw Gateway网关，支持 SSH 隧道和持久化状态。
 </Card>
 
-<Card title="Home Assistant 技能" icon="toggle-on" href="https://clawhub.com/skills/homeassistant">
+<Card title="Home Assistant Skills" icon="toggle-on" href="https://clawhub.com/skills/homeassistant">
   **ClawHub** • `homeassistant` `skill` `automation`
   
   通过自然语言控制和自动化 Home Assistant 设备。
@@ -365,7 +365,7 @@ OpenClaw 连接到 Jira，然后即时生成了一个新技能（在 ClawHub 上
 <Card title="CalDAV 日历" icon="calendar" href="https://clawhub.com/skills/caldav-calendar">
   **ClawHub** • `calendar` `caldav` `skill`
   
-  使用 khal/vdirsyncer 的日历技能。自托管日历集成。
+  使用 khal/vdirsyncer 的日历 Skills。自托管日历集成。
 </Card>
 
 </CardGroup>

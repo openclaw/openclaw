@@ -21,7 +21,7 @@ x-i18n:
 Zalo 以插件形式提供，不包含在核心安装中。
 
 - 通过 CLI 安装：`openclaw plugins install @openclaw/zalo`
-- 或在上手引导中选择 **Zalo** 并确认安装提示
+- 或在新手引导中选择 **Zalo** 并确认安装提示
 - 详情：[插件](/plugin)
 
 ## 快速设置（新手）
@@ -29,11 +29,11 @@ Zalo 以插件形式提供，不包含在核心安装中。
 1. 安装 Zalo 插件：
    - 从源码检出安装：`openclaw plugins install ./extensions/zalo`
    - 从 npm 安装（如已发布）：`openclaw plugins install @openclaw/zalo`
-   - 或在上手引导中选择 **Zalo** 并确认安装提示
+   - 或在新手引导中选择 **Zalo** 并确认安装提示
 2. 设置令牌：
    - 环境变量：`ZALO_BOT_TOKEN=...`
    - 或配置：`channels.zalo.botToken: "..."`。
-3. 重启 Gateway（或完成上手引导）。
+3. 重启 Gateway网关（或完成新手引导）。
 4. 私信访问默认使用配对模式；首次联系时需批准配对码。
 
 最小配置：
@@ -52,10 +52,10 @@ Zalo 以插件形式提供，不包含在核心安装中。
 
 ## 简介
 
-Zalo 是一款面向越南市场的即时通讯应用；其 Bot API 允许 Gateway 运行一个用于一对一对话的机器人。
+Zalo 是一款面向越南市场的即时通讯应用；其 Bot API 允许 Gateway网关运行一个用于一对一对话的机器人。
 它非常适合需要将消息确定性路由回 Zalo 的客服或通知场景。
 
-- 由 Gateway 管理的 Zalo Bot API 渠道。
+- 由 Gateway网关管理的 Zalo Bot API 渠道。
 - 确定性路由：回复始终返回 Zalo；模型不会选择渠道。
 - 私信共享智能体的主会话。
 - 群组尚不支持（Zalo 文档标注"即将推出"）。
@@ -88,7 +88,7 @@ Zalo 是一款面向越南市场的即时通讯应用；其 Bot API 允许 Gatew
 
 多账户支持：使用 `channels.zalo.accounts`，为每个账户配置令牌和可选的 `name`。
 
-3. 重启 Gateway。当令牌被解析（通过环境变量或配置）时，Zalo 将启动。
+3. 重启 Gateway网关。当令牌被解析（通过环境变量或配置）时，Zalo 将启动。
 4. 私信访问默认使用配对模式。机器人首次被联系时，请批准配对码。
 
 ## 工作原理（行为）
@@ -121,7 +121,7 @@ Zalo 是一款面向越南市场的即时通讯应用；其 Bot API 允许 Gatew
   - Webhook 密钥必须为 8-256 个字符。
   - Webhook URL 必须使用 HTTPS。
   - Zalo 通过 `X-Bot-Api-Secret-Token` 请求头发送事件以进行验证。
-  - Gateway HTTP 在 `channels.zalo.webhookPath` 处理 webhook 请求（默认为 webhook URL 路径）。
+  - Gateway网关 HTTP 在 `channels.zalo.webhookPath` 处理 webhook 请求（默认为 webhook URL 路径）。
 
 **注意：** 根据 Zalo API 文档，getUpdates（轮询）和 webhook 互斥。
 
@@ -156,13 +156,13 @@ Zalo 是一款面向越南市场的即时通讯应用；其 Bot API 允许 Gatew
 
 - 检查令牌是否有效：`openclaw channels status --probe`
 - 验证发送者是否已批准（配对或 allowFrom）
-- 检查 Gateway 日志：`openclaw logs --follow`
+- 检查 Gateway网关日志：`openclaw logs --follow`
 
 **Webhook 未收到事件：**
 
 - 确保 webhook URL 使用 HTTPS
 - 验证密钥令牌为 8-256 个字符
-- 确认 Gateway HTTP 端点在配置的路径上可达
+- 确认 Gateway网关 HTTP 端点在配置的路径上可达
 - 检查 getUpdates 轮询是否未在运行（两者互斥）
 
 ## 配置参考（Zalo）
@@ -179,7 +179,7 @@ Zalo 是一款面向越南市场的即时通讯应用；其 Bot API 允许 Gatew
 - `channels.zalo.mediaMaxMb`：入站/出站媒体大小上限（MB，默认 5）。
 - `channels.zalo.webhookUrl`：启用 webhook 模式（需要 HTTPS）。
 - `channels.zalo.webhookSecret`：webhook 密钥（8-256 个字符）。
-- `channels.zalo.webhookPath`：Gateway HTTP 服务器上的 webhook 路径。
+- `channels.zalo.webhookPath`：Gateway网关 HTTP 服务器上的 webhook 路径。
 - `channels.zalo.proxy`：API 请求的代理 URL。
 
 多账户选项：

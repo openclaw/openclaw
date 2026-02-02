@@ -3,7 +3,7 @@ last_updated: "2026-01-19"
 owner: openclaw
 status: 草稿
 summary: 计划：添加 OpenResponses /v1/responses 端点并平稳废弃 Chat Completions
-title: OpenResponses Gateway 计划
+title: OpenResponses Gateway网关计划
 x-i18n:
   generated_at: "2026-02-01T20:25:20Z"
   model: claude-opus-4-5
@@ -13,11 +13,11 @@ x-i18n:
   workflow: 14
 ---
 
-# OpenResponses Gateway 集成计划
+# OpenResponses Gateway网关集成计划
 
 ## 背景
 
-OpenClaw Gateway 当前在 `/v1/chat/completions` 暴露了一个最小化的 OpenAI 兼容 Chat Completions 端点（参见 [OpenAI Chat Completions](/gateway/openai-http-api)）。
+OpenClaw Gateway网关当前在 `/v1/chat/completions` 暴露了一个最小化的 OpenAI 兼容 Chat Completions 端点（参见 [OpenAI Chat Completions](/gateway/openai-http-api)）。
 
 Open Responses 是一个基于 OpenAI Responses API 的开放推理标准。它专为智能体工作流设计，使用基于项目的输入和语义化流式事件。OpenResponses 规范定义的是 `/v1/responses`，而非 `/v1/chat/completions`。
 
@@ -60,7 +60,7 @@ Open Responses 是一个基于 OpenAI Responses API 的开放推理标准。它�
 
 ## 建议架构
 
-- 添加 `src/gateway/open-responses.schema.ts`，仅包含 Zod schema（不引入 Gateway 依赖）。
+- 添加 `src/gateway/open-responses.schema.ts`，仅包含 Zod schema（不引入 Gateway网关依赖）。
 - 添加 `src/gateway/openresponses-http.ts`（或 `open-responses-http.ts`）用于 `/v1/responses`。
 - 保持 `src/gateway/openai-http.ts` 不变，作为旧版兼容适配器。
 - 添加配置 `gateway.http.endpoints.responses.enabled`（默认 `false`）。
@@ -89,7 +89,7 @@ Open Responses 是一个基于 OpenAI Responses API 的开放推理标准。它�
   - `CreateResponseBody`
   - `ItemParam` + 消息内容部分联合类型
   - `ResponseResource`
-  - Gateway 使用的流式事件结构
+  - Gateway网关使用的流式事件结构
 - 将 schema 保存在单个隔离模块中，以避免漂移并支持未来的代码生成。
 
 ## 流式实现（第一阶段）

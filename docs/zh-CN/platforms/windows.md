@@ -15,7 +15,7 @@ x-i18n:
 
 # Windows (WSL2)
 
-推荐**通过 WSL2** 在 Windows 上使用 OpenClaw（建议使用 Ubuntu）。CLI + Gateway 在 Linux 内运行，这样可以保持运行时一致性，并使工具链兼容性更好（Node/Bun/pnpm、Linux 二进制文件、技能）。原生 Windows 可能会更麻烦。WSL2 为你提供完整的 Linux 体验——一条命令即可安装：`wsl --install`。
+推荐**通过 WSL2** 在 Windows 上使用 OpenClaw（建议使用 Ubuntu）。CLI + Gateway网关在 Linux 内运行，这样可以保持运行时一致性，并使工具链兼容性更好（Node/Bun/pnpm、Linux 二进制文件、Skills）。原生 Windows 可能会更麻烦。WSL2 为你提供完整的 Linux 体验——一条命令即可安装：`wsl --install`。
 
 原生 Windows 伴侣应用已在计划中。
 
@@ -25,12 +25,12 @@ x-i18n:
 - [安装与更新](/install/updating)
 - 官方 WSL2 指南（Microsoft）：https://learn.microsoft.com/windows/wsl/install
 
-## Gateway
+## Gateway网关
 
-- [Gateway 运行手册](/gateway)
+- [Gateway网关运行手册](/gateway)
 - [配置](/gateway/configuration)
 
-## Gateway 服务安装（CLI）
+## Gateway网关服务安装（CLI）
 
 在 WSL2 内：
 
@@ -50,7 +50,7 @@ openclaw gateway install
 openclaw configure
 ```
 
-出现提示时选择 **Gateway 服务**。
+出现提示时选择 **Gateway网关服务**。
 
 修复/迁移：
 
@@ -60,7 +60,7 @@ openclaw doctor
 
 ## 进阶：通过局域网暴露 WSL 服务（portproxy）
 
-WSL 拥有自己的虚拟网络。如果另一台机器需要访问 **WSL 内部** 运行的服务（SSH、本地 TTS 服务器或 Gateway），你必须将 Windows 端口转发到当前 WSL IP。WSL IP 在重启后会改变，因此你可能需要刷新转发规则。
+WSL 拥有自己的虚拟网络。如果另一台机器需要访问 **WSL 内部** 运行的服务（SSH、本地 TTS 服务器或 Gateway网关），你必须将 Windows 端口转发到当前 WSL IP。WSL IP 在重启后会改变，因此你可能需要刷新转发规则。
 
 示例（以**管理员身份**运行 PowerShell）：
 
@@ -94,7 +94,7 @@ netsh interface portproxy add v4tov4 listenport=$ListenPort listenaddress=0.0.0.
 注意事项：
 
 - 从另一台机器通过 SSH 连接时，目标是 **Windows 主机 IP**（例如：`ssh user@windows-host -p 2222`）。
-- 远程节点必须指向一个**可达的** Gateway URL（而非 `127.0.0.1`）；使用 `openclaw status --all` 来确认。
+- 远程节点必须指向一个**可达的** Gateway网关 URL（而非 `127.0.0.1`）；使用 `openclaw status --all` 来确认。
 - 使用 `listenaddress=0.0.0.0` 进行局域网访问；`127.0.0.1` 仅限本地访问。
 - 如果你希望自动执行，可以注册一个计划任务，在登录时运行刷新步骤。
 
@@ -113,7 +113,7 @@ wsl --install -d Ubuntu-24.04
 
 如果 Windows 提示，请重启。
 
-### 2) 启用 systemd（Gateway 安装所需）
+### 2) 启用 systemd（Gateway网关安装所需）
 
 在你的 WSL 终端中：
 

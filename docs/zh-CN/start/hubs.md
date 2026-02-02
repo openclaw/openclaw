@@ -19,11 +19,11 @@ x-i18n:
 ## 从这里开始
 
 - [索引](/)
-- [快速入门](/start/getting-started)
-- [上手引导](/start/onboarding)
+- [入门指南](/start/getting-started)
+- [新手引导](/start/onboarding)
 - [向导](/start/wizard)
 - [设置](/start/setup)
-- [仪表盘（本地 Gateway）](http://127.0.0.1:18789/)
+- [仪表盘（本地 Gateway网关）](http://127.0.0.1:18789/)
 - [帮助](/help)
 - [配置](/gateway/configuration)
 - [配置示例](/gateway/configuration-examples)
@@ -84,11 +84,11 @@ x-i18n:
 - [Webhooks](/automation/webhook)
 - [Gmail Pub/Sub](/automation/gmail-pubsub)
 
-## Gateway + 运维
+## Gateway网关 + 运维
 
-- [Gateway 运行手册](/gateway)
-- [Gateway 配对](/gateway/pairing)
-- [Gateway 锁](/gateway/gateway-lock)
+- [Gateway网关运行手册](/gateway)
+- [Gateway网关配对](/gateway/pairing)
+- [Gateway网关锁](/gateway/gateway-lock)
 - [后台进程](/gateway/background-process)
 - [健康检查](/gateway/health)
 - [心跳](/gateway/heartbeat)
@@ -98,7 +98,7 @@ x-i18n:
 - [仪表盘](/web/dashboard)
 - [控制界面](/web/control-ui)
 - [远程访问](/gateway/remote)
-- [远程 Gateway README](/gateway/remote-gateway-readme)
+- [远程 Gateway网关 README](/gateway/remote-gateway-readme)
 - [Tailscale](/gateway/tailscale)
 - [安全](/gateway/security)
 - [故障排除](/gateway/troubleshooting)
@@ -157,16 +157,16 @@ x-i18n:
 - [macOS 远程](/platforms/mac/remote)
 - [macOS 签名](/platforms/mac/signing)
 - [macOS 发布](/platforms/mac/release)
-- [macOS Gateway (launchd)](/platforms/mac/bundled-gateway)
+- [macOS Gateway网关 (launchd)](/platforms/mac/bundled-gateway)
 - [macOS XPC](/platforms/mac/xpc)
-- [macOS 技能](/platforms/mac/skills)
+- [macOS Skills](/platforms/mac/skills)
 - [macOS Peekaboo](/platforms/mac/peekaboo)
 
 ## 工作区 + 模板
 
-- [技能](/tools/skills)
+- [Skills](/tools/skills)
 - [ClawHub](/tools/clawhub)
-- [技能配置](/tools/skills-config)
+- [Skills配置](/tools/skills-config)
 - [默认 AGENTS](/reference/AGENTS.default)
 - [模板：AGENTS](/reference/templates/AGENTS)
 - [模板：BOOTSTRAP](/reference/templates/BOOTSTRAP)
@@ -178,7 +178,7 @@ x-i18n:
 
 ## 实验（探索性）
 
-- [上手引导配置协议](/experiments/onboarding-config-protocol)
+- [新手引导配置协议](/experiments/onboarding-config-protocol)
 - [定时任务加固笔记](/experiments/plans/cron-add-hardening)
 - [群组策略加固笔记](/experiments/plans/group-policy-hardening)
 - [研究：记忆](/experiments/research/memory)

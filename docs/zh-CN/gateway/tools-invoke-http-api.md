@@ -2,7 +2,7 @@
 read_when:
   - 不运行完整智能体轮次而直接调用工具
   - 构建需要工具策略执行的自动化流程
-summary: 通过 Gateway HTTP 端点直接调用单个工具
+summary: 通过 Gateway网关 HTTP 端点直接调用单个工具
 title: 工具调用 API
 x-i18n:
   generated_at: "2026-02-01T20:38:59Z"
@@ -15,16 +15,16 @@ x-i18n:
 
 # 工具调用（HTTP）
 
-OpenClaw 的 Gateway 暴露了一个简单的 HTTP 端点，用于直接调用单个工具。该端点始终启用，但受 Gateway 认证和工具策略控制。
+OpenClaw 的 Gateway网关暴露了一个简单的 HTTP 端点，用于直接调用单个工具。该端点始终启用，但受 Gateway网关认证和工具策略控制。
 
 - `POST /tools/invoke`
-- 与 Gateway 相同的端口（WS + HTTP 多路复用）：`http://<gateway-host>:<port>/tools/invoke`
+- 与 Gateway网关相同的端口（WS + HTTP 多路复用）：`http://<gateway-host>:<port>/tools/invoke`
 
 默认最大请求体大小为 2 MB。
 
 ## 认证
 
-使用 Gateway 认证配置。发送 Bearer 令牌：
+使用 Gateway网关认证配置。发送 Bearer 令牌：
 
 - `Authorization: Bearer <token>`
 
@@ -50,12 +50,12 @@ OpenClaw 的 Gateway 暴露了一个简单的 HTTP 端点，用于直接调用�
 - `tool`（字符串，必填）：要调用的工具名称。
 - `action`（字符串，可选）：如果工具 schema 支持 `action` 且 args 中未包含该字段，则映射到 args 中。
 - `args`（对象，可选）：工具特定的参数。
-- `sessionKey`（字符串，可选）：目标会话键。如果省略或为 `"main"`，Gateway 将使用配置的主会话键（遵循 `session.mainKey` 和默认智能体，或在全局作用域中使用 `global`）。
+- `sessionKey`（字符串，可选）：目标会话键。如果省略或为 `"main"`，Gateway网关将使用配置的主会话键（遵循 `session.mainKey` 和默认智能体，或在全局作用域中使用 `global`）。
 - `dryRun`（布尔值，可选）：保留供将来使用；当前会被忽略。
 
 ## 策略 + 路由行为
 
-工具可用性通过与 Gateway 智能体相同的策略链进行过滤：
+工具可用性通过与 Gateway网关智能体相同的策略链进行过滤：
 
 - `tools.profile` / `tools.byProvider.profile`
 - `tools.allow` / `tools.byProvider.allow`

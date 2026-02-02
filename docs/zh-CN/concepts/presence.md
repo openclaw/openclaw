@@ -2,7 +2,7 @@
 read_when:
   - 调试实例选项卡
   - 排查重复或过期的实例行
-  - 更改 Gateway WebSocket 连接或系统事件信标
+  - 更改 Gateway网关 WebSocket 连接或系统事件信标
 summary: OpenClaw 在线状态条目的生成、合并与显示方式
 title: 在线状态
 x-i18n:
@@ -18,8 +18,8 @@ x-i18n:
 
 OpenClaw 的"在线状态"是一个轻量级、尽力而为的视图，展示：
 
-- **Gateway** 自身，以及
-- **连接到 Gateway 的客户端**（Mac 应用、WebChat、CLI 等）
+- **Gateway网关** 自身，以及
+- **连接到 Gateway网关的客户端**（Mac 应用、WebChat、CLI 等）
 
 在线状态主要用于渲染 macOS 应用的**实例**选项卡，并为操作人员提供快速可视化。
 
@@ -41,13 +41,13 @@ OpenClaw 的"在线状态"是一个轻量级、尽力而为的视图，展示：
 
 在线状态条目由多个来源产生并进行**合并**。
 
-### 1）Gateway 自身条目
+### 1）Gateway网关自身条目
 
-Gateway 在启动时始终会创建一个"self"条目，这样即使在任何客户端连接之前，UI 也能显示 Gateway 主机。
+Gateway网关在启动时始终会创建一个"self"条目，这样即使在任何客户端连接之前，UI 也能显示 Gateway网关主机。
 
 ### 2）WebSocket 连接
 
-每个 WebSocket 客户端都以 `connect` 请求开始。握手成功后，Gateway 会为该连接更新插入一个在线状态条目。
+每个 WebSocket 客户端都以 `connect` 请求开始。握手成功后，Gateway网关会为该连接更新插入一个在线状态条目。
 
 #### 为什么一次性 CLI 命令不会显示
 
@@ -59,7 +59,7 @@ CLI 通常只为短暂的一次性命令建立连接。为避免实例列表被�
 
 ### 4）节点连接（role: node）
 
-当节点通过 Gateway WebSocket 以 `role: node` 连接时，Gateway 会为该节点更新插入一个在线状态条目（与其他 WebSocket 客户端流程相同）。
+当节点通过 Gateway网关 WebSocket 以 `role: node` 连接时，Gateway网关会为该节点更新插入一个在线状态条目（与其他 WebSocket 客户端流程相同）。
 
 ## 合并与去重规则（为什么 `instanceId` 很重要）
 
@@ -80,9 +80,9 @@ CLI 通常只为短暂的一次性命令建立连接。为避免实例列表被�
 
 这确保列表保持新鲜，避免无限制的内存增长。
 
-## 远程/隧道注意事项（回环 IP）
+## 远程/隧道注意事项（local loopback IP）
 
-当客户端通过 SSH 隧道/本地端口转发连接时，Gateway 可能会将远程地址识别为 `127.0.0.1`。为避免覆盖客户端报告的有效 IP，回环远程地址会被忽略。
+当客户端通过 SSH 隧道/本地端口转发连接时，Gateway网关可能会将远程地址识别为 `127.0.0.1`。为避免覆盖客户端报告的有效 IP，local loopback 远程地址会被忽略。
 
 ## 消费者
 
@@ -92,7 +92,7 @@ macOS 应用渲染 `system-presence` 的输出，并根据最后更新的时间�
 
 ## 调试技巧
 
-- 要查看原始列表，请对 Gateway 调用 `system-presence`。
+- 要查看原始列表，请对 Gateway网关调用 `system-presence`。
 - 如果看到重复条目：
   - 确认客户端在握手中发送了稳定的 `client.instanceId`
   - 确认周期性信标使用相同的 `instanceId`

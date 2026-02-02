@@ -16,7 +16,7 @@ x-i18n:
 
 # OpenProse
 
-OpenProse 是一种可移植的、以 Markdown 为核心的工作流格式，用于编排 AI 会话。在 OpenClaw 中，它以插件形式提供，安装后包含一个 OpenProse 技能包和一个 `/prose` 斜杠命令。程序存放在 `.prose` 文件中，可以通过显式控制流生成多个子智能体。
+OpenProse 是一种可移植的、以 Markdown 为核心的工作流格式，用于编排 AI 会话。在 OpenClaw 中，它以插件形式提供，安装后包含一个 OpenProse Skills 包和一个 `/prose` 斜杠命令。程序存放在 `.prose` 文件中，可以通过显式控制流生成多个子智能体。
 
 官方网站：https://www.prose.md
 
@@ -34,15 +34,15 @@ OpenProse 是一种可移植的、以 Markdown 为核心的工作流格式，用
 openclaw plugins enable open-prose
 ```
 
-启用插件后重启 Gateway。
+启用插件后重启 Gateway网关。
 
 开发/本地签出：`openclaw plugins install ./extensions/open-prose`
 
-相关文档：[插件](/plugin)、[插件清单](/plugins/manifest)、[技能](/tools/skills)。
+相关文档：[插件](/plugin)、[插件清单](/plugins/manifest)、[Skills](/tools/skills)。
 
 ## 斜杠命令
 
-OpenProse 注册 `/prose` 作为用户可调用的技能命令。它路由到 OpenProse 虚拟机指令，底层使用 OpenClaw 工具。
+OpenProse 注册 `/prose` 作为用户可调用的 Skills 命令。它路由到 OpenProse 虚拟机指令，底层使用 OpenClaw 工具。
 
 常用命令：
 
@@ -132,7 +132,7 @@ OpenProse 程序映射到 OpenClaw 原语：
 | 文件读写             | `read` / `write` |
 | Web 获取             | `web_fetch`      |
 
-如果你的工具允许列表阻止了这些工具，OpenProse 程序将无法运行。参阅[技能配置](/tools/skills-config)。
+如果你的工具允许列表阻止了这些工具，OpenProse 程序将无法运行。参阅[Skills配置](/tools/skills-config)。
 
 ## 安全与审批
 

@@ -166,14 +166,14 @@ x-i18n:
         "id": "main",
         "workspace": "~/.openclaw/workspace",
         "sandbox": {
-          "mode": "off" // 覆盖：main 永不沙箱化
+          "mode": "off" // 覆盖：main 永不沙箱隔离
         }
       },
       {
         "id": "public",
         "workspace": "~/.openclaw/workspace-public",
         "sandbox": {
-          "mode": "all", // 覆盖：public 始终沙箱化
+          "mode": "all", // 覆盖：public 始终沙箱隔离
           "scope": "agent"
         },
         "tools": {
@@ -250,7 +250,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 - 对不受信任的智能体拒绝 `exec`（`agents.list[].tools.deny: ["exec"]`）
 - 避免将发送者加入允许列表后路由到受限智能体
-- 如果你只需要沙箱化执行，可全局禁用提权（`tools.elevated.enabled: false`）
+- 如果你只需要沙箱隔离执行，可全局禁用提权（`tools.elevated.enabled: false`）
 - 对敏感配置按智能体禁用提权（`agents.list[].tools.elevated.enabled: false`）
 
 ---
@@ -341,7 +341,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 ## 常见陷阱："non-main"
 
 `agents.defaults.sandbox.mode: "non-main"` 基于 `session.mainKey`（默认为 `"main"`），
-而不是智能体 ID。群组/渠道会话总是获得自己的键，因此它们被视为非主会话并将被沙箱化。如果你希望某个智能体永不沙箱化，请设置 `agents.list[].sandbox.mode: "off"`。
+而不是智能体 ID。群组/渠道会话总是获得自己的键，因此它们被视为非主会话并将被沙箱隔离。如果你希望某个智能体永不沙箱隔离，请设置 `agents.list[].sandbox.mode: "off"`。
 
 ---
 
@@ -374,7 +374,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ## 故障排除
 
-### 尽管设置了 `mode: "all"`，智能体未被沙箱化
+### 尽管设置了 `mode: "all"`，智能体未被沙箱隔离
 
 - 检查是否有全局 `agents.defaults.sandbox.mode` 覆盖了它
 - 智能体特定配置优先级更高，因此请设置 `agents.list[].sandbox.mode: "all"`

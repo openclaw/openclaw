@@ -27,7 +27,7 @@ x-i18n:
 
 ## 自动检测（默认）
 
-如果您**未配置模型**且 `tools.media.audio.enabled` **未**设置为 `false`，OpenClaw 会按以下顺序自动检测，并在找到第一个可用选项时停止：
+如果你**未配置模型**且 `tools.media.audio.enabled` **未**设置为 `false`，OpenClaw 会按以下顺序自动检测，并在找到第一个可用选项时停止：
 
 1. **本地 CLI**（如已安装）
    - `sherpa-onnx-offline`（需要 `SHERPA_ONNX_MODEL_DIR` 包含 encoder/decoder/joiner/tokens）
@@ -116,5 +116,5 @@ x-i18n:
 ## 常见陷阱
 
 - 作用域规则采用首次匹配优先。`chatType` 会被规范化为 `direct`、`group` 或 `room`。
-- 确保您的 CLI 以退出码 0 退出并输出纯文本；JSON 格式需要通过 `jq -r .text` 进行转换。
+- 确保你的 CLI 以退出码 0 退出并输出纯文本；JSON 格式需要通过 `jq -r .text` 进行转换。
 - 保持合理的超时时间（`timeoutSeconds`，默认 60 秒），以避免阻塞回复队列。

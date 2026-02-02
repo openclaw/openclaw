@@ -15,7 +15,7 @@ x-i18n:
 
 # Webhooks
 
-Gateway 可以暴露一个小型 HTTP webhook 端点用于外部触发。
+Gateway网关可以暴露一个小型 HTTP webhook 端点用于外部触发。
 
 ## 启用
 
@@ -157,7 +157,7 @@ curl -X POST http://127.0.0.1:18789/hooks/gmail \
 
 ## 安全
 
-- 将 hook 端点限制在回环地址、tailnet 或受信任的反向代理之后。
-- 使用专用的 hook 令牌；不要复用 Gateway 认证令牌。
+- 将 hook 端点限制在 local loopback、tailnet 或受信任的反向代理之后。
+- 使用专用的 hook 令牌；不要复用 Gateway网关认证令牌。
 - 避免在 webhook 日志中包含敏感的原始请求体。
 - Hook 请求体默认被视为不受信任的，并使用安全边界进行包装。如果你必须为特定 hook 禁用此功能，请在该 hook 的映射中设置 `allowUnsafeExternalContent: true`（危险）。

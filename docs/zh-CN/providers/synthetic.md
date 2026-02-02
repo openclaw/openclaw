@@ -20,7 +20,7 @@ Synthetic 提供兼容 Anthropic 的端点。OpenClaw 将其注册为 `synthetic
 ## 快速设置
 
 1. 设置 `SYNTHETIC_API_KEY`（或运行以下向导）。
-2. 运行上手引导：
+2. 运行新手引导：
 
 ```bash
 openclaw onboard --auth-choice synthetic-api-key

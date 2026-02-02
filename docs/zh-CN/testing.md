@@ -2,7 +2,7 @@
 read_when:
   - 在本地或 CI 中运行测试
   - 为模型/提供商缺陷添加回归测试
-  - 调试 Gateway + 智能体行为
+  - 调试 Gateway网关 + 智能体行为
 summary: 测试工具包：单元/端到端/实时测试套件、Docker 运行器，以及每项测试的覆盖范围
 title: 测试
 x-i18n:
@@ -38,7 +38,7 @@ OpenClaw 拥有三个 Vitest 测试套件（单元/集成、端到端、实时�
 
 调试真实提供商/模型时（需要真实凭证）：
 
-- 实时套件（模型 + Gateway 工具/图像探测）：`pnpm test:live`
+- 实时套件（模型 + Gateway网关工具/图像探测）：`pnpm test:live`
 
 提示：当你只需要一个失败用例时，建议通过下文描述的允许列表环境变量来缩小实时测试范围。
 
@@ -53,20 +53,20 @@ OpenClaw 拥有三个 Vitest 测试套件（单元/集成、端到端、实时�
 - 文件：`src/**/*.test.ts`
 - 范围：
   - 纯单元测试
-  - 进程内集成测试（Gateway 认证、路由、工具、解析、配置）
+  - 进程内集成测试（Gateway网关认证、路由、工具、解析、配置）
   - 已知缺陷的确定性回归测试
 - 预期：
   - 在 CI 中运行
   - 不需要真实密钥
   - 应该快速且稳定
 
-### 端到端测试（Gateway 冒烟测试）
+### 端到端测试（Gateway网关冒烟测试）
 
 - 命令：`pnpm test:e2e`
 - 配置：`vitest.e2e.config.ts`
 - 文件：`src/**/*.e2e.test.ts`
 - 范围：
-  - 多实例 Gateway 端到端行为
+  - 多实例 Gateway网关端到端行为
   - WebSocket/HTTP 接口、节点配对和更复杂的网络操作
 - 预期：
   - 在 CI 中运行（当在流水线中启用时）
@@ -94,7 +94,7 @@ OpenClaw 拥有三个 Vitest 测试套件（单元/集成、端到端、实时�
 使用此决策表：
 
 - 编辑逻辑/测试：运行 `pnpm test`（如果改动较多则加上 `pnpm test:coverage`）
-- 涉及 Gateway 网络/WS 协议/配对：加上 `pnpm test:e2e`
+- 涉及 Gateway网关网络/WS 协议/配对：加上 `pnpm test:e2e`
 - 调试"我的机器人挂了"/提供商特定故障/工具调用：运行缩小范围的 `pnpm test:live`
 
 ## 实时测试：模型冒烟测试（profile 密钥）
@@ -102,9 +102,9 @@ OpenClaw 拥有三个 Vitest 测试套件（单元/集成、端到端、实时�
 实时测试分为两层，以便隔离故障：
 
 - "直接模型"告诉我们提供商/模型在给定密钥下是否能正常响应。
-- "Gateway 冒烟测试"告诉我们完整的 Gateway + 智能体管道对该模型是否工作（会话、历史、工具、沙箱策略等）。
+- "Gateway网关冒烟测试"告诉我们完整的 Gateway网关 + 智能体管道对该模型是否工作（会话、历史、工具、沙箱策略等）。
 
-### 第一层：直接模型补全（无 Gateway）
+### 第一层：直接模型补全（无 Gateway网关）
 
 - 测试：`src/agents/models.profiles.live.test.ts`
 - 目标：
@@ -113,7 +113,7 @@ OpenClaw 拥有三个 Vitest 测试套件（单元/集成、端到端、实时�
   - 对每个模型运行一个小型补全（以及需要时的定向回归测试）
 - 如何启用：
   - `pnpm test:live`（或直接调用 Vitest 时设置 `OPENCLAW_LIVE_TEST=1`）
-- 设置 `OPENCLAW_LIVE_MODELS=modern`（或 `all`，modern 的别名）来实际运行此套件；否则会跳过以保持 `pnpm test:live` 聚焦于 Gateway 冒烟测试
+- 设置 `OPENCLAW_LIVE_MODELS=modern`（或 `all`，modern 的别名）来实际运行此套件；否则会跳过以保持 `pnpm test:live` 聚焦于 Gateway网关冒烟测试
 - 如何选择模型：
   - `OPENCLAW_LIVE_MODELS=modern` 运行现代允许列表（Opus/Sonnet/Haiku 4.5、GPT-5.x + Codex、Gemini 3、GLM 4.7、MiniMax M2.1、Grok 4）
   - `OPENCLAW_LIVE_MODELS=all` 是现代允许列表的别名
@@ -124,14 +124,14 @@ OpenClaw 拥有三个 Vitest 测试套件（单元/集成、端到端、实时�
   - 默认：profile 存储和环境变量回退
   - 设置 `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` 以强制仅使用 **profile 存储**
 - 为何存在：
-  - 将"提供商 API 故障/密钥无效"与"Gateway 智能体管道故障"分离
+  - 将"提供商 API 故障/密钥无效"与"Gateway网关智能体管道故障"分离
   - 包含小型、隔离的回归测试（示例：OpenAI Responses/Codex Responses 推理重放 + 工具调用流程）
 
-### 第二层：Gateway + 开发智能体冒烟测试（"@openclaw"实际做什么）
+### 第二层：Gateway网关 + 开发智能体冒烟测试（"@openclaw"实际做什么）
 
 - 测试：`src/gateway/gateway-models.profiles.live.test.ts`
 - 目标：
-  - 启动一个进程内 Gateway
+  - 启动一个进程内 Gateway网关
   - 创建/更新一个 `agent:dev:*` 会话（每次运行覆盖模型）
   - 迭代有密钥的模型并断言：
     - "有意义的"响应（无工具）
@@ -157,7 +157,7 @@ OpenClaw 拥有三个 Vitest 测试套件（单元/集成、端到端、实时�
   - 流程（概要）：
     - 测试生成一个包含"CAT"+ 随机代码的小 PNG（`src/gateway/live-image-probe.ts`）
     - 通过 `agent` `attachments: [{ mimeType: "image/png", content: "<base64>" }]` 发送
-    - Gateway 将附件解析为 `images[]`（`src/gateway/server-methods/agent.ts` + `src/gateway/chat-attachments.ts`）
+    - Gateway网关将附件解析为 `images[]`（`src/gateway/server-methods/agent.ts` + `src/gateway/chat-attachments.ts`）
     - 内嵌智能体将多模态用户消息转发给模型
     - 断言：回复包含 `cat` + 代码（OCR 容差：允许轻微错误）
 
@@ -191,7 +191,7 @@ OPENCLAW_LIVE_SETUP_TOKEN=1 OPENCLAW_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-to
 ## 实时测试：CLI 后端冒烟测试（Claude Code CLI 或其他本地 CLI）
 
 - 测试：`src/gateway/gateway-cli-backend.live.test.ts`
-- 目标：使用本地 CLI 后端验证 Gateway + 智能体管道，不影响你的默认配置。
+- 目标：使用本地 CLI 后端验证 Gateway网关 + 智能体管道，不影响你的默认配置。
 - 启用：
   - `pnpm test:live`（或直接调用 Vitest 时设置 `OPENCLAW_LIVE_TEST=1`）
   - `OPENCLAW_LIVE_CLI_BACKEND=1`
@@ -223,10 +223,10 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 
 缩小范围的、明确的允许列表最快且最不容易出问题：
 
-- 单个模型，直接测试（无 Gateway）：
+- 单个模型，直接测试（无 Gateway网关）：
   - `OPENCLAW_LIVE_MODELS="openai/gpt-5.2" pnpm test:live src/agents/models.profiles.live.test.ts`
 
-- 单个模型，Gateway 冒烟测试：
+- 单个模型，Gateway网关冒烟测试：
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - 跨多个提供商的工具调用：
@@ -261,7 +261,7 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 - Z.AI（GLM）：`zai/glm-4.7`
 - MiniMax：`minimax/minimax-m2.1`
 
-运行带工具 + 图像的 Gateway 冒烟测试：
+运行带工具 + 图像的 Gateway网关冒烟测试：
 `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.2,anthropic/claude-opus-4-5,google/gemini-3-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-5-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### 基线：工具调用（Read + 可选 Exec）
@@ -321,9 +321,9 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 这些在仓库 Docker 镜像中运行 `pnpm test:live`，挂载你的本地配置目录和工作区（如果挂载了 `~/.profile` 则会加载）：
 
 - 直接模型：`pnpm test:docker:live-models`（脚本：`scripts/test-live-models-docker.sh`）
-- Gateway + 开发智能体：`pnpm test:docker:live-gateway`（脚本：`scripts/test-live-gateway-models-docker.sh`）
-- 上手引导向导（TTY，完整脚手架）：`pnpm test:docker:onboard`（脚本：`scripts/e2e/onboard-docker.sh`）
-- Gateway 网络（两个容器，WS 认证 + 健康检查）：`pnpm test:docker:gateway-network`（脚本：`scripts/e2e/gateway-network-docker.sh`）
+- Gateway网关 + 开发智能体：`pnpm test:docker:live-gateway`（脚本：`scripts/test-live-gateway-models-docker.sh`）
+- 新手引导向导（TTY，完整脚手架）：`pnpm test:docker:onboard`（脚本：`scripts/e2e/onboard-docker.sh`）
+- Gateway网关网络（两个容器，WS 认证 + 健康检查）：`pnpm test:docker:gateway-network`（脚本：`scripts/e2e/gateway-network-docker.sh`）
 - 插件（自定义扩展加载 + 注册表冒烟测试）：`pnpm test:docker:plugins`（脚本：`scripts/e2e/plugins-docker.sh`）
 
 常用环境变量：
@@ -342,26 +342,26 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 
 这些是不需要真实提供商的"真实管道"回归测试：
 
-- Gateway 工具调用（模拟 OpenAI，真实 Gateway + 智能体循环）：`src/gateway/gateway.tool-calling.mock-openai.test.ts`
-- Gateway 向导（WS `wizard.start`/`wizard.next`，写入配置 + 认证强制执行）：`src/gateway/gateway.wizard.e2e.test.ts`
+- Gateway网关工具调用（模拟 OpenAI，真实 Gateway网关 + 智能体循环）：`src/gateway/gateway.tool-calling.mock-openai.test.ts`
+- Gateway网关向导（WS `wizard.start`/`wizard.next`，写入配置 + 认证强制执行）：`src/gateway/gateway.wizard.e2e.test.ts`
 
-## 智能体可靠性评估（技能）
+## 智能体可靠性评估（Skills）
 
 我们已经有一些 CI 安全的测试，其行为类似于"智能体可靠性评估"：
 
-- 通过真实 Gateway + 智能体循环进行的模拟工具调用（`src/gateway/gateway.tool-calling.mock-openai.test.ts`）。
+- 通过真实 Gateway网关 + 智能体循环进行的模拟工具调用（`src/gateway/gateway.tool-calling.mock-openai.test.ts`）。
 - 验证会话连接和配置效果的端到端向导流程（`src/gateway/gateway.wizard.e2e.test.ts`）。
 
-技能方面仍然缺少的内容（参见[技能](/tools/skills)）：
+Skills 方面仍然缺少的内容（参见[Skills](/tools/skills)）：
 
-- **决策：** 当技能列在提示中时，智能体是否选择了正确的技能（或避免了不相关的技能）？
+- **决策：** 当 Skills 列在提示中时，智能体是否选择了正确的 Skills（或避免了不相关的 Skills）？
 - **合规：** 智能体是否在使用前阅读了 `SKILL.md` 并遵循了必需的步骤/参数？
 - **工作流契约：** 多轮场景，断言工具顺序、会话历史延续和沙箱边界。
 
 未来的评估应优先保持确定性：
 
-- 使用模拟提供商的场景运行器，断言工具调用 + 顺序、技能文件读取和会话连接。
-- 一小组以技能为重点的场景（使用与避免、门控、提示注入）。
+- 使用模拟提供商的场景运行器，断言工具调用 + 顺序、Skills 文件读取和会话连接。
+- 一小组以 Skills 为重点的场景（使用与避免、门控、提示注入）。
 - 可选的实时评估（可选启用，通过环境变量控制）仅在 CI 安全套件就位后进行。
 
 ## 添加回归测试（指南）
@@ -372,4 +372,4 @@ OPENCLAW_LIVE_CLI_BACKEND=1 \
 - 如果本质上只能进行实时测试（速率限制、认证策略），保持实时测试范围小且通过环境变量可选启用
 - 优先针对能捕获缺陷的最小层：
   - 提供商请求转换/重放缺陷 → 直接模型测试
-  - Gateway 会话/历史/工具管道缺陷 → Gateway 实时冒烟测试或 CI 安全的 Gateway 模拟测试
+  - Gateway网关会话/历史/工具管道缺陷 → Gateway网关实时冒烟测试或 CI 安全的 Gateway网关模拟测试

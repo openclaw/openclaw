@@ -15,7 +15,7 @@ x-i18n:
 
 # `openclaw doctor`
 
-Gateway 和渠道的健康检查 + 快速修复。
+Gateway网关和渠道的健康检查 + 快速修复。
 
 相关内容：
 

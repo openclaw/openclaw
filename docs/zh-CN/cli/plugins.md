@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您想安装或管理进程内 Gateway 插件
-  - 您想调试插件加载失败问题
+  - 你想安装或管理进程内 Gateway网关插件
+  - 你想调试插件加载失败问题
 summary: "`openclaw plugins` 的 CLI 参考（list、install、enable/disable、doctor）"
 title: plugins
 x-i18n:
@@ -15,7 +15,7 @@ x-i18n:
 
 # `openclaw plugins`
 
-管理 Gateway 插件/扩展（进程内加载）。
+管理 Gateway网关插件/扩展（进程内加载）。
 
 相关内容：
 

@@ -1,8 +1,8 @@
 ---
 read_when:
-  - 您想了解哪些功能可能调用付费 API
-  - 您需要审核密钥、费用和用量可见性
-  - 您正在解释 /status 或 /usage 的费用报告
+  - 你想了解哪些功能可能调用付费 API
+  - 你需要审核密钥、费用和用量可见性
+  - 你正在解释 /status 或 /usage 的费用报告
 summary: 审核哪些功能会产生费用、使用了哪些密钥以及如何查看用量
 title: API 用量与费用
 x-i18n:
@@ -43,7 +43,7 @@ OpenClaw 可以从以下来源获取凭据：
 - **认证配置文件**（按智能体配置，存储在 `auth-profiles.json` 中）。
 - **环境变量**（例如 `OPENAI_API_KEY`、`BRAVE_API_KEY`、`FIRECRAWL_API_KEY`）。
 - **配置文件**（`models.providers.*.apiKey`、`tools.web.search.*`、`tools.web.fetch.firecrawl.*`、`memorySearch.*`、`talk.apiKey`）。
-- **技能**（`skills.entries.<name>.apiKey`），可能会将密钥导出到技能进程的环境变量中。
+- **Skills**（`skills.entries.<name>.apiKey`），可能会将密钥导出到 Skills 进程的环境变量中。
 
 ## 可能消耗密钥的功能
 
@@ -71,7 +71,7 @@ OpenClaw 可以从以下来源获取凭据：
 - `memorySearch.provider = "gemini"` → Gemini 嵌入
 - 本地嵌入失败时可选回退到 OpenAI
 
-您可以使用 `memorySearch.provider = "local"` 保持本地运行（无 API 用量）。
+你可以使用 `memorySearch.provider = "local"` 保持本地运行（无 API 用量）。
 
 请参阅[记忆](/concepts/memory)。
 
@@ -129,8 +129,8 @@ OpenClaw 可以从以下来源获取凭据：
 
 请参阅[语音对话模式](/nodes/talk)。
 
-### 10）技能（第三方 API）
+### 10）Skills（第三方 API）
 
-技能可以在 `skills.entries.<name>.apiKey` 中存储 `apiKey`。如果技能使用该密钥调用外部 API，则会根据技能的提供商产生费用。
+Skills 可以在 `skills.entries.<name>.apiKey` 中存储 `apiKey`。如果 Skills 使用该密钥调用外部 API，则会根据 Skills 的提供商产生费用。
 
-请参阅[技能](/tools/skills)。
+请参阅[Skills](/tools/skills)。

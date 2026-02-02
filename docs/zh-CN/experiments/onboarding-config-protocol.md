@@ -1,7 +1,7 @@
 ---
-read_when: 修改上手引导向导步骤或配置 schema 端点时
-summary: 上手引导向导和配置 schema 的 RPC 协议说明
-title: 上手引导与配置协议
+read_when: 修改新手引导向导步骤或配置 schema 端点时
+summary: 新手引导向导和配置 schema 的 RPC 协议说明
+title: 新手引导与配置协议
 x-i18n:
   generated_at: "2026-02-01T20:24:58Z"
   model: claude-opus-4-5
@@ -11,19 +11,19 @@ x-i18n:
   workflow: 14
 ---
 
-# 上手引导 + 配置协议
+# 新手引导 + 配置协议
 
-用途：在 CLI、macOS 应用和 Web UI 之间共享上手引导与配置界面。
+用途：在 CLI、macOS 应用和 Web UI 之间共享新手引导与配置界面。
 
 ## 组件
 
-- 向导引擎（共享会话 + 提示 + 上手引导状态）。
-- CLI 上手引导使用与 UI 客户端相同的向导流程。
-- Gateway RPC 暴露向导 + 配置 schema 端点。
-- macOS 上手引导使用向导步骤模型。
+- 向导引擎（共享会话 + 提示 + 新手引导状态）。
+- CLI 新手引导使用与 UI 客户端相同的向导流程。
+- Gateway网关 RPC 暴露向导 + 配置 schema 端点。
+- macOS 新手引导使用向导步骤模型。
 - Web UI 根据 JSON Schema + UI 提示渲染配置表单。
 
-## Gateway RPC
+## Gateway网关 RPC
 
 - `wizard.start` 参数：`{ mode?: "local"|"remote", workspace?: string }`
 - `wizard.next` 参数：`{ sessionId, answer?: { stepId, value? } }`
@@ -44,4 +44,4 @@ x-i18n:
 
 ## 说明
 
-- 本文档是跟踪上手引导/配置协议重构的唯一位置。
+- 本文档是跟踪新手引导/配置协议重构的唯一位置。

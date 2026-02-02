@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您需要解释智能体工作区或其文件布局
-  - 您想要备份或迁移智能体工作区
+  - 你需要解释智能体工作区或其文件布局
+  - 你想要备份或迁移智能体工作区
 summary: 智能体工作区：位置、布局和备份策略
 title: 智能体工作区
 x-i18n:
@@ -19,7 +19,7 @@ x-i18n:
 
 它与 `~/.openclaw/` 是分开的，后者存储配置、凭据和会话。
 
-**重要提示：** 工作区是**默认工作目录**，而非硬性沙箱。工具会基于工作区解析相对路径，但绝对路径仍然可以访问主机上的其他位置，除非启用了沙箱。如果您需要隔离，请使用 [`agents.defaults.sandbox`](/gateway/sandboxing)（和/或按智能体的沙箱配置）。当启用沙箱且 `workspaceAccess` 不是 `"rw"` 时，工具在 `~/.openclaw/sandboxes` 下的沙箱工作区中运行，而非您的主机工作区。
+**重要提示：** 工作区是**默认工作目录**，而非硬性沙箱。工具会基于工作区解析相对路径，但绝对路径仍然可以访问主机上的其他位置，除非启用了沙箱。如果你需要隔离，请使用 [`agents.defaults.sandbox`](/gateway/sandboxing)（和/或按智能体的沙箱配置）。当启用沙箱且 `workspaceAccess` 不是 `"rw"` 时，工具在 `~/.openclaw/sandboxes` 下的沙箱工作区中运行，而非你的主机工作区。
 
 ## 默认位置
 
@@ -38,7 +38,7 @@ x-i18n:
 
 `openclaw onboard`、`openclaw configure` 或 `openclaw setup` 将创建工作区，并在引导文件缺失时生成它们。
 
-如果您已经自行管理工作区文件，可以禁用引导文件创建：
+如果你已经自行管理工作区文件，可以禁用引导文件创建：
 
 ```json5
 { agent: { skipBootstrap: true } }
@@ -48,7 +48,7 @@ x-i18n:
 
 较旧的安装可能创建了 `~/openclaw`。保留多个工作区目录可能会导致认证或状态不一致的困惑，因为同一时间只有一个工作区处于活跃状态。
 
-**建议：** 保持单一活跃工作区。如果您不再使用额外的文件夹，请将其归档或移至回收站（例如 `trash ~/openclaw`）。如果您有意保留多个工作区，请确保 `agents.defaults.workspace` 指向活跃的那个。
+**建议：** 保持单一活跃工作区。如果你不再使用额外的文件夹，请将其归档或移至回收站（例如 `trash ~/openclaw`）。如果你有意保留多个工作区，请确保 `agents.defaults.workspace` 指向活跃的那个。
 
 `openclaw doctor` 在检测到额外工作区目录时会发出警告。
 
@@ -82,7 +82,7 @@ x-i18n:
   - 保持简短以避免消耗令牌。
 
 - `BOOT.md`
-  - 可选的启动清单，在启用内部钩子时于 Gateway 重启时执行。
+  - 可选的启动清单，在启用内部钩子时于 Gateway网关重启时执行。
   - 保持简短；使用消息工具进行外发。
 
 - `BOOTSTRAP.md`
@@ -101,8 +101,8 @@ x-i18n:
 参见[记忆](/concepts/memory)了解工作流程和自动记忆刷写。
 
 - `skills/`（可选）
-  - 工作区特定的技能。
-  - 名称冲突时覆盖托管/内置技能。
+  - 工作区特定的 Skills。
+  - 名称冲突时覆盖托管/内置 Skills。
 
 - `canvas/`（可选）
   - 用于节点显示的 Canvas UI 文件（例如 `canvas/index.html`）。
@@ -116,15 +116,15 @@ x-i18n:
 - `~/.openclaw/openclaw.json`（配置）
 - `~/.openclaw/credentials/`（OAuth 令牌、API 密钥）
 - `~/.openclaw/agents/<agentId>/sessions/`（会话记录和元数据）
-- `~/.openclaw/skills/`（托管技能）
+- `~/.openclaw/skills/`（托管 Skills）
 
-如果您需要迁移会话或配置，请单独复制它们并将其排除在版本控制之外。
+如果你需要迁移会话或配置，请单独复制它们并将其排除在版本控制之外。
 
 ## Git 备份（推荐，私有）
 
 将工作区视为私有记忆。将其放入一个**私有** git 仓库中，以便备份和恢复。
 
-在 Gateway 运行的机器上执行以下步骤（工作区就在那里）。
+在 Gateway网关运行的机器上执行以下步骤（工作区就在那里）。
 
 ### 1) 初始化仓库
 
@@ -189,7 +189,7 @@ git push
 - `~/.openclaw/` 下的任何内容。
 - 聊天记录的原始转储或敏感附件。
 
-如果您必须存储敏感引用，请使用占位符并将真实密钥保存在其他地方（密码管理器、环境变量或 `~/.openclaw/`）。
+如果你必须存储敏感引用，请使用占位符并将真实密钥保存在其他地方（密码管理器、环境变量或 `~/.openclaw/`）。
 
 建议的 `.gitignore` 起始内容：
 
@@ -206,7 +206,7 @@ git push
 1. 将仓库克隆到目标路径（默认 `~/.openclaw/workspace`）。
 2. 在 `~/.openclaw/openclaw.json` 中将 `agents.defaults.workspace` 设置为该路径。
 3. 运行 `openclaw setup --workspace <path>` 以生成任何缺失的文件。
-4. 如果您需要会话记录，请从旧机器单独复制 `~/.openclaw/agents/<agentId>/sessions/`。
+4. 如果你需要会话记录，请从旧机器单独复制 `~/.openclaw/agents/<agentId>/sessions/`。
 
 ## 高级说明
 

@@ -25,7 +25,7 @@ x-i18n:
    - 或配置：`channels.discord.token: "..."`。
    - 如果两者都设置了，配置优先（环境变量回退仅用于默认账户）。
 4. 邀请机器人到你的服务器并赋予消息权限（如果只想用私信可以创建一个私人服务器）。
-5. 启动 Gateway。
+5. 启动 Gateway网关。
 6. 私信访问默认需要配对；首次联系时批准配对码即可。
 
 最小配置：
@@ -53,7 +53,7 @@ x-i18n:
 1. 创建 Discord 应用 → Bot，启用所需的 intent（私信 + 服务器消息 + 消息内容），获取机器人 token。
 2. 邀请机器人到你的服务器，赋予在你需要使用的地方读取/发送消息所需的权限。
 3. 使用 `channels.discord.token` 配置 OpenClaw（或使用 `DISCORD_BOT_TOKEN` 作为回退）。
-4. 运行 Gateway；当 token 可用（配置优先，环境变量回退）且 `channels.discord.enabled` 不为 `false` 时，它会自动启动 Discord 渠道。
+4. 运行 Gateway网关；当 token 可用（配置优先，环境变量回退）且 `channels.discord.enabled` 不为 `false` 时，它会自动启动 Discord 渠道。
    - 如果你偏好使用环境变量，设置 `DISCORD_BOT_TOKEN`（配置块是可选的）。
 5. 私聊：投递时使用 `user:<id>`（或 `<@id>` 提及）；所有回合都进入共享的 `main` 会话。裸数字 ID 具有歧义性，会被拒绝。
 6. 服务器频道：投递时使用 `channel:<channelId>`。默认需要提及，可按服务器或按频道设置。
@@ -202,20 +202,20 @@ Discord 到处使用数字 ID；OpenClaw 配置推荐使用 ID。
 - 多智能体覆盖：在 `agents.list[].groupChat.mentionPatterns` 上设置每个智能体的模式。
 - 如果存在 `channels`，任何未列出的频道默认被拒绝。
 - 使用 `"*"` 频道条目来应用所有频道的默认值；明确的频道条目会覆盖通配符。
-- 帖子继承父频道配置（允许列表、`requireMention`、技能、提示等），除非你明确添加帖子频道 ID。
+- 帖子继承父频道配置（允许列表、`requireMention`、Skills、提示等），除非你明确添加帖子频道 ID。
 - 机器人发送的消息默认被忽略；设置 `channels.discord.allowBots=true` 可允许它们（自己的消息仍然被过滤）。
 - 警告：如果你允许回复其他机器人（`channels.discord.allowBots=true`），请使用 `requireMention`、`channels.discord.guilds.*.channels.<id>.users` 允许列表和/或在 `AGENTS.md` 和 `SOUL.md` 中设置明确的防护规则来防止机器人之间的回复循环。
 
 ### 6) 验证是否正常工作
 
-1. 启动 Gateway。
+1. 启动 Gateway网关。
 2. 在你的服务器频道中，发送：`@Krill hello`（或你的机器人名称）。
 3. 如果没有响应：查看下方**故障排除**。
 
 ### 故障排除
 
 - 首先：运行 `openclaw doctor` 和 `openclaw channels status --probe`（可操作的警告 + 快速审计）。
-- **"Used disallowed intents"**：在开发者门户中启用 **Message Content Intent**（以及可能的 **Server Members Intent**），然后重启 Gateway。
+- **"Used disallowed intents"**：在开发者门户中启用 **Message Content Intent**（以及可能的 **Server Members Intent**），然后重启 Gateway网关。
 - **机器人连接但在服务器频道中从不回复**：
   - 缺少 **Message Content Intent**，或
   - 机器人缺少频道权限（View/Send/Read History），或
@@ -330,7 +330,7 @@ Discord 到处使用数字 ID；OpenClaw 配置推荐使用 ID。
 - `guilds.<id>.channels.<channel>.tools`：可选的按频道工具策略覆盖（`allow`/`deny`/`alsoAllow`）。
 - `guilds.<id>.channels.<channel>.toolsBySender`：可选的频道内按发送者工具策略覆盖（支持 `"*"` 通配符）。
 - `guilds.<id>.channels.<channel>.users`：可选的按频道用户允许列表。
-- `guilds.<id>.channels.<channel>.skills`：技能过滤器（省略 = 所有技能，空 = 无）。
+- `guilds.<id>.channels.<channel>.skills`：Skills 过滤器（省略 = 所有 Skills，空 = 无）。
 - `guilds.<id>.channels.<channel>.systemPrompt`：频道的额外系统提示（与频道主题合并）。
 - `guilds.<id>.channels.<channel>.enabled`：设置 `false` 可禁用频道。
 - `guilds.<id>.channels`：频道规则（键为频道 slug 或 ID）。
@@ -460,4 +460,4 @@ Discord 消息 ID 在注入的上下文中呈现（`[discord message id: …]` �
 
 - 将机器人 token 视为密码；在受管主机上推荐使用 `DISCORD_BOT_TOKEN` 环境变量或锁定配置文件权限。
 - 仅授予机器人所需的权限（通常是读取/发送消息）。
-- 如果机器人卡住或被速率限制，在确认没有其他进程占用 Discord 会话后重启 Gateway（`openclaw gateway --force`）。
+- 如果机器人卡住或被速率限制，在确认没有其他进程占用 Discord 会话后重启 Gateway网关（`openclaw gateway --force`）。

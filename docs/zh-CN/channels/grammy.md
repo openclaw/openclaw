@@ -22,10 +22,10 @@ x-i18n:
 
 # 已交付的功能
 
-- **单一客户端路径：** 基于 fetch 的实现已移除；grammY 现在是唯一的 Telegram 客户端（发送 + Gateway），默认启用 grammY throttler。
-- **Gateway：** `monitorTelegramProvider` 构建一个 grammY `Bot`，接入提及/允许列表门控、通过 `getFile`/`download` 下载媒体，并通过 `sendMessage/sendPhoto/sendVideo/sendAudio/sendDocument` 投递回复。支持通过 `webhookCallback` 进行长轮询或 webhook。
+- **单一客户端路径：** 基于 fetch 的实现已移除；grammY 现在是唯一的 Telegram 客户端（发送 + Gateway网关），默认启用 grammY throttler。
+- **Gateway网关：** `monitorTelegramProvider` 构建一个 grammY `Bot`，接入提及/允许列表门控、通过 `getFile`/`download` 下载媒体，并通过 `sendMessage/sendPhoto/sendVideo/sendAudio/sendDocument` 投递回复。支持通过 `webhookCallback` 进行长轮询或 webhook。
 - **代理：** 可选的 `channels.telegram.proxy` 通过 grammY 的 `client.baseFetch` 使用 `undici.ProxyAgent`。
-- **Webhook 支持：** `webhook-set.ts` 封装了 `setWebhook/deleteWebhook`；`webhook.ts` 托管回调并支持健康检查 + 优雅关闭。当设置了 `channels.telegram.webhookUrl` + `channels.telegram.webhookSecret` 时 Gateway 启用 webhook 模式（否则使用长轮询）。
+- **Webhook 支持：** `webhook-set.ts` 封装了 `setWebhook/deleteWebhook`；`webhook.ts` 托管回调并支持健康检查 + 优雅关闭。当设置了 `channels.telegram.webhookUrl` + `channels.telegram.webhookSecret` 时 Gateway网关启用 webhook 模式（否则使用长轮询）。
 - **会话：** 私聊合并到智能体主会话（`agent:<agentId>:<mainKey>`）；群组使用 `agent:<agentId>:telegram:group:<chatId>`；回复路由回同一渠道。
 - **配置选项：** `channels.telegram.botToken`、`channels.telegram.dmPolicy`、`channels.telegram.groups`（允许列表 + 提及默认值）、`channels.telegram.allowFrom`、`channels.telegram.groupAllowFrom`、`channels.telegram.groupPolicy`、`channels.telegram.mediaMaxMb`、`channels.telegram.linkPreview`、`channels.telegram.proxy`、`channels.telegram.webhookSecret`、`channels.telegram.webhookUrl`。
 - **草稿流式传输：** 可选的 `channels.telegram.streamMode` 在私有话题聊天中使用 `sendMessageDraft`（Bot API 9.3+）。这与渠道分块流式传输是分开的。
@@ -35,4 +35,4 @@ x-i18n:
 
 - 如果遇到 Bot API 429 错误，考虑使用可选的 grammY 插件（throttler）。
 - 添加更多结构化的媒体测试（贴纸、语音消息）。
-- 使 webhook 监听端口可配置（目前固定为 8787，除非通过 Gateway 接入）。
+- 使 webhook 监听端口可配置（目前固定为 8787，除非通过 Gateway网关接入）。

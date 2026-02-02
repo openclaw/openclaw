@@ -35,7 +35,7 @@ x-i18n:
 - 配置辅助函数：`buildChannelConfigSchema`、`setAccountEnabledInConfigSection`、`deleteAccountFromConfigSection`、
   `applyAccountNameToChannelSection`。
 - 配对辅助函数：`PAIRING_APPROVED_MESSAGE`、`formatPairingApproveHint`。
-- 上手引导辅助函数：`promptChannelAccessConfig`、`addWildcardAllowFrom`、上手引导类型。
+- 新手引导辅助函数：`promptChannelAccessConfig`、`addWildcardAllowFrom`、新手引导类型。
 - 工具参数辅助函数：`createActionGate`、`readStringParam`、`readNumberParam`、`readReactionParams`、`jsonResult`。
 - 文档链接辅助函数：`formatDocsLink`。
 
@@ -174,7 +174,7 @@ export type PluginRuntime = {
 ### 阶段 2：轻度直接导入的插件
 
 - 将 Matrix 迁移到 SDK + 运行时。
-- 验证上手引导、目录、群组提及逻辑。
+- 验证新手引导、目录、群组提及逻辑。
 
 ### 阶段 3：重度直接导入的插件
 

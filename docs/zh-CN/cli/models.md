@@ -1,7 +1,7 @@
 ---
 read_when:
-  - 您想更改默认模型或查看提供商认证状态
-  - 您想扫描可用的模型/提供商并调试认证配置
+  - 你想更改默认模型或查看提供商认证状态
+  - 你想扫描可用的模型/提供商并调试认证配置
 summary: "`openclaw models` 的 CLI 参考（status/list/set/scan、别名、回退、认证）"
 title: models
 x-i18n:
