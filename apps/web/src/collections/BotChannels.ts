@@ -46,11 +46,105 @@ export const BotChannels: CollectionConfig = {
     }
   },
   hooks: {
+    beforeChange: [
+      async ({ data, operation }) => {
+        // Encrypt credentials before saving
+        if (operation === 'create' || operation === 'update') {
+          if (data.credentials) {
+            const { encrypt, isEncrypted } = await import('../lib/utils/encryption')
+            const channelType = data.channel
+            const channelCreds = data.credentials[channelType]
+
+            if (channelCreds && typeof channelCreds === 'object') {
+              const encrypted: Record<string, any> = {}
+
+              for (const [key, value] of Object.entries(channelCreds)) {
+                if (typeof value === 'string' && !isEncrypted(value)) {
+                  // Encrypt sensitive credential fields
+                  encrypted[key] = encrypt(value)
+                } else {
+                  encrypted[key] = value
+                }
+              }
+
+              data.credentials[channelType] = encrypted
+            }
+          }
+        }
+
+        return data
+      }
+    ],
     afterChange: [
       async ({ doc, operation, req }) => {
         if (operation === 'create' || operation === 'update') {
-          req.payload.logger.info(`Channel config changed for bot, sync needed`)
-          // TODO: Trigger channel reconnection
+          req.payload.logger.info(
+            `Channel config changed for bot ${doc.bot}, syncing and reconnecting...`
+          )
+
+          try {
+            // Import services
+            const { getConfigSync } = await import('../lib/gateway/config-sync')
+            const { getOrchestrator } = await import('../lib/gateway/orchestrator')
+
+            const configSync = getConfigSync(req.payload)
+            const orchestrator = getOrchestrator()
+
+            // Fetch bot
+            const botId = typeof doc.bot === 'string' ? doc.bot : doc.bot?.id
+            const bot = await req.payload.findByID({
+              collection: 'bots',
+              id: botId
+            })
+
+            if (!bot) {
+              req.payload.logger.warn(`Bot ${botId} not found`)
+              return
+            }
+
+            // Sync config to file system
+            const outputPath = `/var/openclaw/bots/${bot.agentId}/config.json5`
+            await configSync.syncBotConfig(bot.id, outputPath)
+
+            req.payload.logger.info(`✓ Synced config for bot ${bot.agentId}`)
+
+            // If bot is active, restart to pick up new channel config
+            if (bot.status === 'active') {
+              req.payload.logger.info(
+                `Restarting bot ${bot.agentId} to reconnect channels...`
+              )
+              await orchestrator.restartBot(bot)
+              req.payload.logger.info(`✓ Restarted bot ${bot.agentId}`)
+            } else {
+              req.payload.logger.info(
+                `Bot ${bot.agentId} not active, config synced but not restarted`
+              )
+            }
+
+            // Update channel status to 'disconnected' until reconnection succeeds
+            await req.payload.update({
+              collection: 'bot-channels',
+              id: doc.id,
+              data: {
+                status: 'disconnected',
+                lastSeen: new Date().toISOString()
+              }
+            })
+          } catch (error) {
+            req.payload.logger.error(
+              `Failed to sync/reconnect channel for bot: ${error}`
+            )
+
+            // Mark channel as error
+            await req.payload.update({
+              collection: 'bot-channels',
+              id: doc.id,
+              data: {
+                status: 'error',
+                errorMessage: error instanceof Error ? error.message : String(error)
+              }
+            })
+          }
         }
       }
     ]

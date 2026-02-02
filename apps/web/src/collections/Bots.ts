@@ -89,17 +89,139 @@ export const Bots: CollectionConfig = {
       async ({ doc, operation, req }) => {
         // Sync config to gateway after create/update
         if (operation === 'create' || operation === 'update') {
-          // TODO: Trigger gateway config sync
-          req.payload.logger.info(`Bot ${doc.agentId} config changed, sync needed`)
+          req.payload.logger.info(`Bot ${doc.agentId} config changed, syncing...`)
+
+          try {
+            // Import sync service
+            const { getConfigSync } = await import('../lib/gateway/config-sync')
+            const configSync = getConfigSync(req.payload)
+
+            // Sync config to file system
+            const outputPath = `/var/openclaw/bots/${doc.agentId}/config.json5`
+            await configSync.syncBotConfig(doc.id, outputPath)
+
+            req.payload.logger.info(`✓ Synced config for bot ${doc.agentId}`)
+
+            // If bot is active, restart to pick up new config
+            if (doc.status === 'active') {
+              const { getOrchestrator } = await import('../lib/gateway/orchestrator')
+              const orchestrator = getOrchestrator()
+
+              req.payload.logger.info(`Restarting bot ${doc.agentId} with new config...`)
+              await orchestrator.restartBot(doc)
+              req.payload.logger.info(`✓ Restarted bot ${doc.agentId}`)
+
+              // Restart session sync watcher
+              const { getSessionSyncInstance } = await import('../lib/server-init')
+              const sessionSync = getSessionSyncInstance()
+              if (sessionSync) {
+                sessionSync.stopWatching(doc.id)
+                await sessionSync.watchBotSessions(doc.id, doc.agentId)
+              }
+            }
+          } catch (error) {
+            req.payload.logger.error(
+              `Failed to sync/restart bot ${doc.agentId}: ${error}`
+            )
+          }
         }
       }
     ],
     beforeDelete: [
       async ({ id, req }) => {
-        // Cleanup: stop gateway, delete sessions
-        req.payload.logger.info(`Cleaning up bot ${id}`)
-        // TODO: Stop gateway process
-        // TODO: Delete related sessions
+        req.payload.logger.info(`Cleaning up bot ${id}...`)
+
+        try {
+          // Fetch bot details
+          const bot = await req.payload.findByID({
+            collection: 'bots',
+            id
+          })
+
+          // Stop gateway process if running
+          if (bot.status === 'active') {
+            const { getOrchestrator } = await import('../lib/gateway/orchestrator')
+            const orchestrator = getOrchestrator()
+
+            req.payload.logger.info(`Stopping gateway for bot ${bot.agentId}...`)
+            await orchestrator.stopBot(bot.agentId)
+            req.payload.logger.info(`✓ Stopped gateway for bot ${bot.agentId}`)
+          }
+
+          // Stop session sync watcher
+          const { getSessionSyncInstance } = await import('../lib/server-init')
+          const sessionSync = getSessionSyncInstance()
+          if (sessionSync) {
+            sessionSync.stopWatching(id)
+          }
+
+          // Delete related sessions
+          const sessions = await req.payload.find({
+            collection: 'sessions',
+            where: {
+              bot: {
+                equals: id
+              }
+            }
+          })
+
+          for (const session of sessions.docs) {
+            await req.payload.delete({
+              collection: 'sessions',
+              id: session.id
+            })
+          }
+
+          req.payload.logger.info(
+            `✓ Deleted ${sessions.docs.length} sessions for bot ${bot.agentId}`
+          )
+
+          // Delete related channels
+          const channels = await req.payload.find({
+            collection: 'bot-channels',
+            where: {
+              bot: {
+                equals: id
+              }
+            }
+          })
+
+          for (const channel of channels.docs) {
+            await req.payload.delete({
+              collection: 'bot-channels',
+              id: channel.id
+            })
+          }
+
+          req.payload.logger.info(
+            `✓ Deleted ${channels.docs.length} channels for bot ${bot.agentId}`
+          )
+
+          // Delete related bindings
+          const bindings = await req.payload.find({
+            collection: 'bot-bindings',
+            where: {
+              bot: {
+                equals: id
+              }
+            }
+          })
+
+          for (const binding of bindings.docs) {
+            await req.payload.delete({
+              collection: 'bot-bindings',
+              id: binding.id
+            })
+          }
+
+          req.payload.logger.info(
+            `✓ Deleted ${bindings.docs.length} bindings for bot ${bot.agentId}`
+          )
+
+          req.payload.logger.info(`✅ Bot ${bot.agentId} cleanup complete`)
+        } catch (error) {
+          req.payload.logger.error(`Failed to cleanup bot ${id}: ${error}`)
+        }
       }
     ]
   },
