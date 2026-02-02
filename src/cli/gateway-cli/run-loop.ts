@@ -66,6 +66,7 @@ export async function runGatewayLoop(params: {
 
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
+      cleanupUnhandledRejectionHandler();
       cleanupSignals();
       params.runtime.exit(0);
     }, 5000);
