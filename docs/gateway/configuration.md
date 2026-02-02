@@ -2552,7 +2552,9 @@ Notes:
 
 - Set `MOONSHOT_API_KEY` in the environment or use `openclaw onboard --auth-choice moonshot-api-key`.
 - Model ref: `moonshot/kimi-k2.5`.
-- Use `https://api.moonshot.cn/v1` if you need the China endpoint.
+- For the China endpoint, either:
+  - Run `openclaw onboard --auth-choice moonshot-api-key-cn` (wizard will set `https://api.moonshot.cn/v1`), or
+  - Manually set `baseUrl: "https://api.moonshot.cn/v1"` in `models.providers.moonshot`.
 
 ### Kimi Coding
 
