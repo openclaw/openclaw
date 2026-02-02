@@ -280,6 +280,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     const relPath = params.relPath?.trim();
     if (!relPath) throw new Error("path required");
     const absPath = this.resolveReadPath(relPath);
+    if (!absPath.endsWith(".md")) {
+      throw new Error("path required");
+    }
+    const stat = await fs.lstat(absPath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error("path required");
+    }
     const content = await fs.readFile(absPath, "utf-8");
     if (!params.from && !params.lines) {
       return { text: content, path: relPath };
