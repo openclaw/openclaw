@@ -34,12 +34,40 @@ echo "Starting gateway container..."
   bash -lc "node dist/index.js gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1"
 
 echo "Waiting for gateway to come up..."
-for _ in $(seq 1 20); do
+ready=0
+for _ in $(seq 1 40); do
+  if docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
+    import net from \"node:net\";
+    const socket = net.createConnection({ host: \"127.0.0.1\", port: $PORT });
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      process.exit(1);
+    }, 400);
+    socket.on(\"connect\", () => {
+      clearTimeout(timeout);
+      socket.end();
+      process.exit(0);
+    });
+    socket.on(\"error\", () => {
+      clearTimeout(timeout);
+      process.exit(1);
+    });
+  ' >/dev/null 2>&1"; then
+    ready=1
+    break
+  fi
   if docker exec "$GW_NAME" bash -lc "grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log"; then
+    ready=1
     break
   fi
   sleep 0.5
 done
+
+if [ "$ready" -ne 1 ]; then
+  echo "Gateway failed to start"
+  docker exec "$GW_NAME" bash -lc "tail -n 80 /tmp/gateway-net-e2e.log" || true
+  exit 1
+fi
 
 docker exec "$GW_NAME" bash -lc "tail -n 50 /tmp/gateway-net-e2e.log"
 
