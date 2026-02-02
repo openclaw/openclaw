@@ -10,6 +10,7 @@ import {
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
 import { danger } from "../../globals.js";
+import { maybeProcessDiscordBroadcast } from "./broadcast.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import { processDiscordMessage } from "./message-handler.process.js";
 import { resolveDiscordMessageText } from "./message-utils.js";
@@ -85,7 +86,15 @@ export function createDiscordMessageHandler(params: {
         if (!ctx) {
           return;
         }
-        await processDiscordMessage(ctx);
+        // Check for broadcast routing - if configured, dispatch to all agents
+        const wasBroadcast = await maybeProcessDiscordBroadcast({
+          cfg: params.cfg,
+          ctx,
+          processMessage: processDiscordMessage,
+        });
+        if (!wasBroadcast) {
+          await processDiscordMessage(ctx);
+        }
         return;
       }
       const combinedBaseText = entries
@@ -129,7 +138,15 @@ export function createDiscordMessageHandler(params: {
           ctxBatch.MessageSidLast = ids[ids.length - 1];
         }
       }
-      await processDiscordMessage(ctx);
+      // Check for broadcast routing - if configured, dispatch to all agents
+      const wasBroadcast = await maybeProcessDiscordBroadcast({
+        cfg: params.cfg,
+        ctx,
+        processMessage: processDiscordMessage,
+      });
+      if (!wasBroadcast) {
+        await processDiscordMessage(ctx);
+      }
     },
     onError: (err) => {
       params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
