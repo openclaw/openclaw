@@ -18,6 +18,7 @@ import {
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,
+  sendVoiceMessageDiscord,
   unpinMessageDiscord,
 } from "../../discord/send.js";
 import { resolveDiscordChannelId } from "../../discord/targets.js";
@@ -230,11 +231,25 @@ export async function handleDiscordMessagingAction(
       const to = readStringParam(params, "to", { required: true });
       const content = readStringParam(params, "content", {
         required: true,
+        allowEmpty: true,
       });
       const mediaUrl = readStringParam(params, "mediaUrl");
       const replyTo = readStringParam(params, "replyTo");
+      const asVoice = params.asVoice === true;
       const embeds =
         Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
+
+      // Handle voice message sending
+      if (asVoice && mediaUrl) {
+        // Voice messages require a local file path or downloadable URL
+        // They cannot include text content (Discord limitation)
+        const result = await sendVoiceMessageDiscord(to, mediaUrl, {
+          ...(accountId ? { accountId } : {}),
+          replyTo,
+        });
+        return jsonResult({ ok: true, result, voiceMessage: true });
+      }
+
       const result = await sendMessageDiscord(to, content, {
         ...(accountId ? { accountId } : {}),
         mediaUrl,
