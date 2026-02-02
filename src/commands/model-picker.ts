@@ -183,6 +183,37 @@ export async function promptDefaultModel(
     models = models.filter((entry) => entry.provider === preferredProvider);
   }
 
+  // Filter out hidden router models so models[0] always corresponds to an option
+  models = models.filter((entry) => !HIDDEN_ROUTER_MODELS.has(modelKey(entry.provider, entry.id)));
+
+  // Search/filter models when there are many options
+  const SEARCH_THRESHOLD = 15;
+  if (models.length > SEARCH_THRESHOLD) {
+    // Save base models before search so we can restore on no matches
+    const baseModels = models;
+    const searchQuery = await params.prompter.text({
+      message: `Search models (${models.length} available, type to filter by name, provider, or alias)`,
+      placeholder: "e.g., claude, gpt, gemini",
+      initialValue: "",
+    });
+    const query = searchQuery.trim().toLowerCase();
+    if (query) {
+      models = models.filter((entry) => {
+        const key = modelKey(entry.provider, entry.id);
+        const aliases = aliasIndex.byKey.get(key) ?? [];
+        const searchText = [entry.provider, entry.id, entry.name ?? "", ...aliases]
+          .join(" ")
+          .toLowerCase();
+        return searchText.includes(query);
+      });
+      // If no matches, restore base models
+      if (models.length === 0) {
+        await params.prompter.note("No models match your search. Showing all models.", "Search");
+        models = baseModels;
+      }
+    }
+  }
+
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -347,6 +378,37 @@ export async function promptModelAllowlist(params: {
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
+
+  // Search/filter models when there are many options
+  const baseCatalog = allowedKeySet
+    ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
+    : catalog;
+  let filteredCatalog = baseCatalog;
+  const SEARCH_THRESHOLD = 15;
+  if (filteredCatalog.length > SEARCH_THRESHOLD) {
+    const searchQuery = await params.prompter.text({
+      message: `Search models (${filteredCatalog.length} available, type to filter by name, provider, or alias)`,
+      placeholder: "e.g., claude, gpt, gemini",
+      initialValue: "",
+    });
+    const query = searchQuery.trim().toLowerCase();
+    if (query) {
+      filteredCatalog = filteredCatalog.filter((entry) => {
+        const key = modelKey(entry.provider, entry.id);
+        const aliases = aliasIndex.byKey.get(key) ?? [];
+        const searchText = [entry.provider, entry.id, entry.name ?? "", ...aliases]
+          .join(" ")
+          .toLowerCase();
+        return searchText.includes(query);
+      });
+      // If no matches, restore base catalog
+      if (filteredCatalog.length === 0) {
+        await params.prompter.note("No models match your search. Showing all models.", "Search");
+        filteredCatalog = baseCatalog;
+      }
+    }
+  }
+
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -401,10 +463,6 @@ export async function promptModelAllowlist(params: {
     });
     seen.add(key);
   };
-
-  const filteredCatalog = allowedKeySet
-    ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
-    : catalog;
 
   for (const entry of filteredCatalog) {
     addModelOption(entry);
