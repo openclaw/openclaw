@@ -260,7 +260,7 @@
       "sharp"
     ],
     "patchedDependencies": {
-      "@mariozechner/pi-ai@0.49.3": "patches/@mariozechner+pi-ai@0.49.3.patch"
+      "@mariozechner/pi-ai@0.51.0": "patches/@mariozechner__pi-ai@0.51.0.patch"
     }
   },
   "vitest": {

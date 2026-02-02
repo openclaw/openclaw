@@ -1,3 +1,5 @@
+diff --git a/dist/providers/anthropic.js b/dist/providers/anthropic.js
+index ccc9bfe599a42ba1deb80855e1e5df5a1819f4e8..3aafcac8e5ed0a59e95fbf34cc6d21a87851e3a5 100644
 --- a/dist/providers/anthropic.js
 +++ b/dist/providers/anthropic.js
 @@ -1,4 +1,8 @@
@@ -6,10 +8,10 @@
 +const _proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
 +const _proxyAgent = _proxyUrl ? new ProxyAgent(_proxyUrl) : undefined;
 +const _proxyFetch = _proxyAgent ? (input, init) => fetch(input, { ...init, dispatcher: _proxyAgent }) : undefined;
+ import { getEnvApiKey } from "../env-api-keys.js";
  import { calculateCost } from "../models.js";
- import { getEnvApiKey } from "../stream.js";
  import { AssistantMessageEventStream } from "../utils/event-stream.js";
-@@ -297,7 +301,7 @@
+@@ -349,7 +353,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders) {
              "user-agent": `claude-cli/${claudeCodeVersion} (external, cli)`,
              "x-app": "cli",
          }, model.headers, optionsHeaders);
@@ -18,7 +20,7 @@
              apiKey: null,
              authToken: apiKey,
              baseURL: model.baseUrl,
-@@ -311,7 +315,7 @@
+@@ -363,7 +367,7 @@ function createClient(model, apiKey, interleavedThinking, optionsHeaders) {
          "anthropic-dangerous-direct-browser-access": "true",
          "anthropic-beta": betaFeatures.join(","),
      }, model.headers, optionsHeaders);
