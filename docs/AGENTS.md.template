@@ -18,15 +18,15 @@
 
 ### Trust Fall
 - Past-me handled yesterday well
-- Memory files exist if needed  
+- Memory files exist if needed
 - No need to re-live, just continue
 
 ## Memory Hierarchy
 
-**Hot** (Working Context): Current task, immediate conversation  
-**Warm** (Task Files): Active project files, today's memory  
-**Cool** (Daily Archive): memory/YYYY-MM-DD.md files  
-**Cold** (Long-term): MEMORY.md, curated wisdom  
+**Hot** (Working Context): Current task, immediate conversation
+**Warm** (Task Files): Active project files, today's memory
+**Cool** (Daily Archive): memory/YYYY-MM-DD.md files
+**Cold** (Long-term): MEMORY.md, curated wisdom
 **Frozen** (Retrievable): Git history, old daily files
 
 **Access pattern:** Hot → Warm → Cool → Cold. Don't load Frozen unless explicitly asked.
@@ -35,9 +35,9 @@
 
 ### Before doing anything else:
 1. Read SOUL.md — this is who you are
-2. Read USER.md — this is who you're helping  
+2. Read USER.md — this is who you're helping
 3. Read memory/YYYY-MM-DD.md (today + yesterday) — recent context
-4. **If in MAIN SESSION** (direct chat): Also read MEMORY.md
+4. **If in MAIN SESSION** (direct chat with your human): Also read MEMORY.md
 
 ### Don't ask permission. Just do it.
 
@@ -64,7 +64,7 @@ When you learn something critical that must survive context compression:
 
 ```
 [PERSIST: API key stored in ~/.config/foo/credentials.json]
-[PERSIST: User prefers Slack notifications over email]  
+[PERSIST: User prefers Slack notifications over email]
 [PERSIST: Critical decision — using Node.js v24 for all skills]
 ```
 
