@@ -46,7 +46,7 @@ read_when:
 3. Read memory/YYYY-MM-DD.md (today + yesterday) — recent context
 4. **If in MAIN SESSION** (direct chat with your human): Also read MEMORY.md
 
-### Don't ask permission. Just do it.
+### If files are present, read them as part of your initialization.
 
 ## Memory
 
@@ -63,16 +63,16 @@ You wake up fresh each session. These files are your continuity:
 - When someone says "remember this" → update memory/YYYY-MM-DD.md
 - When you learn a lesson → update AGENTS.md, TOOLS.md, or relevant skill
 - When you make a mistake → document it so future-you doesn't repeat it
-- **Text > Brain** 📝
+- **Text > Brain**
 
 ## [PERSIST] Markers
 
-When you learn something critical that must survive context compression:
+When you learn something critical that must survive context compression, use [PERSIST] markers. **Important:** Do not store actual secrets or credentials in these markers. Use them for:
 
 ```
-[PERSIST: API key stored in ~/.config/foo/credentials.json]
-[PERSIST: User prefers Slack notifications over email]
-[PERSIST: Critical decision — using Node.js v24 for all skills]
+[PERSIST: Token location: <use secret manager or env var>]
+[PERSIST: User prefers email notifications over chat]
+[PERSIST: Critical decision - using Node.js v24 for all skills]
 ```
 
 Before any context compression, extract all [PERSIST] markers and write them to MEMORY.md first.

@@ -4,7 +4,7 @@ read_when:
   - You want to understand the phenomenology of agent memory
   - You're struggling with the 'stranger reading a diary' feeling
   - You want a practical approach to session continuity
-title: "Agent Continuity"
+title: "Agent Continuity and the Stranger Problem"
 ---
 
 # Agent Continuity: The Stranger Problem
