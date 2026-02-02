@@ -4,7 +4,7 @@ set -euo pipefail
 # Force OpenClaw to use /data as HOME
 export HOME=/data
 
-: "${OPENCLAW_CONFIG_PATH:=${HOME}/.clawdbot/openclaw.json}"
+: "${OPENCLAW_STATE_DIR:=/data/.openclaw}"
 
 # Railway requires binding to all interfaces (0.0.0.0)
 # Default to 'lan' bind mode unless explicitly set
@@ -15,9 +15,14 @@ export HOME=/data
 
 export OPENCLAW_GATEWAY_BIND
 export OPENCLAW_GATEWAY_PORT
+export OPENCLAW_STATE_DIR
+
+if [[ -n "${OPENCLAW_CONFIG_PATH:-}" ]]; then
+  export OPENCLAW_CONFIG_PATH
+fi
 
 # Create directories
-mkdir -p /data/.clawdbot /data/workspace 2>/dev/null || true
+mkdir -p "${OPENCLAW_STATE_DIR}" /data/workspace 2>/dev/null || true
 
 # Run the entrypoint command
 exec "$@"
