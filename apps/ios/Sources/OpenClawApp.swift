@@ -15,7 +15,7 @@ struct OpenClawApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootCanvas()
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)

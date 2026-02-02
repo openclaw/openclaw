@@ -9,7 +9,6 @@ import { registerNodesNotifyCommand } from "./register.notify.js";
 import { registerNodesPairingCommands } from "./register.pairing.js";
 import { registerNodesScreenCommands } from "./register.screen.js";
 import { registerNodesStatusCommands } from "./register.status.js";
-import { registerNodesTalkCommands } from "./register.talk.js";
 
 export function registerNodesCli(program: Command) {
   const nodes = program
@@ -29,5 +28,4 @@ export function registerNodesCli(program: Command) {
   registerNodesCameraCommands(nodes);
   registerNodesScreenCommands(nodes);
   registerNodesLocationCommands(nodes);
-  registerNodesTalkCommands(nodes);
 }

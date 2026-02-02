@@ -1,15 +1,8 @@
-import AVFoundation
-import Contacts
-import CoreLocation
-import CoreMotion
-import EventKit
-import Foundation
 import OpenClawKit
+import Darwin
+import Foundation
 import Network
 import Observation
-import Photos
-import ReplayKit
-import Speech
 import SwiftUI
 import UIKit
 
@@ -67,11 +60,6 @@ final class GatewayConnectionController {
             port: port,
             useTLS: tlsParams?.required == true)
         else { return }
-        GatewaySettingsStore.saveLastGatewayConnection(
-            host: host,
-            port: port,
-            useTLS: tlsParams?.required == true,
-            stableID: gateway.stableID)
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
@@ -86,60 +74,17 @@ final class GatewayConnectionController {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-        let resolvedUseTLS = useTLS || self.shouldForceTLS(host: host)
-        guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
-        else { return }
-        let stableID = self.manualStableID(host: host, port: resolvedPort)
-        let tlsParams = self.resolveManualTLSParams(
-            stableID: stableID,
-            tlsEnabled: resolvedUseTLS,
-            allowTOFUReset: self.shouldForceTLS(host: host))
+        let stableID = self.manualStableID(host: host, port: port)
+        let tlsParams = self.resolveManualTLSParams(stableID: stableID, tlsEnabled: useTLS)
         guard let url = self.buildGatewayURL(
             host: host,
-            port: resolvedPort,
+            port: port,
             useTLS: tlsParams?.required == true)
         else { return }
-        GatewaySettingsStore.saveLastGatewayConnection(
-            host: host,
-            port: resolvedPort,
-            useTLS: tlsParams?.required == true,
-            stableID: stableID)
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
             gatewayStableID: stableID,
-            tls: tlsParams,
-            token: token,
-            password: password)
-    }
-
-    func connectLastKnown() async {
-        guard let last = GatewaySettingsStore.loadLastGatewayConnection() else { return }
-        let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-        let resolvedUseTLS = last.useTLS || self.shouldForceTLS(host: last.host)
-        let tlsParams = self.resolveManualTLSParams(
-            stableID: last.stableID,
-            tlsEnabled: resolvedUseTLS,
-            allowTOFUReset: self.shouldForceTLS(host: last.host))
-        guard let url = self.buildGatewayURL(
-            host: last.host,
-            port: last.port,
-            useTLS: tlsParams?.required == true)
-        else { return }
-        if resolvedUseTLS != last.useTLS {
-            GatewaySettingsStore.saveLastGatewayConnection(
-                host: last.host,
-                port: last.port,
-                useTLS: resolvedUseTLS,
-                stableID: last.stableID)
-        }
-        self.didAutoConnect = true
-        self.startAutoConnect(
-            url: url,
-            gatewayStableID: last.stableID,
             tls: tlsParams,
             token: token,
             password: password)
@@ -189,19 +134,11 @@ final class GatewayConnectionController {
             guard !manualHost.isEmpty else { return }
 
             let manualPort = defaults.integer(forKey: "gateway.manual.port")
+            let resolvedPort = manualPort > 0 ? manualPort : 18789
             let manualTLS = defaults.bool(forKey: "gateway.manual.tls")
-            let resolvedUseTLS = manualTLS || self.shouldForceTLS(host: manualHost)
-            guard let resolvedPort = self.resolveManualPort(
-                host: manualHost,
-                port: manualPort,
-                useTLS: resolvedUseTLS)
-            else { return }
 
             let stableID = self.manualStableID(host: manualHost, port: resolvedPort)
-            let tlsParams = self.resolveManualTLSParams(
-                stableID: stableID,
-                tlsEnabled: resolvedUseTLS,
-                allowTOFUReset: self.shouldForceTLS(host: manualHost))
+            let tlsParams = self.resolveManualTLSParams(stableID: stableID, tlsEnabled: manualTLS)
 
             guard let url = self.buildGatewayURL(
                 host: manualHost,
@@ -219,70 +156,30 @@ final class GatewayConnectionController {
             return
         }
 
-        if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection() {
-            let resolvedUseTLS = lastKnown.useTLS || self.shouldForceTLS(host: lastKnown.host)
-            let tlsParams = self.resolveManualTLSParams(
-                stableID: lastKnown.stableID,
-                tlsEnabled: resolvedUseTLS,
-                allowTOFUReset: self.shouldForceTLS(host: lastKnown.host))
-            guard let url = self.buildGatewayURL(
-                host: lastKnown.host,
-                port: lastKnown.port,
-                useTLS: tlsParams?.required == true)
-            else { return }
-
-            self.didAutoConnect = true
-            self.startAutoConnect(
-                url: url,
-                gatewayStableID: lastKnown.stableID,
-                tls: tlsParams,
-                token: token,
-                password: password)
-            return
-        }
-
         let preferredStableID = defaults.string(forKey: "gateway.preferredStableID")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let lastDiscoveredStableID = defaults.string(forKey: "gateway.lastDiscoveredStableID")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         let candidates = [preferredStableID, lastDiscoveredStableID].filter { !$0.isEmpty }
-        if let targetStableID = candidates.first(where: { id in
+        guard let targetStableID = candidates.first(where: { id in
             self.gateways.contains(where: { $0.stableID == id })
-        }) {
-            guard let target = self.gateways.first(where: { $0.stableID == targetStableID }) else { return }
-            guard let host = self.resolveGatewayHost(target) else { return }
-            let port = target.gatewayPort ?? 18789
-            let tlsParams = self.resolveDiscoveredTLSParams(gateway: target)
-            guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true)
-            else { return }
+        }) else { return }
 
-            self.didAutoConnect = true
-            self.startAutoConnect(
-                url: url,
-                gatewayStableID: target.stableID,
-                tls: tlsParams,
-                token: token,
-                password: password)
-            return
-        }
+        guard let target = self.gateways.first(where: { $0.stableID == targetStableID }) else { return }
+        guard let host = self.resolveGatewayHost(target) else { return }
+        let port = target.gatewayPort ?? 18789
+        let tlsParams = self.resolveDiscoveredTLSParams(gateway: target)
+        guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true)
+        else { return }
 
-        if self.gateways.count == 1, let gateway = self.gateways.first {
-            guard let host = self.resolveGatewayHost(gateway) else { return }
-            let port = gateway.gatewayPort ?? 18789
-            let tlsParams = self.resolveDiscoveredTLSParams(gateway: gateway)
-            guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true)
-            else { return }
-
-            self.didAutoConnect = true
-            self.startAutoConnect(
-                url: url,
-                gatewayStableID: gateway.stableID,
-                tls: tlsParams,
-                token: token,
-                password: password)
-            return
-        }
+        self.didAutoConnect = true
+        self.startAutoConnect(
+            url: url,
+            gatewayStableID: target.stableID,
+            tls: tlsParams,
+            token: token,
+            password: password)
     }
 
     private func updateLastDiscoveredGateway(from gateways: [GatewayDiscoveryModel.DiscoveredGateway]) {
@@ -308,10 +205,10 @@ final class GatewayConnectionController {
         password: String?)
     {
         guard let appModel else { return }
-        let connectOptions = self.makeConnectOptions(stableID: gatewayStableID)
+        let connectOptions = self.makeConnectOptions()
 
-        Task { [weak appModel] in
-            guard let appModel else { return }
+        Task { [weak self] in
+            guard let self else { return }
             await MainActor.run {
                 appModel.gatewayStatusText = "Connecting…"
             }
@@ -340,17 +237,13 @@ final class GatewayConnectionController {
         return nil
     }
 
-    private func resolveManualTLSParams(
-        stableID: String,
-        tlsEnabled: Bool,
-        allowTOFUReset: Bool = false) -> GatewayTLSParams?
-    {
+    private func resolveManualTLSParams(stableID: String, tlsEnabled: Bool) -> GatewayTLSParams? {
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if tlsEnabled || stored != nil {
             return GatewayTLSParams(
                 required: true,
                 expectedFingerprint: stored,
-                allowTOFU: stored == nil || allowTOFUReset,
+                allowTOFU: stored == nil,
                 storeKey: stableID)
         }
 
@@ -358,11 +251,11 @@ final class GatewayConnectionController {
     }
 
     private func resolveGatewayHost(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
-        if let tailnet = gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines), !tailnet.isEmpty {
-            return tailnet
-        }
         if let lanHost = gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines), !lanHost.isEmpty {
             return lanHost
+        }
+        if let tailnet = gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines), !tailnet.isEmpty {
+            return tailnet
         }
         return nil
     }
@@ -376,69 +269,38 @@ final class GatewayConnectionController {
         return components.url
     }
 
-    private func shouldForceTLS(host: String) -> Bool {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.isEmpty { return false }
-        return trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.")
-    }
-
     private func manualStableID(host: String, port: Int) -> String {
         "manual|\(host.lowercased())|\(port)"
     }
 
-    private func makeConnectOptions(stableID: String?) -> GatewayConnectOptions {
+    private func makeConnectOptions() -> GatewayConnectOptions {
         let defaults = UserDefaults.standard
         let displayName = self.resolvedDisplayName(defaults: defaults)
-        let resolvedClientId = self.resolvedClientId(defaults: defaults, stableID: stableID)
 
         return GatewayConnectOptions(
             role: "node",
             scopes: [],
             caps: self.currentCaps(),
             commands: self.currentCommands(),
-            permissions: self.currentPermissions(),
-            clientId: resolvedClientId,
+            permissions: [:],
+            clientId: "openclaw-ios",
             clientMode: "node",
             clientDisplayName: displayName)
     }
 
-    private func resolvedClientId(defaults: UserDefaults, stableID: String?) -> String {
-        if let stableID,
-           let override = GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID) {
-            return override
-        }
-        let manualClientId = defaults.string(forKey: "gateway.manual.clientId")?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if manualClientId?.isEmpty == false {
-            return manualClientId!
-        }
-        return "openclaw-ios"
-    }
-
-    private func resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
-        if port > 0 {
-            return port <= 65535 ? port : nil
-        }
-        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedHost.isEmpty else { return nil }
-        if useTLS && self.shouldForceTLS(host: trimmedHost) {
-            return 443
-        }
-        return 18789
-    }
-
     private func resolvedDisplayName(defaults: UserDefaults) -> String {
         let key = "node.displayName"
-        let existingRaw = defaults.string(forKey: key)
-        let resolved = NodeDisplayName.resolve(
-            existing: existingRaw,
-            deviceName: UIDevice.current.name,
-            interfaceIdiom: UIDevice.current.userInterfaceIdiom)
-        let existing = existingRaw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if existing.isEmpty || NodeDisplayName.isGeneric(existing) {
-            defaults.set(resolved, forKey: key)
+        let existing = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !existing.isEmpty, existing != "iOS Node" { return existing }
+
+        let deviceName = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = deviceName.isEmpty ? "iOS Node" : deviceName
+
+        if existing.isEmpty || existing == "iOS Node" {
+            defaults.set(candidate, forKey: key)
         }
-        return resolved
+
+        return candidate
     }
 
     private func currentCaps() -> [String] {
@@ -458,15 +320,6 @@ final class GatewayConnectionController {
         let locationMode = OpenClawLocationMode(rawValue: locationModeRaw) ?? .off
         if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
 
-        caps.append(OpenClawCapability.device.rawValue)
-        caps.append(OpenClawCapability.photos.rawValue)
-        caps.append(OpenClawCapability.contacts.rawValue)
-        caps.append(OpenClawCapability.calendar.rawValue)
-        caps.append(OpenClawCapability.reminders.rawValue)
-        if Self.motionAvailable() {
-            caps.append(OpenClawCapability.motion.rawValue)
-        }
-
         return caps
     }
 
@@ -482,11 +335,10 @@ final class GatewayConnectionController {
             OpenClawCanvasA2UICommand.reset.rawValue,
             OpenClawScreenCommand.record.rawValue,
             OpenClawSystemCommand.notify.rawValue,
-            OpenClawChatCommand.push.rawValue,
-            OpenClawTalkCommand.pttStart.rawValue,
-            OpenClawTalkCommand.pttStop.rawValue,
-            OpenClawTalkCommand.pttCancel.rawValue,
-            OpenClawTalkCommand.pttOnce.rawValue,
+            OpenClawSystemCommand.which.rawValue,
+            OpenClawSystemCommand.run.rawValue,
+            OpenClawSystemCommand.execApprovalsGet.rawValue,
+            OpenClawSystemCommand.execApprovalsSet.rawValue,
         ]
 
         let caps = Set(self.currentCaps())
@@ -498,74 +350,8 @@ final class GatewayConnectionController {
         if caps.contains(OpenClawCapability.location.rawValue) {
             commands.append(OpenClawLocationCommand.get.rawValue)
         }
-        if caps.contains(OpenClawCapability.device.rawValue) {
-            commands.append(OpenClawDeviceCommand.status.rawValue)
-            commands.append(OpenClawDeviceCommand.info.rawValue)
-        }
-        if caps.contains(OpenClawCapability.photos.rawValue) {
-            commands.append(OpenClawPhotosCommand.latest.rawValue)
-        }
-        if caps.contains(OpenClawCapability.contacts.rawValue) {
-            commands.append(OpenClawContactsCommand.search.rawValue)
-            commands.append(OpenClawContactsCommand.add.rawValue)
-        }
-        if caps.contains(OpenClawCapability.calendar.rawValue) {
-            commands.append(OpenClawCalendarCommand.events.rawValue)
-            commands.append(OpenClawCalendarCommand.add.rawValue)
-        }
-        if caps.contains(OpenClawCapability.reminders.rawValue) {
-            commands.append(OpenClawRemindersCommand.list.rawValue)
-            commands.append(OpenClawRemindersCommand.add.rawValue)
-        }
-        if caps.contains(OpenClawCapability.motion.rawValue) {
-            commands.append(OpenClawMotionCommand.activity.rawValue)
-            commands.append(OpenClawMotionCommand.pedometer.rawValue)
-        }
 
         return commands
-    }
-
-    private func currentPermissions() -> [String: Bool] {
-        var permissions: [String: Bool] = [:]
-        permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
-        permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-        permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
-        permissions["location"] = Self.isLocationAuthorized(
-            status: CLLocationManager().authorizationStatus)
-            && CLLocationManager.locationServicesEnabled()
-        permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
-
-        let photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        permissions["photos"] = photoStatus == .authorized || photoStatus == .limited
-        let contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
-        permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
-
-        let calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        permissions["calendar"] =
-            calendarStatus == .authorized || calendarStatus == .fullAccess || calendarStatus == .writeOnly
-        let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        permissions["reminders"] =
-            remindersStatus == .authorized || remindersStatus == .fullAccess || remindersStatus == .writeOnly
-
-        let motionStatus = CMMotionActivityManager.authorizationStatus()
-        let pedometerStatus = CMPedometer.authorizationStatus()
-        permissions["motion"] =
-            motionStatus == .authorized || pedometerStatus == .authorized
-
-        return permissions
-    }
-
-    private static func isLocationAuthorized(status: CLAuthorizationStatus) -> Bool {
-        switch status {
-        case .authorizedAlways, .authorizedWhenInUse, .authorized:
-            return true
-        default:
-            return false
-        }
-    }
-
-    private static func motionAvailable() -> Bool {
-        CMMotionActivityManager.isActivityAvailable() || CMPedometer.isStepCountingAvailable()
     }
 
     private func platformString() -> String {
@@ -619,10 +405,6 @@ extension GatewayConnectionController {
 
     func _test_currentCommands() -> [String] {
         self.currentCommands()
-    }
-
-    func _test_currentPermissions() -> [String: Bool] {
-        self.currentPermissions()
     }
 
     func _test_platformString() -> String {

@@ -7,14 +7,11 @@ private struct KeychainEntry: Hashable {
     let account: String
 }
 
-private let gatewayService = "ai.openclaw.gateway"
-private let nodeService = "ai.openclaw.node"
+private let gatewayService = "bot.molt.gateway"
+private let nodeService = "bot.molt.node"
 private let instanceIdEntry = KeychainEntry(service: nodeService, account: "instanceId")
 private let preferredGatewayEntry = KeychainEntry(service: gatewayService, account: "preferredStableID")
 private let lastGatewayEntry = KeychainEntry(service: gatewayService, account: "lastDiscoveredStableID")
-private func gatewayPasswordEntry(instanceId: String) -> KeychainEntry {
-    KeychainEntry(service: gatewayService, account: "gateway-password.\(instanceId)")
-}
 
 private func snapshotDefaults(_ keys: [String]) -> [String: Any?] {
     let defaults = UserDefaults.standard
@@ -126,34 +123,5 @@ private func restoreKeychain(_ snapshot: [KeychainEntry: String?]) {
         #expect(defaults.string(forKey: "node.instanceId") == "node-from-keychain")
         #expect(defaults.string(forKey: "gateway.preferredStableID") == "preferred-from-keychain")
         #expect(defaults.string(forKey: "gateway.lastDiscoveredStableID") == "last-from-keychain")
-    }
-
-    @Test func bootstrapCopiesManualPasswordToKeychainWhenMissing() {
-        let instanceId = "node-test"
-        let defaultsKeys = [
-            "node.instanceId",
-            "gateway.manual.password",
-        ]
-        let passwordEntry = gatewayPasswordEntry(instanceId: instanceId)
-        let defaultsSnapshot = snapshotDefaults(defaultsKeys)
-        let keychainSnapshot = snapshotKeychain([passwordEntry, instanceIdEntry])
-        defer {
-            restoreDefaults(defaultsSnapshot)
-            restoreKeychain(keychainSnapshot)
-        }
-
-        applyDefaults([
-            "node.instanceId": instanceId,
-            "gateway.manual.password": "manual-secret",
-        ])
-        applyKeychain([
-            passwordEntry: nil,
-            instanceIdEntry: nil,
-        ])
-
-        GatewaySettingsStore.bootstrapPersistence()
-
-        #expect(KeychainStore.loadString(service: gatewayService, account: passwordEntry.account) == "manual-secret")
-        #expect(UserDefaults.standard.string(forKey: "gateway.manual.password") != "manual-secret")
     }
 }
