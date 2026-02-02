@@ -12,6 +12,7 @@ export const CHAT_CHANNEL_ORDER = [
   "slack",
   "signal",
   "imessage",
+  "kook",
 ] as const;
 
 export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
@@ -97,6 +98,16 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     docsLabel: "imessage",
     blurb: "this is still a work in progress.",
     systemImage: "message.fill",
+  },
+  kook: {
+    id: "kook",
+    label: "KOOK",
+    selectionLabel: "KOOK (Bot API)",
+    detailLabel: "KOOK Bot",
+    docsPath: "/channels/kook",
+    docsLabel: "kook",
+    blurb: "KOOK (开黑啦) - Chinese gaming voice chat platform.",
+    systemImage: "message.badge",
   },
 };
 

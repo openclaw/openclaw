@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { KookActionConfig } from "../config/types.kook.js";
 import type {
   ChannelCapabilities,
   ChannelCommandAdapter,
@@ -12,6 +13,7 @@ import type {
 } from "./plugins/types.js";
 import { resolveDiscordAccount } from "../discord/accounts.js";
 import { resolveIMessageAccount } from "../imessage/accounts.js";
+import { resolveKookAccount } from "../kook/accounts.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { resolveSignalAccount } from "../signal/accounts.js";
@@ -28,6 +30,8 @@ import {
   resolveGoogleChatGroupToolPolicy,
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
+  resolveKookGroupRequireMention,
+  resolveKookGroupToolPolicy,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
   resolveTelegramGroupRequireMention,
@@ -363,6 +367,97 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
         const isDirect = context.ChatType?.toLowerCase() === "direct";
         const channelId =
           (isDirect ? (context.From ?? context.To) : context.To)?.trim() || undefined;
+        return {
+          currentChannelId: channelId,
+          currentThreadTs: context.ReplyToId,
+          hasRepliedRef,
+        };
+      },
+    },
+  },
+  kook: {
+    id: "kook",
+    capabilities: {
+      chatTypes: ["direct", "channel"],
+      reactions: true,
+      media: true,
+    },
+    outbound: { textChunkLimit: 2000 },
+    agentPrompt: {
+      messageToolHints: ({ cfg }) => {
+        const kookCfg = cfg.channels?.kook;
+        const actions = kookCfg?.actions ?? ({} as KookActionConfig);
+        const hints: string[] = ["", "### KOOK (开黑啦) Platform Capabilities", ""];
+
+        // Language hint - must be first
+        hints.push(
+          "IMPORTANT: The user is Chinese. You must reply in Chinese (中文) unless explicitly asked otherwise.",
+          "",
+        );
+
+        // Platform intro
+        hints.push(
+          "You are operating on KOOK (开黑啦), a Chinese gaming voice chat platform similar to Discord.",
+          "KOOK uses numeric IDs for guilds (servers), channels, users, and roles.",
+          "",
+        );
+
+        // Core messaging
+        hints.push(
+          "**Core Messaging:**",
+          "- Use `action=send` with `to=user:<userId>` for direct messages",
+          "- Use `action=send` with `to=channel:<channelId>` for channel messages",
+          "- Reply to messages: include `replyToId` parameter",
+          "- Add reactions: `action=react` with `emoji` parameter",
+          "",
+        );
+
+        // Role management
+        const roleOps: string[] = [];
+        if (actions.roleInfo ?? true) {
+          roleOps.push("  - `action=role-info` with `guildId` - List all roles");
+        }
+        if (actions.roles) {
+          roleOps.push(
+            "  - `action=role-create` with `guildId`, `name` - Create role",
+            "  - `action=role-grant` with `guildId`, `userId`, `roleId` - Assign role",
+            "  - `action=role-revoke` with `guildId`, `userId`, `roleId` - Remove role",
+          );
+        }
+        if (roleOps.length > 0) {
+          hints.push("**Role Management:**", ...roleOps, "");
+        }
+
+        // Guild operations
+        hints.push(
+          "**Guild Operations:**",
+          "  - `action=guild-list` - List servers",
+          "  - `action=guild-info` with `guildId` - Get server details",
+          "  - `action=guild-users` with `guildId` - List members",
+          "",
+        );
+
+        return hints;
+      },
+    },
+    config: {
+      resolveAllowFrom: ({ cfg, accountId }) =>
+        (resolveKookAccount({ cfg, accountId }).config.dm?.allowFrom ?? []).map((entry) =>
+          String(entry),
+        ),
+      formatAllowFrom: ({ allowFrom }) =>
+        allowFrom
+          .map((entry) => String(entry).trim())
+          .filter(Boolean)
+          .map((entry) => entry.replace(/^(kook|user):/i, "").replace(/^<@(\d+)>$/, "$1")),
+    },
+    groups: {
+      resolveRequireMention: resolveKookGroupRequireMention,
+      resolveToolPolicy: resolveKookGroupToolPolicy,
+    },
+    threading: {
+      buildToolContext: ({ context, hasRepliedRef }) => {
+        const channelId = context.To?.trim() || undefined;
         return {
           currentChannelId: channelId,
           currentThreadTs: context.ReplyToId,

@@ -207,7 +207,7 @@ export async function readSlackMessages(
     return {
       // conversations.replies includes the parent message; drop it for replies-only reads.
       messages: (result.messages ?? []).filter(
-        (message) => (message as SlackMessageSummary)?.ts !== opts.threadId,
+        (message: unknown) => (message as SlackMessageSummary)?.ts !== opts.threadId,
       ) as SlackMessageSummary[],
       hasMore: Boolean(result.has_more),
     };

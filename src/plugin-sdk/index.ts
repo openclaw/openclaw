@@ -387,5 +387,18 @@ export { normalizeFeishuTarget } from "../channels/plugins/normalize/feishu.js";
 export { probeFeishu, type FeishuProbe } from "../feishu/probe.js";
 export { monitorFeishuProvider } from "../feishu/monitor.js";
 
+// Channel: KOOK
+export {
+  listKookAccountIds,
+  normalizeAccountId as normalizeKookAccountId,
+  resolveKookAccount,
+  DEFAULT_ACCOUNT_ID as DEFAULT_KOOK_ACCOUNT_ID,
+  type ResolvedKookAccount,
+  type KookAccountConfig,
+} from "../kook/accounts.js";
+export { KookConfigSchema } from "../kook/config-schema.js";
+export type { KookConfigSchemaType, KookAccountConfigSchemaType } from "../kook/config-schema.js";
+export { kookOnboardingAdapter } from "../channels/plugins/onboarding/kook.js";
+
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";

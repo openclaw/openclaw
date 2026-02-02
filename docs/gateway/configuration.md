@@ -2660,7 +2660,7 @@ Use MiniMax M2.1 directly without LM Studio:
     mode: "merge",
     providers: {
       minimax: {
-        baseUrl: "https://api.minimax.io/anthropic",
+        baseUrl: "https://api.minimaxi.com/anthropic",
         apiKey: "${MINIMAX_API_KEY}",
         api: "anthropic-messages",
         models: [

@@ -19,7 +19,7 @@
 </p>
 
 **OpenClaw** is a _personal AI assistant_ you run on your own devices.
-It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, and Zalo Personal. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+It answers you on the channels you already use (WhatsApp, Telegram, Slack, Discord, Google Chat, Signal, iMessage, Microsoft Teams, WebChat), plus extension channels like BlueBubbles, Matrix, Zalo, Zalo Personal, and KOOK. It can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
@@ -68,7 +68,7 @@ openclaw gateway --port 18789 --verbose
 # Send a message
 openclaw message send --to +1234567890 --message "Hello from OpenClaw"
 
-# Talk to the assistant (optionally deliver back to any connected channel: WhatsApp/Telegram/Slack/Discord/Google Chat/Signal/iMessage/BlueBubbles/Microsoft Teams/Matrix/Zalo/Zalo Personal/WebChat)
+# Talk to the assistant (optionally deliver back to any connected channel: WhatsApp/Telegram/Slack/Discord/Google Chat/Signal/iMessage/BlueBubbles/Microsoft Teams/Matrix/Zalo/Zalo Personal/KOOK/WebChat)
 openclaw agent --message "Ship checklist" --thinking high
 ```
 
@@ -109,7 +109,7 @@ OpenClaw connects to real messaging surfaces. Treat inbound DMs as **untrusted i
 
 Full security guide: [Security](https://docs.openclaw.ai/gateway/security)
 
-Default behavior on Telegram/WhatsApp/Signal/iMessage/Microsoft Teams/Discord/Google Chat/Slack:
+Default behavior on Telegram/WhatsApp/Signal/iMessage/Microsoft Teams/Discord/Google Chat/Slack/KOOK:
 
 - **DM pairing** (`dmPolicy="pairing"` / `channels.discord.dm.policy="pairing"` / `channels.slack.dm.policy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
 - Approve with: `openclaw pairing approve <channel> <code>` (then the sender is added to a local allowlist store).
@@ -179,7 +179,7 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 ## How it works (short)
 
 ```
-WhatsApp / Telegram / Slack / Discord / Google Chat / Signal / iMessage / BlueBubbles / Microsoft Teams / Matrix / Zalo / Zalo Personal / WebChat
+WhatsApp / Telegram / Slack / Discord / Google Chat / Signal / iMessage / BlueBubbles / Microsoft Teams / Matrix / Zalo / Zalo Personal / KOOK / WebChat
                │
                ▼
 ┌───────────────────────────────┐
@@ -203,6 +203,62 @@ WhatsApp / Telegram / Slack / Discord / Google Chat / Signal / iMessage / BlueBu
 - **[Canvas + A2UI](https://docs.openclaw.ai/platforms/mac/canvas)** — agent‑driven visual workspace (A2UI host: [Canvas/A2UI](https://docs.openclaw.ai/platforms/mac/canvas#canvas-a2ui)).
 - **[Voice Wake](https://docs.openclaw.ai/nodes/voicewake) + [Talk Mode](https://docs.openclaw.ai/nodes/talk)** — always‑on speech and continuous conversation.
 - **[Nodes](https://docs.openclaw.ai/nodes)** — Canvas, camera snap/clip, screen record, `location.get`, notifications, plus macOS‑only `system.run`/`system.notify`.
+
+## KOOK Channel Support
+
+KOOK (开黑啦) is a Chinese gaming voice chat platform with rich bot capabilities. Moltbot now supports full KOOK integration:
+
+### Key Features
+
+- **Direct Messages**: Send and receive DMs with KOOK users
+- **Guild/Server Support**: Full server and channel management
+- **Media Support**: Share images, videos, and files
+- **Rich Formatting**: KMarkdown support for enhanced messages
+- **Role Management**: Create and manage server roles
+- **Emoji Management**: Custom emoji support
+- **Channel Operations**: Create, edit, and manage channels
+
+### Configuration
+
+Configure KOOK in your `~/.clawdbot/moltbot.json`:
+
+```json
+{
+  "channels": {
+    "kook": {
+      "enabled": true,
+      "token": "YOUR_KOOK_BOT_TOKEN",
+      "dm": {
+        "policy": "allowlist",
+        "allowFrom": ["USER_ID_1", "USER_ID_2"]
+      },
+      "groupPolicy": "allowlist",
+      "guilds": {
+        "SERVER_ID": {
+          "users": ["USER_ID_1"],
+          "channels": {
+            "CHANNEL_ID": {
+              "allow": true
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### Bot Commands
+
+- `/approve <user_id>` - Add user to allowlist
+- `/reject <user_id>` - Remove user from allowlist
+- Channel and guild management via Moltbot skills
+
+### Security
+
+- Default DM policy: allowlist only
+- Guild messages: require mention or allowlist
+- Full user, guild, and channel filtering
 
 ## Tailscale access (Gateway dashboard)
 

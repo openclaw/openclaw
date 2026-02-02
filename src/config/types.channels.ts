@@ -1,3 +1,4 @@
+import type { KookConfigSchemaType } from "../kook/config-schema.js";
 import type { GroupPolicy } from "./types.base.js";
 import type { DiscordConfig } from "./types.discord.js";
 import type { FeishuConfig } from "./types.feishu.js";
@@ -35,5 +36,6 @@ export type ChannelsConfig = {
   signal?: SignalConfig;
   imessage?: IMessageConfig;
   msteams?: MSTeamsConfig;
+  kook?: KookConfigSchemaType;
   [key: string]: unknown;
 };

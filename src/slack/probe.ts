@@ -28,7 +28,14 @@ export async function probeSlack(token: string, timeoutMs = 2500): Promise<Slack
   const client = createSlackWebClient(token);
   const start = Date.now();
   try {
-    const result = await withTimeout(client.auth.test(), timeoutMs);
+    const result = (await withTimeout(client.auth.test(), timeoutMs)) as {
+      ok?: boolean;
+      error?: string;
+      user_id?: string;
+      user?: string;
+      team_id?: string;
+      team?: string;
+    };
     if (!result.ok) {
       return {
         ok: false,

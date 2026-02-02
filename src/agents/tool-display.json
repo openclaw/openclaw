@@ -234,7 +234,57 @@
         },
         "timeout": { "label": "timeout", "detailKeys": ["provider", "guildId", "userId"] },
         "kick": { "label": "kick", "detailKeys": ["provider", "guildId", "userId"] },
-        "ban": { "label": "ban", "detailKeys": ["provider", "guildId", "userId"] }
+        "ban": { "label": "ban", "detailKeys": ["provider", "guildId", "userId"] },
+        "get-me": { "label": "kook bot", "detailKeys": ["provider"] },
+        "get-user": { "label": "kook user", "detailKeys": ["provider", "userId"] },
+        "guild-list": { "label": "kook guilds", "detailKeys": ["provider"] },
+        "guild-info": { "label": "kook guild", "detailKeys": ["provider", "guildId"] },
+        "guild-user-count": { "label": "kook user count", "detailKeys": ["provider", "guildId"] },
+        "guild-users": { "label": "kook users", "detailKeys": ["provider", "guildId"] },
+        "channel-user-list": {
+          "label": "kook channel users",
+          "detailKeys": ["provider", "channelId"]
+        },
+        "role-create": {
+          "label": "kook role create",
+          "detailKeys": ["provider", "guildId", "name"]
+        },
+        "role-update": {
+          "label": "kook role update",
+          "detailKeys": ["provider", "guildId", "roleId"]
+        },
+        "role-delete": {
+          "label": "kook role delete",
+          "detailKeys": ["provider", "guildId", "roleId"]
+        },
+        "role-grant": {
+          "label": "kook role grant",
+          "detailKeys": ["provider", "guildId", "userId", "roleId"]
+        },
+        "role-revoke": {
+          "label": "kook role revoke",
+          "detailKeys": ["provider", "guildId", "userId", "roleId"]
+        },
+        "update-nickname": {
+          "label": "kook nickname",
+          "detailKeys": ["provider", "guildId", "userId", "nickname"]
+        },
+        "kick-user": { "label": "kook kick", "detailKeys": ["provider", "guildId", "userId"] },
+        "leave-guild": { "label": "kook leave", "detailKeys": ["provider", "guildId"] },
+        "mute-create": { "label": "kook mute", "detailKeys": ["provider", "guildId", "userId"] },
+        "mute-delete": { "label": "kook unmute", "detailKeys": ["provider", "guildId", "userId"] },
+        "emoji-create": {
+          "label": "kook emoji create",
+          "detailKeys": ["provider", "guildId", "name"]
+        },
+        "emoji-update": {
+          "label": "kook emoji update",
+          "detailKeys": ["provider", "guildId", "emojiId"]
+        },
+        "emoji-delete": {
+          "label": "kook emoji delete",
+          "detailKeys": ["provider", "guildId", "emojiId"]
+        }
       }
     },
     "agents_list": {

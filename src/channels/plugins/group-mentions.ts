@@ -406,3 +406,33 @@ export function resolveBlueBubblesGroupToolPolicy(
     senderE164: params.senderE164,
   });
 }
+
+export function resolveKookGroupRequireMention(params: {
+  cfg: OpenClawConfig;
+  groupId?: string | null;
+}): boolean | undefined {
+  const guilds = params.cfg.channels?.kook?.guilds;
+  if (!guilds) {
+    return undefined;
+  }
+  const guildEntry = params.groupId ? guilds[params.groupId] : undefined;
+  if (typeof guildEntry?.requireMention === "boolean") {
+    return guildEntry.requireMention;
+  }
+  return undefined;
+}
+
+export function resolveKookGroupToolPolicy(
+  params: GroupMentionParams,
+): GroupToolPolicyConfig | undefined {
+  return resolveChannelGroupToolsPolicy({
+    cfg: params.cfg,
+    channel: "kook",
+    groupId: params.groupId,
+    accountId: params.accountId,
+    senderId: params.senderId,
+    senderName: params.senderName,
+    senderUsername: params.senderUsername,
+    senderE164: params.senderE164,
+  });
+}

@@ -1,7 +1,7 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
 
 export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
-export const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
+export const MINIMAX_API_BASE_URL = "https://api.minimaxi.com/anthropic";
 export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.1";
 export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
 export const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;

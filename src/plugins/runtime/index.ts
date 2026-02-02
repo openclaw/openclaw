@@ -40,6 +40,7 @@ import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-di
 import { removeAckReactionAfterReply, shouldAckReaction } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { discordMessageActions } from "../../channels/plugins/actions/discord.js";
+import { kookMessageActions } from "../../channels/plugins/actions/kook.js";
 import { signalMessageActions } from "../../channels/plugins/actions/signal.js";
 import { telegramMessageActions } from "../../channels/plugins/actions/telegram.js";
 import { createWhatsAppLoginTool } from "../../channels/plugins/agent-tools/whatsapp-login.js";
@@ -75,6 +76,9 @@ import { probeIMessage } from "../../imessage/probe.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { monitorKookProvider } from "../../kook/monitor/provider.js";
+import { probeKook } from "../../kook/probe.js";
+import { sendDirectMessageKook, sendMessageKook } from "../../kook/send.js";
 import {
   listLineAccountIds,
   normalizeAccountId as normalizeLineAccountId,
@@ -85,11 +89,11 @@ import { monitorLineProvider } from "../../line/monitor.js";
 import { probeLineBot } from "../../line/probe.js";
 import {
   createQuickReplyItems,
+  pushFlexMessage,
+  pushLocationMessage,
   pushMessageLine,
   pushMessagesLine,
-  pushFlexMessage,
   pushTemplateMessage,
-  pushLocationMessage,
   pushTextMessageWithQuickReplies,
   sendMessageLine,
 } from "../../line/send.js";
@@ -334,6 +338,13 @@ export function createPluginRuntime(): PluginRuntime {
         createQuickReplyItems,
         buildTemplateMessageFromPayload,
         monitorLineProvider,
+      },
+      kook: {
+        probeKook,
+        sendMessageKook,
+        sendDirectMessageKook,
+        monitorKookProvider,
+        messageActions: kookMessageActions,
       },
     },
     logging: {

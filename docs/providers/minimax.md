@@ -74,7 +74,7 @@ Configure via CLI:
     mode: "merge",
     providers: {
       minimax: {
-        baseUrl: "https://api.minimax.io/anthropic",
+        baseUrl: "https://api.minimaxi.com/anthropic",
         apiKey: "${MINIMAX_API_KEY}",
         api: "anthropic-messages",
         models: [
@@ -167,7 +167,7 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 
 ## Configuration options
 
-- `models.providers.minimax.baseUrl`: prefer `https://api.minimax.io/anthropic` (Anthropic-compatible); `https://api.minimax.io/v1` is optional for OpenAI-compatible payloads.
+- `models.providers.minimax.baseUrl`: prefer `https://api.minimaxi.com/anthropic` (Anthropic-compatible); `https://api.minimax.io/v1` is optional for OpenAI-compatible payloads.
 - `models.providers.minimax.api`: prefer `anthropic-messages`; `openai-completions` is optional for OpenAI-compatible payloads.
 - `models.providers.minimax.apiKey`: MiniMax API key (`MINIMAX_API_KEY`).
 - `models.providers.minimax.models`: define `id`, `name`, `reasoning`, `contextWindow`, `maxTokens`, `cost`.

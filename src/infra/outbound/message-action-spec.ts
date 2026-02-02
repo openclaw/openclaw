@@ -53,6 +53,34 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     timeout: "none",
     kick: "none",
     ban: "none",
+    // KOOK-specific actions (kebab-case)
+    "get-me": "none",
+    "get-user": "none",
+    "guild-list": "none",
+    "guild-info": "none",
+    "guild-user-count": "none",
+    "guild-users": "none",
+    "channel-user-list": "channelId",
+    // KOOK Role Management
+    "role-create": "none",
+    "role-update": "none",
+    "role-delete": "none",
+    "role-grant": "none",
+    "role-revoke": "none",
+    // KOOK Channel Management
+    "channel-update": "channelId",
+    "move-user": "none",
+    // KOOK Member & Moderation
+    "update-nickname": "none",
+    "kick-user": "none",
+    "leave-guild": "none",
+    // KOOK Emoji Management
+    "emoji-create": "none",
+    "emoji-update": "none",
+    "emoji-delete": "none",
+    // KOOK Mute Management
+    "mute-create": "none",
+    "mute-delete": "none",
     "set-presence": "none",
   };
 

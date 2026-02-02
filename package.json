@@ -1,11 +1,17 @@
 {
-  "name": "openclaw",
-  "version": "2026.2.3",
-  "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
-  "keywords": [],
+  "name": "kook-openclaw",
+  "version": "2026.2.5-kook.1",
+  "description": "OpenClaw with KOOK channel support",
+  "keywords": [
+    "bot",
+    "gateway",
+    "kaiheila",
+    "kook"
+  ],
   "license": "MIT",
   "author": "",
   "bin": {
+    "kook-openclaw": "openclaw.mjs",
     "openclaw": "openclaw.mjs"
   },
   "files": [
@@ -16,8 +22,69 @@
     "extensions/",
     "LICENSE",
     "openclaw.mjs",
+    "openclaw.plugin.json",
     "README-header.png",
     "README.md",
+    "assets/**",
+    "dist/*.js",
+    "dist/*.json",
+    "docs/**",
+    "extensions/**",
+    "git-hooks/**",
+    "patches/**",
+    "scripts/format-staged.js",
+    "scripts/postinstall.js",
+    "scripts/setup-git-hooks.js",
+    "skills/**",
+    "dist/acp/**",
+    "dist/agents/**",
+    "dist/auto-reply/**",
+    "dist/browser/**",
+    "dist/canvas-host/**",
+    "dist/channels/**",
+    "dist/cli/**",
+    "dist/commands/**",
+    "dist/compat/**",
+    "dist/config/**",
+    "dist/control-ui/**",
+    "dist/cron/**",
+    "dist/daemon/**",
+    "dist/discord/**",
+    "dist/gateway/**",
+    "dist/hooks/**",
+    "dist/imessage/**",
+    "dist/infra/**",
+    "dist/kook/**",
+    "dist/line/**",
+    "dist/link-understanding/**",
+    "dist/logging/**",
+    "dist/macos/**",
+    "dist/markdown/**",
+    "dist/media-understanding/**",
+    "dist/media/**",
+    "dist/memory/**",
+    "dist/node-host/**",
+    "dist/pairing/**",
+    "dist/plugin-sdk/**",
+    "dist/plugins/**",
+    "dist/process/**",
+    "dist/providers/**",
+    "dist/routing/**",
+    "dist/security/**",
+    "dist/sessions/**",
+    "dist/shared/**",
+    "dist/signal/**",
+    "dist/slack/**",
+    "dist/telegram/**",
+    "dist/terminal/**",
+    "dist/test-helpers/**",
+    "dist/test-utils/**",
+    "dist/tts/**",
+    "dist/tui/**",
+    "dist/utils/**",
+    "dist/web/**",
+    "dist/whatsapp/**",
+    "dist/wizard/**",
     "skills/"
   ],
   "type": "module",
@@ -25,7 +92,13 @@
   "exports": {
     ".": "./dist/index.js",
     "./plugin-sdk": "./dist/plugin-sdk/index.js",
+    "./plugin-sdk/*": "./dist/plugin-sdk/*",
+    "./kook": "./dist/kook/index.js",
+    "./kook/*": "./dist/kook/*.js",
     "./cli-entry": "./openclaw.mjs"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org"
   },
   "scripts": {
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",
@@ -207,6 +280,11 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
+    ]
+  },
+  "openclaw": {
+    "extensions": [
+      "extensions/kook/index.ts"
     ]
   },
   "vitest": {
