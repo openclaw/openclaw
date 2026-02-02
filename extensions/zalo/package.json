@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "openclaw": "workspace:*",
-    "undici": "7.19.2"
+    "undici": "7.20.0"
   },
   "devDependencies": {
     "openclaw": "workspace:*"

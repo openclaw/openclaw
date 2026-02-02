@@ -41,30 +41,49 @@ vi.mock("../gateway/client.js", () => ({
 }));
 
 async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const srv = createServer();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      if (!addr || typeof addr === "string") {
+  try {
+    return await new Promise((resolve, reject) => {
+      const srv = createServer();
+      srv.on("error", (err) => {
         srv.close();
-        reject(new Error("failed to acquire free port"));
-        return;
-      }
-      const port = addr.port;
-      srv.close((err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(port);
+        reject(err);
+      });
+      srv.listen(0, "127.0.0.1", () => {
+        const addr = srv.address();
+        if (!addr || typeof addr === "string") {
+          srv.close();
+          reject(new Error("failed to acquire free port"));
+          return;
         }
+        const port = addr.port;
+        srv.close((err) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(port);
+          }
+        });
       });
     });
-  });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EPERM" || code === "EACCES") {
+      return 30_000 + (process.pid % 10_000);
+    }
+    throw err;
+  }
 }
 
 async function getFreeGatewayPort(): Promise<number> {
-  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 4] });
+  try {
+    return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 4] });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EPERM" || code === "EACCES") {
+      return 40_000 + (process.pid % 10_000);
+    }
+    throw err;
+  }
 }
 
 const runtime = {

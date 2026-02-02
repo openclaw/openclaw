@@ -97,7 +97,7 @@ agents:
     models:
       "anthropic/claude-opus-4-5":
         params:
-          cacheControlTtl: "1h"
+          cacheRetention: "long"
     heartbeat:
       every: "55m"
 ```

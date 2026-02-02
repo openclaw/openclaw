@@ -53,7 +53,7 @@ function resolveAccountConfig(
   if (!accounts || typeof accounts !== "object") {
     return undefined;
   }
-  return accounts[accountId] as GoogleChatAccountConfig | undefined;
+  return accounts[accountId];
 }
 
 function mergeGoogleChatAccountConfig(

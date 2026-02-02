@@ -25,11 +25,6 @@ export function resolveContextWindowInfo(params: {
   modelContextWindow?: number;
   defaultTokens: number;
 }): ContextWindowInfo {
-  const fromModel = normalizePositiveInt(params.modelContextWindow);
-  if (fromModel) {
-    return { tokens: fromModel, source: "model" };
-  }
-
   const fromModelsConfig = (() => {
     const providers = params.cfg?.models?.providers as
       | Record<string, { models?: Array<{ id?: string; contextWindow?: number }> }>
@@ -39,16 +34,19 @@ export function resolveContextWindowInfo(params: {
     const match = models.find((m) => m?.id === params.modelId);
     return normalizePositiveInt(match?.contextWindow);
   })();
-  if (fromModelsConfig) {
-    return { tokens: fromModelsConfig, source: "modelsConfig" };
+  const fromModel = normalizePositiveInt(params.modelContextWindow);
+  const baseInfo = fromModelsConfig
+    ? { tokens: fromModelsConfig, source: "modelsConfig" as const }
+    : fromModel
+      ? { tokens: fromModel, source: "model" as const }
+      : { tokens: Math.floor(params.defaultTokens), source: "default" as const };
+
+  const capTokens = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
+  if (capTokens && capTokens < baseInfo.tokens) {
+    return { tokens: capTokens, source: "agentContextTokens" };
   }
 
-  const fromAgentConfig = normalizePositiveInt(params.cfg?.agents?.defaults?.contextTokens);
-  if (fromAgentConfig) {
-    return { tokens: fromAgentConfig, source: "agentContextTokens" };
-  }
-
-  return { tokens: Math.floor(params.defaultTokens), source: "default" };
+  return baseInfo;
 }
 
 export type ContextWindowGuardResult = ContextWindowInfo & {

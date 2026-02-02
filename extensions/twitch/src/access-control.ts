@@ -19,10 +19,10 @@ export type TwitchAccessControlResult = {
  * Priority order:
  * 1. If `requireMention` is true, message must mention the bot
  * 2. If `allowFrom` is set, sender must be in the allowlist (by user ID)
- * 3. If `allowedRoles` is set, sender must have at least one of the specified roles
+ * 3. If `allowedRoles` is set (and `allowFrom` is not), sender must have at least one role
  *
- * Note: You can combine `allowFrom` with `allowedRoles`. If a user is in `allowFrom`,
- * they bypass role checks. This is useful for allowing specific users regardless of role.
+ * Note: `allowFrom` is a hard allowlist. When set, only those user IDs are allowed.
+ * Use `allowedRoles` as an alternative when you don't want to maintain an allowlist.
  *
  * Available roles:
  * - "moderator": Moderators
@@ -66,6 +66,11 @@ export function checkTwitchAccessControl(params: {
         matchSource: "allowlist",
       };
     }
+
+    return {
+      allowed: false,
+      reason: "sender is not in allowFrom allowlist",
+    };
   }
 
   if (account.allowedRoles && account.allowedRoles.length > 0) {

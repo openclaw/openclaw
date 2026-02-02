@@ -195,11 +195,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     }
 
     try {
-      const contextWindowTokens = resolveContextWindowTokens(model);
+      const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+      const modelContextWindow = resolveContextWindowTokens(model);
+      const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
       let messagesToSummarize = preparation.messagesToSummarize;
 
-      const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
       const maxHistoryShare = runtime?.maxHistoryShare ?? 0.5;
 
       const tokensBefore =
