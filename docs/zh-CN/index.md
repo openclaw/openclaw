@@ -62,7 +62,7 @@ OpenClaw 同时也驱动着 OpenClaw 助手。
 远程访问： [Web 界面](/web) 和 [Tailscale](/gateway/tailscale)
 
 <p align="center">
-  <img src="whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
+  <img src="/whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
 </p>
 
 ## 工作原理
