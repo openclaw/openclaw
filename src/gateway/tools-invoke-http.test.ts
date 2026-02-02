@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CONFIG_PATH } from "../config/config.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
 import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
@@ -91,6 +90,7 @@ describe("POST /tools/invoke", () => {
       list: [{ id: "main" }],
     } as any;
 
+    const { CONFIG_PATH } = await import("../config/config.js");
     await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
     await fs.writeFile(
       CONFIG_PATH,
