@@ -35,10 +35,14 @@ describe("fetchWithSlackAuth", () => {
 
     // Verify fetch was called with correct params
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch).toHaveBeenCalledWith("https://files.slack.com/test.jpg", {
-      headers: { Authorization: "Bearer xoxb-test-token" },
-      redirect: "manual",
-    });
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://files.slack.com/test.jpg",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer xoxb-test-token" },
+        redirect: "manual",
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 
   it("rejects non-Slack hosts to avoid leaking tokens", async () => {
@@ -75,16 +79,24 @@ describe("fetchWithSlackAuth", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
 
     // First call should have Authorization header and manual redirect
-    expect(mockFetch).toHaveBeenNthCalledWith(1, "https://files.slack.com/test.jpg", {
-      headers: { Authorization: "Bearer xoxb-test-token" },
-      redirect: "manual",
-    });
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      1,
+      "https://files.slack.com/test.jpg",
+      expect.objectContaining({
+        headers: { Authorization: "Bearer xoxb-test-token" },
+        redirect: "manual",
+        signal: expect.any(AbortSignal),
+      }),
+    );
 
     // Second call should follow the redirect without Authorization
     expect(mockFetch).toHaveBeenNthCalledWith(
       2,
       "https://cdn.slack-edge.com/presigned-url?sig=abc123",
-      { redirect: "follow" },
+      expect.objectContaining({
+        redirect: "follow",
+        signal: expect.any(AbortSignal),
+      }),
     );
   });
 
@@ -107,9 +119,14 @@ describe("fetchWithSlackAuth", () => {
     await fetchWithSlackAuth("https://files.slack.com/original.jpg", "xoxb-test-token");
 
     // Second call should resolve the relative URL against the original
-    expect(mockFetch).toHaveBeenNthCalledWith(2, "https://files.slack.com/files/redirect-target", {
-      redirect: "follow",
-    });
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "https://files.slack.com/files/redirect-target",
+      expect.objectContaining({
+        redirect: "follow",
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 
   it("returns redirect response when no location header is provided", async () => {
@@ -162,9 +179,14 @@ describe("fetchWithSlackAuth", () => {
     await fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token");
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(mockFetch).toHaveBeenNthCalledWith(2, "https://cdn.slack.com/new-url", {
-      redirect: "follow",
-    });
+    expect(mockFetch).toHaveBeenNthCalledWith(
+      2,
+      "https://cdn.slack.com/new-url",
+      expect.objectContaining({
+        redirect: "follow",
+        signal: expect.any(AbortSignal),
+      }),
+    );
   });
 });
 

@@ -82,13 +82,18 @@ function createSlackMediaFetch(token: string): FetchLike {
  * Slack's file URLs redirect to CDN domains with pre-signed URLs that don't need the
  * Authorization header, so we handle the initial auth request manually.
  */
-export async function fetchWithSlackAuth(url: string, token: string): Promise<Response> {
+export async function fetchWithSlackAuth(
+  url: string,
+  token: string,
+  timeoutMs = 30_000,
+): Promise<Response> {
   const parsed = assertSlackFileUrl(url);
 
   // Initial request with auth and manual redirect handling
   const initialRes = await fetch(parsed.href, {
     headers: { Authorization: `Bearer ${token}` },
     redirect: "manual",
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   // If not a redirect, return the response directly
@@ -112,7 +117,7 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
 
   // Follow the redirect without the Authorization header
   // (Slack's CDN URLs are pre-signed and don't need it)
-  return fetch(resolvedUrl.toString(), { redirect: "follow" });
+  return fetch(resolvedUrl.toString(), { redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
 }
 
 export async function resolveSlackMedia(params: {
