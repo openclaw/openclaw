@@ -191,7 +191,9 @@ describe("config view", () => {
 
     const input = container.querySelector(".config-search__input");
     expect(input).not.toBeNull();
-    if (!input) {return;}
+    if (!input) {
+      return;
+    }
     input.value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");

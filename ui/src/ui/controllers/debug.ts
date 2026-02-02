@@ -16,8 +16,12 @@ export type DebugState = {
 };
 
 export async function loadDebug(state: DebugState) {
-  if (!state.client || !state.connected) {return;}
-  if (state.debugLoading) {return;}
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (state.debugLoading) {
+    return;
+  }
   state.debugLoading = true;
   try {
     const [status, health, models, heartbeat] = await Promise.all([
@@ -39,7 +43,9 @@ export async function loadDebug(state: DebugState) {
 }
 
 export async function callDebugMethod(state: DebugState) {
-  if (!state.client || !state.connected) {return;}
+  if (!state.client || !state.connected) {
+    return;
+  }
   state.debugCallError = null;
   state.debugCallResult = null;
   try {
