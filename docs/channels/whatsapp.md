@@ -2,6 +2,7 @@
 summary: "WhatsApp (web channel) integration: login, inbox, replies, media, and ops"
 read_when:
   - Working on WhatsApp/web channel behavior or inbox routing
+title: "WhatsApp"
 ---
 
 # WhatsApp (web channel)

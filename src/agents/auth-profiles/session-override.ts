@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
-import { normalizeProviderId } from "../model-selection.js";
 import {
   ensureAuthProfileStore,
   isProfileInCooldown,
   resolveAuthProfileOrder,
 } from "../auth-profiles.js";
+import { normalizeProviderId } from "../model-selection.js";
 
 function isProfileForProvider(params: {
   provider: string;

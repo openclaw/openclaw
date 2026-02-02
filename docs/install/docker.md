@@ -3,6 +3,7 @@ summary: "Optional Docker-based setup and onboarding for OpenClaw"
 read_when:
   - You want a containerized gateway instead of local installs
   - You are validating the Docker flow
+title: "Docker"
 ---
 
 # Docker (optional)

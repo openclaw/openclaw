@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
 export type AgentIdentityFile = {

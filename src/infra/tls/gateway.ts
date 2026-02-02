@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
 import { promisify } from "node:util";
-
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { CONFIG_DIR, ensureDir, resolveUserPath, shortenHomeInString } from "../../utils.js";
 import { normalizeFingerprint } from "./fingerprint.js";
@@ -135,7 +134,7 @@ export async function loadGatewayTlsRuntime(
         cert,
         key,
         ca,
-        minVersion: "TLSv1.2",
+        minVersion: "TLSv1.3",
       },
     };
   } catch (err) {

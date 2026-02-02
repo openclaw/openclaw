@@ -11,6 +11,7 @@ import {
 } from "../infra/device-identity.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { buildDeviceAuthPayload } from "./device-auth.js";
 import {
   connectOk,
   getFreePort,
@@ -19,7 +20,6 @@ import {
   startGatewayServer,
   startServerWithClient,
 } from "./test-helpers.js";
-import { buildDeviceAuthPayload } from "./device-auth.js";
 
 installGatewayTestHooks({ scope: "suite" });
 

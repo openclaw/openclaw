@@ -1,10 +1,9 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
-
 import type { ResolvedBrowserConfig } from "./config.js";
-import { registerBrowserRoutes } from "./routes/index.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
+import { registerBrowserRoutes } from "./routes/index.js";
 import {
   type BrowserServerState,
   createBrowserRouteContext,

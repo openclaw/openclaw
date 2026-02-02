@@ -2,6 +2,7 @@
 summary: "Agent session tools for listing sessions, fetching history, and sending cross-session messages"
 read_when:
   - Adding or modifying session tools
+title: "Session Tools"
 ---
 
 # Session Tools

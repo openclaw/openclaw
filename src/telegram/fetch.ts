@@ -1,6 +1,6 @@
 import * as net from "node:net";
-import { resolveFetch } from "../infra/fetch.js";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
+import { resolveFetch } from "../infra/fetch.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTelegramAutoSelectFamilyDecision } from "./network-config.js";
 

@@ -1,6 +1,5 @@
 import type { APIMessage } from "discord-api-types/v10";
 import { Routes } from "discord-api-types/v10";
-import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordMessageEdit,
   DiscordMessageQuery,
@@ -9,6 +8,7 @@ import type {
   DiscordThreadCreate,
   DiscordThreadList,
 } from "./send.types.js";
+import { resolveDiscordRest } from "./send.shared.js";
 
 export async function readMessagesDiscord(
   channelId: string,

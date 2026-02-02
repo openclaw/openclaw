@@ -4,6 +4,7 @@ read_when:
   - Introducing ClawHub to new users
   - Installing, searching, or publishing skills
   - Explaining ClawHub CLI flags and sync behavior
+title: "ClawHub"
 ---
 
 # ClawHub

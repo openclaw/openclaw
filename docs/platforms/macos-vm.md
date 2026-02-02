@@ -5,6 +5,7 @@ read_when:
   - You want iMessage integration (BlueBubbles) in a sandbox
   - You want a resettable macOS environment you can clone
   - You want to compare local vs hosted macOS VM options
+title: "macOS VMs"
 ---
 
 # OpenClaw on macOS VMs (Sandboxing)

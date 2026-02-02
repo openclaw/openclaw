@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { runClaudeCliAgent } from "./claude-cli-runner.js";
 
 const runCommandWithTimeoutMock = vi.fn();

@@ -4,6 +4,7 @@ read_when:
   - Implementing the macOS Canvas panel
   - Adding agent controls for visual workspace
   - Debugging WKWebView canvas loads
+title: "Canvas"
 ---
 
 # Canvas (macOS app)

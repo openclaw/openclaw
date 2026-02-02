@@ -1,14 +1,14 @@
 import type { OpenClawConfig } from "./config.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
+import {
+  getChannelPluginCatalogEntry,
+  listChannelPluginCatalogEntries,
+} from "../channels/plugins/catalog.js";
 import {
   getChatChannelMeta,
   listChatChannels,
   normalizeChatChannelId,
 } from "../channels/registry.js";
-import {
-  getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries,
-} from "../channels/plugins/catalog.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 import { hasAnyWhatsAppAuth } from "../web/accounts.js";
 
 type PluginEnableChange = {

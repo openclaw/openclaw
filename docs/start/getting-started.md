@@ -3,6 +3,7 @@ summary: "Beginner guide: from zero to first message (wizard, auth, channels, pa
 read_when:
   - First time setup from zero
   - You want the fastest path from install → onboarding → first message
+title: "Getting Started"
 ---
 
 # Getting Started
@@ -55,7 +56,7 @@ Windows: use **WSL2** (Ubuntu recommended). WSL2 is strongly recommended; native
 ## 1) Install the CLI (recommended)
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 Installer options (install method, non-interactive, from GitHub): [Install](/install).

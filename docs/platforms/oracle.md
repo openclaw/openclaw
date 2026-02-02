@@ -4,6 +4,7 @@ read_when:
   - Setting up OpenClaw on Oracle Cloud
   - Looking for low-cost VPS hosting for OpenClaw
   - Want 24/7 OpenClaw on a small server
+title: "Oracle Cloud"
 ---
 
 # OpenClaw on Oracle Cloud (OCI)
@@ -98,7 +99,7 @@ tailscale status
 ## 5) Install OpenClaw
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 source ~/.bashrc
 ```
 

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { describeGeminiVideo } from "./video.js";
 
 const resolveRequestUrl = (input: RequestInfo | URL) => {

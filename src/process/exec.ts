@@ -1,12 +1,33 @@
 import { execFile, spawn } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
-
 import { danger, shouldLogVerbose } from "../globals.js";
 import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Resolves a command for Windows compatibility.
+ * On Windows, non-.exe commands (like npm, pnpm) require their .cmd extension.
+ */
+function resolveCommand(command: string): string {
+  if (process.platform !== "win32") {
+    return command;
+  }
+  const basename = path.basename(command).toLowerCase();
+  // Skip if already has an extension (.cmd, .exe, .bat, etc.)
+  const ext = path.extname(basename);
+  if (ext) {
+    return command;
+  }
+  // Common npm-related commands that need .cmd extension on Windows
+  const cmdCommands = ["npm", "pnpm", "yarn", "npx"];
+  if (cmdCommands.includes(basename)) {
+    return `${command}.cmd`;
+  }
+  return command;
+}
 
 // Simple promise-wrapped execFile with optional verbosity logging.
 export async function runExec(
@@ -23,7 +44,7 @@ export async function runExec(
           encoding: "utf8" as const,
         };
   try {
-    const { stdout, stderr } = await execFileAsync(command, args, options);
+    const { stdout, stderr } = await execFileAsync(resolveCommand(command), args, options);
     if (shouldLogVerbose()) {
       if (stdout.trim()) {
         logDebug(stdout.trim());
@@ -90,7 +111,7 @@ export async function runCommandWithTimeout(
   }
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const child = spawn(argv[0], argv.slice(1), {
+  const child = spawn(resolveCommand(argv[0]), argv.slice(1), {
     stdio,
     cwd,
     env: resolvedEnv,

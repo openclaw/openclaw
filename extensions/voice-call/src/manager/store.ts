@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-
 import { CallRecordSchema, TerminalStates, type CallId, type CallRecord } from "../types.js";
 
 export function persistCallRecord(storePath: string, call: CallRecord): void {

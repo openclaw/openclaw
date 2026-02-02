@@ -4,6 +4,7 @@ read_when:
   - Setting up BlueBubbles channel
   - Troubleshooting webhook pairing
   - Configuring iMessage on macOS
+title: "BlueBubbles"
 ---
 
 # BlueBubbles (macOS REST)

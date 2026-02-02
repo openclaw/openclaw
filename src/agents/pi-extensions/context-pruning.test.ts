@@ -1,15 +1,13 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-
-import { getContextPruningRuntime, setContextPruningRuntime } from "./context-pruning/runtime.js";
-
 import {
   computeEffectiveSettings,
   default as contextPruningExtension,
   DEFAULT_CONTEXT_PRUNING_SETTINGS,
   pruneContextMessages,
 } from "./context-pruning.js";
+import { getContextPruningRuntime, setContextPruningRuntime } from "./context-pruning/runtime.js";
 
 function toolText(msg: AgentMessage): string {
   if (msg.role !== "toolResult") {

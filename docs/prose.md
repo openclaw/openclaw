@@ -4,6 +4,7 @@ read_when:
   - You want to run or write .prose workflows
   - You want to enable the OpenProse plugin
   - You need to understand state storage
+title: "OpenProse"
 ---
 
 # OpenProse

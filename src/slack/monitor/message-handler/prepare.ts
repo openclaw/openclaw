@@ -1,7 +1,10 @@
+import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
+import type { ResolvedSlackAccount } from "../../accounts.js";
+import type { SlackMessageEvent } from "../../types.js";
+import type { PreparedSlackMessage } from "./types.js";
 import { resolveAckReaction } from "../../../agents/identity.js";
 import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../../auto-reply/commands-registry.js";
-import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
 import {
   formatInboundEnvelope,
   formatThreadStarterEnvelope,
@@ -16,37 +19,31 @@ import {
   buildMentionRegexes,
   matchesMentionWithExplicit,
 } from "../../../auto-reply/reply/mentions.js";
+import {
+  shouldAckReaction as shouldAckReactionGate,
+  type AckReactionScope,
+} from "../../../channels/ack-reactions.js";
+import { formatAllowlistMatchMeta } from "../../../channels/allowlist-match.js";
+import { resolveControlCommandGate } from "../../../channels/command-gating.js";
+import { resolveConversationLabel } from "../../../channels/conversation-label.js";
+import { logInboundDrop } from "../../../channels/logging.js";
+import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating.js";
+import { recordInboundSession } from "../../../channels/session.js";
+import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { buildPairingReply } from "../../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
-import {
-  shouldAckReaction as shouldAckReactionGate,
-  type AckReactionScope,
-} from "../../../channels/ack-reactions.js";
-import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating.js";
-import { resolveConversationLabel } from "../../../channels/conversation-label.js";
-import { resolveControlCommandGate } from "../../../channels/command-gating.js";
-import { logInboundDrop } from "../../../channels/logging.js";
-import { formatAllowlistMatchMeta } from "../../../channels/allowlist-match.js";
-import { recordInboundSession } from "../../../channels/session.js";
-import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
-
-import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
-import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackThreadContext } from "../../threading.js";
-
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
 import { resolveSlackMedia, resolveSlackThreadStarter } from "../media.js";
-
-import type { PreparedSlackMessage } from "./types.js";
 
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;

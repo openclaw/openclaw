@@ -3,6 +3,7 @@ summary: "Use MiniMax M2.1 in OpenClaw"
 read_when:
   - You want MiniMax models in OpenClaw
   - You need MiniMax setup guidance
+title: "MiniMax"
 ---
 
 # MiniMax
@@ -43,9 +44,9 @@ MiniMax highlights these improvements in M2.1:
 Enable the bundled OAuth plugin and authenticate:
 
 ```bash
-moltbot plugins enable minimax-portal-auth  # skip if already loaded.
-moltbot gateway restart  # restart if gateway is already running
-moltbot onboard --auth-choice minimax-portal
+openclaw plugins enable minimax-portal-auth  # skip if already loaded.
+openclaw gateway restart  # restart if gateway is already running
+openclaw onboard --auth-choice minimax-portal
 ```
 
 You will be prompted to select an endpoint:
@@ -53,7 +54,7 @@ You will be prompted to select an endpoint:
 - **Global** - International users (`api.minimax.io`)
 - **CN** - Users in China (`api.minimaxi.com`)
 
-See [MiniMax OAuth plugin README](https://github.com/moltbot/moltbot/tree/main/extensions/minimax-portal-auth) for details.
+See [MiniMax OAuth plugin README](https://github.com/openclaw/openclaw/tree/main/extensions/minimax-portal-auth) for details.
 
 ### MiniMax M2.1 (API key)
 

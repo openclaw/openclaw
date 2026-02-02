@@ -1,13 +1,12 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-
+import type { RuntimeEnv } from "../../runtime.js";
+import type { ModelRow } from "./list.types.js";
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import { parseModelRef } from "../../agents/model-selection.js";
 import { loadConfig } from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { loadModelRegistry, toModelRow } from "./list.registry.js";
 import { printModelTable } from "./list.table.js";
-import type { ModelRow } from "./list.types.js";
 import { DEFAULT_PROVIDER, ensureFlagCompatibility, modelKey } from "./shared.js";
 
 export async function modelsListCommand(

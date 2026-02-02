@@ -3,6 +3,7 @@ summary: "Model provider overview with example configs + CLI flows"
 read_when:
   - You need a provider-by-provider model setup reference
   - You want example configs or CLI onboarding commands for model providers
+title: "Model Providers"
 ---
 
 # Model providers
@@ -80,7 +81,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `google/gemini-3-pro-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
 
-### Google Vertex / Antigravity / Gemini CLI
+### Google Vertex, Antigravity, and Gemini CLI
 
 - Providers: `google-vertex`, `google-antigravity`, `google-gemini-cli`
 - Auth: Vertex uses gcloud ADC; Antigravity/Gemini CLI use their respective auth flows
@@ -132,14 +133,17 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
 - Example model: `moonshot/kimi-k2.5`
-- Kimi K2 model IDs:
-  {/_ moonshot-kimi-k2-model-refs:start _/}
-  - `moonshot/kimi-k2.5`
-  - `moonshot/kimi-k2-0905-preview`
-  - `moonshot/kimi-k2-turbo-preview`
-  - `moonshot/kimi-k2-thinking`
-  - `moonshot/kimi-k2-thinking-turbo`
-    {/_ moonshot-kimi-k2-model-refs:end _/}
+
+Kimi K2 model IDs:
+
+{/_ moonshot-kimi-k2-model-refs:start _/ && null}
+
+- `moonshot/kimi-k2.5`
+- `moonshot/kimi-k2-0905-preview`
+- `moonshot/kimi-k2-turbo-preview`
+- `moonshot/kimi-k2-thinking`
+- `moonshot/kimi-k2-thinking-turbo`
+  {/_ moonshot-kimi-k2-model-refs:end _/ && null}
 
 ```json5
 {

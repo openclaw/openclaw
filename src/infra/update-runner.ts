@@ -1,12 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
-import { compareSemverStrings } from "./update-check.js";
-import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
-import { detectGlobalInstallManagerForRoot, globalInstallArgs } from "./update-global.js";
 import { trimLogTail } from "./restart-sentinel.js";
+import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
+import { compareSemverStrings } from "./update-check.js";
+import { detectGlobalInstallManagerForRoot, globalInstallArgs } from "./update-global.js";
 
 export type UpdateStepResult = {
   name: string;

@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
-
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
-import { buildCommandContext, handleCommands } from "./commands.js";
 import { extractMessageText } from "./commands-subagents.js";
+import { buildCommandContext, handleCommands } from "./commands.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
 import { parseInlineDirectives } from "./directive-handling.js";

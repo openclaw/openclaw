@@ -1,5 +1,4 @@
 import path from "node:path";
-
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 import {

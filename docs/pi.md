@@ -1,3 +1,7 @@
+---
+title: "Pi Integration Architecture"
+---
+
 # Pi Integration Architecture
 
 This document describes how OpenClaw integrates with [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) and its sibling packages (`pi-ai`, `pi-agent-core`, `pi-tui`) to power its AI agent capabilities.
@@ -155,7 +159,20 @@ const result = await runEmbeddedPiAgent({
 Inside `runEmbeddedAttempt()` (called by `runEmbeddedPiAgent()`), the pi SDK is used:
 
 ```typescript
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  SessionManager,
+  SettingsManager,
+} from "@mariozechner/pi-coding-agent";
+
+const resourceLoader = new DefaultResourceLoader({
+  cwd: resolvedWorkspace,
+  agentDir,
+  settingsManager,
+  additionalExtensionPaths,
+});
+await resourceLoader.reload();
 
 const { session } = await createAgentSession({
   cwd: resolvedWorkspace,
@@ -164,15 +181,14 @@ const { session } = await createAgentSession({
   modelRegistry: params.modelRegistry,
   model: params.model,
   thinkingLevel: mapThinkingLevel(params.thinkLevel),
-  systemPrompt: createSystemPromptOverride(appendPrompt),
   tools: builtInTools,
   customTools: allCustomTools,
   sessionManager,
   settingsManager,
-  skills: [],
-  contextFiles: [],
-  additionalExtensionPaths,
+  resourceLoader,
 });
+
+applySystemPromptOverrideToSession(session, systemPromptOverride);
 ```
 
 ### 3. Event Subscription
@@ -260,13 +276,13 @@ This ensures OpenClaw's policy filtering, sandbox integration, and extended tool
 
 ## System Prompt Construction
 
-The system prompt is built in `buildAgentSystemPrompt()` (`system-prompt.ts`). It assembles a full prompt with sections including Tooling, Tool Call Style, OpenClaw CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata, plus Memory and Reactions when enabled, and optional context files and extra system prompt content. Sections are trimmed for minimal prompt mode used by subagents.
+The system prompt is built in `buildAgentSystemPrompt()` (`system-prompt.ts`). It assembles a full prompt with sections including Tooling, Tool Call Style, Safety guardrails, OpenClaw CLI reference, Skills, Docs, Workspace, Sandbox, Messaging, Reply Tags, Voice, Silent Replies, Heartbeats, Runtime metadata, plus Memory and Reactions when enabled, and optional context files and extra system prompt content. Sections are trimmed for minimal prompt mode used by subagents.
 
-The prompt is passed to pi via `systemPrompt` override:
+The prompt is applied after session creation via `applySystemPromptOverrideToSession()`:
 
 ```typescript
-const systemPrompt = createSystemPromptOverride(appendPrompt);
-// Returns: (defaultPrompt: string) => trimmed custom prompt
+const systemPromptOverride = createSystemPromptOverride(appendPrompt);
+applySystemPromptOverrideToSession(session, systemPromptOverride);
 ```
 
 ## Session Management

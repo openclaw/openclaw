@@ -3,6 +3,7 @@ summary: "Usage tracking surfaces and credential requirements"
 read_when:
   - You are wiring provider usage/quota surfaces
   - You need to explain usage tracking behavior or auth requirements
+title: "Usage Tracking"
 ---
 
 # Usage tracking

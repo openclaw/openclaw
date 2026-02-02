@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import {
   DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
   ensurePiCompactionReserveTokens,

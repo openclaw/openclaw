@@ -3,6 +3,7 @@ summary: "Browser-based control UI for the Gateway (chat, nodes, config)"
 read_when:
   - You want to operate the Gateway from a browser
   - You want Tailnet access without SSH tunnels
+title: "Control UI"
 ---
 
 # Control UI (browser)
@@ -28,6 +29,36 @@ Auth is supplied during the WebSocket handshake via:
 - `connect.params.auth.password`
   The dashboard settings panel lets you store a token; passwords are not persisted.
   The onboarding wizard generates a gateway token by default, so paste it here on first connect.
+
+## Device pairing (first connection)
+
+When you connect to the Control UI from a new browser or device, the Gateway
+requires a **one-time pairing approval** — even if you're on the same Tailnet
+with `gateway.auth.allowTailscale: true`. This is a security measure to prevent
+unauthorized access.
+
+**What you'll see:** "disconnected (1008): pairing required"
+
+**To approve the device:**
+
+```bash
+# List pending requests
+openclaw devices list
+
+# Approve by request ID
+openclaw devices approve <requestId>
+```
+
+Once approved, the device is remembered and won't require re-approval unless
+you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
+[Devices CLI](/cli/devices) for token rotation and revocation.
+
+**Notes:**
+
+- Local connections (`127.0.0.1`) are auto-approved.
+- Remote connections (LAN, Tailnet, etc.) require explicit approval.
+- Each browser profile generates a unique device ID, so switching browsers or
+  clearing browser data will require re-pairing.
 
 ## What it can do (today)
 

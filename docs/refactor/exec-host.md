@@ -4,6 +4,7 @@ read_when:
   - Designing exec host routing or exec approvals
   - Implementing node runner + UI IPC
   - Adding exec host security modes and slash commands
+title: "Exec Host Refactor"
 ---
 
 # Exec host refactor plan

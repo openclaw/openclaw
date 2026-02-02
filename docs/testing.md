@@ -4,6 +4,7 @@ read_when:
   - Running tests locally or in CI
   - Adding regressions for model/provider bugs
   - Debugging gateway + agent behavior
+title: "Testing"
 ---
 
 # Testing
@@ -21,7 +22,7 @@ This doc is a “how we test” guide:
 
 Most days:
 
-- Full gate (expected before push): `pnpm lint && pnpm build && pnpm test`
+- Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
 
 When you touch tests or want extra confidence:
 

@@ -49,33 +49,39 @@ export function extractMessageText(content: unknown): string {
     return "";
   }
 
-  return content
-    .map((block: any) => {
-      if (block.inline && Array.isArray(block.inline)) {
-        return block.inline
-          .map((item: any) => {
-            if (typeof item === "string") {
-              return item;
-            }
-            if (item && typeof item === "object") {
-              if (item.ship) {
-                return item.ship;
-              }
-              if (item.break !== undefined) {
-                return "\n";
-              }
-              if (item.link && item.link.href) {
-                return item.link.href;
-              }
-            }
-            return "";
-          })
-          .join("");
-      }
-      return "";
-    })
-    .join("\n")
-    .trim();
+  return (
+    content
+      // oxlint-disable-next-line typescript/no-explicit-any
+      .map((block: any) => {
+        if (block.inline && Array.isArray(block.inline)) {
+          return (
+            block.inline
+              // oxlint-disable-next-line typescript/no-explicit-any
+              .map((item: any) => {
+                if (typeof item === "string") {
+                  return item;
+                }
+                if (item && typeof item === "object") {
+                  if (item.ship) {
+                    return item.ship;
+                  }
+                  if (item.break !== undefined) {
+                    return "\n";
+                  }
+                  if (item.link && item.link.href) {
+                    return item.link.href;
+                  }
+                }
+                return "";
+              })
+              .join("")
+          );
+        }
+        return "";
+      })
+      .join("\n")
+      .trim()
+  );
 }
 
 export function isSummarizationRequest(messageText: string): boolean {

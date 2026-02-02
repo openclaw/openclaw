@@ -3,6 +3,7 @@ summary: "Use Qwen OAuth (free tier) in OpenClaw"
 read_when:
   - You want to use Qwen with OpenClaw
   - You want free-tier OAuth access to Qwen Coder
+title: "Qwen"
 ---
 
 # Qwen

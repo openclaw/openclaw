@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import sharp from "sharp";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { optimizeImageToPng } from "../media/image-ops.js";
 import { loadWebMedia, optimizeImageToJpeg } from "./media.js";
 
