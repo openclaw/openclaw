@@ -171,6 +171,7 @@ Docs: https://docs.openclaw.ai
 - BlueBubbles: debounce by messageId to preserve attachments in text+image messages. (#4984)
 - Routing: prefer requesterOrigin over stale session entries for sub-agent announce delivery. (#4957)
 - Extensions: restore embedded extension discovery typings.
+- Agents: repair malformed tool calls and session transcripts. (#7323)
 - CLI: fix `tui:dev` port resolution.
 - LINE: fix status command TypeError. (#4651)
 - OAuth: skip expired-token warnings when refresh tokens are still valid. (#4593)
