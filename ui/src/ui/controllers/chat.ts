@@ -107,7 +107,6 @@ export async function sendChatMessage(
   // Reset commands (/new, /reset) are processed by the server but not stored
   // in session history. Adding them optimistically would cause them to disappear
   // when history is reloaded after the command completes.
-  // See: https://github.com/openclaw/openclaw/issues/7189
   if (!isChatResetCommand(msg)) {
     state.chatMessages = [
       ...state.chatMessages,

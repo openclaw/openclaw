@@ -98,13 +98,14 @@ describe("handleChatEvent", () => {
 describe("sendChatMessage", () => {
   function createMockClient(): { client: GatewayBrowserClient; request: ReturnType<typeof vi.fn> } {
     const request = vi.fn().mockResolvedValue({});
+    const mock = {
+      request,
+      connected: true,
+      start: vi.fn(),
+      stop: vi.fn(),
+    } satisfies Partial<GatewayBrowserClient>;
     return {
-      client: {
-        request,
-        connected: true,
-        start: vi.fn(),
-        stop: vi.fn(),
-      } as unknown as GatewayBrowserClient,
+      client: mock as unknown as GatewayBrowserClient,
       request,
     };
   }
