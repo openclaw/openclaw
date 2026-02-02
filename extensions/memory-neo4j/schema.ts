@@ -1,0 +1,186 @@
+/**
+ * Graph schema types, Cypher query templates, and constants for memory-neo4j.
+ */
+
+// ============================================================================
+// Node Types
+// ============================================================================
+
+export type MemoryCategory = "preference" | "fact" | "decision" | "entity" | "other";
+export type EntityType = "person" | "organization" | "location" | "event" | "concept";
+export type ExtractionStatus = "pending" | "complete" | "failed" | "skipped";
+export type MemorySource = "user" | "auto-capture" | "memory-watcher" | "import";
+
+export type MemoryNode = {
+  id: string;
+  text: string;
+  embedding: number[];
+  importance: number;
+  category: MemoryCategory;
+  source: MemorySource;
+  createdAt: string;
+  updatedAt: string;
+  extractionStatus: ExtractionStatus;
+  agentId: string;
+  sessionKey?: string;
+};
+
+export type EntityNode = {
+  id: string;
+  name: string;
+  type: EntityType;
+  aliases: string[];
+  embedding?: number[];
+  description?: string;
+  firstSeen: string;
+  lastSeen: string;
+  mentionCount: number;
+};
+
+export type TagNode = {
+  id: string;
+  name: string;
+  category: string;
+  createdAt: string;
+};
+
+// ============================================================================
+// Extraction Types
+// ============================================================================
+
+export type ExtractedEntity = {
+  name: string;
+  type: EntityType;
+  aliases?: string[];
+  description?: string;
+};
+
+export type ExtractedRelationship = {
+  source: string;
+  target: string;
+  type: string;
+  confidence: number;
+};
+
+export type ExtractedTag = {
+  name: string;
+  category: string;
+};
+
+export type ExtractionResult = {
+  entities: ExtractedEntity[];
+  relationships: ExtractedRelationship[];
+  tags: ExtractedTag[];
+};
+
+// ============================================================================
+// Auto-Capture Types
+// ============================================================================
+
+export type CaptureItem = {
+  text: string;
+  category: MemoryCategory;
+  importance: number;
+};
+
+export type CaptureDecision = {
+  memories: CaptureItem[];
+};
+
+// ============================================================================
+// Search Types
+// ============================================================================
+
+export type SearchSignalResult = {
+  id: string;
+  text: string;
+  category: string;
+  importance: number;
+  createdAt: string;
+  score: number;
+};
+
+export type HybridSearchResult = {
+  id: string;
+  text: string;
+  category: string;
+  importance: number;
+  createdAt: string;
+  score: number;
+};
+
+// ============================================================================
+// Input Types
+// ============================================================================
+
+export type StoreMemoryInput = {
+  id: string;
+  text: string;
+  embedding: number[];
+  importance: number;
+  category: MemoryCategory;
+  source: MemorySource;
+  extractionStatus: ExtractionStatus;
+  agentId: string;
+  sessionKey?: string;
+};
+
+export type MergeEntityInput = {
+  id: string;
+  name: string;
+  type: EntityType;
+  aliases?: string[];
+  description?: string;
+  embedding?: number[];
+};
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+export const MEMORY_CATEGORIES = [
+  "preference",
+  "fact",
+  "decision",
+  "entity",
+  "other",
+] as const;
+
+export const ENTITY_TYPES = [
+  "person",
+  "organization",
+  "location",
+  "event",
+  "concept",
+] as const;
+
+export const ALLOWED_RELATIONSHIP_TYPES = new Set([
+  "WORKS_AT",
+  "LIVES_AT",
+  "KNOWS",
+  "MARRIED_TO",
+  "PREFERS",
+  "DECIDED",
+  "RELATED_TO",
+]);
+
+// ============================================================================
+// Lucene Helpers
+// ============================================================================
+
+const LUCENE_SPECIAL_CHARS = /[+\-&|!(){}[\]^"~*?:\\/]/g;
+
+/**
+ * Escape special characters for Lucene fulltext search queries.
+ */
+export function escapeLucene(query: string): string {
+  return query.replace(LUCENE_SPECIAL_CHARS, "\\$&");
+}
+
+/**
+ * Validate that a relationship type is in the allowed set.
+ * Prevents Cypher injection via dynamic relationship type.
+ */
+export function validateRelationshipType(type: string): boolean {
+  return ALLOWED_RELATIONSHIP_TYPES.has(type);
+}
