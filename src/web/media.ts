@@ -200,7 +200,16 @@ async function loadWebMediaInternal(
   };
 
   if (/^https?:\/\//i.test(mediaUrl)) {
-    const fetched = await fetchRemoteMedia({ url: mediaUrl });
+    // Enforce a download cap during fetch to avoid unbounded memory usage.
+    // For optimized images, allow fetching larger payloads before compression.
+    const defaultFetchCap = maxBytesForKind("unknown");
+    const fetchCap =
+      maxBytes === undefined
+        ? defaultFetchCap
+        : optimizeImages
+          ? Math.max(maxBytes, defaultFetchCap)
+          : maxBytes;
+    const fetched = await fetchRemoteMedia({ url: mediaUrl, maxBytes: fetchCap });
     const { buffer, contentType, fileName } = fetched;
     const kind = mediaKindFromMime(contentType);
     return await clampAndFinalize({ buffer, contentType, kind, fileName });
