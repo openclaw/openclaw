@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as ssrf from "../../infra/net/ssrf.js";
 
 // Store original fetch
 const originalFetch = globalThis.fetch;
@@ -171,11 +172,21 @@ describe("resolveSlackMedia", () => {
   beforeEach(() => {
     mockFetch = vi.fn();
     globalThis.fetch = mockFetch as typeof fetch;
+    vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation(async (hostname) => {
+      const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+      const addresses = ["93.184.216.34"];
+      return {
+        hostname: normalized,
+        addresses,
+        lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+      };
+    });
   });
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.resetModules();
+    vi.restoreAllMocks();
   });
 
   it("prefers url_private_download over url_private", async () => {
