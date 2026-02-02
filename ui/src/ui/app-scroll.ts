@@ -64,7 +64,7 @@ export function scheduleChatScroll(host: ScrollHost, force = false) {
       target.scrollTop = target.scrollHeight;
       host.chatUserNearBottom = true;
       host.chatNewMessagesBelow = false;
-      const retryDelay = force ? 150 : 120;
+      const retryDelay = effectiveForce ? 150 : 120;
       host.chatScrollTimeout = window.setTimeout(() => {
         host.chatScrollTimeout = null;
         const latest = pickScrollTarget();
