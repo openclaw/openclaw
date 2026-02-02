@@ -266,7 +266,10 @@ Rules:
 - Preserve placeholders exactly: __OC_I18N_####__.
 - Do not remove, reorder, or summarize content.
 - Use fluent, idiomatic technical Chinese; avoid slang or jokes.
-- Keep product names in English: OpenClaw, Gateway, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- Use neutral documentation tone; prefer “你/你的”, avoid “您/您的”.
+- Keep product names in English: OpenClaw, Pi, WhatsApp, Telegram, Discord, iMessage, Slack, Microsoft Teams, Google Chat, Signal.
+- For the OpenClaw Gateway, use “Gateway网关”.
+- Keep these terms in English: Skills, local loopback, Tailscale.
 - Never output an empty response; if unsure, return the source text unchanged.
 
 %s
