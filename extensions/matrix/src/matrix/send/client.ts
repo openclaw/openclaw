@@ -1,7 +1,7 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import type { CoreConfig } from "../../types.js";
 import { getMatrixRuntime } from "../../runtime.js";
-import { getActiveMatrixClient } from "../active-client.js";
+import { getActiveMatrixClient, getAnyActiveMatrixClient } from "../active-client.js";
 import {
   createMatrixClient,
   isBunRuntime,
@@ -17,8 +17,16 @@ export function ensureNodeRuntime() {
   }
 }
 
-export function resolveMediaMaxBytes(): number | undefined {
+export function resolveMediaMaxBytes(accountId?: string): number | undefined {
   const cfg = getCore().config.loadConfig() as CoreConfig;
+  // Check account-specific config first
+  if (accountId) {
+    const accountConfig = cfg.channels?.matrix?.accounts?.[accountId];
+    if (typeof accountConfig?.mediaMaxMb === "number") {
+      return accountConfig.mediaMaxMb * 1024 * 1024;
+    }
+  }
+  // Fall back to top-level config
   if (typeof cfg.channels?.matrix?.mediaMaxMb === "number") {
     return cfg.channels.matrix.mediaMaxMb * 1024 * 1024;
   }
@@ -28,29 +36,40 @@ export function resolveMediaMaxBytes(): number | undefined {
 export async function resolveMatrixClient(opts: {
   client?: MatrixClient;
   timeoutMs?: number;
+  accountId?: string;
 }): Promise<{ client: MatrixClient; stopOnDone: boolean }> {
   ensureNodeRuntime();
   if (opts.client) {
     return { client: opts.client, stopOnDone: false };
   }
-  const active = getActiveMatrixClient();
+  // Try to get the client for the specific account
+  const active = getActiveMatrixClient(opts.accountId);
   if (active) {
     return { client: active, stopOnDone: false };
+  }
+  // Only fall back to any active client when no specific account is requested
+  if (!opts.accountId) {
+    const anyActive = getAnyActiveMatrixClient();
+    if (anyActive) {
+      return { client: anyActive, stopOnDone: false };
+    }
   }
   const shouldShareClient = Boolean(process.env.OPENCLAW_GATEWAY_PORT);
   if (shouldShareClient) {
     const client = await resolveSharedMatrixClient({
       timeoutMs: opts.timeoutMs,
+      accountId: opts.accountId,
     });
     return { client, stopOnDone: false };
   }
-  const auth = await resolveMatrixAuth();
+  const auth = await resolveMatrixAuth({ accountId: opts.accountId });
   const client = await createMatrixClient({
     homeserver: auth.homeserver,
     userId: auth.userId,
     accessToken: auth.accessToken,
     encryption: auth.encryption,
     localTimeoutMs: opts.timeoutMs,
+    accountId: opts.accountId,
   });
   if (auth.encryption && client.crypto) {
     try {
