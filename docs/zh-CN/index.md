@@ -16,6 +16,8 @@ x-i18n:
 
 > _"EXFOLIATE! EXFOLIATE!"_ — 大概是一只太空龙虾说的
 
+> **中文文档提示：** 本页及其他中文文档由自动化翻译流水线生成。如果你发现翻译问题，请在 https://github.com/openclaw/openclaw/issues/6995 反馈（不要提交 PR）。需要支持请到 Discord 的 #help-中文：https://discord.com/channels/1456350064065904867/1466722439789674741。
+
 <p align="center">
     <img
         src="/assets/openclaw-logo-text-dark.png"
@@ -62,7 +64,10 @@ OpenClaw 同时也驱动着 OpenClaw 助手。
 远程访问： [Web 界面](/web) 和 [Tailscale](/gateway/tailscale)
 
 <p align="center">
-  <img src="/whatsapp-openclaw.jpg" alt="OpenClaw" width="420" />
+  <img src="/whatsapp-openclaw.jpg" alt="OpenClaw（英文原图）" width="360" />
+  <img src="/whatsapp-openclaw-ai-zh.jpg" alt="OpenClaw（AI 自动翻译）" width="360" />
+  <br />
+  <em>左：英文原图 · 右：AI 自动翻译（玩笑版）</em>
 </p>
 
 ## 工作原理
