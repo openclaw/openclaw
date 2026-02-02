@@ -16,7 +16,7 @@ x-i18n:
 
 > _"EXFOLIATE! EXFOLIATE!"_ — 大概是一只太空龙虾说的
 
-> **中文文档提示：** 本页及其他中文文档由自动化翻译流水线生成。如果你发现翻译问题，请在 https://github.com/openclaw/openclaw/issues/6995 反馈（不要提交 PR）。需要支持请到 Discord 的 #help-中文：https://discord.com/channels/1456350064065904867/1466722439789674741。
+> **中文文档提示：** 本页及其他中文文档由自动化翻译流水线生成。如果你发现翻译问题，请在 [#6995](https://github.com/openclaw/openclaw/issues/6995) 反馈（不要提交 PR）。我们正在积极扩展对中文用户、模型与消息平台的支持，更多内容即将推出！需要支持请到 Discord 的 [#help-中文](https://discord.com/channels/1456350064065904867/1466722439789674741)。
 
 <p align="center">
     <img
