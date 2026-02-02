@@ -67,6 +67,11 @@ final class GatewayConnectionController {
             port: port,
             useTLS: tlsParams?.required == true)
         else { return }
+        GatewaySettingsStore.saveLastGatewayConnection(
+            host: host,
+            port: port,
+            useTLS: tlsParams?.required == true,
+            stableID: gateway.stableID)
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
@@ -81,17 +86,60 @@ final class GatewayConnectionController {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-        let stableID = self.manualStableID(host: host, port: port)
-        let tlsParams = self.resolveManualTLSParams(stableID: stableID, tlsEnabled: useTLS)
+        let resolvedUseTLS = useTLS || self.shouldForceTLS(host: host)
+        guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
+        else { return }
+        let stableID = self.manualStableID(host: host, port: resolvedPort)
+        let tlsParams = self.resolveManualTLSParams(
+            stableID: stableID,
+            tlsEnabled: resolvedUseTLS,
+            allowTOFUReset: self.shouldForceTLS(host: host))
         guard let url = self.buildGatewayURL(
             host: host,
-            port: port,
+            port: resolvedPort,
             useTLS: tlsParams?.required == true)
         else { return }
+        GatewaySettingsStore.saveLastGatewayConnection(
+            host: host,
+            port: resolvedPort,
+            useTLS: tlsParams?.required == true,
+            stableID: stableID)
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
             gatewayStableID: stableID,
+            tls: tlsParams,
+            token: token,
+            password: password)
+    }
+
+    func connectLastKnown() async {
+        guard let last = GatewaySettingsStore.loadLastGatewayConnection() else { return }
+        let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
+        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+        let resolvedUseTLS = last.useTLS || self.shouldForceTLS(host: last.host)
+        let tlsParams = self.resolveManualTLSParams(
+            stableID: last.stableID,
+            tlsEnabled: resolvedUseTLS,
+            allowTOFUReset: self.shouldForceTLS(host: last.host))
+        guard let url = self.buildGatewayURL(
+            host: last.host,
+            port: last.port,
+            useTLS: tlsParams?.required == true)
+        else { return }
+        if resolvedUseTLS != last.useTLS {
+            GatewaySettingsStore.saveLastGatewayConnection(
+                host: last.host,
+                port: last.port,
+                useTLS: resolvedUseTLS,
+                stableID: last.stableID)
+        }
+        self.didAutoConnect = true
+        self.startAutoConnect(
+            url: url,
+            gatewayStableID: last.stableID,
             tls: tlsParams,
             token: token,
             password: password)
@@ -143,9 +191,13 @@ final class GatewayConnectionController {
             let manualPort = defaults.integer(forKey: "gateway.manual.port")
             let resolvedPort = manualPort > 0 ? manualPort : 18789
             let manualTLS = defaults.bool(forKey: "gateway.manual.tls")
+            let resolvedUseTLS = manualTLS || self.shouldForceTLS(host: manualHost)
 
             let stableID = self.manualStableID(host: manualHost, port: resolvedPort)
-            let tlsParams = self.resolveManualTLSParams(stableID: stableID, tlsEnabled: manualTLS)
+            let tlsParams = self.resolveManualTLSParams(
+                stableID: stableID,
+                tlsEnabled: resolvedUseTLS,
+                allowTOFUReset: self.shouldForceTLS(host: manualHost))
 
             guard let url = self.buildGatewayURL(
                 host: manualHost,
@@ -169,21 +221,60 @@ final class GatewayConnectionController {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
         let candidates = [preferredStableID, lastDiscoveredStableID].filter { !$0.isEmpty }
-        guard let targetStableID = candidates.first(where: { id in
+        if let targetStableID = candidates.first(where: { id in
             self.gateways.contains(where: { $0.stableID == id })
-        }) else { return }
+        }) {
+            guard let target = self.gateways.first(where: { $0.stableID == targetStableID }) else { return }
+            guard let host = self.resolveGatewayHost(target) else { return }
+            let port = target.gatewayPort ?? 18789
+            let tlsParams = self.resolveDiscoveredTLSParams(gateway: target)
+            guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true)
+            else { return }
 
-        guard let target = self.gateways.first(where: { $0.stableID == targetStableID }) else { return }
-        guard let host = self.resolveGatewayHost(target) else { return }
-        let port = target.gatewayPort ?? 18789
-        let tlsParams = self.resolveDiscoveredTLSParams(gateway: target)
-        guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true)
+            self.didAutoConnect = true
+            self.startAutoConnect(
+                url: url,
+                gatewayStableID: target.stableID,
+                tls: tlsParams,
+                token: token,
+                password: password)
+            return
+        }
+
+        let lastKnown = GatewaySettingsStore.loadLastGatewayConnection()
+        if self.gateways.count == 1, lastKnown == nil, let gateway = self.gateways.first {
+            guard let host = self.resolveGatewayHost(gateway) else { return }
+            let port = gateway.gatewayPort ?? 18789
+            let tlsParams = self.resolveDiscoveredTLSParams(gateway: gateway)
+            guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true)
+            else { return }
+
+            self.didAutoConnect = true
+            self.startAutoConnect(
+                url: url,
+                gatewayStableID: gateway.stableID,
+                tls: tlsParams,
+                token: token,
+                password: password)
+            return
+        }
+
+        guard let lastKnown else { return }
+        let resolvedUseTLS = lastKnown.useTLS || self.shouldForceTLS(host: lastKnown.host)
+        let tlsParams = self.resolveManualTLSParams(
+            stableID: lastKnown.stableID,
+            tlsEnabled: resolvedUseTLS,
+            allowTOFUReset: self.shouldForceTLS(host: lastKnown.host))
+        guard let url = self.buildGatewayURL(
+            host: lastKnown.host,
+            port: lastKnown.port,
+            useTLS: tlsParams?.required == true)
         else { return }
 
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
-            gatewayStableID: target.stableID,
+            gatewayStableID: lastKnown.stableID,
             tls: tlsParams,
             token: token,
             password: password)
@@ -212,7 +303,7 @@ final class GatewayConnectionController {
         password: String?)
     {
         guard let appModel else { return }
-        let connectOptions = self.makeConnectOptions()
+        let connectOptions = self.makeConnectOptions(stableID: gatewayStableID)
 
         Task { [weak appModel] in
             guard let appModel else { return }
@@ -244,13 +335,17 @@ final class GatewayConnectionController {
         return nil
     }
 
-    private func resolveManualTLSParams(stableID: String, tlsEnabled: Bool) -> GatewayTLSParams? {
+    private func resolveManualTLSParams(
+        stableID: String,
+        tlsEnabled: Bool,
+        allowTOFUReset: Bool = false) -> GatewayTLSParams?
+    {
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if tlsEnabled || stored != nil {
             return GatewayTLSParams(
                 required: true,
                 expectedFingerprint: stored,
-                allowTOFU: stored == nil,
+                allowTOFU: stored == nil || allowTOFUReset,
                 storeKey: stableID)
         }
 
@@ -258,11 +353,11 @@ final class GatewayConnectionController {
     }
 
     private func resolveGatewayHost(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
-        if let lanHost = gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines), !lanHost.isEmpty {
-            return lanHost
-        }
         if let tailnet = gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines), !tailnet.isEmpty {
             return tailnet
+        }
+        if let lanHost = gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines), !lanHost.isEmpty {
+            return lanHost
         }
         return nil
     }
@@ -276,16 +371,20 @@ final class GatewayConnectionController {
         return components.url
     }
 
+    private func shouldForceTLS(host: String) -> Bool {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if trimmed.isEmpty { return false }
+        return trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.")
+    }
+
     private func manualStableID(host: String, port: Int) -> String {
         "manual|\(host.lowercased())|\(port)"
     }
 
-    private func makeConnectOptions() -> GatewayConnectOptions {
+    private func makeConnectOptions(stableID: String?) -> GatewayConnectOptions {
         let defaults = UserDefaults.standard
         let displayName = self.resolvedDisplayName(defaults: defaults)
-        let manualClientId = defaults.string(forKey: "gateway.manual.clientId")?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedClientId = manualClientId?.isEmpty == false ? manualClientId! : "openclaw-ios"
+        let resolvedClientId = self.resolvedClientId(defaults: defaults, stableID: stableID)
 
         return GatewayConnectOptions(
             role: "node",
@@ -296,6 +395,31 @@ final class GatewayConnectionController {
             clientId: resolvedClientId,
             clientMode: "node",
             clientDisplayName: displayName)
+    }
+
+    private func resolvedClientId(defaults: UserDefaults, stableID: String?) -> String {
+        if let stableID,
+           let override = GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID) {
+            return override
+        }
+        let manualClientId = defaults.string(forKey: "gateway.manual.clientId")?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if manualClientId?.isEmpty == false {
+            return manualClientId!
+        }
+        return "openclaw-ios"
+    }
+
+    private func resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
+        if port > 0 {
+            return port <= 65535 ? port : nil
+        }
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty else { return nil }
+        if useTLS && self.shouldForceTLS(host: trimmedHost) {
+            return 443
+        }
+        return 18789
     }
 
     private func resolvedDisplayName(defaults: UserDefaults) -> String {

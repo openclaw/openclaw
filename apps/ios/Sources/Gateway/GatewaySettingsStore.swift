@@ -13,6 +13,11 @@ enum GatewaySettingsStore {
     private static let manualTlsDefaultsKey = "gateway.manual.tls"
     private static let manualPasswordDefaultsKey = "gateway.manual.password"
     private static let discoveryDebugLogsDefaultsKey = "gateway.discovery.debugLogs"
+    private static let lastGatewayHostDefaultsKey = "gateway.last.host"
+    private static let lastGatewayPortDefaultsKey = "gateway.last.port"
+    private static let lastGatewayTlsDefaultsKey = "gateway.last.tls"
+    private static let lastGatewayStableIDDefaultsKey = "gateway.last.stableID"
+    private static let clientIdOverrideDefaultsPrefix = "gateway.clientIdOverride."
 
     private static let instanceIdAccount = "instanceId"
     private static let preferredGatewayStableIDAccount = "preferredStableID"
@@ -107,6 +112,49 @@ enum GatewaySettingsStore {
             password,
             service: self.gatewayService,
             account: self.gatewayPasswordAccount(instanceId: instanceId))
+    }
+
+    static func saveLastGatewayConnection(host: String, port: Int, useTLS: Bool, stableID: String) {
+        let defaults = UserDefaults.standard
+        defaults.set(host, forKey: self.lastGatewayHostDefaultsKey)
+        defaults.set(port, forKey: self.lastGatewayPortDefaultsKey)
+        defaults.set(useTLS, forKey: self.lastGatewayTlsDefaultsKey)
+        defaults.set(stableID, forKey: self.lastGatewayStableIDDefaultsKey)
+    }
+
+    static func loadLastGatewayConnection() -> (host: String, port: Int, useTLS: Bool, stableID: String)? {
+        let defaults = UserDefaults.standard
+        let host = defaults.string(forKey: self.lastGatewayHostDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let port = defaults.integer(forKey: self.lastGatewayPortDefaultsKey)
+        let useTLS = defaults.bool(forKey: self.lastGatewayTlsDefaultsKey)
+        let stableID = defaults.string(forKey: self.lastGatewayStableIDDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        guard !host.isEmpty, port > 0, port <= 65535, !stableID.isEmpty else { return nil }
+        return (host: host, port: port, useTLS: useTLS, stableID: stableID)
+    }
+
+    static func loadGatewayClientIdOverride(stableID: String) -> String? {
+        let trimmedID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return nil }
+        let key = self.clientIdOverrideDefaultsPrefix + trimmedID
+        let value = UserDefaults.standard.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if value?.isEmpty == false { return value }
+        return nil
+    }
+
+    static func saveGatewayClientIdOverride(stableID: String, clientId: String?) {
+        let trimmedID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedID.isEmpty else { return }
+        let key = self.clientIdOverrideDefaultsPrefix + trimmedID
+        let trimmedClientId = clientId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmedClientId.isEmpty {
+            UserDefaults.standard.removeObject(forKey: key)
+        } else {
+            UserDefaults.standard.set(trimmedClientId, forKey: key)
+        }
     }
 
     private static func gatewayTokenAccount(instanceId: String) -> String {
