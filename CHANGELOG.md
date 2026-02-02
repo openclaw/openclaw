@@ -6,23 +6,32 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Docs: add direct BotFather link and verification reminder in Telegram setup. (#4064) Thanks @shatner.
-- Docs: add Mintlify language navigation for zh-Hans. (#6416) Thanks @joshp123.
+- Docs: onboarding/install/i18n/exec-approvals/Control UI/exe.dev/cacheRetention updates + misc nav/typos.
 - Telegram: use shared pairing store. (#6127) Thanks @obviyus.
 - Agents: add OpenRouter app attribution headers. (#5050) Thanks @alexanderatallah.
+- Agents: add system prompt safety guardrails. (#5445) Thanks @joshp123.
+- Agents: update pi-ai to 0.50.9 and rename cacheControlTtl -> cacheRetention (with back-compat mapping).
+- Discord: inherit thread parent bindings for routing. (#3892) Thanks @aerolalit.
+- Gateway: require TLS 1.3 minimum for TLS listeners. (#5970) Thanks @loganaden.
 
 ### Fixes
 
-- Docs: run oxfmt to fix format checks. (#6513) Thanks @app/clawdinator.
 - Auto-reply: avoid referencing workspace files in /new greeting prompt. (#5706) Thanks @bravostation.
 - Process: resolve Windows `spawn()` failures for npm-family CLIs by appending `.cmd` when needed. (#5815) Thanks @thejhinvirtuoso.
-- Docs: update MiniMax OAuth setup commands; Extensions: use OpenClaw plugin SDK for MiniMax OAuth. (#5402) Thanks @Maosghoul.
 - Discord: resolve PluralKit proxied senders for allowlists and labels. (#5838) Thanks @thewilloftheshadow.
+- Agents: ensure OpenRouter attribution headers apply in the embedded runner.
+- Agents: cap context window resolution for compaction safeguard. (#6187) Thanks @iamEvanYT.
+- System prompt: hint using session_status for current date/time. (#1897, #1928, #2108)
 - Telegram: restore draft streaming partials. (#5543) Thanks @obviyus.
+- Onboarding: friendlier Windows onboarding message. (#6242) Thanks @shanselman.
+- TUI: prevent crash when searching with digits in the model selector.
+- Agents: wire before_tool_call plugin hook into tool execution. (#6570) Thanks @ryancnelson.
+- Browser: secure Chrome extension relay CDP sessions.
 - Docker: use container port for gateway command instead of host port. (#5110) Thanks @mise42.
-- Docs: add zh-CN frontmatter titles for localized metadata. (#6487) Thanks @joshp123.
-- Docs: clarify Moonshot endpoints. (#4763) Thanks @hansbbans.
 - fix(lobster): block arbitrary exec via lobsterPath/cwd injection (GHSA-4mhr-g7xj-cg8j). (#5335) Thanks @vignesh07.
+- Security: block LD*/DYLD* env overrides for host exec. (#4896) Thanks @HassanFleyah.
+- Security: harden web tool content wrapping + file parsing safeguards. (#4058) Thanks @VACInc.
+- Security: enforce Twitch `allowFrom` allowlist gating (deny non-allowlisted senders). Thanks @MegaManSec.
 
 ## 2026.1.30
 
@@ -137,7 +146,6 @@ Docs: https://docs.openclaw.ai
 - Mentions: honor mentionPatterns even when explicit mentions are present. (#3303) Thanks @HirokiKobayashi-R.
 - Discord: restore username directory lookup in target resolution. (#3131) Thanks @bonald.
 - Agents: align MiniMax base URL test expectation with default provider config. (#3131) Thanks @bonald.
-- Agents: respect configured context window cap for compaction safeguard. (#6187) Thanks @iamEvanYT.
 - Agents: prevent retries on oversized image errors and surface size limits. (#2871) Thanks @Suksham-sharma.
 - Agents: inherit provider baseUrl/api for inline models. (#2740) Thanks @lploc94.
 - Memory Search: keep auto provider model defaults and only include remote when configured. (#2576) Thanks @papago2355.

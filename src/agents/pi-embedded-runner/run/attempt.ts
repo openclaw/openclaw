@@ -78,7 +78,11 @@ import {
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
-import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "../system-prompt.js";
+import {
+  applySystemPromptOverrideToSession,
+  buildEmbeddedSystemPrompt,
+  createSystemPromptOverride,
+} from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { detectAndLoadPromptImages } from "./images.js";
@@ -385,7 +389,8 @@ export async function runEmbeddedAttempt(
       skillsPrompt,
       tools,
     });
-    const systemPrompt = createSystemPromptOverride(appendPrompt);
+    const systemPromptOverride = createSystemPromptOverride(appendPrompt);
+    const systemPromptText = systemPromptOverride();
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -427,7 +432,8 @@ export async function runEmbeddedAttempt(
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
       });
 
-      const additionalExtensionPaths = buildEmbeddedExtensionPaths({
+      // Call for side effects (sets compaction/pruning runtime state)
+      buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
@@ -443,9 +449,16 @@ export async function runEmbeddedAttempt(
       // Add client tools (OpenResponses hosted tools) to customTools
       let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
       const clientToolDefs = params.clientTools
-        ? toClientToolDefinitions(params.clientTools, (toolName, toolParams) => {
-            clientToolCallDetected = { name: toolName, params: toolParams };
-          })
+        ? toClientToolDefinitions(
+            params.clientTools,
+            (toolName, toolParams) => {
+              clientToolCallDetected = { name: toolName, params: toolParams };
+            },
+            {
+              agentId: sessionAgentId,
+              sessionKey: params.sessionKey,
+            },
+          )
         : [];
 
       const allCustomTools = [...customTools, ...clientToolDefs];
@@ -462,6 +475,7 @@ export async function runEmbeddedAttempt(
         sessionManager,
         settingsManager,
       }));
+      applySystemPromptOverrideToSession(session, systemPromptOverride);
       if (!session) {
         throw new Error("Embedded agent session missing");
       }
@@ -502,7 +516,7 @@ export async function runEmbeddedAttempt(
       if (cacheTrace) {
         cacheTrace.recordStage("session:loaded", {
           messages: activeSession.messages,
-          system: systemPrompt,
+          system: systemPromptText,
           note: "after session create",
         });
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);

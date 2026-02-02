@@ -64,7 +64,11 @@ import { log } from "./logger.js";
 import { buildModelAliasLines, resolveModel } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
-import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "./system-prompt.js";
+import {
+  applySystemPromptOverrideToSession,
+  buildEmbeddedSystemPrompt,
+  createSystemPromptOverride,
+} from "./system-prompt.js";
 import { splitSdkTools } from "./tool-split.js";
 import { describeUnknownError, mapThinkingLevel, resolveExecToolDefaults } from "./utils.js";
 
@@ -347,7 +351,7 @@ export async function compactEmbeddedPiSessionDirect(
       userTimeFormat,
       contextFiles,
     });
-    const systemPrompt = createSystemPromptOverride(appendPrompt);
+    const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -370,7 +374,8 @@ export async function compactEmbeddedPiSessionDirect(
         settingsManager,
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
       });
-      const additionalExtensionPaths = buildEmbeddedExtensionPaths({
+      // Call for side effects (sets compaction/pruning runtime state)
+      buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider,
@@ -395,6 +400,7 @@ export async function compactEmbeddedPiSessionDirect(
         sessionManager,
         settingsManager,
       });
+      applySystemPromptOverrideToSession(session, systemPromptOverride);
 
       try {
         const prior = await sanitizeSessionHistory({
