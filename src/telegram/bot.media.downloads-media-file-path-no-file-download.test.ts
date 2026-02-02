@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import * as ssrf from "../infra/net/ssrf.js";
 import { MEDIA_GROUP_TIMEOUT_MS } from "./bot-updates.js";
 
 const useSpy = vi.fn();
@@ -10,6 +11,7 @@ const sendChatActionSpy = vi.fn();
 const cacheStickerSpy = vi.fn();
 const getCachedStickerSpy = vi.fn();
 const describeStickerImageSpy = vi.fn();
+const ssrfResolveSpy = vi.spyOn(ssrf, "resolvePinnedHostname");
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
@@ -26,6 +28,15 @@ const apiStub: ApiStub = {
 beforeEach(() => {
   vi.useRealTimers();
   resetInboundDedupe();
+  ssrfResolveSpy.mockImplementation(async (hostname) => {
+    const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+    const addresses = ["93.184.216.34"];
+    return {
+      hostname: normalized,
+      addresses,
+      lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+    };
+  });
 });
 
 vi.mock("grammy", () => ({
@@ -156,7 +167,10 @@ describe("telegram inbound media", () => {
       });
 
       expect(runtimeError).not.toHaveBeenCalled();
-      expect(fetchSpy).toHaveBeenCalledWith("https://api.telegram.org/file/bottok/photos/1.jpg");
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.telegram.org/file/bottok/photos/1.jpg",
+        expect.any(Object),
+      );
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0][0];
       expect(payload.Body).toContain("<media:image>");
@@ -211,7 +225,10 @@ describe("telegram inbound media", () => {
     });
 
     expect(runtimeError).not.toHaveBeenCalled();
-    expect(proxyFetch).toHaveBeenCalledWith("https://api.telegram.org/file/bottok/photos/2.jpg");
+    expect(proxyFetch).toHaveBeenCalledWith(
+      "https://api.telegram.org/file/bottok/photos/2.jpg",
+      expect.any(Object),
+    );
 
     globalFetchSpy.mockRestore();
   });
@@ -484,6 +501,7 @@ describe("telegram stickers", () => {
       expect(runtimeError).not.toHaveBeenCalled();
       expect(fetchSpy).toHaveBeenCalledWith(
         "https://api.telegram.org/file/bottok/stickers/sticker.webp",
+        expect.any(Object),
       );
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replySpy.mock.calls[0][0];
