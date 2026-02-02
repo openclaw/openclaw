@@ -45,6 +45,7 @@ x-i18n:
 - 启动子智能体运行（`deliver: false`，全局队列：`subagent`）
 - 然后运行回报步骤，将回报回复发布到请求者的聊天渠道
 - 默认模型：继承调用者，除非你设置了 `agents.defaults.subagents.model`（或按智能体 `agents.list[].subagents.model`）；显式的 `sessions_spawn.model` 仍然优先。
+- 默认思考级别：继承调用者，除非你设置了 `agents.defaults.subagents.thinking`（或按智能体 `agents.list[].subagents.thinking`）；显式的 `sessions_spawn.thinking` 仍然优先。
 
 工具参数：
 
