@@ -13,7 +13,13 @@ import { jsonResult } from "./tools/common.js";
 // oxlint-disable-next-line typescript/no-explicit-any
 type AnyAgentTool = AgentTool<any, unknown>;
 
-type ToolExecuteArgs = Parameters<ToolDefinition["execute"]>;
+type ToolExecuteArgsCurrent = [
+  string,
+  unknown,
+  AgentToolUpdateCallback<unknown> | undefined,
+  unknown,
+  AbortSignal | undefined,
+];
 type ToolExecuteArgsLegacy = [
   string,
   unknown,
@@ -21,7 +27,10 @@ type ToolExecuteArgsLegacy = [
   AgentToolUpdateCallback<unknown> | undefined,
   unknown,
 ];
-type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy;
+type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => unknown
+  ? P
+  : ToolExecuteArgsCurrent;
+type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -63,7 +72,7 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
       signal,
     };
   }
-  const [toolCallId, params, onUpdate, _ctx, signal] = args;
+  const [toolCallId, params, onUpdate, _ctx, signal] = args as ToolExecuteArgsCurrent;
   return {
     toolCallId,
     params,
