@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
+  repairToolUseResultPairing,
   sanitizeToolCallInputs,
   sanitizeToolUseResultPairing,
 } from "./session-transcript-repair.js";
@@ -111,6 +112,122 @@ describe("sanitizeToolUseResultPairing", () => {
     const out = sanitizeToolUseResultPairing(input);
     expect(out.some((m) => m.role === "toolResult")).toBe(false);
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("handles assistant message with pending tool calls at end of transcript", () => {
+    // This is the scenario that causes the "unexpected tool_use_id" error:
+    // Session ends with assistant making tool calls, but no tool results follow
+    const input = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I will help you" },
+          { type: "toolCall", id: "toolu_01HQJpqakGoGCnFR3p16MPLw", name: "exec", arguments: {} },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const report = repairToolUseResultPairing(input);
+    expect(report.added.length).toBe(1);
+    expect(report.added[0]?.toolCallId).toBe("toolu_01HQJpqakGoGCnFR3p16MPLw");
+    expect(report.messages.length).toBe(3);
+    expect(report.messages[2]?.role).toBe("toolResult");
+  });
+
+  it("handles multiple pending tool calls at end of transcript", () => {
+    const input = [
+      { role: "user", content: "do things" },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_a", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_b", name: "exec", arguments: {} },
+          { type: "toolCall", id: "call_c", name: "write", arguments: {} },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const report = repairToolUseResultPairing(input);
+    expect(report.added.length).toBe(3);
+    expect(report.messages.length).toBe(5); // user + assistant + 3 tool results
+    expect(report.messages.slice(2).every((m) => m.role === "toolResult")).toBe(true);
+  });
+
+  it("handles orphan tool result appearing before any assistant message", () => {
+    // Edge case: tool result at the very beginning of transcript
+    const input = [
+      {
+        role: "toolResult",
+        toolCallId: "orphan_early",
+        toolName: "unknown",
+        content: [{ type: "text", text: "orphan at start" }],
+        isError: false,
+      },
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "hi" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const report = repairToolUseResultPairing(input);
+    expect(report.droppedOrphanCount).toBe(1);
+    expect(report.messages.some((m) => m.role === "toolResult")).toBe(false);
+  });
+
+  it("preserves non-tool-call assistant messages", () => {
+    const input = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "just text, no tools" }],
+      },
+      { role: "user", content: "ok" },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out).toEqual(input);
+  });
+
+  it("handles interleaved tool calls and results correctly", () => {
+    const input = [
+      { role: "user", content: "first" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "result 1" }],
+        isError: false,
+      },
+      { role: "user", content: "second" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_2", name: "exec", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "exec",
+        content: [{ type: "text", text: "result 2" }],
+        isError: false,
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    // Should remain unchanged since it's already valid
+    expect(out.map((m) => m.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
   });
 });
 
