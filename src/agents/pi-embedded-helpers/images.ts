@@ -1,7 +1,4 @@
-import type {
-  AgentMessage,
-  AgentToolResult,
-} from "@mariozechner/pi-agent-core";
+import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import {
@@ -68,10 +65,7 @@ export async function sanitizeSessionMessagesImages(
     : messages;
   const sanitizedIds =
     allowNonImageSanitization && options?.sanitizeToolCallIds
-      ? sanitizeToolCallIdsForCloudCodeAssist(
-          normalizedArgs,
-          options.toolCallIdMode,
-        )
+      ? sanitizeToolCallIdsForCloudCodeAssist(normalizedArgs, options.toolCallIdMode)
       : normalizedArgs;
   const out: AgentMessage[] = [];
   for (const msg of sanitizedIds) {
