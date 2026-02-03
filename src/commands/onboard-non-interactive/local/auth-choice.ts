@@ -55,6 +55,7 @@ import {
   resolveCustomProviderId,
 } from "../../onboard-custom.js";
 import type { AuthChoice, OnboardOptions } from "../../onboard-types.js";
+import { applyPrimaryModel } from "../../model-picker.js";
 import { applyOpenAIConfig } from "../../openai-model-default.js";
 import { detectZaiEndpoint } from "../../zai-endpoint-detect.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
@@ -301,6 +302,52 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXaiConfig(nextConfig);
+  }
+
+  if (authChoice === "volcengine-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "volcengine",
+      cfg: baseConfig,
+      flagValue: opts.volcengineApiKey,
+      flagName: "--volcengine-api-key",
+      envVar: "VOLCANO_ENGINE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      const result = upsertSharedEnvVar({
+        key: "VOLCANO_ENGINE_API_KEY",
+        value: resolved.key,
+      });
+      process.env.VOLCANO_ENGINE_API_KEY = resolved.key;
+      runtime.log(`Saved VOLCANO_ENGINE_API_KEY to ${shortenHomePath(result.path)}`);
+    }
+    return applyPrimaryModel(nextConfig, "volcengine-plan/ark-code-latest");
+  }
+
+  if (authChoice === "byteplus-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "byteplus",
+      cfg: baseConfig,
+      flagValue: opts.byteplusApiKey,
+      flagName: "--byteplus-api-key",
+      envVar: "BYTEPLUS_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      const result = upsertSharedEnvVar({
+        key: "BYTEPLUS_API_KEY",
+        value: resolved.key,
+      });
+      process.env.BYTEPLUS_API_KEY = resolved.key;
+      runtime.log(`Saved BYTEPLUS_API_KEY to ${shortenHomePath(result.path)}`);
+    }
+    return applyPrimaryModel(nextConfig, "byteplus-plan/ark-code-latest");
   }
 
   if (authChoice === "qianfan-api-key") {
