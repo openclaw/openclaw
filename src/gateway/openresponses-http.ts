@@ -325,8 +325,10 @@ export async function handleOpenResponsesHttpRequest(
   const model = payload.model;
   const user = payload.user;
   const toolResultMaxDataBytes = opts.config?.toolResultMaxDataBytes;
-  const reasoningLevel = payload.reasoning ? "stream" : undefined;
-  const reasoningSummary = Boolean(payload.reasoning?.summary);
+  const reasoning = payload.reasoning;
+  // `reasoning.effort` is accepted for parity but currently ignored.
+  const reasoningLevel = reasoning ? "stream" : undefined;
+  const reasoningSummary = Boolean(reasoning?.summary);
 
   // Extract images + files from input (Phase 2)
   let images: ImageContent[] = [];

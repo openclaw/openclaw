@@ -113,6 +113,7 @@ export const FunctionCallItemSchema = z
 export const FunctionCallOutputItemSchema = z
   .object({
     type: z.literal("function_call_output"),
+    id: z.string().optional(),
     call_id: z.string(),
     output: z.string(),
   })

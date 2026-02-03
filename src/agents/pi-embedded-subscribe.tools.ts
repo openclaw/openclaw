@@ -123,15 +123,9 @@ export function sanitizeToolResult(result: unknown, options?: ToolResultSanitize
     const data = typeof entry.data === "string" ? entry.data : undefined;
     if (data) {
       const bytes = estimateBase64Bytes(data);
-      if (enforceDataLimit) {
-        if (bytes > maxDataBytes) {
-          const cleaned = { ...entry };
-          delete cleaned.data;
-          return { ...cleaned, bytes, omitted: true };
-        }
-        return { ...entry, bytes };
-      }
-      if (type === "image") {
+      const shouldOmit =
+        (enforceDataLimit && bytes > maxDataBytes) || (!enforceDataLimit && type === "image");
+      if (shouldOmit) {
         const cleaned = { ...entry };
         delete cleaned.data;
         return { ...cleaned, bytes, omitted: true };

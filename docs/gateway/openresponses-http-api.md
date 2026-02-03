@@ -112,11 +112,13 @@ The request follows the OpenResponses API with item-based input. Current support
 Accepted but **currently ignored**:
 
 - `max_tool_calls`
-- `reasoning`
 - `metadata`
 - `store`
 - `previous_response_id`
 - `truncation`
+
+`reasoning` is honored for streaming output items. `reasoning.summary` switches to summary output;
+`reasoning.effort` is accepted for parity but currently ignored.
 
 ## Items (input)
 
@@ -287,6 +289,12 @@ Security note:
 - Allowlisting a hostname does not bypass private/internal IP blocking.
 - For internet-exposed gateways, apply network egress controls in addition to app-level guards.
   See [Security](/gateway/security).
+- `toolResultMaxDataBytes` applies to any `content[].data` field returned by tools
+  (images or other binary payloads like PDFs/docx).
+- When unset, OpenClaw strips base64 data for `type: "image"` tool results and returns
+  `{ bytes, omitted: true }`. When set, base64 is included up to the byte cap.
+- If a tool returns base64 data over the cap, OpenClaw omits `data` and returns
+  `{ bytes, omitted: true }` for that item.
 
 ## Streaming (SSE)
 
