@@ -7,6 +7,7 @@ import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { getConsoleSettings, shouldLogSubsystemToConsole } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger } from "./logger.js";
+import { createSensitiveRedactor, getConfiguredRedactOptions } from "./redact.js";
 import { loggingState } from "./state.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -153,13 +154,15 @@ function formatConsoleLine(opts: {
   const displaySubsystem =
     opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
-    return JSON.stringify({
+    const redactor = createSensitiveRedactor(getConfiguredRedactOptions());
+    const record = redactor.redactValue({
       time: new Date().toISOString(),
       level: opts.level,
       subsystem: displaySubsystem,
       message: opts.message,
       ...opts.meta,
     });
+    return JSON.stringify(record);
   }
   const color = getColorForConsole();
   const prefix = `[${displaySubsystem}]`;

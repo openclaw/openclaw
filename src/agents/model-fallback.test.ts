@@ -151,16 +151,16 @@ describe("runWithModelFallback", () => {
         defaults: {
           model: {
             primary: `${provider}/m1`,
-            fallbacks: ["fallback/ok-model"],
+            fallbacks: ["anthropic/claude-haiku-3-5"],
           },
         },
       },
     });
-    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
-      if (providerId === "fallback") {
+    const run = vi.fn().mockImplementation(async (providerId) => {
+      if (providerId === "anthropic") {
         return "ok";
       }
-      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+      throw new Error(`unexpected provider: ${providerId}`);
     });
 
     try {
@@ -173,7 +173,7 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("ok");
-      expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+      expect(run.mock.calls).toEqual([["anthropic", "claude-haiku-3-5"]]);
       expect(result.attempts[0]?.reason).toBe("rate_limit");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -214,7 +214,7 @@ describe("runWithModelFallback", () => {
         defaults: {
           model: {
             primary: `${provider}/m1`,
-            fallbacks: ["fallback/ok-model"],
+            fallbacks: ["anthropic/claude-haiku-3-5"],
           },
         },
       },

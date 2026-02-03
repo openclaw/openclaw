@@ -824,12 +824,12 @@ Context:
 - Integrate upstream changes appropriately
 - Ask for clarification if uncertain
 
-Conflict markers:
-<<<<<<< HEAD
-${conflict.ourContent}
-=======
-${conflict.theirContent}
->>>>>>> upstream
+Conflict markers (leading space to avoid literal markers in this doc):
+ <<<<<<< HEAD
+ ${conflict.ourContent}
+ =======
+ ${conflict.theirContent}
+ >>>>>>> upstream
 
 Please:
 1. Analyze the conflict

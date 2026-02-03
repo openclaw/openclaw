@@ -9,6 +9,7 @@ const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
 const DEFAULT_REDACT_MIN_LENGTH = 18;
 const DEFAULT_REDACT_KEEP_START = 6;
 const DEFAULT_REDACT_KEEP_END = 4;
+const DEFAULT_REDACT_OBJECT_DEPTH = 12;
 
 const DEFAULT_REDACT_PATTERNS: string[] = [
   // ENV-style assignments.
@@ -35,27 +36,50 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
 ];
 
-type RedactOptions = {
+export type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: string[];
+};
+
+type ResolvedRedactOptions = {
+  mode: RedactSensitiveMode;
+  patterns: RegExp[];
+};
+
+export type SensitiveRedactor = {
+  mode: RedactSensitiveMode;
+  redactText: (text: string) => string;
+  redactValue: (value: unknown) => unknown;
+  redactArgs: (args: unknown[]) => unknown[];
 };
 
 function normalizeMode(value?: string): RedactSensitiveMode {
   return value === "off" ? "off" : DEFAULT_REDACT_MODE;
 }
 
+const patternCache = new Map<string, RegExp | null>();
+
 function parsePattern(raw: string): RegExp | null {
   if (!raw.trim()) {
     return null;
+  }
+  const cached = patternCache.get(raw);
+  if (cached !== undefined) {
+    return cached;
   }
   const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
   try {
     if (match) {
       const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
-      return new RegExp(match[1], flags);
+      const compiled = new RegExp(match[1], flags);
+      patternCache.set(raw, compiled);
+      return compiled;
     }
-    return new RegExp(raw, "gi");
+    const compiled = new RegExp(raw, "gi");
+    patternCache.set(raw, compiled);
+    return compiled;
   } catch {
+    patternCache.set(raw, null);
     return null;
   }
 }
@@ -74,6 +98,18 @@ function maskToken(token: string): string {
   return `${start}…${end}`;
 }
 
+function isPasswordKey(key: string): boolean {
+  return /(pass(word)?|passwd)\b/i.test(key);
+}
+
+function isSensitiveKey(key: string): boolean {
+  return (
+    /(pass(word)?|passwd|token|secret|api[-_]?key|access[-_]?token|refresh[-_]?token|authorization|cookie)\b/i.test(
+      key,
+    ) || /^x-api-key$/i.test(key)
+  );
+}
+
 function redactPemBlock(block: string): string {
   const lines = block.split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) {
@@ -86,9 +122,10 @@ function redactMatch(match: string, groups: string[]): string {
   if (match.includes("PRIVATE KEY-----")) {
     return redactPemBlock(match);
   }
+  const shouldFullyRedact = /\bpass(word)?\b/i.test(match) || /\bpasswd\b/i.test(match);
   const token =
     groups.filter((value) => typeof value === "string" && value.length > 0).at(-1) ?? match;
-  const masked = maskToken(token);
+  const masked = shouldFullyRedact ? "***" : maskToken(token);
   if (token === match) {
     return masked;
   }
@@ -121,19 +158,56 @@ function resolveConfigRedaction(): RedactOptions {
   };
 }
 
+export function getConfiguredRedactOptions(): RedactOptions {
+  return resolveConfigRedaction();
+}
+
+function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOptions {
+  const raw = options ?? resolveConfigRedaction();
+  return {
+    mode: normalizeMode(raw.mode),
+    patterns: resolvePatterns(raw.patterns),
+  };
+}
+
+export function createSensitiveRedactor(options?: RedactOptions): SensitiveRedactor {
+  const resolved = resolveRedactOptions(options);
+  if (resolved.mode === "off" || resolved.patterns.length === 0) {
+    return {
+      mode: "off",
+      redactText: (text) => text,
+      redactValue: (value) => value,
+      redactArgs: (args) => args,
+    };
+  }
+
+  const patterns = resolved.patterns;
+  return {
+    mode: resolved.mode,
+    redactText: (text) => (text ? redactText(text, patterns) : text),
+    redactValue: (value) => redactSensitiveValueInner(value, patterns, new WeakSet<object>(), 0),
+    redactArgs: (args) => {
+      if (!Array.isArray(args) || args.length === 0) {
+        return args;
+      }
+      const seen = new WeakSet<object>();
+      return args.map((value) => redactSensitiveValueInner(value, patterns, seen, 0));
+    },
+  };
+}
+
 export function redactSensitiveText(text: string, options?: RedactOptions): string {
   if (!text) {
     return text;
   }
-  const resolved = options ?? resolveConfigRedaction();
-  if (normalizeMode(resolved.mode) === "off") {
+  const resolved = resolveRedactOptions(options);
+  if (resolved.mode === "off") {
     return text;
   }
-  const patterns = resolvePatterns(resolved.patterns);
-  if (!patterns.length) {
+  if (resolved.patterns.length === 0) {
     return text;
   }
-  return redactText(text, patterns);
+  return redactText(text, resolved.patterns);
 }
 
 export function redactToolDetail(detail: string): string {
@@ -142,6 +216,110 @@ export function redactToolDetail(detail: string): string {
     return detail;
   }
   return redactSensitiveText(detail, resolved);
+}
+
+function redactSensitivePrimitive(value: unknown, patterns: RegExp[]): unknown {
+  if (typeof value === "string") {
+    return redactText(value, patterns);
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  return value;
+}
+
+function redactSensitiveValueInner(
+  value: unknown,
+  patterns: RegExp[],
+  seen: WeakSet<object>,
+  depth: number,
+): unknown {
+  const prim = redactSensitivePrimitive(value, patterns);
+  if (prim !== value) {
+    return prim;
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  if (depth >= DEFAULT_REDACT_OBJECT_DEPTH) {
+    return "[MaxDepth]";
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactSensitiveValueInner(item, patterns, seen, depth + 1));
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+  if (value instanceof RegExp) {
+    return value;
+  }
+  if (value instanceof URL) {
+    return redactText(value.toString(), patterns);
+  }
+  if (value instanceof Error) {
+    return {
+      name: value.name,
+      message: redactText(value.message, patterns),
+      stack: value.stack ? redactText(value.stack, patterns) : undefined,
+    };
+  }
+
+  const proto = Object.getPrototypeOf(value);
+  const next: Record<string, unknown> = proto ? Object.create(proto) : {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (isSensitiveKey(key)) {
+      if (raw == null) {
+        next[key] = raw;
+        continue;
+      }
+      if (isPasswordKey(key)) {
+        next[key] = "***";
+        continue;
+      }
+      const text = typeof raw === "string" ? raw : typeof raw === "bigint" ? raw.toString() : "";
+      if (text) {
+        const redacted = redactText(text, patterns);
+        next[key] = redacted === text ? maskToken(text) : redacted;
+      } else {
+        next[key] = "***";
+      }
+      continue;
+    }
+    next[key] = redactSensitiveValueInner(raw, patterns, seen, depth + 1);
+  }
+  return next;
+}
+
+export function redactSensitiveValue(value: unknown, options?: RedactOptions): unknown {
+  const resolved = resolveRedactOptions(options);
+  if (resolved.mode === "off") {
+    return value;
+  }
+  if (resolved.patterns.length === 0) {
+    return value;
+  }
+  return redactSensitiveValueInner(value, resolved.patterns, new WeakSet<object>(), 0);
+}
+
+export function redactSensitiveArgs(args: unknown[], options?: RedactOptions): unknown[] {
+  if (!Array.isArray(args) || args.length === 0) {
+    return args;
+  }
+  const resolved = resolveRedactOptions(options);
+  if (resolved.mode === "off") {
+    return args;
+  }
+  if (resolved.patterns.length === 0) {
+    return args;
+  }
+  const seen = new WeakSet<object>();
+  return args.map((value) => redactSensitiveValueInner(value, resolved.patterns, seen, 0));
 }
 
 export function getDefaultRedactPatterns(): string[] {

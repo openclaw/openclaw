@@ -73,7 +73,7 @@ export function useChatBackend(sessionKey: string, agent?: Agent): ChatBackendHo
   // Handle sending messages (gateway implementation using mutation hook)
   const handleSendGateway = React.useCallback(
     async (message: string) => {
-      if (!sessionKey) return;
+      if (!sessionKey) {return;}
 
       const idempotencyKey = uuidv7();
 
@@ -102,7 +102,7 @@ export function useChatBackend(sessionKey: string, agent?: Agent): ChatBackendHo
   // Handle sending messages (Vercel AI implementation)
   const handleSendVercel = React.useCallback(
     async (message: string) => {
-      if (!sessionKey || !vercelAdapterRef.current) return;
+      if (!sessionKey || !vercelAdapterRef.current) {return;}
 
       const idempotencyKey = uuidv7();
 
@@ -155,7 +155,7 @@ export function useChatBackend(sessionKey: string, agent?: Agent): ChatBackendHo
 
   // Handle stopping the stream (gateway using mutation hook)
   const handleStopGateway = React.useCallback(async () => {
-    if (!sessionKey) return;
+    if (!sessionKey) {return;}
 
     const runId = gatewayStore.getCurrentRunId(sessionKey);
     try {
@@ -169,7 +169,7 @@ export function useChatBackend(sessionKey: string, agent?: Agent): ChatBackendHo
 
   // Handle stopping the stream (Vercel AI)
   const handleStopVercel = React.useCallback(async () => {
-    if (!sessionKey) return;
+    if (!sessionKey) {return;}
 
     // For Vercel AI, we just clear the streaming state
     // (actual abort would require AbortController support)

@@ -195,11 +195,11 @@ export function useChatEventSubscription(
 
   const handleChatEvent = useCallback(
     (event: GatewayEvent) => {
-      if (!sessionKey) return;
-      if (event.event !== "chat") return;
+      if (!sessionKey) {return;}
+      if (event.event !== "chat") {return;}
 
       const payload = event.payload as ChatEventPayload;
-      if (payload.sessionKey !== sessionKey) return;
+      if (payload.sessionKey !== sessionKey) {return;}
 
       switch (payload.state) {
         case "delta":
@@ -225,11 +225,11 @@ export function useChatEventSubscription(
 
   const handleAgentEvent = useCallback(
     (event: GatewayEvent) => {
-      if (!sessionKey) return;
-      if (event.event !== "agent") return;
+      if (!sessionKey) {return;}
+      if (event.event !== "agent") {return;}
 
       const payload = event.payload as AgentEventPayload;
-      if (payload.sessionKey !== sessionKey) return;
+      if (payload.sessionKey !== sessionKey) {return;}
       handlers.onAgentEvent?.(payload);
     },
     [sessionKey, handlers]

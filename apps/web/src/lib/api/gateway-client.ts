@@ -304,7 +304,7 @@ class GatewayClient {
   }
 
   private doConnect() {
-    if (this.stopped) return;
+    if (this.stopped) {return;}
 
     const url = this.config.url || DEFAULT_GATEWAY_URL;
     this.setConnectionState({ status: "connecting" });
@@ -378,7 +378,7 @@ class GatewayClient {
   }
 
   private async sendConnect() {
-    if (this.connectSent) return;
+    if (this.connectSent) {return;}
     this.connectSent = true;
     this.clearConnectTimer();
 
@@ -611,7 +611,7 @@ class GatewayClient {
   }
 
   private scheduleReconnect() {
-    if (this.stopped || this.reconnectTimer) return;
+    if (this.stopped || this.reconnectTimer) {return;}
 
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 1.7, MAX_BACKOFF);
