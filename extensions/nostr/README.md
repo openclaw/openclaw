@@ -1,6 +1,6 @@
 # @openclaw/nostr
 
-Nostr DM channel plugin for OpenClaw using NIP-04 encrypted direct messages.
+Nostr DM channel plugin for OpenClaw using NIP-17 encrypted direct messages.
 
 ## Overview
 
@@ -8,7 +8,7 @@ This extension adds Nostr as a messaging channel to OpenClaw. It enables your bo
 
 - Receive encrypted DMs from Nostr users
 - Send encrypted responses back
-- Work with any NIP-04 compatible Nostr client (Damus, Amethyst, etc.)
+- Work with any NIP-17 compatible Nostr client (supporting gift-wrapped messages)
 
 ## Installation
 
@@ -103,11 +103,12 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 
 ## Protocol Support
 
-| NIP    | Status    | Notes                  |
-| ------ | --------- | ---------------------- |
-| NIP-01 | Supported | Basic event structure  |
-| NIP-04 | Supported | Encrypted DMs (kind:4) |
-| NIP-17 | Planned   | Gift-wrapped DMs (v2)  |
+| NIP    | Status    | Notes                       |
+| ------ | --------- | --------------------------- |
+| NIP-01 | Supported | Basic event structure       |
+| NIP-17 | Supported | Gift-wrapped DMs (kind:1059)|
+| NIP-44 | Supported | Versioned encryption        |
+| NIP-59 | Supported | Seals and gift wraps        |
 
 ## Security Notes
 

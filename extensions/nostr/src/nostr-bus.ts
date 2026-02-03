@@ -6,7 +6,8 @@ import {
   nip19,
   type Event,
 } from "nostr-tools";
-import { decrypt, encrypt } from "nostr-tools/nip04";
+import * as nip44 from "nostr-tools/nip44";
+import * as nip59 from "nostr-tools/nip59";
 import type { NostrProfile } from "./config-schema.js";
 import {
   createMetrics,
@@ -316,7 +317,7 @@ export function getPublicKeyFromPrivate(privateKey: string): string {
 // ============================================================================
 
 /**
- * Start the Nostr DM bus - subscribes to NIP-04 encrypted DMs
+ * Start the Nostr DM bus - subscribes to NIP-17 gift-wrapped DMs
  */
 export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusHandle> {
   const {
@@ -446,15 +447,19 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       seen.add(event.id);
       metrics.emit("memory.seen_tracker_size", seen.size());
 
-      // Decrypt the message
+      // Unwrap the gift wrap (NIP-59)
+      let rumor: nip59.Rumor;
+      let senderPubkey: string;
       let plaintext: string;
       try {
-        plaintext = decrypt(sk, event.pubkey, event.content);
+        rumor = nip59.unwrapEvent(event, sk);
+        senderPubkey = rumor.pubkey;
+        plaintext = rumor.content;
         metrics.emit("decrypt.success");
       } catch (err) {
         metrics.emit("decrypt.failure");
         metrics.emit("event.rejected.decrypt_failed");
-        onError?.(err as Error, `decrypt from ${event.pubkey}`);
+        onError?.(err as Error, `unwrap gift wrap from ${event.pubkey}`);
         return;
       }
 
@@ -463,7 +468,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         await sendEncryptedDm(
           pool,
           sk,
-          event.pubkey,
+          senderPubkey,
           text,
           relays,
           metrics,
@@ -474,7 +479,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       };
 
       // Call the message handler
-      await onMessage(event.pubkey, plaintext, replyTo);
+      await onMessage(senderPubkey, plaintext, replyTo);
 
       // Mark as processed
       metrics.emit("event.processed");
@@ -488,7 +493,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     }
   }
 
-  const sub = pool.subscribeMany(relays, [{ kinds: [4], "#p": [pk], since }], {
+  const sub = pool.subscribeMany(relays, [{ kinds: [1059], "#p": [pk], since }], {
     onevent: handleEvent,
     oneose: () => {
       // EOSE handler - called when all stored events have been received
@@ -602,15 +607,16 @@ async function sendEncryptedDm(
   healthTracker: RelayHealthTracker,
   onError?: (error: Error, context: string) => void,
 ): Promise<void> {
-  const ciphertext = encrypt(sk, toPubkey, text);
-  const reply = finalizeEvent(
+  // Create a gift-wrapped message (NIP-17/NIP-59)
+  const wrap = nip59.wrapEvent(
     {
-      kind: 4,
-      content: ciphertext,
-      tags: [["p", toPubkey]],
+      kind: 14, // NIP-17 chat message
+      content: text,
+      tags: [],
       created_at: Math.floor(Date.now() / 1000),
     },
     sk,
+    toPubkey,
   );
 
   // Sort relays by health score (best first)
@@ -629,7 +635,7 @@ async function sendEncryptedDm(
     const startTime = Date.now();
     try {
       // oxlint-disable-next-line typescript/await-thenable typesciript/no-floating-promises
-      await pool.publish([relay], reply);
+      await pool.publish([relay], wrap);
       const latency = Date.now() - startTime;
 
       // Record success

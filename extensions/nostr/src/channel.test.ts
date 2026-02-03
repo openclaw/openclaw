@@ -10,7 +10,7 @@ describe("nostrPlugin", () => {
     it("has required meta fields", () => {
       expect(nostrPlugin.meta.label).toBe("Nostr");
       expect(nostrPlugin.meta.docsPath).toBe("/channels/nostr");
-      expect(nostrPlugin.meta.blurb).toContain("NIP-04");
+      expect(nostrPlugin.meta.blurb).toContain("NIP-17");
     });
   });
 

@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/nostr",
   "version": "2026.2.2",
-  "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
+  "description": "OpenClaw Nostr channel plugin for NIP-17 encrypted DMs",
   "type": "module",
   "dependencies": {
     "nostr-tools": "^2.23.0",
@@ -18,10 +18,10 @@
     "channel": {
       "id": "nostr",
       "label": "Nostr",
-      "selectionLabel": "Nostr (NIP-04 DMs)",
+      "selectionLabel": "Nostr (NIP-17 DMs)",
       "docsPath": "/channels/nostr",
       "docsLabel": "nostr",
-      "blurb": "Decentralized protocol; encrypted DMs via NIP-04.",
+      "blurb": "Decentralized protocol; encrypted DMs via NIP-17.",
       "order": 55,
       "quickstartAllowFrom": true
     },

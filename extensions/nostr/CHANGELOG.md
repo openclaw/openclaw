@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Breaking Changes
+
+- **Replaced NIP-04 with NIP-17**: Migrated from NIP-04 encrypted DMs (kind:4) to NIP-17 gift-wrapped messages (kind:1059)
+- Uses NIP-44 versioned encryption instead of NIP-04
+- Implements NIP-59 seals and gift wraps for better metadata privacy
+- **Important**: This is not backward compatible with NIP-04 clients. Both sender and receiver must support NIP-17.
+
 ## 2026.2.2
 
 ### Changes
