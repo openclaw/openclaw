@@ -161,9 +161,64 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
   }
 }
 
+/**
+ * Environment variables that could enable code injection if attacker-controlled.
+ * These are blocked from being set via config to prevent RCE attacks.
+ */
+const DANGEROUS_ENV_VARS = new Set([
+  // Node.js code injection
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "NODE_REPL_HISTORY",
+  // Dynamic library injection (Linux)
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "LD_AUDIT",
+  // Dynamic library injection (macOS)
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_LIBRARY_PATH",
+  "DYLD_FRAMEWORK_PATH",
+  "DYLD_VERSIONED_LIBRARY_PATH",
+  "DYLD_VERSIONED_FRAMEWORK_PATH",
+  // Python code injection
+  "PYTHONPATH",
+  "PYTHONSTARTUP",
+  "PYTHONHOME",
+  // Perl code injection
+  "PERL5LIB",
+  "PERLLIB",
+  "PERL5OPT",
+  // Ruby code injection
+  "RUBYLIB",
+  "RUBYOPT",
+  // Shell injection
+  "ENV",
+  "BASH_ENV",
+]);
+
+/**
+ * Check if an environment variable name is dangerous (could enable code injection).
+ * Matches exact names in the blocklist plus patterns like LD_*, DYLD_*, etc.
+ */
+function isDangerousEnvVar(key: string): boolean {
+  if (DANGEROUS_ENV_VARS.has(key)) {
+    return true;
+  }
+  // Block pattern-based dangerous variables
+  const upperKey = key.toUpperCase();
+  if (upperKey.startsWith("LD_") || upperKey.startsWith("DYLD_") || upperKey.startsWith("_LD_")) {
+    return true;
+  }
+  return false;
+}
+
 function applyConfigEnv(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): void {
   const entries = collectConfigEnvVars(cfg);
   for (const [key, value] of Object.entries(entries)) {
+    // Block dangerous environment variables that could enable code injection (CWE-94)
+    if (isDangerousEnvVar(key)) {
+      continue;
+    }
     if (env[key]?.trim()) {
       continue;
     }
