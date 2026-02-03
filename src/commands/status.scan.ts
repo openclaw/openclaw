@@ -28,7 +28,9 @@ type MemoryPluginStatus = {
 
 function resolveMemoryPluginStatus(cfg: ReturnType<typeof loadConfig>): MemoryPluginStatus {
   const pluginsEnabled = cfg.plugins?.enabled !== false;
-  if (!pluginsEnabled) return { enabled: false, slot: null, reason: "plugins disabled" };
+  if (!pluginsEnabled) {
+    return { enabled: false, slot: null, reason: "plugins disabled" };
+  }
   const raw = typeof cfg.plugins?.slots?.memory === "string" ? cfg.plugins.slots.memory.trim() : "";
   if (raw && raw.toLowerCase() === "none") {
     return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
@@ -126,7 +128,7 @@ export async function scanStatus(
 
       progress.setLabel("Querying channel status…");
       const channelsStatus = gatewayReachable
-        ? await callGateway<Record<string, unknown>>({
+        ? await callGateway({
             method: "channels.status",
             params: {
               probe: false,
@@ -149,11 +151,17 @@ export async function scanStatus(
       progress.setLabel("Checking memory…");
       const memoryPlugin = resolveMemoryPluginStatus(cfg);
       const memory = await (async (): Promise<MemoryStatusSnapshot | null> => {
-        if (!memoryPlugin.enabled) return null;
-        if (memoryPlugin.slot !== "memory-core") return null;
+        if (!memoryPlugin.enabled) {
+          return null;
+        }
+        if (memoryPlugin.slot !== "memory-core") {
+          return null;
+        }
         const agentId = agentStatus.defaultId ?? "main";
         const { manager } = await getMemorySearchManager({ cfg, agentId });
-        if (!manager) return null;
+        if (!manager) {
+          return null;
+        }
         try {
           await manager.probeVectorAvailability();
         } catch {}
