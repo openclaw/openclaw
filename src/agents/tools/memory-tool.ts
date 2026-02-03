@@ -207,12 +207,7 @@ function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" |
   if (!parsed?.rest) {
     return "direct";
   }
-  const tokens = new Set(
-    parsed.rest
-      .toLowerCase()
-      .split(":")
-      .filter(Boolean),
-  );
+  const tokens = new Set(parsed.rest.toLowerCase().split(":").filter(Boolean));
   if (tokens.has("channel")) {
     return "channel";
   }
