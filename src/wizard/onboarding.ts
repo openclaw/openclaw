@@ -10,7 +10,6 @@ import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.j
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { installCompletion } from "../cli/completion-cli.js";
 import { promptAuthChoiceGrouped } from "../commands/auth-choice-prompt.js";
 import {
   applyAuthChoice,
@@ -467,17 +466,5 @@ export async function runOnboardingWizard(
   });
   if (launchedTui) {
     return;
-  }
-
-  const installShell = await prompter.confirm({
-    message: "Install shell completion script?",
-    initialValue: true,
-  });
-
-  if (installShell) {
-    const shell = process.env.SHELL?.split("/").pop() || "zsh";
-    // We pass 'yes=true' to skip any double-confirmation inside the helper,
-    // as the wizard prompt above serves as confirmation.
-    await installCompletion(shell, true);
   }
 }
