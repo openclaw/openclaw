@@ -9,6 +9,7 @@ import { applyAuthChoiceGitHubCopilot } from "./auth-choice.apply.github-copilot
 import { applyAuthChoiceGoogleAntigravity } from "./auth-choice.apply.google-antigravity.js";
 import { applyAuthChoiceGoogleGeminiCli } from "./auth-choice.apply.google-gemini-cli.js";
 import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
+import { applyAuthChoiceNvidiaNim } from "./auth-choice.apply.nvidia-nim.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import { applyAuthChoiceQwenPortal } from "./auth-choice.apply.qwen-portal.js";
@@ -46,6 +47,7 @@ export async function applyAuthChoice(
     applyAuthChoiceGoogleGeminiCli,
     applyAuthChoiceCopilotProxy,
     applyAuthChoiceQwenPortal,
+    applyAuthChoiceNvidiaNim,
   ];
 
   for (const handler of handlers) {
