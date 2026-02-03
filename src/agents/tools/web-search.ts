@@ -17,11 +17,12 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "seltz"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const SELTZ_SEARCH_ENDPOINT = "https://api.seltz.ai/v1/search/";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
@@ -103,6 +104,19 @@ type PerplexitySearchResponse = {
 
 type PerplexityBaseUrlHint = "direct" | "openrouter";
 
+type SeltzConfig = {
+  apiKey?: string;
+};
+
+type SeltzApiKeySource = "config" | "env" | "none";
+
+type SeltzSearchResponse = {
+  documents?: Array<{
+    url?: string;
+    content?: string;
+  }>;
+};
+
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
   if (!search || typeof search !== "object") {
@@ -137,6 +151,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "seltz") {
+    return {
+      error: "missing_seltz_api_key",
+      message:
+        "web_search (seltz) needs an API key. Set SELTZ_API_KEY in the Gateway environment, or configure tools.web.search.seltz.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -151,6 +173,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
       : "";
   if (raw === "perplexity") {
     return "perplexity";
+  }
+  if (raw === "seltz") {
+    return "seltz";
   }
   if (raw === "brave") {
     return "brave";
@@ -245,6 +270,34 @@ function resolvePerplexityModel(perplexity?: PerplexityConfig): string {
       ? perplexity.model.trim()
       : "";
   return fromConfig || DEFAULT_PERPLEXITY_MODEL;
+}
+
+function resolveSeltzConfig(search?: WebSearchConfig): SeltzConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const seltz = "seltz" in search ? search.seltz : undefined;
+  if (!seltz || typeof seltz !== "object") {
+    return {};
+  }
+  return seltz as SeltzConfig;
+}
+
+function resolveSeltzApiKey(seltz?: SeltzConfig): {
+  apiKey?: string;
+  source: SeltzApiKeySource;
+} {
+  const fromConfig = normalizeApiKey(seltz?.apiKey);
+  if (fromConfig) {
+    return { apiKey: fromConfig, source: "config" };
+  }
+
+  const fromEnv = normalizeApiKey(process.env.SELTZ_API_KEY);
+  if (fromEnv) {
+    return { apiKey: fromEnv, source: "env" };
+  }
+
+  return { apiKey: undefined, source: "none" };
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
@@ -350,6 +403,49 @@ async function runPerplexitySearch(params: {
   return { content, citations };
 }
 
+async function runSeltzSearch(params: {
+  query: string;
+  apiKey: string;
+  count: number;
+  timeoutSeconds: number;
+}): Promise<Array<{ title: string; url: string; description: string; siteName?: string }>> {
+  const res = await fetch(SELTZ_SEARCH_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      api_key: params.apiKey,
+      query: params.query,
+      includes: {
+        max_documents: params.count,
+      },
+    }),
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detail = await readResponseText(res);
+    throw new Error(`Seltz API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as SeltzSearchResponse;
+  const documents = data.documents ?? [];
+
+  return documents.map((doc) => {
+    const url = doc.url ?? "";
+    const content = doc.content ?? "";
+    const siteName = resolveSiteName(url);
+    const truncatedContent = content.length > 200 ? content.slice(0, 200) + "..." : content;
+    return {
+      title: siteName || url,
+      url,
+      description: truncatedContent,
+      siteName,
+    };
+  });
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -392,6 +488,32 @@ async function runWebSearch(params: {
       tookMs: Date.now() - start,
       content: wrapWebContent(content),
       citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "seltz") {
+    const results = await runSeltzSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const mapped = results.map((entry) => ({
+      title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+      url: entry.url,
+      description: entry.description ? wrapWebContent(entry.description, "web_search") : "",
+      siteName: entry.siteName,
+    }));
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      results: mapped,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -469,11 +591,14 @@ export function createWebSearchTool(options?: {
 
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
+  const seltzConfig = resolveSeltzConfig(search);
 
   const description =
     provider === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
-      : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+      : provider === "seltz"
+        ? "Search the web using Seltz. Returns context-engineered web content with sources for real-time AI reasoning."
+        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -483,8 +608,13 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args) => {
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
+      const seltzAuth = provider === "seltz" ? resolveSeltzApiKey(seltzConfig) : undefined;
       const apiKey =
-        provider === "perplexity" ? perplexityAuth?.apiKey : resolveSearchApiKey(search);
+        provider === "perplexity"
+          ? perplexityAuth?.apiKey
+          : provider === "seltz"
+            ? seltzAuth?.apiKey
+            : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -540,4 +670,5 @@ export const __testing = {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
   normalizeFreshness,
+  resolveSeltzApiKey,
 } as const;
