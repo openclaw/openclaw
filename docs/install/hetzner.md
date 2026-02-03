@@ -168,7 +168,14 @@ OPENCLAW_WORKSPACE_DIR=/root/.openclaw/workspace
 
 GOG_KEYRING_PASSWORD=change-me-now
 XDG_CONFIG_HOME=/home/node/.openclaw
+
+# Optional: only if using the Claude Web provider auth flows
+# CLAUDE_AI_SESSION_KEY=
+# CLAUDE_WEB_SESSION_KEY=
+# CLAUDE_WEB_COOKIE=
 ```
+
+CLAUDE\_\* variables are optional; only set them if you use the Claude Web provider authentication flows.
 
 Generate strong secrets:
 
@@ -334,12 +341,15 @@ Expected output:
 
 ## 9) Configure Gateway
 
-Apply first-run fixes and recommended proxy settings via the CLI container:
+Apply first-run fixes via the CLI container. Run one of the following:
+– `setup`: minimal, non-interactive; creates missing config
+– `onboard`: guided, interactive; walks through onboarding
 
 ```bash
-# Missing config on first run
+# Option A (minimal, non-interactive): create missing config
 docker compose run --rm openclaw-cli -- setup
-# Or just run onboard
+
+# Option B (guided, interactive): onboarding wizard
 docker compose run --rm openclaw-cli -- onboard
 
 # Ensure local mode when running the gateway here
@@ -350,8 +360,6 @@ docker compose run --rm openclaw-cli -- config set gateway.controlUi.allowInsecu
 # Restart the gateway to apply changes
 docker compose restart openclaw-gateway
 ```
-
-Note: the bridge IP may differ on your host; adjust if needed.
 
 ## 10) Validate & Access
 
