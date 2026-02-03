@@ -4,13 +4,24 @@ import { normalizeProviderId } from "../model-selection.js";
 import { listProfilesForProvider } from "./profiles.js";
 import { isProfileInCooldown } from "./usage.js";
 
-function resolveProfileUnusableUntil(stats: {
-  cooldownUntil?: number;
-  disabledUntil?: number;
-}): number | null {
+function resolveProfileUnusableUntil(
+  stats: {
+    cooldownUntil?: number;
+    disabledUntil?: number;
+    modelCooldowns?: Record<string, { cooldownUntil?: number }>;
+  },
+  modelId?: string,
+): number | null {
   const values = [stats.cooldownUntil, stats.disabledUntil]
     .filter((value): value is number => typeof value === "number")
     .filter((value) => Number.isFinite(value) && value > 0);
+  // Include model-specific cooldown if modelId provided
+  if (modelId) {
+    const modelCooldown = stats.modelCooldowns?.[modelId]?.cooldownUntil;
+    if (typeof modelCooldown === "number" && Number.isFinite(modelCooldown) && modelCooldown > 0) {
+      values.push(modelCooldown);
+    }
+  }
   if (values.length === 0) {
     return null;
   }
@@ -22,8 +33,10 @@ export function resolveAuthProfileOrder(params: {
   store: AuthProfileStore;
   provider: string;
   preferredProfile?: string;
+  /** Optional model ID for per-model cooldown checking */
+  modelId?: string;
 }): string[] {
-  const { cfg, store, provider, preferredProfile } = params;
+  const { cfg, store, provider, preferredProfile, modelId } = params;
   const providerKey = normalizeProviderId(provider);
   const now = Date.now();
   const storedOrder = (() => {
@@ -122,7 +135,8 @@ export function resolveAuthProfileOrder(params: {
     const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
 
     for (const profileId of deduped) {
-      const cooldownUntil = resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? 0;
+      const cooldownUntil =
+        resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, modelId) ?? 0;
       if (
         typeof cooldownUntil === "number" &&
         Number.isFinite(cooldownUntil) &&
@@ -151,7 +165,7 @@ export function resolveAuthProfileOrder(params: {
   // Otherwise, use round-robin: sort by lastUsed (oldest first)
   // preferredProfile goes first if specified (for explicit user choice)
   // lastGood is NOT prioritized - that would defeat round-robin
-  const sorted = orderProfilesByMode(deduped, store);
+  const sorted = orderProfilesByMode(deduped, store, modelId);
 
   if (preferredProfile && sorted.includes(preferredProfile)) {
     return [preferredProfile, ...sorted.filter((e) => e !== preferredProfile)];
@@ -160,7 +174,7 @@ export function resolveAuthProfileOrder(params: {
   return sorted;
 }
 
-function orderProfilesByMode(order: string[], store: AuthProfileStore): string[] {
+function orderProfilesByMode(order: string[], store: AuthProfileStore, modelId?: string): string[] {
   const now = Date.now();
 
   // Partition into available and in-cooldown
@@ -168,7 +182,7 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore): string[]
   const inCooldown: string[] = [];
 
   for (const profileId of order) {
-    if (isProfileInCooldown(store, profileId)) {
+    if (isProfileInCooldown(store, profileId, modelId)) {
       inCooldown.push(profileId);
     } else {
       available.push(profileId);
@@ -201,7 +215,8 @@ function orderProfilesByMode(order: string[], store: AuthProfileStore): string[]
   const cooldownSorted = inCooldown
     .map((profileId) => ({
       profileId,
-      cooldownUntil: resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? now,
+      cooldownUntil:
+        resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}, modelId) ?? now,
     }))
     .toSorted((a, b) => a.cooldownUntil - b.cooldownUntil)
     .map((entry) => entry.profileId);

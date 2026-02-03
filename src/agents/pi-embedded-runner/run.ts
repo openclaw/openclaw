@@ -154,6 +154,7 @@ export async function runEmbeddedPiAgent(
         store: authStore,
         provider,
         preferredProfile: preferredProfileId,
+        modelId,
       });
       if (lockedProfileId && !profileOrder.includes(lockedProfileId)) {
         throw new Error(`Auth profile "${lockedProfileId}" is not configured for ${provider}.`);

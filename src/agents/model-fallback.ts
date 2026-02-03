@@ -260,6 +260,7 @@ export async function runWithModelFallback<T>(params: {
         cfg: params.cfg,
         store: authStore,
         provider: candidate.provider,
+        modelId: candidate.model,
       });
       // Check cooldown with model ID to enable per-model cooldown tracking
       const isAnyProfileAvailable = profileIds.some(
