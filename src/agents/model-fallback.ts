@@ -257,7 +257,7 @@ export async function runWithModelFallback<T>(params: {
   const modelConfig = params.cfg?.agents?.defaults?.model;
   const fallbackHttpCodes =
     typeof modelConfig === "object" && modelConfig && "fallbackHttpCodes" in modelConfig
-      ? (modelConfig.fallbackHttpCodes as number[] | undefined)
+      ? modelConfig.fallbackHttpCodes
       : undefined;
 
   for (let i = 0; i < candidates.length; i += 1) {
