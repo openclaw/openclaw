@@ -5,11 +5,14 @@ import type { AppViewState } from "./app-view-state";
 import type { DevicePairingList } from "./controllers/devices";
 import type { ExecApprovalRequest } from "./controllers/exec-approval";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals";
+import type { SkillMessage } from "./controllers/skills";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
 import type { Tab } from "./navigation";
 import type { ResolvedTheme, ThemeMode } from "./theme";
 import type {
   AgentsListResult,
+  AgentsFilesListResult,
+  AgentIdentityResult,
   ConfigSnapshot,
   ConfigUiHints,
   CronJob,
@@ -197,6 +200,23 @@ export class OpenClawApp extends LitElement {
   @state() agentsLoading = false;
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsError: string | null = null;
+  @state() agentsSelectedId: string | null = null;
+  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" =
+    "overview";
+  @state() agentFilesLoading = false;
+  @state() agentFilesError: string | null = null;
+  @state() agentFilesList: AgentsFilesListResult | null = null;
+  @state() agentFileContents: Record<string, string> = {};
+  @state() agentFileDrafts: Record<string, string> = {};
+  @state() agentFileActive: string | null = null;
+  @state() agentFileSaving = false;
+  @state() agentIdentityLoading = false;
+  @state() agentIdentityError: string | null = null;
+  @state() agentIdentityById: Record<string, AgentIdentityResult> = {};
+  @state() agentSkillsLoading = false;
+  @state() agentSkillsError: string | null = null;
+  @state() agentSkillsReport: SkillStatusReport | null = null;
+  @state() agentSkillsAgentId: string | null = null;
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
