@@ -9,6 +9,20 @@ import {
   AgentParamsSchema,
   type AgentSummary,
   AgentSummarySchema,
+  type AgentsFileEntry,
+  AgentsFileEntrySchema,
+  type AgentsFilesGetParams,
+  AgentsFilesGetParamsSchema,
+  type AgentsFilesGetResult,
+  AgentsFilesGetResultSchema,
+  type AgentsFilesListParams,
+  AgentsFilesListParamsSchema,
+  type AgentsFilesListResult,
+  AgentsFilesListResultSchema,
+  type AgentsFilesSetParams,
+  AgentsFilesSetParamsSchema,
+  type AgentsFilesSetResult,
+  AgentsFilesSetResultSchema,
   type AgentsListParams,
   AgentsListParamsSchema,
   type AgentsListResult,
@@ -209,6 +223,15 @@ export const validateAgentIdentityParams =
 export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(AgentWaitParamsSchema);
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
 export const validateAgentsListParams = ajv.compile<AgentsListParams>(AgentsListParamsSchema);
+export const validateAgentsFilesListParams = ajv.compile<AgentsFilesListParams>(
+  AgentsFilesListParamsSchema,
+);
+export const validateAgentsFilesGetParams = ajv.compile<AgentsFilesGetParams>(
+  AgentsFilesGetParamsSchema,
+);
+export const validateAgentsFilesSetParams = ajv.compile<AgentsFilesSetParams>(
+  AgentsFilesSetParamsSchema,
+);
 export const validateNodePairRequestParams = ajv.compile<NodePairRequestParams>(
   NodePairRequestParamsSchema,
 );
@@ -408,6 +431,13 @@ export {
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
   AgentSummarySchema,
+  AgentsFileEntrySchema,
+  AgentsFilesListParamsSchema,
+  AgentsFilesListResultSchema,
+  AgentsFilesGetParamsSchema,
+  AgentsFilesGetResultSchema,
+  AgentsFilesSetParamsSchema,
+  AgentsFilesSetResultSchema,
   AgentsListParamsSchema,
   AgentsListResultSchema,
   ModelsListParamsSchema,
@@ -482,6 +512,13 @@ export type {
   WebLoginStartParams,
   WebLoginWaitParams,
   AgentSummary,
+  AgentsFileEntry,
+  AgentsFilesListParams,
+  AgentsFilesListResult,
+  AgentsFilesGetParams,
+  AgentsFilesGetResult,
+  AgentsFilesSetParams,
+  AgentsFilesSetResult,
   AgentsListParams,
   AgentsListResult,
   SkillsStatusParams,
