@@ -41,6 +41,7 @@ import {
   useGatewayConnected,
   useChannelsStatus,
   useConfig,
+  useHealthProbe,
 } from "@/hooks";
 import type { ChannelSummary, ChannelAccountSnapshot } from "@/lib/api";
 
@@ -492,20 +493,16 @@ function ProvidersStatusCard({ className }: { className?: string }) {
 
 // Main Health Dashboard Component
 export function HealthDashboard({ className }: HealthDashboardProps) {
-  const [isRunningDiagnostics, setIsRunningDiagnostics] = React.useState(false);
-
   const { isConnected, isLoading: gatewayLoading } = useGatewayConnected();
   const {
     data: channelsData,
     isLoading: channelsLoading,
-    refetch: refetchChannels,
   } = useChannelsStatus({ probe: false });
   const {
     data: config,
     isLoading: configLoading,
-    refetch: refetchConfig,
   } = useConfig();
-  const { refetch: refetchHealth } = useGatewayHealth();
+  const healthProbe = useHealthProbe();
 
   // Calculate overall stats
   const stats = React.useMemo(() => {
@@ -546,29 +543,25 @@ export function HealthDashboard({ className }: HealthDashboardProps) {
 
   const isLoading = gatewayLoading || channelsLoading || configLoading;
 
-  // Run diagnostics
+  // Run diagnostics with deep health probing
   const runDiagnostics = async () => {
-    setIsRunningDiagnostics(true);
-
     try {
-      // Refetch all data
-      await Promise.all([
-        refetchHealth(),
-        refetchChannels(),
-        refetchConfig(),
-      ]);
+      const result = await healthProbe.mutateAsync();
 
-      // Show result toast
+      // Show result toast based on probe results
       const issues: string[] = [];
 
-      if (!isConnected) {
-        issues.push("Gateway not connected");
+      if (!result.gateway.ok) {
+        issues.push("Gateway health check failed");
       }
-      if (stats.providersConfigured === 0) {
+      if (result.providers.configured === 0) {
         issues.push("No AI providers configured");
       }
-      if (stats.channelsTotal > 0 && stats.channelsConnected < stats.channelsTotal) {
-        issues.push(`${stats.channelsTotal - stats.channelsConnected} channel(s) disconnected`);
+      if (result.channels.total > 0 && result.channels.connected < result.channels.total) {
+        issues.push(`${result.channels.total - result.channels.connected} of ${result.channels.total} channel(s) disconnected`);
+      }
+      if (result.channels.errors.length > 0) {
+        issues.push(`${result.channels.errors.length} channel error(s)`);
       }
 
       if (issues.length === 0) {
@@ -584,8 +577,6 @@ export function HealthDashboard({ className }: HealthDashboardProps) {
       toast.error("Diagnostics failed", {
         description: error instanceof Error ? error.message : "Unknown error",
       });
-    } finally {
-      setIsRunningDiagnostics(false);
     }
   };
 
@@ -656,12 +647,12 @@ export function HealthDashboard({ className }: HealthDashboardProps) {
           <Button
             variant="outline"
             onClick={runDiagnostics}
-            disabled={isRunningDiagnostics}
+            disabled={healthProbe.isPending}
           >
-            {isRunningDiagnostics ? (
+            {healthProbe.isPending ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Running...
+                Probing...
               </>
             ) : (
               <>

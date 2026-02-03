@@ -24,9 +24,25 @@ export {
   useGoals,
   useGoal,
   useGoalsByStatus,
+  useInvalidateGoals,
   goalKeys,
 } from "./useGoals";
-export type { Goal, GoalStatus, Milestone } from "./useGoals";
+export type { Goal, GoalStatus, GoalPriority, Milestone, GoalDetail } from "./useGoals";
+
+// Overseer (raw overseer hooks)
+export {
+  useOverseerStatus,
+  useOverseerGoals,
+  useOverseerGoal,
+  useOverseerStalledAssignments,
+  overseerKeys,
+} from "./useOverseer";
+export type {
+  OverseerStatusResult,
+  OverseerGoalStatusResult,
+  OverseerGoalSummary,
+  OverseerGoalDetail,
+} from "./useOverseer";
 
 // Memories
 export {
@@ -104,6 +120,14 @@ export {
 } from "./useGateway";
 export type { HealthResponse, StatusResponse } from "./useGateway";
 
+// Health (advanced probing and system health)
+export {
+  useHealthProbe,
+  useSystemHealth,
+  healthKeys,
+} from "./useHealth";
+export type { SystemHealthStatus } from "./useHealth";
+
 // User Settings
 export {
   useUserProfile,
@@ -130,13 +154,22 @@ export {
 
 // Cron Jobs
 export {
+  useCronStatus,
   useCronJobs,
   useCronJob,
   useCronJobsByAgent,
   useEnabledCronJobs,
+  useCronRunHistory,
+  useInvalidateCron,
   cronKeys,
 } from "./useCron";
-export type { CronJob, CronJobListResult } from "./useCron";
+export type {
+  CronJob,
+  CronJobListResult,
+  CronStatusResult,
+  CronRunsResult,
+  CronRunLogEntry,
+} from "./useCron";
 
 // Skills
 export {
