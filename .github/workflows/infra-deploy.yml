@@ -1,0 +1,58 @@
+name: Deploy Infra
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: eu-central-1
+  TF_STATE_BUCKET: openclaw-tfstate-aron98
+  TF_STATE_TABLE: openclaw-tf-lock
+  TF_STATE_KEY: openclaw/prod/terraform.tfstate
+  TF_WORKING_DIR: infra
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: OpenTofu Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          tofu init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=${TF_STATE_KEY}" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="dynamodb_table=${TF_STATE_TABLE}"
+
+      - name: OpenTofu Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: tofu apply -auto-approve
+
+      - name: Read instance id
+        id: tf
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: echo "instance_id=$(tofu output -raw instance_id)" >> "$GITHUB_OUTPUT"
+
+      - name: Restart openclawd
+        run: |
+          aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --targets "Key=instanceids,Values=${{ steps.tf.outputs.instance_id }}" \
+            --parameters "commands=sudo systemctl restart openclawd"

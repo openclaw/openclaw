@@ -1,0 +1,13 @@
+{
+  "gateway": {
+    "port": 18789
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/var/lib/openclaw/workspace"
+    }
+  },
+  "logging": {
+    "file": "/tmp/openclaw/openclaw.log"
+  }
+}

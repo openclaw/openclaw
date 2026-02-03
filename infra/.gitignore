@@ -1,0 +1,8 @@
+openclaw-secret.json
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log

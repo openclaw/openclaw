@@ -1,0 +1,263 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+OPENCLAW_SECRET_ID="${openclaw_secret_id}"
+OPENCLAW_STATE_DIR="${openclaw_state_dir}"
+OPENCLAW_USER="openclaw"
+OPENCLAW_DATA_VOLUME_ID="${openclaw_data_volume_id}"
+OPENCLAW_REPO_URL="${openclaw_repo_url}"
+OPENCLAW_REPO_REF="${openclaw_repo_ref}"
+OPENCLAW_REPO_DIR="${openclaw_state_dir}/workspace/openclaw"
+AWS_REGION="${aws_region}"
+AWS_DEFAULT_REGION="${aws_region}"
+
+export AWS_REGION
+export AWS_DEFAULT_REGION
+
+cat > /usr/local/bin/openclaw-bootstrap <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+export HOME="$${HOME:-/root}"
+
+OPENCLAW_USER="openclaw"
+OPENCLAW_STATE_DIR="${openclaw_state_dir}"
+OPENCLAW_DATA_VOLUME_ID="${openclaw_data_volume_id}"
+OPENCLAW_REPO_DIR="${openclaw_state_dir}/workspace/openclaw"
+OPENCLAW_BOOTSTRAP_MARKER="${openclaw_state_dir}/.bootstrap-done"
+OPENCLAW_SWAP_GB=4
+
+if [ -f "$OPENCLAW_BOOTSTRAP_MARKER" ]; then
+  exit 0
+fi
+
+dnf -y update
+dnf -y install awscli ca-certificates curl-minimal e2fsprogs git gzip make perl python3 shadow-utils tar which xz
+
+if ! swapon --show | grep -q "^/swapfile"; then
+  fallocate -l "$${OPENCLAW_SWAP_GB}G" /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  if ! grep -q "^/swapfile" /etc/fstab; then
+    echo "/swapfile none swap sw 0 0" >> /etc/fstab
+  fi
+fi
+
+if ! swapon --show | grep -q "^/swapfile"; then
+  fallocate -l "$${OPENCLAW_SWAP_GB}G" /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  if ! grep -q "^/swapfile" /etc/fstab; then
+    echo "/swapfile none swap sw 0 0" >> /etc/fstab
+  fi
+fi
+
+data_volume_short="$(echo "$OPENCLAW_DATA_VOLUME_ID" | sed 's/^vol-/vol/')"
+data_device="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$data_volume_short"
+if [ ! -e "$data_device" ]; then
+  data_device="/dev/xvdf"
+fi
+
+for i in $(seq 1 60); do
+  if [ -b "$data_device" ]; then
+    break
+  fi
+  sleep 2
+done
+
+if [ ! -b "$data_device" ]; then
+  echo "OpenClaw data volume not found at $data_device" >&2
+  exit 1
+fi
+
+if ! blkid "$data_device" >/dev/null 2>&1; then
+  mkfs.ext4 -F "$data_device"
+fi
+
+mkdir -p "$OPENCLAW_STATE_DIR"
+if ! mountpoint -q "$OPENCLAW_STATE_DIR"; then
+  mount "$data_device" "$OPENCLAW_STATE_DIR"
+fi
+data_uuid=$(blkid -s UUID -o value "$data_device")
+if ! grep -q "$data_uuid" /etc/fstab; then
+  echo "UUID=$data_uuid $OPENCLAW_STATE_DIR ext4 defaults,nofail 0 2" >> /etc/fstab
+fi
+
+if ! id -u "$OPENCLAW_USER" >/dev/null 2>&1; then
+  useradd --system --home-dir "$OPENCLAW_STATE_DIR" --shell /sbin/nologin "$OPENCLAW_USER"
+fi
+
+mkdir -p "/etc/openclaw" "$OPENCLAW_STATE_DIR/workspace" "$OPENCLAW_STATE_DIR/credentials" "$OPENCLAW_STATE_DIR/agents/main/agent"
+chown -R "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_STATE_DIR"
+
+curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
+dnf -y install nodejs
+
+npm install -g pnpm@10.23.0
+
+if [ ! -d "/home/linuxbrew/.linuxbrew" ]; then
+  mkdir -p /home/linuxbrew/.linuxbrew
+  chown -R "$OPENCLAW_USER:$OPENCLAW_USER" /home/linuxbrew
+  sudo -u "$OPENCLAW_USER" env HOME="$OPENCLAW_STATE_DIR" NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+fi
+
+if [ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
+  export HOMEBREW_NO_ENV_HINTS=1
+  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+  echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' > /etc/profile.d/brew.sh
+  chmod 644 /etc/profile.d/brew.sh
+  sudo -u "$OPENCLAW_USER" /home/linuxbrew/.linuxbrew/bin/brew install gcc
+fi
+
+touch "$OPENCLAW_BOOTSTRAP_MARKER"
+EOF
+
+cat > /usr/local/bin/openclaw-refresh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+OPENCLAW_STATE_DIR="${openclaw_state_dir}"
+OPENCLAW_REPO_URL="${openclaw_repo_url}"
+OPENCLAW_REPO_REF="${openclaw_repo_ref}"
+OPENCLAW_REPO_DIR="${openclaw_state_dir}/workspace/openclaw"
+OPENCLAW_BUILD_MARKER="${openclaw_state_dir}/.last-build"
+OPENCLAW_NODE_HEAP_MB=3072
+
+export HOME="$${HOME:-$OPENCLAW_STATE_DIR}"
+export NODE_OPTIONS="--max-old-space-size=$${OPENCLAW_NODE_HEAP_MB}"
+
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+if [ -x "/home/linuxbrew/.linuxbrew/bin/brew" ]; then
+  export HOMEBREW_NO_ENV_HINTS=1
+  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+fi
+
+mkdir -p "$(dirname "$OPENCLAW_REPO_DIR")"
+if [ ! -d "$OPENCLAW_REPO_DIR/.git" ]; then
+  git clone "$OPENCLAW_REPO_URL" "$OPENCLAW_REPO_DIR"
+fi
+
+git -C "$OPENCLAW_REPO_DIR" fetch --prune origin
+git -C "$OPENCLAW_REPO_DIR" checkout "$OPENCLAW_REPO_REF"
+git -C "$OPENCLAW_REPO_DIR" pull --ff-only origin "$OPENCLAW_REPO_REF"
+
+current_rev="$(git -C "$OPENCLAW_REPO_DIR" rev-parse HEAD)"
+last_rev=""
+if [ -f "$OPENCLAW_BUILD_MARKER" ]; then
+  last_rev="$(cat "$OPENCLAW_BUILD_MARKER")"
+fi
+
+if [ "$current_rev" != "$last_rev" ] || [ ! -d "$OPENCLAW_REPO_DIR/dist" ]; then
+  pnpm -C "$OPENCLAW_REPO_DIR" install
+  pnpm -C "$OPENCLAW_REPO_DIR" ui:build
+  pnpm -C "$OPENCLAW_REPO_DIR" build
+  echo "$current_rev" > "$OPENCLAW_BUILD_MARKER"
+fi
+EOF
+
+chmod 755 /usr/local/bin/openclaw-bootstrap /usr/local/bin/openclaw-refresh
+
+/usr/local/bin/openclaw-bootstrap
+
+cat > /usr/local/bin/openclaw-sync-secrets <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+secret_id="$1"
+env_path="${openclaw_state_dir}/openclawd.env"
+
+if [ -z "$secret_id" ]; then
+  echo "Secret id not set"
+  exit 1
+fi
+
+secret_json=""
+if ! secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_id" --query SecretString --output text 2>/dev/null); then
+  echo "Secret not available: $secret_id"
+  exit 0
+fi
+
+if [ -z "$secret_json" ] || [ "$secret_json" = "None" ]; then
+  echo "Secret is empty: $secret_id"
+  exit 0
+fi
+
+python3 - "$secret_json" <<'PY'
+import json
+import sys
+
+data = json.loads(sys.argv[1])
+
+def is_env_key(key: str) -> bool:
+    if not key or not key.isupper():
+        return False
+    if not key[0].isalpha():
+        return False
+    for char in key:
+        if not (char.isalnum() or char == "_"):
+            return False
+    return True
+
+env_lines = []
+for key in sorted(data.keys()):
+    if not isinstance(key, str) or not is_env_key(key):
+        continue
+    value = data.get(key)
+    if value is None:
+        continue
+    env_lines.append(f"{key}={value}")
+
+if env_lines:
+    with open("${openclaw_state_dir}/openclawd.env", "w") as handle:
+      handle.write("\n".join(env_lines) + "\n")
+PY
+EOF
+
+chmod 755 /usr/local/bin/openclaw-sync-secrets
+
+if [ ! -f "$OPENCLAW_STATE_DIR/openclaw.json" ]; then
+  cat > "$OPENCLAW_STATE_DIR/openclaw.json" <<'JSON'
+${openclaw_config}
+JSON
+fi
+
+chown -R "$OPENCLAW_USER:$OPENCLAW_USER" "$OPENCLAW_STATE_DIR"
+if [ -f "$OPENCLAW_STATE_DIR/openclawd.env" ]; then
+  chmod 600 "$OPENCLAW_STATE_DIR/openclawd.env"
+fi
+
+cat > /etc/systemd/system/openclawd.service <<UNIT
+[Unit]
+Description=OpenClaw Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+TimeoutStartSec=20min
+Environment=OPENCLAW_STATE_DIR=${openclaw_state_dir}
+Environment=OPENCLAW_CONFIG_PATH=${openclaw_state_dir}/openclaw.json
+Environment=OPENCLAW_REPO_DIR=${openclaw_state_dir}/workspace/openclaw
+Environment=OPENCLAW_REPO_URL=${openclaw_repo_url}
+Environment=OPENCLAW_REPO_REF=${openclaw_repo_ref}
+EnvironmentFile=-${openclaw_state_dir}/openclawd.env
+ExecStartPre=/usr/local/bin/openclaw-refresh
+ExecStartPre=/usr/local/bin/openclaw-sync-secrets ${openclaw_secret_id}
+ExecStart=/usr/bin/env node ${openclaw_state_dir}/workspace/openclaw/openclaw.mjs gateway --port 18789 --verbose
+WorkingDirectory=${openclaw_state_dir}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable openclawd
+systemctl restart openclawd
