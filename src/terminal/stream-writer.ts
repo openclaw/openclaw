@@ -20,7 +20,9 @@ export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): S
   let notified = false;
 
   const noteBrokenPipe = (err: NodeJS.ErrnoException, stream: NodeJS.WriteStream) => {
-    if (notified) return;
+    if (notified) {
+      return;
+    }
     notified = true;
     options.onBrokenPipe?.(err, stream);
   };
@@ -35,7 +37,9 @@ export function createSafeStreamWriter(options: SafeStreamWriterOptions = {}): S
   };
 
   const write = (stream: NodeJS.WriteStream, text: string): boolean => {
-    if (closed) return false;
+    if (closed) {
+      return false;
+    }
     try {
       options.beforeWrite?.();
     } catch (err) {

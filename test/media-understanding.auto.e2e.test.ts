@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import type { OpenClawConfig } from "../src/config/config.js";
 import type { MsgContext } from "../src/auto-reply/templating.js";
+import type { OpenClawConfig } from "../src/config/config.js";
 
 const makeTempDir = async (prefix: string) => await fs.mkdtemp(path.join(os.tmpdir(), prefix));
 
@@ -64,7 +62,7 @@ describe("media understanding auto-detect (e2e)", () => {
       await writeExecutable(
         binDir,
         "sherpa-onnx-offline",
-        "#!/usr/bin/env bash\n" + 'echo "{\\"text\\":\\"sherpa ok\\"}"\n',
+        `#!/usr/bin/env bash\necho "{\\"text\\":\\"sherpa ok\\"}"\n`,
       );
 
       process.env.PATH = `${binDir}:/usr/bin:/bin`;
@@ -143,7 +141,7 @@ describe("media understanding auto-detect (e2e)", () => {
       await writeExecutable(
         binDir,
         "gemini",
-        "#!/usr/bin/env bash\necho '{" + '\\"response\\":\\"gemini ok\\"' + "}'\n",
+        `#!/usr/bin/env bash\necho '{\\"response\\":\\"gemini ok\\"' + "}'\n`,
       );
 
       process.env.PATH = `${binDir}:/usr/bin:/bin`;

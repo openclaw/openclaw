@@ -6,16 +6,17 @@ import {
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
 } from "openclaw/plugin-sdk";
+import type { CoreConfig, DmPolicy } from "./types.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import { listMatrixDirectoryPeersLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
-import type { CoreConfig, DmPolicy } from "./types.js";
 
 const channel = "matrix" as const;
 
 function setMatrixDmPolicy(cfg: CoreConfig, policy: DmPolicy) {
-  const allowFrom = policy === "open" ? addWildcardAllowFrom(cfg.channels?.matrix?.dm?.allowFrom) : undefined;
+  const allowFrom =
+    policy === "open" ? addWildcardAllowFrom(cfg.channels?.matrix?.dm?.allowFrom) : undefined;
   return {
     ...cfg,
     channels: {
@@ -248,8 +249,12 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: existing.homeserver ?? envHomeserver,
         validate: (value) => {
           const raw = String(value ?? "").trim();
-          if (!raw) return "Required";
-          if (!/^https?:\/\//i.test(raw)) return "Use a full URL (https://...)";
+          if (!raw) {
+            return "Required";
+          }
+          if (!/^https?:\/\//i.test(raw)) {
+            return "Use a full URL (https://...)";
+          }
           return undefined;
         },
       }),
@@ -273,13 +278,13 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
 
     if (!accessToken && !password) {
       // Ask auth method FIRST before asking for user ID
-      const authMode = (await prompter.select({
+      const authMode = await prompter.select({
         message: "Matrix auth method",
         options: [
           { value: "token", label: "Access token (user ID fetched automatically)" },
           { value: "password", label: "Password (requires user ID)" },
         ],
-      })) as "token" | "password";
+      });
 
       if (authMode === "token") {
         accessToken = String(
@@ -299,9 +304,15 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
             initialValue: existing.userId ?? envUserId,
             validate: (value) => {
               const raw = String(value ?? "").trim();
-              if (!raw) return "Required";
-              if (!raw.startsWith("@")) return "Matrix user IDs should start with @";
-              if (!raw.includes(":")) return "Matrix user IDs should include a server (:server)";
+              if (!raw) {
+                return "Required";
+              }
+              if (!raw.startsWith("@")) {
+                return "Matrix user IDs should start with @";
+              }
+              if (!raw.includes(":")) {
+                return "Matrix user IDs should include a server (:server)";
+              }
               return undefined;
             },
           }),
@@ -369,7 +380,9 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
             const unresolved: string[] = [];
             for (const entry of accessConfig.entries) {
               const trimmed = entry.trim();
-              if (!trimmed) continue;
+              if (!trimmed) {
+                continue;
+              }
               const cleaned = trimmed.replace(/^(room|channel):/i, "").trim();
               if (cleaned.startsWith("!") && cleaned.includes(":")) {
                 resolvedIds.push(cleaned);
@@ -390,10 +403,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
                 unresolved.push(entry);
               }
             }
-            roomKeys = [
-              ...resolvedIds,
-              ...unresolved.map((entry) => entry.trim()).filter(Boolean),
-            ];
+            roomKeys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
             if (resolvedIds.length > 0 || unresolved.length > 0) {
               await prompter.note(
                 [

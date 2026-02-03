@@ -89,6 +89,8 @@ function ensureColumn(
   definition: string,
 ): void {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-  if (rows.some((row) => row.name === column)) return;
+  if (rows.some((row) => row.name === column)) {
+    return;
+  }
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }

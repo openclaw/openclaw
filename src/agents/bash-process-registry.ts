@@ -7,7 +7,9 @@ const MAX_JOB_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 const DEFAULT_PENDING_OUTPUT_CHARS = 30_000;
 
 function clampTtl(value: number | undefined) {
-  if (!value || Number.isNaN(value)) return DEFAULT_JOB_TTL_MS;
+  if (!value || Number.isNaN(value)) {
+    return DEFAULT_JOB_TTL_MS;
+  }
   return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
 }
 
@@ -155,7 +157,9 @@ export function markBackgrounded(session: ProcessSession) {
 
 function moveToFinished(session: ProcessSession, status: ProcessStatus) {
   runningSessions.delete(session.id);
-  if (!session.backgrounded) return;
+  if (!session.backgrounded) {
+    return;
+  }
   finishedSessions.set(session.id, {
     id: session.id,
     command: session.command,
@@ -174,18 +178,24 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
 }
 
 export function tail(text: string, max = 2000) {
-  if (text.length <= max) return text;
+  if (text.length <= max) {
+    return text;
+  }
   return text.slice(text.length - max);
 }
 
 function sumPendingChars(buffer: string[]) {
   let total = 0;
-  for (const chunk of buffer) total += chunk.length;
+  for (const chunk of buffer) {
+    total += chunk.length;
+  }
   return total;
 }
 
 function capPendingBuffer(buffer: string[], pendingChars: number, cap: number) {
-  if (pendingChars <= cap) return pendingChars;
+  if (pendingChars <= cap) {
+    return pendingChars;
+  }
   const last = buffer.at(-1);
   if (last && last.length >= cap) {
     buffer.length = 0;
@@ -205,7 +215,9 @@ function capPendingBuffer(buffer: string[], pendingChars: number, cap: number) {
 }
 
 export function trimWithCap(text: string, max: number) {
-  if (text.length <= max) return text;
+  if (text.length <= max) {
+    return text;
+  }
   return text.slice(text.length - max);
 }
 
@@ -228,7 +240,9 @@ export function resetProcessRegistryForTests() {
 }
 
 export function setJobTtlMs(value?: number) {
-  if (value === undefined || Number.isNaN(value)) return;
+  if (value === undefined || Number.isNaN(value)) {
+    return;
+  }
   jobTtlMs = clampTtl(value);
   stopSweeper();
   startSweeper();
@@ -244,13 +258,17 @@ function pruneFinishedSessions() {
 }
 
 function startSweeper() {
-  if (sweeper) return;
+  if (sweeper) {
+    return;
+  }
   sweeper = setInterval(pruneFinishedSessions, Math.max(30_000, jobTtlMs / 6));
   sweeper.unref?.();
 }
 
 function stopSweeper() {
-  if (!sweeper) return;
+  if (!sweeper) {
+    return;
+  }
   clearInterval(sweeper);
   sweeper = null;
 }

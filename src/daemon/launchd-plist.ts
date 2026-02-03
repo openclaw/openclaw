@@ -17,11 +17,15 @@ const plistUnescape = (value: string): string =>
     .replaceAll("&amp;", "&");
 
 const renderEnvDict = (env: Record<string, string | undefined> | undefined): string => {
-  if (!env) return "";
+  if (!env) {
+    return "";
+  }
   const entries = Object.entries(env).filter(
     ([, value]) => typeof value === "string" && value.trim(),
   );
-  if (entries.length === 0) return "";
+  if (entries.length === 0) {
+    return "";
+  }
   const items = entries
     .map(
       ([key, value]) =>
@@ -40,7 +44,9 @@ export async function readLaunchAgentProgramArgumentsFromFile(plistPath: string)
   try {
     const plist = await fs.readFile(plistPath, "utf8");
     const programMatch = plist.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/i);
-    if (!programMatch) return null;
+    if (!programMatch) {
+      return null;
+    }
     const args = Array.from(programMatch[1].matchAll(/<string>([\s\S]*?)<\/string>/gi)).map(
       (match) => plistUnescape(match[1] ?? "").trim(),
     );
@@ -55,7 +61,9 @@ export async function readLaunchAgentProgramArgumentsFromFile(plistPath: string)
         /<key>([\s\S]*?)<\/key>\s*<string>([\s\S]*?)<\/string>/gi,
       )) {
         const key = plistUnescape(pair[1] ?? "").trim();
-        if (!key) continue;
+        if (!key) {
+          continue;
+        }
         const value = plistUnescape(pair[2] ?? "").trim();
         environment[key] = value;
       }

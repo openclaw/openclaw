@@ -28,13 +28,13 @@ In-context state uses text-prefixed markers to persist state within the conversa
 
 In-context state is appropriate for:
 
-| Factor | In-Context | Use File-Based Instead |
-|--------|------------|------------------------|
-| Statement count | < 30 statements | >= 30 statements |
-| Parallel branches | < 5 concurrent | >= 5 concurrent |
-| Imported programs | 0-2 imports | >= 3 imports |
-| Nested depth | <= 2 levels | > 2 levels |
-| Expected duration | < 5 minutes | >= 5 minutes |
+| Factor            | In-Context      | Use File-Based Instead |
+| ----------------- | --------------- | ---------------------- |
+| Statement count   | < 30 statements | >= 30 statements       |
+| Parallel branches | < 5 concurrent  | >= 5 concurrent        |
+| Imported programs | 0-2 imports     | >= 3 imports           |
+| Nested depth      | <= 2 levels     | > 2 levels             |
+| Expected duration | < 5 minutes     | >= 5 minutes           |
 
 Announce your state mode at program start:
 
@@ -49,23 +49,23 @@ OpenProse Program Start
 
 Use text-prefixed markers for each state change:
 
-| Marker | Category | Usage |
-|--------|----------|-------|
-| [Program] | Program | Start, end, definition collection |
-| [Position] | Position | Current statement being executed |
-| [Binding] | Binding | Variable assignment or update |
-| [Input] | Input | Receiving inputs from caller |
-| [Output] | Output | Producing outputs for caller |
-| [Import] | Import | Fetching and invoking imported programs |
-| [Success] | Success | Session or block completion |
-| [Warning] | Error | Failures and exceptions |
-| [Parallel] | Parallel | Entering, branch status, joining |
-| [Loop] | Loop | Iteration, condition evaluation |
-| [Pipeline] | Pipeline | Stage progress |
-| [Try] | Error handling | Try/catch/finally |
-| [Flow] | Flow | Condition evaluation results |
-| [Frame+] | Call Stack | Push new frame (block invocation) |
-| [Frame-] | Call Stack | Pop frame (block completion) |
+| Marker     | Category       | Usage                                   |
+| ---------- | -------------- | --------------------------------------- |
+| [Program]  | Program        | Start, end, definition collection       |
+| [Position] | Position       | Current statement being executed        |
+| [Binding]  | Binding        | Variable assignment or update           |
+| [Input]    | Input          | Receiving inputs from caller            |
+| [Output]   | Output         | Producing outputs for caller            |
+| [Import]   | Import         | Fetching and invoking imported programs |
+| [Success]  | Success        | Session or block completion             |
+| [Warning]  | Error          | Failures and exceptions                 |
+| [Parallel] | Parallel       | Entering, branch status, joining        |
+| [Loop]     | Loop           | Iteration, condition evaluation         |
+| [Pipeline] | Pipeline       | Stage progress                          |
+| [Try]      | Error handling | Try/catch/finally                       |
+| [Flow]     | Flow           | Condition evaluation results            |
+| [Frame+]   | Call Stack     | Push new frame (block invocation)       |
+| [Frame-]   | Call Stack     | Pop frame (block completion)            |
 
 ---
 
@@ -185,6 +185,7 @@ Track block invocations with frame markers:
 ```
 
 **Key points:**
+
 - Each `[Frame+]` must have a matching `[Frame-]`
 - `execution_id` uniquely identifies each invocation
 - `depth` shows call stack depth (1 = first level)
@@ -236,13 +237,14 @@ For variable resolution across scopes:
 
 When passing context to sessions, format appropriately:
 
-| Context Size | Strategy |
-|--------------|----------|
-| < 2000 chars | Pass verbatim |
+| Context Size    | Strategy                |
+| --------------- | ----------------------- |
+| < 2000 chars    | Pass verbatim           |
 | 2000-8000 chars | Summarize to key points |
-| > 8000 chars | Extract essentials only |
+| > 8000 chars    | Extract essentials only |
 
 **Format:**
+
 ```
 Context provided:
 ---
@@ -274,6 +276,7 @@ loop until **analysis complete** (max: 3):
 ```
 
 **Narration:**
+
 ```
 [Program] Program Start
    Collecting definitions...
@@ -322,20 +325,20 @@ loop until **analysis complete** (max: 3):
 
 The VM must track these state categories in narration:
 
-| Category | What to Track | Example |
-|----------|---------------|---------|
-| **Import Registry** | Imported programs and aliases | `research: @alice/research` |
-| **Agent Registry** | All agent definitions | `researcher: {model: sonnet, prompt: "..."}` |
-| **Block Registry** | All block definitions (hoisted) | `review: {params: [topic], body: [...]}` |
-| **Input Bindings** | Inputs received from caller | `topic = "quantum computing"` |
-| **Output Bindings** | Outputs to return to caller | `findings = "Research shows..."` |
-| **Variable Bindings** | Name -> value mapping (with execution_id) | `result = "..." (execution_id: 3)` |
-| **Variable Mutability** | Which are `let` vs `const` vs `output` | `research: let, findings: output` |
-| **Execution Position** | Current statement index | Statement 3 of 7 |
-| **Loop State** | Counter, max, condition | Iteration 2 of max 5 |
-| **Parallel State** | Branches, results, strategy | `{a: complete, b: pending}` |
-| **Error State** | Exception, retry count | Retry 2 of 3, error: "timeout" |
-| **Call Stack** | Stack of execution frames | See below |
+| Category                | What to Track                             | Example                                      |
+| ----------------------- | ----------------------------------------- | -------------------------------------------- |
+| **Import Registry**     | Imported programs and aliases             | `research: @alice/research`                  |
+| **Agent Registry**      | All agent definitions                     | `researcher: {model: sonnet, prompt: "..."}` |
+| **Block Registry**      | All block definitions (hoisted)           | `review: {params: [topic], body: [...]}`     |
+| **Input Bindings**      | Inputs received from caller               | `topic = "quantum computing"`                |
+| **Output Bindings**     | Outputs to return to caller               | `findings = "Research shows..."`             |
+| **Variable Bindings**   | Name -> value mapping (with execution_id) | `result = "..." (execution_id: 3)`           |
+| **Variable Mutability** | Which are `let` vs `const` vs `output`    | `research: let, findings: output`            |
+| **Execution Position**  | Current statement index                   | Statement 3 of 7                             |
+| **Loop State**          | Counter, max, condition                   | Iteration 2 of max 5                         |
+| **Parallel State**      | Branches, results, strategy               | `{a: complete, b: pending}`                  |
+| **Error State**         | Exception, retry count                    | Retry 2 of 3, error: "timeout"               |
+| **Call Stack**          | Stack of execution frames                 | See below                                    |
 
 ### Call Stack State
 
@@ -349,6 +352,7 @@ For block invocations, track the full call stack:
 ```
 
 Each frame tracks:
+
 - `execution_id`: Unique ID for this invocation
 - `block`: Name of the block
 - `depth`: Position in call stack

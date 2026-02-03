@@ -84,7 +84,7 @@ Message context lines include `discord message id` and `channel` fields you can 
 {
   "action": "stickerUpload",
   "guildId": "999",
-  "name": "moltbot_wave",
+  "name": "openclaw_wave",
   "description": "OpenClaw waving hello",
   "tags": "👋",
   "mediaUrl": "file:///tmp/wave.png"
@@ -131,6 +131,7 @@ Message context lines include `discord message id` and `channel` fields you can 
 ## Action gating
 
 Use `discord.actions.*` to disable action groups:
+
 - `reactions` (react + reactions list + emojiList)
 - `stickers`, `polls`, `permissions`, `messages`, `threads`, `pins`, `search`
 - `emojiUploads`, `stickerUploads`
@@ -138,6 +139,7 @@ Use `discord.actions.*` to disable action groups:
 - `roles` (role add/remove, default `false`)
 - `channels` (channel/category create/edit/delete/move, default `false`)
 - `moderation` (timeout/kick/ban, default `false`)
+
 ### Read recent messages
 
 ```json
@@ -435,6 +437,7 @@ Create, edit, delete, and move channels and categories. Enable via `discord.acti
 **Keep it conversational!** Discord is a chat platform, not documentation.
 
 ### Do
+
 - Short, punchy messages (1-3 sentences ideal)
 - Multiple quick replies > one wall of text
 - Use emoji for tone/emphasis 🦞
@@ -443,6 +446,7 @@ Create, edit, delete, and move channels and categories. Enable via `discord.acti
 - Match the energy of the conversation
 
 ### Don't
+
 - No markdown tables (Discord renders them as ugly raw `| text |`)
 - No `## Headers` for casual chat (use **bold** or CAPS for emphasis)
 - Avoid multi-paragraph essays
@@ -450,6 +454,7 @@ Create, edit, delete, and move channels and categories. Enable via `discord.acti
 - Skip the "I'd be happy to help!" fluff
 
 ### Formatting that works
+
 - **bold** for emphasis
 - `code` for technical terms
 - Lists for multiple items
@@ -459,6 +464,7 @@ Create, edit, delete, and move channels and categories. Enable via `discord.acti
 ### Example transformations
 
 ❌ Bad:
+
 ```
 I'd be happy to help with that! Here's a comprehensive overview of the versioning strategies available:
 
@@ -470,6 +476,7 @@ CalVer uses date-based versions like...
 ```
 
 ✅ Good:
+
 ```
 versioning options: semver (1.2.3), calver (2026.01.04), or yolo (`latest` forever). what fits your release cadence?
 ```

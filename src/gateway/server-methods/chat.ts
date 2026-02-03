@@ -1,7 +1,9 @@
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-
+import type { MsgContext } from "../../auto-reply/templating.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../../agents/identity.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
@@ -12,7 +14,6 @@ import {
   extractShortModelName,
   type ResponsePrefixContext,
 } from "../../auto-reply/reply/response-prefix-template.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -22,6 +23,7 @@ import {
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import {
   ErrorCodes,
   errorShape,
@@ -32,16 +34,15 @@ import {
   validateChatSendParams,
 } from "../protocol/index.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import { ensureTranscriptFile } from "../session-utils.fs.js";
 import {
   capArrayByJsonBytes,
   loadSessionEntry,
   readSessionMessages,
   resolveSessionModelRef,
 } from "../session-utils.js";
-import { ensureTranscriptFile } from "../session-utils.fs.js";
-import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -56,8 +57,12 @@ function resolveTranscriptPath(params: {
   sessionFile?: string;
 }): string | null {
   const { sessionId, storePath, sessionFile } = params;
-  if (sessionFile) return sessionFile;
-  if (!storePath) return null;
+  if (sessionFile) {
+    return sessionFile;
+  }
+  if (!storePath) {
+    return null;
+  }
   return path.join(path.dirname(storePath), `${sessionId}.jsonl`);
 }
 
@@ -422,9 +427,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
+      // Inject timestamp so agents know the current date/time.
+      // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
+      // See: https://github.com/moltbot/moltbot/issues/3658
+      const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
+
       const ctx: MsgContext = {
         Body: parsedMessage,
-        BodyForAgent: parsedMessage,
+        BodyForAgent: stampedMessage,
         BodyForCommands: commandBody,
         RawBody: parsedMessage,
         CommandBody: commandBody,
@@ -455,9 +465,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
-          if (info.kind !== "final") return;
+          if (info.kind !== "final") {
+            return;
+          }
           const text = payload.text?.trim() ?? "";
-          if (!text) return;
+          if (!text) {
+            return;
+          }
           finalReplyParts.push(text);
         },
       });

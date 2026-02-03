@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import {
   GroupChatSchema,
   InboundDebounceSchema,
@@ -13,6 +12,31 @@ const SessionResetConfigSchema = z
     mode: z.union([z.literal("daily"), z.literal("idle")]).optional(),
     atHour: z.number().int().min(0).max(23).optional(),
     idleMinutes: z.number().int().positive().optional(),
+  })
+  .strict();
+
+export const SessionSendPolicySchema = z
+  .object({
+    default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
+    rules: z
+      .array(
+        z
+          .object({
+            action: z.union([z.literal("allow"), z.literal("deny")]),
+            match: z
+              .object({
+                channel: z.string().optional(),
+                chatType: z
+                  .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
+                  .optional(),
+                keyPrefix: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict(),
+      )
+      .optional(),
   })
   .strict();
 
@@ -51,31 +75,7 @@ export const SessionSchema = z
       ])
       .optional(),
     mainKey: z.string().optional(),
-    sendPolicy: z
-      .object({
-        default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
-        rules: z
-          .array(
-            z
-              .object({
-                action: z.union([z.literal("allow"), z.literal("deny")]),
-                match: z
-                  .object({
-                    channel: z.string().optional(),
-                    chatType: z
-                      .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
-                      .optional(),
-                    keyPrefix: z.string().optional(),
-                  })
-                  .strict()
-                  .optional(),
-              })
-              .strict(),
-          )
-          .optional(),
-      })
-      .strict()
-      .optional(),
+    sendPolicy: SessionSendPolicySchema.optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),

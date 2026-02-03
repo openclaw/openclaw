@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import {
   formatDurationShort,

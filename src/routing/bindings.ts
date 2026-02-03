@@ -1,12 +1,14 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.agents.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
 
 function normalizeBindingChannelId(raw?: string | null): string | null {
   const normalized = normalizeChatChannelId(raw);
-  if (normalized) return normalized;
+  if (normalized) {
+    return normalized;
+  }
   const fallback = (raw ?? "").trim().toLowerCase();
   return fallback || null;
 }
@@ -17,19 +19,29 @@ export function listBindings(cfg: OpenClawConfig): AgentBinding[] {
 
 export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
   const normalizedChannel = normalizeBindingChannelId(channelId);
-  if (!normalizedChannel) return [];
+  if (!normalizedChannel) {
+    return [];
+  }
   const ids = new Set<string>();
   for (const binding of listBindings(cfg)) {
-    if (!binding || typeof binding !== "object") continue;
+    if (!binding || typeof binding !== "object") {
+      continue;
+    }
     const match = binding.match;
-    if (!match || typeof match !== "object") continue;
+    if (!match || typeof match !== "object") {
+      continue;
+    }
     const channel = normalizeBindingChannelId(match.channel);
-    if (!channel || channel !== normalizedChannel) continue;
+    if (!channel || channel !== normalizedChannel) {
+      continue;
+    }
     const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
-    if (!accountId || accountId === "*") continue;
+    if (!accountId || accountId === "*") {
+      continue;
+    }
     ids.add(normalizeAccountId(accountId));
   }
-  return Array.from(ids).sort((a, b) => a.localeCompare(b));
+  return Array.from(ids).toSorted((a, b) => a.localeCompare(b));
 }
 
 export function resolveDefaultAgentBoundAccountId(
@@ -37,17 +49,29 @@ export function resolveDefaultAgentBoundAccountId(
   channelId: string,
 ): string | null {
   const normalizedChannel = normalizeBindingChannelId(channelId);
-  if (!normalizedChannel) return null;
+  if (!normalizedChannel) {
+    return null;
+  }
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
   for (const binding of listBindings(cfg)) {
-    if (!binding || typeof binding !== "object") continue;
-    if (normalizeAgentId(binding.agentId) !== defaultAgentId) continue;
+    if (!binding || typeof binding !== "object") {
+      continue;
+    }
+    if (normalizeAgentId(binding.agentId) !== defaultAgentId) {
+      continue;
+    }
     const match = binding.match;
-    if (!match || typeof match !== "object") continue;
+    if (!match || typeof match !== "object") {
+      continue;
+    }
     const channel = normalizeBindingChannelId(match.channel);
-    if (!channel || channel !== normalizedChannel) continue;
+    if (!channel || channel !== normalizedChannel) {
+      continue;
+    }
     const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
-    if (!accountId || accountId === "*") continue;
+    if (!accountId || accountId === "*") {
+      continue;
+    }
     return normalizeAccountId(accountId);
   }
   return null;
@@ -56,18 +80,28 @@ export function resolveDefaultAgentBoundAccountId(
 export function buildChannelAccountBindings(cfg: OpenClawConfig) {
   const map = new Map<string, Map<string, string[]>>();
   for (const binding of listBindings(cfg)) {
-    if (!binding || typeof binding !== "object") continue;
+    if (!binding || typeof binding !== "object") {
+      continue;
+    }
     const match = binding.match;
-    if (!match || typeof match !== "object") continue;
+    if (!match || typeof match !== "object") {
+      continue;
+    }
     const channelId = normalizeBindingChannelId(match.channel);
-    if (!channelId) continue;
+    if (!channelId) {
+      continue;
+    }
     const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
-    if (!accountId || accountId === "*") continue;
+    if (!accountId || accountId === "*") {
+      continue;
+    }
     const agentId = normalizeAgentId(binding.agentId);
     const byAgent = map.get(channelId) ?? new Map<string, string[]>();
     const list = byAgent.get(agentId) ?? [];
     const normalizedAccountId = normalizeAccountId(accountId);
-    if (!list.includes(normalizedAccountId)) list.push(normalizedAccountId);
+    if (!list.includes(normalizedAccountId)) {
+      list.push(normalizedAccountId);
+    }
     byAgent.set(agentId, list);
     map.set(channelId, byAgent);
   }
@@ -79,6 +113,8 @@ export function resolvePreferredAccountId(params: {
   defaultAccountId: string;
   boundAccounts: string[];
 }): string {
-  if (params.boundAccounts.length > 0) return params.boundAccounts[0];
+  if (params.boundAccounts.length > 0) {
+    return params.boundAccounts[0];
+  }
   return params.defaultAccountId;
 }

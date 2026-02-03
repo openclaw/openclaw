@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-
 import {
   connectOk,
   getFreePort,
@@ -27,8 +26,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server.close();
-  if (previousToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  else process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+  if (previousToken === undefined) {
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  } else {
+    process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+  }
 });
 
 const openClient = async () => {

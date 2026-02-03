@@ -1,3 +1,4 @@
+import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
@@ -150,6 +151,8 @@ export type DiscordAccountConfig = {
   execApprovals?: DiscordExecApprovalConfig;
   /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
   intents?: DiscordIntentsConfig;
+  /** PluralKit identity resolution for proxied messages. */
+  pluralkit?: DiscordPluralKitConfig;
 };
 
 export type DiscordConfig = {

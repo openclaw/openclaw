@@ -24,7 +24,9 @@ export function applyTargetToParams(params: {
     throw new Error("Use `target` for actions that accept a destination.");
   }
 
-  if (!target) return;
+  if (!target) {
+    return;
+  }
   if (mode === "channelId") {
     params.args.channelId = target;
     return;

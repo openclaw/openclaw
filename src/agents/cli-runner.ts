@@ -1,14 +1,14 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
-import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
+import { shouldLogVerbose } from "../globals.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { shouldLogVerbose } from "../globals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
@@ -28,9 +28,9 @@ import {
   writeCliImages,
 } from "./cli-runner/helpers.js";
 import { mapCliStreamEvent, runCliWithStreaming } from "./cli-runner/streaming.js";
+import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
-import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
 
@@ -292,12 +292,20 @@ export async function runCliAgent(params: {
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();
       if (logOutputText) {
-        if (stdout) log.info(`cli stdout:\n${stdout}`);
-        if (stderr) log.info(`cli stderr:\n${stderr}`);
+        if (stdout) {
+          log.info(`cli stdout:\n${stdout}`);
+        }
+        if (stderr) {
+          log.info(`cli stderr:\n${stderr}`);
+        }
       }
       if (shouldLogVerbose()) {
-        if (stdout) log.debug(`cli stdout:\n${stdout}`);
-        if (stderr) log.debug(`cli stderr:\n${stderr}`);
+        if (stdout) {
+          log.debug(`cli stdout:\n${stdout}`);
+        }
+        if (stderr) {
+          log.debug(`cli stderr:\n${stderr}`);
+        }
       }
 
       if (result.code !== 0) {
@@ -348,7 +356,9 @@ export async function runCliAgent(params: {
       },
     };
   } catch (err) {
-    if (err instanceof FailoverError) throw err;
+    if (err instanceof FailoverError) {
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     if (isFailoverErrorMessage(message)) {
       const reason = classifyFailoverReason(message) ?? "unknown";

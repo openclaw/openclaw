@@ -1,9 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
 import {
   autoMigrateLegacyStateDir,
@@ -25,7 +23,9 @@ async function makeTempRoot() {
 afterEach(async () => {
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
-  if (!tempRoot) return;
+  if (!tempRoot) {
+    return;
+  }
   await fs.promises.rm(tempRoot, { recursive: true, force: true });
   tempRoot = null;
 });

@@ -6,7 +6,6 @@ type PackageJson = {
   version?: string;
 };
 
-const root = resolve(".");
 const rootPackagePath = resolve("package.json");
 const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as PackageJson;
 const targetVersion = rootPackage.version;
@@ -16,16 +15,22 @@ if (!targetVersion) {
 }
 
 const extensionsDir = resolve("extensions");
-const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+const dirs = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
+  entry.isDirectory(),
+);
 
 const updated: string[] = [];
 const changelogged: string[] = [];
 const skipped: string[] = [];
 
 function ensureChangelogEntry(changelogPath: string, version: string): boolean {
-  if (!existsSync(changelogPath)) return false;
+  if (!existsSync(changelogPath)) {
+    return false;
+  }
   const content = readFileSync(changelogPath, "utf8");
-  if (content.includes(`## ${version}`)) return false;
+  if (content.includes(`## ${version}`)) {
+    return false;
+  }
   const entry = `## ${version}\n\n### Changes\n- Version alignment with core OpenClaw release numbers.\n\n`;
   if (content.startsWith("# Changelog\n\n")) {
     const next = content.replace("# Changelog\n\n", `# Changelog\n\n${entry}`);
@@ -67,5 +72,5 @@ for (const dir of dirs) {
 }
 
 console.log(
-  `Synced plugin versions to ${targetVersion}. Updated: ${updated.length}. Changelogged: ${changelogged.length}. Skipped: ${skipped.length}.`
+  `Synced plugin versions to ${targetVersion}. Updated: ${updated.length}. Changelogged: ${changelogged.length}. Skipped: ${skipped.length}.`,
 );

@@ -1,9 +1,8 @@
 import { html, nothing } from "lit";
-
-import { formatAgo } from "../format";
-import { formatSessionTokens } from "../presenter";
-import { pathForTab } from "../navigation";
 import type { GatewaySessionRow, SessionsListResult } from "../types";
+import { formatAgo } from "../format";
+import { pathForTab } from "../navigation";
+import { formatSessionTokens } from "../presenter";
 
 export type SessionsProps = {
   loading: boolean;
@@ -43,9 +42,13 @@ const VERBOSE_LEVELS = [
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 
 function normalizeProviderId(provider?: string | null): string {
-  if (!provider) return "";
+  if (!provider) {
+    return "";
+  }
   const normalized = provider.trim().toLowerCase();
-  if (normalized === "z.ai" || normalized === "z-ai") return "zai";
+  if (normalized === "z.ai" || normalized === "z-ai") {
+    return "zai";
+  }
   return normalized;
 }
 
@@ -58,15 +61,25 @@ function resolveThinkLevelOptions(provider?: string | null): readonly string[] {
 }
 
 function resolveThinkLevelDisplay(value: string, isBinary: boolean): string {
-  if (!isBinary) return value;
-  if (!value || value === "off") return value;
+  if (!isBinary) {
+    return value;
+  }
+  if (!value || value === "off") {
+    return value;
+  }
   return "on";
 }
 
 function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string | null {
-  if (!value) return null;
-  if (!isBinary) return value;
-  if (value === "on") return "low";
+  if (!value) {
+    return null;
+  }
+  if (!isBinary) {
+    return value;
+  }
+  if (value === "on") {
+    return "low";
+  }
   return value;
 }
 
@@ -141,9 +154,11 @@ export function renderSessions(props: SessionsProps) {
         </label>
       </div>
 
-      ${props.error
-        ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
-        : nothing}
+      ${
+        props.error
+          ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
+          : nothing
+      }
 
       <div class="muted" style="margin-top: 12px;">
         ${props.result ? `Store: ${props.result.path}` : ""}
@@ -161,11 +176,15 @@ export function renderSessions(props: SessionsProps) {
           <div>Reasoning</div>
           <div>Actions</div>
         </div>
-        ${rows.length === 0
-          ? html`<div class="muted">No sessions found.</div>`
-          : rows.map((row) =>
-              renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
-            )}
+        ${
+          rows.length === 0
+            ? html`
+                <div class="muted">No sessions found.</div>
+              `
+            : rows.map((row) =>
+                renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
+              )
+        }
       </div>
     </section>
   `;
@@ -193,9 +212,9 @@ function renderRow(
 
   return html`
     <div class="table-row">
-      <div class="mono">${canLink
-        ? html`<a href=${chatUrl} class="session-link">${displayName}</a>`
-        : displayName}</div>
+      <div class="mono">${
+        canLink ? html`<a href=${chatUrl} class="session-link">${displayName}</a>` : displayName
+      }</div>
       <div>
         <input
           .value=${row.label ?? ""}
@@ -221,9 +240,7 @@ function renderRow(
             });
           }}
         >
-          ${thinkLevels.map((level) =>
-            html`<option value=${level}>${level || "inherit"}</option>`,
-          )}
+          ${thinkLevels.map((level) => html`<option value=${level}>${level || "inherit"}</option>`)}
         </select>
       </div>
       <div>
@@ -249,8 +266,8 @@ function renderRow(
             onPatch(row.key, { reasoningLevel: value || null });
           }}
         >
-          ${REASONING_LEVELS.map((level) =>
-            html`<option value=${level}>${level || "inherit"}</option>`,
+          ${REASONING_LEVELS.map(
+            (level) => html`<option value=${level}>${level || "inherit"}</option>`,
           )}
         </select>
       </div>

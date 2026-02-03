@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { resolveMemorySearchConfig } from "./memory-search.js";
 
 describe("memory search config", () => {

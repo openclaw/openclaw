@@ -1,26 +1,33 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
-
 import type { ResolvedZaloAccount, ZaloAccountConfig, ZaloConfig } from "./types.js";
 import { resolveZaloToken } from "./token.js";
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   const accounts = (cfg.channels?.zalo as ZaloConfig | undefined)?.accounts;
-  if (!accounts || typeof accounts !== "object") return [];
+  if (!accounts || typeof accounts !== "object") {
+    return [];
+  }
   return Object.keys(accounts).filter(Boolean);
 }
 
 export function listZaloAccountIds(cfg: OpenClawConfig): string[] {
   const ids = listConfiguredAccountIds(cfg);
-  if (ids.length === 0) return [DEFAULT_ACCOUNT_ID];
-  return ids.sort((a, b) => a.localeCompare(b));
+  if (ids.length === 0) {
+    return [DEFAULT_ACCOUNT_ID];
+  }
+  return ids.toSorted((a, b) => a.localeCompare(b));
 }
 
 export function resolveDefaultZaloAccountId(cfg: OpenClawConfig): string {
   const zaloConfig = cfg.channels?.zalo as ZaloConfig | undefined;
-  if (zaloConfig?.defaultAccount?.trim()) return zaloConfig.defaultAccount.trim();
+  if (zaloConfig?.defaultAccount?.trim()) {
+    return zaloConfig.defaultAccount.trim();
+  }
   const ids = listZaloAccountIds(cfg);
-  if (ids.includes(DEFAULT_ACCOUNT_ID)) return DEFAULT_ACCOUNT_ID;
+  if (ids.includes(DEFAULT_ACCOUNT_ID)) {
+    return DEFAULT_ACCOUNT_ID;
+  }
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
@@ -29,7 +36,9 @@ function resolveAccountConfig(
   accountId: string,
 ): ZaloAccountConfig | undefined {
   const accounts = (cfg.channels?.zalo as ZaloConfig | undefined)?.accounts;
-  if (!accounts || typeof accounts !== "object") return undefined;
+  if (!accounts || typeof accounts !== "object") {
+    return undefined;
+  }
   return accounts[accountId] as ZaloAccountConfig | undefined;
 }
 

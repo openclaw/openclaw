@@ -1,3 +1,5 @@
+import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -8,9 +10,7 @@ import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../daemon/systemd-hints.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { isWSLEnv } from "../infra/wsl.js";
-import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 
 type RuntimeHintOptions = {
@@ -21,14 +21,20 @@ type RuntimeHintOptions = {
 export function formatGatewayRuntimeSummary(
   runtime: GatewayServiceRuntime | undefined,
 ): string | null {
-  if (!runtime) return null;
+  if (!runtime) {
+    return null;
+  }
   const status = runtime.status ?? "unknown";
   const details: string[] = [];
-  if (runtime.pid) details.push(`pid ${runtime.pid}`);
+  if (runtime.pid) {
+    details.push(`pid ${runtime.pid}`);
+  }
   if (runtime.state && runtime.state.toLowerCase() !== status) {
     details.push(`state ${runtime.state}`);
   }
-  if (runtime.subState) details.push(`sub ${runtime.subState}`);
+  if (runtime.subState) {
+    details.push(`sub ${runtime.subState}`);
+  }
   if (runtime.lastExitStatus !== undefined) {
     details.push(`last exit ${runtime.lastExitStatus}`);
   }
@@ -41,7 +47,9 @@ export function formatGatewayRuntimeSummary(
   if (runtime.lastRunTime) {
     details.push(`last run time ${runtime.lastRunTime}`);
   }
-  if (runtime.detail) details.push(runtime.detail);
+  if (runtime.detail) {
+    details.push(runtime.detail);
+  }
   return details.length > 0 ? `${status} (${details.join(", ")})` : status;
 }
 
@@ -50,7 +58,9 @@ export function buildGatewayRuntimeHints(
   options: RuntimeHintOptions = {},
 ): string[] {
   const hints: string[] = [];
-  if (!runtime) return hints;
+  if (!runtime) {
+    return hints;
+  }
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const fileLog = (() => {
@@ -62,7 +72,9 @@ export function buildGatewayRuntimeHints(
   })();
   if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
     hints.push(...renderSystemdUnavailableHints({ wsl: isWSLEnv() }));
-    if (fileLog) hints.push(`File logs: ${fileLog}`);
+    if (fileLog) {
+      hints.push(`File logs: ${fileLog}`);
+    }
     return hints;
   }
   if (runtime.cachedLabel && platform === "darwin") {
@@ -74,12 +86,16 @@ export function buildGatewayRuntimeHints(
   }
   if (runtime.missingUnit) {
     hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
-    if (fileLog) hints.push(`File logs: ${fileLog}`);
+    if (fileLog) {
+      hints.push(`File logs: ${fileLog}`);
+    }
     return hints;
   }
   if (runtime.status === "stopped") {
     hints.push("Service is loaded but not running (likely exited immediately).");
-    if (fileLog) hints.push(`File logs: ${fileLog}`);
+    if (fileLog) {
+      hints.push(`File logs: ${fileLog}`);
+    }
     if (platform === "darwin") {
       const logs = resolveGatewayLogPaths(env);
       hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);

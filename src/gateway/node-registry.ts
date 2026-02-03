@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 export type NodeSession = {
@@ -81,11 +80,15 @@ export class NodeRegistry {
 
   unregister(connId: string): string | null {
     const nodeId = this.nodesByConn.get(connId);
-    if (!nodeId) return null;
+    if (!nodeId) {
+      return null;
+    }
     this.nodesByConn.delete(connId);
     this.nodesById.delete(nodeId);
     for (const [id, pending] of this.pendingInvokes.entries()) {
-      if (pending.nodeId !== nodeId) continue;
+      if (pending.nodeId !== nodeId) {
+        continue;
+      }
       clearTimeout(pending.timer);
       pending.reject(new Error(`node disconnected (${pending.command})`));
       this.pendingInvokes.delete(id);
@@ -160,8 +163,12 @@ export class NodeRegistry {
     error?: { code?: string; message?: string } | null;
   }): boolean {
     const pending = this.pendingInvokes.get(params.id);
-    if (!pending) return false;
-    if (pending.nodeId !== params.nodeId) return false;
+    if (!pending) {
+      return false;
+    }
+    if (pending.nodeId !== params.nodeId) {
+      return false;
+    }
     clearTimeout(pending.timer);
     this.pendingInvokes.delete(params.id);
     pending.resolve({
@@ -175,7 +182,9 @@ export class NodeRegistry {
 
   sendEvent(nodeId: string, event: string, payload?: unknown): boolean {
     const node = this.nodesById.get(nodeId);
-    if (!node) return false;
+    if (!node) {
+      return false;
+    }
     return this.sendEventToSession(node, event, payload);
   }
 

@@ -340,6 +340,41 @@ export type AgentsListResult = {
   agents: GatewayAgentRow[];
 };
 
+export type AgentIdentityResult = {
+  agentId: string;
+  name: string;
+  avatar: string;
+  emoji?: string;
+};
+
+export type AgentFileEntry = {
+  name: string;
+  path: string;
+  missing: boolean;
+  size?: number;
+  updatedAtMs?: number;
+  content?: string;
+};
+
+export type AgentsFilesListResult = {
+  agentId: string;
+  workspace: string;
+  files: AgentFileEntry[];
+};
+
+export type AgentsFilesGetResult = {
+  agentId: string;
+  workspace: string;
+  file: AgentFileEntry;
+};
+
+export type AgentsFilesSetResult = {
+  ok: true;
+  agentId: string;
+  workspace: string;
+  file: AgentFileEntry;
+};
+
 export type GatewaySessionRow = {
   key: string;
   kind: "direct" | "group" | "global" | "unknown";
@@ -514,13 +549,7 @@ export type StatusSummary = Record<string, unknown>;
 
 export type HealthSnapshot = Record<string, unknown>;
 
-export type LogLevel =
-  | "trace"
-  | "debug"
-  | "info"
-  | "warn"
-  | "error"
-  | "fatal";
+export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 
 export type LogEntry = {
   raw: string;

@@ -6,14 +6,14 @@
  */
 
 import fs from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { HookHandler } from "../../hooks.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { resolveHookConfig } from "../../config.js";
-import type { HookHandler } from "../../hooks.js";
 
 /**
  * Read recent messages from session file for slug generation
@@ -38,7 +38,8 @@ async function getRecentSessionContent(
           if ((role === "user" || role === "assistant") && msg.content) {
             // Extract text content
             const text = Array.isArray(msg.content)
-              ? msg.content.find((c: any) => c.type === "text")?.text
+              ? // oxlint-disable-next-line typescript/no-explicit-any
+                msg.content.find((c: any) => c.type === "text")?.text
               : msg.content;
             if (text && !text.startsWith("/")) {
               allMessages.push(`${role}: ${text}`);
@@ -129,7 +130,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // If no slug, use timestamp
     if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1]!.split(".")[0]!.replace(/:/g, "");
+      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
       slug = timeSlug.slice(0, 4); // HHMM
       console.log("[session-memory] Using fallback timestamp slug:", slug);
     }
@@ -141,7 +142,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     console.log("[session-memory] Full path:", memoryFilePath);
 
     // Format time as HH:MM:SS UTC
-    const timeStr = now.toISOString().split("T")[1]!.split(".")[0];
+    const timeStr = now.toISOString().split("T")[1].split(".")[0];
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";

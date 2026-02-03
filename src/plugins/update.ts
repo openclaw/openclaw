@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-
 import type { OpenClawConfig } from "../config/config.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
@@ -66,11 +65,17 @@ function resolveBundledPluginSources(params: {
   const bundled = new Map<string, BundledPluginSource>();
 
   for (const candidate of discovery.candidates) {
-    if (candidate.origin !== "bundled") continue;
+    if (candidate.origin !== "bundled") {
+      continue;
+    }
     const manifest = loadPluginManifest(candidate.rootDir);
-    if (!manifest.ok) continue;
+    if (!manifest.ok) {
+      continue;
+    }
     const pluginId = manifest.manifest.id;
-    if (bundled.has(pluginId)) continue;
+    if (bundled.has(pluginId)) {
+      continue;
+    }
 
     const npmSpec =
       candidate.packageManifest?.install?.npmSpec?.trim() ||
@@ -88,7 +93,9 @@ function resolveBundledPluginSources(params: {
 }
 
 function pathsEqual(left?: string, right?: string): boolean {
-  if (!left || !right) return false;
+  if (!left || !right) {
+    return false;
+  }
   return resolveUserPath(left) === resolveUserPath(right);
 }
 
@@ -100,7 +107,9 @@ function buildLoadPathHelpers(existing: string[]) {
 
   const addPath = (value: string) => {
     const normalized = resolveUserPath(value);
-    if (resolved.has(normalized)) return;
+    if (resolved.has(normalized)) {
+      return;
+    }
     paths.push(value);
     resolved.add(normalized);
     changed = true;
@@ -108,7 +117,9 @@ function buildLoadPathHelpers(existing: string[]) {
 
   const removePath = (value: string) => {
     const normalized = resolveUserPath(value);
-    if (!resolved.has(normalized)) return;
+    if (!resolved.has(normalized)) {
+      return;
+    }
     paths = paths.filter((entry) => resolveUserPath(entry) !== normalized);
     resolved = resolveSet();
     changed = true;
@@ -178,7 +189,17 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    const installPath = record.installPath ?? resolvePluginInstallDir(pluginId);
+    let installPath: string;
+    try {
+      installPath = record.installPath ?? resolvePluginInstallDir(pluginId);
+    } catch (err) {
+      outcomes.push({
+        pluginId,
+        status: "error",
+        message: `Invalid install path for "${pluginId}": ${String(err)}`,
+      });
+      continue;
+    }
     const currentVersion = await readInstalledPackageVersion(installPath);
 
     if (params.dryRun) {
@@ -314,13 +335,17 @@ export async function syncPluginsForUpdateChannel(params: {
   if (params.channel === "dev") {
     for (const [pluginId, record] of Object.entries(installs)) {
       const bundledInfo = bundled.get(pluginId);
-      if (!bundledInfo) continue;
+      if (!bundledInfo) {
+        continue;
+      }
 
       loadHelpers.addPath(bundledInfo.localPath);
 
       const alreadyBundled =
         record.source === "path" && pathsEqual(record.sourcePath, bundledInfo.localPath);
-      if (alreadyBundled) continue;
+      if (alreadyBundled) {
+        continue;
+      }
 
       next = recordPluginInstall(next, {
         pluginId,
@@ -336,15 +361,21 @@ export async function syncPluginsForUpdateChannel(params: {
   } else {
     for (const [pluginId, record] of Object.entries(installs)) {
       const bundledInfo = bundled.get(pluginId);
-      if (!bundledInfo) continue;
+      if (!bundledInfo) {
+        continue;
+      }
 
       if (record.source === "npm") {
         loadHelpers.removePath(bundledInfo.localPath);
         continue;
       }
 
-      if (record.source !== "path") continue;
-      if (!pathsEqual(record.sourcePath, bundledInfo.localPath)) continue;
+      if (record.source !== "path") {
+        continue;
+      }
+      if (!pathsEqual(record.sourcePath, bundledInfo.localPath)) {
+        continue;
+      }
 
       const spec = record.spec ?? bundledInfo.npmSpec;
       if (!spec) {

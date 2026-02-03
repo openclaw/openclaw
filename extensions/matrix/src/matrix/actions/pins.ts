@@ -1,12 +1,12 @@
+import { resolveMatrixRoomId } from "../send.js";
+import { resolveActionClient } from "./client.js";
+import { fetchEventSummary, readPinnedEvents } from "./summary.js";
 import {
   EventType,
   type MatrixActionClientOpts,
   type MatrixMessageSummary,
   type RoomPinnedEventsEventContent,
 } from "./types.js";
-import { resolveActionClient } from "./client.js";
-import { fetchEventSummary, readPinnedEvents } from "./summary.js";
-import { resolveMatrixRoomId } from "../send.js";
 
 export async function pinMatrixMessage(
   roomId: string,
@@ -22,7 +22,9 @@ export async function pinMatrixMessage(
     await client.sendStateEvent(resolvedRoom, EventType.RoomPinnedEvents, "", payload);
     return { pinned: next };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }
 
@@ -40,7 +42,9 @@ export async function unpinMatrixMessage(
     await client.sendStateEvent(resolvedRoom, EventType.RoomPinnedEvents, "", payload);
     return { pinned: next };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }
 
@@ -65,6 +69,8 @@ export async function listMatrixPins(
     ).filter((event): event is MatrixMessageSummary => Boolean(event));
     return { pinned, events };
   } finally {
-    if (stopOnDone) client.stop();
+    if (stopOnDone) {
+      client.stop();
+    }
   }
 }

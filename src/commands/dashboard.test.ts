@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { dashboardCommand } from "./dashboard.js";
 
 const mocks = vi.hoisted(() => ({
