@@ -124,10 +124,10 @@ export const memoryConfigSchema = {
     };
 
     if (provider === "minimax") {
-      if (typeof embedding.groupId !== "string") {
-        throw new Error("embedding.groupId is required for MiniMax provider");
+      // Group ID is optional for some MiniMax plans (like Coding Plan)
+      if (typeof embedding.groupId === "string") {
+        result.embedding.groupId = resolveEnvVars(embedding.groupId);
       }
-      result.embedding.groupId = resolveEnvVars(embedding.groupId);
     }
 
     return result;

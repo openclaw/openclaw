@@ -186,13 +186,15 @@ class MiniMaxEmbeddings implements EmbeddingProvider {
   }
 
   async embed(text: string): Promise<number[]> {
-    const response = await fetch(this.baseUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-        "X-GroupId": this.groupId,
-      },
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${this.apiKey}`,
+    };
+    
+    // Only add X-GroupId if it's provided
+    if (this.groupId) {
+      headers["X-GroupId"] = this.groupId;
+    }
       body: JSON.stringify({
         model: this.model,
         texts: [text],
@@ -224,10 +226,7 @@ function createEmbeddings(
   groupId?: string,
 ): EmbeddingProvider {
   if (provider === "minimax") {
-    if (!groupId) {
-      throw new Error("MiniMax provider requires groupId");
-    }
-    return new MiniMaxEmbeddings(apiKey, groupId, model);
+    return new MiniMaxEmbeddings(apiKey, groupId || "", model);
   }
   return new OpenAIEmbeddings(apiKey, model);
 }
