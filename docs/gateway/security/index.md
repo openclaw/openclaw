@@ -518,6 +518,62 @@ Rotation checklist (token/password):
 3. Update any remote clients (`gateway.remote.token` / `.password` on machines that call into the Gateway).
 4. Verify you can no longer connect with the old credentials.
 
+### 0.5.1) DNS rebinding protection
+
+OpenClaw validates the HTTP `Host` header on all requests to protect against
+**DNS rebinding attacks**. In a DNS rebinding attack, a malicious website
+makes your browser send requests to `localhost` using a hostname that the
+attacker controls (e.g., `malicious.example.com` resolves to `127.0.0.1`).
+Without Host header validation, these requests would appear to come from
+localhost and could bypass auth.
+
+Default allowed hosts:
+
+- `localhost`
+- `127.0.0.1`
+- `::1`
+- `*.ts.net` (Tailscale hostnames)
+
+Add custom allowed hosts via config:
+
+```json5
+{
+  gateway: {
+    auth: {
+      allowedHosts: ["myhost.local", "gateway.internal"],
+    },
+  },
+}
+```
+
+Requests with an unrecognized `Host` header receive a `403 Forbidden` response.
+
+### 0.5.2) Zero-trust localhost (advanced)
+
+By default, **all connections require authentication**, even from localhost.
+This is the zero-trust security model: localhost is not automatically trusted.
+
+For legacy setups that require unauthenticated localhost access (not recommended),
+you can explicitly opt in:
+
+```json5
+{
+  gateway: {
+    auth: {
+      trustLocalhost: true, // NOT recommended
+    },
+  },
+}
+```
+
+When `trustLocalhost` is enabled, OpenClaw still validates the Host header
+(DNS rebinding protection) and verifies the request is a direct local connection
+(not proxied). This provides defense-in-depth even with localhost trust enabled.
+
+**Security note:** Keep `trustLocalhost` disabled unless you have a specific
+legacy integration that cannot provide authentication. The CLI sends tokens
+automatically, so most users won't notice the requirement.
+
 ### 0.6) Tailscale Serve identity headers
 
 When `gateway.auth.allowTailscale` is `true` (default for Serve), OpenClaw
