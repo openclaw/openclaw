@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
-import type { ConfigUiHints } from "../types";
-import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form";
-import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared";
+import type { ConfigUiHints } from "../types.ts";
+import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
+import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
 
 export type ConfigProps = {
   raw: string;
