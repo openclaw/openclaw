@@ -243,7 +243,13 @@ export async function handleOpenAiHttpRequest(
   res: ServerResponse,
   opts: OpenAiHttpOptions,
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+  } catch {
+    // Malformed URL - not our endpoint
+    return false;
+  }
   if (url.pathname !== "/v1/chat/completions") {
     return false;
   }

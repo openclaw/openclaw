@@ -78,7 +78,14 @@ const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
-  res.write(`data: ${JSON.stringify(event)}\n\n`);
+  try {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  } catch {
+    // Fallback for non-serializable data (bigint, circular refs)
+    res.write(
+      `data: ${JSON.stringify({ type: event.type, error: "payload_not_serializable" })}\n\n`,
+    );
+  }
 }
 
 function extractTextContent(content: string | ContentPart[]): string {
@@ -393,7 +400,13 @@ export async function handleOpenResponsesHttpRequest(
   res: ServerResponse,
   opts: OpenResponsesHttpOptions,
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+  let url: URL;
+  try {
+    url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+  } catch {
+    // Malformed URL - not our endpoint
+    return false;
+  }
   if (url.pathname !== "/v1/responses") {
     return false;
   }
@@ -680,13 +693,58 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
 
-      const content =
+      let content =
         Array.isArray(payloads) && payloads.length > 0
           ? payloads
               .map((p) => (typeof p.text === "string" ? p.text : ""))
               .filter(Boolean)
               .join("\n\n")
           : "No response from OpenClaw.";
+
+      // ======================================================================
+      // SECURITY: Run http_response_sending hook before returning response
+      // ======================================================================
+      if (hookRunner && httpCtx) {
+        try {
+          const responseHook = await hookRunner.runHttpResponseSending(
+            {
+              content,
+              responseBody: { output: [{ content }] },
+              requestBody: payload as unknown as Record<string, unknown>,
+              isStreaming: false,
+            },
+            httpCtx,
+          );
+          if (responseHook?.block) {
+            const blocked = createResponseResource({
+              id: responseId,
+              model,
+              status: "failed",
+              output: [],
+              error: {
+                code: "security_block",
+                message: responseHook.blockReason || "Response blocked for security reasons",
+              },
+            });
+            sendJson(res, 400, blocked);
+            return true;
+          }
+          if (responseHook?.modifiedContent) {
+            content = responseHook.modifiedContent;
+          }
+        } catch (hookError) {
+          console.error("[openresponses-http] http_response_sending hook error:", hookError);
+          const errResponse = createResponseResource({
+            id: responseId,
+            model,
+            status: "failed",
+            output: [],
+            error: { code: "security_error", message: "Security check failed" },
+          });
+          sendJson(res, 500, errResponse);
+          return true;
+        }
+      }
 
       const response = createResponseResource({
         id: responseId,
