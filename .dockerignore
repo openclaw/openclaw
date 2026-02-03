@@ -1,48 +1,51 @@
-.git
-.worktrees
-.bun-cache
-.bun
-.tmp
-**/.tmp
+# Node modules
+node_modules/
+npm-debug.log
+package-lock.json
+
+# Workspace (will be mounted as volume)
+workspace/
+
+# OpenClaw data (will be persisted in volume)
+.openclaw/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# CI/CD
+.github/
+
+# Documentation
+*.md
+docs/
+
+# Tests
+tests/
+*.test.*
+*.spec.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
-**/.DS_Store
-*.png
-*.jpg
-*.jpeg
-*.webp
-*.gif
-*.mp4
-*.mov
-*.wav
-*.mp3
-node_modules
-**/node_modules
-.pnpm-store
-**/.pnpm-store
-.turbo
-**/.turbo
-.cache
-**/.cache
-.next
-**/.next
-coverage
-**/coverage
+Thumbs.db
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
 *.log
-tmp
-**/tmp
 
-# build artifacts
-dist
-**/dist
-apps/macos/.build
-apps/ios/build
-**/*.trace
-
-# large app trees not needed for CLI build
-apps/
-assets/
-Peekaboo/
-Swabble/
-Core/
-Users/
-vendor/
+# Temp files
+tmp/
+temp/

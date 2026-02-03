@@ -1,6 +1,6 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { setupGitHooks } from "./setup-git-hooks.js";
 
@@ -10,18 +10,10 @@ function detectPackageManager(ua = process.env.npm_config_user_agent ?? "") {
   // - "npm/10.9.4 node/v22.12.0 linux x64"
   // - "bun/1.2.2"
   const normalized = String(ua).trim();
-  if (normalized.startsWith("pnpm/")) {
-    return "pnpm";
-  }
-  if (normalized.startsWith("bun/")) {
-    return "bun";
-  }
-  if (normalized.startsWith("npm/")) {
-    return "npm";
-  }
-  if (normalized.startsWith("yarn/")) {
-    return "yarn";
-  }
+  if (normalized.startsWith("pnpm/")) return "pnpm";
+  if (normalized.startsWith("bun/")) return "bun";
+  if (normalized.startsWith("npm/")) return "npm";
+  if (normalized.startsWith("yarn/")) return "yarn";
   return "unknown";
 }
 
@@ -36,42 +28,38 @@ function getRepoRoot() {
 }
 
 function ensureExecutable(targetPath) {
-  if (process.platform === "win32") {
-    return;
-  }
-  if (!fs.existsSync(targetPath)) {
-    return;
-  }
+  if (process.platform === "win32") return;
+  if (!fs.existsSync(targetPath)) return;
   try {
     const mode = fs.statSync(targetPath).mode & 0o777;
-    if (mode & 0o100) {
-      return;
-    }
+    if (mode & 0o100) return;
     fs.chmodSync(targetPath, 0o755);
   } catch (err) {
     console.warn(`[postinstall] chmod failed: ${err}`);
   }
 }
 
+function hasGit(repoRoot) {
+  const result = spawnSync("git", ["--version"], {
+    cwd: repoRoot,
+    stdio: "ignore",
+  });
+  return result.status === 0;
+}
+
 function extractPackageName(key) {
   if (key.startsWith("@")) {
     const idx = key.indexOf("@", 1);
-    if (idx === -1) {
-      return key;
-    }
+    if (idx === -1) return key;
     return key.slice(0, idx);
   }
   const idx = key.lastIndexOf("@");
-  if (idx <= 0) {
-    return key;
-  }
+  if (idx <= 0) return key;
   return key.slice(0, idx);
 }
 
 function stripPrefix(p) {
-  if (p.startsWith("a/") || p.startsWith("b/")) {
-    return p.slice(2);
-  }
+  if (p.startsWith("a/") || p.startsWith("b/")) return p.slice(2);
   return p;
 }
 
@@ -101,9 +89,7 @@ function parsePatch(patchText) {
     i += 1;
 
     // Skip index line(s)
-    while (i < lines.length && lines[i].startsWith("index ")) {
-      i += 1;
-    }
+    while (i < lines.length && lines[i].startsWith("index ")) i += 1;
 
     if (i < lines.length && lines[i].startsWith("--- ")) {
       file.oldPath = stripPrefix(lines[i].slice(4).trim());
@@ -117,9 +103,7 @@ function parsePatch(patchText) {
     while (i < lines.length && lines[i].startsWith("@@")) {
       const header = lines[i];
       const match = /^@@\s+(-\d+(?:,\d+)?)\s+(\+\d+(?:,\d+)?)\s+@@/.exec(header);
-      if (!match) {
-        throw new Error(`invalid hunk header: ${header}`);
-      }
+      if (!match) throw new Error(`invalid hunk header: ${header}`);
       const oldRange = parseRange(match[1]);
       const newRange = parseRange(match[2]);
       i += 1;
@@ -127,9 +111,7 @@ function parsePatch(patchText) {
       const hunkLines = [];
       while (i < lines.length) {
         const line = lines[i];
-        if (line.startsWith("@@") || line.startsWith("diff --git ")) {
-          break;
-        }
+        if (line.startsWith("@@") || line.startsWith("diff --git ")) break;
         if (line === "") {
           i += 1;
           continue;
@@ -166,9 +148,7 @@ function readFileLines(targetPath) {
   const raw = fs.readFileSync(targetPath, "utf-8");
   const hasTrailingNewline = raw.endsWith("\n");
   const parts = raw.split("\n");
-  if (hasTrailingNewline) {
-    parts.pop();
-  }
+  if (hasTrailingNewline) parts.pop();
   return { lines: parts, hasTrailingNewline };
 }
 
@@ -255,9 +235,7 @@ function applyPatchSet({ patchText, targetDir }) {
   resolvedTarget = fs.realpathSync(resolvedTarget);
 
   const files = parsePatch(patchText);
-  if (files.length === 0) {
-    return;
-  }
+  if (files.length === 0) return;
 
   for (const filePatch of files) {
     applyPatchToFile(resolvedTarget, filePatch);
@@ -275,20 +253,14 @@ function applyPatchFile({ patchPath, targetDir }) {
 
 function trySetupCompletion(repoRoot) {
   // Skip in CI or if explicitly disabled
-  if (process.env.CI || process.env.OPENCLAW_SKIP_COMPLETION_SETUP) {
-    return;
-  }
+  if (process.env.CI || process.env.OPENCLAW_SKIP_COMPLETION_SETUP) return;
 
   const binPath = path.join(repoRoot, "openclaw.mjs");
-  if (!fs.existsSync(binPath)) {
-    return;
-  }
+  if (!fs.existsSync(binPath)) return;
 
   // In development, dist might not exist yet during postinstall
   const distEntry = path.join(repoRoot, "dist", "index.js");
-  if (!fs.existsSync(distEntry)) {
-    return;
-  }
+  if (!fs.existsSync(distEntry)) return;
 
   try {
     // Run with OPENCLAW_SKIP_POSTINSTALL to avoid any weird recursion,
@@ -298,7 +270,7 @@ function trySetupCompletion(repoRoot) {
       stdio: "inherit",
       env: { ...process.env, OPENCLAW_SKIP_POSTINSTALL: "1" },
     });
-  } catch {
+  } catch (err) {
     // Ignore errors to not break install
   }
 }
@@ -322,13 +294,9 @@ function main() {
   // Bun does not support pnpm.patchedDependencies. Apply these patch files to
   // node_modules packages as a best-effort compatibility layer.
   for (const [key, relPatchPath] of Object.entries(patched)) {
-    if (typeof relPatchPath !== "string" || !relPatchPath.trim()) {
-      continue;
-    }
+    if (typeof relPatchPath !== "string" || !relPatchPath.trim()) continue;
     const pkgName = extractPackageName(String(key));
-    if (!pkgName) {
-      continue;
-    }
+    if (!pkgName) continue;
     applyPatchFile({
       targetDir: path.join("node_modules", ...pkgName.split("/")),
       patchPath: relPatchPath,

@@ -1,0 +1,84 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: openclaw/openclaw
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: Run Trivy vulnerability scanner
+        if: github.event_name != 'pull_request'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: openclaw/openclaw:latest
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security
+        if: github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Image size
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "### Image sizes 📊" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          docker pull openclaw/openclaw:latest
+          echo '#### linux/amd64' >> $GITHUB_STEP_SUMMARY
+          docker buildx imagetools inspect openclaw/openclaw:latest --format '{{json .}}' | jq '.Manifest[] | select(.Platform.OS == "linux" and .Platform.Architecture == "amd64") | .Size' | awk '{printf "- %.1f MB\n", $1/1024/1024}' >> $GITHUB_STEP_SUMMARY
+          echo '#### linux/arm64' >> $GITHUB_STEP_SUMMARY
+          docker buildx imagetools inspect openclaw/openclaw:latest --format '{{json .}}' | jq '.Manifest[] | select(.Platform.OS == "linux" and .Platform.Architecture == "arm64") | .Size' | awk '{printf "- %.1f MB\n", $1/1024/1024}' >> $GITHUB_STEP_SUMMARY

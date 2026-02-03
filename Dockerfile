@@ -1,39 +1,54 @@
-FROM node:22-bookworm
+# Multi-stage build for OpenClaw Docker image
+# Stage 1: Builder
+FROM node:22-alpine AS builder
 
-# Install Bun (required for build scripts)
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
-
-RUN corepack enable
+# Install build dependencies
+RUN apk add --no-cache python3 make g++
 
 WORKDIR /app
 
-ARG OPENCLAW_DOCKER_APT_PACKAGES=""
-RUN if [ -n "$OPENCLAW_DOCKER_APT_PACKAGES" ]; then \
-      apt-get update && \
-      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $OPENCLAW_DOCKER_APT_PACKAGES && \
-      apt-get clean && \
-      rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
-    fi
+# Install OpenClaw globally
+RUN npm install -g openclaw@latest
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-COPY ui/package.json ./ui/package.json
-COPY patches ./patches
-COPY scripts ./scripts
+# Stage 2: Runtime
+FROM node:22-alpine
 
-RUN pnpm install --frozen-lockfile
+# Install runtime dependencies
+RUN apk add --no-cache \
+    git \
+    curl \
+    tzdata \
+    ca-certificates
 
-COPY . .
-RUN OPENCLAW_A2UI_SKIP_MISSING=1 pnpm build
-# Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
-ENV OPENCLAW_PREFER_PNPM=1
-RUN pnpm ui:build
+# Copy OpenClaw from builder
+COPY --from=builder /usr/local/lib/node_modules/openclaw /usr/local/lib/node_modules/openclaw
+COPY --from=builder /usr/local/bin/openclaw /usr/local/bin/openclaw
 
-ENV NODE_ENV=production
+# Create symbolic link for gateway
+RUN ln -sf /usr/local/lib/node_modules/openclaw/dist/index.js /usr/local/bin/openclaw
 
-# Security hardening: Run as non-root user
-# The node:22-bookworm image includes a 'node' user (uid 1000)
-# This reduces the attack surface by preventing container escape via root privileges
-USER node
+# Setup directories
+RUN mkdir -p /root/.openclaw /workspace
 
-CMD ["node", "dist/index.js"]
+# Set working directory
+WORKDIR /workspace
+
+# Volume mount points
+VOLUME ["/root/.openclaw", "/workspace"]
+
+# Environment defaults
+ENV GATEWAY_MODE=local \
+    GATEWAY_BIND=0.0.0.0 \
+    GATEWAY_PORT=18789 \
+    OPENCLAW_MODEL=zhipu/GLM-4.7 \
+    NODE_ENV=production
+
+# Expose Gateway port
+EXPOSE 18789
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:18789/health || exit 1
+
+# Run Gateway by default
+CMD ["gateway"]

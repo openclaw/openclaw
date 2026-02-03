@@ -1,45 +1,74 @@
-services:
-  openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
-    environment:
-      HOME: /home/node
-      TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
-    volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-    ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
-    init: true
-    restart: unless-stopped
-    command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-      ]
+version: '3.8'
 
-  openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+services:
+  openclaw:
+    image: openclaw/openclaw:latest
+    container_name: openclaw-gateway
+    restart: unless-stopped
+
+    ports:
+      - "18789:18789"
+
     environment:
-      HOME: /home/node
-      TERM: xterm-256color
-      BROWSER: echo
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      # ===================
+      # Model Provider (choose one)
+      # ===================
+      # - ZHIPU_API_KEY: ${ZHIPU_API_KEY}
+      # - OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # - ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+
+      # ===================
+      # Gateway Configuration
+      # ===================
+      - GATEWAY_MODE=local
+      - GATEWAY_TOKEN=${GATEWAY_TOKEN:-auto}
+      - GATEWAY_BIND=0.0.0.0
+      - GATEWAY_PORT=18789
+
+      # ===================
+      # Default Model
+      # ===================
+      - OPENCLAW_MODEL=zhipu/GLM-4.7
+
+      # ===================
+      # Communication Channels
+      # ===================
+      # Telegram
+      # - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+
+      # WhatsApp
+      # - WHATSAPP_PHONE_ID=${WHATSAPP_PHONE_ID}
+      # - WHATSAPP_ACCESS_TOKEN=${WHATSAPP_ACCESS_TOKEN}
+
+      # Slack
+      # - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+      # - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET}
+
+      # Discord
+      # - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+
+      # ===================
+      # Advanced Options
+      # ===================
+      # - REASONING=off
+      # - VERBOSE=false
+      # - LOG_LEVEL=info
+
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-    stdin_open: true
-    tty: true
-    init: true
-    entrypoint: ["node", "dist/index.js"]
+      # Persist configuration and memory
+      - openclaw-data:/root/.openclaw
+      # Workspace for agent files
+      - ./workspace:/workspace
+      # Optional: Mount custom skills
+      # - ./skills:/usr/local/lib/node_modules/openclaw/skills
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18789/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  openclaw-data:
+    driver: local
