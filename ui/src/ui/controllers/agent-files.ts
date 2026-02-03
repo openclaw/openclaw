@@ -55,11 +55,16 @@ export async function loadAgentFiles(state: AgentFilesState, agentId: string) {
   }
 }
 
-export async function loadAgentFileContent(state: AgentFilesState, agentId: string, name: string) {
+export async function loadAgentFileContent(
+  state: AgentFilesState,
+  agentId: string,
+  name: string,
+  opts?: { force?: boolean; preserveDraft?: boolean },
+) {
   if (!state.client || !state.connected || state.agentFilesLoading) {
     return;
   }
-  if (Object.hasOwn(state.agentFileContents, name)) {
+  if (!opts?.force && Object.hasOwn(state.agentFileContents, name)) {
     return;
   }
   state.agentFilesLoading = true;
@@ -71,9 +76,16 @@ export async function loadAgentFileContent(state: AgentFilesState, agentId: stri
     });
     if (res?.file) {
       const content = res.file.content ?? "";
+      const previousBase = state.agentFileContents[name] ?? "";
+      const currentDraft = state.agentFileDrafts[name];
+      const preserveDraft = opts?.preserveDraft ?? true;
       state.agentFilesList = mergeFileEntry(state.agentFilesList, res.file);
       state.agentFileContents = { ...state.agentFileContents, [name]: content };
-      if (!Object.hasOwn(state.agentFileDrafts, name)) {
+      if (
+        !preserveDraft ||
+        !Object.hasOwn(state.agentFileDrafts, name) ||
+        currentDraft === previousBase
+      ) {
         state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
       }
     }
