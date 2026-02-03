@@ -365,12 +365,14 @@ export const commonlyPlugin: ChannelPlugin<ResolvedCommonlyAccount> = {
         });
 
         const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
+        // Disable response prefix for ensemble turns to avoid "My response:" prefix
+        const isEnsembleTurn = event.type === "ensemble.turn";
         let ensembleResponseSent = false;
         await runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
           ctx: ctxPayload,
           cfg,
           dispatcherOptions: {
-            responsePrefix: prefixContext.responsePrefix,
+            responsePrefix: isEnsembleTurn ? undefined : prefixContext.responsePrefix,
             responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
             humanDelay: runtime.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
             deliver: async (payload: ReplyPayload) => {

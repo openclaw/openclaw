@@ -16,6 +16,7 @@ export class CommonlyWebSocket {
   private socket: Socket | null = null;
   private eventHandlers: EventHandler[] = [];
   private statusHandlers: StatusHandler[] = [];
+  private subscribedPodIds: string[] = [];
 
   constructor(config: CommonlyWebSocketConfig) {
     this.config = config;
@@ -51,14 +52,23 @@ export class CommonlyWebSocket {
 
     this.socket.on("connect", () => {
       this.emitStatus({ connected: true });
+      // Re-subscribe to pods on reconnect
+      if (this.subscribedPodIds.length > 0) {
+        this.socket?.emit("subscribe", { podIds: this.subscribedPodIds });
+      }
     });
 
-    this.socket.on("disconnect", (reason) => {
+    this.socket.on("disconnect", (reason: string) => {
       this.emitStatus({ connected: false, reason });
     });
 
-    this.socket.on("connect_error", (err) => {
+    this.socket.on("connect_error", (err: Error) => {
       this.emitStatus({ connected: false, error: err?.message || String(err) });
+    });
+
+    // Handle server ping for connection liveness
+    this.socket.on("ping", () => {
+      this.socket?.emit("pong");
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -78,12 +88,17 @@ export class CommonlyWebSocket {
   subscribe(podIds: string[]): void {
     if (!this.socket) return;
     if (!Array.isArray(podIds) || podIds.length === 0) return;
+    // Store podIds for re-subscription on reconnect
+    this.subscribedPodIds = [...new Set([...this.subscribedPodIds, ...podIds])];
     this.socket.emit("subscribe", { podIds });
   }
 
   unsubscribe(podIds: string[]): void {
     if (!this.socket) return;
     if (!Array.isArray(podIds) || podIds.length === 0) return;
+    // Remove from stored podIds
+    const toRemove = new Set(podIds);
+    this.subscribedPodIds = this.subscribedPodIds.filter((id) => !toRemove.has(id));
     this.socket.emit("unsubscribe", { podIds });
   }
 
