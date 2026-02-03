@@ -187,7 +187,7 @@ Gateway (from this repo):
 node openclaw.mjs gateway --port 18789 --verbose
 ```
 
-## 7) Verify end-to-end
+## 6) Verify end-to-end
 
 In a new terminal, send a test message:
 
