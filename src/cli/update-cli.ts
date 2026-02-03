@@ -208,7 +208,7 @@ async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise
   }
   const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
     cwd: root,
-    env: { ...process.env, OPENCLAW_SKIP_POSTINSTALL: "1" },
+    env: process.env,
     encoding: "utf-8",
   });
   if (result.error) {
