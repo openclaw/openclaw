@@ -288,6 +288,11 @@ export async function statusCommand(
     }
     if (!memory) {
       const slot = memoryPlugin.slot ? `plugin ${memoryPlugin.slot}` : "plugin";
+      // External plugins (non memory-core) don't have detailed status available,
+      // but that doesn't mean they're unavailable - just that we can't query them here
+      if (memoryPlugin.slot && memoryPlugin.slot !== "memory-core") {
+        return muted(`enabled (${slot})`);
+      }
       return muted(`enabled (${slot}) · unavailable`);
     }
     const parts: string[] = [];
