@@ -5,6 +5,7 @@ import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import { resolveMemoryBackendConfig } from "../../memory/backend-config.js";
 import { getMemorySearchManager } from "../../memory/index.js";
 import type { MemorySearchResult } from "../../memory/types.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AnyAgentTool } from "./common.js";
@@ -195,14 +196,19 @@ function shouldIncludeCitations(params: {
 }
 
 function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" | "channel" {
-  if (!sessionKey) {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed?.rest) {
     return "direct";
   }
-  if (sessionKey.includes(":group:")) {
-    return "group";
-  }
-  if (sessionKey.includes(":channel:")) {
+  const tokens = parsed.rest
+    .toLowerCase()
+    .split(":")
+    .filter(Boolean);
+  if (tokens.includes("channel")) {
     return "channel";
+  }
+  if (tokens.includes("group")) {
+    return "group";
   }
   return "direct";
 }
