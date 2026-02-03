@@ -197,8 +197,10 @@ describe("buildModelsKeyboard", () => {
     expect(paginationRow?.[1]?.text).toBe("3/3");
   });
 
-  it("truncates long model IDs", () => {
-    const longModel = "this-is-a-very-long-model-name-that-exceeds-the-limit";
+  it("truncates long model IDs for display", () => {
+    // Model ID that's long enough to truncate display but still fits in callback_data
+    // callback_data = "mdl_sel_anthropic/" (18) + model (<=46) = 64 max
+    const longModel = "claude-3-5-sonnet-20241022-with-suffix";
     const result = buildModelsKeyboard({
       provider: "anthropic",
       models: [longModel],
@@ -206,8 +208,23 @@ describe("buildModelsKeyboard", () => {
       totalPages: 1,
     });
     const text = result[0]?.[0]?.text;
+    // Model is 38 chars, fits exactly in 38-char display limit
+    expect(text).toBe(longModel);
+  });
+
+  it("truncates display text for very long model names", () => {
+    // Use short provider to allow longer model in callback_data (64 byte limit)
+    // "mdl_sel_a/" = 10 bytes, leaving 54 for model
+    const longModel = "this-model-name-is-long-enough-to-need-truncation-abcd";
+    const result = buildModelsKeyboard({
+      provider: "a",
+      models: [longModel],
+      currentPage: 1,
+      totalPages: 1,
+    });
+    const text = result[0]?.[0]?.text;
     expect(text?.startsWith("…")).toBe(true);
-    expect(text?.length).toBeLessThanOrEqual(39); // 38 max + possible checkmark
+    expect(text?.length).toBeLessThanOrEqual(38);
   });
 });
 
@@ -240,5 +257,79 @@ describe("calculateTotalPages", () => {
   it("uses custom page size", () => {
     expect(calculateTotalPages(10, 5)).toBe(2);
     expect(calculateTotalPages(11, 5)).toBe(3);
+  });
+});
+
+describe("large model lists (OpenRouter-scale)", () => {
+  it("handles 100+ models with pagination", () => {
+    const models = Array.from({ length: 150 }, (_, i) => `model-${i}`);
+    const totalPages = calculateTotalPages(models.length);
+    expect(totalPages).toBe(19); // 150 / 8 = 18.75 -> 19 pages
+
+    // Test first page
+    const firstPage = buildModelsKeyboard({
+      provider: "openrouter",
+      models,
+      currentPage: 1,
+      totalPages,
+    });
+    expect(firstPage.length).toBe(10); // 8 models + pagination + back
+    expect(firstPage[0]?.[0]?.text).toBe("model-0");
+    expect(firstPage[7]?.[0]?.text).toBe("model-7");
+
+    // Test last page
+    const lastPage = buildModelsKeyboard({
+      provider: "openrouter",
+      models,
+      currentPage: 19,
+      totalPages,
+    });
+    // Last page has 150 - (18 * 8) = 6 models
+    expect(lastPage.length).toBe(8); // 6 models + pagination + back
+    expect(lastPage[0]?.[0]?.text).toBe("model-144");
+  });
+
+  it("all callback_data stays within 64-byte limit", () => {
+    // Realistic OpenRouter model IDs
+    const models = [
+      "anthropic/claude-3-5-sonnet-20241022",
+      "google/gemini-2.0-flash-thinking-exp:free",
+      "deepseek/deepseek-r1-distill-llama-70b",
+      "meta-llama/llama-3.3-70b-instruct:nitro",
+      "nousresearch/hermes-3-llama-3.1-405b:extended",
+    ];
+    const result = buildModelsKeyboard({
+      provider: "openrouter",
+      models,
+      currentPage: 1,
+      totalPages: 1,
+    });
+
+    for (const row of result) {
+      for (const button of row) {
+        const bytes = Buffer.byteLength(button.callback_data, "utf8");
+        expect(bytes).toBeLessThanOrEqual(64);
+      }
+    }
+  });
+
+  it("skips models that would exceed callback_data limit", () => {
+    const models = [
+      "short-model",
+      "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit",
+      "another-short",
+    ];
+    const result = buildModelsKeyboard({
+      provider: "openrouter",
+      models,
+      currentPage: 1,
+      totalPages: 1,
+    });
+
+    // Should have 2 model buttons (skipping the long one) + back
+    const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
+    expect(modelButtons.length).toBe(2);
+    expect(modelButtons[0]?.[0]?.text).toBe("short-model");
+    expect(modelButtons[1]?.[0]?.text).toBe("another-short");
   });
 });

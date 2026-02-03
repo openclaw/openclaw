@@ -474,9 +474,14 @@ export const registerTelegramHandlers = ({
           const totalPages = calculateTotalPages(models.length, pageSize);
           const safePage = Math.max(1, Math.min(page, totalPages));
 
+          // Get current model from config for checkmark display
+          const modelCfg = cfg.agents?.defaults?.model;
+          const currentModel = typeof modelCfg === "string" ? modelCfg : modelCfg?.primary;
+
           const buttons = buildModelsKeyboard({
             provider,
             models,
+            currentModel,
             currentPage: safePage,
             totalPages,
             pageSize,
