@@ -9,7 +9,6 @@
     "build": "tsc"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.5.1",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   }

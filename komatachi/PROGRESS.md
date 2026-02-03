@@ -109,6 +109,25 @@ Key validations:
 
 This validates both the distilled code and the distillation process itself.
 
+### 6. Rust Portability Validation (Complete, Cleaned Up)
+
+Built an experimental Rust implementation of compaction to validate decision #5 ("TypeScript with Rust portability"). The experiment confirmed:
+
+- Type mapping works cleanly between TypeScript and Rust
+- Pure functions port 1:1
+- Hybrid architecture (Rust computation, TypeScript async) is viable
+
+**Outcome**: Validation successful. Experimental code removed; lessons documented in [docs/rust-porting.md](./docs/rust-porting.md) for future reference.
+
+### 7. Documentation Reorganization (Complete)
+
+Restructured documentation for discoverability:
+
+- Created `docs/` directory for supplementary documentation
+- Added `docs/INDEX.md` as central navigation hub
+- Updated `CLAUDE.md` with document map
+- Preserved lessons from Rust experiment in `docs/rust-porting.md`
+
 ---
 
 ## Key Decisions Made
@@ -118,8 +137,8 @@ This validates both the distilled code and the distillation process itself.
 3. **Vector-only search** - Modern embeddings are sufficient
 4. **Cross-agent session access** - Deferred. Essential for power users, but not needed for minimal viable agent. Will add when requirements demand it.
 5. **TypeScript with Rust portability** - Distill into TypeScript, but write code that converts easily to Rust. Avoid TypeScript-only tricks; verify heavy dependencies have Rust ecosystem equivalents.
-6. **Minimal viable agent** - A CLI where an agent using a Claude subscription can read and write files via tools. We'll refine this definition as we go.
-7. **No gateway for minimal scope** - Single-process CLI doesn't need inter-process communication. Design session storage and tool execution so they *could* support multi-agent later, but don't build it until needed. If/when we need multi-agent communication, prefer local-first IPC (ZeroMQ, Unix sockets) over web-oriented tech (WebSocket, HTTP). Note: ZeroMQ supports broker-less patterns (direct peer-to-peer)—a central broker may not be required at all.
+6. **CLI + Backend architecture** - The CLI is a thin client handling user interaction and display. The backend handles agent logic, LLM calls, compaction, memory, etc. This separation keeps the core framework interface-agnostic—it could serve a CLI, web client, or be embedded as a library.
+7. **Backend-first, gateway-deferred** - Start with a single-process backend. Design session storage and tool execution so they *could* support multi-agent later, but don't build it until needed. If/when we need multi-agent communication, prefer local-first IPC (ZeroMQ, Unix sockets) over web-oriented tech (WebSocket, HTTP). Note: ZeroMQ supports broker-less patterns (direct peer-to-peer)—a central broker may not be required at all.
 8. **Validate before advancing** - Write tests for each distilled component before moving to the next. Unvalidated foundations are risky; tests often reveal design issues early. This implements "Phase 4: Validate" from DISTILLATION.md.
 
 ---
@@ -175,12 +194,15 @@ None currently. Cross-agent session access question resolved—deferred until re
 
 ```
 komatachi/
-├── CLAUDE.md           # Project context
-├── DISTILLATION.md     # Principles and process
+├── CLAUDE.md           # Project context (includes document map)
 ├── PROGRESS.md         # This file - update as work progresses
+├── DISTILLATION.md     # Principles and process
 ├── package.json        # Dependencies (vitest, typescript)
 ├── tsconfig.json       # TypeScript config
 ├── vitest.config.ts    # Test runner config
+├── docs/               # Supplementary documentation
+│   ├── INDEX.md        # Central navigation hub
+│   └── rust-porting.md # Rust migration guide (from validation)
 ├── scouting/           # Analysis of OpenClaw components
 │   ├── context-management.md
 │   ├── long-term-memory-search.md
