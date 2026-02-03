@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { logWarn } from "../logger.js";
 
+type Env = Record<string, string | undefined>;
+
 export class MigrationService {
   private static strictModeCache: boolean | undefined;
 
@@ -13,16 +15,16 @@ export class MigrationService {
    * @security STRICT MODE: If ~/.openclaw exists, we ignore legacy vars
    * unless OPENCLAW_ALLOW_LEGACY_ENV=1 is set. This prevents injection attacks.
    */
-  static getEnv(key: string): string | undefined {
+  static getEnv(key: string, env: Env = process.env): string | undefined {
     // 1. Primary: Check the new OPENCLAW_* variable
     const newKey = `OPENCLAW_${key}`;
-    const value = process.env[newKey];
+    const value = env[newKey];
     if (value) {
       return value;
     }
 
     // 2. Security Check: Should we allow legacy variables?
-    const allowLegacy = process.env.OPENCLAW_ALLOW_LEGACY_ENV === "1";
+    const allowLegacy = env.OPENCLAW_ALLOW_LEGACY_ENV === "1";
 
     if (this.strictModeCache === undefined) {
       const homedir = os.homedir();
@@ -50,7 +52,7 @@ export class MigrationService {
     // 3. Fallback: Check legacy keys (CLAWDBOT_*, MOLTBOT_*)
     const legacyKey = `CLAWDBOT_${key}`;
     const ancientKey = `MOLTBOT_${key}`;
-    const fallback = process.env[legacyKey] || process.env[ancientKey];
+    const fallback = env[legacyKey] || env[ancientKey];
 
     if (fallback) {
       logWarn(
