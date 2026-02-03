@@ -1,6 +1,5 @@
 {
   "id": "conversation-summarizer",
-  "kind": "memory",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

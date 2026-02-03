@@ -134,7 +134,7 @@ const cortexPlugin: OpenClawPlugin = {
   }),
 
   register(api: OpenClawPluginApi) {
-    const config = api.pluginConfig as {
+    const rawConfig = (api.pluginConfig ?? {}) as Partial<{
       enabled: boolean;
       autoCapture: boolean;
       stmFastPath: boolean;
@@ -142,6 +142,17 @@ const cortexPlugin: OpenClawPlugin = {
       temporalWeight: number;
       importanceWeight: number;
       stmCapacity: number;
+    }>;
+
+    // Apply defaults
+    const config = {
+      enabled: rawConfig.enabled ?? true,
+      autoCapture: rawConfig.autoCapture ?? true,
+      stmFastPath: rawConfig.stmFastPath ?? true,
+      temporalRerank: rawConfig.temporalRerank ?? true,
+      temporalWeight: rawConfig.temporalWeight ?? 0.4,
+      importanceWeight: rawConfig.importanceWeight ?? 0.3,
+      stmCapacity: rawConfig.stmCapacity ?? 20,
     };
 
     if (!config.enabled) {
