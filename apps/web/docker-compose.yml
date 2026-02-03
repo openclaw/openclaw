@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: openclaw
+      POSTGRES_PASSWORD: openclaw
+      POSTGRES_DB: openclaw
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openclaw"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql://openclaw:openclaw@postgres:5432/openclaw
+      PAYLOAD_SECRET: ${PAYLOAD_SECRET:-change-this-secret-in-production}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-change-this-key-in-production}
+      NEXT_PUBLIC_SERVER_URL: http://localhost:3000
+      OPENCLAW_BASE_PATH: /var/openclaw
+      OPENCLAW_BASE_PORT: 18789
+      OPENCLAW_MAX_BOTS: 50
+    volumes:
+      - openclaw_data:/var/openclaw
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  openclaw_data:

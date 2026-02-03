@@ -1,0 +1,44 @@
+{
+  "name": "@openclaw/web",
+  "version": "2026.1.30",
+  "description": "OpenClaw Payload CMS web application for multi-bot management",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cross-env NODE_OPTIONS=--no-deprecation next dev",
+    "build": "cross-env NODE_OPTIONS=--no-deprecation next build",
+    "start": "cross-env NODE_OPTIONS=--no-deprecation next start",
+    "lint": "next lint",
+    "generate:types": "cross-env PAYLOAD_CONFIG_PATH=src/payload.config.ts payload generate:types",
+    "generate:graphql": "cross-env PAYLOAD_CONFIG_PATH=src/payload.config.ts payload generate:graphqlschema",
+    "payload": "cross-env PAYLOAD_CONFIG_PATH=src/payload.config.ts payload"
+  },
+  "dependencies": {
+    "@noble/ed25519": "3.0.0",
+    "@payloadcms/db-postgres": "^3.33.0",
+    "@payloadcms/next": "^3.33.0",
+    "@payloadcms/richtext-lexical": "^3.33.0",
+    "@payloadcms/ui": "^3.33.0",
+    "cross-env": "^7.0.3",
+    "graphql": "^16.11.1",
+    "next": "^15.2.0",
+    "payload": "^3.33.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "@types/react": "^19.0.9",
+    "@types/react-dom": "^19.0.3",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9",
+    "eslint-config-next": "^15.2.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
