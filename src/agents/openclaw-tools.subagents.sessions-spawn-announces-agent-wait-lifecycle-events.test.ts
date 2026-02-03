@@ -124,10 +124,18 @@ describe("openclaw-tools: subagents", () => {
     const first = agentCalls[0]?.params as { lane?: string } | undefined;
     expect(first?.lane).toBe("subagent");
 
-    // Second call: main agent trigger
-    const second = agentCalls[1]?.params as { sessionKey?: string; deliver?: boolean } | undefined;
-    expect(second?.sessionKey).toBe("discord:group:req");
-    expect(second?.deliver).toBe(true);
+    // Second call: announce step (uses separate announce session, not direct delivery)
+    const second = agentCalls[1]?.params as
+      | {
+          sessionKey?: string;
+          deliver?: boolean;
+          lane?: string;
+        }
+      | undefined;
+    // PR #7556: Announce now uses a separate session key derived from the requester's key
+    expect(second?.sessionKey?.startsWith("agent:main:announce:")).toBe(true);
+    expect(second?.deliver).toBe(false);
+    expect(second?.lane).toBe("nested");
 
     // No direct send to external channel (main agent handles delivery)
     const sendCalls = calls.filter((c) => c.method === "send");
