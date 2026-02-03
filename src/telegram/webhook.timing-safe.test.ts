@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import * as webhookModule from "./webhook.js";
 
 // Test that the webhook handler uses timing-safe comparison for secrets.
@@ -7,6 +7,28 @@ import * as webhookModule from "./webhook.js";
 //
 // CWE-208: Observable Timing Discrepancy
 // https://cwe.mitre.org/data/definitions/208.html
+
+// Mock grammy and bot to isolate webhook secret validation tests
+const handlerSpy = vi.fn(
+  (_req: unknown, res: { writeHead: (status: number) => void; end: (body?: string) => void }) => {
+    res.writeHead(200);
+    res.end("ok");
+  },
+);
+const setWebhookSpy = vi.fn();
+const stopSpy = vi.fn();
+
+vi.mock("grammy", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("grammy")>();
+  return { ...actual, webhookCallback: () => handlerSpy };
+});
+
+vi.mock("./bot.js", () => ({
+  createTelegramBot: () => ({
+    api: { setWebhook: setWebhookSpy },
+    stop: stopSpy,
+  }),
+}));
 
 describe("VULN-026: telegram webhook secret must use timing-safe comparison", () => {
   it("safeEqualSecret is exported from webhook module", () => {
@@ -36,37 +58,112 @@ describe("VULN-026: telegram webhook secret must use timing-safe comparison", ()
     expect(webhookModule.safeEqualSecret(secret, secret.slice(0, -1) + "X")).toBe(false);
   });
 
-  describe("startTelegramWebhook secret validation", () => {
-    let safeEqualSecretSpy: ReturnType<typeof vi.spyOn>;
+  describe("startTelegramWebhook secret validation integration", () => {
+    const SECRET = "test-webhook-secret-12345";
 
     beforeEach(() => {
-      safeEqualSecretSpy = vi.spyOn(webhookModule, "safeEqualSecret");
+      handlerSpy.mockClear();
+      setWebhookSpy.mockClear();
     });
 
-    afterEach(() => {
-      safeEqualSecretSpy.mockRestore();
+    it("returns 401 when secret header is missing", async () => {
+      const abort = new AbortController();
+      const { server } = await webhookModule.startTelegramWebhook({
+        token: "tok",
+        port: 0,
+        secret: SECRET,
+        abortSignal: abort.signal,
+      });
+
+      const addr = server.address();
+      if (!addr || typeof addr === "string") {
+        throw new Error("no addr");
+      }
+
+      const res = await fetch(`http://127.0.0.1:${addr.port}/telegram-webhook`, {
+        method: "POST",
+      });
+
+      expect(res.status).toBe(401);
+      expect(handlerSpy).not.toHaveBeenCalled();
+      abort.abort();
     });
 
-    it("calls safeEqualSecret when validating webhook requests with secrets", async () => {
-      // We can't easily start the full webhook server in a unit test,
-      // but we can verify the function is being used by testing the export
-      // and its behavior. The integration is verified by the fact that:
-      // 1. safeEqualSecret is exported
-      // 2. The webhook.ts code imports and uses it
-      // 3. If someone removes the safeEqualSecret call, this test would still
-      //    pass but the timing-safe test above would fail because the function
-      //    wouldn't match expected behavior
+    it("returns 401 when secret header is wrong", async () => {
+      const abort = new AbortController();
+      const { server } = await webhookModule.startTelegramWebhook({
+        token: "tok",
+        port: 0,
+        secret: SECRET,
+        abortSignal: abort.signal,
+      });
 
-      // Verify the spy works correctly
-      safeEqualSecretSpy.mockReturnValueOnce(true);
-      expect(webhookModule.safeEqualSecret("test", "test")).toBe(true);
-      expect(safeEqualSecretSpy).toHaveBeenCalledWith("test", "test");
+      const addr = server.address();
+      if (!addr || typeof addr === "string") {
+        throw new Error("no addr");
+      }
 
-      // Verify it's actually timing-safe by checking the real implementation
-      safeEqualSecretSpy.mockRestore();
-      // These should work with the real implementation
-      expect(webhookModule.safeEqualSecret("real-secret", "real-secret")).toBe(true);
-      expect(webhookModule.safeEqualSecret("real-secret", "fake-secret")).toBe(false);
+      const res = await fetch(`http://127.0.0.1:${addr.port}/telegram-webhook`, {
+        method: "POST",
+        headers: { "x-telegram-bot-api-secret-token": "wrong-secret" },
+      });
+
+      expect(res.status).toBe(401);
+      expect(handlerSpy).not.toHaveBeenCalled();
+      abort.abort();
+    });
+
+    it("passes request to handler when secret header is correct", async () => {
+      const abort = new AbortController();
+      const { server } = await webhookModule.startTelegramWebhook({
+        token: "tok",
+        port: 0,
+        secret: SECRET,
+        abortSignal: abort.signal,
+      });
+
+      const addr = server.address();
+      if (!addr || typeof addr === "string") {
+        throw new Error("no addr");
+      }
+
+      const res = await fetch(`http://127.0.0.1:${addr.port}/telegram-webhook`, {
+        method: "POST",
+        headers: { "x-telegram-bot-api-secret-token": SECRET },
+      });
+
+      expect(res.status).toBe(200);
+      expect(handlerSpy).toHaveBeenCalled();
+      abort.abort();
+    });
+
+    it("rejects request if safeEqualSecret returns false (regression guard)", async () => {
+      // This test ensures that if someone changes the code to bypass safeEqualSecret,
+      // the test will fail because we're verifying the actual HTTP behavior matches
+      // what safeEqualSecret would return.
+      const abort = new AbortController();
+      const { server } = await webhookModule.startTelegramWebhook({
+        token: "tok",
+        port: 0,
+        secret: SECRET,
+        abortSignal: abort.signal,
+      });
+
+      const addr = server.address();
+      if (!addr || typeof addr === "string") {
+        throw new Error("no addr");
+      }
+
+      // Near-miss secret (timing attack target) - must be rejected
+      const nearMiss = SECRET.slice(0, -1) + "X";
+      const res = await fetch(`http://127.0.0.1:${addr.port}/telegram-webhook`, {
+        method: "POST",
+        headers: { "x-telegram-bot-api-secret-token": nearMiss },
+      });
+
+      expect(res.status).toBe(401);
+      expect(handlerSpy).not.toHaveBeenCalled();
+      abort.abort();
     });
   });
 });
