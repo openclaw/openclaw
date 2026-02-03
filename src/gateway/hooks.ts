@@ -48,7 +48,7 @@ export type HookTokenResult = {
   fromQuery: boolean;
 };
 
-export function extractHookToken(req: IncomingMessage, url: URL): HookTokenResult {
+export function extractHookToken(req: IncomingMessage, _url: URL): HookTokenResult {
   const auth =
     typeof req.headers.authorization === "string" ? req.headers.authorization.trim() : "";
   if (auth.toLowerCase().startsWith("bearer ")) {
@@ -64,10 +64,8 @@ export function extractHookToken(req: IncomingMessage, url: URL): HookTokenResul
   if (headerToken) {
     return { token: headerToken, fromQuery: false };
   }
-  const queryToken = url.searchParams.get("token");
-  if (queryToken) {
-    return { token: queryToken.trim(), fromQuery: true };
-  }
+  // Query parameter tokens removed for security (CWE-598).
+  // Tokens in URLs leak via logs, referrer headers, browser history, etc.
   return { token: undefined, fromQuery: false };
 }
 
