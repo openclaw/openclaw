@@ -395,6 +395,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         to: resolvedTo,
         sessionId: resolvedSessionId,
         sessionKey: requestedSessionKey,
+        sessionEntry,
         thinking: request.thinking,
         deliver,
         deliveryTargetMode,

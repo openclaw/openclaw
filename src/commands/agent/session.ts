@@ -86,6 +86,7 @@ export function resolveSession(opts: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
+  sessionEntry?: SessionEntry;
 }): SessionResolution {
   const sessionCfg = opts.cfg.session;
   const { sessionKey, sessionStore, storePath } = resolveSessionKeyForRequest({
@@ -97,7 +98,7 @@ export function resolveSession(opts: {
   });
   const now = Date.now();
 
-  const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
+  const sessionEntry = opts.sessionEntry ?? (sessionKey ? sessionStore[sessionKey] : undefined);
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
