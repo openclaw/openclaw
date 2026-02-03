@@ -113,7 +113,7 @@ describe("memory openai embedding token limits", () => {
 
     // Verify each batch stays within limits
     for (const call of embedBatch.mock.calls) {
-      const texts = call[0] as string[];
+      const texts = call[0];
       const batchTokens = texts.reduce((sum, t) => sum + countTokens(t), 0);
       expect(batchTokens).toBeLessThanOrEqual(8192 + texts.length);
     }
