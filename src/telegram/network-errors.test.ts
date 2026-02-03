@@ -40,6 +40,11 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(new Error("invalid token"))).toBe(false);
   });
 
+  it("detects grammY 'timed out' long-poll errors (#7239)", () => {
+    const err = new Error("Request to 'getUpdates' timed out after 500 seconds");
+    expect(isRecoverableTelegramNetworkError(err)).toBe(true);
+  });
+
   // Grammy HttpError tests (issue #3815)
   // Grammy wraps fetch errors in .error property, not .cause
   describe("Grammy HttpError", () => {
