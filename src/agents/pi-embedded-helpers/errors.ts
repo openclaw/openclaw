@@ -368,6 +368,14 @@ export function formatAssistantErrorText(
     return "The AI service is temporarily overloaded. Please try again in a moment.";
   }
 
+  if (isBillingErrorMessage(raw)) {
+    return (
+      "⚠️ API provider returned a billing error — your API key has run out of credits " +
+      "or has an insufficient balance. Check your provider's billing dashboard and top up or " +
+      "switch to a different API key."
+    );
+  }
+
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
     return formatRawAssistantErrorForUi(raw);
   }
@@ -400,6 +408,14 @@ export function sanitizeUserFacingText(text: string): string {
     return (
       "Context overflow: prompt too large for the model. " +
       "Try again with less input or a larger-context model."
+    );
+  }
+
+  if (isBillingErrorMessage(trimmed)) {
+    return (
+      "⚠️ API provider returned a billing error — your API key has run out of credits " +
+      "or has an insufficient balance. Check your provider's billing dashboard and top up or " +
+      "switch to a different API key."
     );
   }
 

@@ -53,4 +53,22 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
+  it("returns a friendly billing message for credit balance errors", () => {
+    const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("billing error");
+    expect(result).toContain("credits");
+  });
+  it("returns a friendly billing message for HTTP 402 errors", () => {
+    const msg = makeAssistantError("HTTP 402 Payment Required");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("billing error");
+    expect(result).toContain("credits");
+  });
+  it("returns a friendly billing message for insufficient credits", () => {
+    const msg = makeAssistantError("insufficient credits");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("billing error");
+    expect(result).toContain("balance");
+  });
 });
