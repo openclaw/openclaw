@@ -831,6 +831,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     ]);
     this.watcher = chokidar.watch(Array.from(watchPaths), {
       ignoreInitial: true,
+      ignored: this.settings.ignorePaths,
       awaitWriteFinish: {
         stabilityThreshold: this.settings.sync.watchDebounceMs,
         pollInterval: 100,
@@ -1071,7 +1072,11 @@ export class MemoryIndexManager implements MemorySearchManager {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    const files = await listMemoryFiles(this.workspaceDir, this.settings.extraPaths);
+    const files = await listMemoryFiles(
+      this.workspaceDir,
+      this.settings.extraPaths,
+      this.settings.ignorePaths,
+    );
     const fileEntries = await Promise.all(
       files.map(async (file) => buildFileEntry(file, this.workspaceDir)),
     );
