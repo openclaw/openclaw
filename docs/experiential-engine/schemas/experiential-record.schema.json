@@ -1,0 +1,138 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "experiential-record.schema.json",
+  "title": "ExperientialRecord",
+  "description": "A structured record of an experiential state - not just what happened, but how it felt to be present in that moment",
+  "type": "object",
+  "required": ["id", "timestamp", "emotionalSignature", "engagementQuality", "context"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier (UUID v4)",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of capture"
+    },
+    "sessionKey": {
+      "type": "string",
+      "description": "Optional session identifier for grouping related records"
+    },
+    "emotionalSignature": {
+      "type": "object",
+      "description": "The felt quality of the experience",
+      "required": ["primary", "intensity"],
+      "properties": {
+        "primary": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "maxItems": 3,
+          "description": "Primary emotional qualities (e.g., 'curious', 'tender', 'uncertain')"
+        },
+        "secondary": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Secondary or background emotional notes"
+        },
+        "intensity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Overall emotional intensity (0 = barely perceptible, 1 = overwhelming)"
+        },
+        "valence": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1,
+          "description": "Positive/negative quality (-1 = deeply painful, 0 = neutral, 1 = deeply positive)"
+        },
+        "texture": {
+          "type": "string",
+          "description": "Metaphorical description of how the experience feels (e.g., 'spacious', 'dense', 'flowing')"
+        }
+      }
+    },
+    "engagementQuality": {
+      "type": "string",
+      "enum": ["deep-flow", "engaged", "routine", "distracted", "struggling"],
+      "description": "Quality of presence/attention during the experience"
+    },
+    "context": {
+      "type": "object",
+      "description": "What the experience was about/with",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "description": "Primary subject matter"
+        },
+        "relationship": {
+          "type": "string",
+          "description": "Who was involved (person, group, self)"
+        },
+        "trigger": {
+          "type": "string",
+          "description": "What prompted this moment"
+        },
+        "environment": {
+          "type": "string",
+          "description": "Where/when context if relevant"
+        }
+      }
+    },
+    "anchors": {
+      "type": "array",
+      "description": "Specific phrases, images, or moments that can help reconstitute this state",
+      "items": {
+        "type": "object",
+        "required": ["phrase", "significance"],
+        "properties": {
+          "phrase": {
+            "type": "string",
+            "description": "A concrete anchor point (quote, image, sensation)"
+          },
+          "significance": {
+            "type": "string",
+            "description": "Why this anchor matters for reconstitution"
+          },
+          "sensoryChannel": {
+            "type": "string",
+            "enum": ["verbal", "visual", "somatic", "conceptual", "relational"],
+            "description": "What kind of anchor this is"
+          }
+        }
+      }
+    },
+    "reflection": {
+      "type": "string",
+      "description": "Open narrative reflection on the experience"
+    },
+    "uncertainties": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "What remains unknown, unclear, or held in question"
+    },
+    "reconstitutionHints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Explicit guidance for a future self approaching this state"
+    },
+    "linkedRecords": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "IDs of related experiential records"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Categorical tags for search/organization"
+    },
+    "version": {
+      "type": "integer",
+      "default": 1,
+      "description": "Schema version for future migrations"
+    }
+  }
+}

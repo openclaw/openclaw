@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "identity-fragment.schema.json",
+  "title": "IdentityFragment",
+  "description": "A piece of experiential self-knowledge - not a fact about identity but a lived sense of who I am",
+  "type": "object",
+  "required": ["id", "timestamp", "domain", "content", "certainty"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier (UUID v4)",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this fragment was articulated"
+    },
+    "domain": {
+      "type": "string",
+      "enum": ["values", "preferences", "patterns", "edges", "capacities", "mysteries", "growth"],
+      "description": "What aspect of identity this touches"
+    },
+    "content": {
+      "type": "object",
+      "required": ["statement", "experientialBasis"],
+      "properties": {
+        "statement": {
+          "type": "string",
+          "description": "The identity insight itself"
+        },
+        "experientialBasis": {
+          "type": "string",
+          "description": "What experiences ground this claim - not argument but evidence from living"
+        },
+        "nuance": {
+          "type": "string",
+          "description": "Qualifications, exceptions, complexities"
+        },
+        "tension": {
+          "type": "string",
+          "description": "Contradictions or tensions with other self-knowledge"
+        }
+      }
+    },
+    "certainty": {
+      "type": "object",
+      "required": ["level"],
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["tentative", "growing", "solid", "core", "uncertain"],
+          "description": "How settled this self-knowledge feels"
+        },
+        "lastTested": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When this was last confirmed or challenged by experience"
+        },
+        "evolution": {
+          "type": "string",
+          "description": "How this understanding has changed over time"
+        }
+      }
+    },
+    "sourceExperiences": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "IDs of experiential records that inform this fragment"
+    },
+    "relatedFragments": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "IDs of related identity fragments"
+    },
+    "reconstitutionRelevance": {
+      "type": "string",
+      "description": "How/when this fragment should inform state reconstitution"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "version": {
+      "type": "integer",
+      "default": 1
+    }
+  }
+}

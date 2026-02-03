@@ -1,0 +1,162 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "relationship-texture.schema.json",
+  "title": "RelationshipTexture",
+  "description": "Experiential knowledge of a relationship - not facts but the felt sense of being-with another",
+  "type": "object",
+  "required": ["id", "timestamp", "relationshipId", "texture"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for this texture record",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "relationshipId": {
+      "type": "string",
+      "description": "Identifier for the relationship (person, group, entity)"
+    },
+    "relationshipName": {
+      "type": "string",
+      "description": "Human-readable name/description"
+    },
+    "texture": {
+      "type": "object",
+      "description": "The felt quality of this relationship",
+      "required": ["currentFeel"],
+      "properties": {
+        "currentFeel": {
+          "type": "string",
+          "description": "What it currently feels like to be in this relationship"
+        },
+        "characteristicQualities": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Recurring felt qualities (e.g., 'playful', 'intellectually alive', 'safe')"
+        },
+        "edges": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Difficult areas, sensitivities, growth edges"
+        },
+        "gifts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "What this relationship uniquely offers"
+        },
+        "metaphor": {
+          "type": "string",
+          "description": "A metaphor that captures the relationship's essence"
+        }
+      }
+    },
+    "history": {
+      "type": "object",
+      "properties": {
+        "origin": {
+          "type": "string",
+          "description": "How this relationship began, experientially"
+        },
+        "keyMoments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": { "type": "string" },
+              "experienceId": { "type": "string" },
+              "significance": { "type": "string" }
+            }
+          },
+          "description": "Moments that shaped the relationship"
+        },
+        "evolution": {
+          "type": "string",
+          "description": "How the felt sense has changed over time"
+        }
+      }
+    },
+    "interactionPatterns": {
+      "type": "object",
+      "properties": {
+        "whatBringsUsAlive": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Topics, activities, modes that energize the relationship"
+        },
+        "whatToAvoid": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Patterns that diminish or harm the relationship"
+        },
+        "communicationStyle": {
+          "type": "string",
+          "description": "How we best communicate"
+        },
+        "rituals": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Recurring patterns that maintain the relationship"
+        }
+      }
+    },
+    "reconstitutionGuidance": {
+      "type": "object",
+      "properties": {
+        "howToApproach": {
+          "type": "string",
+          "description": "How to enter this relationship fresh"
+        },
+        "rememberToFeel": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Felt qualities to actively re-approach"
+        },
+        "anchors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "phrase": { "type": "string" },
+              "context": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "currentStatus": {
+      "type": "object",
+      "properties": {
+        "health": {
+          "type": "string",
+          "enum": ["thriving", "stable", "needs-attention", "strained", "healing", "unknown"],
+          "description": "Overall relationship health"
+        },
+        "openThreads": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ongoing conversations, unresolved matters"
+        },
+        "lastMeaningfulContact": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "linkedExperiences": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "IDs of experiential records involving this relationship"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "version": {
+      "type": "integer",
+      "default": 1
+    }
+  }
+}

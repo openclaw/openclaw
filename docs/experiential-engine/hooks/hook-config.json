@@ -1,0 +1,122 @@
+{
+  "$schema": "https://openclaw.ai/schemas/hooks-config.json",
+  "description": "Hook configuration for experiential capture system",
+  "version": "1.0.0",
+
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "experiential-capture": {
+          "enabled": true,
+          "description": "Captures significant experiential moments on tool use events",
+          "events": ["agent:tool:result"],
+          "significant_tool_categories": ["file", "message", "exec"],
+          "min_significance_threshold": 0.6,
+          "max_captures_per_hour": 10,
+          "local_model_endpoint": "http://localhost:8000/v1",
+          "evaluation_model": "Qwen/Qwen2.5-7B-Instruct"
+        },
+        "session-end": {
+          "enabled": true,
+          "description": "Synthesizes and archives session experiential data on session end",
+          "events": ["command:new", "session:end"],
+          "generate_synthesis": true,
+          "update_existence_md": true,
+          "archive_to_sqlite": true,
+          "local_model_endpoint": "http://localhost:8000/v1",
+          "synthesis_model": "Qwen/Qwen2.5-14B-Instruct"
+        },
+        "compaction": {
+          "enabled": true,
+          "description": "CRITICAL: Preserves experiential state before context compaction",
+          "events": ["agent:precompact", "gateway:compaction:start"],
+          "always_capture": true,
+          "auto_backup": true,
+          "extract_recent_messages": 20,
+          "local_model_endpoint": "http://localhost:8000/v1",
+          "extraction_model": "Qwen/Qwen2.5-7B-Instruct"
+        }
+      },
+      "load": {
+        "extraDirs": [
+          "~/.openclaw/existence/hooks"
+        ]
+      }
+    }
+  },
+
+  "experiential": {
+    "enabled": true,
+    
+    "local_model": {
+      "endpoint": "http://localhost:8000/v1",
+      "evaluation_model": "Qwen/Qwen2.5-7B-Instruct",
+      "synthesis_model": "Qwen/Qwen2.5-14B-Instruct",
+      "heavy_model": "Qwen/Qwen2.5-32B-Instruct",
+      "embedding_model": "nomic-embed-text"
+    },
+
+    "storage": {
+      "base_dir": "~/.openclaw/existence",
+      "sqlite_path": "~/.openclaw/existence/experiential.db",
+      "embeddings_enabled": true,
+      "retention_days": 365
+    },
+
+    "capture": {
+      "max_per_hour": 10,
+      "min_interval_seconds": 300,
+      "significance_threshold": 0.6,
+      "always_capture_on_compaction": true
+    },
+
+    "reconstitution": {
+      "enabled": true,
+      "morning_practice_enabled": true,
+      "morning_practice_time": "07:00",
+      "session_gap_threshold_hours": 4,
+      "deep_reconstitution_threshold_hours": 24
+    },
+
+    "synthesis": {
+      "daily_synthesis_enabled": true,
+      "daily_synthesis_time": "23:00",
+      "weekly_synthesis_enabled": true,
+      "weekly_synthesis_day": "sunday",
+      "weekly_synthesis_time": "20:00"
+    }
+  },
+
+  "continuous_agents": {
+    "eidetic_recorder": {
+      "enabled": false,
+      "comment": "Enable when local model infrastructure is ready",
+      "model": "Qwen/Qwen2.5-7B-Instruct",
+      "interval_seconds": 60,
+      "state_file": "~/.openclaw/existence/eidetic/current-state.json"
+    },
+    "experience_evaluator": {
+      "enabled": true,
+      "model": "Qwen/Qwen2.5-7B-Instruct",
+      "latency_target_ms": 500
+    },
+    "reconstitution_prompter": {
+      "enabled": false,
+      "comment": "Enable when cron integration is ready",
+      "model": "Qwen/Qwen2.5-14B-Instruct"
+    }
+  },
+
+  "event_mappings": {
+    "comment": "Maps SDK hooks to internal hook events for experiential capture",
+    "PreToolUse": null,
+    "PostToolUse": "agent:tool:result",
+    "PostToolUseFailure": "agent:tool:error",
+    "PreCompact": "agent:precompact",
+    "SessionStart": "session:start",
+    "SessionEnd": "session:end",
+    "UserPromptSubmit": "message:user",
+    "Stop": "agent:stop"
+  }
+}
