@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "speechify" | "edge";
 
 export type TtsMode = "final" | "all";
 
@@ -58,6 +58,14 @@ export type TtsConfig = {
     apiKey?: string;
     model?: string;
     voice?: string;
+  };
+  /** Speechify configuration. */
+  speechify?: {
+    apiKey?: string;
+    voiceId?: string;
+    model?: "simba-english" | "simba-multilingual";
+    language?: string;
+    audioFormat?: "wav" | "mp3" | "ogg" | "aac" | "pcm";
   };
   /** Microsoft Edge (node-edge-tts) configuration. */
   edge?: {
