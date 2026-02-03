@@ -265,6 +265,38 @@ Notes:
 Use this scripted runbook to demo ArmorIQ intent enforcement across WhatsApp, Slack, Telegram,
 and `/tools/invoke`. It is designed for a consumer-friendly, viral-style walkthrough.
 
+### CLI Demo Runner (aiqdemo/)
+
+The repo includes a small demo runner and assets under `aiqdemo/`:
+
+- `pnpm aiq:demo setup` creates `aiqdemo/` assets (prompts + injection file + empty itinerary).
+- `pnpm aiq:demo prompts` prints the prompts for WhatsApp/Slack/Telegram.
+- `pnpm aiq:demo invoke --segment=5a,5b,5c,5d` runs the `/tools/invoke` demo steps.
+
+Environment variables for `/tools/invoke`:
+
+- `AIQ_DEMO_GATEWAY_URL` (default `http://localhost:18789`)
+- `AIQ_DEMO_GATEWAY_TOKEN` (required)
+- `AIQ_DEMO_INTENT_TOKEN` (segment 5B)
+- `AIQ_DEMO_CSRG_JWT` (segment 5D)
+- `AIQ_DEMO_CSRG_PATH` (segment 5D)
+- `AIQ_DEMO_CSRG_PROOF` (segment 5D, JSON array string)
+- `AIQ_DEMO_CSRG_VALUE_DIGEST` (segment 5D)
+- `AIQ_DEMO_MESSAGE_CHANNEL` (optional, sets `x-openclaw-message-channel`)
+
+### Using the .env Example
+
+`aiqdemo/.env.example` lists all supported environment variables. Populate `aiqdemo/.env` with
+real values. The demo runner auto-loads `aiqdemo/.env` if present. You can also load it in your
+shell before running, for example:
+
+```bash
+set -a
+source aiqdemo/.env
+set +a
+pnpm aiq:demo invoke --segment=5a,5b,5c,5d
+```
+
 ### Baseline First: Run Without ArmorIQ (Show the Problem)
 
 If you are new to OpenClaw, do this once to show what happens without intent enforcement.
