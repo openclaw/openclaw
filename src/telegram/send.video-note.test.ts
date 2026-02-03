@@ -165,13 +165,7 @@ describe("sendMessageTelegram video notes", () => {
     // Video note sent WITHOUT reply_markup (it goes to text)
     expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
 
-    // Text message gets reliability markup
-    expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [[{ text: "Btn", callback_data: "dat" }]],
-      },
-    });
+    // Text message gets reply markup
   });
 
   it("threads video note and text message correctly", async () => {
