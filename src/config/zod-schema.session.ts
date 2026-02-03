@@ -15,31 +15,6 @@ const SessionResetConfigSchema = z
   })
   .strict();
 
-export const SessionSendPolicySchema = z
-  .object({
-    default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
-    rules: z
-      .array(
-        z
-          .object({
-            action: z.union([z.literal("allow"), z.literal("deny")]),
-            match: z
-              .object({
-                channel: z.string().optional(),
-                chatType: z
-                  .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
-                  .optional(),
-                keyPrefix: z.string().optional(),
-              })
-              .strict()
-              .optional(),
-          })
-          .strict(),
-      )
-      .optional(),
-  })
-  .strict();
-
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
@@ -75,7 +50,31 @@ export const SessionSchema = z
       ])
       .optional(),
     mainKey: z.string().optional(),
-    sendPolicy: SessionSendPolicySchema.optional(),
+    sendPolicy: z
+      .object({
+        default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
+        rules: z
+          .array(
+            z
+              .object({
+                action: z.union([z.literal("allow"), z.literal("deny")]),
+                match: z
+                  .object({
+                    channel: z.string().optional(),
+                    chatType: z
+                      .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
+                      .optional(),
+                    keyPrefix: z.string().optional(),
+                  })
+                  .strict()
+                  .optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
+      .optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),
