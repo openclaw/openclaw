@@ -79,10 +79,9 @@ Or with pnpm:
 ```bash
 pnpm add -g openclaw@latest
 pnpm approve-builds -g                # approve openclaw, node-llama-cpp, sharp, etc.
-pnpm add -g openclaw@latest           # re-run to execute postinstall scripts
 ```
 
-pnpm requires explicit approval for packages with build scripts. After the first install shows the "Ignored build scripts" warning, run `pnpm approve-builds -g` and select the listed packages, then re-run the install so postinstall scripts execute.
+pnpm requires explicit approval for packages with build scripts. After the first install shows the "Ignored build scripts" warning, run `pnpm approve-builds -g` and select the listed packages.
 
 Then:
 
