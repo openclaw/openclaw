@@ -69,11 +69,11 @@ function setCachedThreadStarter(key: string, value: DiscordThreadStarter, now: n
   DISCORD_THREAD_STARTER_CACHE.set(key, { value, updatedAt: now });
   // Evict oldest entries (first in Map) when over max size
   while (DISCORD_THREAD_STARTER_CACHE.size > DISCORD_THREAD_STARTER_CACHE_MAX) {
-    const oldestKey = DISCORD_THREAD_STARTER_CACHE.keys().next().value;
-    if (!oldestKey) {
+    const iter = DISCORD_THREAD_STARTER_CACHE.keys().next();
+    if (iter.done) {
       break;
     }
-    DISCORD_THREAD_STARTER_CACHE.delete(oldestKey);
+    DISCORD_THREAD_STARTER_CACHE.delete(iter.value);
   }
 }
 
