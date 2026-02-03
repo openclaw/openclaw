@@ -25,9 +25,9 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   wakeMode: "next-heartbeat",
   payloadKind: "systemEvent",
   payloadText: "",
-  deliveryMode: "legacy",
+  deliveryMode: "announce",
   deliveryChannel: "last",
   deliveryTo: "",
   timeoutSeconds: "",
-  postToMainPrefix: "",
+  postToMainPrefix: "Cron",
 };

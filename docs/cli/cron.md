@@ -16,6 +16,10 @@ Related:
 
 Tip: run `openclaw cron --help` for the full command surface.
 
+Note: isolated `cron add` jobs default to `--announce` delivery. Use `--deliver` for full output
+or `--no-deliver` to keep output internal. To opt into the legacy main-summary path, pass
+`--post-prefix` (or other `--post-*` options) without delivery flags.
+
 ## Common edits
 
 Update delivery settings without changing the message:
