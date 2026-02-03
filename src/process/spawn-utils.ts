@@ -33,9 +33,8 @@ export function resolveCommandStdio(params: {
   preferInherit: boolean;
   ignoreOutput?: boolean;
 }): ["pipe" | "inherit" | "ignore", "pipe" | "ignore", "pipe" | "ignore"] {
-  // EBADF workaround: always ignore output to prevent pipe creation failures
-  // Set ignoreOutput=false explicitly to override (at your own risk)
-  if (params.ignoreOutput !== false) {
+  // ignoreOutput=true explicitly requests no output capture
+  if (params.ignoreOutput === true) {
     return ["ignore", "ignore", "ignore"];
   }
   const stdin = params.hasInput ? "pipe" : params.preferInherit ? "inherit" : "pipe";
