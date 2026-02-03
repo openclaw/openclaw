@@ -218,6 +218,21 @@ export async function handleDiscordMessageAction(
     );
   }
 
+  if (action === "set-presence") {
+    return await handleDiscordAction(
+      {
+        action: "setPresence",
+        accountId: accountId ?? undefined,
+        status: readStringParam(params, "status"),
+        activityType: readStringParam(params, "activityType"),
+        activityName: readStringParam(params, "activityName"),
+        activityUrl: readStringParam(params, "activityUrl"),
+        activityState: readStringParam(params, "activityState"),
+      },
+      cfg,
+    );
+  }
+
   const adminResult = await tryHandleDiscordMessageActionGuildAdmin({
     ctx,
     resolveChannelId,
