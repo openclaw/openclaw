@@ -170,10 +170,6 @@ export function attachGatewayWsMessageHandler(params: {
     return;
   }
 
-  // Determine if we should apply localhost trust for this connection.
-  // This requires explicit opt-in via config AND passing all security checks.
-  const trustsLocalhost = shouldTrustLocalhost(upgradeReq, resolvedAuth, trustedProxies);
-
   const reportedClientIp =
     isLocalClient || hasUntrustedProxyHeaders
       ? undefined
@@ -506,9 +502,10 @@ export function attachGatewayWsMessageHandler(params: {
             close(1008, "device signature expired");
             return;
           }
-          // Nonce is required unless trustLocalhost is explicitly enabled AND
-          // this is a verified local connection. Default: always require nonce.
-          const nonceRequired = !trustsLocalhost;
+          // Nonce is required for remote clients. Local clients (determined by
+          // isLocalDirectRequest) can skip the nonce for backward compatibility,
+          // but still must pass Host header validation (DNS rebinding protection).
+          const nonceRequired = !isLocalClient;
           const providedNonce = typeof device.nonce === "string" ? device.nonce.trim() : "";
           if (nonceRequired && !providedNonce) {
             setHandshakeState("failed");
