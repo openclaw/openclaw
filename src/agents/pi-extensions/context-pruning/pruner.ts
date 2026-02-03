@@ -229,7 +229,11 @@ ${tail}`;
  *
  * Returns the original array if no changes were needed.
  */
-export function capToolResultMessages(messages: AgentMessage[], maxChars: number): AgentMessage[] {
+export function capToolResultMessages(
+  messages: AgentMessage[],
+  maxChars: number,
+  isToolPrunable?: (toolName: string) => boolean,
+): AgentMessage[] {
   if (maxChars <= 0) return messages;
 
   let next: AgentMessage[] | null = null;
@@ -237,6 +241,7 @@ export function capToolResultMessages(messages: AgentMessage[], maxChars: number
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     if (!msg || msg.role !== "toolResult") continue;
+    if (isToolPrunable && !isToolPrunable(msg.toolName)) continue;
     if (hasImageBlocks(msg.content)) continue;
 
     const parts = collectTextSegments(msg.content);
