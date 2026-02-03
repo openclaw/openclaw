@@ -15,9 +15,9 @@ primary_region = "iad"  # change to your closest region
   NODE_OPTIONS = "--max-old-space-size=1536"
 
 [processes]
-  # Default bind is loopback (127.0.0.1). For public access, add: --bind lan --token YOUR_SECRET
-  # WARNING: Using --bind lan exposes your gateway to internet scanners (Shodan).
-  app = "node dist/index.js gateway --allow-unconfigured --port 3000"
+  # --bind lan required for Fly's proxy to reach the app (listens on private interface, not public internet)
+  # Set MOLTBOT_TOKEN env var or use --token for auth
+  app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
 
 [http_service]
   internal_port = 3000
