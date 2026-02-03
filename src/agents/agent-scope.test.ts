@@ -4,6 +4,8 @@ import {
   resolveAgentConfig,
   resolveAgentModelFallbacksOverride,
   resolveAgentModelPrimary,
+  resolveAgentThinkingDefault,
+  resolveAgentVerboseDefault,
 } from "./agent-scope.js";
 
 describe("resolveAgentConfig", () => {
@@ -199,5 +201,205 @@ describe("resolveAgentConfig", () => {
     const result = resolveAgentConfig(cfg, "");
     expect(result).toBeDefined();
     expect(result?.workspace).toBe("~/openclaw");
+  });
+});
+
+describe("resolveAgentThinkingDefault", () => {
+  it("should return per-agent thinking default when set", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          thinkingDefault: "high",
+        },
+        list: [
+          {
+            id: "codex-worker",
+            model: "openai-codex/gpt-5.2",
+            thinkingDefault: "medium",
+          },
+        ],
+      },
+    };
+    expect(resolveAgentThinkingDefault(cfg, "codex-worker")).toBe("medium");
+  });
+
+  it("should fall back to global default when per-agent not set", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          thinkingDefault: "high",
+        },
+        list: [
+          {
+            id: "main",
+            model: "anthropic/claude-opus-4-5",
+          },
+        ],
+      },
+    };
+    expect(resolveAgentThinkingDefault(cfg, "main")).toBe("high");
+  });
+
+  it("should return undefined when neither per-agent nor global default is set", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            model: "anthropic/claude-opus-4-5",
+          },
+        ],
+      },
+    };
+    expect(resolveAgentThinkingDefault(cfg, "main")).toBeUndefined();
+  });
+
+  it("should prioritize per-agent over global default", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          thinkingDefault: "high",
+        },
+        list: [
+          {
+            id: "codex-worker-1",
+            model: "openai-codex/gpt-5.2",
+            thinkingDefault: "medium",
+          },
+          {
+            id: "codex-worker-smart",
+            model: "openai-codex/gpt-5.2",
+            thinkingDefault: "high",
+          },
+          {
+            id: "main",
+            model: "anthropic/claude-opus-4-5",
+            // No override - should use global "high"
+          },
+        ],
+      },
+    };
+    expect(resolveAgentThinkingDefault(cfg, "codex-worker-1")).toBe("medium");
+    expect(resolveAgentThinkingDefault(cfg, "codex-worker-smart")).toBe("high");
+    expect(resolveAgentThinkingDefault(cfg, "main")).toBe("high");
+  });
+
+  it("should support all thinking levels", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "off-agent", thinkingDefault: "off" },
+          { id: "minimal-agent", thinkingDefault: "minimal" },
+          { id: "low-agent", thinkingDefault: "low" },
+          { id: "medium-agent", thinkingDefault: "medium" },
+          { id: "high-agent", thinkingDefault: "high" },
+          { id: "xhigh-agent", thinkingDefault: "xhigh" },
+        ],
+      },
+    };
+    expect(resolveAgentThinkingDefault(cfg, "off-agent")).toBe("off");
+    expect(resolveAgentThinkingDefault(cfg, "minimal-agent")).toBe("minimal");
+    expect(resolveAgentThinkingDefault(cfg, "low-agent")).toBe("low");
+    expect(resolveAgentThinkingDefault(cfg, "medium-agent")).toBe("medium");
+    expect(resolveAgentThinkingDefault(cfg, "high-agent")).toBe("high");
+    expect(resolveAgentThinkingDefault(cfg, "xhigh-agent")).toBe("xhigh");
+  });
+});
+
+describe("resolveAgentVerboseDefault", () => {
+  it("should return per-agent verbose default when set", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          verboseDefault: "off",
+        },
+        list: [
+          {
+            id: "debug-agent",
+            model: "openai-codex/gpt-5.2",
+            verboseDefault: "full",
+          },
+        ],
+      },
+    };
+    expect(resolveAgentVerboseDefault(cfg, "debug-agent")).toBe("full");
+  });
+
+  it("should fall back to global default when per-agent not set", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          verboseDefault: "on",
+        },
+        list: [
+          {
+            id: "main",
+            model: "anthropic/claude-opus-4-5",
+          },
+        ],
+      },
+    };
+    expect(resolveAgentVerboseDefault(cfg, "main")).toBe("on");
+  });
+
+  it("should return undefined when neither per-agent nor global default is set", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            model: "anthropic/claude-opus-4-5",
+          },
+        ],
+      },
+    };
+    expect(resolveAgentVerboseDefault(cfg, "main")).toBeUndefined();
+  });
+
+  it("should prioritize per-agent over global default", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          verboseDefault: "off",
+        },
+        list: [
+          {
+            id: "quiet-agent",
+            verboseDefault: "off",
+          },
+          {
+            id: "normal-agent",
+            verboseDefault: "on",
+          },
+          {
+            id: "debug-agent",
+            verboseDefault: "full",
+          },
+          {
+            id: "default-agent",
+            // No override - should use global "off"
+          },
+        ],
+      },
+    };
+    expect(resolveAgentVerboseDefault(cfg, "quiet-agent")).toBe("off");
+    expect(resolveAgentVerboseDefault(cfg, "normal-agent")).toBe("on");
+    expect(resolveAgentVerboseDefault(cfg, "debug-agent")).toBe("full");
+    expect(resolveAgentVerboseDefault(cfg, "default-agent")).toBe("off");
+  });
+
+  it("should support all verbose levels", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "off-agent", verboseDefault: "off" },
+          { id: "on-agent", verboseDefault: "on" },
+          { id: "full-agent", verboseDefault: "full" },
+        ],
+      },
+    };
+    expect(resolveAgentVerboseDefault(cfg, "off-agent")).toBe("off");
+    expect(resolveAgentVerboseDefault(cfg, "on-agent")).toBe("on");
+    expect(resolveAgentVerboseDefault(cfg, "full-agent")).toBe("full");
   });
 });

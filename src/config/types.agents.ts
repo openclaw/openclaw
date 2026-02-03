@@ -46,6 +46,10 @@ export type AgentConfig = {
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  /** Per-agent default thinking level override (Pi runtime only). */
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  /** Per-agent default verbose level override (Pi runtime only). */
+  verboseDefault?: "off" | "on" | "full";
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {
@@ -88,11 +92,18 @@ export type AgentConfig = {
   tools?: AgentToolsConfig;
 };
 
+export type AgentHandoffLoggingConfig = {
+  /** Enable agent handoff transition logging (default: false). */
+  enabled?: boolean;
+  /** Log level for handoff events (default: "info"). */
+  level?: "debug" | "info" | "warn";
+};
+
 export type AgentsConfig = {
   /**
    * Main agent loop configuration.
    *
-   * This is the gateway-wide “main agent” operating mode (inbound auto-reply loop, etc.).
+   * This is the gateway-wide "main agent" operating mode (inbound auto-reply loop, etc.).
    * It is intentionally separate from per-agent/session defaults so the main runtime can be
    * swapped independently of configured agents.
    */
@@ -148,6 +159,7 @@ export type AgentsConfig = {
   };
   defaults?: AgentDefaultsConfig;
   list?: AgentConfig[];
+  handoffLogging?: AgentHandoffLoggingConfig;
 };
 
 export type AgentBinding = {

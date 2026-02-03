@@ -345,6 +345,9 @@ export type SubagentRunOutcome = {
   error?: string;
 };
 
+import type { HandoffLoggingOptions } from "./handoff-logging.js";
+import { logHandoffComplete } from "./handoff-logging.js";
+
 export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
@@ -360,6 +363,7 @@ export async function runSubagentAnnounceFlow(params: {
   endedAt?: number;
   label?: string;
   outcome?: SubagentRunOutcome;
+  handoffLoggingOptions?: HandoffLoggingOptions;
 }): Promise<boolean> {
   let didAnnounce = false;
   try {
@@ -420,6 +424,45 @@ export async function runSubagentAnnounceFlow(params: {
       sessionKey: params.childSessionKey,
       startedAt: params.startedAt,
       endedAt: params.endedAt,
+    });
+
+    // Extract stats for handoff logging
+    const cfg = loadConfig();
+    const { entry: statsEntry } = await waitForSessionUsage({
+      sessionKey: params.childSessionKey,
+    });
+    const inputTokens = statsEntry?.inputTokens;
+    const outputTokens = statsEntry?.outputTokens;
+    const totalTokens =
+      statsEntry?.totalTokens ??
+      (typeof inputTokens === "number" && typeof outputTokens === "number"
+        ? inputTokens + outputTokens
+        : undefined);
+    const runtimeMs =
+      typeof params.startedAt === "number" && typeof params.endedAt === "number"
+        ? Math.max(0, params.endedAt - params.startedAt)
+        : undefined;
+    const provider = statsEntry?.modelProvider;
+    const model = statsEntry?.model;
+    const costConfig = resolveModelCost({ provider, model, config: cfg });
+    const estimatedCost =
+      costConfig && typeof inputTokens === "number" && typeof outputTokens === "number"
+        ? (inputTokens * costConfig.input + outputTokens * costConfig.output) / 1_000_000
+        : undefined;
+
+    // Log handoff completion
+    logHandoffComplete({
+      fromSessionKey: params.childSessionKey,
+      toSessionKey: params.requesterSessionKey,
+      outcome,
+      stats: {
+        runtimeMs,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        estimatedCost: estimatedCost !== undefined ? formatUsd(estimatedCost) : undefined,
+      },
+      options: params.handoffLoggingOptions,
     });
 
     // Build status label

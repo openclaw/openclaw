@@ -108,6 +108,38 @@ export type LoggingConfig = {
   redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */
   redactPatterns?: string[];
+
+  /** Enhanced logging features */
+  enhanced?: {
+    /** Log detailed context when tool calls fail (default: true) */
+    toolErrors?: boolean;
+    /** Log operations that exceed performance thresholds (default: true) */
+    performanceOutliers?: boolean;
+    /** Log warnings when approaching token limits (default: true) */
+    tokenWarnings?: boolean;
+    /** Log gateway connection state changes (default: true) */
+    gatewayHealth?: boolean;
+  };
+
+  /** Performance thresholds (milliseconds) */
+  performanceThresholds?: {
+    /** Tool call threshold (default: 5000) */
+    toolCall?: number;
+    /** Agent turn threshold (default: 30000) */
+    agentTurn?: number;
+    /** Gateway request threshold (default: 10000) */
+    gatewayRequest?: number;
+    /** Database operation threshold (default: 2000) */
+    databaseOp?: number;
+  };
+
+  /** Token warning thresholds (percentage) */
+  tokenWarningThresholds?: {
+    /** Warning threshold (default: 75) */
+    warning?: number;
+    /** Critical threshold (default: 90) */
+    critical?: number;
+  };
 };
 
 export type DiagnosticsOtelConfig = {

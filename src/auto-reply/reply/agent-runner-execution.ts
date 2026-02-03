@@ -30,6 +30,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { logPerformanceOutlier, getPerformanceThresholds } from "../../logging/enhanced-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isMarkdownCapableMessageChannel,
@@ -89,6 +90,7 @@ export async function runAgentTurnWithFallback(params: {
   const directlySentBlockKeys = new Set<string>();
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
+  const turnStartTime = Date.now();
   params.opts?.onAgentRunStart?.(runId);
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
@@ -645,6 +647,25 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+
+      // Log performance outlier if agent turn took too long
+      const turnDurationMs = Date.now() - turnStartTime;
+      const thresholds = getPerformanceThresholds();
+      if (turnDurationMs > thresholds.agentTurn) {
+        const agentId = params.followupRun.run.agentId;
+        logPerformanceOutlier({
+          operation: "agent_turn",
+          name: `${agentId}:${params.sessionKey || "unknown"}`,
+          durationMs: turnDurationMs,
+          threshold: thresholds.agentTurn,
+          metadata: {
+            agentId,
+            sessionKey: params.sessionKey,
+            model: fallbackModel,
+            provider: fallbackProvider,
+          },
+        });
+      }
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.

@@ -5,6 +5,10 @@ import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
+import {
+  resolveForkThinkingLevel,
+  resolveForkVerboseLevel,
+} from "../../openclaw/agent-config-overrides.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import { isDirectiveOnly } from "./directive-handling.parse.js";
 
@@ -87,13 +91,20 @@ export async function applyInlineDirectivesFastLane(params: {
 
   const agentCfg = params.agentCfg;
   const resolvedDefaultThinkLevel =
-    (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
-    (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
-    (await modelState.resolveDefaultThinkingLevel());
+    (await resolveForkThinkingLevel({
+      sessionEntry,
+      cfg,
+      agentId: agentId ?? "",
+      agentCfg,
+      modelFallback: () => modelState.resolveDefaultThinkingLevel(),
+    })) ?? "off";
   const currentThinkLevel = resolvedDefaultThinkLevel;
-  const currentVerboseLevel =
-    (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
-    (agentCfg?.verboseDefault as VerboseLevel | undefined);
+  const currentVerboseLevel = resolveForkVerboseLevel({
+    sessionEntry,
+    cfg,
+    agentId,
+    agentCfg,
+  });
   const currentReasoningLevel =
     (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off";
   const currentElevatedLevel =

@@ -23,6 +23,8 @@ type ResolvedAgentConfig = {
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
   heartbeat?: AgentEntry["heartbeat"];
+  thinkingDefault?: AgentEntry["thinkingDefault"];
+  verboseDefault?: AgentEntry["verboseDefault"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
@@ -120,6 +122,8 @@ export function resolveAgentConfig(
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
     heartbeat: entry.heartbeat,
+    thinkingDefault: entry.thinkingDefault,
+    verboseDefault: entry.verboseDefault,
     identity: entry.identity,
     mcpServers: entry.mcpServers,
     groupChat: entry.groupChat,
@@ -168,6 +172,34 @@ export function resolveAgentModelFallbacksOverride(
     return undefined;
   }
   return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
+}
+
+/**
+ * Resolve per-agent thinking level default with fallback to global defaults.
+ */
+export function resolveAgentThinkingDefault(
+  cfg: OpenClawConfig,
+  agentId: string,
+): "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined {
+  const perAgent = resolveAgentConfig(cfg, agentId)?.thinkingDefault;
+  if (perAgent) {
+    return perAgent;
+  }
+  return cfg.agents?.defaults?.thinkingDefault;
+}
+
+/**
+ * Resolve per-agent verbose level default with fallback to global defaults.
+ */
+export function resolveAgentVerboseDefault(
+  cfg: OpenClawConfig,
+  agentId: string,
+): "off" | "on" | "full" | undefined {
+  const perAgent = resolveAgentConfig(cfg, agentId)?.verboseDefault;
+  if (perAgent) {
+    return perAgent;
+  }
+  return cfg.agents?.defaults?.verboseDefault;
 }
 
 export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {

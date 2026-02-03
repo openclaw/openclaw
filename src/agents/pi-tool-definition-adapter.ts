@@ -6,6 +6,7 @@ import type {
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import { logDebug, logError } from "../logger.js";
+import { logToolError, measureOperation } from "../logging/enhanced-events.js";
 import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
@@ -81,7 +82,10 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
+export function toToolDefinitions(
+  tools: AnyAgentTool[],
+  hookContext?: { agentId?: string; sessionKey?: string },
+): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
@@ -92,8 +96,15 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        const startTime = Date.now();
         try {
-          return await tool.execute(toolCallId, params, signal, onUpdate);
+          // Wrap with performance measurement
+          return await measureOperation(
+            "tool",
+            normalizedName,
+            () => tool.execute(toolCallId, params, signal, onUpdate),
+            { toolCallId, sessionKey: hookContext?.sessionKey },
+          );
         } catch (err) {
           if (signal?.aborted) {
             throw err;
@@ -110,6 +121,19 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
           logError(`[tools] ${normalizedName} failed: ${described.message}`);
+
+          // Log enhanced error context
+          logToolError({
+            toolName: normalizedName,
+            input: params,
+            error: err,
+            sessionContext: {
+              agentId: hookContext?.agentId,
+              sessionId: hookContext?.sessionKey,
+            },
+            durationMs: Date.now() - startTime,
+          });
+
           return jsonResult({
             status: "error",
             tool: normalizedName,

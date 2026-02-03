@@ -50,6 +50,8 @@ export type AgentCliOpts = {
   runId?: string;
   extraSystemPrompt?: string;
   local?: boolean;
+  /** Enable payload logging to console (CLI sets this based on output mode). */
+  enablePayloadLogging?: boolean;
 };
 
 function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
@@ -177,6 +179,8 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     ...opts,
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
+    // Pass through enablePayloadLogging as-is (CLI command sets this)
+    enablePayloadLogging: opts.enablePayloadLogging,
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);

@@ -171,7 +171,7 @@ export async function deliverAgentCommandResult(params: {
     }
     runtime.log(output);
   };
-  if (!deliver) {
+  if (!deliver && opts.enablePayloadLogging) {
     for (const payload of deliveryPayloads) {
       logPayload(payload);
     }

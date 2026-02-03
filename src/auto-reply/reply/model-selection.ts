@@ -13,6 +13,7 @@ import {
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
+import { resolveAgentThinkingDefault } from "../../openclaw/agent-config-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveThreadParentSessionKey } from "../../sessions/session-key-utils.js";
 
@@ -260,6 +261,7 @@ function scoreFuzzyMatch(params: {
 
 export async function createModelSelectionState(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentCfg: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -386,7 +388,10 @@ export async function createModelSelectionState(params: {
       catalog: catalogForThinking,
     });
     defaultThinkingLevel =
-      resolved ?? (agentCfg?.thinkingDefault as ThinkLevel | undefined) ?? "off";
+      resolved ??
+      (params.agentId ? resolveAgentThinkingDefault(cfg, params.agentId) : undefined) ??
+      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
+      "off";
     return defaultThinkingLevel;
   };
 

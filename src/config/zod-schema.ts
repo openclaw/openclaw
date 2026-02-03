@@ -121,6 +121,31 @@ export const OpenClawSchema = z
           .optional(),
         redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
         redactPatterns: z.array(z.string()).optional(),
+        enhanced: z
+          .object({
+            toolErrors: z.boolean().optional(),
+            performanceOutliers: z.boolean().optional(),
+            tokenWarnings: z.boolean().optional(),
+            gatewayHealth: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        performanceThresholds: z
+          .object({
+            toolCall: z.number().int().positive().optional(),
+            agentTurn: z.number().int().positive().optional(),
+            gatewayRequest: z.number().int().positive().optional(),
+            databaseOp: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        tokenWarningThresholds: z
+          .object({
+            warning: z.number().int().min(0).max(100).optional(),
+            critical: z.number().int().min(0).max(100).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

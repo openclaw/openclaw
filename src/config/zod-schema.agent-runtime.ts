@@ -450,6 +450,8 @@ export const AgentEntrySchema = z
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
+    thinkingDefault: z.enum(["off", "minimal", "low", "medium", "high", "xhigh"]).optional(),
+    verboseDefault: z.enum(["off", "on", "full"]).optional(),
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
     subagents: z

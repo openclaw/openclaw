@@ -10,6 +10,7 @@ import { resolveChannelCapabilities } from "../../../config/channel-capabilities
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { resolveMcpToolsForAgent } from "../../../mcp/mcp-tools.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import { warnIfThinkingBudgetConflict } from "../../../openclaw/thinking-budget-integration.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
@@ -445,9 +446,20 @@ export async function runEmbeddedAttempt(
       });
 
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
+      const compactionReserve = resolveCompactionReserveTokensFloor(params.config);
       ensurePiCompactionReserveTokens({
         settingsManager,
-        minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
+        minReserveTokens: compactionReserve,
+      });
+
+      // Check thinking budget vs available context space (fork extension)
+      warnIfThinkingBudgetConflict({
+        provider: params.provider,
+        modelId: params.modelId,
+        model: params.model,
+        thinkLevel: params.thinkLevel,
+        config: params.config,
+        compactionReserve,
       });
 
       // Call for side effects (sets compaction/pruning runtime state)

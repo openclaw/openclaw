@@ -371,6 +371,8 @@ function adaptSdkResultToPiResult(params: {
         model: result.meta.model ?? "default",
         // Pass through Claude Code session ID for persistence (used for resume).
         claudeSessionId: result.meta.claudeSessionId,
+        // Pass through usage tracking from SDK runner
+        usage: result.meta.usage,
       },
       // SDK runner errors are rendered as text payloads with isError=true.
       // Avoid mapping to Pi-specific error kinds (context/compaction) because

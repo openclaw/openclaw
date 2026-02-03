@@ -247,6 +247,9 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.sessions.deltaMessages": "Session Delta Messages",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
+  "agents.handoffLogging": "Agent Handoff Logging",
+  "agents.handoffLogging.enabled": "Enable Handoff Logging",
+  "agents.handoffLogging.level": "Handoff Log Level",
   "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",
   "agents.defaults.memorySearch.query.hybrid.vectorWeight": "Memory Search Vector Weight",
   "agents.defaults.memorySearch.query.hybrid.textWeight": "Memory Search Text Weight",
@@ -588,6 +591,8 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
+  "agents.handoffLogging.enabled": "Log agent transitions with detailed context (default: false).",
+  "agents.handoffLogging.level": "Log level for handoff events (debug|info|warn). Default: info.",
   "commands.native":
     "Register native commands with channels that support it (Discord/Slack/Telegram).",
   "commands.nativeSkills":

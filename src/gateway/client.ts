@@ -14,6 +14,7 @@ import {
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
+import { logGatewayHealth } from "../logging/enhanced-events.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -146,11 +147,23 @@ export class GatewayClient {
           return;
         }
       }
+      logGatewayHealth({
+        event: "connected",
+        metadata: { url, clientName: this.opts.clientName },
+      });
       this.queueConnect();
     });
     this.ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
+      logGatewayHealth({
+        event: "disconnected",
+        metadata: {
+          code,
+          reason: reasonText,
+          hint: describeGatewayCloseCode(code),
+        },
+      });
       this.ws = null;
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
       this.scheduleReconnect();
@@ -356,6 +369,10 @@ export class GatewayClient {
     }
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
+    logGatewayHealth({
+      event: "reconnect_attempt",
+      metadata: { delayMs: delay, nextBackoffMs: this.backoffMs },
+    });
     setTimeout(() => this.start(), delay).unref();
   }
 

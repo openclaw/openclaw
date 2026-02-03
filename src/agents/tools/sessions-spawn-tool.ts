@@ -76,6 +76,9 @@ function normalizeModelSelection(value: unknown): string | undefined {
   return undefined;
 }
 
+import type { HandoffLoggingOptions } from "../handoff-logging.js";
+import { logHandoffSpawn } from "../handoff-logging.js";
+
 export function createSessionsSpawnTool(opts?: {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
@@ -90,6 +93,7 @@ export function createSessionsSpawnTool(opts?: {
   requesterAgentIdOverride?: string;
   /** When true, this tool is being exposed in a Claude Agent SDK / tool-bridge context. */
   isToolBridgeContext?: boolean;
+  handoffLogging?: HandoffLoggingOptions;
 }): AnyAgentTool {
   // Build description with conditional guidance for tool-bridge context
   const baseDescription =
@@ -302,6 +306,27 @@ export function createSessionsSpawnTool(opts?: {
         cleanup,
         label: label || undefined,
         runTimeoutSeconds,
+        handoffLoggingOptions: opts?.handoffLogging,
+      });
+
+      logHandoffSpawn({
+        fromSessionKey: requesterInternalKey,
+        toSessionKey: childSessionKey,
+        task,
+        contextInherited: {
+          channel: requesterOrigin?.channel,
+          accountId: requesterOrigin?.accountId,
+          threadId: opts?.agentThreadId,
+          modelOverride: resolvedModel,
+          thinkingOverride,
+          groupId: opts?.agentGroupId,
+          groupChannel: opts?.agentGroupChannel,
+          groupSpace: opts?.agentGroupSpace,
+          cleanup,
+          label: label || undefined,
+          runTimeoutSeconds,
+        },
+        options: opts?.handoffLogging,
       });
 
       return jsonResult({

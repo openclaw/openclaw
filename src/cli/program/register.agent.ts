@@ -6,6 +6,7 @@ import {
   agentsDeleteCommand,
   agentsListCommand,
   agentsSetIdentityCommand,
+  agentsThinkingConfigCommand,
 } from "../../commands/agents.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -76,7 +77,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       // Build default deps (keeps parity with other commands; future-proofing).
       const deps = createDefaultDeps();
       await runCommandWithRuntime(defaultRuntime, async () => {
-        await agentCliCommand(opts, defaultRuntime, deps);
+        // Enable payload logging for CLI unless in JSON mode
+        const cliOpts = { ...opts, enablePayloadLogging: opts.json !== true };
+        await agentCliCommand(cliOpts, defaultRuntime, deps);
       });
     });
 
@@ -98,6 +101,34 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       await runCommandWithRuntime(defaultRuntime, async () => {
         await agentsListCommand(
           { json: Boolean(opts.json), bindings: Boolean(opts.bindings) },
+          defaultRuntime,
+        );
+      });
+    });
+
+  agents
+    .command("config [agent-id]")
+    .description("Show thinking levels and token budgets for agents")
+    .option("--json", "Output JSON instead of text", false)
+    .addHelpText(
+      "after",
+      () =>
+        `
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  ["openclaw agents config", "Show thinking config for all agents."],
+  ["openclaw agents config codex-dev-worker-1", "Show config for specific agent."],
+  ["openclaw agents config --json", "Output as JSON for programmatic access."],
+])}
+`,
+    )
+    .action(async (agentId, opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentsThinkingConfigCommand(
+          {
+            agent: typeof agentId === "string" ? agentId : undefined,
+            json: Boolean(opts.json),
+          },
           defaultRuntime,
         );
       });

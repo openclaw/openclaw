@@ -99,6 +99,10 @@ export function setConsoleTimestampPrefix(enabled: boolean): void {
 }
 
 export function shouldLogSubsystemToConsole(subsystem: string): boolean {
+  // Suppress test-runner logs by default unless explicitly enabled
+  if (subsystem === "test-runner" || subsystem.startsWith("test-runner/")) {
+    return process.env.CLAWDBRAIN_TEST_LOGS === "1";
+  }
   const filter = loggingState.consoleSubsystemFilter;
   if (!filter || filter.length === 0) {
     return true;

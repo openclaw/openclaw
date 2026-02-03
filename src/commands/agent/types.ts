@@ -41,6 +41,8 @@ export type AgentCommandOpts = {
   thinkingOnce?: string;
   verbose?: string;
   json?: boolean;
+  /** Enable payload logging to console (default: false). Set true for CLI output. */
+  enablePayloadLogging?: boolean;
   timeout?: string;
   deliver?: boolean;
   /** Override delivery target (separate from session routing). */
