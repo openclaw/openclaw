@@ -395,6 +395,14 @@ export function normalizeForwardedContext(msg: Message): TelegramForwardedContex
   return resolveForwardOrigin(msg.forward_origin);
 }
 
+/**
+ * Build a human-readable forward prefix string from a TelegramForwardedContext.
+ * Shared between bot-message-context (single messages) and bot-handlers (debounce batching).
+ */
+export function buildForwardPrefix(fwd: TelegramForwardedContext): string {
+  return `[Forwarded from ${fwd.from}${fwd.date ? ` at ${new Date(fwd.date * 1000).toISOString()}` : ""}]\n`;
+}
+
 export function extractTelegramLocation(msg: Message): NormalizedLocation | null {
   const { venue, location } = msg;
 

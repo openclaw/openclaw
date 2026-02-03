@@ -47,6 +47,7 @@ import {
   buildTelegramGroupPeerId,
   buildTypingThreadParams,
   expandTextLinks,
+  buildForwardPrefix,
   normalizeForwardedContext,
   describeReplyTarget,
   extractTelegramLocation,
@@ -504,11 +505,7 @@ export const buildTelegramMessageContext = async ({
           replyTarget.id ? ` id:${replyTarget.id}` : ""
         }]\n${replyTarget.body}\n[/Replying]`
     : "";
-  const forwardPrefix = forwardOrigin
-    ? `[Forwarded from ${forwardOrigin.from}${
-        forwardOrigin.date ? ` at ${new Date(forwardOrigin.date * 1000).toISOString()}` : ""
-      }]\n`
-    : "";
+  const forwardPrefix = forwardOrigin ? buildForwardPrefix(forwardOrigin) : "";
   const groupLabel = isGroup ? buildGroupLabel(msg, chatId, resolvedThreadId) : undefined;
   const senderName = buildSenderName(msg);
   const conversationLabel = isGroup
