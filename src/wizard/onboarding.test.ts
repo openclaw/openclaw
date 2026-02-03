@@ -73,6 +73,22 @@ vi.mock("../tui/tui.js", () => ({
   runTui,
 }));
 
+// Mock wizard-state to return no incomplete state by default
+const loadWizardState = vi.hoisted(() => vi.fn(async () => null));
+const updateWizardStep = vi.hoisted(() => vi.fn(async () => {}));
+const completeWizard = vi.hoisted(() => vi.fn(async () => {}));
+const clearWizardState = vi.hoisted(() => vi.fn(async () => {}));
+const shouldSkipStep = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("./wizard-state.js", () => ({
+  loadWizardState,
+  updateWizardStep,
+  completeWizard,
+  clearWizardState,
+  shouldSkipStep,
+  getResumeStep: vi.fn(() => "risk-ack"),
+}));
+
 describe("runOnboardingWizard", () => {
   it("exits when config is invalid", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({

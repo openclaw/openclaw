@@ -43,6 +43,14 @@ import { resolveUserPath } from "../utils.js";
 import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
 import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import {
+  clearWizardState,
+  completeWizard,
+  getResumeStep,
+  loadWizardState,
+  shouldSkipStep,
+  updateWizardStep,
+} from "./wizard-state.js";
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
@@ -94,7 +102,50 @@ export async function runOnboardingWizard(
 ) {
   printWizardHeader(runtime);
   await prompter.intro("OpenClaw onboarding");
-  await requireRiskAcknowledgement({ opts, prompter });
+
+  // Check for incomplete wizard from previous run
+  let wizardState = await loadWizardState();
+  let resuming = false;
+  if (wizardState && !wizardState.completed) {
+    const resumeStep = getResumeStep(wizardState);
+    await prompter.note(
+      [
+        "A previous setup was interrupted.",
+        `Last completed step: ${wizardState.lastCompletedStep ?? "none"}`,
+        `Would resume from: ${resumeStep}`,
+      ].join("\n"),
+      "Incomplete setup detected",
+    );
+
+    const resumeChoice = await prompter.select({
+      message: "How would you like to proceed?",
+      options: [
+        {
+          value: "resume",
+          label: "Resume where I left off",
+          hint: "Continue from the last completed step",
+        },
+        {
+          value: "restart",
+          label: "Start fresh",
+          hint: "Begin setup from the beginning",
+        },
+      ],
+    });
+
+    if (resumeChoice === "restart") {
+      await clearWizardState();
+      wizardState = null;
+    } else {
+      resuming = true;
+    }
+  }
+
+  // Risk acknowledgement (skip if resuming past this step)
+  if (!shouldSkipStep("risk-ack", wizardState)) {
+    await requireRiskAcknowledgement({ opts, prompter });
+    await updateWizardStep("risk-ack", { riskAccepted: true });
+  }
 
   const snapshot = await readConfigFileSnapshot();
   let baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
@@ -118,40 +169,48 @@ export async function runOnboardingWizard(
     return;
   }
 
-  const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
-  const manualHint = "Configure port, network, Tailscale, and auth options.";
-  const explicitFlowRaw = opts.flow?.trim();
-  const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
-  if (
-    normalizedExplicitFlow &&
-    normalizedExplicitFlow !== "quickstart" &&
-    normalizedExplicitFlow !== "advanced"
-  ) {
-    runtime.error("Invalid --flow (use quickstart, manual, or advanced).");
-    runtime.exit(1);
-    return;
-  }
-  const explicitFlow: WizardFlow | undefined =
-    normalizedExplicitFlow === "quickstart" || normalizedExplicitFlow === "advanced"
-      ? normalizedExplicitFlow
-      : undefined;
-  let flow: WizardFlow =
-    explicitFlow ??
-    (await prompter.select({
-      message: "Onboarding mode",
-      options: [
-        { value: "quickstart", label: "QuickStart", hint: quickstartHint },
-        { value: "advanced", label: "Manual", hint: manualHint },
-      ],
-      initialValue: "quickstart",
-    }));
+  // Flow selection (skip if resuming past this step)
+  let flow: WizardFlow;
+  if (shouldSkipStep("flow-select", wizardState) && wizardState?.answers.flow) {
+    flow = wizardState.answers.flow;
+  } else {
+    const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
+    const manualHint = "Configure port, network, Tailscale, and auth options.";
+    const explicitFlowRaw = opts.flow?.trim();
+    const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
+    if (
+      normalizedExplicitFlow &&
+      normalizedExplicitFlow !== "quickstart" &&
+      normalizedExplicitFlow !== "advanced"
+    ) {
+      runtime.error("Invalid --flow (use quickstart, manual, or advanced).");
+      runtime.exit(1);
+      return;
+    }
+    const explicitFlow: WizardFlow | undefined =
+      normalizedExplicitFlow === "quickstart" || normalizedExplicitFlow === "advanced"
+        ? normalizedExplicitFlow
+        : undefined;
+    flow =
+      explicitFlow ??
+      (await prompter.select({
+        message: "Onboarding mode",
+        options: [
+          { value: "quickstart", label: "QuickStart", hint: quickstartHint },
+          { value: "advanced", label: "Manual", hint: manualHint },
+        ],
+        initialValue: "quickstart",
+      }));
 
-  if (opts.mode === "remote" && flow === "quickstart") {
-    await prompter.note(
-      "QuickStart only supports local gateways. Switching to Manual mode.",
-      "QuickStart",
-    );
-    flow = "advanced";
+    if (opts.mode === "remote" && flow === "quickstart") {
+      await prompter.note(
+        "QuickStart only supports local gateways. Switching to Manual mode.",
+        "QuickStart",
+      );
+      flow = "advanced";
+    }
+
+    await updateWizardStep("flow-select", { flow });
   }
 
   if (snapshot.exists) {
@@ -367,6 +426,7 @@ export async function runOnboardingWizard(
     },
   };
 
+  // Auth choice (track progress for resumption)
   const authStore = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,
   });
@@ -391,7 +451,9 @@ export async function runOnboardingWizard(
     },
   });
   nextConfig = authResult.config;
+  await updateWizardStep("auth-choice", { authChoice });
 
+  // Model selection (track progress for resumption)
   if (authChoiceFromPrompt) {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
@@ -402,11 +464,13 @@ export async function runOnboardingWizard(
     });
     if (modelSelection.model) {
       nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+      await updateWizardStep("model-select", { model: modelSelection.model });
     }
   }
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
 
+  // Gateway configuration (track progress for resumption)
   const gateway = await configureGatewayForOnboarding({
     flow,
     baseConfig,
@@ -418,39 +482,52 @@ export async function runOnboardingWizard(
   });
   nextConfig = gateway.nextConfig;
   const settings = gateway.settings;
+  await updateWizardStep("gateway-config");
 
-  if (opts.skipChannels ?? opts.skipProviders) {
-    await prompter.note("Skipping channel setup.", "Channels");
-  } else {
-    const quickstartAllowFromChannels =
-      flow === "quickstart"
-        ? listChannelPlugins()
-            .filter((plugin) => plugin.meta.quickstartAllowFrom)
-            .map((plugin) => plugin.id)
-        : [];
-    nextConfig = await setupChannels(nextConfig, runtime, prompter, {
-      allowSignalInstall: true,
-      forceAllowFromChannels: quickstartAllowFromChannels,
-      skipDmPolicyPrompt: flow === "quickstart",
-      skipConfirm: flow === "quickstart",
-      quickstartDefaults: flow === "quickstart",
-    });
+  // Channel setup (track progress for resumption)
+  if (!shouldSkipStep("channels", wizardState)) {
+    if (opts.skipChannels ?? opts.skipProviders) {
+      await prompter.note("Skipping channel setup.", "Channels");
+    } else {
+      const quickstartAllowFromChannels =
+        flow === "quickstart"
+          ? listChannelPlugins()
+              .filter((plugin) => plugin.meta.quickstartAllowFrom)
+              .map((plugin) => plugin.id)
+          : [];
+      nextConfig = await setupChannels(nextConfig, runtime, prompter, {
+        allowSignalInstall: true,
+        forceAllowFromChannels: quickstartAllowFromChannels,
+        skipDmPolicyPrompt: flow === "quickstart",
+        skipConfirm: flow === "quickstart",
+        quickstartDefaults: flow === "quickstart",
+      });
+    }
+
+    await writeConfigFile(nextConfig);
+    logConfigUpdated(runtime);
+    await updateWizardStep("channels");
   }
 
-  await writeConfigFile(nextConfig);
-  logConfigUpdated(runtime);
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
 
-  if (opts.skipSkills) {
-    await prompter.note("Skipping skills setup.", "Skills");
-  } else {
-    nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
+  // Skills setup (track progress for resumption)
+  if (!shouldSkipStep("skills", wizardState)) {
+    if (opts.skipSkills) {
+      await prompter.note("Skipping skills setup.", "Skills");
+    } else {
+      nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
+    }
+    await updateWizardStep("skills");
   }
 
-  // Setup hooks (session memory on /new)
-  nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
+  // Hooks setup (track progress for resumption)
+  if (!shouldSkipStep("hooks", wizardState)) {
+    nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
+    await updateWizardStep("hooks");
+  }
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
@@ -466,6 +543,9 @@ export async function runOnboardingWizard(
     runtime,
   });
 
+  // Mark wizard as complete (track for resumption)
+  await updateWizardStep("completion");
+
   const installShell = await prompter.confirm({
     message: "Install shell completion script?",
     initialValue: true,
@@ -477,4 +557,7 @@ export async function runOnboardingWizard(
     // as the wizard prompt above serves as confirmation.
     await installCompletion(shell, true);
   }
+
+  // Clear wizard state on successful completion
+  await completeWizard();
 }
