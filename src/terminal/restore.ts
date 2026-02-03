@@ -8,11 +8,7 @@ function reportRestoreFailure(scope: string, err: unknown, reason?: string): voi
   try {
     process.stderr.write(`${message}\n`);
   } catch (writeErr) {
-    try {
-      console.error(`[terminal] restore reporting failed${suffix}: ${String(writeErr)}`);
-    } catch (consoleErr) {
-      throw consoleErr;
-    }
+    console.error(`[terminal] restore reporting failed${suffix}: ${String(writeErr)}`);
   }
 }
 
