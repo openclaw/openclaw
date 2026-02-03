@@ -10,19 +10,19 @@ import type {
   CronStatus,
   SkillStatusEntry,
   SkillStatusReport,
-} from "../types";
+} from "../types.ts";
 import {
   expandToolGroups,
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy.js";
-import { formatAgo } from "../format";
+import { formatAgo } from "../format.ts";
 import {
   formatCronPayload,
   formatCronSchedule,
   formatCronState,
   formatNextRun,
-} from "../presenter";
+} from "../presenter.ts";
 
 export type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
 

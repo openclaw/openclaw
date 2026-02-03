@@ -1,15 +1,15 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import type { AppViewState } from "./app-view-state";
-import type { ThemeMode } from "./theme";
-import type { ThemeTransitionContext } from "./theme-transition";
-import type { SessionsListResult } from "./types";
-import { OpenClawApp } from "./app";
-import { refreshChat } from "./app-chat";
-import { syncUrlWithSessionKey } from "./app-settings";
-import { ChatState, loadChatHistory } from "./controllers/chat";
-import { icons } from "./icons";
-import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation";
+import type { AppViewState } from "./app-view-state.ts";
+import type { ThemeTransitionContext } from "./theme-transition.ts";
+import type { ThemeMode } from "./theme.ts";
+import type { SessionsListResult } from "./types.ts";
+import { refreshChat } from "./app-chat.ts";
+import { syncUrlWithSessionKey } from "./app-settings.ts";
+import { OpenClawApp } from "./app.ts";
+import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { icons } from "./icons.ts";
+import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
