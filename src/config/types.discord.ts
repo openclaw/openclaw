@@ -73,6 +73,8 @@ export type DiscordActionConfig = {
   emojiUploads?: boolean;
   stickerUploads?: boolean;
   channels?: boolean;
+  /** Enable bot presence/activity changes (default: false). */
+  presence?: boolean;
 };
 
 export type DiscordIntentsConfig = {
