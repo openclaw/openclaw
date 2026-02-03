@@ -46,6 +46,7 @@ export async function handleDiscordMessageAction(
     const replyTo = readStringParam(params, "replyTo");
     const embeds = Array.isArray(params.embeds) ? params.embeds : undefined;
     const asVoice = params.asVoice === true;
+    const silent = params.silent === true;
     return await handleDiscordAction(
       {
         action: "sendMessage",
@@ -56,6 +57,7 @@ export async function handleDiscordMessageAction(
         replyTo: replyTo ?? undefined,
         embeds,
         asVoice,
+        silent,
       },
       cfg,
     );

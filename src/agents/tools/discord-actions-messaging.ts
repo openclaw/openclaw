@@ -236,6 +236,7 @@ export async function handleDiscordMessagingAction(
       const mediaUrl = readStringParam(params, "mediaUrl");
       const replyTo = readStringParam(params, "replyTo");
       const asVoice = params.asVoice === true;
+      const silent = params.silent === true;
       const embeds =
         Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
 
@@ -266,6 +267,7 @@ export async function handleDiscordMessagingAction(
         mediaUrl,
         replyTo,
         embeds,
+        silent,
       });
       return jsonResult({ ok: true, result });
     }
