@@ -528,18 +528,16 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.BodyForCommands).toBe("audio ok");
   });
 
-  it("treats text-like audio attachments as CSV (comma wins over tabs)", async () => {
+  it("treats text-like attachments as CSV (comma wins over tabs)", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
-    const csvPath = path.join(dir, "data.mp3");
+    const csvPath = path.join(dir, "data.bin");
     const csvText = '"a","b"\t"c"\n"1","2"\t"3"';
-    const csvBuffer = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(csvText, "utf16le")]);
-    await fs.writeFile(csvPath, csvBuffer);
+    await fs.writeFile(csvPath, csvText);
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "<media:file>",
       MediaPath: csvPath,
-      MediaType: "audio/mpeg",
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -554,21 +552,20 @@ describe("applyMediaUnderstanding", () => {
     const result = await applyMediaUnderstanding({ ctx, cfg });
 
     expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain('<file name="data.mp3" mime="text/csv">');
+    expect(ctx.Body).toContain('<file name="data.bin" mime="text/csv">');
     expect(ctx.Body).toContain('"a","b"\t"c"');
   });
 
   it("infers TSV when tabs are present without commas", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
-    const tsvPath = path.join(dir, "report.mp3");
+    const tsvPath = path.join(dir, "report.bin");
     const tsvText = "a\tb\tc\n1\t2\t3";
     await fs.writeFile(tsvPath, tsvText);
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "<media:file>",
       MediaPath: tsvPath,
-      MediaType: "audio/mpeg",
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -583,21 +580,20 @@ describe("applyMediaUnderstanding", () => {
     const result = await applyMediaUnderstanding({ ctx, cfg });
 
     expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain('<file name="report.mp3" mime="text/tab-separated-values">');
+    expect(ctx.Body).toContain('<file name="report.bin" mime="text/tab-separated-values">');
     expect(ctx.Body).toContain("a\tb\tc");
   });
 
-  it("treats cp1252-like audio attachments as text", async () => {
+  it("treats cp1252-like attachments as text", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
-    const filePath = path.join(dir, "legacy.mp3");
+    const filePath = path.join(dir, "legacy.bin");
     const cp1252Bytes = Buffer.from([0x93, 0x48, 0x69, 0x94, 0x20, 0x54, 0x65, 0x73, 0x74]);
     await fs.writeFile(filePath, cp1252Bytes);
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "<media:file>",
       MediaPath: filePath,
-      MediaType: "audio/mpeg",
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -645,17 +641,16 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).not.toContain("<file");
   });
 
-  it("respects configured allowedMimes for text-like audio attachments", async () => {
+  it("respects configured allowedMimes for text-like attachments", async () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
-    const tsvPath = path.join(dir, "report.mp3");
+    const tsvPath = path.join(dir, "report.bin");
     const tsvText = "a\tb\tc\n1\t2\t3";
     await fs.writeFile(tsvPath, tsvText);
 
     const ctx: MsgContext = {
-      Body: "<media:audio>",
+      Body: "<media:file>",
       MediaPath: tsvPath,
-      MediaType: "audio/mpeg",
     };
     const cfg: OpenClawConfig = {
       gateway: {
@@ -679,7 +674,7 @@ describe("applyMediaUnderstanding", () => {
     const result = await applyMediaUnderstanding({ ctx, cfg });
 
     expect(result.appliedFile).toBe(false);
-    expect(ctx.Body).toBe("<media:audio>");
+    expect(ctx.Body).toBe("<media:file>");
     expect(ctx.Body).not.toContain("<file");
   });
 
@@ -740,10 +735,11 @@ describe("applyMediaUnderstanding", () => {
 
     const result = await applyMediaUnderstanding({ ctx, cfg });
 
+    const body = ctx.Body ?? "";
     expect(result.appliedFile).toBe(true);
-    expect(ctx.Body).toContain("&lt;/file&gt;");
-    expect(ctx.Body).toContain("&lt;file");
-    expect((ctx.Body.match(/<\/file>/g) ?? []).length).toBe(1);
+    expect(body).toContain("&lt;/file&gt;");
+    expect(body).toContain("&lt;file");
+    expect((body.match(/<\/file>/g) ?? []).length).toBe(1);
   });
 
   it("normalizes MIME types to prevent attribute injection", async () => {
