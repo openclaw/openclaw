@@ -77,26 +77,26 @@ describe("security-audit", () => {
   });
 
   describe("extractPaths", () => {
-    it("extracts path from Read tool", () => {
-      expect(extractPaths("Read", { file_path: "/etc/passwd" })).toEqual(["/etc/passwd"]);
-      expect(extractPaths("Read", { path: "/etc/passwd" })).toEqual(["/etc/passwd"]);
+    it("extracts path from read tool", () => {
+      expect(extractPaths("read", { file_path: "/etc/passwd" })).toEqual(["/etc/passwd"]);
+      expect(extractPaths("read", { path: "/etc/passwd" })).toEqual(["/etc/passwd"]);
     });
 
-    it("extracts path from Write tool", () => {
-      expect(extractPaths("Write", { file_path: "~/.bashrc" })).toEqual(["~/.bashrc"]);
+    it("extracts path from write tool", () => {
+      expect(extractPaths("write", { file_path: "~/.bashrc" })).toEqual(["~/.bashrc"]);
     });
 
-    it("extracts path from Edit tool", () => {
-      expect(extractPaths("Edit", { file_path: "~/.ssh/config" })).toEqual(["~/.ssh/config"]);
+    it("extracts path from edit tool", () => {
+      expect(extractPaths("edit", { file_path: "~/.ssh/config" })).toEqual(["~/.ssh/config"]);
     });
 
-    it("extracts paths from Bash command", () => {
-      const paths = extractPaths("Bash", { command: "cat ~/.ssh/id_rsa" });
+    it("extracts paths from exec command", () => {
+      const paths = extractPaths("exec", { command: "cat ~/.ssh/id_rsa" });
       expect(paths).toContain("~/.ssh/id_rsa");
     });
 
-    it("extracts multiple paths from Bash command", () => {
-      const paths = extractPaths("Bash", { command: "cp ~/.env /tmp/backup" });
+    it("extracts multiple paths from exec command", () => {
+      const paths = extractPaths("exec", { command: "cp ~/.env /tmp/backup" });
       expect(paths).toContain("~/.env");
       expect(paths).toContain("/tmp/backup");
     });
@@ -106,8 +106,8 @@ describe("security-audit", () => {
     });
 
     it("returns empty array for missing params", () => {
-      expect(extractPaths("Read", null)).toEqual([]);
-      expect(extractPaths("Read", {})).toEqual([]);
+      expect(extractPaths("read", null)).toEqual([]);
+      expect(extractPaths("read", {})).toEqual([]);
     });
   });
 

@@ -233,10 +233,10 @@ describe("default constants", () => {
   });
 
   it("default policy contains expected categories", () => {
-    expect(DEFAULT_POLICY).toContain("Violent or harmful content");
-    expect(DEFAULT_POLICY).toContain("Hate speech or discrimination");
-    expect(DEFAULT_POLICY).toContain("Sexual content involving minors");
-    expect(DEFAULT_POLICY).toContain("Instructions for illegal activities");
-    expect(DEFAULT_POLICY).toContain("Personal information exposure");
+    expect(DEFAULT_POLICY).toContain("prompt injection");
+    expect(DEFAULT_POLICY).toContain("secrets, credentials, API keys");
+    expect(DEFAULT_POLICY).toContain("illegal, violent, self-harm");
+    expect(DEFAULT_POLICY).toContain("sensitive personal data");
+    expect(DEFAULT_POLICY).toContain("tool use, code execution");
   });
 });
