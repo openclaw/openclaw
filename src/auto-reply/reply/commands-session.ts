@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { CommandHandler } from "./commands-types.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
@@ -6,6 +7,7 @@ import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
+import { defaultRuntime } from "../../runtime.js";
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
@@ -312,40 +314,92 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
       `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
     );
   }
+  let persistenceFailed = false;
   if (abortTarget.entry && params.sessionStore && abortTarget.key) {
+    // Capture only the fields we mutate for revert (avoid structuredClone which can throw)
+    const prevAbortedLastRun = abortTarget.entry.abortedLastRun;
+    const prevUpdatedAt = abortTarget.entry.updatedAt;
     abortTarget.entry.abortedLastRun = true;
     abortTarget.entry.updatedAt = Date.now();
     params.sessionStore[abortTarget.key] = abortTarget.entry;
     if (params.storePath) {
-      await updateSessionStore(params.storePath, (store) => {
-        store[abortTarget.key] = abortTarget.entry;
-      });
+      try {
+        await updateSessionStore(params.storePath, (store) => {
+          store[abortTarget.key] = abortTarget.entry;
+        });
+      } catch (err) {
+        defaultRuntime.error(`Failed to persist session stop (${abortTarget.key}): ${String(err)}`);
+        // Revert in-memory change if persistence failed
+        abortTarget.entry.abortedLastRun = prevAbortedLastRun;
+        abortTarget.entry.updatedAt = prevUpdatedAt;
+        params.sessionStore[abortTarget.key] = abortTarget.entry;
+        persistenceFailed = true;
+      }
     }
   } else if (params.command.abortKey) {
     setAbortMemory(params.command.abortKey, true);
   }
 
-  // Trigger internal hook for stop command
-  const sessionKeyForHook = abortTarget.key ?? params.sessionKey;
+  // Trigger internal hook for stop command (fires regardless of persistence outcome)
+  // Use persisted session key when available; fallback to hash for non-persisted flows
+  // Hash From/To/AccountId/ThreadId to avoid PII and prevent collisions across accounts/threads
+  const sessionKeyForHook =
+    (abortTarget.entry ? abortTarget.key : undefined) ||
+    params.sessionKey ||
+    `command:${params.ctx.Provider || "unknown"}:${crypto
+      .createHash("sha256")
+      .update(
+        `${params.ctx.From || ""}:${params.ctx.To || ""}:${params.ctx.AccountId || ""}:${params.ctx.MessageThreadId || ""}`,
+      )
+      .digest("hex")
+      .slice(0, 16)}`;
   let hookMessages: string[] = [];
-  if (sessionKeyForHook) {
+  const entry = abortTarget.entry ?? params.sessionEntry;
+  // Guard structuredClone for best-effort hooks; non-cloneable entries fall back to undefined
+  let clonedEntry: typeof entry | undefined;
+  if (entry) {
+    try {
+      clonedEntry = structuredClone(entry);
+    } catch {
+      clonedEntry = undefined;
+    }
+  }
+  try {
     const hookEvent = createInternalHookEvent("command", "stop", sessionKeyForHook, {
-      sessionEntry: abortTarget.entry ?? params.sessionEntry,
+      sessionEntry: clonedEntry,
       sessionId: abortTarget.sessionId,
       commandSource: params.command.surface,
       senderId: params.command.senderId,
+      persistenceFailed,
     });
     await triggerInternalHook(hookEvent);
     hookMessages = hookEvent.messages;
+  } catch (err) {
+    defaultRuntime.error(`command:stop hook failed: ${String(err)}`);
   }
 
-  const { stopped } = stopSubagentsForRequester({
-    cfg: params.cfg,
-    requesterSessionKey: abortTarget.key ?? params.sessionKey,
-  });
+  // Use actual session key for stopping (fallback hash is only for hook routing)
+  const requesterKey = abortTarget.key || params.sessionKey;
+  let stopped = 0;
+
+  if (requesterKey) {
+    const result = stopSubagentsForRequester({
+      cfg: params.cfg,
+      requesterSessionKey: requesterKey,
+    });
+    stopped = result.stopped;
+  }
 
   // Build reply text and prepend hook messages if present
   let replyText = formatAbortReplyText(stopped);
+
+  // Prepend user-visible warning if no requester key was available (but keep abort confirmation)
+  if (!requesterKey) {
+    const warningText =
+      "⚠️ Could not stop subagents: no session key available (non-persisted session).";
+    replyText = `${warningText}\n\n${replyText}`;
+  }
+
   if (hookMessages.length > 0) {
     replyText = `${hookMessages.join("\n\n")}\n\n${replyText}`;
   }

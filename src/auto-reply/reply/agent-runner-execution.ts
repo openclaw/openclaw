@@ -543,12 +543,23 @@ export async function runAgentTurnWithFallback(params: {
 
         try {
           // Delete transcript file if it exists
+          // Try both thread-scoped and non-thread-scoped paths
           if (corruptedSessionId) {
-            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
-            try {
-              fs.unlinkSync(transcriptPath);
-            } catch {
-              // Ignore if file doesn't exist
+            const agentId = resolveAgentIdFromSessionKey(sessionKey);
+            const transcriptCandidates = [
+              resolveSessionTranscriptPath(corruptedSessionId, agentId),
+              resolveSessionTranscriptPath(
+                corruptedSessionId,
+                agentId,
+                params.sessionCtx.MessageThreadId,
+              ),
+            ];
+            for (const candidate of transcriptCandidates) {
+              try {
+                await fs.promises.unlink(candidate);
+              } catch {
+                // Ignore if file doesn't exist
+              }
             }
           }
 

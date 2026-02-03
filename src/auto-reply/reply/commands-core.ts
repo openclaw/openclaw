@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type {
   CommandHandler,
   CommandHandlerResult,
@@ -5,6 +6,7 @@ import type {
 } from "./commands-types.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
@@ -74,34 +76,80 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   // Trigger internal hook for reset/new commands
   if (resetRequested && params.command.isAuthorizedSender) {
     const commandAction = resetMatch?.[1] ?? "new";
-    const hookEvent = createInternalHookEvent("command", commandAction, params.sessionKey ?? "", {
-      sessionEntry: params.sessionEntry,
-      previousSessionEntry: params.previousSessionEntry,
-      commandSource: params.command.surface,
-      senderId: params.command.senderId,
-      cfg: params.cfg, // Pass config for LLM slug generation
-    });
-    await triggerInternalHook(hookEvent);
+    // Use stable fallback key for non-persisted flows so command hooks always fire
+    // Hash From/To/AccountId/ThreadId to avoid PII and prevent collisions across accounts/threads
+    const fallbackKey = params.sessionKey
+      ? null
+      : `command:${params.ctx.Provider || "unknown"}:${crypto
+          .createHash("sha256")
+          .update(
+            `${params.ctx.From || ""}:${params.ctx.To || ""}:${params.ctx.AccountId || ""}:${params.ctx.MessageThreadId || ""}`,
+          )
+          .digest("hex")
+          .slice(0, 16)}`;
+    const hookSessionKey = params.sessionKey || fallbackKey || "command:unknown";
+    let hookMessages: string[] = [];
+    // Guard each clone individually for best-effort hook context
+    let clonedSessionEntry: typeof params.sessionEntry | undefined;
+    if (params.sessionEntry) {
+      try {
+        clonedSessionEntry = structuredClone(params.sessionEntry);
+      } catch {
+        clonedSessionEntry = undefined;
+      }
+    }
+    let clonedPreviousEntry: typeof params.previousSessionEntry | undefined;
+    if (params.previousSessionEntry) {
+      try {
+        clonedPreviousEntry = structuredClone(params.previousSessionEntry);
+      } catch {
+        clonedPreviousEntry = undefined;
+      }
+    }
+    try {
+      const hookEvent = createInternalHookEvent("command", commandAction, hookSessionKey, {
+        sessionEntry: clonedSessionEntry,
+        previousSessionEntry: clonedPreviousEntry,
+        commandSource: params.command.surface,
+        senderId: params.command.senderId,
+      });
+      await triggerInternalHook(hookEvent);
+      hookMessages = hookEvent.messages;
+    } catch (err) {
+      defaultRuntime.error(`command:${commandAction} hook failed: ${String(err)}`);
+    }
 
     // Send hook messages immediately if present
-    if (hookEvent.messages.length > 0) {
-      // Use OriginatingChannel/To if available, otherwise fall back to command channel/from
+    if (hookMessages.length > 0) {
+      // Use OriginatingChannel if available, otherwise fall back to command channel
       // oxlint-disable-next-line typescript/no-explicit-any
       const channel = params.ctx.OriginatingChannel || (params.command.channel as any);
-      // For replies, use 'from' (the sender) not 'to' (which might be the bot itself)
+      // Use same addressing logic as normal reply path (get-reply-run.ts:293)
       const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
 
       if (channel && to) {
-        const hookReply = { text: hookEvent.messages.join("\n\n") };
-        await routeReply({
-          payload: hookReply,
-          channel: channel,
-          to: to,
-          sessionKey: params.sessionKey,
-          accountId: params.ctx.AccountId,
-          threadId: params.ctx.MessageThreadId,
-          cfg: params.cfg,
-        });
+        try {
+          const hookReply = { text: hookMessages.join("\n\n") };
+          await routeReply({
+            payload: hookReply,
+            channel: channel,
+            to: to,
+            // Use real session key (may be undefined in non-persisted flows)
+            // Hook message delivery is best-effort; messages may not persist without a session key
+            sessionKey: params.sessionKey,
+            accountId: params.ctx.AccountId,
+            threadId: params.ctx.MessageThreadId,
+            cfg: params.cfg,
+          });
+        } catch (err) {
+          defaultRuntime.error(
+            `Failed to deliver hook messages for ${commandAction}: ${String(err)}`,
+          );
+        }
+      } else {
+        logVerbose(
+          `Hook messages for ${commandAction} dropped: missing ${!channel ? "channel" : "to"} (hook output is best-effort depending on routing context)`,
+        );
       }
     }
   }

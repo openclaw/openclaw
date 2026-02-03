@@ -17,6 +17,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { defaultRuntime } from "../../runtime.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import {
   resolveMemoryFlushContextWindowTokens,
@@ -83,19 +84,28 @@ export async function runMemoryFlushIfNeeded(params: {
   }
 
   // Lifecycle hook: Memory Flush Start
-  // Emit whenever a flush runs, regardless of whether we can persist metadata
+  // IMPORTANT: This fires BEFORE the flush runs. Hook consumers should treat this as
+  // "flush starting" not "flush completed". Session state reflects pre-flush snapshot.
+  // Only fires when sessionKey is present (agent lifecycle event requires session context)
   let flushHookMessages: string[] = [];
   if (params.sessionKey) {
     // Report the same totalTokens that triggered shouldRunMemoryFlush decision.
-    // This is the last persisted token count; should always be valid when flush fires.
-    const contextTokensUsed = entryForFlush?.totalTokens ?? 0;
-    const hookEvent = createInternalHookEvent("agent", "flush", params.sessionKey, {
+    // Omit contextTokensUsed if not available rather than defaulting to 0.
+    const context: Record<string, unknown> = {
       sessionId: params.followupRun.run.sessionId,
-      contextTokensUsed,
       reason: "context_limit",
-    });
-    await triggerInternalHook(hookEvent);
-    flushHookMessages = hookEvent.messages;
+      phase: "start", // Explicit phase: this hook fires before flush runs
+    };
+    if (entryForFlush?.totalTokens !== undefined) {
+      context.contextTokensUsed = entryForFlush.totalTokens;
+    }
+    const hookEvent = createInternalHookEvent("agent", "flush", params.sessionKey, context);
+    try {
+      await triggerInternalHook(hookEvent);
+      flushHookMessages = hookEvent.messages;
+    } catch (err) {
+      defaultRuntime.error(`agent:flush hook failed: ${String(err)}`);
+    }
   }
 
   let activeSessionEntry = params.sessionEntry;
