@@ -95,10 +95,14 @@ export async function checkInboundAccessControl(params: {
     // Check if group is explicitly in the groups allowlist.
     // If so, allow messages from all participants in this group (#3375).
     const groups = account.groups;
-    const groupInAllowlist = params.groupId && groups && params.groupId in groups;
+    const groupInAllowlist = params.groupId && groups && Object.hasOwn(groups, params.groupId);
+    const groupConfig = groupInAllowlist && params.groupId ? groups[params.groupId] : undefined;
+    const requireMention = groupConfig?.requireMention ?? false;
 
-    if (groupInAllowlist) {
-      logVerbose(`Allowing message from allowlisted group ${params.groupId}`);
+    if (groupInAllowlist && !requireMention) {
+      logVerbose(
+        `Allowing message from allowlisted group ${params.groupId} (requireMention: false)`,
+      );
       // Continue to allow; don't return early so DM checks are skipped but message proceeds.
     } else {
       // Group not in allowlist - fall back to sender-based filtering via groupAllowFrom
