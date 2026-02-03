@@ -19,11 +19,13 @@ import {
   isCliProvider,
   modelKey,
   resolveConfiguredModelRef,
+  resolveModelForTaskType,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import { classifyTask } from "../agents/task-classifier.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import {
@@ -254,13 +256,31 @@ export async function agentCommand(
         }
       : cfg;
 
-    const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
-      cfg: cfgForModelSelection,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    });
+    // Classify the task to potentially use a specialized model
+    const taskType = classifyTask(body);
+    const hasSpecializedModel =
+      (taskType === "coding" && cfg.agents?.defaults?.codingModel) ||
+      (taskType === "vision" && cfg.agents?.defaults?.imageModel);
+
+    // Use task-aware model selection if a specialized model is configured
+    const selectedModelRef = hasSpecializedModel
+      ? resolveModelForTaskType({ cfg: cfgForModelSelection, taskType, agentId: sessionAgentId })
+      : resolveConfiguredModelRef({
+          cfg: cfgForModelSelection,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+        });
+
+    const { provider: defaultProvider, model: defaultModel } = selectedModelRef;
     let provider = defaultProvider;
     let model = defaultModel;
+
+    // Log task classification when using specialized model
+    if (hasSpecializedModel && taskType !== "general") {
+      console.log(
+        `\x1b[36m[agent]\x1b[0m Task classified as "${taskType}" → using ${provider}/${model}`,
+      );
+    }
     const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
     const hasStoredOverride = Boolean(
       sessionEntry?.modelOverride || sessionEntry?.providerOverride,
