@@ -1,6 +1,6 @@
 ---
 name: peekaboo
-description: Capture and automate macOS UI with the Peekaboo CLI.
+description: Capture macOS screenshots, inspect UI elements, automate interactions (clicking, typing, dragging), and manage windows and applications from the command line. Use when you need to script UI automation, test interfaces, or perform complex desktop tasks programmatically.
 homepage: https://peekaboo.boo
 metadata:
   {

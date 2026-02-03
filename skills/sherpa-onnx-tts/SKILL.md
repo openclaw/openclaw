@@ -1,6 +1,6 @@
 ---
 name: sherpa-onnx-tts
-description: Local text-to-speech via sherpa-onnx (offline, no cloud)
+description: Convert text to speech completely offline using sherpa-onnx without any internet connection or API keys, supporting multiple voices and languages. Use when you need private, fast text-to-speech that doesn't require cloud services or external dependencies.
 metadata:
   {
     "openclaw":

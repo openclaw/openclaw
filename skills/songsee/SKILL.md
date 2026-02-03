@@ -1,6 +1,6 @@
 ---
 name: songsee
-description: Generate spectrograms and feature-panel visualizations from audio with the songsee CLI.
+description: Generate spectrograms and feature visualizations (mel, chroma, HPSS, loudness, tempogram, MFCC) from audio files for analysis and sharing. Use when you want to visualize audio characteristics, create technical documentation, or analyze music structure.
 homepage: https://github.com/steipete/songsee
 metadata:
   {

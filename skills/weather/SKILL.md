@@ -1,6 +1,6 @@
 ---
 name: weather
-description: Get current weather and forecasts (no API key required).
+description: Get current weather, detailed forecasts, and conditions for any location using free APIs (wttr.in or Open-Meteo) without API keys or registration. Use when you want to check weather, temperature, rain, forecasts, or what to wear without API setup overhead.
 homepage: https://wttr.in/:help
 metadata: { "openclaw": { "emoji": "🌤️", "requires": { "bins": ["curl"] } } }
 ---

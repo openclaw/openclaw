@@ -1,6 +1,6 @@
 ---
 name: gifgrep
-description: Search GIF providers with CLI/TUI, download results, and extract stills/sheets.
+description: Search Giphy and Tenor for GIFs with a TUI, download results, and extract individual frames or sprite sheets for quick sharing. Use when you want to find and grab GIFs for chat, documents, or presentations from the command line.
 homepage: https://gifgrep.com
 metadata:
   {

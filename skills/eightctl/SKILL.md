@@ -1,6 +1,6 @@
 ---
 name: eightctl
-description: Control Eight Sleep pods (status, temperature, alarms, schedules).
+description: Control Eight Sleep smart bed pods to adjust temperature, manage alarms and schedules, and check pod status from the command line. Use when you want to set your bed temperature, dismiss alarms, or automate sleep routines without using the app.
 homepage: https://eightctl.sh
 metadata:
   {

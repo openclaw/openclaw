@@ -1,6 +1,6 @@
 ---
 name: sonoscli
-description: Control Sonos speakers (discover/status/play/volume/group).
+description: Discover, control, and group Sonos speakers for playback, volume adjustment, queue management, and Spotify/TuneIn integration from the command line. Use when you want to manage music playback across multiple rooms without using the Sonos app.
 homepage: https://sonoscli.sh
 metadata:
   {

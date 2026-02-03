@@ -1,6 +1,6 @@
 ---
 name: camsnap
-description: Capture frames or clips from RTSP/ONVIF cameras.
+description: Capture snapshots, video clips, and motion events from configured RTSP/ONVIF security cameras via the command line. Use when you want to grab a quick screenshot from a camera, record a clip, or automate camera monitoring.
 homepage: https://camsnap.ai
 metadata:
   {

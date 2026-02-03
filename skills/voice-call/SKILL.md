@@ -1,6 +1,6 @@
 ---
 name: voice-call
-description: Start voice calls via the OpenClaw voice-call plugin.
+description: Initiate and control voice calls using Twilio, Telnyx, or Plivo providers for programmatic outbound calling and message delivery. Use when you want to make automated phone calls, deliver voice messages, or integrate phone communications into workflows.
 metadata:
   {
     "openclaw":
