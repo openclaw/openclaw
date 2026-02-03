@@ -48,12 +48,5 @@
   },
   "peerDependencies": {
     "openclaw": ">=2026.2.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "oxfmt": "0.27.0",
-    "oxlint": "^1.42.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.0.18"
   }
 }
