@@ -120,6 +120,7 @@ export const zhCN: typeof import("./en.js").en = {
     },
     ui: {
         tabs: {
+            agents: "智能代理",
             overview: "概览",
             channels: "频道",
             instances: "实例",
@@ -133,6 +134,7 @@ export const zhCN: typeof import("./en.js").en = {
             logs: "日志",
         },
         subtitles: {
+            agents: "管理代理工作区、工具和身份。",
             overview: "网关状态、入口点和快速健康检查。",
             channels: "管理频道及其设置。",
             instances: "来自已连接客户端和节点的在线信号。",
