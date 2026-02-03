@@ -54,6 +54,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          build-args: |
+            OPENCLAW_DOCKER_APT_PACKAGES=sqlite3 jq ffmpeg
           labels: ${{ steps.meta.outputs.labels }}
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
@@ -103,6 +105,8 @@ jobs:
         with:
           context: .
           platforms: linux/arm64
+          build-args: |
+            OPENCLAW_DOCKER_APT_PACKAGES=sqlite3 jq ffmpeg
           labels: ${{ steps.meta.outputs.labels }}
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
