@@ -8,8 +8,12 @@ import type { GatewayPlugin } from "@buape/carbon/gateway";
  */
 const gatewayRegistry = new Map<string, GatewayPlugin>();
 
+// Sentinel key for the default (unnamed) account. Uses a prefix that cannot
+// collide with user-configured account IDs.
+const DEFAULT_ACCOUNT_KEY = "\0__default__";
+
 function resolveAccountKey(accountId?: string): string {
-  return accountId ?? "default";
+  return accountId ?? DEFAULT_ACCOUNT_KEY;
 }
 
 /** Register a GatewayPlugin instance for an account. */
