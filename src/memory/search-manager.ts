@@ -204,7 +204,7 @@ function sortValue(value: unknown): unknown {
   }
   if (value && typeof value === "object") {
     const sortedEntries = Object.keys(value as Record<string, unknown>)
-      .sort((a, b) => a.localeCompare(b))
+      .toSorted((a, b) => a.localeCompare(b))
       .map((key) => [key, sortValue((value as Record<string, unknown>)[key])]);
     return Object.fromEntries(sortedEntries);
   }
