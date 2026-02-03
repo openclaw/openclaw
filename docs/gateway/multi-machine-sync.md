@@ -27,7 +27,7 @@ If you just git sync `openclaw.json`, pulling on one machine overwrites its gate
 
 ## The Solution: `$include` for Machine-Specific Config
 
-OpenClaw's [`$include` directive](/gateway/configuration#config-includes-include) lets you split config into multiple files. Put shared settings in the git-tracked config, and machine-specific settings in a gitignored local file.
+OpenClaw's [`$include` directive](/gateway/configuration#config-includes-$include) lets you split config into multiple files. Put shared settings in the git-tracked config, and machine-specific settings in a gitignored local file.
 
 ### Step 1: Create Machine-Specific Config Files
 
@@ -225,6 +225,6 @@ This pattern works for any multi-machine setup where you want shared workspaces 
 ## Related
 
 - [Configuration](/gateway/configuration)
-- [Config Includes](/gateway/configuration#config-includes-include)
+- [Config Includes](/gateway/configuration#config-includes-$include)
 - [Remote Access](/gateway/remote)
 - [Multiple Gateways](/gateway/multiple-gateways)
