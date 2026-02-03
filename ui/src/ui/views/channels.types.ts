@@ -26,7 +26,7 @@ export type ChannelsProps = {
   whatsappQrDataUrl: string | null;
   whatsappConnected: boolean | null;
   whatsappBusy: boolean;
-  configSchema: unknown | null;
+  configSchema: unknown;
   configSchemaLoading: boolean;
   configForm: Record<string, unknown> | null;
   configUiHints: ConfigUiHints;

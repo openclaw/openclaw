@@ -1,4 +1,5 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
@@ -76,6 +77,20 @@ export function buildEmbeddedSystemPrompt(params: {
 export function createSystemPromptOverride(
   systemPrompt: string,
 ): (defaultPrompt?: string) => string {
-  const trimmed = systemPrompt.trim();
-  return () => trimmed;
+  const override = systemPrompt.trim();
+  return (_defaultPrompt?: string) => override;
+}
+
+export function applySystemPromptOverrideToSession(
+  session: AgentSession,
+  override: string | ((defaultPrompt?: string) => string),
+) {
+  const prompt = typeof override === "function" ? override() : override.trim();
+  session.agent.setSystemPrompt(prompt);
+  const mutableSession = session as unknown as {
+    _baseSystemPrompt?: string;
+    _rebuildSystemPrompt?: (toolNames: string[]) => string;
+  };
+  mutableSession._baseSystemPrompt = prompt;
+  mutableSession._rebuildSystemPrompt = () => prompt;
 }

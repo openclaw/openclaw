@@ -7,6 +7,9 @@ import {
   stopDebugPolling,
 } from "./app-polling";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll";
+import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity";
+import { loadAgentSkills } from "./controllers/agent-skills";
+import { loadAgents } from "./controllers/agents";
 import { loadChannels } from "./controllers/channels";
 import { loadConfig, loadConfigSchema } from "./controllers/config";
 import { loadCronJobs, loadCronStatus } from "./controllers/cron";
@@ -64,13 +67,19 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
 
 export function setLastActiveSessionKey(host: SettingsHost, next: string) {
   const trimmed = next.trim();
-  if (!trimmed) return;
-  if (host.settings.lastActiveSessionKey === trimmed) return;
+  if (!trimmed) {
+    return;
+  }
+  if (host.settings.lastActiveSessionKey === trimmed) {
+    return;
+  }
   applySettings(host, { ...host.settings, lastActiveSessionKey: trimmed });
 }
 
 export function applySettingsFromUrl(host: SettingsHost) {
-  if (!window.location.search) return;
+  if (!window.location.search) {
+    return;
+  }
   const params = new URLSearchParams(window.location.search);
   const tokenRaw = params.get("token");
   const passwordRaw = params.get("password");
@@ -117,20 +126,31 @@ export function applySettingsFromUrl(host: SettingsHost) {
     shouldCleanUrl = true;
   }
 
-  if (!shouldCleanUrl) return;
+  if (!shouldCleanUrl) {
+    return;
+  }
   const url = new URL(window.location.href);
   url.search = params.toString();
   window.history.replaceState({}, "", url.toString());
 }
 
 export function setTab(host: SettingsHost, next: Tab) {
-  if (host.tab !== next) host.tab = next;
-  if (next === "chat") host.chatHasAutoScrolled = false;
-  if (next === "logs") startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
-  else stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
-  if (next === "debug")
+  if (host.tab !== next) {
+    host.tab = next;
+  }
+  if (next === "chat") {
+    host.chatHasAutoScrolled = false;
+  }
+  if (next === "logs") {
+    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
+  } else {
+    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+  }
+  if (next === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
-  else stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  } else {
+    stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  }
   void refreshActiveTab(host);
   syncUrlWithTab(host, next, false);
 }
@@ -150,12 +170,46 @@ export function setTheme(host: SettingsHost, next: ThemeMode, context?: ThemeTra
 }
 
 export async function refreshActiveTab(host: SettingsHost) {
-  if (host.tab === "overview") await loadOverview(host);
-  if (host.tab === "channels") await loadChannelsTab(host);
-  if (host.tab === "instances") await loadPresence(host as unknown as OpenClawApp);
-  if (host.tab === "sessions") await loadSessions(host as unknown as OpenClawApp);
-  if (host.tab === "cron") await loadCron(host);
-  if (host.tab === "skills") await loadSkills(host as unknown as OpenClawApp);
+  if (host.tab === "overview") {
+    await loadOverview(host);
+  }
+  if (host.tab === "channels") {
+    await loadChannelsTab(host);
+  }
+  if (host.tab === "instances") {
+    await loadPresence(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "sessions") {
+    await loadSessions(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "cron") {
+    await loadCron(host);
+  }
+  if (host.tab === "skills") {
+    await loadSkills(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "agents") {
+    await loadAgents(host as unknown as OpenClawApp);
+    await loadConfig(host as unknown as OpenClawApp);
+    const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
+    if (agentIds.length > 0) {
+      void loadAgentIdentities(host as unknown as OpenClawApp, agentIds);
+    }
+    const agentId =
+      host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
+    if (agentId) {
+      void loadAgentIdentity(host as unknown as OpenClawApp, agentId);
+      if (host.agentsPanel === "skills") {
+        void loadAgentSkills(host as unknown as OpenClawApp, agentId);
+      }
+      if (host.agentsPanel === "channels") {
+        void loadChannels(host as unknown as OpenClawApp, false);
+      }
+      if (host.agentsPanel === "cron") {
+        void loadCron(host);
+      }
+    }
+  }
   if (host.tab === "nodes") {
     await loadNodes(host as unknown as OpenClawApp);
     await loadDevices(host as unknown as OpenClawApp);
@@ -185,7 +239,9 @@ export async function refreshActiveTab(host: SettingsHost) {
 }
 
 export function inferBasePath() {
-  if (typeof window === "undefined") return "";
+  if (typeof window === "undefined") {
+    return "";
+  }
   const configured = window.__OPENCLAW_CONTROL_UI_BASE_PATH__;
   if (typeof configured === "string" && configured.trim()) {
     return normalizeBasePath(configured);
@@ -200,17 +256,23 @@ export function syncThemeWithSettings(host: SettingsHost) {
 
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {
   host.themeResolved = resolved;
-  if (typeof document === "undefined") return;
+  if (typeof document === "undefined") {
+    return;
+  }
   const root = document.documentElement;
   root.dataset.theme = resolved;
   root.style.colorScheme = resolved;
 }
 
 export function attachThemeListener(host: SettingsHost) {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return;
+  }
   host.themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
   host.themeMediaHandler = (event) => {
-    if (host.theme !== "system") return;
+    if (host.theme !== "system") {
+      return;
+    }
     applyResolvedTheme(host, event.matches ? "dark" : "light");
   };
   if (typeof host.themeMedia.addEventListener === "function") {
@@ -224,7 +286,9 @@ export function attachThemeListener(host: SettingsHost) {
 }
 
 export function detachThemeListener(host: SettingsHost) {
-  if (!host.themeMedia || !host.themeMediaHandler) return;
+  if (!host.themeMedia || !host.themeMediaHandler) {
+    return;
+  }
   if (typeof host.themeMedia.removeEventListener === "function") {
     host.themeMedia.removeEventListener("change", host.themeMediaHandler);
     return;
@@ -238,16 +302,22 @@ export function detachThemeListener(host: SettingsHost) {
 }
 
 export function syncTabWithLocation(host: SettingsHost, replace: boolean) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") {
+    return;
+  }
   const resolved = tabFromPath(window.location.pathname, host.basePath) ?? "chat";
   setTabFromRoute(host, resolved);
   syncUrlWithTab(host, resolved, replace);
 }
 
 export function onPopState(host: SettingsHost) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") {
+    return;
+  }
   const resolved = tabFromPath(window.location.pathname, host.basePath);
-  if (!resolved) return;
+  if (!resolved) {
+    return;
+  }
 
   const url = new URL(window.location.href);
   const session = url.searchParams.get("session")?.trim();
@@ -264,18 +334,31 @@ export function onPopState(host: SettingsHost) {
 }
 
 export function setTabFromRoute(host: SettingsHost, next: Tab) {
-  if (host.tab !== next) host.tab = next;
-  if (next === "chat") host.chatHasAutoScrolled = false;
-  if (next === "logs") startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
-  else stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
-  if (next === "debug")
+  if (host.tab !== next) {
+    host.tab = next;
+  }
+  if (next === "chat") {
+    host.chatHasAutoScrolled = false;
+  }
+  if (next === "logs") {
+    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
+  } else {
+    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+  }
+  if (next === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
-  else stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
-  if (host.connected) void refreshActiveTab(host);
+  } else {
+    stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  }
+  if (host.connected) {
+    void refreshActiveTab(host);
+  }
 }
 
 export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") {
+    return;
+  }
   const targetPath = normalizePath(pathForTab(tab, host.basePath));
   const currentPath = normalizePath(window.location.pathname);
   const url = new URL(window.location.href);
@@ -298,11 +381,16 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
 }
 
 export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") {
+    return;
+  }
   const url = new URL(window.location.href);
   url.searchParams.set("session", sessionKey);
-  if (replace) window.history.replaceState({}, "", url.toString());
-  else window.history.pushState({}, "", url.toString());
+  if (replace) {
+    window.history.replaceState({}, "", url.toString());
+  } else {
+    window.history.pushState({}, "", url.toString());
+  }
 }
 
 export async function loadOverview(host: SettingsHost) {

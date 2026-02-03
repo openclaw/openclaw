@@ -15,22 +15,29 @@ export function formatPresenceAge(entry: PresenceEntry): string {
 }
 
 export function formatNextRun(ms?: number | null) {
-  if (!ms) return "n/a";
+  if (!ms) {
+    return "n/a";
+  }
   return `${formatMs(ms)} (${formatAgo(ms)})`;
 }
 
 export function formatSessionTokens(row: GatewaySessionRow) {
-  if (row.totalTokens == null) return "n/a";
+  if (row.totalTokens == null) {
+    return "n/a";
+  }
   const total = row.totalTokens ?? 0;
   const ctx = row.contextTokens ?? 0;
   return ctx ? `${total} / ${ctx}` : String(total);
 }
 
 export function formatEventPayload(payload: unknown): string {
-  if (payload == null) return "";
+  if (payload == null) {
+    return "";
+  }
   try {
     return JSON.stringify(payload, null, 2);
   } catch {
+    // oxlint-disable typescript/no-base-to-string
     return String(payload);
   }
 }
@@ -45,13 +52,19 @@ export function formatCronState(job: CronJob) {
 
 export function formatCronSchedule(job: CronJob) {
   const s = job.schedule;
-  if (s.kind === "at") return `At ${formatMs(s.atMs)}`;
-  if (s.kind === "every") return `Every ${formatDurationMs(s.everyMs)}`;
+  if (s.kind === "at") {
+    return `At ${formatMs(s.atMs)}`;
+  }
+  if (s.kind === "every") {
+    return `Every ${formatDurationMs(s.everyMs)}`;
+  }
   return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
 }
 
 export function formatCronPayload(job: CronJob) {
   const p = job.payload;
-  if (p.kind === "systemEvent") return `System: ${p.text}`;
+  if (p.kind === "systemEvent") {
+    return `System: ${p.text}`;
+  }
   return `Agent: ${p.message}`;
 }

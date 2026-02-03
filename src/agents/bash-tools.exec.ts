@@ -56,6 +56,55 @@ import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
+// Security: Blocklist of environment variables that could alter execution flow
+// or inject code when running on non-sandboxed hosts (Gateway/Node).
+const DANGEROUS_HOST_ENV_VARS = new Set([
+  "LD_PRELOAD",
+  "LD_LIBRARY_PATH",
+  "LD_AUDIT",
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_LIBRARY_PATH",
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "PYTHONPATH",
+  "PYTHONHOME",
+  "RUBYLIB",
+  "PERL5LIB",
+  "BASH_ENV",
+  "ENV",
+  "GCONV_PATH",
+  "IFS",
+  "SSLKEYLOGFILE",
+]);
+const DANGEROUS_HOST_ENV_PREFIXES = ["DYLD_", "LD_"];
+
+// Centralized sanitization helper.
+// Throws an error if dangerous variables or PATH modifications are detected on the host.
+function validateHostEnv(env: Record<string, string>): void {
+  for (const key of Object.keys(env)) {
+    const upperKey = key.toUpperCase();
+
+    // 1. Block known dangerous variables (Fail Closed)
+    if (DANGEROUS_HOST_ENV_PREFIXES.some((prefix) => upperKey.startsWith(prefix))) {
+      throw new Error(
+        `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
+      );
+    }
+    if (DANGEROUS_HOST_ENV_VARS.has(upperKey)) {
+      throw new Error(
+        `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
+      );
+    }
+
+    // 2. Strictly block PATH modification on host
+    // Allowing custom PATH on the gateway/node can lead to binary hijacking.
+    if (upperKey === "PATH") {
+      throw new Error(
+        "Security Violation: Custom 'PATH' variable is forbidden during host execution.",
+      );
+    }
+  }
+}
 const DEFAULT_MAX_OUTPUT = clampNumber(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
   200_000,
@@ -750,7 +799,7 @@ async function runExecProcess(opts: {
 
 export function createExecTool(
   defaults?: ExecToolDefaults,
-  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any, ExecToolDetails> {
   const defaultBackgroundMs = clampNumber(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
@@ -916,7 +965,15 @@ export function createExecTool(
       }
 
       const baseEnv = coerceEnv(process.env);
+
+      // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
+      // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
+      if (host !== "sandbox" && params.env) {
+        validateHostEnv(params.env);
+      }
+
       const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
+
       const env = sandbox
         ? buildSandboxEnv({
             defaultPath: DEFAULT_PATH,
@@ -925,6 +982,7 @@ export function createExecTool(
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
           })
         : mergedEnv;
+
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
           env: process.env,
@@ -976,7 +1034,9 @@ export function createExecTool(
           );
         }
         const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
+
         const nodeEnv = params.env ? { ...params.env } : undefined;
+
         if (nodeEnv) {
           applyPathPrepend(nodeEnv, defaultPathPrepend, { requireExisting: true });
         }
@@ -1398,8 +1458,7 @@ export function createExecTool(
               {
                 type: "text",
                 text:
-                  `${warningText}` +
-                  `Approval required (id ${approvalSlug}). ` +
+                  `${warningText}Approval required (id ${approvalSlug}). ` +
                   "Approve to run; updates will arrive after completion.",
               },
             ],
@@ -1481,12 +1540,9 @@ export function createExecTool(
             content: [
               {
                 type: "text",
-                text:
-                  `${getWarningText()}` +
-                  `Command still running (session ${run.session.id}, pid ${
-                    run.session.pid ?? "n/a"
-                  }). ` +
-                  "Use process (list/poll/log/write/kill/clear/remove) for follow-up.",
+                text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
+                  run.session.pid ?? "n/a"
+                }). Use process (list/poll/log/write/kill/clear/remove) for follow-up.`,
               },
             ],
             details: {

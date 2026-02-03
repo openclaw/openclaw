@@ -1,0 +1,134 @@
+[
+  {
+    "source": "OpenClaw",
+    "target": "OpenClaw"
+  },
+  {
+    "source": "Gateway",
+    "target": "Gateway网关"
+  },
+  {
+    "source": "Pi",
+    "target": "Pi"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "Skills配置"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Skills配置"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Getting Started",
+    "target": "入门指南"
+  },
+  {
+    "source": "Getting started",
+    "target": "入门指南"
+  },
+  {
+    "source": "DMs",
+    "target": "私信"
+  },
+  {
+    "source": "DM",
+    "target": "私信"
+  },
+  {
+    "source": "sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Auth: where it lives (important)",
+    "target": "凭证：存储位置（重要）"
+  },
+  {
+    "source": "agent",
+    "target": "智能体"
+  },
+  {
+    "source": "channel",
+    "target": "渠道"
+  },
+  {
+    "source": "session",
+    "target": "会话"
+  },
+  {
+    "source": "provider",
+    "target": "提供商"
+  },
+  {
+    "source": "model",
+    "target": "模型"
+  },
+  {
+    "source": "tool",
+    "target": "工具"
+  },
+  {
+    "source": "CLI",
+    "target": "CLI"
+  },
+  {
+    "source": "install sanity",
+    "target": "安装完整性检查"
+  },
+  {
+    "source": "get unstuck",
+    "target": "解决问题"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "故障排除"
+  },
+  {
+    "source": "FAQ",
+    "target": "常见问题"
+  },
+  {
+    "source": "onboarding",
+    "target": "新手引导"
+  },
+  {
+    "source": "Onboarding",
+    "target": "新手引导"
+  },
+  {
+    "source": "wizard",
+    "target": "向导"
+  },
+  {
+    "source": "environment variables",
+    "target": "环境变量"
+  },
+  {
+    "source": "environment variable",
+    "target": "环境变量"
+  },
+  {
+    "source": "env vars",
+    "target": "环境变量"
+  },
+  {
+    "source": "env var",
+    "target": "环境变量"
+  }
+]

@@ -164,6 +164,43 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
       'channels.telegram.dmPolicy="open" requires channels.telegram.allowFrom to include "*"',
   });
   validateTelegramCustomCommands(value, ctx);
+
+  const baseWebhookUrl = typeof value.webhookUrl === "string" ? value.webhookUrl.trim() : "";
+  const baseWebhookSecret =
+    typeof value.webhookSecret === "string" ? value.webhookSecret.trim() : "";
+  if (baseWebhookUrl && !baseWebhookSecret) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "channels.telegram.webhookUrl requires channels.telegram.webhookSecret",
+      path: ["webhookSecret"],
+    });
+  }
+  if (!value.accounts) {
+    return;
+  }
+  for (const [accountId, account] of Object.entries(value.accounts)) {
+    if (!account) {
+      continue;
+    }
+    if (account.enabled === false) {
+      continue;
+    }
+    const accountWebhookUrl =
+      typeof account.webhookUrl === "string" ? account.webhookUrl.trim() : "";
+    if (!accountWebhookUrl) {
+      continue;
+    }
+    const accountSecret =
+      typeof account.webhookSecret === "string" ? account.webhookSecret.trim() : "";
+    if (!accountSecret && !baseWebhookSecret) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "channels.telegram.accounts.*.webhookUrl requires channels.telegram.webhookSecret or channels.telegram.accounts.*.webhookSecret",
+        path: ["accounts", accountId, "webhookSecret"],
+      });
+    }
+  }
 });
 
 export const DiscordDmSchema = z
@@ -763,6 +800,7 @@ export const MSTeamsConfigSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
+    mediaAuthAllowHosts: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
