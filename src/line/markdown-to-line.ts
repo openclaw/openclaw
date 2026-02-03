@@ -344,6 +344,10 @@ export function convertLinksToFlexBubble(links: MarkdownLink[]): FlexBubble {
 export function stripMarkdown(text: string): string {
   let result = text;
 
+  // Replace markdown links [text](url) with just the URL
+  // (iMessage/SMS auto-linkify URLs, so users get clickable links)
+  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$2");
+
   // Remove bold: **text** or __text__
   result = result.replace(/\*\*(.+?)\*\*/g, "$1");
   result = result.replace(/__(.+?)__/g, "$1");

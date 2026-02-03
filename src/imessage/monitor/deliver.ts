@@ -4,6 +4,7 @@ import type { createIMessageRpcClient } from "../client.js";
 import { chunkTextWithMode, resolveChunkMode } from "../../auto-reply/chunk.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
+import { stripMarkdown } from "../../line/markdown-to-line.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { sendMessageIMessage } from "../send.js";
 
@@ -27,7 +28,12 @@ export async function deliverReplies(params: {
   for (const payload of replies) {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const rawText = payload.text ?? "";
-    const text = convertMarkdownTables(rawText, tableMode);
+    const tableConverted = convertMarkdownTables(rawText, tableMode);
+    const shouldStrip =
+      (accountId ? cfg.channels?.imessage?.accounts?.[accountId]?.markdown?.strip : undefined) ??
+      cfg.channels?.imessage?.markdown?.strip ??
+      false;
+    const text = shouldStrip ? stripMarkdown(tableConverted) : tableConverted;
     if (!text && mediaList.length === 0) {
       continue;
     }
