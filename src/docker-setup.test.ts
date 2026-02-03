@@ -157,10 +157,7 @@ describe("docker-setup.sh", () => {
       composePath,
       "services:\n  openclaw-gateway:\n    image: noop\n  openclaw-cli:\n    image: noop\n",
     );
-    await writeFile(
-      cliOnlyComposePath,
-      "services:\n  openclaw-gateway:\n    ports: !reset []\n",
-    );
+    await writeFile(cliOnlyComposePath, "services:\n  openclaw-gateway:\n    ports: !reset []\n");
     await writeDockerStub(binDir, logPath);
 
     const env = {
