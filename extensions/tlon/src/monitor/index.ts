@@ -88,7 +88,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         error: (message) => runtime.error?.(message),
       },
     });
-  } catch (error: any) {
+  } catch (error) {
     runtime.error?.(`[tlon] Failed to authenticate: ${error?.message ?? String(error)}`);
     throw error;
   }
@@ -102,7 +102,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       if (discoveredChannels.length > 0) {
         groupChannels = discoveredChannels;
       }
-    } catch (error: any) {
+    } catch (error) {
       runtime.error?.(`[tlon] Auto-discovery failed: ${error?.message ?? String(error)}`);
     }
   }
@@ -120,6 +120,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     runtime.log?.("[tlon] No group channels to monitor (DMs only)");
   }
 
+  // oxlint-disable-next-line typescript/no-explicit-any
   const handleIncomingDM = async (update: any) => {
     try {
       const memo = update?.response?.add?.memo;
@@ -154,11 +155,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         isGroup: false,
         timestamp: memo.sent || Date.now(),
       });
-    } catch (error: any) {
+    } catch (error) {
       runtime.error?.(`[tlon] Error handling DM: ${error?.message ?? String(error)}`);
     }
   };
 
+  // oxlint-disable-next-line typescript/no-explicit-any
   const handleIncomingGroupMessage = (channelNest: string) => async (update: any) => {
     try {
       const parsed = parseChannelNest(channelNest);
@@ -235,7 +237,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         timestamp: content.sent || Date.now(),
         parentId,
       });
-    } catch (error: any) {
+    } catch (error) {
       runtime.error?.(`[tlon] Error handling group message: ${error?.message ?? String(error)}`);
     }
   };
@@ -294,7 +296,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           "2. Key decisions or conclusions\n" +
           "3. Action items if any\n" +
           "4. Notable participants";
-      } catch (error: any) {
+      } catch (error) {
         const errorMsg = `Sorry, I encountered an error while fetching the channel history: ${error?.message ?? String(error)}`;
         if (isGroup && groupChannel) {
           const parsed = parseChannelNest(groupChannel);
@@ -437,7 +439,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       });
       subscribedChannels.add(channelNest);
       runtime.log?.(`[tlon] Subscribed to group channel: ${channelNest}`);
-    } catch (error: any) {
+    } catch (error) {
       runtime.error?.(
         `[tlon] Failed to subscribe to ${channelNest}: ${error?.message ?? String(error)}`,
       );
@@ -463,7 +465,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       });
       subscribedDMs.add(dmShip);
       runtime.log?.(`[tlon] Subscribed to DM with ${dmShip}`);
-    } catch (error: any) {
+    } catch (error) {
       runtime.error?.(
         `[tlon] Failed to subscribe to DM with ${dmShip}: ${error?.message ?? String(error)}`,
       );
@@ -485,7 +487,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           await subscribeToChannel(channelNest);
         }
       }
-    } catch (error: any) {
+    } catch (error) {
       runtime.error?.(`[tlon] Channel refresh failed: ${error?.message ?? String(error)}`);
     }
   }
@@ -500,7 +502,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         dmShips = dmList;
         runtime.log?.(`[tlon] Found ${dmShips.length} DM conversation(s)`);
       }
-    } catch (error: any) {
+    } catch (error) {
       runtime.error?.(`[tlon] Failed to fetch DM list: ${error?.message ?? String(error)}`);
     }
 
@@ -544,7 +546,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   } finally {
     try {
       await api?.close();
-    } catch (error: any) {
+    } catch (error) {
       runtime.error?.(`[tlon] Cleanup error: ${error?.message ?? String(error)}`);
     }
   }

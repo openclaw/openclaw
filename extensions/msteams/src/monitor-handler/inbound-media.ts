@@ -18,6 +18,7 @@ export async function resolveMSTeamsInboundMedia(params: {
   htmlSummary?: MSTeamsHtmlAttachmentSummary;
   maxBytes: number;
   allowHosts?: string[];
+  authAllowHosts?: string[];
   tokenProvider: MSTeamsAccessTokenProvider;
   conversationType: string;
   conversationId: string;
@@ -46,6 +47,7 @@ export async function resolveMSTeamsInboundMedia(params: {
     maxBytes,
     tokenProvider,
     allowHosts,
+    authAllowHosts: params.authAllowHosts,
     preserveFilenames,
   });
 
@@ -85,6 +87,7 @@ export async function resolveMSTeamsInboundMedia(params: {
             tokenProvider,
             maxBytes,
             allowHosts,
+            authAllowHosts: params.authAllowHosts,
             preserveFilenames,
           });
           attempts.push({

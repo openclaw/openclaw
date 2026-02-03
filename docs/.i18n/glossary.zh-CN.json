@@ -5,11 +5,59 @@
   },
   {
     "source": "Gateway",
-    "target": "Gateway"
+    "target": "Gateway网关"
   },
   {
     "source": "Pi",
     "target": "Pi"
+  },
+  {
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "Skills配置"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Skills配置"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Getting Started",
+    "target": "入门指南"
+  },
+  {
+    "source": "Getting started",
+    "target": "入门指南"
+  },
+  {
+    "source": "DMs",
+    "target": "私信"
+  },
+  {
+    "source": "DM",
+    "target": "私信"
+  },
+  {
+    "source": "sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Auth: where it lives (important)",
+    "target": "凭证：存储位置（重要）"
   },
   {
     "source": "agent",
@@ -45,7 +93,7 @@
   },
   {
     "source": "get unstuck",
-    "target": "快速排障"
+    "target": "解决问题"
   },
   {
     "source": "troubleshooting",
@@ -57,7 +105,11 @@
   },
   {
     "source": "onboarding",
-    "target": "上手引导"
+    "target": "新手引导"
+  },
+  {
+    "source": "Onboarding",
+    "target": "新手引导"
   },
   {
     "source": "wizard",

@@ -162,6 +162,26 @@ describe("sanitizeSessionHistory", () => {
     expect(result[0]?.role).toBe("assistant");
   });
 
+  it("drops malformed tool calls missing input or arguments", async () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read" }],
+      },
+      { role: "user", content: "hello" },
+    ];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: "test-session",
+    });
+
+    expect(result.map((msg) => msg.role)).toEqual(["user"]);
+  });
+
   it("does not downgrade openai reasoning when the model has not changed", async () => {
     const sessionEntries: Array<{ type: string; customType: string; data: unknown }> = [
       {

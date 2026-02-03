@@ -31,10 +31,13 @@ describe("discord processDiscordMessage inbound contract", () => {
     const storePath = path.join(dir, "sessions.json");
 
     await processDiscordMessage({
+      // oxlint-disable-next-line typescript/no-explicit-any
       cfg: { messages: {}, session: { store: storePath } } as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
       discordConfig: {} as any,
       accountId: "default",
       token: "token",
+      // oxlint-disable-next-line typescript/no-explicit-any
       runtime: { log: () => {}, error: () => {} } as any,
       guildHistories: new Map(),
       historyLimit: 0,
@@ -44,19 +47,23 @@ describe("discord processDiscordMessage inbound contract", () => {
       replyToMode: "off",
       ackReactionScope: "direct",
       groupPolicy: "open",
+      // oxlint-disable-next-line typescript/no-explicit-any
       data: { guild: null } as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
       client: { rest: {} } as any,
       message: {
         id: "m1",
         channelId: "c1",
         timestamp: new Date().toISOString(),
         attachments: [],
+        // oxlint-disable-next-line typescript/no-explicit-any
       } as any,
       author: {
         id: "U1",
         username: "alice",
         discriminator: "0",
         globalName: "Alice",
+        // oxlint-disable-next-line typescript/no-explicit-any
       } as any,
       channelInfo: null,
       channelName: undefined,
@@ -86,7 +93,9 @@ describe("discord processDiscordMessage inbound contract", () => {
         accountId: "default",
         sessionKey: "agent:main:discord:dm:u1",
         mainSessionKey: "agent:main:main",
+        // oxlint-disable-next-line typescript/no-explicit-any
       } as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
 
     expect(capturedCtx).toBeTruthy();

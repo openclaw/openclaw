@@ -37,6 +37,22 @@ jobs:
           node scripts/extract-tool-groups.mjs
           node scripts/check-tool-group-alias.mjs
 
+      # Drift is about extracted artifacts only; compute it before model checking
+      # to avoid any incidental file touches affecting the result.
+      - name: Compute drift (generated/*)
+        id: drift
+        run: |
+          set -euo pipefail
+          cd clawdbot-formal-models
+
+          if git diff --quiet -- generated; then
+            echo "drift=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "drift=true" >> "$GITHUB_OUTPUT"
+          git diff -- generated > "${GITHUB_WORKSPACE}/formal-models-drift.diff"
+
       - name: Model check (green suite)
         run: |
           set -euo pipefail
@@ -51,6 +67,10 @@ jobs:
             routing-isolation routing-precedence routing-identitylinks routing-identity-transitive routing-identity-symmetry routing-identity-channel-override \
             routing-thread-parent discord-pluralkit \
             ingress-retry session-key-stability session-explosion-bound config-normalization \
+            queue-drain delivery-route-stability delivery-pipeline retry-termination retry-eventual-success \
+            no-cross-stream multi-event-eventual-emission \
+            dedupe-collision-fallback crash-restart-dedupe two-worker-dedupe openclaw-session-key-conformance \
+            routing-thread-parent-channel-override routing-trirule gateway-auth-proxy-header-spoof \
             group-alias-check
 
       - name: Model check (negative suite, expected violations)
@@ -69,21 +89,11 @@ jobs:
             ingress-gating-negative ingress-idempotency-negative ingress-dedupe-fallback-negative ingress-trace-negative ingress-trace2-negative \
             routing-isolation-negative routing-precedence-negative routing-identitylinks-negative routing-identity-transitive-negative routing-identity-symmetry-negative routing-identity-channel-override-negative \
             routing-thread-parent-negative discord-pluralkit-negative \
-            ingress-retry-negative session-key-stability-negative config-normalization-negative
-
-      - name: Compute drift
-        id: drift
-        run: |
-          set -euo pipefail
-          cd clawdbot-formal-models
-
-          if git diff --quiet; then
-            echo "drift=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "drift=true" >> "$GITHUB_OUTPUT"
-          git diff > "${GITHUB_WORKSPACE}/formal-models-drift.diff"
+            ingress-retry-negative session-key-stability-negative config-normalization-negative \
+            queue-drain delivery-route-stability-negative delivery-pipeline-negative retry-termination-negative retry-eventual-success-negative \
+            no-cross-stream-negative multi-event-eventual-emission-negative \
+            dedupe-collision-fallback-negative crash-restart-dedupe-negative two-worker-dedupe-negative openclaw-session-key-conformance-negative \
+            routing-thread-parent-channel-override-negative routing-trirule-negative gateway-auth-proxy-header-spoof-negative
 
       - name: Upload drift diff artifact
         if: steps.drift.outputs.drift == 'true'

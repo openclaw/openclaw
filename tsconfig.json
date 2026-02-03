@@ -1,13 +1,15 @@
 {
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "allowSyntheticDefaultImports": true,
+    "declaration": true,
     "esModuleInterop": true,
+    "experimentalDecorators": true,
     "forceConsistentCasingInFileNames": true,
+    "lib": ["DOM", "DOM.Iterable", "ES2023", "ScriptHost"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "lib": ["DOM", "DOM.Iterable", "ES2023", "ScriptHost"],
     "noEmit": true,
-    "declaration": true,
     "noEmitOnError": true,
     "outDir": "dist",
     "resolveJsonModule": true,
@@ -16,7 +18,7 @@
     "strict": true,
     "target": "es2023"
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "ui/**/*"],
   "exclude": [
     "node_modules",
     "dist",

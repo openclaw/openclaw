@@ -1,14 +1,15 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import type { AppViewState } from "./app-view-state";
-import type { ThemeMode } from "./theme";
-import type { ThemeTransitionContext } from "./theme-transition";
-import type { SessionsListResult } from "./types";
-import { refreshChat } from "./app-chat";
-import { syncUrlWithSessionKey } from "./app-settings";
-import { loadChatHistory } from "./controllers/chat";
-import { icons } from "./icons";
-import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation";
+import type { AppViewState } from "./app-view-state.ts";
+import type { ThemeTransitionContext } from "./theme-transition.ts";
+import type { ThemeMode } from "./theme.ts";
+import type { SessionsListResult } from "./types.ts";
+import { refreshChat } from "./app-chat.ts";
+import { syncUrlWithSessionKey } from "./app-settings.ts";
+import { OpenClawApp } from "./app.ts";
+import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { icons } from "./icons.ts";
+import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 
 export function renderTab(state: AppViewState, tab: Tab) {
   const href = pathForTab(tab, state.basePath);
@@ -94,18 +95,18 @@ export function renderChatControls(state: AppViewState) {
             state.sessionKey = next;
             state.chatMessage = "";
             state.chatStream = null;
-            state.chatStreamStartedAt = null;
+            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
             state.chatRunId = null;
-            state.resetToolStream();
-            state.resetChatScroll();
+            (state as unknown as OpenClawApp).resetToolStream();
+            (state as unknown as OpenClawApp).resetChatScroll();
             state.applySettings({
               ...state.settings,
               sessionKey: next,
               lastActiveSessionKey: next,
             });
             void state.loadAssistantIdentity();
-            syncUrlWithSessionKey(state, next, true);
-            void loadChatHistory(state);
+            syncUrlWithSessionKey(next, true);
+            void loadChatHistory(state as unknown as ChatState);
           }}
         >
           ${repeat(
@@ -122,7 +123,7 @@ export function renderChatControls(state: AppViewState) {
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
         @click=${() => {
-          state.resetToolStream();
+          (state as unknown as OpenClawApp).resetToolStream();
           void refreshChat(state as unknown as Parameters<typeof refreshChat>[0]);
         }}
         title="Refresh chat data"
@@ -134,7 +135,9 @@ export function renderChatControls(state: AppViewState) {
         class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
         ?disabled=${disableThinkingToggle}
         @click=${() => {
-          if (disableThinkingToggle) return;
+          if (disableThinkingToggle) {
+            return;
+          }
           state.applySettings({
             ...state.settings,
             chatShowThinking: !state.settings.chatShowThinking,
@@ -153,7 +156,9 @@ export function renderChatControls(state: AppViewState) {
         class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
         ?disabled=${disableFocusToggle}
         @click=${() => {
-          if (disableFocusToggle) return;
+          if (disableFocusToggle) {
+            return;
+          }
           state.applySettings({
             ...state.settings,
             chatFocusMode: !state.settings.chatFocusMode,
@@ -183,18 +188,28 @@ function resolveMainSessionKey(
 ): string | null {
   const snapshot = hello?.snapshot as { sessionDefaults?: SessionDefaultsSnapshot } | undefined;
   const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
-  if (mainSessionKey) return mainSessionKey;
+  if (mainSessionKey) {
+    return mainSessionKey;
+  }
   const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
-  if (mainKey) return mainKey;
-  if (sessions?.sessions?.some((row) => row.key === "main")) return "main";
+  if (mainKey) {
+    return mainKey;
+  }
+  if (sessions?.sessions?.some((row) => row.key === "main")) {
+    return "main";
+  }
   return null;
 }
 
 function resolveSessionDisplayName(key: string, row?: SessionsListResult["sessions"][number]) {
   const label = row?.label?.trim();
-  if (label) return `${label} (${key})`;
+  if (label) {
+    return `${label} (${key})`;
+  }
   const displayName = row?.displayName?.trim();
-  if (displayName) return displayName;
+  if (displayName) {
+    return displayName;
+  }
   return key;
 }
 
@@ -214,7 +229,7 @@ function resolveSessionOptions(
     seen.add(mainSessionKey);
     options.push({
       key: mainSessionKey,
-      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain),
+      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain || undefined),
     });
   }
 

@@ -131,6 +131,36 @@ describe("exec approvals shell parsing", () => {
     expect(res.ok).toBe(true);
     expect(res.segments[0]?.argv).toEqual(["/bin/echo", "ok"]);
   });
+
+  it("rejects command substitution inside double quotes", () => {
+    const res = analyzeShellCommand({ command: 'echo "output: $(whoami)"' });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("unsupported shell token: $()");
+  });
+
+  it("rejects backticks inside double quotes", () => {
+    const res = analyzeShellCommand({ command: 'echo "output: `id`"' });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("unsupported shell token: `");
+  });
+
+  it("rejects command substitution outside quotes", () => {
+    const res = analyzeShellCommand({ command: "echo $(whoami)" });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("unsupported shell token: $()");
+  });
+
+  it("allows escaped command substitution inside double quotes", () => {
+    const res = analyzeShellCommand({ command: 'echo "output: \\$(whoami)"' });
+    expect(res.ok).toBe(true);
+    expect(res.segments[0]?.argv[0]).toBe("echo");
+  });
+
+  it("allows command substitution syntax inside single quotes", () => {
+    const res = analyzeShellCommand({ command: "echo 'output: $(whoami)'" });
+    expect(res.ok).toBe(true);
+    expect(res.segments[0]?.argv[0]).toBe("echo");
+  });
 });
 
 describe("exec approvals shell allowlist (chained commands)", () => {
@@ -178,6 +208,18 @@ describe("exec approvals shell allowlist (chained commands)", () => {
     const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/echo" }];
     const result = evaluateShellAllowlist({
       command: '/usr/bin/echo "foo && bar"',
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
+  });
+
+  it("respects escaped quotes when splitting chains", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/echo" }];
+    const result = evaluateShellAllowlist({
+      command: '/usr/bin/echo "foo\\" && bar"',
       allowlist,
       safeBins: new Set(),
       cwd: "/tmp",

@@ -19,7 +19,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Any tips for Raspberry Pi installs?](#any-tips-for-raspberry-pi-installs)
   - [It is stuck on "wake up my friend" / onboarding will not hatch. What now?](#it-is-stuck-on-wake-up-my-friend-onboarding-will-not-hatch-what-now)
   - [Can I migrate my setup to a new machine (Mac mini) without redoing onboarding?](#can-i-migrate-my-setup-to-a-new-machine-mac-mini-without-redoing-onboarding)
-  - [Where do I see what’s new in the latest version?](#where-do-i-see-whats-new-in-the-latest-version)
+  - [Where do I see what is new in the latest version?](#where-do-i-see-what-is-new-in-the-latest-version)
   - [I can't access docs.openclaw.ai (SSL error). What now?](#i-cant-access-docsopenclawai-ssl-error-what-now)
   - [What’s the difference between stable and beta?](#whats-the-difference-between-stable-and-beta)
 - [How do I install the beta version, and what’s the difference between beta and dev?](#how-do-i-install-the-beta-version-and-whats-the-difference-between-beta-and-dev)
@@ -429,7 +429,7 @@ Related: [Migrating](/install/migrating), [Where things live on disk](/help/faq#
 [Agent workspace](/concepts/agent-workspace), [Doctor](/gateway/doctor),
 [Remote mode](/gateway/remote).
 
-### Where do I see whats new in the latest version
+### Where do I see what is new in the latest version
 
 Check the GitHub changelog:  
 https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md
@@ -1155,6 +1155,19 @@ You still need to click the extension button on the tab you want to control (it 
 ### Is there a dedicated sandboxing doc
 
 Yes. See [Sandboxing](/gateway/sandboxing). For Docker-specific setup (full gateway in Docker or sandbox images), see [Docker](/install/docker).
+
+### Docker feels limited How do I enable full features
+
+The default image is security-first and runs as the `node` user, so it does not
+include system packages, Homebrew, or bundled browsers. For a fuller setup:
+
+- Persist `/home/node` with `OPENCLAW_HOME_VOLUME` so caches survive.
+- Bake system deps into the image with `OPENCLAW_DOCKER_APT_PACKAGES`.
+- Install Playwright browsers via the bundled CLI:
+  `node /app/node_modules/playwright-core/cli.js install chromium`
+- Set `PLAYWRIGHT_BROWSERS_PATH` and ensure the path is persisted.
+
+Docs: [Docker](/install/docker), [Browser](/tools/browser).
 
 **Can I keep DMs personal but make groups public sandboxed with one agent**
 
