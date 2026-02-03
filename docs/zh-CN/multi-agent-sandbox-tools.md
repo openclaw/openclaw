@@ -1,10 +1,10 @@
 ---
 read_when: You want per-agent sandboxing or per-agent tool allow/deny policies in a multi-agent gateway.
 status: active
-summary: 每个智能体的沙箱与工具限制、优先级及示例
+summary: 按智能体的沙箱 + 工具限制、优先级和示例
 title: 多智能体沙箱与工具
 x-i18n:
-  generated_at: "2026-02-01T21:17:27Z"
+  generated_at: "2026-02-03T07:50:39Z"
   model: claude-opus-4-5
   provider: pi
   source_hash: f602cb6192b84b404cd7b6336562888a239d0fe79514edd51bd73c5b090131ef
@@ -16,36 +16,36 @@ x-i18n:
 
 ## 概述
 
-在多智能体设置中，每个智能体现在可以拥有独立的：
+多智能体设置中的每个智能体现在可以拥有自己的：
 
 - **沙箱配置**（`agents.list[].sandbox` 覆盖 `agents.defaults.sandbox`）
 - **工具限制**（`tools.allow` / `tools.deny`，以及 `agents.list[].tools`）
 
-这允许你运行具有不同安全配置的多个智能体：
+这允许你运行具有不同安全配置文件的多个智能体：
 
-- 拥有完全访问权限的个人助手
-- 工具受限的家庭/工作智能体
+- 具有完全访问权限的个人助手
+- 具有受限工具的家庭/工作智能体
 - 在沙箱中运行的面向公众的智能体
 
-`setupCommand` 属于 `sandbox.docker`（全局或每个智能体），在容器创建时运行一次。
+`setupCommand` 属于 `sandbox.docker` 下（全局或按智能体），在容器创建时运行一次。
 
-认证是按智能体隔离的：每个智能体从其自己的 `agentDir` 认证存储中读取：
+认证是按智能体的：每个智能体从其自己的 `agentDir` 认证存储读取：
 
 ```
 ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
-凭据**不会**在智能体之间共享。切勿在智能体之间复用 `agentDir`。
-如果你想共享凭据，请将 `auth-profiles.json` 复制到其他智能体的 `agentDir` 中。
+凭证**不会**在智能体之间共享。切勿在智能体之间重用 `agentDir`。
+如果你想共享凭证，请将 `auth-profiles.json` 复制到其他智能体的 `agentDir` 中。
 
-有关沙箱在运行时的行为，请参阅[沙箱](/gateway/sandboxing)。
-有关调试"为什么被阻止了？"，请参阅[沙箱 vs 工具策略 vs 提权](/gateway/sandbox-vs-tool-policy-vs-elevated)和 `openclaw sandbox explain`。
+有关沙箱隔离在运行时的行为，请参见[沙箱隔离](/gateway/sandboxing)。
+有关调试"为什么这被阻止了？"，请参见[沙箱 vs 工具策略 vs 提权](/gateway/sandbox-vs-tool-policy-vs-elevated) 和 `openclaw sandbox explain`。
 
 ---
 
 ## 配置示例
 
-### 示例 1：个人助手 + 受限家庭智能体
+### 示例 1：个人 + 受限家庭智能体
 
 ```json
 {
@@ -91,12 +91,12 @@ x-i18n:
 
 **结果：**
 
-- `main` 智能体：在宿主机上运行，拥有完全工具访问权限
+- `main` 智能体：在主机上运行，完全工具访问
 - `family` 智能体：在 Docker 中运行（每个智能体一个容器），仅有 `read` 工具
 
 ---
 
-### 示例 2：使用共享沙箱的工作智能体
+### 示例 2：具有共享沙箱的工作智能体
 
 ```json
 {
@@ -127,7 +127,7 @@ x-i18n:
 
 ---
 
-### 示例 2b：全局编程配置 + 仅消息传递的智能体
+### 示例 2b：全局编码配置文件 + 仅消息智能体
 
 ```json
 {
@@ -145,8 +145,8 @@ x-i18n:
 
 **结果：**
 
-- 默认智能体获得编程工具
-- `support` 智能体仅限消息传递（+ Slack 工具）
+- 默认智能体获得编码工具
+- `support` 智能体仅用于消息（+ Slack 工具）
 
 ---
 
@@ -157,7 +157,7 @@ x-i18n:
   "agents": {
     "defaults": {
       "sandbox": {
-        "mode": "non-main", // 全局默认值
+        "mode": "non-main", // 全局默认
         "scope": "session"
       }
     },
@@ -190,11 +190,11 @@ x-i18n:
 
 ## 配置优先级
 
-当全局配置（`agents.defaults.*`）和智能体特定配置（`agents.list[].*`）同时存在时：
+当全局（`agents.defaults.*`）和智能体特定（`agents.list[].*`）配置同时存在时：
 
 ### 沙箱配置
 
-智能体特定设置覆盖全局设置：
+智能体特定设置覆盖全局：
 
 ```
 agents.list[].sandbox.mode > agents.defaults.sandbox.mode
@@ -208,14 +208,14 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 **注意事项：**
 
-- `agents.list[].sandbox.{docker,browser,prune}.*` 会覆盖该智能体的 `agents.defaults.sandbox.{docker,browser,prune}.*`（当沙箱范围解析为 `"shared"` 时忽略）。
+- `agents.list[].sandbox.{docker,browser,prune}.*` 为该智能体覆盖 `agents.defaults.sandbox.{docker,browser,prune}.*`（当沙箱 scope 解析为 `"shared"` 时忽略）。
 
 ### 工具限制
 
-过滤顺序为：
+过滤顺序是：
 
-1. **工具配置**（`tools.profile` 或 `agents.list[].tools.profile`）
-2. **提供商工具配置**（`tools.byProvider[provider].profile` 或 `agents.list[].tools.byProvider[provider].profile`）
+1. **工具配置文件**（`tools.profile` 或 `agents.list[].tools.profile`）
+2. **提供商工具配置文件**（`tools.byProvider[provider].profile` 或 `agents.list[].tools.byProvider[provider].profile`）
 3. **全局工具策略**（`tools.allow` / `tools.deny`）
 4. **提供商工具策略**（`tools.byProvider[provider].allow/deny`）
 5. **智能体特定工具策略**（`agents.list[].tools.allow/deny`）
@@ -223,14 +223,14 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 7. **沙箱工具策略**（`tools.sandbox.tools` 或 `agents.list[].tools.sandbox.tools`）
 8. **子智能体工具策略**（`tools.subagents.tools`，如适用）
 
-每一层可以进一步限制工具，但不能恢复在前面层级中已被拒绝的工具。
-如果设置了 `agents.list[].tools.sandbox.tools`，它会替换该智能体的 `tools.sandbox.tools`。
-如果设置了 `agents.list[].tools.profile`，它会覆盖该智能体的 `tools.profile`。
+每个级别可以进一步限制工具，但不能恢复之前级别拒绝的工具。
+如果设置了 `agents.list[].tools.sandbox.tools`，它将替换该智能体的 `tools.sandbox.tools`。
+如果设置了 `agents.list[].tools.profile`，它将覆盖该智能体的 `tools.profile`。
 提供商工具键接受 `provider`（例如 `google-antigravity`）或 `provider/model`（例如 `openai/gpt-5.2`）。
 
 ### 工具组（简写）
 
-工具策略（全局、智能体、沙箱）支持 `group:*` 条目，它们会展开为多个具体工具：
+工具策略（全局、智能体、沙箱）支持 `group:*` 条目，可扩展为多个具体工具：
 
 - `group:runtime`：`exec`、`bash`、`process`
 - `group:fs`：`read`、`write`、`edit`、`apply_patch`
@@ -244,14 +244,14 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ### 提权模式
 
-`tools.elevated` 是全局基线（基于发送者的允许列表）。`agents.list[].tools.elevated` 可以进一步限制特定智能体的提权（两者都必须允许）。
+`tools.elevated` 是全局基线（基于发送者的允许列表）。`agents.list[].tools.elevated` 可以为特定智能体进一步限制提权（两者都必须允许）。
 
 缓解模式：
 
-- 对不受信任的智能体拒绝 `exec`（`agents.list[].tools.deny: ["exec"]`）
+- 为不受信任的智能体拒绝 `exec`（`agents.list[].tools.deny: ["exec"]`）
 - 避免将发送者加入允许列表后路由到受限智能体
-- 如果你只需要沙箱隔离执行，可全局禁用提权（`tools.elevated.enabled: false`）
-- 对敏感配置按智能体禁用提权（`agents.list[].tools.elevated.enabled: false`）
+- 如果你只想要沙箱隔离执行，全局禁用提权（`tools.elevated.enabled: false`）
+- 为敏感配置文件按智能体禁用提权（`agents.list[].tools.elevated.enabled: false`）
 
 ---
 
@@ -280,7 +280,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 }
 ```
 
-**之后（具有不同配置的多智能体）：**
+**之后（具有不同配置文件的多智能体）：**
 
 ```json
 {
@@ -297,7 +297,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 }
 ```
 
-旧版 `agent.*` 配置会由 `openclaw doctor` 迁移；今后请优先使用 `agents.defaults` + `agents.list`。
+旧版 `agent.*` 配置由 `openclaw doctor` 迁移；今后请优先使用 `agents.defaults` + `agents.list`。
 
 ---
 
@@ -340,8 +340,10 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ## 常见陷阱："non-main"
 
-`agents.defaults.sandbox.mode: "non-main"` 基于 `session.mainKey`（默认为 `"main"`），
-而不是智能体 ID。群组/渠道会话总是获得自己的键，因此它们被视为非主会话并将被沙箱隔离。如果你希望某个智能体永不沙箱隔离，请设置 `agents.list[].sandbox.mode: "off"`。
+`agents.defaults.sandbox.mode: "non-main"` 基于 `session.mainKey`（默认 `"main"`），
+而不是智能体 id。群组/渠道会话始终获得自己的键，因此它们
+被视为非 main 并将被沙箱隔离。如果你希望智能体永不
+沙箱隔离，请设置 `agents.list[].sandbox.mode: "off"`。
 
 ---
 
@@ -349,7 +351,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 配置多智能体沙箱和工具后：
 
-1. **检查智能体路由解析：**
+1. **检查智能体解析：**
 
    ```exec
    openclaw agents list --bindings
@@ -362,7 +364,7 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
    ```
 
 3. **测试工具限制：**
-   - 发送一条需要受限工具的消息
+   - 发送需要受限工具的消息
    - 验证智能体无法使用被拒绝的工具
 
 4. **监控日志：**
@@ -374,21 +376,21 @@ agents.list[].sandbox.prune.* > agents.defaults.sandbox.prune.*
 
 ## 故障排除
 
-### 尽管设置了 `mode: "all"`，智能体未被沙箱隔离
+### 尽管设置了 `mode: "all"` 但智能体未被沙箱隔离
 
-- 检查是否有全局 `agents.defaults.sandbox.mode` 覆盖了它
-- 智能体特定配置优先级更高，因此请设置 `agents.list[].sandbox.mode: "all"`
+- 检查是否有全局 `agents.defaults.sandbox.mode` 覆盖它
+- 智能体特定配置优先，因此设置 `agents.list[].sandbox.mode: "all"`
 
-### 尽管设置了拒绝列表，工具仍然可用
+### 尽管有拒绝列表但工具仍然可用
 
 - 检查工具过滤顺序：全局 → 智能体 → 沙箱 → 子智能体
-- 每一层只能进一步限制，不能恢复已拒绝的工具
+- 每个级别只能进一步限制，不能恢复
 - 通过日志验证：`[tools] filtering tools for agent:${agentId}`
 
 ### 容器未按智能体隔离
 
 - 在智能体特定沙箱配置中设置 `scope: "agent"`
-- 默认值为 `"session"`，即每个会话创建一个容器
+- 默认是 `"session"`，每个会话创建一个容器
 
 ---
 
