@@ -18,6 +18,9 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { createTtsTool } from "./tools/tts-tool.js";
+import { createGraphitiSearchTool } from "./tools/graphiti-search-tool.js";
+import { createLightRAGQueryTool } from "./tools/lightrag-query-tool.js";
+import { createMemoryServiceQueryTool } from "./tools/memory-service-query-tool.js";
 
 export function createOpenClawTools(options?: {
   sandboxBrowserBridgeUrl?: string;
@@ -69,6 +72,18 @@ export function createOpenClawTools(options?: {
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
+  });
+  const graphitiSearchTool = createGraphitiSearchTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+  });
+  const lightragQueryTool = createLightRAGQueryTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
+  });
+  const memoryServiceQueryTool = createMemoryServiceQueryTool({
+    config: options?.config,
+    agentSessionKey: options?.agentSessionKey,
   });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
@@ -137,6 +152,9 @@ export function createOpenClawTools(options?: {
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
+    ...(graphitiSearchTool ? [graphitiSearchTool] : []),
+    ...(lightragQueryTool ? [lightragQueryTool] : []),
+    ...(memoryServiceQueryTool ? [memoryServiceQueryTool] : []),
   ];
 
   const pluginTools = resolvePluginTools({
