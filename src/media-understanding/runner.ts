@@ -391,6 +391,44 @@ async function resolveKeyEntry(params: {
   return null;
 }
 
+function resolveImageModelFromAgentDefaults(cfg: OpenClawConfig): MediaUnderstandingModelConfig[] {
+  const imageModel = cfg.agents?.defaults?.imageModel as
+    | { primary?: string; fallbacks?: string[] }
+    | string
+    | undefined;
+  if (!imageModel) {
+    return [];
+  }
+  const refs: string[] = [];
+  if (typeof imageModel === "string") {
+    if (imageModel.trim()) {
+      refs.push(imageModel.trim());
+    }
+  } else {
+    if (imageModel.primary?.trim()) {
+      refs.push(imageModel.primary.trim());
+    }
+    for (const fb of imageModel.fallbacks ?? []) {
+      if (fb?.trim()) {
+        refs.push(fb.trim());
+      }
+    }
+  }
+  const entries: MediaUnderstandingModelConfig[] = [];
+  for (const ref of refs) {
+    const slashIdx = ref.indexOf("/");
+    if (slashIdx <= 0 || slashIdx >= ref.length - 1) {
+      continue;
+    }
+    entries.push({
+      type: "provider",
+      provider: ref.slice(0, slashIdx),
+      model: ref.slice(slashIdx + 1),
+    });
+  }
+  return entries;
+}
+
 async function resolveAutoEntries(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -406,6 +444,12 @@ async function resolveAutoEntries(params: {
     const localAudio = await resolveLocalAudioEntry();
     if (localAudio) {
       return [localAudio];
+    }
+  }
+  if (params.capability === "image") {
+    const imageModelEntries = resolveImageModelFromAgentDefaults(params.cfg);
+    if (imageModelEntries.length > 0) {
+      return imageModelEntries;
     }
   }
   const gemini = await resolveGeminiCliEntry(params.capability);
