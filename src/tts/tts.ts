@@ -1213,6 +1213,7 @@ async function speechifyTTS(params: {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
+        "x-caller": "openclaw",
       },
       body: JSON.stringify(body),
       signal: controller.signal,
