@@ -94,7 +94,7 @@ export async function loadExecApprovals(
       state.lastError = "Select a node before loading exec approvals.";
       return;
     }
-    const res = await state.client.request(rpc.method, rpc.params);
+    const res = await state.client.request<ExecApprovalsSnapshot>(rpc.method, rpc.params);
     applyExecApprovalsSnapshot(state, res);
   } catch (err) {
     state.lastError = String(err);
