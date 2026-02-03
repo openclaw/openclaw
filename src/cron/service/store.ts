@@ -1,20 +1,37 @@
+import fs from "node:fs";
 import type { CronJob } from "../types.js";
 import type { CronServiceState } from "./state.js";
 import { migrateLegacyCronPayload } from "../payload-migration.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { recomputeNextRuns } from "./jobs.js";
 import { inferLegacyName, normalizeOptionalText } from "./normalize.js";
 
-const storeCache = new Map<string, { version: 1; jobs: CronJob[] }>();
+async function getFileMtimeMs(path: string): Promise<number | null> {
+  try {
+    const stats = await fs.promises.stat(path);
+    return stats.mtimeMs;
+  } catch {
+    return null;
+  }
+}
 
 export async function ensureLoaded(state: CronServiceState) {
-  if (state.store) {
+  const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
+
+  // Check if we need to reload:
+  // - No store loaded yet
+  // - File modification time has changed
+  // - File was modified after we last loaded (external edit)
+  const needsReload =
+    !state.store ||
+    (fileMtimeMs !== null &&
+      state.storeFileMtimeMs !== null &&
+      fileMtimeMs > state.storeFileMtimeMs);
+
+  if (!needsReload) {
     return;
   }
-  const cached = storeCache.get(state.deps.storePath);
-  if (cached) {
-    state.store = cached;
-    return;
-  }
+
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   let mutated = false;
@@ -44,7 +61,12 @@ export async function ensureLoaded(state: CronServiceState) {
     }
   }
   state.store = { version: 1, jobs: jobs as unknown as CronJob[] };
-  storeCache.set(state.deps.storePath, state.store);
+  state.storeLoadedAtMs = state.deps.nowMs();
+  state.storeFileMtimeMs = fileMtimeMs;
+
+  // Recompute next runs after loading to ensure accuracy
+  recomputeNextRuns(state);
+
   if (mutated) {
     await persist(state);
   }
@@ -69,4 +91,6 @@ export async function persist(state: CronServiceState) {
     return;
   }
   await saveCronStore(state.deps.storePath, state.store);
+  // Update file mtime after save to prevent immediate reload
+  state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }
