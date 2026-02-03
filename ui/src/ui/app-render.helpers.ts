@@ -289,6 +289,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
   // ── Subagent ─────────────────────────────────────
   if (key.includes(":subagent:")) {
     return { prefix: "Subagent:", fallbackName: "Subagent:" };
+ ce845ecb1 (ui: show subagent labels in chat session dropdown)
   }
 
   // ── Cron job ─────────────────────────────────────
