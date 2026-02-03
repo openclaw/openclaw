@@ -106,7 +106,13 @@ class MemoryDB {
     if (this.hybridConfig.enabled) {
       try {
         const indices = await this.table.listIndices();
-        const hasFtsIndex = indices.some((idx) => idx.name === "text_idx");
+        // Check if FTS index exists by looking for index on the "text" column
+        // LanceDB names indices as "{column}_idx" but we check columns to be safe
+        const hasFtsIndex = indices.some(
+          (idx) =>
+            idx.name === "text_idx" ||
+            (idx.columns && idx.columns.includes("text") && idx.indexType === "FTS"),
+        );
         if (!hasFtsIndex) {
           await this.table.createIndex("text", { config: lancedb.Index.fts() });
         }
@@ -155,8 +161,7 @@ class MemoryDB {
           results = await this.linearCombinationSearch(vector, queryText, limit);
         } else if (this.reranker) {
           // RRF reranking via LanceDB built-in
-          results = await this.table!
-            .query()
+          results = await this.table!.query()
             .nearestTo(vector)
             .fullTextSearch(queryText, { columns: "text" })
             .rerank(this.reranker)
@@ -229,8 +234,12 @@ class MemoryDB {
 
     // Run both searches in parallel
     const [vectorResults, ftsResults] = await Promise.all([
-      this.table!.vectorSearch(vector).limit(limit * 2).toArray(),
-      this.table!.search(queryText, "text").limit(limit * 2).toArray(),
+      this.table!.vectorSearch(vector)
+        .limit(limit * 2)
+        .toArray(),
+      this.table!.search(queryText, "text")
+        .limit(limit * 2)
+        .toArray(),
     ]);
 
     // Build score maps
@@ -265,11 +274,11 @@ class MemoryDB {
 
     // Compute combined scores and sort
     const combined = [...scoreMap.entries()]
-      .map(([id, { row, vectorScore, ftsScore }]) => ({
+      .map(([_id, { row, vectorScore, ftsScore }]) => ({
         ...row,
         _combinedScore: vectorWeight * vectorScore + textWeight * ftsScore,
       }))
-      .sort((a, b) => (b._combinedScore as number) - (a._combinedScore as number))
+      .toSorted((a, b) => b._combinedScore - a._combinedScore)
       .slice(0, limit);
 
     return combined;

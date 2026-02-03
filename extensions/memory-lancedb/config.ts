@@ -93,6 +93,17 @@ function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
   return model;
 }
 
+/**
+ * Clamps a number to the range [0, 1] and handles edge cases (NaN, Infinity).
+ * Returns the default value if input is invalid.
+ */
+function clampWeight(value: unknown, defaultValue: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return defaultValue;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
 function parseHybridConfig(hybrid: unknown): HybridConfig {
   if (!hybrid || typeof hybrid !== "object" || Array.isArray(hybrid)) {
     return { enabled: true, reranker: "rrf", vectorWeight: 0.7, textWeight: 0.3 };
@@ -105,8 +116,8 @@ function parseHybridConfig(hybrid: unknown): HybridConfig {
   return {
     enabled: h.enabled !== false,
     reranker,
-    vectorWeight: typeof h.vectorWeight === "number" ? h.vectorWeight : 0.7,
-    textWeight: typeof h.textWeight === "number" ? h.textWeight : 0.3,
+    vectorWeight: clampWeight(h.vectorWeight, 0.7),
+    textWeight: clampWeight(h.textWeight, 0.3),
   };
 }
 
