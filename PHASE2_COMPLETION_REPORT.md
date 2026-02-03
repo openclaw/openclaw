@@ -24,6 +24,8 @@ Phase 2 of Operation: FIREWALL THE AGENTS is complete. The internal config API h
 | `9f8d3e0` | Phase 1.8: Add completion report for human checkpoint |
 | `4975b0a` | Phase 2: Add internal config API with Tailscale authentication |
 | `e572e8b` | Phase 2.6: Add secure config loader with API/disk fallback |
+| `209e301` | Phase 2.7: Add completion report for human verification |
+| `ad1cf80` | Phase 2.6b: Wire secure config loader into workspace template loading |
 
 ---
 
@@ -102,6 +104,44 @@ WRITEGATE_CONSENT_DENIED  // File write blocked
 - On first load, fetches manifest from API to establish baseline
 - Every subsequent load verified against known hashes
 - Hash mismatch triggers security event and throws error
+
+---
+
+## Phase 2.6b: Bootstrap Chain Integration (COMPLETE)
+
+### Implementation: `src/agents/workspace.ts`
+
+The `loadTemplate()` function now uses secure config loader:
+
+```typescript
+async function loadTemplate(name: string): Promise<string> {
+  // Phase 2: Try secure config loader first (internal API or behavioral core)
+  const loader = await getSecureConfigLoader();
+  if (loader) {
+    try {
+      const config = await loader.loadConfigFile(name);
+      if (config) {
+        return stripFrontMatter(config.content);
+      }
+    } catch (err) {
+      // If it's an integrity check failure, don't fall back - security event
+      if (err instanceof Error && err.message.includes("integrity check failed")) {
+        throw err;
+      }
+      // Otherwise, fall back to disk
+    }
+  }
+  // Fallback: Load from docs/reference/templates (original behavior)
+  ...
+}
+```
+
+**Loading chain:**
+1. `ensureAgentWorkspace()` calls `loadTemplate()`
+2. `loadTemplate()` tries secure config loader first
+3. If API available: fetches from internal config API
+4. If API unavailable: reads from `internal/behavioral-core/`
+5. If both fail: falls back to `docs/reference/templates/`
 
 ---
 
