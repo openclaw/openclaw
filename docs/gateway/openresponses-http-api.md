@@ -281,7 +281,7 @@ Defaults when omitted:
 - `images.maxRedirects`: 3
 - `images.timeoutMs`: 10s
 - HEIC/HEIF `input_image` sources are accepted and normalized to JPEG before provider delivery.
-- `toolResultMaxDataBytes`: unset (tool result data stripped)
+- `toolResultMaxDataBytes`: unset or `0` (tool result data stripped)
 
 Security note:
 
