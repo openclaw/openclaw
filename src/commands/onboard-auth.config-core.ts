@@ -469,6 +469,8 @@ export function applyOllamaProviderConfig(
 ): OpenClawConfig {
   const providers = { ...cfg.models?.providers };
   const existingProvider = providers.ollama;
+  // Preserve existing models if configured; otherwise use empty array for dynamic discovery
+  const existingModels = Array.isArray(existingProvider?.models) ? existingProvider.models : [];
   const { apiKey: existingApiKey, ...existingProviderRest } = (existingProvider ?? {}) as Record<
     string,
     unknown
@@ -483,7 +485,7 @@ export function applyOllamaProviderConfig(
     api: "openai-completions",
     apiKey: normalizedApiKey,
     // Models are discovered dynamically via Ollama's /api/tags endpoint
-    models: [],
+    models: existingModels,
   };
 
   return {

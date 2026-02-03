@@ -46,8 +46,9 @@ export async function applyNonInteractiveAuthChoice(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  agentDir?: string;
 }): Promise<OpenClawConfig | null> {
-  const { authChoice, opts, runtime, baseConfig } = params;
+  const { authChoice, opts, runtime, baseConfig, agentDir } = params;
   let nextConfig = params.nextConfig;
 
   if (authChoice === "claude-cli" || authChoice === "codex-cli") {
@@ -441,7 +442,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     }
 
     // Store placeholder API key to enable provider discovery
-    await setOllamaApiKey(OLLAMA_DEFAULT_API_KEY);
+    await setOllamaApiKey(OLLAMA_DEFAULT_API_KEY, agentDir);
 
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "ollama:default",
