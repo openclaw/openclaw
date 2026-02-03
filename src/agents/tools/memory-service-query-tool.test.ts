@@ -97,7 +97,8 @@ describe("memory_service_query tool", () => {
     expect(tool).not.toBeNull();
 
     const result = await tool!.execute("1", { query: "test query" });
-    const parsed = JSON.parse(result);
+    const text = result.content[0]?.text ?? "";
+    const parsed = JSON.parse(text);
 
     expect(parsed.disabled).toBe(true);
     expect(parsed.error).toBe("Memory Service unavailable");
@@ -134,7 +135,8 @@ describe("memory_service_query tool", () => {
     expect(tool).not.toBeNull();
 
     const result = await tool!.execute("1", { query: "test query" });
-    const parsed = JSON.parse(result);
+    const text = result.content[0]?.text ?? "";
+    const parsed = JSON.parse(text);
 
     expect(parsed.memories).toHaveLength(2);
     expect(parsed.total).toBe(2);
@@ -168,7 +170,8 @@ describe("memory_service_query tool", () => {
     expect(tool).not.toBeNull();
 
     const result = await tool!.execute("1", { query: "test query" });
-    const parsed = JSON.parse(result);
+    const text = result.content[0]?.text ?? "";
+    const parsed = JSON.parse(text);
 
     expect(parsed.disabled).toBe(true);
     expect(parsed.error).toBe("Database error");

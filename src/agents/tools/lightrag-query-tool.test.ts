@@ -97,7 +97,8 @@ describe("lightrag_query tool", () => {
     expect(tool).not.toBeNull();
 
     const result = await tool!.execute("1", { query: "test query" });
-    const parsed = JSON.parse(result);
+    const text = result.content[0]?.text ?? "";
+    const parsed = JSON.parse(text);
 
     expect(parsed.disabled).toBe(true);
     expect(parsed.error).toBe("LightRAG service unavailable");
@@ -134,7 +135,8 @@ describe("lightrag_query tool", () => {
     expect(tool).not.toBeNull();
 
     const result = await tool!.execute("1", { query: "test query" });
-    const parsed = JSON.parse(result);
+    const text = result.content[0]?.text ?? "";
+    const parsed = JSON.parse(text);
 
     expect(parsed.answer).toBe("Test answer");
     expect(parsed.sources).toHaveLength(2);
@@ -172,7 +174,8 @@ describe("lightrag_query tool", () => {
     expect(tool).not.toBeNull();
 
     const result = await tool!.execute("1", { query: "test query" });
-    const parsed = JSON.parse(result);
+    const text = result.content[0]?.text ?? "";
+    const parsed = JSON.parse(text);
 
     expect(parsed.disabled).toBe(true);
     expect(parsed.error).toBe("Query failed");

@@ -97,7 +97,8 @@ describe("graphiti_search tool", () => {
     expect(tool).not.toBeNull();
 
     const result = await tool!.execute("1", { query: "test query" });
-    const parsed = JSON.parse(result);
+    const text = result.content[0]?.text ?? "";
+    const parsed = JSON.parse(text);
 
     expect(parsed.disabled).toBe(true);
     expect(parsed.error).toBe("Graphiti service unavailable");
@@ -133,7 +134,8 @@ describe("graphiti_search tool", () => {
     expect(tool).not.toBeNull();
 
     const result = await tool!.execute("1", { query: "test query" });
-    const parsed = JSON.parse(result);
+    const text = result.content[0]?.text ?? "";
+    const parsed = JSON.parse(text);
 
     expect(parsed.entities).toHaveLength(1);
     expect(parsed.relationships).toHaveLength(1);
@@ -170,7 +172,8 @@ describe("graphiti_search tool", () => {
     expect(tool).not.toBeNull();
 
     const result = await tool!.execute("1", { query: "test query" });
-    const parsed = JSON.parse(result);
+    const text = result.content[0]?.text ?? "";
+    const parsed = JSON.parse(text);
 
     expect(parsed.disabled).toBe(true);
     expect(parsed.error).toBe("Network error");
