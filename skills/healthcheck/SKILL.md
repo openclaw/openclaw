@@ -43,19 +43,19 @@ Determine (in order):
    Note: these are not blocking items, but are highly recommended, especially if OpenClaw can access sensitive data.
 10) Usage mode for a personal assistant with full access (local workstation vs headless/remote vs other).
 
-First ask once for permission to run read-only checks. If granted, run them by default and only ask questions for items you cannot infer or verify. Do not ask for information already visible in runtime or command output.
+First ask once for permission to run read-only checks. If granted, run them by default and only ask questions for items you cannot infer or verify. Do not ask for information already visible in runtime or command output. Keep the permission ask as a single sentence, and list follow-up info needed as an unordered list (not numbered) unless you are presenting selectable choices.
 
-If you must ask, use non-technical prompts (numbered):
-1) “Are you using a Mac, Windows PC, or Linux?”
-2) “Are you logged in directly on the machine, or connecting from another computer?”
-3) “Is this machine reachable from the public internet, or only on your home/network?”
-4) “Do you have backups enabled (e.g., Time Machine), and are they current?”
-5) “Is disk encryption turned on (FileVault/BitLocker/LUKS)?”
-6) “Are automatic security updates enabled?”
-7) “How do you use this machine?”
-   1) Personal/workstation (mostly local dev)
-   2) Headless server (always on, accessed remotely)
-   3) Something else?
+If you must ask, use non-technical prompts:
+- “Are you using a Mac, Windows PC, or Linux?”
+- “Are you logged in directly on the machine, or connecting from another computer?”
+- “Is this machine reachable from the public internet, or only on your home/network?”
+- “Do you have backups enabled (e.g., Time Machine), and are they current?”
+- “Is disk encryption turned on (FileVault/BitLocker/LUKS)?”
+- “Are automatic security updates enabled?”
+- “How do you use this machine?”
+  1) Personal/workstation (mostly local dev)
+  2) Headless server (always on, accessed remotely)
+  3) Something else?
 
 Only ask for the risk profile after system context is known.
 
@@ -71,10 +71,9 @@ If the user grants read-only permission, run the OS-appropriate checks by defaul
 
 ### 2) Run OpenClaw security audits (read-only)
 
-If the user grants permission, run `openclaw security audit --deep` by default. If they decline or ask for alternatives, offer these options (numbered):
-1) `openclaw security audit --deep` (best-effort live gateway probe; default)
-2) `openclaw security audit` (faster, non-probing)
-3) `openclaw security audit --json` (structured output)
+As part of the default read-only checks, run `openclaw security audit --deep` without a separate permission prompt. Only offer alternatives if the user requests them:
+1) `openclaw security audit` (faster, non-probing)
+2) `openclaw security audit --json` (structured output)
 
 Offer to apply OpenClaw safe defaults (numbered):
 1) `openclaw security audit --fix`
