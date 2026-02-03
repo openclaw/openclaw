@@ -37,9 +37,9 @@ function isValidMedia(candidate: string, opts?: { allowSpaces?: boolean }) {
   // macOS: /var/folders/*/T/*, /private/var/folders/*/T/*
   // Linux: /tmp/*
   if (
-    /^\/tmp\//.test(candidate) ||
-    /^\/var\/folders\/[^/]+\/[^/]+\/T\//.test(candidate) ||
-    /^\/private\/var\/folders\/[^/]+\/[^/]+\/T\//.test(candidate)
+    candidate.startsWith("/tmp/") ||
+    (candidate.startsWith("/var/folders/") && candidate.includes("/T/")) ||
+    (candidate.startsWith("/private/var/folders/") && candidate.includes("/T/"))
   ) {
     return !candidate.includes("..");
   }
