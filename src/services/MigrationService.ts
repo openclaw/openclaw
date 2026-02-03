@@ -18,8 +18,9 @@ export class MigrationService {
   static getEnv(key: string, env: Env = process.env): string | undefined {
     // 1. Primary: Check the new OPENCLAW_* variable
     const newKey = `OPENCLAW_${key}`;
+
     const value = env[newKey];
-    if (value) {
+    if (value !== undefined) {
       return value;
     }
 
@@ -52,9 +53,9 @@ export class MigrationService {
     // 3. Fallback: Check legacy keys (CLAWDBOT_*, MOLTBOT_*)
     const legacyKey = `CLAWDBOT_${key}`;
     const ancientKey = `MOLTBOT_${key}`;
-    const fallback = env[legacyKey] || env[ancientKey];
+    const fallback = env[legacyKey] ?? env[ancientKey];
 
-    if (fallback) {
+    if (fallback !== undefined) {
       logWarn(
         `[SECURITY WARNING] Legacy environment variable detected: ${legacyKey}. ` +
           `Please migrate to ${newKey}. Legacy support will be removed in v2.1.0.`,

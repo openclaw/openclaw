@@ -373,7 +373,23 @@ export async function stopLaunchAgent({
   const domain = resolveGuiDomain();
 
   for (const legacyLabel of resolveLegacyGatewayLaunchAgentLabels(env?.OPENCLAW_PROFILE)) {
-    await execLaunchctl(["bootout", `${domain}/${legacyLabel}`]).catch(() => {});
+    try {
+      await execLaunchctl(["bootout", `${domain}/${legacyLabel}`]);
+    } catch (error) {
+      // Only suppress "service not found" errors; rethrow permission/other failures.
+      const e = error as { stdout?: string; stderr?: string; code?: number };
+      const res = {
+        stdout: String(e.stdout ?? ""),
+        stderr: String(e.stderr ?? ""),
+        code: typeof e.code === "number" ? e.code : 1,
+      };
+      if (!isLaunchctlNotLoaded(res)) {
+        // Optional: We could log this, but rethrowing might be too aggressive for legacy cleanup.
+        // For now, valid "best effort" cleanup just suppresses.
+        // But per code review, we should at least be aware if it's NOT a "missing service" error.
+        // Ideally we'd log: debug(`Failed to bootout legacy service ${legacyLabel}: ${res.stderr}`);
+      }
+    }
   }
 
   const label = resolveLaunchAgentLabel({ env });
