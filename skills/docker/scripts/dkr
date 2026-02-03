@@ -1,0 +1,223 @@
+#!/bin/bash
+# Docker CLI helper - simplified interface for common operations
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+    cat << 'EOF'
+Docker helper CLI
+
+USAGE:
+    dkr <command> [options]
+
+COMMANDS:
+    ps              List running containers
+    psa             List all containers
+    logs <name>     Show container logs (-f to follow)
+    shell <name>    Open shell in container
+    stop <name>     Stop container
+    rm <name>       Remove container
+    rma             Remove all stopped containers
+    
+    images          List images
+    pull <image>    Pull image
+    rmi <image>     Remove image
+    
+    up              Docker compose up -d
+    down            Docker compose down
+    restart         Docker compose restart
+    
+    stats           Show resource usage
+    clean           Clean up unused resources
+    
+    help            Show this help
+
+EXAMPLES:
+    dkr ps                      # List running containers
+    dkr logs -f myapp           # Follow logs for myapp
+    dkr shell myapp             # Open bash in myapp
+    dkr up                      # Start compose services
+    dkr clean                   # Prune unused resources
+EOF
+}
+
+cmd_ps() {
+    docker ps --format "table {{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+}
+
+cmd_psa() {
+    docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}"
+}
+
+cmd_logs() {
+    local follow=""
+    local container=""
+    local tail="100"
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -f|--follow) follow="-f"; shift ;;
+            -n|--tail) tail="$2"; shift 2 ;;
+            *) container="$1"; shift ;;
+        esac
+    done
+    
+    if [[ -z "$container" ]]; then
+        echo "Error: container name required"
+        echo "Usage: dkr logs [-f] <container>"
+        exit 1
+    fi
+    
+    docker logs $follow --tail "$tail" "$container"
+}
+
+cmd_shell() {
+    local container="$1"
+    
+    if [[ -z "$container" ]]; then
+        echo "Error: container name required"
+        echo "Usage: dkr shell <container>"
+        exit 1
+    fi
+    
+    # Try bash first, fall back to sh
+    docker exec -it "$container" bash 2>/dev/null || docker exec -it "$container" sh
+}
+
+cmd_stop() {
+    local container="$1"
+    
+    if [[ -z "$container" ]]; then
+        echo "Error: container name required"
+        exit 1
+    fi
+    
+    docker stop "$container"
+    echo "[OK] Stopped $container"
+}
+
+cmd_rm() {
+    local container="$1"
+    local force=""
+    
+    if [[ "$container" == "-f" ]]; then
+        force="-f"
+        container="$2"
+    fi
+    
+    if [[ -z "$container" ]]; then
+        echo "Error: container name required"
+        exit 1
+    fi
+    
+    docker rm $force "$container"
+    echo "[OK] Removed $container"
+}
+
+cmd_rma() {
+    echo "Removing all stopped containers..."
+    docker container prune -f
+    echo "[OK] Done"
+}
+
+cmd_images() {
+    docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}\t{{.CreatedSince}}"
+}
+
+cmd_pull() {
+    local image="$1"
+    
+    if [[ -z "$image" ]]; then
+        echo "Error: image name required"
+        exit 1
+    fi
+    
+    docker pull "$image"
+}
+
+cmd_rmi() {
+    local image="$1"
+    
+    if [[ -z "$image" ]]; then
+        echo "Error: image name required"
+        exit 1
+    fi
+    
+    docker rmi "$image"
+    echo "[OK] Removed $image"
+}
+
+cmd_up() {
+    docker compose up -d "$@"
+    echo "[OK] Services started"
+    docker compose ps
+}
+
+cmd_down() {
+    docker compose down "$@"
+    echo "[OK] Services stopped"
+}
+
+cmd_restart() {
+    docker compose restart "$@"
+    echo "[OK] Services restarted"
+}
+
+cmd_stats() {
+    docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.NetIO}}"
+}
+
+cmd_clean() {
+    echo "Cleaning up Docker resources..."
+    echo ""
+    echo "=== Removing stopped containers ==="
+    docker container prune -f
+    echo ""
+    echo "=== Removing unused images ==="
+    docker image prune -f
+    echo ""
+    echo "=== Removing unused volumes ==="
+    docker volume prune -f
+    echo ""
+    echo "=== Removing unused networks ==="
+    docker network prune -f
+    echo ""
+    echo "[OK] Cleanup complete"
+    echo ""
+    docker system df
+}
+
+# Main
+if [[ $# -eq 0 ]]; then
+    usage
+    exit 0
+fi
+
+command="$1"
+shift
+
+case "$command" in
+    ps)      cmd_ps "$@" ;;
+    psa)     cmd_psa "$@" ;;
+    logs)    cmd_logs "$@" ;;
+    shell)   cmd_shell "$@" ;;
+    stop)    cmd_stop "$@" ;;
+    rm)      cmd_rm "$@" ;;
+    rma)     cmd_rma "$@" ;;
+    images)  cmd_images "$@" ;;
+    pull)    cmd_pull "$@" ;;
+    rmi)     cmd_rmi "$@" ;;
+    up)      cmd_up "$@" ;;
+    down)    cmd_down "$@" ;;
+    restart) cmd_restart "$@" ;;
+    stats)   cmd_stats "$@" ;;
+    clean)   cmd_clean "$@" ;;
+    help|-h|--help) usage ;;
+    *)
+        echo "Unknown command: $command"
+        echo "Run 'dkr help' for usage"
+        exit 1
+        ;;
+esac
