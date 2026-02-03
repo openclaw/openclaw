@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Docs: finish renaming the QMD memory docs to reference the OpenClaw state dir.
 - Onboarding: keep TUI flow exclusive (skip completion prompt + background Web UI seed).
 - TUI: block onboarding output while TUI is active and restore terminal state on exit.
 - Agents: repair malformed tool calls and session transcripts. (#7473) Thanks @justinhuangcode.
