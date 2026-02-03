@@ -86,6 +86,8 @@ export async function runMemoryFlushIfNeeded(params: {
   // Emit whenever a flush runs, regardless of whether we can persist metadata
   let flushHookMessages: string[] = [];
   if (params.sessionKey) {
+    // Report the same totalTokens that triggered shouldRunMemoryFlush decision.
+    // This is the last persisted token count; should always be valid when flush fires.
     const contextTokensUsed = entryForFlush?.totalTokens ?? 0;
     const hookEvent = createInternalHookEvent("agent", "flush", params.sessionKey, {
       sessionId: params.followupRun.run.sessionId,

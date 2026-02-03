@@ -230,9 +230,47 @@ Triggered when agent commands are issued:
 - **`command:reset`**: When `/reset` command is issued
 - **`command:stop`**: When `/stop` command is issued
 
+### Session Events
+
+Triggered during session lifecycle when session persistence is enabled (requires a valid `sessionKey`):
+
+- **`session:start`**: When a new session begins (both user-initiated and auto-recovery)
+- **`session:end`**: When the old session is terminated (auto-recovery resets only)
+- **`session:reset`**: Emitted after `session:end` during resets to provide transition context (auto-recovery resets only)
+
+**Context includes**:
+
+- `sessionId`: The session ID (for `session:start` and `session:end`)
+- `oldSessionId` and `newSessionId`: (for `session:reset` only) The session transition
+
+**Lifecycle patterns**:
+
+- **User-initiated reset** (`/new` or `/reset`): `command:new` or `command:reset` → `session:start`
+- **Auto-recovery reset** (compaction failure, role-ordering conflict): `session:end` → `session:reset` → `session:start`
+
 ### Agent Events
 
+Triggered during agent execution when session persistence is enabled (requires a valid `sessionKey`):
+
 - **`agent:bootstrap`**: Before workspace bootstrap files are injected (hooks may mutate `context.bootstrapFiles`)
+- **`agent:reply`**: After each agent turn completes (fires even when output is empty; hooks may add messages)
+- **`agent:flush`**: When memory flush is triggered (context nearing token limit)
+
+**Context for `agent:reply` includes**:
+
+- `sessionId`: Current session ID
+- `input`: User's input message
+- `output`: Assistant's response (may be empty string)
+- `turnId`: Unique turn identifier
+- `senderId`: ID of the message sender
+
+**Note:** Hooks can add messages to `event.messages` which will be prepended to the agent's response.
+
+**Context for `agent:flush` includes**:
+
+- `sessionId`: Current session ID
+- `contextTokensUsed`: Number of context tokens currently used
+- `reason`: Reason for flush (e.g., "context_limit")
 
 ### Gateway Events
 
@@ -250,11 +288,11 @@ These hooks are not event-stream listeners; they let plugins synchronously adjus
 
 Planned event types:
 
-- **`session:start`**: When a new session begins
-- **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
 - **`message:sent`**: When a message is sent
 - **`message:received`**: When a message is received
+
+**Note**: Previously planned `session:start` and `session:end` events are now implemented (see Session Events above). Additionally, `session:reset` was added to track session transitions.
 
 ## Creating Custom Hooks
 
