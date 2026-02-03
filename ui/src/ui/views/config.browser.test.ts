@@ -194,7 +194,7 @@ describe("config view", () => {
     if (!input) {
       return;
     }
-    input.value = "gateway";
+    (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });
