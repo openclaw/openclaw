@@ -40,15 +40,15 @@ import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.j
 
 export type AgentRunLoopResult =
   | {
-    kind: "success";
-    runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
-    fallbackProvider?: string;
-    fallbackModel?: string;
-    didLogHeartbeatStrip: boolean;
-    autoCompactionCompleted: boolean;
-    /** Payload keys sent directly (not via pipeline) during tool flush. */
-    directlySentBlockKeys?: Set<string>;
-  }
+      kind: "success";
+      runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+      fallbackProvider?: string;
+      fallbackModel?: string;
+      didLogHeartbeatStrip: boolean;
+      autoCompactionCompleted: boolean;
+      /** Payload keys sent directly (not via pipeline) during tool flush. */
+      directlySentBlockKeys?: Set<string>;
+    }
   | { kind: "final"; payload: ReplyPayload };
 
 export async function runAgentTurnWithFallback(params: {
@@ -311,15 +311,15 @@ export async function runAgentTurnWithFallback(params: {
             blockReplyChunking: params.blockReplyChunking,
             onPartialReply: allowPartialStream
               ? async (payload) => {
-                const textForTyping = await handlePartialForTyping(payload);
-                if (!params.opts?.onPartialReply || textForTyping === undefined) {
-                  return;
+                  const textForTyping = await handlePartialForTyping(payload);
+                  if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                    return;
+                  }
+                  await params.opts.onPartialReply({
+                    text: textForTyping,
+                    mediaUrls: payload.mediaUrls,
+                  });
                 }
-                await params.opts.onPartialReply({
-                  text: textForTyping,
-                  mediaUrls: payload.mediaUrls,
-                });
-              }
               : undefined,
             onAssistantMessageStart: async () => {
               await params.typingSignals.signalMessageStart();
@@ -327,12 +327,12 @@ export async function runAgentTurnWithFallback(params: {
             onReasoningStream:
               params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                 ? async (payload) => {
-                  await params.typingSignals.signalReasoningDelta();
-                  await params.opts?.onReasoningStream?.({
-                    text: payload.text,
-                    mediaUrls: payload.mediaUrls,
-                  });
-                }
+                    await params.typingSignals.signalReasoningDelta();
+                    await params.opts?.onReasoningStream?.({
+                      text: payload.text,
+                      mediaUrls: payload.mediaUrls,
+                    });
+                  }
                 : undefined,
             onAgentEvent: async (evt) => {
               // Trigger typing when tools start executing.
@@ -357,107 +357,107 @@ export async function runAgentTurnWithFallback(params: {
             // via opts.onBlockReply when the pipeline isn't available.
             onBlockReply: params.opts?.onBlockReply
               ? async (payload) => {
-                const { text, skip } = normalizeStreamingText(payload);
-                const hasPayloadMedia = (payload.mediaUrls?.length ?? 0) > 0;
-                if (skip && !hasPayloadMedia) {
-                  return;
-                }
-                const currentMessageId =
-                  params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
-                const taggedPayload = applyReplyTagsToPayload(
-                  {
-                    text,
-                    mediaUrls: payload.mediaUrls,
-                    mediaUrl: payload.mediaUrls?.[0],
-                    replyToId: payload.replyToId,
-                    replyToTag: payload.replyToTag,
-                    replyToCurrent: payload.replyToCurrent,
-                  },
-                  currentMessageId,
-                );
-                // Let through payloads with audioAsVoice flag even if empty (need to track it)
-                if (!isRenderablePayload(taggedPayload) && !payload.audioAsVoice) {
-                  return;
-                }
-                const parsed = parseReplyDirectives(taggedPayload.text ?? "", {
-                  currentMessageId,
-                  silentToken: SILENT_REPLY_TOKEN,
-                });
-                const cleaned = parsed.text || undefined;
-                const hasRenderableMedia =
-                  Boolean(taggedPayload.mediaUrl) || (taggedPayload.mediaUrls?.length ?? 0) > 0;
-                // Skip empty payloads unless they have audioAsVoice flag (need to track it)
-                if (
-                  !cleaned &&
-                  !hasRenderableMedia &&
-                  !payload.audioAsVoice &&
-                  !parsed.audioAsVoice
-                ) {
-                  return;
-                }
-                if (parsed.isSilent && !hasRenderableMedia) {
-                  return;
-                }
+                  const { text, skip } = normalizeStreamingText(payload);
+                  const hasPayloadMedia = (payload.mediaUrls?.length ?? 0) > 0;
+                  if (skip && !hasPayloadMedia) {
+                    return;
+                  }
+                  const currentMessageId =
+                    params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+                  const taggedPayload = applyReplyTagsToPayload(
+                    {
+                      text,
+                      mediaUrls: payload.mediaUrls,
+                      mediaUrl: payload.mediaUrls?.[0],
+                      replyToId: payload.replyToId,
+                      replyToTag: payload.replyToTag,
+                      replyToCurrent: payload.replyToCurrent,
+                    },
+                    currentMessageId,
+                  );
+                  // Let through payloads with audioAsVoice flag even if empty (need to track it)
+                  if (!isRenderablePayload(taggedPayload) && !payload.audioAsVoice) {
+                    return;
+                  }
+                  const parsed = parseReplyDirectives(taggedPayload.text ?? "", {
+                    currentMessageId,
+                    silentToken: SILENT_REPLY_TOKEN,
+                  });
+                  const cleaned = parsed.text || undefined;
+                  const hasRenderableMedia =
+                    Boolean(taggedPayload.mediaUrl) || (taggedPayload.mediaUrls?.length ?? 0) > 0;
+                  // Skip empty payloads unless they have audioAsVoice flag (need to track it)
+                  if (
+                    !cleaned &&
+                    !hasRenderableMedia &&
+                    !payload.audioAsVoice &&
+                    !parsed.audioAsVoice
+                  ) {
+                    return;
+                  }
+                  if (parsed.isSilent && !hasRenderableMedia) {
+                    return;
+                  }
 
-                const blockPayload: ReplyPayload = params.applyReplyToMode({
-                  ...taggedPayload,
-                  text: cleaned,
-                  audioAsVoice: Boolean(parsed.audioAsVoice || payload.audioAsVoice),
-                  replyToId: taggedPayload.replyToId ?? parsed.replyToId,
-                  replyToTag: taggedPayload.replyToTag || parsed.replyToTag,
-                  replyToCurrent: taggedPayload.replyToCurrent || parsed.replyToCurrent,
-                });
-
-                void params.typingSignals
-                  .signalTextDelta(cleaned ?? taggedPayload.text)
-                  .catch((err) => {
-                    logVerbose(`block reply typing signal failed: ${String(err)}`);
+                  const blockPayload: ReplyPayload = params.applyReplyToMode({
+                    ...taggedPayload,
+                    text: cleaned,
+                    audioAsVoice: Boolean(parsed.audioAsVoice || payload.audioAsVoice),
+                    replyToId: taggedPayload.replyToId ?? parsed.replyToId,
+                    replyToTag: taggedPayload.replyToTag || parsed.replyToTag,
+                    replyToCurrent: taggedPayload.replyToCurrent || parsed.replyToCurrent,
                   });
 
-                // Use pipeline if available (block streaming enabled), otherwise send directly
-                if (params.blockStreamingEnabled && params.blockReplyPipeline) {
-                  params.blockReplyPipeline.enqueue(blockPayload);
-                } else if (params.blockStreamingEnabled) {
-                  // Send directly when flushing before tool execution (no pipeline but streaming enabled).
-                  // Track sent key to avoid duplicate in final payloads.
-                  directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
-                  await params.opts?.onBlockReply?.(blockPayload);
+                  void params.typingSignals
+                    .signalTextDelta(cleaned ?? taggedPayload.text)
+                    .catch((err) => {
+                      logVerbose(`block reply typing signal failed: ${String(err)}`);
+                    });
+
+                  // Use pipeline if available (block streaming enabled), otherwise send directly
+                  if (params.blockStreamingEnabled && params.blockReplyPipeline) {
+                    params.blockReplyPipeline.enqueue(blockPayload);
+                  } else if (params.blockStreamingEnabled) {
+                    // Send directly when flushing before tool execution (no pipeline but streaming enabled).
+                    // Track sent key to avoid duplicate in final payloads.
+                    directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
+                    await params.opts?.onBlockReply?.(blockPayload);
+                  }
+                  // When streaming is disabled entirely, blocks are accumulated in final text instead.
                 }
-                // When streaming is disabled entirely, blocks are accumulated in final text instead.
-              }
               : undefined,
             onBlockReplyFlush:
               params.blockStreamingEnabled && blockReplyPipeline
                 ? async () => {
-                  await blockReplyPipeline.flush({ force: true });
-                }
+                    await blockReplyPipeline.flush({ force: true });
+                  }
                 : undefined,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
             onToolResult: onToolResult
               ? (payload) => {
-                // `subscribeEmbeddedPiSession` may invoke tool callbacks without awaiting them.
-                // If a tool callback starts typing after the run finalized, we can end up with
-                // a typing loop that never sees a matching markRunComplete(). Track and drain.
-                const task = (async () => {
-                  const { text, skip } = normalizeStreamingText(payload);
-                  if (skip) {
-                    return;
-                  }
-                  await params.typingSignals.signalTextDelta(text);
-                  await onToolResult({
-                    text,
-                    mediaUrls: payload.mediaUrls,
-                  });
-                })()
-                  .catch((err) => {
-                    logVerbose(`tool result delivery failed: ${String(err)}`);
-                  })
-                  .finally(() => {
-                    params.pendingToolTasks.delete(task);
-                  });
-                params.pendingToolTasks.add(task);
-              }
+                  // `subscribeEmbeddedPiSession` may invoke tool callbacks without awaiting them.
+                  // If a tool callback starts typing after the run finalized, we can end up with
+                  // a typing loop that never sees a matching markRunComplete(). Track and drain.
+                  const task = (async () => {
+                    const { text, skip } = normalizeStreamingText(payload);
+                    if (skip) {
+                      return;
+                    }
+                    await params.typingSignals.signalTextDelta(text);
+                    await onToolResult({
+                      text,
+                      mediaUrls: payload.mediaUrls,
+                    });
+                  })()
+                    .catch((err) => {
+                      logVerbose(`tool result delivery failed: ${String(err)}`);
+                    })
+                    .finally(() => {
+                      params.pendingToolTasks.delete(task);
+                    });
+                  params.pendingToolTasks.add(task);
+                }
               : undefined,
           });
         },
