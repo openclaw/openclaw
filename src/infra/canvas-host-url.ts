@@ -45,9 +45,32 @@ const parseHostHeader = (value: HostSource) => {
     return "";
   }
   try {
-    return new URL(`http://${String(value).trim()}`).hostname;
+    const hostname = new URL(`http://${String(value).trim()}`).hostname;
+    // Strip brackets from IPv6 addresses (URL API may include them)
+    if (hostname.startsWith("[") && hostname.endsWith("]")) {
+      return hostname.slice(1, -1);
+    }
+    return hostname;
   } catch {
     return "";
+  }
+};
+
+// Extract port from Host header (e.g., "node.tailnet:443" -> 443)
+// This is needed for reverse proxy setups like Tailscale Serve
+const parseHostPort = (value: HostSource): number | undefined => {
+  if (!value) return undefined;
+  try {
+    const raw = String(value).trim();
+    const url = new URL(`http://${raw}`);
+    // url.port is empty string for default ports (80 for http, 443 for https)
+    if (url.port) return parseInt(url.port, 10);
+    // Check if the original string had an explicit port (handles :80 and :443)
+    const portMatch = raw.match(/:(\d+)$/);
+    if (portMatch) return parseInt(portMatch[1], 10);
+    return undefined;
+  } catch {
+    return undefined;
   }
 };
 
@@ -59,14 +82,17 @@ const parseForwardedProto = (value: HostSource | HostSource[]) => {
 };
 
 export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
-  const port = params.canvasPort;
-  if (!port) {
-    return undefined;
-  }
-
   const scheme =
     params.scheme ??
     (parseForwardedProto(params.forwardedProto)?.trim() === "https" ? "https" : "http");
+
+  // Prefer port from Host header (respects reverse proxy config like Tailscale Serve)
+  const hostHeaderPort = parseHostPort(params.requestHost);
+  const port = hostHeaderPort ?? params.canvasPort;
+
+  if (!port) {
+    return undefined;
+  }
 
   const override = normalizeHost(params.hostOverride, true);
   const requestHost = normalizeHost(parseHostHeader(params.requestHost), !!override);
