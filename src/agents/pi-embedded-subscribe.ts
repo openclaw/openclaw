@@ -59,6 +59,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
     compactionInFlight: false,
+    didCompactThisRun: false,
     pendingCompactionRetry: 0,
     compactionRetryResolve: undefined,
     compactionRetryPromise: null,
@@ -501,6 +502,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTargets.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
+    state.didCompactThisRun = false;
     resetAssistantMessageState(0);
   };
 
@@ -543,6 +545,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.
     didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
+    // Returns true if compaction occurred during this run.
+    // Used to skip cache-ttl writes after compaction to prevent double compaction.
+    didCompact: () => state.didCompactThisRun,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     waitForCompactionRetry: () => {
       if (state.compactionInFlight || state.pendingCompactionRetry > 0) {

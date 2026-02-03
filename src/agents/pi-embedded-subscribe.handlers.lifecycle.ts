@@ -39,6 +39,7 @@ export function handleAutoCompactionEnd(
   evt: AgentEvent & { willRetry?: unknown },
 ) {
   ctx.state.compactionInFlight = false;
+  ctx.state.didCompactThisRun = true;
   const willRetry = Boolean(evt.willRetry);
   if (willRetry) {
     ctx.noteCompactionRetry();
