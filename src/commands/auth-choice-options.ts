@@ -71,6 +71,18 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["xai-api-key"],
   },
   {
+    value: "volcengine",
+    label: "Volcano Engine",
+    hint: "API key",
+    choices: ["volcengine-api-key"],
+  },
+  {
+    value: "byteplus",
+    label: "BytePlus",
+    hint: "API key",
+    choices: ["byteplus-api-key"],
+  },
+  {
     value: "openrouter",
     label: "OpenRouter",
     hint: "API key",
@@ -180,6 +192,8 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   },
   { value: "openai-api-key", label: "OpenAI API key" },
   { value: "xai-api-key", label: "xAI (Grok) API key" },
+  { value: "volcengine-api-key", label: "Volcano Engine API key" },
+  { value: "byteplus-api-key", label: "BytePlus API key" },
   {
     value: "qianfan-api-key",
     label: "Qianfan API key",
