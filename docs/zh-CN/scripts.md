@@ -24,11 +24,6 @@ x-i18n:
 - 当 CLI 接口存在时优先使用（例如：认证监控使用 `openclaw models status --check`）。
 - 假定脚本与特定主机相关；在新机器上运行前请先阅读脚本内容。
 
-## Git 钩子
-
-- `scripts/setup-git-hooks.js`：在 git 仓库中尽力设置 `core.hooksPath`。
-- `scripts/format-staged.js`：用于暂存的 `src/` 和 `test/` 文件的预提交格式化工具。
-
 ## 认证监控脚本
 
 认证监控脚本的文档请参阅：
