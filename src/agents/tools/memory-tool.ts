@@ -27,12 +27,16 @@ export function createMemorySearchTool(options: {
   agentSessionKey?: string;
 }): AnyAgentTool | null {
   const cfg = options.config;
-  if (!cfg) return null;
+  if (!cfg) {
+    return null;
+  }
   const agentId = resolveSessionAgentId({
     sessionKey: options.agentSessionKey,
     config: cfg,
   });
-  if (!resolveMemorySearchConfig(cfg, agentId)) return null;
+  if (!resolveMemorySearchConfig(cfg, agentId)) {
+    return null;
+  }
   return {
     label: "Memory Search",
     name: "memory_search",
@@ -88,12 +92,16 @@ export function createMemoryGetTool(options: {
   agentSessionKey?: string;
 }): AnyAgentTool | null {
   const cfg = options.config;
-  if (!cfg) return null;
+  if (!cfg) {
+    return null;
+  }
   const agentId = resolveSessionAgentId({
     sessionKey: options.agentSessionKey,
     config: cfg,
   });
-  if (!resolveMemorySearchConfig(cfg, agentId)) return null;
+  if (!resolveMemorySearchConfig(cfg, agentId)) {
+    return null;
+  }
   return {
     label: "Memory Get",
     name: "memory_get",
@@ -199,11 +207,16 @@ function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" |
   if (!parsed?.rest) {
     return "direct";
   }
-  const tokens = parsed.rest.toLowerCase().split(":").filter(Boolean);
-  if (tokens.includes("channel")) {
+  const tokens = new Set(
+    parsed.rest
+      .toLowerCase()
+      .split(":")
+      .filter(Boolean),
+  );
+  if (tokens.has("channel")) {
     return "channel";
   }
-  if (tokens.includes("group")) {
+  if (tokens.has("group")) {
     return "group";
   }
   return "direct";
