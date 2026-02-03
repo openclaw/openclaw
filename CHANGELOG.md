@@ -7,36 +7,30 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Web UI: add Agents dashboard for managing agent files, tools, skills, models, channels, and cron jobs.
-- Docs: reorganize navigation into eight tabs and restore `/images` redirect. (#7622) Thanks @ethanpalm.
-- Security: add healthcheck skill and bootstrap audit guidance. (#7641) Thanks @Takhoffman.
-- Docs: seed zh-CN translations. (#6619) Thanks @joshp123.
-- Docs: expand zh-Hans navigation and fix zh-CN index asset paths. (#7242) Thanks @joshp123.
-- Docs: add zh-CN landing notice + AI-translated image. (#7303) Thanks @joshp123.
-- Docs: fix typo - clawdbot is the compatibility shim, not openclaw. (#7415) Thanks @lailoo.
-- Config: allow setting a default subagent thinking level via `agents.defaults.subagents.thinking` (and per-agent `agents.list[].subagents.thinking`). (#7372) Thanks @tyler6204.
 - Memory: implement the opt-in QMD backend for workspace memory. (#3160) Thanks @vignesh07.
+- Config: allow setting a default subagent thinking level via `agents.defaults.subagents.thinking` (and per-agent `agents.list[].subagents.thinking`). (#7372) Thanks @tyler6204.
+- Security: add healthcheck skill and bootstrap audit guidance. (#7641) Thanks @Takhoffman.
+- Docs: zh-CN translations seed + nav polish + landing notice + typo fix. (#6619, #7242, #7303, #7415) Thanks @joshp123, @lailoo.
 
 ### Fixes
 
 - Security: Matrix allowlists now require full MXIDs; ambiguous name resolution no longer grants access. Thanks @MegaManSec.
-- Docs: finish renaming the QMD memory docs to reference the OpenClaw state dir.
-- Onboarding: keep TUI flow exclusive (skip completion prompt + background Web UI seed).
-- Onboarding: drop completion prompt now handled by install/update.
-- TUI: block onboarding output while TUI is active and restore terminal state on exit.
-- CLI: cache shell completion scripts in state dir and source cached files in profiles.
-- Zsh completion: escape option descriptions to avoid invalid option errors.
-- Agents: repair malformed tool calls and session transcripts. (#7473) Thanks @justinhuangcode.
-- fix(agents): validate AbortSignal instances before calling AbortSignal.any() (#7277) (thanks @Elarwei001)
-- fix(webchat): respect user scroll position during streaming and refresh (#7226) (thanks @marcomarandiz)
-- Telegram: recover from grammY long-poll timed out errors. (#7466) Thanks @macmimi23.
-- Media understanding: skip binary media from file text extraction. (#7475) Thanks @AlexZhangji.
 - Security: enforce access-group gating for Slack slash commands when channel type lookup fails.
 - Security: require validated shared-secret auth before skipping device identity on gateway connect.
 - Security: guard skill installer downloads with SSRF checks (block private/localhost URLs).
 - Security: harden Windows exec allowlist; block cmd.exe bypass via single &. Thanks @simecek.
 - Media understanding: apply SSRF guardrails to provider fetches; allow private baseUrl overrides explicitly.
-- Tests: stub SSRF DNS pinning in web auto-reply + Gemini video coverage. (#6619) Thanks @joshp123.
 - fix(voice-call): harden inbound allowlist; reject anonymous callers; require Telnyx publicKey for allowlist; token-gate Twilio media streams; cap webhook body size (thanks @simecek)
+- fix(webchat): respect user scroll position during streaming and refresh (#7226) (thanks @marcomarandiz)
+- Telegram: recover from grammY long-poll timed out errors. (#7466) Thanks @macmimi23.
+- Agents: repair malformed tool calls and session transcripts. (#7473) Thanks @justinhuangcode.
+- fix(agents): validate AbortSignal instances before calling AbortSignal.any() (#7277) (thanks @Elarwei001)
+- Media understanding: skip binary media from file text extraction. (#7475) Thanks @AlexZhangji.
+- Onboarding: keep TUI flow exclusive (skip completion prompt + background Web UI seed); completion prompt now handled by install/update.
+- TUI: block onboarding output while TUI is active and restore terminal state on exit.
+- CLI/Zsh completion: cache scripts in state dir and escape option descriptions to avoid invalid option errors.
+- Docs: finish renaming the QMD memory docs to reference the OpenClaw state dir.
+- Tests: stub SSRF DNS pinning in web auto-reply + Gemini video coverage. (#6619) Thanks @joshp123.
 
 ## 2026.2.1
 
