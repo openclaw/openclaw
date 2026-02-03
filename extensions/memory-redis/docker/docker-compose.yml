@@ -1,0 +1,34 @@
+# Redis 8 for memory-redis plugin
+#
+# Redis 8+ includes the Query Engine (vector search) built-in - no need for Redis Stack.
+#
+# Usage with OpenClaw gateway (merge with main compose):
+#   docker compose -f docker-compose.yml -f extensions/memory-redis/docker/docker-compose.yml up -d
+#
+# Standalone (Redis only, accessible from host at localhost:6379):
+#   cd extensions/memory-redis/docker && docker compose up -d
+#
+# Plugin config:
+#   redis.url: "redis://redis-stack:6379"  (from gateway container, when merged)
+#   redis.url: "redis://localhost:6379"    (from host, or standalone)
+
+services:
+  redis-stack:
+    image: redis:8
+    container_name: openclaw-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    # Enable AOF persistence (RDB-only can lose up to 5+ minutes of data on crash)
+    command: redis-server --appendonly yes --appendfsync everysec
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redis-data:
+    name: openclaw-redis-data

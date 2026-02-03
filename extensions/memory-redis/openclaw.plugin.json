@@ -1,0 +1,124 @@
+{
+  "id": "memory-redis",
+  "kind": "memory",
+  "uiHints": {
+    "redis.url": {
+      "label": "Redis URL",
+      "placeholder": "redis://localhost:6379",
+      "help": "Redis connection URL (or use ${REDIS_URL})"
+    },
+    "redis.password": {
+      "label": "Redis Password",
+      "sensitive": true,
+      "placeholder": "optional",
+      "help": "Redis password (or use ${REDIS_PASSWORD})"
+    },
+    "redis.tls": {
+      "label": "Enable TLS",
+      "help": "Use TLS for Redis connection"
+    },
+    "embedding.provider": {
+      "label": "Embedding Provider",
+      "placeholder": "local",
+      "help": "Choose: local (no API key), openai, gemini, or auto"
+    },
+    "embedding.apiKey": {
+      "label": "API Key",
+      "sensitive": true,
+      "placeholder": "sk-proj-... (optional for local/auto)",
+      "help": "API key for OpenAI/Gemini embeddings (not required for local)"
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "provider-specific",
+      "help": "Embedding model to use (provider-specific)"
+    },
+    "embedding.baseUrl": {
+      "label": "Custom API Base URL",
+      "placeholder": "http://localhost:11434/v1",
+      "help": "Custom base URL for Ollama or self-hosted embedding API"
+    },
+    "embedding.fallback": {
+      "label": "Fallback Provider",
+      "placeholder": "none",
+      "help": "Fallback if primary provider fails: openai, gemini, local, none"
+    },
+    "indexName": {
+      "label": "Index Name",
+      "placeholder": "idx:openclaw:memories",
+      "advanced": true
+    },
+    "keyPrefix": {
+      "label": "Key Prefix",
+      "placeholder": "openclaw:memory",
+      "advanced": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically capture important information from conversations"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories into context"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "redis": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "tls": {
+            "type": "boolean"
+          }
+        },
+        "required": ["url"]
+      },
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": ["openai", "gemini", "local", "auto"],
+            "default": "local"
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          },
+          "fallback": {
+            "type": "string",
+            "enum": ["openai", "gemini", "local", "none"]
+          }
+        }
+      },
+      "indexName": {
+        "type": "string"
+      },
+      "keyPrefix": {
+        "type": "string"
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      }
+    },
+    "required": ["redis", "embedding"]
+  }
+}
