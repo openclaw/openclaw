@@ -80,11 +80,12 @@ export function registerCronAddCommand(cron: Command) {
       .option("--thinking <level>", "Thinking level for agent jobs (off|minimal|low|medium|high)")
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option("--announce", "Announce summary to a chat (subagent-style)", false)
       .option(
         "--deliver",
-        "Deliver agent output (required when using last-route delivery without --to)",
-        false,
+        "Deliver full output to a chat (required when using last-route delivery without --to)",
       )
+      .option("--no-deliver", "Disable delivery and skip main-session summary")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`, "last")
       .option(
         "--to <dest>",
@@ -158,6 +159,15 @@ export function registerCronAddCommand(cron: Command) {
               return { kind: "systemEvent" as const, text: systemEvent };
             }
             const timeoutSeconds = parsePositiveIntOrUndefined(opts.timeoutSeconds);
+            const hasAnnounce = Boolean(opts.announce);
+            const hasDeliver = opts.deliver === true;
+            const hasNoDeliver = opts.deliver === false;
+            const deliveryFlagCount = [hasAnnounce, hasDeliver, hasNoDeliver].filter(
+              Boolean,
+            ).length;
+            if (deliveryFlagCount > 1) {
+              throw new Error("Choose at most one of --announce, --deliver, or --no-deliver");
+            }
             return {
               kind: "agentTurn" as const,
               message,
@@ -169,10 +179,15 @@ export function registerCronAddCommand(cron: Command) {
                   : undefined,
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
-              deliver: opts.deliver ? true : undefined,
-              channel: typeof opts.channel === "string" ? opts.channel : "last",
+              channel:
+                typeof opts.channel === "string" && opts.channel.trim()
+                  ? opts.channel.trim()
+                  : "last",
               to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
-              bestEffortDeliver: opts.bestEffortDeliver ? true : undefined,
+              bestEffortDeliver:
+                !hasAnnounce && !hasDeliver && !hasNoDeliver && opts.bestEffortDeliver
+                  ? true
+                  : undefined,
             };
           })();
 
@@ -181,6 +196,12 @@ export function registerCronAddCommand(cron: Command) {
           }
           if (sessionTarget === "isolated" && payload.kind !== "agentTurn") {
             throw new Error("Isolated jobs require --message (agentTurn).");
+          }
+          if (
+            (opts.announce || typeof opts.deliver === "boolean") &&
+            (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
+          ) {
+            throw new Error("--announce/--deliver/--no-deliver require --session isolated.");
           }
 
           const isolation =
@@ -222,6 +243,20 @@ export function registerCronAddCommand(cron: Command) {
             sessionTarget,
             wakeMode,
             payload,
+            delivery:
+              payload.kind === "agentTurn" &&
+              sessionTarget === "isolated" &&
+              (opts.announce || typeof opts.deliver === "boolean")
+                ? {
+                    mode: opts.announce ? "announce" : opts.deliver === true ? "deliver" : "none",
+                    channel:
+                      typeof opts.channel === "string" && opts.channel.trim()
+                        ? opts.channel.trim()
+                        : "last",
+                    to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                    bestEffort: opts.bestEffortDeliver ? true : undefined,
+                  }
+                : undefined,
             isolation,
           };
 

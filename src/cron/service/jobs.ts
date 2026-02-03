@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import type {
+  CronDelivery,
+  CronDeliveryPatch,
   CronJob,
   CronJobCreate,
   CronJobPatch,
@@ -23,6 +25,12 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   }
   if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
     throw new Error('isolated cron jobs require payload.kind="agentTurn"');
+  }
+}
+
+function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+  if (job.delivery && job.sessionTarget !== "isolated") {
+    throw new Error('cron delivery config is only supported for sessionTarget="isolated"');
   }
 }
 
@@ -102,12 +110,14 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
     payload: input.payload,
+    delivery: input.delivery,
     isolation: input.isolation,
     state: {
       ...input.state,
     },
   };
   assertSupportedJobSpec(job);
+  assertDeliverySupport(job);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
@@ -137,6 +147,9 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);
   }
+  if (patch.delivery) {
+    job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
+  }
   if (patch.isolation) {
     job.isolation = patch.isolation;
   }
@@ -147,6 +160,7 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
   }
   assertSupportedJobSpec(job);
+  assertDeliverySupport(job);
 }
 
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
@@ -217,6 +231,35 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     to: patch.to,
     bestEffortDeliver: patch.bestEffortDeliver,
   };
+}
+
+function mergeCronDelivery(
+  existing: CronDelivery | undefined,
+  patch: CronDeliveryPatch,
+): CronDelivery {
+  const next: CronDelivery = {
+    mode: existing?.mode ?? "none",
+    channel: existing?.channel,
+    to: existing?.to,
+    bestEffort: existing?.bestEffort,
+  };
+
+  if (typeof patch.mode === "string") {
+    next.mode = patch.mode;
+  }
+  if ("channel" in patch) {
+    const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";
+    next.channel = channel ? channel : undefined;
+  }
+  if ("to" in patch) {
+    const to = typeof patch.to === "string" ? patch.to.trim() : "";
+    next.to = to ? to : undefined;
+  }
+  if (typeof patch.bestEffort === "boolean") {
+    next.bestEffort = patch.bestEffort;
+  }
+
+  return next;
 }
 
 export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {

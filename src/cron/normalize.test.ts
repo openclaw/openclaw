@@ -110,4 +110,28 @@ describe("normalizeCronJobCreate", () => {
     expect(schedule.kind).toBe("at");
     expect(schedule.atMs).toBe(Date.parse("2026-01-12T18:00:00Z"));
   });
+
+  it("normalizes delivery mode and channel", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "delivery",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+      delivery: {
+        mode: " ANNOUNCE ",
+        channel: " TeLeGrAm ",
+        to: " 7200373102 ",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.mode).toBe("announce");
+    expect(delivery.channel).toBe("telegram");
+    expect(delivery.to).toBe("7200373102");
+  });
 });

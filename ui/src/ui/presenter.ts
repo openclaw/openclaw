@@ -66,5 +66,18 @@ export function formatCronPayload(job: CronJob) {
   if (p.kind === "systemEvent") {
     return `System: ${p.text}`;
   }
-  return `Agent: ${p.message}`;
+  const base = `Agent: ${p.message}`;
+  const delivery = job.delivery;
+  if (delivery && delivery.mode !== "none") {
+    const target =
+      delivery.channel || delivery.to
+        ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
+        : "";
+    return `${base} · ${delivery.mode}${target}`;
+  }
+  if (!delivery && (p.deliver || p.to)) {
+    const target = p.channel || p.to ? ` (${p.channel ?? "last"}${p.to ? ` -> ${p.to}` : ""})` : "";
+    return `${base} · deliver${target}`;
+  }
+  return base;
 }

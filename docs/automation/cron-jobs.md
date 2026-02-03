@@ -23,7 +23,7 @@ cron is the mechanism.
 - Jobs persist under `~/.openclaw/cron/` so restarts don’t lose schedules.
 - Two execution styles:
   - **Main session**: enqueue a system event, then run on the next heartbeat.
-  - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, optionally deliver output.
+  - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, with a delivery mode (legacy summary, announce, full output, or none).
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 
 ## Quick start (actionable)
@@ -53,7 +53,7 @@ openclaw cron add \
   --tz "America/Los_Angeles" \
   --session isolated \
   --message "Summarize overnight updates." \
-  --deliver \
+  --announce \
   --channel slack \
   --to "channel:C1234567890"
 ```
@@ -96,7 +96,7 @@ A cron job is a stored record with:
 
 - a **schedule** (when it should run),
 - a **payload** (what it should do),
-- optional **delivery** (where output should be sent).
+- optional **delivery mode** (announce, full output, or none).
 - optional **agent binding** (`agentId`): run the job under a specific agent; if
   missing or unknown, the gateway falls back to the default agent.
 
@@ -136,9 +136,12 @@ Key behaviors:
 
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
 - Each run starts a **fresh session id** (no prior conversation carry-over).
-- A summary is posted to the main session (prefix `Cron`, configurable).
-- `wakeMode: "now"` triggers an immediate heartbeat after posting the summary.
-- If `payload.deliver: true`, output is delivered to a channel; otherwise it stays internal.
+- Legacy behavior (no `delivery` field): a summary is posted to the main session (prefix `Cron`, configurable).
+- `delivery.mode` (isolated-only) chooses what happens instead of the legacy summary:
+  - `announce`: subagent-style summary delivered immediately to a chat.
+  - `deliver`: full agent output delivered immediately to a chat.
+  - `none`: internal only (no main summary, no delivery).
+- `wakeMode: "now"` triggers an immediate heartbeat after posting the **legacy** summary.
 
 Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
 your main chat history.
@@ -155,16 +158,28 @@ Common `agentTurn` fields:
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
-- `deliver`: `true` to send output to a channel target.
-- `channel`: `last` or a specific channel.
-- `to`: channel-specific target (phone/chat/channel id).
-- `bestEffortDeliver`: avoid failing the job if delivery fails.
+
+Delivery config (isolated jobs only):
+
+- `delivery.mode`: `none` | `announce` | `deliver`.
+- `delivery.channel`: `last` or a specific channel.
+- `delivery.to`: channel-specific target (phone/chat/channel id).
+- `delivery.bestEffort`: avoid failing the job if delivery fails (deliver mode).
+
+Legacy delivery fields (still accepted when `delivery` is omitted):
+
+- `payload.deliver`: `true` to send output to a channel target.
+- `payload.channel`: `last` or a specific channel.
+- `payload.to`: channel-specific target (phone/chat/channel id).
+- `payload.bestEffortDeliver`: avoid failing the job if delivery fails.
 
 Isolation options (only for `session=isolated`):
 
 - `postToMainPrefix` (CLI: `--post-prefix`): prefix for the system event in main.
 - `postToMainMode`: `summary` (default) or `full`.
 - `postToMainMaxChars`: max chars when `postToMainMode=full` (default 8000).
+
+Note: isolation post-to-main settings apply to legacy jobs (no `delivery` field). If `delivery` is set, the legacy summary is skipped.
 
 ### Model and thinking overrides
 
@@ -185,19 +200,24 @@ Resolution priority:
 
 ### Delivery (channel + target)
 
-Isolated jobs can deliver output to a channel. The job payload can specify:
+Isolated jobs can deliver output to a channel via the top-level `delivery` config:
 
-- `channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (plugin) / `signal` / `imessage` / `last`
-- `to`: channel-specific recipient target
+- `delivery.mode`: `announce` (subagent-style summary) or `deliver` (full output).
+- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (plugin) / `signal` / `imessage` / `last`.
+- `delivery.to`: channel-specific recipient target.
 
-If `channel` or `to` is omitted, cron can fall back to the main session’s “last route”
-(the last place the agent replied).
+Delivery config is only valid for isolated jobs (`sessionTarget: "isolated"`).
 
-Delivery notes:
+If `delivery.channel` or `delivery.to` is omitted, cron can fall back to the main session’s
+“last route” (the last place the agent replied).
 
-- If `to` is set, cron auto-delivers the agent’s final output even if `deliver` is omitted.
-- Use `deliver: true` when you want last-route delivery without an explicit `to`.
-- Use `deliver: false` to keep output internal even if a `to` is present.
+Legacy behavior (no `delivery` field):
+
+- If `payload.to` is set, cron auto-delivers the agent’s final output even if `payload.deliver` is omitted.
+- Use `payload.deliver: true` when you want last-route delivery without an explicit `to`.
+- Use `payload.deliver: false` to keep output internal even if a `to` is present.
+
+If `delivery` is set, it overrides legacy payload delivery fields and skips the legacy main-session summary.
 
 Target format reminders:
 
@@ -248,13 +268,14 @@ Recurring, isolated job with delivery:
   "wakeMode": "next-heartbeat",
   "payload": {
     "kind": "agentTurn",
-    "message": "Summarize overnight updates.",
-    "deliver": true,
+    "message": "Summarize overnight updates."
+  },
+  "delivery": {
+    "mode": "announce",
     "channel": "slack",
     "to": "channel:C1234567890",
-    "bestEffortDeliver": true
-  },
-  "isolation": { "postToMainPrefix": "Cron", "postToMainMode": "summary" }
+    "bestEffort": true
+  }
 }
 ```
 
@@ -263,7 +284,7 @@ Notes:
 - `schedule.kind`: `at` (`atMs`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
 - `atMs` and `everyMs` are epoch milliseconds.
 - `sessionTarget` must be `"main"` or `"isolated"` and must match `payload.kind`.
-- Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun`, `isolation`.
+- Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun`, `delivery`, `isolation`.
 - `wakeMode` defaults to `"next-heartbeat"` when omitted.
 
 ### cron.update params
@@ -341,7 +362,7 @@ openclaw cron add \
   --wake now
 ```
 
-Recurring isolated job (deliver to WhatsApp):
+Recurring isolated job (announce to WhatsApp):
 
 ```bash
 openclaw cron add \
@@ -350,7 +371,7 @@ openclaw cron add \
   --tz "America/Los_Angeles" \
   --session isolated \
   --message "Summarize inbox + calendar for today." \
-  --deliver \
+  --announce \
   --channel whatsapp \
   --to "+15551234567"
 ```

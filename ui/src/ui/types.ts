@@ -440,7 +440,7 @@ export type CronPayload =
       thinking?: string;
       timeoutSeconds?: number;
       deliver?: boolean;
-      provider?:
+      channel?:
         | "last"
         | "whatsapp"
         | "telegram"
@@ -452,6 +452,13 @@ export type CronPayload =
       to?: string;
       bestEffortDeliver?: boolean;
     };
+
+export type CronDelivery = {
+  mode: "none" | "announce" | "deliver";
+  channel?: string;
+  to?: string;
+  bestEffort?: boolean;
+};
 
 export type CronIsolation = {
   postToMainPrefix?: string;
@@ -479,6 +486,7 @@ export type CronJob = {
   sessionTarget: CronSessionTarget;
   wakeMode: CronWakeMode;
   payload: CronPayload;
+  delivery?: CronDelivery;
   isolation?: CronIsolation;
   state?: CronJobState;
 };
