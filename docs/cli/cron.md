@@ -20,6 +20,8 @@ Note: isolated `cron add` jobs default to `--announce` delivery. Use `--deliver`
 or `--no-deliver` to keep output internal. To opt into the legacy main-summary path, pass
 `--post-prefix` (or other `--post-*` options) without delivery flags.
 
+Note: one-shot (`--at`) jobs delete after success by default. Use `--keep-after-run` to keep them.
+
 ## Common edits
 
 Update delivery settings without changing the message:

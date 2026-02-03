@@ -86,7 +86,8 @@ Think of a cron job as: **when** to run + **what** to do.
    - Main session → `payload.kind = "systemEvent"`
    - Isolated session → `payload.kind = "agentTurn"`
 
-Optional: `deleteAfterRun: true` removes successful one-shot jobs from the store.
+Optional: one-shot jobs (`schedule.kind = "at"`) delete after success by default. Set
+`deleteAfterRun: false` to keep them (they will disable after success).
 
 ## Concepts
 
@@ -102,7 +103,7 @@ A cron job is a stored record with:
 
 Jobs are identified by a stable `jobId` (used by CLI/Gateway APIs).
 In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
-Jobs can optionally auto-delete after a successful one-shot run via `deleteAfterRun: true`.
+One-shot jobs auto-delete after success by default; set `deleteAfterRun: false` to keep them.
 
 ### Schedules
 
@@ -289,7 +290,8 @@ Notes:
 - `schedule.at` accepts ISO 8601 (timezone optional; treated as UTC when omitted).
 - `atMs` and `everyMs` are epoch milliseconds.
 - `sessionTarget` must be `"main"` or `"isolated"` and must match `payload.kind`.
-- Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun`, `delivery`, `isolation`.
+- Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun` (defaults to true for `at`),
+  `delivery`, `isolation`.
 - `wakeMode` defaults to `"next-heartbeat"` when omitted.
 
 ### cron.update params

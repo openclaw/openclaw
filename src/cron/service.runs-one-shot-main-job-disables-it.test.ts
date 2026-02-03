@@ -36,7 +36,7 @@ describe("CronService", () => {
     vi.useRealTimers();
   });
 
-  it("runs a one-shot main job and disables it after success", async () => {
+  it("runs a one-shot main job and disables it after success when requested", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
@@ -55,6 +55,7 @@ describe("CronService", () => {
     const job = await cron.add({
       name: "one-shot hello",
       enabled: true,
+      deleteAfterRun: false,
       schedule: { kind: "at", atMs },
       sessionTarget: "main",
       wakeMode: "now",
@@ -79,7 +80,7 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
-  it("runs a one-shot job and deletes it after success when requested", async () => {
+  it("runs a one-shot job and deletes it after success by default", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
@@ -98,7 +99,6 @@ describe("CronService", () => {
     const job = await cron.add({
       name: "one-shot delete",
       enabled: true,
-      deleteAfterRun: true,
       schedule: { kind: "at", atMs },
       sessionTarget: "main",
       wakeMode: "now",
