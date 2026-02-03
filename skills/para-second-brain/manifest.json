@@ -1,0 +1,16 @@
+{
+  "name": "second-brain",
+  "version": "1.0.0",
+  "description": "Build a persistent knowledge system using PARA methodology. Organize daily logs, curated memory, and topic notes into a searchable second brain.",
+  "author": "halthelobster",
+  "keywords": ["memory", "para", "organization", "notes", "knowledge-management", "second-brain", "productivity"],
+  "license": "MIT",
+  "repository": "https://github.com/halthelobster/second-brain",
+  "files": [
+    "SKILL.md",
+    "manifest.json",
+    "templates/MEMORY.md.template",
+    "templates/daily-log.md.template",
+    "scripts/setup.sh"
+  ]
+}

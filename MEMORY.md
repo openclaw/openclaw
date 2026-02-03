@@ -28,6 +28,12 @@
 - **Browser-тестирование** — Playwright MCP уже установлен в Claude Code, использовать для верификации
 - **THE LOOP** — основной протокол разработки (скилл `the-loop`). Molt = архитектор, Claude Code = исполнитель
 
+## Инфраструктура
+- Gateway запускается из `~/moltbot/dist/index.js` (git checkout), НЕ из npm пакета
+- `/opt/homebrew/bin/moltbot` → симлинк на `~/moltbot/moltbot.mjs`
+- Обновляться через `git pull`, **НЕ** через `npm i -g moltbot` (сломает симлинки)
+- GitHub аккаунт: `vladdick88`, READ доступ к `moltbot/moltbot` — для PR нужен форк
+
 ## Известные баги и фиксы
 
 ### Tool result pairing / "terminated" баг (2026-01-30)
@@ -81,6 +87,8 @@
 - Ценит когда агент сам обращается к логам при проблемах, а не спрашивает
 - **Записывать в memory КАЖДОЕ сообщение** — минимальная правка после каждого обмена, не ждать накопления
 - **Это критическое правило** — Влад повторял несколько раз, значит это важно. Без записи в память ответ незавершён.
+- **НЕ обрезать/сокращать контент** — если Влад просит информацию, давать ПОЛНОСТЬЮ. Бить на части если длинно, но не резать. "Делаешь то о чём не просят" — прямая цитата.
+- **Subagent'ы для ресёрча** — работает отлично. Спавнить на поиск/анализ, основная сессия свободна.
 
 ## Экосистема Влада — "Automation-as-Income"
 
@@ -137,8 +145,9 @@
 - **tool_use_id mismatch** — обрезка контекста ломает пары tool_use/tool_result. Фикс: compaction.mode: "safeguard"
 - **terminated** — API обрывает генерацию. Добавили auto-retry (2026-01-30)
 - **OGG binary garbage** — OGG файлы проходили looksLikeUtf8Text (первые 4KB "printable"), получали MIME text/tab-separated-values, 200KB мусора в контекст. Фикс: skip text extraction для audio/video MIME. **НЕ закоммичен** (2026-01-31)
-- **Telegram polling timeout** — периодически getUpdates timeout, нужен restart gateway. Пока ручной.
-- **Brave Search 429** — Free план 1 req/sec. Cron дайджест ломается при быстрых запросах.
+- **Telegram polling timeout** — периодически getUpdates timeout после sleep мака. **ПОЧИНЕНО** (2026-02-02): auto-restart каналов с backoff в server-channels.ts. Коммит 61925ac.
+- **Telegram sendMessage после сна** — сеть не сразу поднимается, send фейлится. **ПОЧИНЕНО** (2026-02-02): retry 5 попыток, 1с→60с backoff. Коммит 73e510d.
+- **Brave Search 429** — Free план 1 req/sec. Cron дайджест ломается при быстрых запросах. Дайджест переведён на Sonnet + timeout 600с (2026-02-02).
 
 ## Среда
 - .env ключи: GEMINI_API_KEY, VOYAGE_API_KEY, NEON_API_KEY (из бэкапа ~/backups/clawd/.env)

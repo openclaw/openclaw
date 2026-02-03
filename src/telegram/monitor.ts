@@ -138,18 +138,21 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     },
   });
 
-  if (opts.useWebhook) {
+  // Auto-detect webhook mode from config or opts
+  const useWebhook = opts.useWebhook ?? Boolean(account.config.webhookUrl);
+
+  if (useWebhook) {
     await startTelegramWebhook({
       token,
       accountId: account.accountId,
       config: cfg,
-      path: opts.webhookPath,
+      path: opts.webhookPath ?? account.config.webhookPath,
       port: opts.webhookPort,
-      secret: opts.webhookSecret,
+      secret: opts.webhookSecret ?? account.config.webhookSecret,
       runtime: opts.runtime as RuntimeEnv,
       fetch: proxyFetch,
       abortSignal: opts.abortSignal,
-      publicUrl: opts.webhookUrl,
+      publicUrl: opts.webhookUrl ?? account.config.webhookUrl,
     });
     return;
   }

@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "skills": {
+    "proactive-agent": {
+      "version": "1.2.4",
+      "installedAt": 1769746814441
+    },
+    "ai-compound": {
+      "version": "1.0.1",
+      "installedAt": 1769782771901
+    },
+    "find-people": {
+      "version": "1.0.0",
+      "installedAt": 1769783617522
+    },
+    "news-aggregator-skill-3": {
+      "version": "0.1.0",
+      "installedAt": 1769783803286
+    },
+    "transcribee": {
+      "version": "1.2.1",
+      "installedAt": 1769785088475
+    },
+    "clean-code": {
+      "version": "1.0.0",
+      "installedAt": 1769785489157
+    },
+    "game-theory": {
+      "version": "1.0.0",
+      "installedAt": 1769785625449
+    },
+    "para-second-brain": {
+      "version": "3.0.0",
+      "installedAt": 1769785773495
+    },
+    "bulletproof-memory": {
+      "version": "1.0.0",
+      "installedAt": 1769786213643
+    },
+    "readme-gen": {
+      "version": "1.0.0",
+      "installedAt": 1769786800584
+    },
+    "bybit-agent": {
+      "version": "1.0.0",
+      "installedAt": 1769786903005
+    },
+    "ui-ux-master": {
+      "version": "0.1.2",
+      "installedAt": 1769787238379
+    },
+    "autofillin": {
+      "version": "1.2.1",
+      "installedAt": 1769787363741
+    },
+    "ez-cronjob": {
+      "version": "1.0.0",
+      "installedAt": 1769787466342
+    },
+    "marketing-mode": {
+      "version": "1.0.0",
+      "installedAt": 1769787592098
+    },
+    "creative-thought-partner": {
+      "version": "1.0.1",
+      "installedAt": 1769809507661
+    },
+    "competitive-intelligence-market-research": {
+      "version": "1.0.0",
+      "installedAt": 1769829141996
+    },
+    "alpha-finder": {
+      "version": "1.0.0",
+      "installedAt": 1769829185891
+    },
+    "jtbd-analyzer": {
+      "version": "1.0.0",
+      "installedAt": 1769830131808
+    },
+    "cross-pollination-engine": {
+      "version": "1.0.0",
+      "installedAt": 1769830145303
+    },
+    "reddit-insights": {
+      "version": "1.2.0",
+      "installedAt": 1769830165127
+    }
+  }
+}

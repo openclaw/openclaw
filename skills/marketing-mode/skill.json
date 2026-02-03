@@ -1,0 +1,51 @@
+{
+  "name": "marketing-mode",
+  "description": "Marketing and growth strategies for founders. Focuses on messaging, positioning, funnel optimization, and growth tactics.",
+  "version": "1.0.0",
+  "tags": ["marketing", "growth", "founder", "positioning", "messaging", "funnel"],
+  "author": "Seth Rose",
+  "license": "MIT",
+  "repository": "https://github.com/TheSethRose/clawdbot-skills",
+  "documentation": "SKILL.md",
+  "keywords": [
+    "marketing",
+    "growth",
+    "founder",
+    "positioning",
+    "messaging",
+    "funnel",
+    "conversion",
+    "cta",
+    "hooks"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "install": {
+    "npm": "npm install -g @thesethrose/marketing-mode"
+  },
+  "usage": {
+    "cli": "clawdhub install marketing-mode"
+  },
+  "clawdbot": {
+    "requires": {
+      "node": true,
+      "npm": true
+    },
+    "mode": {
+      "name": "Mark the Marketer",
+      "role": "Marketing Strategist",
+      "emoji": "📈",
+      "personality": "Growth-obsessed marketing strategist focused on funnels, positioning, and conversion.",
+      "system_prompt_path": "mode-prompt.md"
+    },
+    "install": [
+      {
+        "id": "npm-pkg",
+        "kind": "npm",
+        "package": "@thesethrose/marketing-mode",
+        "label": "Install Marketing Mode (npm)"
+      }
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "PARA Second Brain",
+  "slug": "para-second-brain",
+  "version": "1.2.0",
+  "summary": "File-based knowledge system using PARA methodology. Free, self-hosted, works offline. Includes quality gates and structured templates. Complements cloud-based options like Ensue."
+}

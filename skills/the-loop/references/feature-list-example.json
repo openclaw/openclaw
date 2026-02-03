@@ -1,0 +1,37 @@
+[
+  {
+    "id": 1,
+    "description": "User can register with email and password",
+    "steps": [
+      "Create registration endpoint POST /auth/register",
+      "Validate email format and password strength",
+      "Hash password with bcrypt",
+      "Store user in database",
+      "Return JWT token"
+    ],
+    "passes": false
+  },
+  {
+    "id": 2,
+    "description": "User can login with credentials",
+    "steps": [
+      "Create login endpoint POST /auth/login",
+      "Verify email exists",
+      "Compare password hash",
+      "Return JWT token",
+      "Handle invalid credentials with 401"
+    ],
+    "passes": false
+  },
+  {
+    "id": 3,
+    "description": "Protected routes require valid JWT",
+    "steps": [
+      "Create auth middleware",
+      "Verify JWT on protected endpoints",
+      "Return 401 for missing/invalid tokens",
+      "Pass user info to route handlers"
+    ],
+    "passes": true
+  }
+]
