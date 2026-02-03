@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security: Matrix allowlists now require full MXIDs; ambiguous name resolution no longer grants access. Thanks @MegaManSec.
 - Docs: finish renaming the QMD memory docs to reference the OpenClaw state dir.
 - Onboarding: keep TUI flow exclusive (skip completion prompt + background Web UI seed).
 - Onboarding: drop completion prompt now handled by install/update.
@@ -31,8 +32,10 @@ Docs: https://docs.openclaw.ai
 - Security: enforce access-group gating for Slack slash commands when channel type lookup fails.
 - Security: require validated shared-secret auth before skipping device identity on gateway connect.
 - Security: guard skill installer downloads with SSRF checks (block private/localhost URLs).
+- Security: harden Windows exec allowlist; block cmd.exe bypass via single &. Thanks @simecek.
 - Media understanding: apply SSRF guardrails to provider fetches; allow private baseUrl overrides explicitly.
 - Tests: stub SSRF DNS pinning in web auto-reply + Gemini video coverage. (#6619) Thanks @joshp123.
+- fix(voice-call): harden inbound allowlist; reject anonymous callers; require Telnyx publicKey for allowlist; token-gate Twilio media streams; cap webhook body size (thanks @simecek)
 
 ## 2026.2.1
 
