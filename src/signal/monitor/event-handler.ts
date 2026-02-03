@@ -47,6 +47,30 @@ import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../s
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
 
+  /**
+   * Format quoted message context similar to Telegram's implementation.
+   * Returns a formatted string to append to the message body.
+   */
+  function formatQuotedMessageContext(quote: {
+    id?: number | null;
+    author?: string | null;
+    authorNumber?: string | null;
+    authorUuid?: string | null;
+    text?: string | null;
+  }): string {
+    if (!quote) {
+      return "";
+    }
+
+    // Prefer phone number, fall back to UUID, then author
+    const authorLabel =
+      quote.authorNumber?.trim() || quote.authorUuid?.trim() || quote.author?.trim() || "Unknown";
+    const messageId = quote.id ? String(quote.id) : undefined;
+    const quoteText = quote.text?.trim() || "<no text>";
+
+    return `\n\n[Replying to ${authorLabel}${messageId ? ` id:${messageId}` : ""}]\n${quoteText}\n[/Replying]`;
+  }
+
   type SignalInboundEntry = {
     senderName: string;
     senderDisplay: string;
@@ -584,10 +608,22 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
+    // Format quoted message context
+    const quoteSuffix = dataMessage.quote ? formatQuotedMessageContext(dataMessage.quote) : "";
+
+    // Build body text with quote context
+    let bodyText = messageText || placeholder || "";
+    if (!bodyText && dataMessage.quote?.text?.trim()) {
+      // If no message text but there's a quote (quote-only reply), use quote text
+      bodyText = dataMessage.quote.text.trim();
+    }
+
     if (!bodyText) {
       return;
     }
+
+    // Append quoted message context to body
+    bodyText = bodyText + quoteSuffix;
 
     const receiptTimestamp =
       typeof envelope.timestamp === "number"
