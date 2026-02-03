@@ -260,7 +260,7 @@ Defaults when omitted:
 - `images.maxBytes`: 10MB
 - `images.maxRedirects`: 3
 - `images.timeoutMs`: 10s
-- `toolResultMaxDataBytes`: unset (tool result data stripped)
+- `toolResultMaxDataBytes`: unset or `0` (tool result data stripped)
 
 Security note:
 

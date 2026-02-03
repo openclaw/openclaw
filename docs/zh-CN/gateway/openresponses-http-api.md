@@ -251,7 +251,7 @@ URL 获取默认值：
 - `images.maxBytes`：10MB
 - `images.maxRedirects`：3
 - `images.timeoutMs`：10s
-- `toolResultMaxDataBytes`：未设置（工具结果 data 会被剥离）
+- `toolResultMaxDataBytes`：未设置或 `0`（工具结果 data 会被剥离）
 
 说明：
 
