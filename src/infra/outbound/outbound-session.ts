@@ -51,10 +51,7 @@ export type ResolveOutboundSessionRouteParams = {
 const MAX_SLACK_CHANNEL_CACHE_SIZE = 1000;
 const SLACK_CHANNEL_TYPE_CACHE = new Map<string, "channel" | "group" | "dm" | "unknown">();
 
-function setSlackChannelTypeCache(
-  key: string,
-  type: "channel" | "group" | "dm" | "unknown",
-): void {
+function setSlackChannelTypeCache(key: string, type: "channel" | "group" | "dm" | "unknown"): void {
   // Evict oldest entry if cache is full (LRU eviction)
   if (SLACK_CHANNEL_TYPE_CACHE.size >= MAX_SLACK_CHANNEL_CACHE_SIZE) {
     const firstKey = SLACK_CHANNEL_TYPE_CACHE.keys().next().value;
