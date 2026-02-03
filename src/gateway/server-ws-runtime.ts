@@ -12,6 +12,7 @@ export function attachGatewayWsHandlers(params: {
   gatewayHost?: string;
   canvasHostEnabled: boolean;
   canvasHostServerPort?: number;
+  canvasHostAdvertisedUrl?: string;
   resolvedAuth: ResolvedGatewayAuth;
   gatewayMethods: string[];
   events: string[];
@@ -36,6 +37,7 @@ export function attachGatewayWsHandlers(params: {
     gatewayHost: params.gatewayHost,
     canvasHostEnabled: params.canvasHostEnabled,
     canvasHostServerPort: params.canvasHostServerPort,
+    canvasHostAdvertisedUrl: params.canvasHostAdvertisedUrl,
     resolvedAuth: params.resolvedAuth,
     gatewayMethods: params.gatewayMethods,
     events: params.events,

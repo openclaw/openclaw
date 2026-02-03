@@ -2,6 +2,7 @@ type HostSource = string | null | undefined;
 
 type CanvasHostUrlParams = {
   canvasPort?: number;
+  advertisedUrl?: HostSource;
   hostOverride?: HostSource;
   requestHost?: HostSource;
   forwardedProto?: HostSource | HostSource[];
@@ -62,6 +63,11 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
   const port = params.canvasPort;
   if (!port) {
     return undefined;
+  }
+
+  // If an explicit advertisedUrl is configured, use it directly (for remote nodes)
+  if (params.advertisedUrl?.trim()) {
+    return params.advertisedUrl.trim();
   }
 
   const scheme =
