@@ -1,0 +1,51 @@
+{
+  "id": "cortex",
+  "kind": "memory",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable Cortex memory enhancements"
+      },
+      "autoCapture": {
+        "type": "boolean",
+        "default": true,
+        "description": "Automatically capture important conversation moments"
+      },
+      "stmFastPath": {
+        "type": "boolean",
+        "default": true,
+        "description": "Check STM before full memory search (fast path)"
+      },
+      "temporalRerank": {
+        "type": "boolean",
+        "default": true,
+        "description": "Re-rank search results by recency"
+      },
+      "temporalWeight": {
+        "type": "number",
+        "default": 0.4,
+        "minimum": 0,
+        "maximum": 1,
+        "description": "Weight for temporal/recency scoring (0-1)"
+      },
+      "importanceWeight": {
+        "type": "number",
+        "default": 0.3,
+        "minimum": 0,
+        "maximum": 1,
+        "description": "Weight for importance scoring (0-1)"
+      },
+      "stmCapacity": {
+        "type": "integer",
+        "default": 20,
+        "minimum": 5,
+        "maximum": 100,
+        "description": "Maximum items in short-term memory"
+      }
+    }
+  }
+}
