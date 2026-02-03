@@ -288,10 +288,9 @@ export async function handleDiscordMessagingAction(
       const messageId = readStringParam(params, "messageId");
       // Optional initial content (required for forum posts).
       const content = readStringParam(params, "content") ?? undefined;
-      // Optional applied tag ids (forum posts).
-      const appliedTagIds = Array.isArray(params.appliedTagIds)
-        ? params.appliedTagIds.filter((x) => typeof x === "string" && x.trim())
-        : undefined;
+      // Optional applied tag ids (forum posts). Supports native arrays, JSON array strings,
+      // and comma-separated strings via readStringArrayParam.
+      const appliedTagIds = readStringArrayParam(params, "appliedTagIds");
       const autoArchiveMinutesRaw = params.autoArchiveMinutes;
       const autoArchiveMinutes =
         typeof autoArchiveMinutesRaw === "number" && Number.isFinite(autoArchiveMinutesRaw)
