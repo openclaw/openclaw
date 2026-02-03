@@ -137,19 +137,15 @@ out to QMD for retrieval. Key points:
   - If you want to pre-download models manually (and warm the same index OpenClaw
     uses), run a one-off query with the agent’s XDG dirs.
 
-    OpenClaw’s QMD state lives under your **state dir** (usually `~/.openclaw`, or
-    legacy dirs like `~/.clawdbot` and `~/.moltbot`). You can point `qmd` at the exact same index
-    by exporting the same XDG vars OpenClaw uses:
+    OpenClaw’s QMD state lives under your **state dir** (defaults to `~/.openclaw`).
+    You can point `qmd` at the exact same index by exporting the same XDG vars
+    OpenClaw uses:
 
     ```bash
     # Pick the same state dir OpenClaw uses
-    STATE_DIR="${OPENCLAW_STATE_DIR:-${CLAWDBOT_STATE_DIR:-$HOME/.openclaw}}"
-    if [ -d "$HOME/.clawdbot" ] && [ ! -d "$HOME/.openclaw" ] \
-      && [ -z "${OPENCLAW_STATE_DIR:-}" ] && [ -z "${CLAWDBOT_STATE_DIR:-}" ]; then
-      STATE_DIR="$HOME/.clawdbot"
-    fi
+    STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
     if [ -d "$HOME/.moltbot" ] && [ ! -d "$HOME/.openclaw" ] \
-      && [ -z "${OPENCLAW_STATE_DIR:-}" ] && [ -z "${CLAWDBOT_STATE_DIR:-}" ]; then
+      && [ -z "${OPENCLAW_STATE_DIR:-}" ]; then
       STATE_DIR="$HOME/.moltbot"
     fi
 
@@ -347,7 +343,7 @@ Local mode:
 ### What gets indexed (and when)
 
 - File type: Markdown only (`MEMORY.md`, `memory/**/*.md`).
-- Index storage: per-agent SQLite at `~/.clawdbot/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
+- Index storage: per-agent SQLite at `~/.openclaw/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
 - Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync is scheduled on session start, on search, or on an interval and runs asynchronously. Session transcripts use delta thresholds to trigger background sync.
 - Reindex triggers: the index stores the embedding **provider/model + endpoint fingerprint + chunking params**. If any of those change, OpenClaw automatically resets and reindexes the entire store.
 
@@ -465,7 +461,7 @@ Notes:
 - `memory_search` never blocks on indexing; results can be slightly stale until background sync finishes.
 - Results still include snippets only; `memory_get` remains limited to memory files.
 - Session indexing is isolated per agent (only that agent’s session logs are indexed).
-- Session logs live on disk (`~/.clawdbot/agents/<agentId>/sessions/*.jsonl`). Any process/user with filesystem access can read them, so treat disk access as the trust boundary. For stricter isolation, run agents under separate OS users or hosts.
+- Session logs live on disk (`~/.openclaw/agents/<agentId>/sessions/*.jsonl`). Any process/user with filesystem access can read them, so treat disk access as the trust boundary. For stricter isolation, run agents under separate OS users or hosts.
 
 Delta thresholds (defaults shown):
 
