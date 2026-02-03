@@ -483,7 +483,9 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   if (emptyAgentIds.length > 0) {
     const agentList = emptyAgentIds.join(", ");
     defaultRuntime.log(
-      `${muted(`Memory Search: ${emptyAgentIds.length} agent${emptyAgentIds.length > 1 ? "s" : ""} with no indexed files (${agentList})`)}`,
+      muted(
+        `Memory Search: ${emptyAgentIds.length} agent${emptyAgentIds.length > 1 ? "s" : ""} with no indexed files (${agentList})`,
+      ),
     );
     defaultRuntime.log("");
   }
@@ -492,7 +494,9 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   if (disabledAgentIds.length > 0 && emptyAgentIds.length === 0) {
     const agentList = disabledAgentIds.join(", ");
     defaultRuntime.log(
-      `${muted(`Memory Search: disabled for ${disabledAgentIds.length} agent${disabledAgentIds.length > 1 ? "s" : ""} (${agentList})`)}`,
+      muted(
+        `Memory Search: disabled for ${disabledAgentIds.length} agent${disabledAgentIds.length > 1 ? "s" : ""} (${agentList})`,
+      ),
     );
     defaultRuntime.log("");
   }

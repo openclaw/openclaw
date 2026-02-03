@@ -35,10 +35,14 @@ export function classifyQuery(query: string): QueryType {
   const wordCount = words.length;
 
   // Short queries: 1-2 words → boost BM25
-  if (wordCount <= 2) return "short";
+  if (wordCount <= 2) {
+    return "short";
+  }
 
   // Long queries: 5+ words → boost vector
-  if (wordCount >= 5) return "long";
+  if (wordCount >= 5) {
+    return "long";
+  }
 
   // Entity detection: check for capitalized words (proper nouns)
   // Heuristic: if more than half of non-first words are capitalized
@@ -50,7 +54,9 @@ export function classifyQuery(query: string): QueryType {
         !/^(I|A|An|The|Is|Are|Was|Were|What|Who|Where|When|How|Why|Do|Does|Did)$/.test(w),
     );
 
-  if (capitalizedWords.length > 0) return "entity";
+  if (capitalizedWords.length > 0) {
+    return "entity";
+  }
 
   // Check for question patterns targeting entities
   if (/^(who|where|what)\s+(is|does|did|was|were)\s/i.test(query)) {

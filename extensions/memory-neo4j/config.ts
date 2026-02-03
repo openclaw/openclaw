@@ -135,13 +135,13 @@ export const memoryNeo4jConfigSchema = {
 
     return {
       neo4j: {
-        uri: neo4jRaw.uri as string,
+        uri: neo4jRaw.uri,
         username: neo4jUsername,
         password: neo4jPassword,
       },
       embedding: {
-        apiKey: resolveEnvVars(embeddingRaw.apiKey as string),
-        model: embeddingModel as MemoryNeo4jConfig["embedding"]["model"],
+        apiKey: resolveEnvVars(embeddingRaw.apiKey),
+        model: embeddingModel,
       },
       autoCapture: cfg.autoCapture !== false,
       autoRecall: cfg.autoRecall !== false,

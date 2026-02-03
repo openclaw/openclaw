@@ -12,13 +12,7 @@ import { randomUUID } from "node:crypto";
 import type { ExtractionConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
 import type { Neo4jMemoryClient } from "./neo4j-client.js";
-import type {
-  CaptureDecision,
-  CaptureItem,
-  EntityType,
-  ExtractionResult,
-  MemoryCategory,
-} from "./schema.js";
+import type { CaptureItem, EntityType, ExtractionResult, MemoryCategory } from "./schema.js";
 import { ALLOWED_RELATIONSHIP_TYPES, ENTITY_TYPES } from "./schema.js";
 
 // ============================================================================
@@ -149,17 +143,21 @@ export async function extractEntities(
   text: string,
   config: ExtractionConfig,
 ): Promise<ExtractionResult | null> {
-  if (!config.enabled) return null;
+  if (!config.enabled) {
+    return null;
+  }
 
   const prompt = ENTITY_EXTRACTION_PROMPT.replace("{text}", text);
 
   try {
     const content = await callOpenRouter(config, prompt);
-    if (!content) return null;
+    if (!content) {
+      return null;
+    }
 
     const parsed = JSON.parse(content) as Record<string, unknown>;
     return validateExtractionResult(parsed);
-  } catch (err) {
+  } catch {
     // Will be handled by caller; don't throw for parse errors
     return null;
   }
@@ -349,20 +347,26 @@ export async function evaluateAutoCapture(
   userMessages: string[],
   config: ExtractionConfig,
 ): Promise<CaptureItem[]> {
-  if (!config.enabled || userMessages.length === 0) return [];
+  if (!config.enabled || userMessages.length === 0) {
+    return [];
+  }
 
   const combined = userMessages.join("\n\n");
-  if (combined.length < 10) return [];
+  if (combined.length < 10) {
+    return [];
+  }
 
   const prompt = AUTO_CAPTURE_PROMPT.replace("{messages}", combined);
 
   try {
     const content = await callOpenRouter(config, prompt);
-    if (!content) return [];
+    if (!content) {
+      return [];
+    }
 
     const parsed = JSON.parse(content) as Record<string, unknown>;
     return validateCaptureDecision(parsed);
-  } catch (err) {
+  } catch {
     // Silently fail — auto-capture is best-effort
     return [];
   }
@@ -406,11 +410,15 @@ export function extractUserMessages(messages: unknown[]): string[] {
   const texts: string[] = [];
 
   for (const msg of messages) {
-    if (!msg || typeof msg !== "object") continue;
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
     const msgObj = msg as Record<string, unknown>;
 
     // Only process user messages for auto-capture
-    if (msgObj.role !== "user") continue;
+    if (msgObj.role !== "user") {
+      continue;
+    }
 
     const content = msgObj.content;
     if (typeof content === "string") {

@@ -397,7 +397,9 @@ const memoryNeo4jPlugin = {
     // Auto-recall: inject relevant memories before agent starts
     if (cfg.autoRecall) {
       api.on("before_agent_start", async (event, ctx) => {
-        if (!event.prompt || event.prompt.length < 5) return;
+        if (!event.prompt || event.prompt.length < 5) {
+          return;
+        }
 
         const agentId = ctx.agentId || "default";
 
@@ -411,7 +413,9 @@ const memoryNeo4jPlugin = {
             extractionConfig.enabled,
           );
 
-          if (results.length === 0) return;
+          if (results.length === 0) {
+            return;
+          }
 
           const memoryContext = results.map((r) => `- [${r.category}] ${r.text}`).join("\n");
 
@@ -440,10 +444,14 @@ const memoryNeo4jPlugin = {
           if (extractionConfig.enabled) {
             // LLM-based auto-capture (Decision Q8)
             const userMessages = extractUserMessages(event.messages);
-            if (userMessages.length === 0) return;
+            if (userMessages.length === 0) {
+              return;
+            }
 
             const items = await evaluateAutoCapture(userMessages, extractionConfig);
-            if (items.length === 0) return;
+            if (items.length === 0) {
+              return;
+            }
 
             let stored = 0;
             for (const item of items) {
@@ -452,7 +460,9 @@ const memoryNeo4jPlugin = {
 
                 // Check for duplicates
                 const existing = await db.findSimilar(vector, 0.95, 1);
-                if (existing.length > 0) continue;
+                if (existing.length > 0) {
+                  continue;
+                }
 
                 const memoryId = randomUUID();
                 await db.storeMemory({
@@ -489,12 +499,16 @@ const memoryNeo4jPlugin = {
           } else {
             // Fallback: rule-based capture (no extraction API key)
             const userMessages = extractUserMessages(event.messages);
-            if (userMessages.length === 0) return;
+            if (userMessages.length === 0) {
+              return;
+            }
 
             const toCapture = userMessages.filter(
               (text) => text.length >= 10 && text.length <= 500 && shouldCaptureRuleBased(text),
             );
-            if (toCapture.length === 0) return;
+            if (toCapture.length === 0) {
+              return;
+            }
 
             let stored = 0;
             for (const text of toCapture.slice(0, 3)) {
@@ -502,7 +516,9 @@ const memoryNeo4jPlugin = {
               const vector = await embeddings.embed(text);
 
               const existing = await db.findSimilar(vector, 0.95, 1);
-              if (existing.length > 0) continue;
+              if (existing.length > 0) {
+                continue;
+              }
 
               await db.storeMemory({
                 id: randomUUID(),
@@ -572,20 +588,36 @@ const MEMORY_TRIGGERS = [
 ];
 
 function shouldCaptureRuleBased(text: string): boolean {
-  if (text.includes("<relevant-memories>")) return false;
-  if (text.startsWith("<") && text.includes("</")) return false;
-  if (text.includes("**") && text.includes("\n-")) return false;
+  if (text.includes("<relevant-memories>")) {
+    return false;
+  }
+  if (text.startsWith("<") && text.includes("</")) {
+    return false;
+  }
+  if (text.includes("**") && text.includes("\n-")) {
+    return false;
+  }
   const emojiCount = (text.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
-  if (emojiCount > 3) return false;
+  if (emojiCount > 3) {
+    return false;
+  }
   return MEMORY_TRIGGERS.some((r) => r.test(text));
 }
 
 function detectCategory(text: string): MemoryCategory {
   const lower = text.toLowerCase();
-  if (/prefer|radši|like|love|hate|want/i.test(lower)) return "preference";
-  if (/decided|rozhodli|will use|budeme/i.test(lower)) return "decision";
-  if (/\+\d{10,}|@[\w.-]+\.\w+|is called|jmenuje se/i.test(lower)) return "entity";
-  if (/is|are|has|have|je|má|jsou/i.test(lower)) return "fact";
+  if (/prefer|radši|like|love|hate|want/i.test(lower)) {
+    return "preference";
+  }
+  if (/decided|rozhodli|will use|budeme/i.test(lower)) {
+    return "decision";
+  }
+  if (/\+\d{10,}|@[\w.-]+\.\w+|is called|jmenuje se/i.test(lower)) {
+    return "entity";
+  }
+  if (/is|are|has|have|je|má|jsou/i.test(lower)) {
+    return "fact";
+  }
   return "other";
 }
 

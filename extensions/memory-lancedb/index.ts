@@ -401,9 +401,10 @@ class MemoryExtractor {
         )
         .map((m) => ({
           text: String(m.text).slice(0, 500),
-          category: MEMORY_CATEGORIES.includes(m.category as MemoryCategory)
-            ? (m.category as MemoryCategory)
-            : ("fact" as MemoryCategory),
+          category:
+            typeof m.category === "string" && MEMORY_CATEGORIES.includes(m.category)
+              ? m.category
+              : "fact",
           importance:
             typeof m.importance === "number" ? Math.min(1, Math.max(0, m.importance)) : 0.7,
         }))

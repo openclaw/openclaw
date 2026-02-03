@@ -33,11 +33,13 @@ export async function loadSessionMeta(
   const metaPath = getSessionMetaPath(sessionId, agentId);
   try {
     const content = await fs.readFile(metaPath, "utf-8");
-    const entry = JSON5.parse(content) as SessionEntry;
+    const entry = JSON5.parse(content);
     return entry;
   } catch (err) {
     const code = (err as { code?: string }).code;
-    if (code === "ENOENT") return undefined;
+    if (code === "ENOENT") {
+      return undefined;
+    }
     throw err;
   }
 }
@@ -97,7 +99,9 @@ export async function updateSessionMeta(
 export async function deleteSessionMeta(sessionId: string, agentId?: string): Promise<void> {
   const metaPath = getSessionMetaPath(sessionId, agentId);
   await fs.unlink(metaPath).catch((err) => {
-    if ((err as { code?: string }).code !== "ENOENT") throw err;
+    if ((err as { code?: string }).code !== "ENOENT") {
+      throw err;
+    }
   });
 }
 
@@ -111,7 +115,9 @@ export async function listSessionMetas(agentId?: string): Promise<string[]> {
     const files = await fs.readdir(sessionsDir);
     return files.filter((f) => f.endsWith(META_SUFFIX)).map((f) => f.slice(0, -META_SUFFIX.length));
   } catch (err) {
-    if ((err as { code?: string }).code === "ENOENT") return [];
+    if ((err as { code?: string }).code === "ENOENT") {
+      return [];
+    }
     throw err;
   }
 }

@@ -33,7 +33,9 @@ export class Embeddings {
    * Returns array of embeddings in the same order as input.
    */
   async embedBatch(texts: string[]): Promise<number[][]> {
-    if (texts.length === 0) return [];
+    if (texts.length === 0) {
+      return [];
+    }
 
     const response = await this.client.embeddings.create({
       model: this.model,
@@ -41,6 +43,6 @@ export class Embeddings {
     });
 
     // Sort by index to ensure correct order
-    return response.data.sort((a, b) => a.index - b.index).map((d) => d.embedding);
+    return response.data.toSorted((a, b) => a.index - b.index).map((d) => d.embedding);
   }
 }

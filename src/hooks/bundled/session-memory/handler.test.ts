@@ -607,6 +607,7 @@ describe("session-memory hook", () => {
         hooks: {
           internal: {
             entries: {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
               "session-memory": { enabled: true, target: "invalid" as any },
             },
           },

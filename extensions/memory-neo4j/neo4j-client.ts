@@ -55,8 +55,12 @@ export class Neo4jMemoryClient {
   // --------------------------------------------------------------------------
 
   async ensureInitialized(): Promise<void> {
-    if (this.driver && this.indexesReady) return;
-    if (this.initPromise) return this.initPromise;
+    if (this.driver && this.indexesReady) {
+      return;
+    }
+    if (this.initPromise) {
+      return this.initPromise;
+    }
     this.initPromise = this.doInitialize();
     return this.initPromise;
   }
@@ -182,7 +186,9 @@ export class Neo4jMemoryClient {
   }
 
   async verifyConnection(): Promise<boolean> {
-    if (!this.driver) return false;
+    if (!this.driver) {
+      return false;
+    }
     const session = this.driver.session();
     try {
       await session.run("RETURN 1");
@@ -328,7 +334,9 @@ export class Neo4jMemoryClient {
     const session = this.driver!.session();
     try {
       const escaped = escapeLucene(query);
-      if (!escaped.trim()) return [];
+      if (!escaped.trim()) {
+        return [];
+      }
 
       const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
       const result = await session.run(
@@ -353,7 +361,9 @@ export class Neo4jMemoryClient {
         rawScore: r.get("bm25Score") as number,
       }));
 
-      if (records.length === 0) return [];
+      if (records.length === 0) {
+        return [];
+      }
       const maxScore = records[0].rawScore || 1;
       return records.map((r) => ({
         ...r,
@@ -386,7 +396,9 @@ export class Neo4jMemoryClient {
     const session = this.driver!.session();
     try {
       const escaped = escapeLucene(query);
-      if (!escaped.trim()) return [];
+      if (!escaped.trim()) {
+        return [];
+      }
 
       // Step 1: Find matching entities
       const entityResult = await session.run(
@@ -400,7 +412,9 @@ export class Neo4jMemoryClient {
       );
 
       const entityIds = entityResult.records.map((r) => r.get("entityId") as string);
-      if (entityIds.length === 0) return [];
+      if (entityIds.length === 0) {
+        return [];
+      }
 
       // Step 2 + 3: Direct mentions + 1-hop spreading activation
       const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
@@ -437,7 +451,9 @@ export class Neo4jMemoryClient {
       const byId = new Map<string, SearchSignalResult>();
       for (const record of result.records) {
         const id = record.get("id") as string;
-        if (!id) continue;
+        if (!id) {
+          continue;
+        }
         const score = record.get("graphScore") as number;
         const existing = byId.get(id);
         if (!existing || score > existing.score) {
@@ -453,7 +469,7 @@ export class Neo4jMemoryClient {
       }
 
       return Array.from(byId.values())
-        .sort((a, b) => b.score - a.score)
+        .toSorted((a, b) => b.score - a.score)
         .slice(0, limit);
     } catch (err) {
       this.logger.warn(`memory-neo4j: graph search failed: ${String(err)}`);
