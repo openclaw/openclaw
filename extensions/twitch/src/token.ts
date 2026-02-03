@@ -23,9 +23,13 @@ export type TwitchTokenResolution = {
  * Normalize a Twitch OAuth token - ensure it has the oauth: prefix
  */
 function normalizeTwitchToken(raw?: string | null): string | undefined {
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   const trimmed = raw.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   // Twitch tokens should have oauth: prefix
   return trimmed.startsWith("oauth:") ? trimmed : `oauth:${trimmed}`;
 }
@@ -55,7 +59,7 @@ export function resolveTwitchToken(
   const accountCfg =
     accountId === DEFAULT_ACCOUNT_ID
       ? (twitchCfg?.accounts?.[DEFAULT_ACCOUNT_ID] as Record<string, unknown> | undefined)
-      : (twitchCfg?.accounts?.[accountId as string] as Record<string, unknown> | undefined);
+      : (twitchCfg?.accounts?.[accountId] as Record<string, unknown> | undefined);
 
   // For default account, also check base-level config
   let token: string | undefined;

@@ -23,6 +23,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 import { emitAgentEvent } from "../infra/agent-events.js";
 import "./test-helpers/fast-core-tools.js";
+import { sleep } from "../utils.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
@@ -74,7 +75,9 @@ describe("openclaw-tools: subagents", () => {
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) throw new Error("missing sessions_spawn tool");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
 
     const result = await tool.execute("call10", {
       task: "do thing",
@@ -111,7 +114,9 @@ describe("openclaw-tools: subagents", () => {
       agentSessionKey: "main",
       agentChannel: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) throw new Error("missing sessions_spawn tool");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
 
     const result = await tool.execute("call9", {
       task: "do thing",
@@ -161,7 +166,12 @@ describe("openclaw-tools: subagents", () => {
       if (request.method === "agent.wait") {
         const params = request.params as { runId?: string; timeoutMs?: number } | undefined;
         waitCalls.push(params ?? {});
-        return { runId: params?.runId ?? "run-1", status: "ok", startedAt: 1000, endedAt: 2000 };
+        return {
+          runId: params?.runId ?? "run-1",
+          status: "ok",
+          startedAt: 1000,
+          endedAt: 2000,
+        };
       }
       if (request.method === "sessions.delete") {
         const params = request.params as { key?: string } | undefined;
@@ -175,7 +185,9 @@ describe("openclaw-tools: subagents", () => {
       agentSessionKey: "discord:group:req",
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) throw new Error("missing sessions_spawn tool");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
 
     const result = await tool.execute("call1", {
       task: "do thing",
@@ -187,7 +199,9 @@ describe("openclaw-tools: subagents", () => {
       runId: "run-1",
     });
 
-    if (!childRunId) throw new Error("missing child runId");
+    if (!childRunId) {
+      throw new Error("missing child runId");
+    }
     emitAgentEvent({
       runId: childRunId,
       stream: "lifecycle",
@@ -198,9 +212,9 @@ describe("openclaw-tools: subagents", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await sleep(0);
+    await sleep(0);
+    await sleep(0);
 
     const childWait = waitCalls.find((call) => call.runId === childRunId);
     expect(childWait?.timeoutMs).toBe(1000);
@@ -264,7 +278,12 @@ describe("openclaw-tools: subagents", () => {
       }
       if (request.method === "agent.wait") {
         const params = request.params as { runId?: string; timeoutMs?: number } | undefined;
-        return { runId: params?.runId ?? "run-1", status: "ok", startedAt: 1000, endedAt: 2000 };
+        return {
+          runId: params?.runId ?? "run-1",
+          status: "ok",
+          startedAt: 1000,
+          endedAt: 2000,
+        };
       }
       if (request.method === "sessions.delete" || request.method === "sessions.patch") {
         return { ok: true };
@@ -277,7 +296,9 @@ describe("openclaw-tools: subagents", () => {
       agentChannel: "whatsapp",
       agentAccountId: "kev",
     }).find((candidate) => candidate.name === "sessions_spawn");
-    if (!tool) throw new Error("missing sessions_spawn tool");
+    if (!tool) {
+      throw new Error("missing sessions_spawn tool");
+    }
 
     const result = await tool.execute("call2", {
       task: "do thing",
@@ -289,7 +310,9 @@ describe("openclaw-tools: subagents", () => {
       runId: "run-1",
     });
 
-    if (!childRunId) throw new Error("missing child runId");
+    if (!childRunId) {
+      throw new Error("missing child runId");
+    }
     emitAgentEvent({
       runId: childRunId,
       stream: "lifecycle",
@@ -300,9 +323,9 @@ describe("openclaw-tools: subagents", () => {
       },
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await sleep(0);
+    await sleep(0);
+    await sleep(0);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(2);

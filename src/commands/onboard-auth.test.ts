@@ -1,10 +1,8 @@
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-
 import {
   applyAuthProfileConfig,
   applyMinimaxApiConfig,
@@ -27,7 +25,9 @@ import {
 const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
 const requireAgentDir = () => {
   const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) throw new Error("OPENCLAW_AGENT_DIR not set");
+  if (!agentDir) {
+    throw new Error("OPENCLAW_AGENT_DIR not set");
+  }
   return agentDir;
 };
 

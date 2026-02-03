@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import { monitorSlackProvider } from "./monitor.js";
+
+const { monitorSlackProvider } = await import("./monitor.js");
 
 const sendMock = vi.fn();
 const replyMock = vi.fn();
@@ -106,7 +106,9 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function waitForEvent(name: string) {
   for (let i = 0; i < 10; i += 1) {
-    if (getSlackHandlers()?.has(name)) return;
+    if (getSlackHandlers()?.has(name)) {
+      return;
+    }
     await flush();
   }
 }
@@ -137,7 +139,9 @@ describe("monitorSlackProvider threading", () => {
     replyMock.mockResolvedValue({ text: "thread reply" });
 
     const client = getSlackClient();
-    if (!client) throw new Error("Slack client not registered");
+    if (!client) {
+      throw new Error("Slack client not registered");
+    }
     const conversations = client.conversations as {
       history: ReturnType<typeof vi.fn>;
     };
@@ -154,7 +158,9 @@ describe("monitorSlackProvider threading", () => {
 
     await waitForEvent("message");
     const handler = getSlackHandlers()?.get("message");
-    if (!handler) throw new Error("Slack message handler not registered");
+    if (!handler) {
+      throw new Error("Slack message handler not registered");
+    }
 
     await handler({
       event: {

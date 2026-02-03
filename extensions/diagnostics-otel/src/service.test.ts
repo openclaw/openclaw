@@ -100,8 +100,8 @@ vi.mock("openclaw/plugin-sdk", async () => {
   };
 });
 
-import { createDiagnosticsOtelService } from "./service.js";
 import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
+import { createDiagnosticsOtelService } from "./service.js";
 
 describe("diagnostics-otel service", () => {
   beforeEach(() => {
@@ -189,13 +189,19 @@ describe("diagnostics-otel service", () => {
     });
 
     expect(telemetryState.counters.get("openclaw.webhook.received")?.add).toHaveBeenCalled();
-    expect(telemetryState.histograms.get("openclaw.webhook.duration_ms")?.record).toHaveBeenCalled();
+    expect(
+      telemetryState.histograms.get("openclaw.webhook.duration_ms")?.record,
+    ).toHaveBeenCalled();
     expect(telemetryState.counters.get("openclaw.message.queued")?.add).toHaveBeenCalled();
     expect(telemetryState.counters.get("openclaw.message.processed")?.add).toHaveBeenCalled();
-    expect(telemetryState.histograms.get("openclaw.message.duration_ms")?.record).toHaveBeenCalled();
+    expect(
+      telemetryState.histograms.get("openclaw.message.duration_ms")?.record,
+    ).toHaveBeenCalled();
     expect(telemetryState.histograms.get("openclaw.queue.wait_ms")?.record).toHaveBeenCalled();
     expect(telemetryState.counters.get("openclaw.session.stuck")?.add).toHaveBeenCalled();
-    expect(telemetryState.histograms.get("openclaw.session.stuck_age_ms")?.record).toHaveBeenCalled();
+    expect(
+      telemetryState.histograms.get("openclaw.session.stuck_age_ms")?.record,
+    ).toHaveBeenCalled();
     expect(telemetryState.counters.get("openclaw.run.attempt")?.add).toHaveBeenCalled();
 
     const spanNames = telemetryState.tracer.startSpan.mock.calls.map((call) => call[0]);
@@ -206,7 +212,7 @@ describe("diagnostics-otel service", () => {
     expect(registerLogTransportMock).toHaveBeenCalledTimes(1);
     expect(registeredTransports).toHaveLength(1);
     registeredTransports[0]?.({
-      0: "{\"subsystem\":\"diagnostic\"}",
+      0: '{"subsystem":"diagnostic"}',
       1: "hello",
       _meta: { logLevelName: "INFO", date: new Date() },
     });

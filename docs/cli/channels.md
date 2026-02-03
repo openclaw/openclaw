@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw channels` (accounts, status, login/logout,
 read_when:
   - You want to add/remove channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage)
   - You want to check channel status or tail channel logs
+title: "channels"
 ---
 
 # `openclaw channels`
@@ -10,6 +11,7 @@ read_when:
 Manage chat channel accounts and their runtime status on the Gateway.
 
 Related docs:
+
 - Channel guides: [Channels](/channels/index)
 - Gateway configuration: [Configuration](/gateway/configuration)
 
@@ -56,6 +58,7 @@ openclaw channels capabilities --channel discord --target channel:123
 ```
 
 Notes:
+
 - `--channel` is optional; omit it to list every channel (including extensions).
 - `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord.
 - Probes are provider-specific: Discord intents + optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; MS Teams app token + Graph roles/scopes (annotated where known). Channels without probes report `Probe: unavailable`.
@@ -71,5 +74,6 @@ openclaw channels resolve --channel matrix "Project Room"
 ```
 
 Notes:
+
 - Use `--kind user|group|auto` to force the target type.
 - Resolution prefers active matches when multiple entries share the same name.

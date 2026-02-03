@@ -77,7 +77,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+  transition:
+    background 150ms ease-out,
+    color 150ms ease-out,
+    border-color 150ms ease-out;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
@@ -292,6 +295,7 @@
 
 .chat-controls__session {
   min-width: 140px;
+  max-width: 420px;
 }
 
 .chat-controls__thinking {
@@ -358,6 +362,9 @@
 .chat-controls__session select {
   padding: 6px 10px;
   font-size: 13px;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chat-controls__thinking {

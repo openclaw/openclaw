@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
-import { parseLogLine } from "../../logging/parse-log-line.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
+import { parseLogLine } from "../../logging/parse-log-line.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
 
@@ -21,32 +21,46 @@ const getChannelSet = () =>
 
 function parseChannelFilter(raw?: string) {
   const trimmed = raw?.trim().toLowerCase();
-  if (!trimmed) return "all";
+  if (!trimmed) {
+    return "all";
+  }
   return getChannelSet().has(trimmed) ? trimmed : "all";
 }
 
 function matchesChannel(line: NonNullable<LogLine>, channel: string) {
-  if (channel === "all") return true;
+  if (channel === "all") {
+    return true;
+  }
   const needle = `gateway/channels/${channel}`;
-  if (line.subsystem?.includes(needle)) return true;
-  if (line.module?.includes(channel)) return true;
+  if (line.subsystem?.includes(needle)) {
+    return true;
+  }
+  if (line.module?.includes(channel)) {
+    return true;
+  }
   return false;
 }
 
 async function readTailLines(file: string, limit: number): Promise<string[]> {
   const stat = await fs.stat(file).catch(() => null);
-  if (!stat) return [];
+  if (!stat) {
+    return [];
+  }
   const size = stat.size;
   const start = Math.max(0, size - MAX_BYTES);
   const handle = await fs.open(file, "r");
   try {
     const length = Math.max(0, size - start);
-    if (length === 0) return [];
+    if (length === 0) {
+      return [];
+    }
     const buffer = Buffer.alloc(length);
     const readResult = await handle.read(buffer, 0, length, start);
     const text = buffer.toString("utf8", 0, readResult.bytesRead);
     let lines = text.split("\n");
-    if (start > 0) lines = lines.slice(1);
+    if (start > 0) {
+      lines = lines.slice(1);
+    }
     if (lines.length && lines[lines.length - 1] === "") {
       lines = lines.slice(0, -1);
     }

@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import { CronService } from "./service.js";
 
@@ -163,7 +161,9 @@ describe("CronService", () => {
 
     const runPromise = cron.run(job.id, "force");
     for (let i = 0; i < 10; i++) {
-      if (runHeartbeatOnce.mock.calls.length > 0) break;
+      if (runHeartbeatOnce.mock.calls.length > 0) {
+        break;
+      }
       // Let the locked() chain progress.
       await Promise.resolve();
     }

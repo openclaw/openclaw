@@ -1,5 +1,5 @@
-import { lookup as dnsLookup } from "node:dns/promises";
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { Agent, type Dispatcher } from "undici";
 
 type LookupCallback = (
@@ -15,7 +15,12 @@ export class SsrFBlockedError extends Error {
   }
 }
 
-type LookupFn = typeof dnsLookup;
+export type LookupFn = typeof dnsLookup;
+
+export type SsrFPolicy = {
+  allowPrivateNetwork?: boolean;
+  allowedHostnames?: string[];
+};
 
 const PRIVATE_IPV6_PREFIXES = ["fe80:", "fec0:", "fc", "fd"];
 const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
@@ -28,11 +33,22 @@ function normalizeHostname(hostname: string): string {
   return normalized;
 }
 
+function normalizeHostnameSet(values?: string[]): Set<string> {
+  if (!values || values.length === 0) {
+    return new Set<string>();
+  }
+  return new Set(values.map((value) => normalizeHostname(value)).filter(Boolean));
+}
+
 function parseIpv4(address: string): number[] | null {
   const parts = address.split(".");
-  if (parts.length !== 4) return null;
+  if (parts.length !== 4) {
+    return null;
+  }
   const numbers = parts.map((part) => Number.parseInt(part, 10));
-  if (numbers.some((value) => Number.isNaN(value) || value < 0 || value > 255)) return null;
+  if (numbers.some((value) => Number.isNaN(value) || value < 0 || value > 255)) {
+    return null;
+  }
   return numbers;
 }
 
@@ -43,10 +59,14 @@ function parseIpv4FromMappedIpv6(mapped: string): number[] | null {
   const parts = mapped.split(":").filter(Boolean);
   if (parts.length === 1) {
     const value = Number.parseInt(parts[0], 16);
-    if (Number.isNaN(value) || value < 0 || value > 0xffff_ffff) return null;
+    if (Number.isNaN(value) || value < 0 || value > 0xffff_ffff) {
+      return null;
+    }
     return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
   }
-  if (parts.length !== 2) return null;
+  if (parts.length !== 2) {
+    return null;
+  }
   const high = Number.parseInt(parts[0], 16);
   const low = Number.parseInt(parts[1], 16);
   if (
@@ -65,13 +85,27 @@ function parseIpv4FromMappedIpv6(mapped: string): number[] | null {
 
 function isPrivateIpv4(parts: number[]): boolean {
   const [octet1, octet2] = parts;
-  if (octet1 === 0) return true;
-  if (octet1 === 10) return true;
-  if (octet1 === 127) return true;
-  if (octet1 === 169 && octet2 === 254) return true;
-  if (octet1 === 172 && octet2 >= 16 && octet2 <= 31) return true;
-  if (octet1 === 192 && octet2 === 168) return true;
-  if (octet1 === 100 && octet2 >= 64 && octet2 <= 127) return true;
+  if (octet1 === 0) {
+    return true;
+  }
+  if (octet1 === 10) {
+    return true;
+  }
+  if (octet1 === 127) {
+    return true;
+  }
+  if (octet1 === 169 && octet2 === 254) {
+    return true;
+  }
+  if (octet1 === 172 && octet2 >= 16 && octet2 <= 31) {
+    return true;
+  }
+  if (octet1 === 192 && octet2 === 168) {
+    return true;
+  }
+  if (octet1 === 100 && octet2 >= 64 && octet2 <= 127) {
+    return true;
+  }
   return false;
 }
 
@@ -80,28 +114,40 @@ export function isPrivateIpAddress(address: string): boolean {
   if (normalized.startsWith("[") && normalized.endsWith("]")) {
     normalized = normalized.slice(1, -1);
   }
-  if (!normalized) return false;
+  if (!normalized) {
+    return false;
+  }
 
   if (normalized.startsWith("::ffff:")) {
     const mapped = normalized.slice("::ffff:".length);
     const ipv4 = parseIpv4FromMappedIpv6(mapped);
-    if (ipv4) return isPrivateIpv4(ipv4);
+    if (ipv4) {
+      return isPrivateIpv4(ipv4);
+    }
   }
 
   if (normalized.includes(":")) {
-    if (normalized === "::" || normalized === "::1") return true;
+    if (normalized === "::" || normalized === "::1") {
+      return true;
+    }
     return PRIVATE_IPV6_PREFIXES.some((prefix) => normalized.startsWith(prefix));
   }
 
   const ipv4 = parseIpv4(normalized);
-  if (!ipv4) return false;
+  if (!ipv4) {
+    return false;
+  }
   return isPrivateIpv4(ipv4);
 }
 
 export function isBlockedHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
-  if (!normalized) return false;
-  if (BLOCKED_HOSTNAMES.has(normalized)) return true;
+  if (!normalized) {
+    return false;
+  }
+  if (BLOCKED_HOSTNAMES.has(normalized)) {
+    return true;
+  }
   return (
     normalized.endsWith(".localhost") ||
     normalized.endsWith(".local") ||
@@ -134,7 +180,9 @@ export function createPinnedLookup(params: {
   return ((host: string, options?: unknown, callback?: unknown) => {
     const cb: LookupCallback =
       typeof options === "function" ? (options as LookupCallback) : (callback as LookupCallback);
-    if (!cb) return;
+    if (!cb) {
+      return;
+    }
     const normalized = normalizeHostname(host);
     if (!normalized || normalized !== normalizedHost) {
       if (typeof options === "function" || options === undefined) {
@@ -170,31 +218,40 @@ export type PinnedHostname = {
   lookup: typeof dnsLookupCb;
 };
 
-export async function resolvePinnedHostname(
+export async function resolvePinnedHostnameWithPolicy(
   hostname: string,
-  lookupFn: LookupFn = dnsLookup,
+  params: { lookupFn?: LookupFn; policy?: SsrFPolicy } = {},
 ): Promise<PinnedHostname> {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
     throw new Error("Invalid hostname");
   }
 
-  if (isBlockedHostname(normalized)) {
-    throw new SsrFBlockedError(`Blocked hostname: ${hostname}`);
+  const allowPrivateNetwork = Boolean(params.policy?.allowPrivateNetwork);
+  const allowedHostnames = normalizeHostnameSet(params.policy?.allowedHostnames);
+  const isExplicitAllowed = allowedHostnames.has(normalized);
+
+  if (!allowPrivateNetwork && !isExplicitAllowed) {
+    if (isBlockedHostname(normalized)) {
+      throw new SsrFBlockedError(`Blocked hostname: ${hostname}`);
+    }
+
+    if (isPrivateIpAddress(normalized)) {
+      throw new SsrFBlockedError("Blocked: private/internal IP address");
+    }
   }
 
-  if (isPrivateIpAddress(normalized)) {
-    throw new SsrFBlockedError("Blocked: private/internal IP address");
-  }
-
+  const lookupFn = params.lookupFn ?? dnsLookup;
   const results = await lookupFn(normalized, { all: true });
   if (results.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
 
-  for (const entry of results) {
-    if (isPrivateIpAddress(entry.address)) {
-      throw new SsrFBlockedError("Blocked: resolves to private/internal IP address");
+  if (!allowPrivateNetwork && !isExplicitAllowed) {
+    for (const entry of results) {
+      if (isPrivateIpAddress(entry.address)) {
+        throw new SsrFBlockedError("Blocked: resolves to private/internal IP address");
+      }
     }
   }
 
@@ -210,6 +267,13 @@ export async function resolvePinnedHostname(
   };
 }
 
+export async function resolvePinnedHostname(
+  hostname: string,
+  lookupFn: LookupFn = dnsLookup,
+): Promise<PinnedHostname> {
+  return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
+}
+
 export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
   return new Agent({
     connect: {
@@ -219,7 +283,9 @@ export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
 }
 
 export async function closeDispatcher(dispatcher?: Dispatcher | null): Promise<void> {
-  if (!dispatcher) return;
+  if (!dispatcher) {
+    return;
+  }
   const candidate = dispatcher as { close?: () => Promise<void> | void; destroy?: () => void };
   try {
     if (typeof candidate.close === "function") {

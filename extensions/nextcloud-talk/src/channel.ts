@@ -10,7 +10,7 @@ import {
   type OpenClawConfig,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk";
-
+import type { CoreConfig } from "./types.js";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
@@ -19,12 +19,14 @@ import {
 } from "./accounts.js";
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import { monitorNextcloudTalkProvider } from "./monitor.js";
-import { looksLikeNextcloudTalkTargetId, normalizeNextcloudTalkMessagingTarget } from "./normalize.js";
+import {
+  looksLikeNextcloudTalkTargetId,
+  normalizeNextcloudTalkMessagingTarget,
+} from "./normalize.js";
 import { nextcloudTalkOnboardingAdapter } from "./onboarding.js";
+import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import type { CoreConfig } from "./types.js";
-import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 
 const meta = {
   id: "nextcloud-talk",
@@ -97,9 +99,9 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       baseUrl: account.baseUrl ? "[set]" : "[missing]",
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
-      (resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId }).config.allowFrom ?? []).map(
-        (entry) => String(entry).toLowerCase(),
-      ),
+      (
+        resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId }).config.allowFrom ?? []
+      ).map((entry) => String(entry).toLowerCase()),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
         .map((entry) => String(entry).trim())
@@ -122,14 +124,15 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
         policyPath: `${basePath}dmPolicy`,
         allowFromPath: basePath,
         approveHint: formatPairingApproveHint("nextcloud-talk"),
-        normalizeEntry: (raw) =>
-          raw.replace(/^(nextcloud-talk|nc-talk|nc):/i, "").toLowerCase(),
+        normalizeEntry: (raw) => raw.replace(/^(nextcloud-talk|nc-talk|nc):/i, "").toLowerCase(),
       };
     },
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
       const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") return [];
+      if (groupPolicy !== "open") {
+        return [];
+      }
       const roomAllowlistConfigured =
         account.config.rooms && Object.keys(account.config.rooms).length > 0;
       if (roomAllowlistConfigured) {
@@ -146,7 +149,9 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     resolveRequireMention: ({ cfg, accountId, groupId }) => {
       const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
       const rooms = account.config.rooms;
-      if (!rooms || !groupId) return true;
+      if (!rooms || !groupId) {
+        return true;
+      }
 
       const roomConfig = rooms[groupId];
       if (roomConfig?.requireMention !== undefined) {
@@ -173,7 +178,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
     applyAccountName: ({ cfg, accountId, name }) =>
       applyAccountNameToChannelSection({
-        cfg: cfg as OpenClawConfig,
+        cfg: cfg,
         channelKey: "nextcloud-talk",
         accountId,
         name,
@@ -194,7 +199,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     applyAccountConfig: ({ cfg, accountId, input }) => {
       const setupInput = input as NextcloudSetupInput;
       const namedConfig = applyAccountNameToChannelSection({
-        cfg: cfg as OpenClawConfig,
+        cfg: cfg,
         channelKey: "nextcloud-talk",
         accountId,
         name: setupInput.name,
@@ -385,7 +390,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
       }
 
       const resolved = resolveNextcloudTalkAccount({
-        cfg: (changed ? (nextCfg as CoreConfig) : (cfg as CoreConfig)),
+        cfg: changed ? (nextCfg as CoreConfig) : (cfg as CoreConfig),
         accountId,
       });
       const loggedOut = resolved.secretSource === "none";

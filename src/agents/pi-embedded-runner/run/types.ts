@@ -1,19 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, AssistantMessage, ImageContent, Model } from "@mariozechner/pi-ai";
-import type { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
-
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import type { AgentStreamParams } from "../../../commands/agent/types.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import type { AuthStorage, ModelRegistry } from "../../pi-model-discovery.js";
 import type { SkillSnapshot } from "../../skills.js";
-import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import type { ClientToolDefinition } from "./params.js";
-
-type AuthStorage = ReturnType<typeof discoverAuthStorage>;
-type ModelRegistry = ReturnType<typeof discoverModels>;
 
 export type EmbeddedRunAttemptParams = {
   sessionId: string;

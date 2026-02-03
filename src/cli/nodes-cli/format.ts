@@ -2,11 +2,17 @@ import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./ty
 
 export function formatAge(msAgo: number) {
   const s = Math.max(0, Math.floor(msAgo / 1000));
-  if (s < 60) return `${s}s`;
+  if (s < 60) {
+    return `${s}s`;
+  }
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
+  if (m < 60) {
+    return `${m}m`;
+  }
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
+  if (h < 24) {
+    return `${h}h`;
+  }
   const d = Math.floor(h / 24);
   return `${d}d`;
 }
@@ -24,12 +30,16 @@ export function parseNodeList(value: unknown): NodeListNode[] {
 }
 
 export function formatPermissions(raw: unknown) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
   const entries = Object.entries(raw as Record<string, unknown>)
     .map(([key, value]) => [String(key).trim(), value === true] as const)
     .filter(([key]) => key.length > 0)
-    .sort((a, b) => a[0].localeCompare(b[0]));
-  if (entries.length === 0) return null;
+    .toSorted((a, b) => a[0].localeCompare(b[0]));
+  if (entries.length === 0) {
+    return null;
+  }
   const parts = entries.map(([key, granted]) => `${key}=${granted ? "yes" : "no"}`);
   return `[${parts.join(", ")}]`;
 }

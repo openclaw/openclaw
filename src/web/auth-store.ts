@@ -1,14 +1,13 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-
+import type { WebChannel } from "../utils.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir } from "../config/paths.js";
 import { info, success } from "../globals.js";
 import { getChildLogger } from "../logging.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { WebChannel } from "../utils.js";
 import { jidToE164, resolveUserPath } from "../utils.js";
 
 export function resolveDefaultWebAuthDir(): string {
@@ -36,9 +35,13 @@ export function hasWebCredsSync(authDir: string): boolean {
 
 function readCredsJsonRaw(filePath: string): string | null {
   try {
-    if (!fsSync.existsSync(filePath)) return null;
+    if (!fsSync.existsSync(filePath)) {
+      return null;
+    }
     const stats = fsSync.statSync(filePath);
-    if (!stats.isFile() || stats.size <= 1) return null;
+    if (!stats.isFile() || stats.size <= 1) {
+      return null;
+    }
     return fsSync.readFileSync(filePath, "utf-8");
   } catch {
     return null;
@@ -58,7 +61,9 @@ export function maybeRestoreCredsFromBackup(authDir: string): void {
     }
 
     const backupRaw = readCredsJsonRaw(backupPath);
-    if (!backupRaw) return;
+    if (!backupRaw) {
+      return;
+    }
 
     // Ensure backup is parseable before restoring.
     JSON.parse(backupRaw);
@@ -80,7 +85,9 @@ export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()
   }
   try {
     const stats = await fs.stat(credsPath);
-    if (!stats.isFile() || stats.size <= 1) return false;
+    if (!stats.isFile() || stats.size <= 1) {
+      return false;
+    }
     const raw = await fs.readFile(credsPath, "utf-8");
     JSON.parse(raw);
     return true;
@@ -92,15 +99,25 @@ export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()
 async function clearLegacyBaileysAuthState(authDir: string) {
   const entries = await fs.readdir(authDir, { withFileTypes: true });
   const shouldDelete = (name: string) => {
-    if (name === "oauth.json") return false;
-    if (name === "creds.json" || name === "creds.json.bak") return true;
-    if (!name.endsWith(".json")) return false;
+    if (name === "oauth.json") {
+      return false;
+    }
+    if (name === "creds.json" || name === "creds.json.bak") {
+      return true;
+    }
+    if (!name.endsWith(".json")) {
+      return false;
+    }
     return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
   };
   await Promise.all(
     entries.map(async (entry) => {
-      if (!entry.isFile()) return;
-      if (!shouldDelete(entry.name)) return;
+      if (!entry.isFile()) {
+        return;
+      }
+      if (!shouldDelete(entry.name)) {
+        return;
+      }
       await fs.rm(path.join(authDir, entry.name), { force: true });
     }),
   );

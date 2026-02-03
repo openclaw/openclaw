@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { ProviderAuthOverview } from "./list.types.js";
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import {
   type AuthProfileStore,
@@ -7,10 +9,8 @@ import {
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
-import type { ProviderAuthOverview } from "./list.types.js";
 
 export function resolveProviderAuthOverview(params: {
   provider: string;
@@ -23,7 +23,9 @@ export function resolveProviderAuthOverview(params: {
   const profiles = listProfilesForProvider(store, provider);
   const withUnusableSuffix = (base: string, profileId: string) => {
     const unusableUntil = resolveProfileUnusableUntilForDisplay(store, profileId);
-    if (!unusableUntil || now >= unusableUntil) return base;
+    if (!unusableUntil || now >= unusableUntil) {
+      return base;
+    }
     const stats = store.usageStats?.[profileId];
     const kind =
       typeof stats?.disabledUntil === "number" && now < stats.disabledUntil
@@ -34,7 +36,9 @@ export function resolveProviderAuthOverview(params: {
   };
   const labels = profiles.map((profileId) => {
     const profile = store.profiles[profileId];
-    if (!profile) return `${profileId}=missing`;
+    if (!profile) {
+      return `${profileId}=missing`;
+    }
     if (profile.type === "api_key") {
       return withUnusableSuffix(`${profileId}=${maskApiKey(profile.key)}`, profileId);
     }

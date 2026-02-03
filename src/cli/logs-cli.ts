@@ -1,5 +1,5 @@
-import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
+import { setTimeout as delay } from "node:timers/promises";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -33,7 +33,9 @@ type LogsCliOptions = {
 };
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
+  if (!value) {
+    return fallback;
+  }
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
@@ -58,10 +60,16 @@ async function fetchLogs(
 }
 
 function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain") {
-  if (!value) return "";
+  if (!value) {
+    return "";
+  }
   const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  if (mode === "pretty") return parsed.toISOString().slice(11, 19);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  if (mode === "pretty") {
+    return parsed.toISOString().slice(11, 19);
+  }
   return parsed.toISOString();
 }
 
@@ -73,7 +81,9 @@ function formatLogLine(
   },
 ): string {
   const parsed = parseLogLine(raw);
-  if (!parsed) return raw;
+  if (!parsed) {
+    return raw;
+  }
   const label = parsed.subsystem ?? parsed.module ?? "";
   const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain");
   const level = parsed.level ?? "";
@@ -162,8 +172,12 @@ function emitGatewayError(
     return;
   }
 
-  if (!errorLine(colorize(rich, theme.error, message))) return;
-  if (!errorLine(details.message)) return;
+  if (!errorLine(colorize(rich, theme.error, message))) {
+    return;
+  }
+  if (!errorLine(details.message)) {
+    return;
+  }
   errorLine(colorize(rich, theme.muted, hint));
 }
 
@@ -288,7 +302,9 @@ export function registerLogsCli(program: Command) {
           : cursor;
       first = false;
 
-      if (!opts.follow) return;
+      if (!opts.follow) {
+        return;
+      }
       await delay(interval);
     }
   });

@@ -1,5 +1,4 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSlackAccount } from "../../slack/accounts.js";
 import {
@@ -49,16 +48,24 @@ function resolveThreadTsFromContext(
   context: SlackActionContext | undefined,
 ): string | undefined {
   // Agent explicitly provided threadTs - use it
-  if (explicitThreadTs) return explicitThreadTs;
+  if (explicitThreadTs) {
+    return explicitThreadTs;
+  }
   // No context or missing required fields
-  if (!context?.currentThreadTs || !context?.currentChannelId) return undefined;
+  if (!context?.currentThreadTs || !context?.currentChannelId) {
+    return undefined;
+  }
 
   const parsedTarget = parseSlackTarget(targetChannel, { defaultKind: "channel" });
-  if (!parsedTarget || parsedTarget.kind !== "channel") return undefined;
+  if (!parsedTarget || parsedTarget.kind !== "channel") {
+    return undefined;
+  }
   const normalizedTarget = parsedTarget.id;
 
   // Different channel - don't inject
-  if (normalizedTarget !== context.currentChannelId) return undefined;
+  if (normalizedTarget !== context.currentChannelId) {
+    return undefined;
+  }
 
   // Check replyToMode
   if (context.replyToMode === "all") {
@@ -93,15 +100,21 @@ export async function handleSlackAction(
 
   // Choose the most appropriate token for Slack read/write operations.
   const getTokenForOperation = (operation: "read" | "write") => {
-    if (operation === "read") return userToken ?? botToken;
-    if (!allowUserWrites) return botToken;
+    if (operation === "read") {
+      return userToken ?? botToken;
+    }
+    if (!allowUserWrites) {
+      return botToken;
+    }
     return botToken ?? userToken;
   };
 
   const buildActionOpts = (operation: "read" | "write") => {
     const token = getTokenForOperation(operation);
     const tokenOverride = token && token !== botToken ? token : undefined;
-    if (!accountId && !tokenOverride) return undefined;
+    if (!accountId && !tokenOverride) {
+      return undefined;
+    }
     return {
       ...(accountId ? { accountId } : {}),
       ...(tokenOverride ? { token: tokenOverride } : {}),

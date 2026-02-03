@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-
 import {
   resolveDefaultConfigCandidates,
   resolveConfigPath,
@@ -48,11 +47,24 @@ describe("state + config path candidates", () => {
   it("orders default config candidates in a stable order", () => {
     const home = "/home/test";
     const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => home);
-    const expectedDirs = [".openclaw", ".clawdbot", ".moltbot", ".moldbot"];
-    const expectedFiles = ["openclaw.json", "clawdbot.json", "moltbot.json", "moldbot.json"];
-    const expected = expectedDirs.flatMap((dir) =>
-      expectedFiles.map((file) => path.join(home, dir, file)),
-    );
+    const expected = [
+      path.join(home, ".openclaw", "openclaw.json"),
+      path.join(home, ".openclaw", "clawdbot.json"),
+      path.join(home, ".openclaw", "moltbot.json"),
+      path.join(home, ".openclaw", "moldbot.json"),
+      path.join(home, ".clawdbot", "openclaw.json"),
+      path.join(home, ".clawdbot", "clawdbot.json"),
+      path.join(home, ".clawdbot", "moltbot.json"),
+      path.join(home, ".clawdbot", "moldbot.json"),
+      path.join(home, ".moltbot", "openclaw.json"),
+      path.join(home, ".moltbot", "clawdbot.json"),
+      path.join(home, ".moltbot", "moltbot.json"),
+      path.join(home, ".moltbot", "moldbot.json"),
+      path.join(home, ".moldbot", "openclaw.json"),
+      path.join(home, ".moldbot", "clawdbot.json"),
+      path.join(home, ".moldbot", "moltbot.json"),
+      path.join(home, ".moldbot", "moldbot.json"),
+    ];
     expect(candidates).toEqual(expected);
   });
 
@@ -101,20 +113,41 @@ describe("state + config path candidates", () => {
       } else {
         process.env.HOME = previousHome;
       }
-      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
-      else process.env.USERPROFILE = previousUserProfile;
-      if (previousHomeDrive === undefined) delete process.env.HOMEDRIVE;
-      else process.env.HOMEDRIVE = previousHomeDrive;
-      if (previousHomePath === undefined) delete process.env.HOMEPATH;
-      else process.env.HOMEPATH = previousHomePath;
-      if (previousOpenClawConfig === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
-      else process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfig;
-      if (previousOpenClawConfig === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
-      else process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfig;
-      if (previousOpenClawState === undefined) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = previousOpenClawState;
-      if (previousOpenClawState === undefined) delete process.env.OPENCLAW_STATE_DIR;
-      else process.env.OPENCLAW_STATE_DIR = previousOpenClawState;
+      if (previousUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = previousUserProfile;
+      }
+      if (previousHomeDrive === undefined) {
+        delete process.env.HOMEDRIVE;
+      } else {
+        process.env.HOMEDRIVE = previousHomeDrive;
+      }
+      if (previousHomePath === undefined) {
+        delete process.env.HOMEPATH;
+      } else {
+        process.env.HOMEPATH = previousHomePath;
+      }
+      if (previousOpenClawConfig === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfig;
+      }
+      if (previousOpenClawConfig === undefined) {
+        delete process.env.OPENCLAW_CONFIG_PATH;
+      } else {
+        process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfig;
+      }
+      if (previousOpenClawState === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousOpenClawState;
+      }
+      if (previousOpenClawState === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousOpenClawState;
+      }
       await fs.rm(root, { recursive: true, force: true });
       vi.resetModules();
     }

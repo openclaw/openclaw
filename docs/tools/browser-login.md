@@ -3,6 +3,7 @@ summary: "Manual logins for browser automation + X/Twitter posting"
 read_when:
   - You need to log into sites for browser automation
   - You want to post updates to X/Twitter
+title: "Browser Login"
 ---
 
 # Browser login + X/Twitter posting
@@ -21,8 +22,8 @@ OpenClaw controls a **dedicated Chrome profile** (named `openclaw`, orange‑tin
 
 Two easy ways to access it:
 
-1) **Ask the agent to open the browser** and then log in yourself.
-2) **Open it via CLI**:
+1. **Ask the agent to open the browser** and then log in yourself.
+2. **Open it via CLI**:
 
 ```bash
 openclaw browser start
@@ -50,11 +51,11 @@ If the agent is sandboxed, the browser tool defaults to the sandbox. To allow ho
       sandbox: {
         mode: "non-main",
         browser: {
-          allowHostControl: true
-        }
-      }
-    }
-  }
+          allowHostControl: true,
+        },
+      },
+    },
+  },
 }
 ```
 

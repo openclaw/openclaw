@@ -8,7 +8,9 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
   if (isLoopbackHost(ws.hostname) && !isLoopbackHost(cdp.hostname)) {
     ws.hostname = cdp.hostname;
     const cdpPort = cdp.port || (cdp.protocol === "https:" ? "443" : "80");
-    if (cdpPort) ws.port = cdpPort;
+    if (cdpPort) {
+      ws.port = cdpPort;
+    }
     ws.protocol = cdp.protocol === "https:" ? "wss:" : "ws:";
   }
   if (cdp.protocol === "https:" && ws.protocol === "ws:") {
@@ -19,7 +21,9 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
     ws.password = cdp.password;
   }
   for (const [key, value] of cdp.searchParams.entries()) {
-    if (!ws.searchParams.has(key)) ws.searchParams.append(key, value);
+    if (!ws.searchParams.has(key)) {
+      ws.searchParams.append(key, value);
+    }
   }
   return ws.toString();
 }
@@ -71,7 +75,9 @@ export async function captureScreenshot(opts: {
     })) as { data?: string };
 
     const base64 = result?.data;
-    if (!base64) throw new Error("Screenshot failed: missing data");
+    if (!base64) {
+      throw new Error("Screenshot failed: missing data");
+    }
     return Buffer.from(base64, "base64");
   });
 }
@@ -86,14 +92,18 @@ export async function createTargetViaCdp(opts: {
   );
   const wsUrlRaw = String(version?.webSocketDebuggerUrl ?? "").trim();
   const wsUrl = wsUrlRaw ? normalizeCdpWsUrl(wsUrlRaw, opts.cdpUrl) : "";
-  if (!wsUrl) throw new Error("CDP /json/version missing webSocketDebuggerUrl");
+  if (!wsUrl) {
+    throw new Error("CDP /json/version missing webSocketDebuggerUrl");
+  }
 
   return await withCdpSocket(wsUrl, async (send) => {
     const created = (await send("Target.createTarget", { url: opts.url })) as {
       targetId?: string;
     };
     const targetId = String(created?.targetId ?? "").trim();
-    if (!targetId) throw new Error("CDP Target.createTarget returned no targetId");
+    if (!targetId) {
+      throw new Error("CDP Target.createTarget returned no targetId");
+    }
     return { targetId };
   });
 }
@@ -138,7 +148,9 @@ export async function evaluateJavaScript(opts: {
     };
 
     const result = evaluated?.result;
-    if (!result) throw new Error("CDP Runtime.evaluate returned no result");
+    if (!result) {
+      throw new Error("CDP Runtime.evaluate returned no result");
+    }
     return { result, exceptionDetails: evaluated.exceptionDetails };
   });
 }
@@ -164,9 +176,13 @@ export type RawAXNode = {
 };
 
 function axValue(v: unknown): string {
-  if (!v || typeof v !== "object") return "";
+  if (!v || typeof v !== "object") {
+    return "";
+  }
   const value = (v as { value?: unknown }).value;
-  if (typeof value === "string") return value;
+  if (typeof value === "string") {
+    return value;
+  }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
@@ -176,25 +192,35 @@ function axValue(v: unknown): string {
 export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnapshotNode[] {
   const byId = new Map<string, RawAXNode>();
   for (const n of nodes) {
-    if (n.nodeId) byId.set(n.nodeId, n);
+    if (n.nodeId) {
+      byId.set(n.nodeId, n);
+    }
   }
 
   // Heuristic: pick a root-ish node (one that is not referenced as a child), else first.
   const referenced = new Set<string>();
   for (const n of nodes) {
-    for (const c of n.childIds ?? []) referenced.add(c);
+    for (const c of n.childIds ?? []) {
+      referenced.add(c);
+    }
   }
   const root = nodes.find((n) => n.nodeId && !referenced.has(n.nodeId)) ?? nodes[0];
-  if (!root?.nodeId) return [];
+  if (!root?.nodeId) {
+    return [];
+  }
 
   const out: AriaSnapshotNode[] = [];
   const stack: Array<{ id: string; depth: number }> = [{ id: root.nodeId, depth: 0 }];
   while (stack.length && out.length < limit) {
     const popped = stack.pop();
-    if (!popped) break;
+    if (!popped) {
+      break;
+    }
     const { id, depth } = popped;
     const n = byId.get(id);
-    if (!n) continue;
+    if (!n) {
+      continue;
+    }
     const role = axValue(n.role);
     const name = axValue(n.name);
     const value = axValue(n.value);
@@ -213,7 +239,9 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
     const children = (n.childIds ?? []).filter((c) => byId.has(c));
     for (let i = children.length - 1; i >= 0; i--) {
       const child = children[i];
-      if (child) stack.push({ id: child, depth: depth + 1 });
+      if (child) {
+        stack.push({ id: child, depth: depth + 1 });
+      }
     }
   }
 
@@ -296,8 +324,10 @@ export async function snapshotDom(opts: {
     awaitPromise: true,
     returnByValue: true,
   });
-  const value = evaluated.result?.value as unknown;
-  if (!value || typeof value !== "object") return { nodes: [] };
+  const value = evaluated.result?.value;
+  if (!value || typeof value !== "object") {
+    return { nodes: [] };
+  }
   const nodes = (value as { nodes?: unknown }).nodes;
   return { nodes: Array.isArray(nodes) ? (nodes as DomSnapshotNode[]) : [] };
 }
