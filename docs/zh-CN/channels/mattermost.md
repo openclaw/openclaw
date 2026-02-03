@@ -5,21 +5,23 @@ read_when:
 summary: Mattermost 机器人设置和 OpenClaw 配置
 title: Mattermost
 x-i18n:
-  generated_at: "2026-02-01T19:22:40Z"
+  generated_at: "2026-02-03T07:43:43Z"
   model: claude-opus-4-5
   provider: pi
   source_hash: 57fabe5eb0efbcb885f4178b317b2fa99a41daf609e3a471de2b44db9def4ad7
   source_path: channels/mattermost.md
-  workflow: 14
+  workflow: 15
 ---
 
 # Mattermost（插件）
 
-状态：通过插件支持（bot token + WebSocket 事件）。支持频道、群组和私信。Mattermost 是一个可自托管的团队消息平台；有关产品详情和下载请访问官方网站 [mattermost.com](https://mattermost.com)。
+状态：通过插件支持（bot token + WebSocket 事件）。支持频道、群组和私信。
+Mattermost 是一个可自托管的团队消息平台；有关产品详情和下载，请访问官方网站
+[mattermost.com](https://mattermost.com)。
 
 ## 需要插件
 
-Mattermost 作为插件发布，不包含在核心安装中。
+Mattermost 以插件形式提供，不包含在核心安装中。
 
 通过 CLI 安装（npm 注册表）：
 
@@ -33,16 +35,16 @@ openclaw plugins install @openclaw/mattermost
 openclaw plugins install ./extensions/mattermost
 ```
 
-如果你在配置/新手引导期间选择了 Mattermost 并检测到 git 检出，OpenClaw 会自动提供本地安装路径。
+如果你在配置/新手引导期间选择 Mattermost 并检测到 git 检出，OpenClaw 会自动提供本地安装路径。
 
 详情：[插件](/plugin)
 
 ## 快速设置
 
 1. 安装 Mattermost 插件。
-2. 创建一个 Mattermost 机器人账户并复制 **bot token**。
+2. 创建 Mattermost bot 账户并复制 **bot token**。
 3. 复制 Mattermost **基础 URL**（例如 `https://chat.example.com`）。
-4. 配置 OpenClaw 并启动 Gateway网关。
+4. 配置 OpenClaw 并启动 Gateway 网关。
 
 最小配置：
 
@@ -61,7 +63,7 @@ openclaw plugins install ./extensions/mattermost
 
 ## 环境变量（默认账户）
 
-如果你偏好使用环境变量，请在 Gateway网关主机上设置：
+如果你偏好使用环境变量，请在 Gateway 网关主机上设置：
 
 - `MATTERMOST_BOT_TOKEN=...`
 - `MATTERMOST_URL=https://chat.example.com`
@@ -73,7 +75,7 @@ openclaw plugins install ./extensions/mattermost
 Mattermost 自动响应私信。频道行为由 `chatmode` 控制：
 
 - `oncall`（默认）：仅在频道中被 @提及时响应。
-- `onmessage`：响应频道中的每条消息。
+- `onmessage`：响应每条频道消息。
 - `onchar`：当消息以触发前缀开头时响应。
 
 配置示例：
@@ -91,8 +93,8 @@ Mattermost 自动响应私信。频道行为由 `chatmode` 控制：
 
 注意事项：
 
-- `onchar` 模式仍然响应明确的 @提及。
-- `channels.mattermost.requireMention` 对旧版配置仍然有效，但推荐使用 `chatmode`。
+- `onchar` 仍会响应显式 @提及。
+- `channels.mattermost.requireMention` 对旧配置仍然有效，但推荐使用 `chatmode`。
 
 ## 访问控制（私信）
 
@@ -104,13 +106,13 @@ Mattermost 自动响应私信。频道行为由 `chatmode` 控制：
 
 ## 频道（群组）
 
-- 默认：`channels.mattermost.groupPolicy = "allowlist"`（提及门控）。
-- 使用 `channels.mattermost.groupAllowFrom` 允许列表发送者（用户 ID 或 `@username`）。
-- 开放频道：`channels.mattermost.groupPolicy="open"`（提及门控）。
+- 默认：`channels.mattermost.groupPolicy = "allowlist"`（提及限制）。
+- 使用 `channels.mattermost.groupAllowFrom` 将发送者加入允许列表（用户 ID 或 `@username`）。
+- 开放频道：`channels.mattermost.groupPolicy="open"`（提及限制）。
 
 ## 出站投递目标
 
-在 `openclaw message send` 或定时任务/webhook 中使用以下目标格式：
+在 `openclaw message send` 或 cron/webhooks 中使用这些目标格式：
 
 - `channel:<id>` 用于频道
 - `user:<id>` 用于私信
@@ -137,6 +139,6 @@ Mattermost 支持在 `channels.mattermost.accounts` 下配置多个账户：
 
 ## 故障排除
 
-- 频道中没有回复：确保机器人已加入频道并提及它（oncall 模式），使用触发前缀（onchar 模式），或设置 `chatmode: "onmessage"`。
+- 频道中无回复：确保 bot 在频道中并提及它（oncall），使用触发前缀（onchar），或设置 `chatmode: "onmessage"`。
 - 认证错误：检查 bot token、基础 URL 以及账户是否已启用。
 - 多账户问题：环境变量仅适用于 `default` 账户。

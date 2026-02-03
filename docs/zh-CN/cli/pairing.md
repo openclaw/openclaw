@@ -1,15 +1,15 @@
 ---
 read_when:
-  - 你正在使用配对模式的私信功能，需要批准发送者
-summary: "`openclaw pairing`（批准/列出配对请求）的 CLI 参考"
+  - 你正在使用配对模式私信并需要批准发送者
+summary: "`openclaw pairing` 的 CLI 参考（批准/列出配对请求）"
 title: pairing
 x-i18n:
-  generated_at: "2026-02-01T20:21:19Z"
+  generated_at: "2026-02-03T07:45:02Z"
   model: claude-opus-4-5
   provider: pi
   source_hash: e0bc9707294463c95d13e0deb67d834cfad6a105ab44baf4c25592e5de65ddf5
   source_path: cli/pairing.md
-  workflow: 14
+  workflow: 15
 ---
 
 # `openclaw pairing`
