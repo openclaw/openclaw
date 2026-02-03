@@ -156,6 +156,8 @@ export type AgentDefaultsConfig = {
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
   timeoutSeconds?: number;
+  /** Per-tool-call timeout in seconds (default: 60). Prevents agent hangs when individual tool calls fail to complete. */
+  toolCallTimeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
   typingIntervalSeconds?: number;

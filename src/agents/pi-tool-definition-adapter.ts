@@ -81,7 +81,84 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
+/**
+ * Wraps a tool execution promise with a timeout.
+ * If the tool doesn't complete within the timeout, returns an error result instead of hanging.
+ *
+ * @param execute The tool execution function
+ * @param timeoutMs Timeout in milliseconds (0 or negative = no timeout)
+ * @param toolName Tool name for error messages
+ * @param signal Optional abort signal
+ */
+function withToolCallTimeout<T>(
+  execute: () => Promise<T>,
+  timeoutMs: number,
+  toolName: string,
+  signal?: AbortSignal,
+): Promise<T> {
+  // If timeout is disabled or already aborted, execute directly
+  if (timeoutMs <= 0 || signal?.aborted) {
+    return execute();
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timeoutId: NodeJS.Timeout | undefined;
+
+    const finish = (value: T | Error) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      // Remove abort listener to prevent memory leak
+      if (signal) signal.removeEventListener("abort", onAbort);
+      if (value instanceof Error) {
+        reject(value);
+      } else {
+        resolve(value);
+      }
+    };
+
+    const onAbort = () => {
+      finish(new Error("Tool execution aborted"));
+    };
+
+    // Set up timeout
+    timeoutId = setTimeout(() => {
+      finish(
+        new Error(
+          `Tool '${toolName}' timed out after ${timeoutMs}ms. The tool did not complete in time.`,
+        ),
+      );
+    }, timeoutMs);
+
+    // Listen for abort signal
+    if (signal) {
+      signal.addEventListener("abort", onAbort);
+    }
+
+    // Execute the tool
+    execute()
+      .then((result) => finish(result))
+      .catch((err) => finish(err instanceof Error ? err : new Error(String(err))))
+      .finally(() => {
+        // Clean up listeners when execution completes
+        if (timeoutId) clearTimeout(timeoutId);
+        if (signal) signal.removeEventListener("abort", onAbort);
+      });
+  });
+}
+
+export function toToolDefinitions(
+  tools: AnyAgentTool[],
+  config?: {
+    toolCallTimeoutSeconds?: number;
+  },
+): ToolDefinition[] {
+  const timeoutMs =
+    typeof config?.toolCallTimeoutSeconds === "number" && config.toolCallTimeoutSeconds > 0
+      ? config.toolCallTimeoutSeconds * 1000
+      : 60000; // Default 60s
+
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
@@ -93,7 +170,12 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         try {
-          return await tool.execute(toolCallId, params, signal, onUpdate);
+          return await withToolCallTimeout(
+            () => tool.execute(toolCallId, params, signal, onUpdate),
+            timeoutMs,
+            normalizedName,
+            signal,
+          );
         } catch (err) {
           if (signal?.aborted) {
             throw err;
