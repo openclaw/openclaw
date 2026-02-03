@@ -49,6 +49,7 @@ export class SmartRouter {
     }
 
     private loadConfig(): void {
+        // [Hotfix 15:08] Forced update for CI synchronization
         if (fs.existsSync(this.configFilePath)) {
             try {
                 const content = fs.readFileSync(this.configFilePath, "utf-8");
