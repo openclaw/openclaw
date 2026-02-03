@@ -14,6 +14,8 @@ export type CronState = {
   cronRunsJobId: string | null;
   cronRuns: CronRunLogEntry[];
   cronBusy: boolean;
+  cronJobFilter: "all" | "enabled" | "disabled";
+  cronSessionFilter: "all" | "main" | "isolated";
 };
 
 export async function loadCronStatus(state: CronState) {

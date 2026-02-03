@@ -318,6 +318,8 @@ export function renderApp(state: AppViewState) {
                 channelMeta: state.channelsSnapshot?.channelMeta ?? [],
                 runsJobId: state.cronRunsJobId,
                 runs: state.cronRuns,
+                jobFilter: state.cronJobFilter,
+                sessionFilter: state.cronSessionFilter,
                 onFormChange: (patch) => (state.cronForm = { ...state.cronForm, ...patch }),
                 onRefresh: () => state.loadCron(),
                 onAdd: () => addCronJob(state),
@@ -325,6 +327,8 @@ export function renderApp(state: AppViewState) {
                 onRun: (job) => runCronJob(state, job),
                 onRemove: (job) => removeCronJob(state, job),
                 onLoadRuns: (jobId) => loadCronRuns(state, jobId),
+                onFilterChange: (filter) => (state.cronJobFilter = filter),
+                onSessionFilterChange: (filter) => (state.cronSessionFilter = filter),
               })
             : nothing
         }

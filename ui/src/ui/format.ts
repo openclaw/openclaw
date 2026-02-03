@@ -54,6 +54,20 @@ export function formatDurationMs(ms?: number | null): string {
   return `${day}d`;
 }
 
+export function formatDurationMsWithDecimal(ms?: number | null, precision: number = 1): string {
+  if (!ms && ms !== 0) return "n/a";
+  if (precision < 0) precision = 0;
+  if (ms < 1000) return `${ms}ms`;
+  const sec = ms / 1000;
+  if (sec < 60) return `${sec.toFixed(precision)}s`;
+  const min = sec / 60;
+  if (min < 60) return `${min.toFixed(precision)}m`;
+  const hr = min / 60;
+  if (hr < 48) return `${hr.toFixed(precision)}h`;
+  const day = hr / 24;
+  return `${day.toFixed(precision)}d`;
+}
+
 export function formatList(values?: Array<string | null | undefined>): string {
   if (!values || values.length === 0) {
     return "none";

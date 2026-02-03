@@ -30,6 +30,8 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     channelLabels: {},
     runsJobId: null,
     runs: [],
+    jobFilter: "all",
+    sessionFilter: "all",
     onFormChange: () => undefined,
     onRefresh: () => undefined,
     onAdd: () => undefined,
@@ -37,6 +39,8 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     onRun: () => undefined,
     onRemove: () => undefined,
     onLoadRuns: () => undefined,
+    onFilterChange: () => undefined,
+    onSessionFilterChange: () => undefined,
     ...overrides,
   };
 }

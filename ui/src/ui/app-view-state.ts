@@ -139,6 +139,8 @@ export type AppViewState = {
   cronRunsJobId: string | null;
   cronRuns: CronRunLogEntry[];
   cronBusy: boolean;
+  cronJobFilter: "all" | "enabled" | "disabled";
+  cronSessionFilter: "all" | "main" | "isolated";
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
   skillsError: string | null;

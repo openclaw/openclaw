@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types";
 import type { CronFormState } from "../ui-types";
-import { formatMs } from "../format";
+import { formatDurationMsWithDecimal, formatMs } from "../format";
 import {
   formatCronPayload,
   formatCronSchedule,
@@ -21,6 +21,8 @@ export type CronProps = {
   channelMeta?: ChannelUiMetaEntry[];
   runsJobId: string | null;
   runs: CronRunLogEntry[];
+  jobFilter: "all" | "enabled" | "disabled";
+  sessionFilter: "all" | "main" | "isolated";
   onFormChange: (patch: Partial<CronFormState>) => void;
   onRefresh: () => void;
   onAdd: () => void;
@@ -28,6 +30,8 @@ export type CronProps = {
   onRun: (job: CronJob) => void;
   onRemove: (job: CronJob) => void;
   onLoadRuns: (jobId: string) => void;
+  onFilterChange: (filter: "all" | "enabled" | "disabled") => void;
+  onSessionFilterChange: (filter: "all" | "main" | "isolated") => void;
 };
 
 function buildChannelOptions(props: CronProps): string[] {
@@ -55,6 +59,28 @@ function resolveChannelLabel(props: CronProps, channel: string): string {
     return meta.label;
   }
   return props.channelLabels?.[channel] ?? channel;
+}
+
+function filterJobs(
+  jobs: CronJob[],
+  enabledFilter: "all" | "enabled" | "disabled",
+  sessionFilter: "all" | "main" | "isolated",
+): CronJob[] {
+  let filtered = jobs;
+
+  // Apply enabled filter
+  if (enabledFilter === "enabled") {
+    filtered = filtered.filter((job) => job.enabled);
+  } else if (enabledFilter === "disabled") {
+    filtered = filtered.filter((job) => !job.enabled);
+  }
+
+  // Apply session filter
+  if (sessionFilter !== "all") {
+    filtered = filtered.filter((job) => job.sessionTarget === sessionFilter);
+  }
+
+  return filtered;
 }
 
 export function renderCron(props: CronProps) {
@@ -279,22 +305,70 @@ export function renderCron(props: CronProps) {
     <section class="card" style="margin-top: 18px;">
       <div class="card-title">Jobs</div>
       <div class="card-sub">All scheduled jobs stored in the gateway.</div>
-      ${
-        props.jobs.length === 0
+      <div class="row" style="margin-top: 12px; gap: 12px;">
+        <label class="field" style="max-width: 160px;">
+          <span>Status</span>
+          <select
+            .value=${props.jobFilter}
+            @change=${(e: Event) =>
+              props.onFilterChange(
+                (e.target as HTMLSelectElement).value as "all" | "enabled" | "disabled",
+              )}
+          >
+            <option value="all">All</option>
+            <option value="enabled">Enabled</option>
+            <option value="disabled">Disabled</option>
+          </select>
+        </label>
+        <label class="field" style="max-width: 160px;">
+          <span>Session</span>
+          <select
+            .value=${props.sessionFilter}
+            @change=${(e: Event) =>
+              props.onSessionFilterChange(
+                (e.target as HTMLSelectElement).value as "all" | "main" | "isolated",
+              )}
+          >
+            <option value="all">All</option>
+            <option value="main">Main</option>
+            <option value="isolated">Isolated</option>
+          </select>
+        </label>
+      </div>
+      ${(() => {
+        const filteredJobs = filterJobs(props.jobs, props.jobFilter, props.sessionFilter);
+        return filteredJobs.length === 0
           ? html`
-              <div class="muted" style="margin-top: 12px">No jobs yet.</div>
+              <div class="muted" style="margin-top: 12px">
+                ${
+                  props.jobFilter === "all" && props.sessionFilter === "all"
+                    ? "No jobs yet."
+                    : "No jobs match the current filters."
+                }
+              </div>
             `
           : html`
             <div class="list" style="margin-top: 12px;">
-              ${props.jobs.map((job) => renderJob(job, props))}
+              ${filteredJobs.map((job) => renderJob(job, props))}
             </div>
-          `
-      }
+          `;
+      })()}
     </section>
 
     <section class="card" style="margin-top: 18px;">
       <div class="card-title">Run history</div>
-      <div class="card-sub">Latest runs for ${props.runsJobId ?? "(select a job)"}.</div>
+      ${
+        props.runsJobId
+          ? (() => {
+              const job = props.jobs.find((j) => j.id === props.runsJobId);
+              return html`
+                        <div class="card-sub">
+                            ${job ? html` Job: <strong>${job.name}</strong>.` : nothing} Latest runs for ${props.runsJobId}.
+                        </div>
+                      `;
+            })()
+          : nothing
+      }
       ${
         props.runsJobId == null
           ? html`
@@ -394,7 +468,7 @@ function renderJob(job: CronJob, props: CronProps) {
         <div class="muted">${formatCronPayload(job)}</div>
         ${job.agentId ? html`<div class="muted">Agent: ${job.agentId}</div>` : nothing}
         <div class="chip-row" style="margin-top: 6px;">
-          <span class="chip">${job.enabled ? "enabled" : "disabled"}</span>
+          <span class="chip ${job.enabled ? "chip-ok" : ""}">${job.enabled ? "enabled" : "disabled"}</span>
           <span class="chip">${job.sessionTarget}</span>
           <span class="chip">${job.wakeMode}</span>
         </div>
@@ -449,6 +523,7 @@ function renderJob(job: CronJob, props: CronProps) {
 }
 
 function renderRun(entry: CronRunLogEntry) {
+  const duration = formatDurationMsWithDecimal(entry.durationMs ?? 0);
   return html`
     <div class="list-item">
       <div class="list-main">
@@ -457,7 +532,7 @@ function renderRun(entry: CronRunLogEntry) {
       </div>
       <div class="list-meta">
         <div>${formatMs(entry.ts)}</div>
-        <div class="muted">${entry.durationMs ?? 0}ms</div>
+          <div class="muted">${duration}</div>
         ${entry.error ? html`<div class="muted">${entry.error}</div>` : nothing}
       </div>
     </div>
