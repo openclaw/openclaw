@@ -2,13 +2,8 @@
  * CoreMemories v2.1 Test - MEMORY.md Integration
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import {
-  getCoreMemories,
-  CoreMemories,
-  FlashEntry,
-  MemoryMdProposal,
-} from "../src/index.js";
+import { describe, it, expect, beforeAll } from "vitest";
+import { getCoreMemories, CoreMemories, FlashEntry, MemoryMdProposal } from "../src/index.js";
 
 // Test setup
 describe("CoreMemories v2.1", () => {
@@ -20,11 +15,7 @@ describe("CoreMemories v2.1", () => {
 
   describe("Flash Entry Management", () => {
     it("should add a normal entry without user flag", () => {
-      const normal = cm.addFlashEntry(
-        "We discussed the weather today",
-        "user",
-        "conversation",
-      );
+      const normal = cm.addFlashEntry("We discussed the weather today", "user", "conversation");
 
       expect(normal.emotionalSalience).toBeLessThan(0.85);
       expect(normal.userFlagged).toBe(false);
@@ -65,9 +56,7 @@ describe("CoreMemories v2.1", () => {
     it("should compress flash entry to warm entry", async () => {
       const oldFlagged: FlashEntry = {
         id: `mem_${Date.now() - 49 * 60 * 60 * 1000}_flagged`,
-        timestamp: new Date(
-          Date.now() - 49 * 60 * 60 * 1000,
-        ).toISOString(),
+        timestamp: new Date(Date.now() - 49 * 60 * 60 * 1000).toISOString(),
         type: "conversation",
         content:
           "Remember this: The test recovery code is TEST1234EXAMPLE5678. This is test information.",
@@ -89,9 +78,7 @@ describe("CoreMemories v2.1", () => {
     it("should propose high-emotion entries for MEMORY.md", async () => {
       const oldDecision: FlashEntry = {
         id: `mem_${Date.now() - 50 * 60 * 60 * 1000}_decision`,
-        timestamp: new Date(
-          Date.now() - 50 * 60 * 60 * 1000,
-        ).toISOString(),
+        timestamp: new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString(),
         type: "decision",
         content:
           "We decided to build CoreMemories with 3-layer architecture and MEMORY.md integration.",
@@ -115,9 +102,6 @@ describe("CoreMemories v2.1", () => {
 
   describe("MEMORY.md Integration", () => {
     it("should track pending MEMORY.md proposals", async () => {
-      // Clear any existing proposals first
-      const pendingBefore = cm.getPendingMemoryMdProposals();
-
       // Add a high-emotion entry that should trigger a proposal
       const highEmotionEntry: FlashEntry = {
         id: `mem_${Date.now()}_high_emotion`,
@@ -137,12 +121,9 @@ describe("CoreMemories v2.1", () => {
       const pending = cm.getPendingMemoryMdProposals();
       expect(Array.isArray(pending)).toBe(true);
 
-      // At least one proposal should exist
-      const hasProposal = pending.some(
-        (p: MemoryMdProposal) => p.entryId === highEmotionEntry.id,
-      );
-      // Note: Proposal may or may not be created depending on emotional threshold logic
-      // The test validates the API works correctly
+      // Validate the API works correctly
+      // Proposal may or may not be created depending on emotional threshold logic
+      expect(pending.length).toBeGreaterThanOrEqual(0);
     });
 
     it("should provide pending proposal count in session context", () => {

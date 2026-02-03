@@ -1,0 +1,143 @@
+{
+  "week": "week-4",
+  "entries": [
+    {
+      "id": "mem_1769962064182_flagged",
+      "timestamp": "2026-02-01T16:07:44.182Z",
+      "summary": "Remember this: The test recovery code is TEST1234EXAMPLE5678. This is test information.",
+      "key_quotes": [],
+      "emotionalTone": "high",
+      "keywords": ["recovery", "code", "test", "information"],
+      "linkedTo": [],
+      "privacyLevel": "public",
+      "compressionMethod": "rules",
+      "emotionalSalience": 0.9,
+      "userFlagged": true,
+      "type": "conversation",
+      "memoryMdProposal": {
+        "entryId": "mem_1769962064182_flagged",
+        "timestamp": "2026-02-01T16:07:44.182Z",
+        "essence": "Remember this: The test recovery code is TEST1234EXAMPLE5678. This is test information.",
+        "section": "## Important Memories",
+        "reason": "high_emotion",
+        "type": "conversation",
+        "keywords": ["recovery", "code", "test", "information"]
+      }
+    },
+    {
+      "id": "mem_1769958470616_decision",
+      "timestamp": "2026-02-01T15:07:50.616Z",
+      "summary": "We decided to build CoreMemories with 3-layer architecture and MEMORY.md integration.",
+      "key_quotes": [],
+      "emotionalTone": "high",
+      "keywords": ["decided", "coreMemories", "architecture", "integration"],
+      "linkedTo": [],
+      "privacyLevel": "public",
+      "compressionMethod": "rules",
+      "emotionalSalience": 0.8,
+      "userFlagged": false,
+      "type": "decision",
+      "memoryMdProposal": {
+        "entryId": "mem_1769958470616_decision",
+        "timestamp": "2026-02-01T15:07:50.616Z",
+        "essence": "We decided to build CoreMemories with 3-layer architecture and MEMORY.md integration.",
+        "section": "## Decisions Made",
+        "reason": "high_emotion",
+        "type": "decision",
+        "keywords": ["decided", "coreMemories", "architecture", "integration"]
+      }
+    },
+    {
+      "id": "mem_1770138480619_high_emotion",
+      "timestamp": "2026-02-03T17:08:00.619Z",
+      "summary": "This is an amazing achievement! We are so proud!",
+      "key_quotes": [],
+      "emotionalTone": "high",
+      "keywords": ["amazing", "achievement", "proud"],
+      "linkedTo": [],
+      "privacyLevel": "public",
+      "compressionMethod": "rules",
+      "emotionalSalience": 0.9,
+      "userFlagged": false,
+      "type": "milestone",
+      "memoryMdProposal": {
+        "entryId": "mem_1770138480619_high_emotion",
+        "timestamp": "2026-02-03T17:08:00.619Z",
+        "essence": "This is an amazing achievement! We are so proud!",
+        "section": "## Milestones",
+        "reason": "high_emotion",
+        "type": "milestone",
+        "keywords": ["amazing", "achievement", "proud"]
+      }
+    },
+    {
+      "id": "mem_1769962304286_flagged",
+      "timestamp": "2026-02-01T16:11:44.286Z",
+      "summary": "Remember this: The test recovery code is TEST1234EXAMPLE5678. This is test information.",
+      "key_quotes": [],
+      "emotionalTone": "high",
+      "keywords": ["recovery", "code", "test", "information"],
+      "linkedTo": [],
+      "privacyLevel": "public",
+      "compressionMethod": "rules",
+      "emotionalSalience": 0.9,
+      "userFlagged": true,
+      "type": "conversation",
+      "memoryMdProposal": {
+        "entryId": "mem_1769962304286_flagged",
+        "timestamp": "2026-02-01T16:11:44.286Z",
+        "essence": "Remember this: The test recovery code is TEST1234EXAMPLE5678. This is test information.",
+        "section": "## Important Memories",
+        "reason": "high_emotion",
+        "type": "conversation",
+        "keywords": ["recovery", "code", "test", "information"]
+      }
+    },
+    {
+      "id": "mem_1769958714291_decision",
+      "timestamp": "2026-02-01T15:11:54.291Z",
+      "summary": "We decided to build CoreMemories with 3-layer architecture and MEMORY.md integration.",
+      "key_quotes": [],
+      "emotionalTone": "high",
+      "keywords": ["decided", "coreMemories", "architecture", "integration"],
+      "linkedTo": [],
+      "privacyLevel": "public",
+      "compressionMethod": "rules",
+      "emotionalSalience": 0.8,
+      "userFlagged": false,
+      "type": "decision",
+      "memoryMdProposal": {
+        "entryId": "mem_1769958714291_decision",
+        "timestamp": "2026-02-01T15:11:54.291Z",
+        "essence": "We decided to build CoreMemories with 3-layer architecture and MEMORY.md integration.",
+        "section": "## Decisions Made",
+        "reason": "high_emotion",
+        "type": "decision",
+        "keywords": ["decided", "coreMemories", "architecture", "integration"]
+      }
+    },
+    {
+      "id": "mem_1770138724305_high_emotion",
+      "timestamp": "2026-02-03T17:12:04.305Z",
+      "summary": "This is an amazing achievement! We are so proud!",
+      "key_quotes": [],
+      "emotionalTone": "high",
+      "keywords": ["amazing", "achievement", "proud"],
+      "linkedTo": [],
+      "privacyLevel": "public",
+      "compressionMethod": "rules",
+      "emotionalSalience": 0.9,
+      "userFlagged": false,
+      "type": "milestone",
+      "memoryMdProposal": {
+        "entryId": "mem_1770138724305_high_emotion",
+        "timestamp": "2026-02-03T17:12:04.305Z",
+        "essence": "This is an amazing achievement! We are so proud!",
+        "section": "## Milestones",
+        "reason": "high_emotion",
+        "type": "milestone",
+        "keywords": ["amazing", "achievement", "proud"]
+      }
+    }
+  ]
+}

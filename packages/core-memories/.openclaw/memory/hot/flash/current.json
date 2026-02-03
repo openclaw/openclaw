@@ -1,0 +1,118 @@
+{
+  "entries": [
+    {
+      "id": "mem_1770138464176_v0erzojot",
+      "timestamp": "2026-02-03T17:07:44.176Z",
+      "type": "conversation",
+      "content": "We discussed the weather today",
+      "speaker": "user",
+      "keywords": ["discussed", "weather", "today"],
+      "emotionalSalience": 0.5,
+      "userFlagged": false,
+      "linkedTo": [],
+      "privacyLevel": "public"
+    },
+    {
+      "id": "mem_1770138464178_d2eos2l98",
+      "timestamp": "2026-02-03T17:07:44.178Z",
+      "type": "conversation",
+      "content": "Remember this: The API integration is scheduled for next month. This is important for the project.",
+      "speaker": "user",
+      "keywords": ["remember", "integration", "scheduled", "month", "important", "project"],
+      "emotionalSalience": 0.85,
+      "userFlagged": true,
+      "linkedTo": [],
+      "privacyLevel": "public"
+    },
+    {
+      "id": "mem_1770138464180_rz8kwuw21",
+      "timestamp": "2026-02-03T17:07:44.180Z",
+      "type": "decision",
+      "content": "We decided to migrate to the new database system. This is a major change but will improve performance!",
+      "speaker": "user",
+      "keywords": [
+        "decided",
+        "migrate",
+        "database",
+        "system",
+        "major",
+        "change",
+        "improve",
+        "performance"
+      ],
+      "emotionalSalience": 0.5,
+      "userFlagged": false,
+      "linkedTo": [],
+      "privacyLevel": "public"
+    },
+    {
+      "id": "mem_1770138490635_o9xi9jvsg",
+      "timestamp": "2026-02-03T17:08:10.635Z",
+      "type": "test",
+      "content": "Testing the keyword search functionality with unique keywords",
+      "speaker": "test",
+      "keywords": ["testing", "keyword", "search", "functionality", "unique", "keywords"],
+      "emotionalSalience": 0.5,
+      "userFlagged": false,
+      "linkedTo": [],
+      "privacyLevel": "public"
+    },
+    {
+      "id": "mem_1770138704281_crx18oae5",
+      "timestamp": "2026-02-03T17:11:44.281Z",
+      "type": "conversation",
+      "content": "We discussed the weather today",
+      "speaker": "user",
+      "keywords": ["discussed", "weather", "today"],
+      "emotionalSalience": 0.5,
+      "userFlagged": false,
+      "linkedTo": [],
+      "privacyLevel": "public"
+    },
+    {
+      "id": "mem_1770138704283_baudokxgc",
+      "timestamp": "2026-02-03T17:11:44.283Z",
+      "type": "conversation",
+      "content": "Remember this: The API integration is scheduled for next month. This is important for the project.",
+      "speaker": "user",
+      "keywords": ["remember", "integration", "scheduled", "month", "important", "project"],
+      "emotionalSalience": 0.85,
+      "userFlagged": true,
+      "linkedTo": [],
+      "privacyLevel": "public"
+    },
+    {
+      "id": "mem_1770138704285_7fnx1k49o",
+      "timestamp": "2026-02-03T17:11:44.285Z",
+      "type": "decision",
+      "content": "We decided to migrate to the new database system. This is a major change but will improve performance!",
+      "speaker": "user",
+      "keywords": [
+        "decided",
+        "migrate",
+        "database",
+        "system",
+        "major",
+        "change",
+        "improve",
+        "performance"
+      ],
+      "emotionalSalience": 0.5,
+      "userFlagged": false,
+      "linkedTo": [],
+      "privacyLevel": "public"
+    },
+    {
+      "id": "mem_1770138734314_eh3fd6zfp",
+      "timestamp": "2026-02-03T17:12:14.314Z",
+      "type": "test",
+      "content": "Testing the keyword search functionality with unique keywords",
+      "speaker": "test",
+      "keywords": ["testing", "keyword", "search", "functionality", "unique", "keywords"],
+      "emotionalSalience": 0.5,
+      "userFlagged": false,
+      "linkedTo": [],
+      "privacyLevel": "public"
+    }
+  ]
+}
