@@ -9,6 +9,7 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { resolveMcpToolsForAgent } from "../../../mcp/mcp-tools.js";
+import { formatMcpToolNamesForLog } from "../../../mcp/tool-name-format.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { warnIfThinkingBudgetConflict } from "../../../openclaw/thinking-budget-integration.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -258,6 +259,14 @@ export async function runEmbeddedAttempt(
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
+
+    const mcpToolLog = formatMcpToolNamesForLog(tools.map((t) => t.name));
+    if (mcpToolLog.formatted.length > 0) {
+      const total = mcpToolLog.formatted.length + mcpToolLog.remaining;
+      log.info(
+        `embedded mcp tools: runId=${params.runId} sessionId=${params.sessionId} sessionKey=${params.sessionKey ?? params.sessionId} agentId=${sessionAgentId} mcpToolsCount=${total} mcpTools=${mcpToolLog.formatted.join(",")}${mcpToolLog.truncated ? ` ...(+${mcpToolLog.remaining})` : ""}`,
+      );
+    }
 
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);

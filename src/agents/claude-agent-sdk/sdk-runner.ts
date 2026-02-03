@@ -17,6 +17,7 @@
 import type { SdkRunnerParams, SdkRunnerResult } from "./sdk-runner.types.js";
 import type { SdkRunnerQueryOptions } from "./tool-bridge.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { formatMcpToolNamesForLog } from "../../mcp/tool-name-format.js";
 import { normalizeToolName } from "../tool-policy.js";
 
 const log = createSubsystemLogger("sdk-runner");
@@ -210,6 +211,18 @@ export async function runSdkAgent(params: SdkRunnerParams): Promise<SdkRunnerRes
   const startedAt = Date.now();
   const mcpServerName = params.mcpServerName ?? DEFAULT_MCP_SERVER_NAME;
   const hooksEnabled = params.hooksEnabled === true;
+
+  // Log *real* MCP tools (tools with the `mcp__{server}__{tool}` prefix) that were
+  // added to the session tool list (e.g. from configured `mcpServers`).
+  // Important: do NOT log bridged OpenClaw native tools as "MCP tools" just
+  // because we expose them to the SDK through an in-process MCP server.
+  const realMcpToolLog = formatMcpToolNamesForLog(params.tools.map((t) => t.name));
+  if (realMcpToolLog.formatted.length > 0) {
+    const total = realMcpToolLog.formatted.length + realMcpToolLog.remaining;
+    log.info(
+      `sdk mcp tools: runId=${params.runId} sessionId=${params.sessionId} claudeSessionId=${params.claudeSessionId ?? "new"} mcpToolsCount=${total} mcpTools=${realMcpToolLog.formatted.join(",")}${realMcpToolLog.truncated ? ` ...(+${realMcpToolLog.remaining})` : ""}`,
+    );
+  }
 
   const emitEvent = (stream: string, data: Record<string, unknown>) => {
     try {
