@@ -64,6 +64,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       gifPlayback?: boolean;
       channel?: string;
       accountId?: string;
+      threadId?: string;
       sessionKey?: string;
       idempotencyKey: string;
     };
@@ -88,6 +89,10 @@ export const sendHandlers: GatewayRequestHandlers = {
     const message = request.message.trim();
     const mediaUrls = Array.isArray(request.mediaUrls) ? request.mediaUrls : undefined;
     const channelInput = typeof request.channel === "string" ? request.channel : undefined;
+    const threadId =
+      typeof request.threadId === "string" && request.threadId.trim()
+        ? request.threadId.trim()
+        : undefined;
     const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
     if (channelInput && !normalizedChannel) {
       respond(
@@ -172,6 +177,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           accountId,
           payloads: [{ text: message, mediaUrl: request.mediaUrl, mediaUrls }],
           gifPlayback: request.gifPlayback,
+          threadId,
           deps: outboundDeps,
           mirror: providedSessionKey
             ? {

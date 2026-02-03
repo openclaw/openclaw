@@ -213,6 +213,7 @@ async function deliverAnnounce(params: {
   }
 
   if (origin?.to && channel && channel !== INTERNAL_MESSAGE_CHANNEL) {
+    const threadId = origin.threadId != null ? String(origin.threadId) : undefined;
     await callGateway({
       method: "send",
       params: {
@@ -220,6 +221,7 @@ async function deliverAnnounce(params: {
         message,
         channel,
         accountId: origin.accountId,
+        threadId,
         sessionKey: canonicalKey,
         idempotencyKey: crypto.randomUUID(),
       },
