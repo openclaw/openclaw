@@ -97,13 +97,19 @@ export function nextWakeAtMs(state: CronServiceState) {
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
   const id = crypto.randomUUID();
+  const deleteAfterRun =
+    typeof input.deleteAfterRun === "boolean"
+      ? input.deleteAfterRun
+      : input.schedule.kind === "at"
+        ? true
+        : undefined;
   const job: CronJob = {
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
     name: normalizeRequiredName(input.name),
     description: normalizeOptionalText(input.description),
     enabled: input.enabled,
-    deleteAfterRun: input.deleteAfterRun,
+    deleteAfterRun,
     createdAtMs: now,
     updatedAtMs: now,
     schedule: input.schedule,

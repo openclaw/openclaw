@@ -172,6 +172,14 @@ export function normalizeCronJobInput(
         next.sessionTarget = "isolated";
       }
     }
+    if (
+      "schedule" in next &&
+      isRecord(next.schedule) &&
+      next.schedule.kind === "at" &&
+      !("deleteAfterRun" in next)
+    ) {
+      next.deleteAfterRun = true;
+    }
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";

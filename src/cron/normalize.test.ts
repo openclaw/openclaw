@@ -111,6 +111,22 @@ describe("normalizeCronJobCreate", () => {
     expect(schedule.atMs).toBe(Date.parse("2026-01-12T18:00:00Z"));
   });
 
+  it("defaults deleteAfterRun for one-shot schedules", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "default delete",
+      enabled: true,
+      schedule: { at: "2026-01-12T18:00:00Z" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.deleteAfterRun).toBe(true);
+  });
+
   it("normalizes delivery mode and channel", () => {
     const normalized = normalizeCronJobCreate({
       name: "delivery",

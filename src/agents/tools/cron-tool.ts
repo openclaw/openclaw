@@ -206,6 +206,7 @@ LEGACY DELIVERY (payload, only when delivery is omitted):
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
 - sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
+Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat

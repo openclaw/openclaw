@@ -95,6 +95,67 @@ describe("cron cli", () => {
     expect(params?.delivery?.mode).toBe("announce");
   });
 
+  it("infers sessionTarget from payload when --session is omitted", async () => {
+    callGatewayFromCli.mockClear();
+
+    const { registerCronCli } = await import("./cron-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerCronCli(program);
+
+    await program.parseAsync(
+      ["cron", "add", "--name", "Main reminder", "--cron", "* * * * *", "--system-event", "hi"],
+      { from: "user" },
+    );
+
+    let addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
+    let params = addCall?.[2] as { sessionTarget?: string; payload?: { kind?: string } };
+    expect(params?.sessionTarget).toBe("main");
+    expect(params?.payload?.kind).toBe("systemEvent");
+
+    callGatewayFromCli.mockClear();
+
+    await program.parseAsync(
+      ["cron", "add", "--name", "Isolated task", "--cron", "* * * * *", "--message", "hello"],
+      { from: "user" },
+    );
+
+    addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
+    params = addCall?.[2] as { sessionTarget?: string; payload?: { kind?: string } };
+    expect(params?.sessionTarget).toBe("isolated");
+    expect(params?.payload?.kind).toBe("agentTurn");
+  });
+
+  it("supports --keep-after-run on cron add", async () => {
+    callGatewayFromCli.mockClear();
+
+    const { registerCronCli } = await import("./cron-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerCronCli(program);
+
+    await program.parseAsync(
+      [
+        "cron",
+        "add",
+        "--name",
+        "Keep me",
+        "--at",
+        "20m",
+        "--session",
+        "main",
+        "--system-event",
+        "hello",
+        "--keep-after-run",
+      ],
+      { from: "user" },
+    );
+
+    const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
+    const params = addCall?.[2] as { deleteAfterRun?: boolean };
+    expect(params?.deleteAfterRun).toBe(false);
+  });
+
   it("sends agent id on cron add", async () => {
     callGatewayFromCli.mockClear();
 

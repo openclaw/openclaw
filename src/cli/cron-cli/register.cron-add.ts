@@ -68,8 +68,9 @@ export function registerCronAddCommand(cron: Command) {
       .option("--description <text>", "Optional description")
       .option("--disabled", "Create job disabled", false)
       .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
+      .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
       .option("--agent <id>", "Agent id for this job")
-      .option("--session <target>", "Session target (main|isolated)", "main")
+      .option("--session <target>", "Session target (main|isolated)")
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
       .option("--at <when>", "Run once at time (ISO) or +duration (e.g. 20m)")
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
@@ -131,12 +132,6 @@ export function registerCronAddCommand(cron: Command) {
             };
           })();
 
-          const sessionTargetRaw = typeof opts.session === "string" ? opts.session : "main";
-          const sessionTarget = sessionTargetRaw.trim() || "main";
-          if (sessionTarget !== "main" && sessionTarget !== "isolated") {
-            throw new Error("--session must be main or isolated");
-          }
-
           const wakeModeRaw = typeof opts.wake === "string" ? opts.wake : "next-heartbeat";
           const wakeMode = wakeModeRaw.trim() || "next-heartbeat";
           if (wakeMode !== "now" && wakeMode !== "next-heartbeat") {
@@ -181,6 +176,23 @@ export function registerCronAddCommand(cron: Command) {
             };
           })();
 
+          const optionSource =
+            typeof cmd?.getOptionValueSource === "function"
+              ? (name: string) => cmd.getOptionValueSource(name)
+              : () => undefined;
+          const sessionSource = optionSource("session");
+          const sessionTargetRaw = typeof opts.session === "string" ? opts.session.trim() : "";
+          const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
+          const sessionTarget =
+            sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
+          if (sessionTarget !== "main" && sessionTarget !== "isolated") {
+            throw new Error("--session must be main or isolated");
+          }
+
+          if (opts.deleteAfterRun && opts.keepAfterRun) {
+            throw new Error("Choose --delete-after-run or --keep-after-run, not both");
+          }
+
           if (sessionTarget === "main" && payload.kind !== "systemEvent") {
             throw new Error("Main jobs require --system-event (systemEvent).");
           }
@@ -194,10 +206,6 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("--announce/--deliver/--no-deliver require --session isolated.");
           }
 
-          const optionSource =
-            typeof cmd?.getOptionValueSource === "function"
-              ? (name: string) => cmd.getOptionValueSource(name)
-              : () => undefined;
           const hasLegacyPostConfig =
             optionSource("postPrefix") === "cli" ||
             optionSource("postMode") === "cli" ||
@@ -262,7 +270,7 @@ export function registerCronAddCommand(cron: Command) {
             name,
             description,
             enabled: !opts.disabled,
-            deleteAfterRun: Boolean(opts.deleteAfterRun),
+            deleteAfterRun: opts.deleteAfterRun ? true : opts.keepAfterRun ? false : undefined,
             agentId,
             schedule,
             sessionTarget,
