@@ -261,6 +261,10 @@ export type TelegramForwardedContext = {
   fromUsername?: string;
   fromTitle?: string;
   fromSignature?: string;
+  /** Original chat type from forward_from_chat (e.g. "channel", "supergroup", "group"). */
+  fromChatType?: string;
+  /** Original message ID in the source chat (channel forwards). */
+  fromMessageId?: number;
 };
 
 function normalizeForwardedUserLabel(user: User) {
@@ -323,6 +327,7 @@ function buildForwardedContextFromChat(params: {
   date?: number;
   type: string;
   signature?: string;
+  messageId?: number;
 }): TelegramForwardedContext | null {
   const fallbackKind = params.type === "channel" ? "channel" : "chat";
   const { display, title, username, id } = normalizeForwardedChatLabel(params.chat, fallbackKind);
@@ -331,6 +336,7 @@ function buildForwardedContextFromChat(params: {
   }
   const signature = params.signature?.trim() || undefined;
   const from = signature ? `${display} (${signature})` : display;
+  const chatType = params.chat.type?.trim() || undefined;
   return {
     from,
     date: params.date,
@@ -339,6 +345,8 @@ function buildForwardedContextFromChat(params: {
     fromUsername: username,
     fromTitle: title,
     fromSignature: signature,
+    fromChatType: chatType,
+    fromMessageId: params.messageId,
   };
 }
 
@@ -369,6 +377,7 @@ function resolveForwardOrigin(origin: MessageOrigin): TelegramForwardedContext |
         date: origin.date,
         type: "channel",
         signature: origin.author_signature,
+        messageId: origin.message_id,
       });
     default:
       // Exhaustiveness guard: if Grammy adds a new MessageOrigin variant,
