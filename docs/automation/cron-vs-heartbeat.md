@@ -90,7 +90,7 @@ Cron jobs run at **exact times** and can run in isolated sessions without affect
 - **Exact timing**: 5-field cron expressions with timezone support.
 - **Session isolation**: Runs in `cron:<jobId>` without polluting main history.
 - **Model overrides**: Use a cheaper or more powerful model per job.
-- **Delivery control**: Choose `announce` (summary), `deliver` (full output), or `none`. Legacy jobs still post a summary to main by default.
+- **Delivery control**: Isolated jobs default to `announce` (summary); choose `deliver` (full output) or `none` as needed. Legacy jobs still post a summary to main.
 - **Immediate delivery**: Announce/deliver modes post directly without waiting for heartbeat.
 - **No agent context needed**: Runs even if main session is idle or compacted.
 - **One-shot support**: `--at` for precise future timestamps.
@@ -215,13 +215,13 @@ See [Lobster](/tools/lobster) for full usage and examples.
 
 Both heartbeat and cron can interact with the main session, but differently:
 
-|         | Heartbeat                       | Cron (main)              | Cron (isolated)        |
-| ------- | ------------------------------- | ------------------------ | ---------------------- |
-| Session | Main                            | Main (via system event)  | `cron:<jobId>`         |
-| History | Shared                          | Shared                   | Fresh each run         |
-| Context | Full                            | Full                     | None (starts clean)    |
-| Model   | Main session model              | Main session model       | Can override           |
-| Output  | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Summary posted to main |
+|         | Heartbeat                       | Cron (main)              | Cron (isolated)            |
+| ------- | ------------------------------- | ------------------------ | -------------------------- |
+| Session | Main                            | Main (via system event)  | `cron:<jobId>`             |
+| History | Shared                          | Shared                   | Fresh each run             |
+| Context | Full                            | Full                     | None (starts clean)        |
+| Model   | Main session model              | Main session model       | Can override               |
+| Output  | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Announce summary (default) |
 
 ### When to use main session cron
 
