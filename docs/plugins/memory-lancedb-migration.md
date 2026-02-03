@@ -109,7 +109,9 @@ For clarity or edge cases, explicitly specify the provider:
    ```
 
 4. **Verify It Works**
+
    Check logs for:
+
    ```
    memory-lancedb: plugin registered (db: ..., lazy init)
    memory-lancedb: initialized (db: ..., model: gemini-embedding-001)
@@ -128,9 +130,11 @@ For clarity or edge cases, explicitly specify the provider:
 
 1. **Keep using OpenAI** (no changes, your memories stay)
 2. **Switch to Gemini and clear memories**:
+
    ```bash
    rm ~/.openclaw/memory/lancedb/*
    ```
+
    New memories will be created with Gemini embeddings.
 
 ### Why Different Dimensions?
@@ -192,7 +196,7 @@ This prevents silent failures where invalid responses would store zero-vectors.
 
 - For Google: Key starts with `AIza...` not `sk-...`
 - For OpenAI: Key starts with `sk-` not `AIza...`
-- Model matches provider (gemini-_ for Google, text-embedding-3-_ for OpenAI)
+- Model matches provider (`gemini-*` for Google, `text-embedding-3-*` for OpenAI)
 
 ### Memories Not Found After Switch
 
@@ -245,6 +249,7 @@ This means you only need to set `provider` if you want to override auto-detectio
    ```
 
 4. ✅ **Clear memories** if switching providers
+
    ```bash
    rm ~/.openclaw/memory/lancedb/*
    ```

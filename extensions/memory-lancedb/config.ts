@@ -1,7 +1,7 @@
-import { Type } from "@sinclair/typebox";
 import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { Type } from "@sinclair/typebox";
 
 export type MemoryConfig = {
   embedding: {

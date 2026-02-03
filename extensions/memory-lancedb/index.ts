@@ -6,10 +6,10 @@
  * Provides seamless auto-recall and auto-capture via lifecycle hooks.
  */
 
-import type * as LanceDB from "@lancedb/lancedb";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
+import type * as LanceDB from "@lancedb/lancedb";
+import { Type } from "@sinclair/typebox";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import {
   MEMORY_CATEGORIES,
   type MemoryCategory,
