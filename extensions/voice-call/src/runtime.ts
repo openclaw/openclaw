@@ -48,11 +48,17 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
 
   switch (config.provider) {
     case "telnyx":
-      return new TelnyxProvider({
-        apiKey: config.telnyx?.apiKey,
-        connectionId: config.telnyx?.connectionId,
-        publicKey: config.telnyx?.publicKey,
-      });
+      return new TelnyxProvider(
+        {
+          apiKey: config.telnyx?.apiKey,
+          connectionId: config.telnyx?.connectionId,
+          publicKey: config.telnyx?.publicKey,
+        },
+        {
+          allowUnsignedWebhooks:
+            config.inboundPolicy === "open" || config.inboundPolicy === "disabled",
+        },
+      );
     case "twilio":
       return new TwilioProvider(
         {
