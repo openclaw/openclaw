@@ -196,6 +196,12 @@ describe("handleDiscordPresenceAction", () => {
     );
   });
 
+  it("requires activityType when activityName is provided", async () => {
+    await expect(
+      handleDiscordPresenceAction("setPresence", { activityName: "My Game" }, presenceEnabled),
+    ).rejects.toThrow(/activityType is required/);
+  });
+
   it("rejects unknown presence actions", async () => {
     await expect(handleDiscordPresenceAction("unknownAction", {}, presenceEnabled)).rejects.toThrow(
       /Unknown presence action/,

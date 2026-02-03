@@ -23,11 +23,12 @@ describe("gateway-registry", () => {
     expect(getGateway("account-b")).toBeUndefined();
   });
 
-  it("uses 'default' key when accountId is undefined", () => {
+  it("uses collision-safe key when accountId is undefined", () => {
     const gateway = fakeGateway();
     registerGateway(undefined, gateway);
     expect(getGateway(undefined)).toBe(gateway);
-    expect(getGateway("default")).toBe(gateway);
+    // "default" as a literal account ID must not collide with the sentinel key
+    expect(getGateway("default")).toBeUndefined();
   });
 
   it("unregisters a gateway", () => {

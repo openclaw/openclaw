@@ -55,7 +55,13 @@ export async function handleDiscordPresenceAction(
   const activities: Activity[] = [];
 
   if (activityTypeRaw || activityName) {
-    const typeNum = activityTypeRaw ? ACTIVITY_TYPE_MAP[activityTypeRaw.toLowerCase()] : 0;
+    if (!activityTypeRaw) {
+      throw new Error(
+        "activityType is required when activityName is provided. " +
+          `Valid types: ${Object.keys(ACTIVITY_TYPE_MAP).join(", ")}`,
+      );
+    }
+    const typeNum = ACTIVITY_TYPE_MAP[activityTypeRaw.toLowerCase()];
     if (typeNum === undefined) {
       throw new Error(
         `Invalid activityType "${activityTypeRaw}". Must be one of: ${Object.keys(ACTIVITY_TYPE_MAP).join(", ")}`,
