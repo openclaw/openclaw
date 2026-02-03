@@ -119,6 +119,8 @@ export type LoggingConfig = {
     tokenWarnings?: boolean;
     /** Log gateway connection state changes (default: true) */
     gatewayHealth?: boolean;
+    /** Gateway RPC methods that should not emit connect/disconnect health logs. */
+    gatewayHealthSuppressMethods?: string[];
   };
 
   /** Performance thresholds (milliseconds) */

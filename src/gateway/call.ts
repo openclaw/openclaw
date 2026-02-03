@@ -18,6 +18,39 @@ import {
 import { GatewayClient } from "./client.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
+// Suppress gateway health logs for polling/one-off RPCs that reconnect frequently.
+const DEFAULT_GATEWAY_HEALTH_SUPPRESS_METHODS = new Set<string>([
+  "automations.history",
+  "automations.list",
+  "browser.request",
+  "channels.status",
+  "cron.add",
+  "cron.list",
+  "cron.remove",
+  "cron.run",
+  "cron.runs",
+  "cron.status",
+  "cron.update",
+  "logs.tail",
+  "overseer.goal.create",
+  "overseer.goal.pause",
+  "overseer.goal.resume",
+  "overseer.status",
+  "overseer.tick",
+  "overseer.work.update",
+  "wake",
+  "health",
+  "status",
+  "system-presence",
+  "last-heartbeat",
+  "set-heartbeats",
+  "config.get",
+  "config.set",
+  "config.apply",
+  "config.patch",
+  "config.schema",
+]);
+
 export type CallGatewayOptions = {
   url?: string;
   token?: string;
@@ -36,6 +69,7 @@ export type CallGatewayOptions = {
   instanceId?: string;
   minProtocol?: number;
   maxProtocol?: number;
+  suppressGatewayHealth?: boolean;
   /**
    * Overrides the config path shown in connection error details.
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
@@ -114,6 +148,9 @@ export async function callGateway<T = Record<string, unknown>>(
 ): Promise<T> {
   const timeoutMs = opts.timeoutMs ?? 10_000;
   const config = opts.config ?? loadConfig();
+  const suppressGatewayHealth =
+    opts.suppressGatewayHealth ??
+    (typeof opts.method === "string" && isGatewayHealthSuppressedMethod(config, opts.method));
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const urlOverride =
@@ -220,6 +257,7 @@ export async function callGateway<T = Record<string, unknown>>(
       deviceIdentity: loadOrCreateDeviceIdentity(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
+      logGatewayHealth: !suppressGatewayHealth,
       onHelloOk: async () => {
         try {
           const result = await client.request<T>(opts.method, opts.params, {
@@ -252,6 +290,14 @@ export async function callGateway<T = Record<string, unknown>>(
 
     client.start();
   });
+}
+
+function isGatewayHealthSuppressedMethod(config: OpenClawConfig, method: string): boolean {
+  const configured = config.logging?.enhanced?.gatewayHealthSuppressMethods;
+  if (Array.isArray(configured)) {
+    return configured.includes(method);
+  }
+  return DEFAULT_GATEWAY_HEALTH_SUPPRESS_METHODS.has(method);
 }
 
 export function randomIdempotencyKey() {

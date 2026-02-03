@@ -64,6 +64,7 @@ export type GatewayClientOptions = {
   onConnectError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  logGatewayHealth?: boolean;
 };
 
 export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
@@ -147,23 +148,27 @@ export class GatewayClient {
           return;
         }
       }
-      logGatewayHealth({
-        event: "connected",
-        metadata: { url, clientName: this.opts.clientName },
-      });
+      if (this.shouldLogGatewayHealth()) {
+        logGatewayHealth({
+          event: "connected",
+          metadata: { url, clientName: this.opts.clientName },
+        });
+      }
       this.queueConnect();
     });
     this.ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
-      logGatewayHealth({
-        event: "disconnected",
-        metadata: {
-          code,
-          reason: reasonText,
-          hint: describeGatewayCloseCode(code),
-        },
-      });
+      if (this.shouldLogGatewayHealth()) {
+        logGatewayHealth({
+          event: "disconnected",
+          metadata: {
+            code,
+            reason: reasonText,
+            hint: describeGatewayCloseCode(code),
+          },
+        });
+      }
       this.ws = null;
       this.flushPendingErrors(new Error(`gateway closed (${code}): ${reasonText}`));
       this.scheduleReconnect();
@@ -369,11 +374,17 @@ export class GatewayClient {
     }
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
-    logGatewayHealth({
-      event: "reconnect_attempt",
-      metadata: { delayMs: delay, nextBackoffMs: this.backoffMs },
-    });
+    if (this.shouldLogGatewayHealth()) {
+      logGatewayHealth({
+        event: "reconnect_attempt",
+        metadata: { delayMs: delay, nextBackoffMs: this.backoffMs },
+      });
+    }
     setTimeout(() => this.start(), delay).unref();
+  }
+
+  private shouldLogGatewayHealth() {
+    return this.opts.logGatewayHealth !== false;
   }
 
   private flushPendingErrors(err: Error) {

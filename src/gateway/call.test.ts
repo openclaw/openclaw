@@ -8,6 +8,7 @@ let lastClientOptions: {
   url?: string;
   token?: string;
   password?: string;
+  logGatewayHealth?: boolean;
   onHelloOk?: () => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
 } | null = null;
@@ -44,6 +45,7 @@ vi.mock("./client.js", () => ({
       url?: string;
       token?: string;
       password?: string;
+      logGatewayHealth?: boolean;
       onHelloOk?: () => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
     }) {
@@ -116,6 +118,29 @@ describe("callGateway url resolution", () => {
     await callGateway({ method: "health", url: "wss://override.example/ws" });
 
     expect(lastClientOptions?.url).toBe("wss://override.example/ws");
+  });
+
+  it("suppresses gateway health logs for logs.tail", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    await callGateway({ method: "logs.tail" });
+
+    expect(lastClientOptions?.logGatewayHealth).toBe(false);
+  });
+
+  it("uses config overrides for gateway health suppression list", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+      logging: { enhanced: { gatewayHealthSuppressMethods: [] } },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    await callGateway({ method: "logs.tail" });
+
+    expect(lastClientOptions?.logGatewayHealth).toBe(true);
   });
 });
 
