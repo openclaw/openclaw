@@ -100,7 +100,7 @@ In **Bot** → **Privileged Gateway Intents**, enable:
 - **Message Content Intent** (required to read message text in most guilds; without it you’ll see “Used disallowed intents” or the bot will connect but not react to messages)
 - **Server Members Intent** (recommended; required for some member/user lookups and allowlist matching in guilds)
 
-You usually do **not** need **Presence Intent**.
+You usually do **not** need **Presence Intent**. Setting the bot's own presence (`setPresence` action) uses gateway OP3 and does not require this intent; it is only needed if you want to receive presence updates about other guild members.
 
 ### 3) Generate an invite URL (OAuth2 URL Generator)
 
@@ -278,6 +278,7 @@ Outbound Discord API calls retry on rate limits (429) using Discord `retry_after
         voiceStatus: true,
         events: true,
         moderation: false,
+        presence: false,
       },
       replyToMode: "off",
       dm: {
@@ -353,6 +354,7 @@ ack reaction after the bot replies.
   - `channels` (create/edit/delete channels + categories + permissions)
   - `roles` (role add/remove, default `false`)
   - `moderation` (timeout/kick/ban, default `false`)
+  - `presence` (bot status/activity, default `false`)
 - `execApprovals`: Discord-only exec approval DMs (button UI). Supports `enabled`, `approvers`, `agentFilter`, `sessionFilter`.
 
 Reaction notifications use `guilds.<id>.reactionNotifications`:
@@ -412,6 +414,7 @@ Allowlist notes (PK-enabled):
 | events         | enabled  | List/create scheduled events       |
 | roles          | disabled | Role add/remove                    |
 | moderation     | disabled | Timeout/kick/ban                   |
+| presence       | disabled | Bot status/activity (setPresence)  |
 
 - `replyToMode`: `off` (default), `first`, or `all`. Applies only when the model includes a reply tag.
 
@@ -460,6 +463,7 @@ The agent can call `discord` with actions like:
 - `searchMessages`, `memberInfo`, `roleInfo`, `roleAdd`, `roleRemove`, `emojiList`
 - `channelInfo`, `channelList`, `voiceStatus`, `eventList`, `eventCreate`
 - `timeout`, `kick`, `ban`
+- `setPresence` (bot activity and online status)
 
 Discord message ids are surfaced in the injected context (`[discord message id: …]` and history lines) so the agent can target them.
 Emoji can be unicode (e.g., `✅`) or custom emoji syntax like `<:party_blob:1234567890>`.
