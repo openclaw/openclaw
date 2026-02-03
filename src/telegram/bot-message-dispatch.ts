@@ -259,72 +259,77 @@ export const dispatchTelegramMessage = async ({
     await placeholder.start();
   }
 
-  const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg,
-    dispatcherOptions: {
-      responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
-      deliver: async (payload, info) => {
-        if (info.kind === "final") {
-          await flushDraft();
-          draftStream?.stop();
-          // Clean up placeholder before sending final reply
-          await placeholder.cleanup();
-        }
-        const result = await deliverReplies({
-          replies: [payload],
-          chatId: String(chatId),
-          token: opts.token,
-          runtime,
-          bot,
-          replyToMode,
-          textLimit,
-          thread: threadSpec,
-          tableMode,
-          chunkMode,
-          onVoiceRecording: sendRecordVoice,
-          linkPreview: telegramCfg.linkPreview,
-          replyQuoteText,
-        });
-        if (result.delivered) {
-          deliveryState.delivered = true;
-        }
-      },
-      onSkip: (_payload, info) => {
-        if (info.reason !== "silent") {
-          deliveryState.skippedNonSilent += 1;
-        }
-      },
-      onError: (err, info) => {
-        runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
-      },
-      onReplyStart: createTypingCallbacks({
-        start: sendTyping,
-        onStartError: (err) => {
-          logTypingFailure({
-            log: logVerbose,
-            channel: "telegram",
-            target: String(chatId),
-            error: err,
-          });
-        },
-      }).onReplyStart,
-    },
-    replyOptions: {
-      skillFilter,
-      disableBlockStreaming,
-      onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
-      onModelSelected: (ctx) => {
-        prefixContext.onModelSelected(ctx);
-      },
-      onToolStart: placeholderConfig.enabled
-        ? async (toolName, args) => {
-            await placeholder.onTool(toolName, args);
+  let queuedFinal = false;
+  try {
+    const result = await dispatchReplyWithBufferedBlockDispatcher({
+      ctx: ctxPayload,
+      cfg,
+      dispatcherOptions: {
+        responsePrefix: prefixContext.responsePrefix,
+        responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+        deliver: async (payload, info) => {
+          if (info.kind === "final") {
+            await flushDraft();
+            draftStream?.stop();
           }
-        : undefined,
-    },
-  });
+          const result = await deliverReplies({
+            replies: [payload],
+            chatId: String(chatId),
+            token: opts.token,
+            runtime,
+            bot,
+            replyToMode,
+            textLimit,
+            thread: threadSpec,
+            tableMode,
+            chunkMode,
+            onVoiceRecording: sendRecordVoice,
+            linkPreview: telegramCfg.linkPreview,
+            replyQuoteText,
+          });
+          if (result.delivered) {
+            deliveryState.delivered = true;
+          }
+        },
+        onSkip: (_payload, info) => {
+          if (info.reason !== "silent") {
+            deliveryState.skippedNonSilent += 1;
+          }
+        },
+        onError: (err, info) => {
+          runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
+        },
+        onReplyStart: createTypingCallbacks({
+          start: sendTyping,
+          onStartError: (err) => {
+            logTypingFailure({
+              log: logVerbose,
+              channel: "telegram",
+              target: String(chatId),
+              error: err,
+            });
+          },
+        }).onReplyStart,
+      },
+      replyOptions: {
+        skillFilter,
+        disableBlockStreaming,
+        onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
+        onModelSelected: (ctx) => {
+          prefixContext.onModelSelected(ctx);
+        },
+        onToolStart: placeholderConfig.enabled
+          ? async (toolName, args) => {
+              await placeholder.onTool(toolName, args);
+            }
+          : undefined,
+      },
+    });
+    queuedFinal = result.queuedFinal;
+  } finally {
+    // Ensure placeholder is always cleaned up even on errors
+    await placeholder.cleanup();
+  }
   draftStream?.stop();
   let sentFallback = false;
   if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {

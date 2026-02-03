@@ -38,6 +38,15 @@ export type PlaceholderController = {
   isActive: () => boolean;
 };
 
+/** Escape HTML special characters for safe display. */
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 const DEFAULT_MESSAGES = ["🤔 Thinking...", "💭 Processing...", "🧠 Working on it..."];
 
 export function createPlaceholderController(params: {
@@ -55,14 +64,16 @@ export function createPlaceholderController(params: {
 
   const getRandomMessage = () => {
     const idx = Math.floor(Math.random() * messages.length);
-    return messages[idx] ?? messages[0] ?? DEFAULT_MESSAGES[0];
+    const msg = messages[idx] ?? messages[0] ?? DEFAULT_MESSAGES[0];
+    // Escape user-configured messages but not our defaults (which have safe HTML entities)
+    return config.messages?.length ? escapeHtml(msg) : msg;
   };
 
   const getToolDisplay = (toolName: string) => {
     const override = config.toolDisplay?.[toolName];
     return {
       emoji: override?.emoji ?? "🔧",
-      label: override?.label ?? toolName,
+      label: escapeHtml(override?.label ?? toolName),
     };
   };
 
