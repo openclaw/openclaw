@@ -788,18 +788,6 @@ export async function runEmbeddedAttempt(
             note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
           });
 
-          const shouldTrackCacheTtl =
-            params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-            isCacheTtlEligibleProvider(params.provider, params.modelId) &&
-            !subscription.didCompact();
-          if (shouldTrackCacheTtl) {
-            appendCacheTtlTimestamp(sessionManager, {
-              timestamp: Date.now(),
-              provider: params.provider,
-              modelId: params.modelId,
-            });
-          }
-
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
@@ -825,6 +813,22 @@ export async function runEmbeddedAttempt(
           } else {
             throw err;
           }
+        }
+
+        // Write cache-ttl only if no compaction occurred during this prompt.
+        // This must happen AFTER waitForCompactionRetry() because compaction
+        // triggers during prompt(), not before. Writing before prompt() would
+        // always see didCompact()=false, causing a second compaction later.
+        const shouldTrackCacheTtl =
+          params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
+          isCacheTtlEligibleProvider(params.provider, params.modelId) &&
+          !subscription.didCompact();
+        if (shouldTrackCacheTtl) {
+          appendCacheTtlTimestamp(sessionManager, {
+            timestamp: Date.now(),
+            provider: params.provider,
+            modelId: params.modelId,
+          });
         }
 
         messagesSnapshot = activeSession.messages.slice();
