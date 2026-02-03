@@ -51,3 +51,10 @@ export const DEFAULT_IMAGE_MODELS: Record<string, string> = {
 };
 export const CLI_OUTPUT_MAX_BUFFER = 5 * MB;
 export const DEFAULT_MEDIA_CONCURRENCY = 2;
+
+/**
+ * Minimum audio file size in bytes below which transcription is skipped.
+ * Files smaller than this threshold are almost certainly empty or corrupt
+ * and would cause unhelpful API errors from Whisper/transcription providers.
+ */
+export const MIN_AUDIO_FILE_BYTES = 1024;

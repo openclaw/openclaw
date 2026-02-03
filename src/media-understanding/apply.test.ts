@@ -41,7 +41,7 @@ describe("applyMediaUnderstanding", () => {
     mockedResolveApiKey.mockClear();
     mockedFetchRemoteMedia.mockReset();
     mockedFetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+      buffer: Buffer.alloc(2048),
       contentType: "audio/ogg",
       fileName: "note.ogg",
     });
@@ -51,7 +51,7 @@ describe("applyMediaUnderstanding", () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPath = path.join(dir, "note.ogg");
-    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]));
+    await fs.writeFile(audioPath, Buffer.alloc(2048));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -94,7 +94,7 @@ describe("applyMediaUnderstanding", () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPath = path.join(dir, "data.mp3");
-    await fs.writeFile(audioPath, '"a","b"\n"1","2"');
+    await fs.writeFile(audioPath, '"a","b"\n"1","2"' + "\n".repeat(1100));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -134,7 +134,7 @@ describe("applyMediaUnderstanding", () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPath = path.join(dir, "note.ogg");
-    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]));
+    await fs.writeFile(audioPath, Buffer.alloc(2048));
 
     const ctx: MsgContext = {
       Body: "<media:audio> /capture status",
@@ -251,7 +251,7 @@ describe("applyMediaUnderstanding", () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPath = path.join(dir, "note.ogg");
-    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]));
+    await fs.writeFile(audioPath, Buffer.alloc(2048));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -392,7 +392,7 @@ describe("applyMediaUnderstanding", () => {
     const { applyMediaUnderstanding } = await loadApply();
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPath = path.join(dir, "fallback.ogg");
-    await fs.writeFile(audioPath, Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6]));
+    await fs.writeFile(audioPath, Buffer.alloc(2048));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -430,8 +430,8 @@ describe("applyMediaUnderstanding", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-"));
     const audioPathA = path.join(dir, "note-a.ogg");
     const audioPathB = path.join(dir, "note-b.ogg");
-    await fs.writeFile(audioPathA, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
-    await fs.writeFile(audioPathB, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
+    await fs.writeFile(audioPathA, Buffer.alloc(2048));
+    await fs.writeFile(audioPathB, Buffer.alloc(2048));
 
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -475,7 +475,7 @@ describe("applyMediaUnderstanding", () => {
     const audioPath = path.join(dir, "note.ogg");
     const videoPath = path.join(dir, "clip.mp4");
     await fs.writeFile(imagePath, "image-bytes");
-    await fs.writeFile(audioPath, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
+    await fs.writeFile(audioPath, Buffer.alloc(2048));
     await fs.writeFile(videoPath, "video-bytes");
 
     const ctx: MsgContext = {

@@ -34,6 +34,7 @@ import {
   DEFAULT_AUDIO_MODELS,
   DEFAULT_IMAGE_MODELS,
   DEFAULT_TIMEOUT_SECONDS,
+  MIN_AUDIO_FILE_BYTES,
 } from "./defaults.js";
 import { isMediaUnderstandingSkipError, MediaUnderstandingSkipError } from "./errors.js";
 import { describeImageWithModel } from "./providers/image.js";
@@ -894,6 +895,12 @@ async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
+    if (media.size < MIN_AUDIO_FILE_BYTES) {
+      throw new MediaUnderstandingSkipError(
+        "tooSmall",
+        `Audio attachment ${params.attachmentIndex + 1} is too small (${media.size} bytes, minimum ${MIN_AUDIO_FILE_BYTES})`,
+      );
+    }
     const auth = await resolveApiKeyForProvider({
       provider: providerId,
       cfg,
@@ -1016,6 +1023,15 @@ async function runCliEntry(params: {
     maxBytes,
     timeoutMs,
   });
+  if (capability === "audio") {
+    const stat = await fs.stat(pathResult.path);
+    if (stat.size < MIN_AUDIO_FILE_BYTES) {
+      throw new MediaUnderstandingSkipError(
+        "tooSmall",
+        `Audio attachment ${params.attachmentIndex + 1} is too small (${stat.size} bytes, minimum ${MIN_AUDIO_FILE_BYTES})`,
+      );
+    }
+  }
   const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-cli-"));
   const mediaPath = pathResult.path;
   const outputBase = path.join(outputDir, path.parse(mediaPath).name);
