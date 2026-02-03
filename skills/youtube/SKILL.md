@@ -1,7 +1,8 @@
 ---
 name: youtube
-description: YouTube Research Pro - Search, transcripts (FREE!), video details, comments, downloads. Use for video research, content analysis, or extracting information from YouTube.
-homepage: https://developers.google.com/youtube/v3
+description: |
+  The most comprehensive YouTube skill for AI agents. Extract transcripts for FREE (zero API quota!), search with filters, batch video details, read comments, download videos/audio. We analyzed 15+ YouTube tools and built the one that does everything.
+homepage: https://github.com/openclaw/openclaw/tree/main/skills/youtube
 metadata:
   {
     "openclaw":
@@ -31,56 +32,74 @@ metadata:
 
 # YouTube Research Pro
 
-Comprehensive YouTube access: search, transcripts, video details, comments, and downloads.
+**The most comprehensive YouTube skill for AI agents.**
 
-**Key Feature:** Transcript extraction is **FREE** (no API quota used!)
+We analyzed 15+ YouTube MCP servers and found each does one thing well, but none does everything. So we built the skill we wished existed.
+
+## Why This Skill?
+
+| What Others Do | What We Do |
+|----------------|------------|
+| Transcripts OR search OR downloads | **All three, unified** |
+| Burn API quota on transcripts | **FREE transcripts** (zero quota) |
+| Single video at a time | **Batch operations** (50 videos) |
+| Basic search | **Filtered search** (date, duration, order) |
+| Text output only | **JSON export** for pipelines |
+
+### The Killer Feature: FREE Transcripts
+
+Most tools use the YouTube Data API for transcripts = **100 quota units per request**. Daily limit is 10,000 units = only ~100 transcripts/day.
+
+**We use `youtube-transcript-api`** — extracts directly from YouTube's frontend. **Zero API quota. Unlimited transcripts.**
 
 ## Quick Reference
 
-| Command | API Quota | Description |
-|---------|-----------|-------------|
-| `transcript` | **FREE** | Get video transcript/captions |
-| `transcript-list` | **FREE** | List available languages |
-| `search` | 100 units | Search videos |
-| `video` | 1 unit | Get video details (batch supported) |
-| `comments` | 1 unit | Get video comments |
-| `channel` | 1-3 units | Get channel info |
-| `download` | **FREE** | Download video (yt-dlp) |
-| `download-audio` | **FREE** | Extract audio only |
+| Command | Quota | What it does |
+|---------|-------|--------------|
+| `transcript VIDEO` | **FREE** | Get video transcript |
+| `transcript-list VIDEO` | **FREE** | List available languages |
+| `download VIDEO` | **FREE** | Download video (yt-dlp) |
+| `download-audio VIDEO` | **FREE** | Extract audio only |
+| `search QUERY` | 100 | Search videos |
+| `video ID [ID...]` | 1/video | Get details (batch!) |
+| `comments VIDEO` | 1 | Get comments + replies |
+| `channel [ID]` | 1-3 | Channel statistics |
 
-## First-time Setup
-
-1. Get OAuth credentials from [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-2. Create OAuth 2.0 Client ID (Desktop app)
-3. Download JSON and save to `~/.config/youtube-skill/credentials.json`
-4. Run auth:
+## Setup (One Time)
 
 ```bash
+# 1. Get credentials from Google Cloud Console
+#    - Create OAuth 2.0 Client ID (Desktop app)
+#    - Download JSON
+
+# 2. Save credentials
+mkdir -p ~/.config/youtube-skill
+mv ~/Downloads/client_secret*.json ~/.config/youtube-skill/credentials.json
+
+# 3. Authenticate
 uv run {baseDir}/scripts/youtube.py auth
 ```
 
-## Transcripts (FREE - No API Quota!)
-
-The killer feature: extract transcripts without using any API quota.
+## Transcripts (FREE!)
 
 ```bash
-# Get transcript as plain text
+# Plain text transcript
 uv run {baseDir}/scripts/youtube.py transcript VIDEO_ID
 
 # With timestamps
 uv run {baseDir}/scripts/youtube.py transcript VIDEO_ID --timestamps
 
-# Specific language
+# Specific language (falls back to available)
 uv run {baseDir}/scripts/youtube.py transcript VIDEO_ID -l es
 
-# List available languages
+# List what's available
 uv run {baseDir}/scripts/youtube.py transcript-list VIDEO_ID
 
-# Output as JSON
+# JSON output
 uv run {baseDir}/scripts/youtube.py transcript VIDEO_ID --json
 ```
 
-Works with video IDs or full URLs:
+Works with URLs too:
 ```bash
 uv run {baseDir}/scripts/youtube.py transcript "https://youtube.com/watch?v=dQw4w9WgXcQ"
 ```
@@ -92,27 +111,22 @@ uv run {baseDir}/scripts/youtube.py transcript "https://youtube.com/watch?v=dQw4
 uv run {baseDir}/scripts/youtube.py search "AI news 2026"
 
 # With filters
-uv run {baseDir}/scripts/youtube.py search "python tutorial" -l 20 -o date
-uv run {baseDir}/scripts/youtube.py search "machine learning" --duration long
+uv run {baseDir}/scripts/youtube.py search "tutorial" -l 20 --order date
+uv run {baseDir}/scripts/youtube.py search "lecture" --duration long
 uv run {baseDir}/scripts/youtube.py search "news" --published-after 2026-01-01T00:00:00Z
 ```
 
-## Video Details
-
-Supports batch mode for multiple videos:
+## Video Details (Batch Supported)
 
 ```bash
 # Single video
 uv run {baseDir}/scripts/youtube.py video dQw4w9WgXcQ
 
-# Multiple videos (batch)
-uv run {baseDir}/scripts/youtube.py video dQw4w9WgXcQ abc123 xyz789
+# Multiple videos at once (up to 50)
+uv run {baseDir}/scripts/youtube.py video id1 id2 id3 id4 id5
 
-# Verbose with description
-uv run {baseDir}/scripts/youtube.py video dQw4w9WgXcQ -v
-
-# JSON output
-uv run {baseDir}/scripts/youtube.py video dQw4w9WgXcQ --json
+# JSON output for processing
+uv run {baseDir}/scripts/youtube.py video id1 id2 --json
 ```
 
 ## Comments
@@ -121,45 +135,17 @@ uv run {baseDir}/scripts/youtube.py video dQw4w9WgXcQ --json
 # Top comments
 uv run {baseDir}/scripts/youtube.py comments VIDEO_ID
 
-# Recent comments with replies
-uv run {baseDir}/scripts/youtube.py comments VIDEO_ID -o time -r
+# With replies
+uv run {baseDir}/scripts/youtube.py comments VIDEO_ID --replies
 
-# More results
-uv run {baseDir}/scripts/youtube.py comments VIDEO_ID -l 50
-```
-
-## Channel Info
-
-```bash
-# Your channel
-uv run {baseDir}/scripts/youtube.py channel
-
-# Specific channel
-uv run {baseDir}/scripts/youtube.py channel UCxxxx
-```
-
-## User Data
-
-```bash
-# Subscriptions
-uv run {baseDir}/scripts/youtube.py subscriptions
-
-# Playlists
-uv run {baseDir}/scripts/youtube.py playlists
-
-# Playlist contents
-uv run {baseDir}/scripts/youtube.py playlist-items PLxxxx
-
-# Liked videos
-uv run {baseDir}/scripts/youtube.py liked
+# Recent comments
+uv run {baseDir}/scripts/youtube.py comments VIDEO_ID --order time -l 50
 ```
 
 ## Downloads (requires yt-dlp)
 
-Install yt-dlp: `brew install yt-dlp`
-
 ```bash
-# Download video (best quality)
+# Video (best quality)
 uv run {baseDir}/scripts/youtube.py download VIDEO_ID
 
 # Specific resolution
@@ -168,67 +154,61 @@ uv run {baseDir}/scripts/youtube.py download VIDEO_ID -r 720p
 # With subtitles
 uv run {baseDir}/scripts/youtube.py download VIDEO_ID -s en
 
-# Custom output directory
-uv run {baseDir}/scripts/youtube.py download VIDEO_ID -o ~/Videos
-
 # Audio only (MP3)
 uv run {baseDir}/scripts/youtube.py download-audio VIDEO_ID
 
-# Audio in different format
+# Audio as M4A
 uv run {baseDir}/scripts/youtube.py download-audio VIDEO_ID -f m4a
 ```
 
-## Multi-account Support
+## User Data
+
+```bash
+uv run {baseDir}/scripts/youtube.py subscriptions
+uv run {baseDir}/scripts/youtube.py playlists
+uv run {baseDir}/scripts/youtube.py playlist-items PLAYLIST_ID
+uv run {baseDir}/scripts/youtube.py liked
+uv run {baseDir}/scripts/youtube.py channel
+```
+
+## Command Aliases
+
+| Full | Alias |
+|------|-------|
+| `transcript` | `tr` |
+| `search` | `s` |
+| `video` | `v` |
+| `comments` | `c` |
+| `download` | `dl` |
+| `download-audio` | `dla` |
+
+## Use Cases
+
+**Research:** Fetch transcript → analyze with LLM → extract insights
+
+**Learning:** Batch transcripts from playlist → create study notes
+
+**Monitoring:** Search recent videos → extract transcripts → track trends
+
+**Podcasts:** Download audio for offline listening
+
+**Analysis:** Get channel stats → compare competitors
+
+## Multi-Account
 
 ```bash
 uv run {baseDir}/scripts/youtube.py -a work subscriptions
 uv run {baseDir}/scripts/youtube.py -a personal liked
 ```
 
-## Command Aliases
+## Why We Built This
 
-| Full Command | Alias |
-|--------------|-------|
-| `transcript` | `tr`, `trans` |
-| `transcript-list` | `trl` |
-| `search` | `s` |
-| `video` | `v` |
-| `comments` | `c` |
-| `channel` | `ch` |
-| `subscriptions` | `subs` |
-| `playlists` | `pl` |
-| `playlist-items` | `pli` |
-| `download` | `dl` |
-| `download-audio` | `dla` |
+We surveyed the landscape:
+- **kimtaeyoon83/mcp-server-youtube-transcript** (463⭐) — Great transcripts, no search
+- **kevinwatt/yt-dlp-mcp** (211⭐) — Great downloads, no transcripts
+- **dannySubsense/youtube-mcp-server** (9⭐) — Most functions, but uses paid API for transcripts
+- **kirbah/mcp-youtube** (9⭐) — Batch ops, but no free transcripts
 
-## Research Workflows
+**None combined free transcripts + search + downloads + batch ops.**
 
-### Summarize a video's content
-```bash
-# Get transcript and video details together
-uv run {baseDir}/scripts/youtube.py video VIDEO_ID --json > video_info.json
-uv run {baseDir}/scripts/youtube.py transcript VIDEO_ID > transcript.txt
-```
-
-### Batch research on a topic
-```bash
-# Search and get details for top results
-uv run {baseDir}/scripts/youtube.py search "topic" -l 10 --json | \
-  jq -r '.[].id.videoId' | \
-  xargs uv run {baseDir}/scripts/youtube.py video --json
-```
-
-### Extract audio for analysis
-```bash
-uv run {baseDir}/scripts/youtube.py download-audio VIDEO_ID -f mp3 -o ./audio
-```
-
-## API Quota Notes
-
-- Daily quota: 10,000 units (free tier)
-- **Transcripts use 0 quota** (uses youtube-transcript-api)
-- Search: 100 units per request
-- Video/Channel details: 1-3 units per request
-- Downloads: 0 quota (uses yt-dlp)
-
-Tip: For research tasks, prefer transcripts over repeated API calls.
+Now one does.
