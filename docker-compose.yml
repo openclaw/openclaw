@@ -24,7 +24,7 @@ services:
         "--bind",
         "${OPENCLAW_GATEWAY_BIND:-lan}",
         "--port",
-        "${OPENCLAW_GATEWAY_PORT:-18789}",
+        "18789",
       ]
 
   openclaw-cli:
@@ -32,6 +32,7 @@ services:
     environment:
       HOME: /home/node
       TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}

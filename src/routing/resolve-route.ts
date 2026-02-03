@@ -221,7 +221,9 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     : null;
   if (parentPeer && parentPeer.id) {
     const parentPeerMatch = bindings.find((b) => matchesPeer(b.match, parentPeer));
-    if (parentPeerMatch) return choose(parentPeerMatch.agentId, "binding.peer.parent");
+    if (parentPeerMatch) {
+      return choose(parentPeerMatch.agentId, "binding.peer.parent");
+    }
   }
 
   if (guildId) {

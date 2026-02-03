@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../icons";
 import { toSanitizedMarkdownHtml } from "../markdown";

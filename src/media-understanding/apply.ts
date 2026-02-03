@@ -89,11 +89,29 @@ function xmlEscapeAttr(value: string): string {
   return value.replace(/[<>&"']/g, (char) => XML_ESCAPE_MAP[char] ?? char);
 }
 
+function escapeFileBlockContent(value: string): string {
+  return value.replace(/<\s*\/\s*file\s*>/gi, "&lt;/file&gt;").replace(/<\s*file\b/gi, "&lt;file");
+}
+
+function sanitizeMimeType(value?: string): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return undefined;
+  }
+  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)/);
+  return match?.[1];
+}
+
 function resolveFileLimits(cfg: OpenClawConfig) {
   const files = cfg.gateway?.http?.endpoints?.responses?.files;
+  const allowedMimesConfigured = Boolean(files?.allowedMimes && files.allowedMimes.length > 0);
   return {
     allowUrl: files?.allowUrl ?? true,
     allowedMimes: normalizeMimeList(files?.allowedMimes, DEFAULT_INPUT_FILE_MIMES),
+    allowedMimesConfigured,
     maxBytes: files?.maxBytes ?? DEFAULT_INPUT_FILE_MAX_BYTES,
     maxChars: files?.maxChars ?? DEFAULT_INPUT_FILE_MAX_CHARS,
     maxRedirects: files?.maxRedirects ?? DEFAULT_INPUT_MAX_REDIRECTS,
@@ -131,42 +149,128 @@ function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefin
     return "utf-16be";
   }
   const sampleLen = Math.min(buffer.length, 2048);
-  let zeroCount = 0;
+  let zeroEven = 0;
+  let zeroOdd = 0;
   for (let i = 0; i < sampleLen; i += 1) {
-    if (buffer[i] === 0) {
-      zeroCount += 1;
+    if (buffer[i] !== 0) {
+      continue;
+    }
+    if (i % 2 === 0) {
+      zeroEven += 1;
+    } else {
+      zeroOdd += 1;
     }
   }
+  const zeroCount = zeroEven + zeroOdd;
   if (zeroCount / sampleLen > 0.2) {
-    return "utf-16le";
+    return zeroOdd >= zeroEven ? "utf-16le" : "utf-16be";
   }
   return undefined;
+}
+
+const WORDISH_CHAR = /[\p{L}\p{N}]/u;
+const CP1252_MAP: Array<string | undefined> = [
+  "\u20ac",
+  undefined,
+  "\u201a",
+  "\u0192",
+  "\u201e",
+  "\u2026",
+  "\u2020",
+  "\u2021",
+  "\u02c6",
+  "\u2030",
+  "\u0160",
+  "\u2039",
+  "\u0152",
+  undefined,
+  "\u017d",
+  undefined,
+  undefined,
+  "\u2018",
+  "\u2019",
+  "\u201c",
+  "\u201d",
+  "\u2022",
+  "\u2013",
+  "\u2014",
+  "\u02dc",
+  "\u2122",
+  "\u0161",
+  "\u203a",
+  "\u0153",
+  undefined,
+  "\u017e",
+  "\u0178",
+];
+
+function decodeLegacyText(buffer: Buffer): string {
+  let output = "";
+  for (const byte of buffer) {
+    if (byte >= 0x80 && byte <= 0x9f) {
+      const mapped = CP1252_MAP[byte - 0x80];
+      output += mapped ?? String.fromCharCode(byte);
+      continue;
+    }
+    output += String.fromCharCode(byte);
+  }
+  return output;
+}
+
+function getTextStats(text: string): { printableRatio: number; wordishRatio: number } {
+  if (!text) {
+    return { printableRatio: 0, wordishRatio: 0 };
+  }
+  let printable = 0;
+  let control = 0;
+  let wordish = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code === 9 || code === 10 || code === 13 || code === 32) {
+      printable += 1;
+      wordish += 1;
+      continue;
+    }
+    if (code < 32 || (code >= 0x7f && code <= 0x9f)) {
+      control += 1;
+      continue;
+    }
+    printable += 1;
+    if (WORDISH_CHAR.test(char)) {
+      wordish += 1;
+    }
+  }
+  const total = printable + control;
+  if (total === 0) {
+    return { printableRatio: 0, wordishRatio: 0 };
+  }
+  return { printableRatio: printable / total, wordishRatio: wordish / total };
+}
+
+function isMostlyPrintable(text: string): boolean {
+  return getTextStats(text).printableRatio > 0.85;
+}
+
+function looksLikeLegacyTextBytes(buffer: Buffer): boolean {
+  if (buffer.length === 0) {
+    return false;
+  }
+  const text = decodeLegacyText(buffer);
+  const { printableRatio, wordishRatio } = getTextStats(text);
+  return printableRatio > 0.95 && wordishRatio > 0.3;
 }
 
 function looksLikeUtf8Text(buffer?: Buffer): boolean {
   if (!buffer || buffer.length === 0) {
     return false;
   }
-  const sampleLen = Math.min(buffer.length, 4096);
-  let printable = 0;
-  let other = 0;
-  for (let i = 0; i < sampleLen; i += 1) {
-    const byte = buffer[i];
-    if (byte === 0) {
-      other += 1;
-      continue;
-    }
-    if (byte === 9 || byte === 10 || byte === 13 || (byte >= 32 && byte <= 126)) {
-      printable += 1;
-    } else {
-      other += 1;
-    }
+  const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(sample);
+    return isMostlyPrintable(text);
+  } catch {
+    return looksLikeLegacyTextBytes(sample);
   }
-  const total = printable + other;
-  if (total === 0) {
-    return false;
-  }
-  return printable / total > 0.85;
 }
 
 function decodeTextSample(buffer?: Buffer): string {
@@ -213,12 +317,20 @@ function resolveTextMimeFromName(name?: string): string | undefined {
   return TEXT_EXT_MIME.get(ext);
 }
 
+function isBinaryMediaMime(mime?: string): boolean {
+  if (!mime) {
+    return false;
+  }
+  return mime.startsWith("image/") || mime.startsWith("audio/") || mime.startsWith("video/");
+}
+
 async function extractFileBlocks(params: {
   attachments: ReturnType<typeof normalizeMediaAttachments>;
   cache: ReturnType<typeof createMediaAttachmentCache>;
   limits: ReturnType<typeof resolveFileLimits>;
+  skipAttachmentIndexes?: Set<number>;
 }): Promise<string[]> {
-  const { attachments, cache, limits } = params;
+  const { attachments, cache, limits, skipAttachmentIndexes } = params;
   if (!attachments || attachments.length === 0) {
     return [];
   }
@@ -227,9 +339,12 @@ async function extractFileBlocks(params: {
     if (!attachment) {
       continue;
     }
+    if (skipAttachmentIndexes?.has(attachment.index)) {
+      continue;
+    }
     const forcedTextMime = resolveTextMimeFromName(attachment.path ?? attachment.url ?? "");
     const kind = forcedTextMime ? "document" : resolveAttachmentKind(attachment);
-    if (!forcedTextMime && (kind === "image" || kind === "video")) {
+    if (!forcedTextMime && (kind === "image" || kind === "video" || kind === "audio")) {
       continue;
     }
     if (!limits.allowUrl && attachment.url && !attachment.path) {
@@ -253,17 +368,18 @@ async function extractFileBlocks(params: {
     }
     const nameHint = bufferResult?.fileName ?? attachment.path ?? attachment.url;
     const forcedTextMimeResolved = forcedTextMime ?? resolveTextMimeFromName(nameHint ?? "");
+    const rawMime = bufferResult?.mime ?? attachment.mime;
+    const normalizedRawMime = normalizeMimeType(rawMime);
+    if (!forcedTextMimeResolved && isBinaryMediaMime(normalizedRawMime)) {
+      continue;
+    }
     const utf16Charset = resolveUtf16Charset(bufferResult?.buffer);
     const textSample = decodeTextSample(bufferResult?.buffer);
     const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
-    if (!forcedTextMimeResolved && kind === "audio" && !textLike) {
-      continue;
-    }
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
     const textHint =
       forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
-    const rawMime = bufferResult?.mime ?? attachment.mime;
-    const mimeType = textHint ?? normalizeMimeType(rawMime);
+    const mimeType = sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
     // Log when MIME type is overridden from non-text to text for auditability
     if (textHint && rawMime && !rawMime.startsWith("text/")) {
       logVerbose(
@@ -277,11 +393,13 @@ async function extractFileBlocks(params: {
       continue;
     }
     const allowedMimes = new Set(limits.allowedMimes);
-    for (const extra of EXTRA_TEXT_MIMES) {
-      allowedMimes.add(extra);
-    }
-    if (mimeType.startsWith("text/")) {
-      allowedMimes.add(mimeType);
+    if (!limits.allowedMimesConfigured) {
+      for (const extra of EXTRA_TEXT_MIMES) {
+        allowedMimes.add(extra);
+      }
+      if (mimeType.startsWith("text/")) {
+        allowedMimes.add(mimeType);
+      }
     }
     if (!allowedMimes.has(mimeType)) {
       if (shouldLogVerbose()) {
@@ -294,6 +412,7 @@ async function extractFileBlocks(params: {
     let extracted: Awaited<ReturnType<typeof extractFileContentFromSource>>;
     try {
       const mediaType = utf16Charset ? `${mimeType}; charset=${utf16Charset}` : mimeType;
+      const { allowedMimesConfigured: _allowedMimesConfigured, ...baseLimits } = limits;
       extracted = await extractFileContentFromSource({
         source: {
           type: "base64",
@@ -302,7 +421,7 @@ async function extractFileBlocks(params: {
           filename: bufferResult.fileName,
         },
         limits: {
-          ...limits,
+          ...baseLimits,
           allowedMimes,
         },
       });
@@ -326,7 +445,7 @@ async function extractFileBlocks(params: {
       .trim();
     // Escape XML special characters in attributes to prevent injection
     blocks.push(
-      `<file name="${xmlEscapeAttr(safeName)}" mime="${xmlEscapeAttr(mimeType)}">\n${blockText}\n</file>`,
+      `<file name="${xmlEscapeAttr(safeName)}" mime="${xmlEscapeAttr(mimeType)}">\n${escapeFileBlockContent(blockText)}\n</file>`,
     );
   }
   return blocks;
@@ -351,12 +470,6 @@ export async function applyMediaUnderstanding(params: {
   const cache = createMediaAttachmentCache(attachments);
 
   try {
-    const fileBlocks = await extractFileBlocks({
-      attachments,
-      cache,
-      limits: resolveFileLimits(cfg),
-    });
-
     const tasks = CAPABILITY_ORDER.map((capability) => async () => {
       const config = cfg.tools?.media?.[capability];
       return await runCapability({
@@ -408,13 +521,24 @@ export async function applyMediaUnderstanding(params: {
       }
       ctx.MediaUnderstanding = [...(ctx.MediaUnderstanding ?? []), ...outputs];
     }
+    const audioAttachmentIndexes = new Set(
+      outputs
+        .filter((output) => output.kind === "audio.transcription")
+        .map((output) => output.attachmentIndex),
+    );
+    const fileBlocks = await extractFileBlocks({
+      attachments,
+      cache,
+      limits: resolveFileLimits(cfg),
+      skipAttachmentIndexes: audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
+    });
     if (fileBlocks.length > 0) {
       ctx.Body = appendFileBlocks(ctx.Body, fileBlocks);
     }
     if (outputs.length > 0 || fileBlocks.length > 0) {
       finalizeInboundContext(ctx, {
         forceBodyForAgent: true,
-        forceBodyForCommands: outputs.length > 0,
+        forceBodyForCommands: outputs.length > 0 || fileBlocks.length > 0,
       });
     }
 

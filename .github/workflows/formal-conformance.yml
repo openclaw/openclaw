@@ -6,7 +6,7 @@ on:
 jobs:
   formal_conformance:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write
@@ -21,6 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: vignesh07/clawdbot-formal-models
+          ref: main
           path: clawdbot-formal-models
 
       - name: Setup Node
@@ -36,19 +37,63 @@ jobs:
           node scripts/extract-tool-groups.mjs
           node scripts/check-tool-group-alias.mjs
 
-      - name: Compute drift
+      # Drift is about extracted artifacts only; compute it before model checking
+      # to avoid any incidental file touches affecting the result.
+      - name: Compute drift (generated/*)
         id: drift
         run: |
           set -euo pipefail
           cd clawdbot-formal-models
 
-          if git diff --quiet; then
+          if git diff --quiet -- generated; then
             echo "drift=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "drift=true" >> "$GITHUB_OUTPUT"
-          git diff > "${GITHUB_WORKSPACE}/formal-models-drift.diff"
+          git diff -- generated > "${GITHUB_WORKSPACE}/formal-models-drift.diff"
+
+      - name: Model check (green suite)
+        run: |
+          set -euo pipefail
+          cd clawdbot-formal-models
+          make \
+            precedence groups elevated nodes-policy \
+            attacker approvals approvals-token nodes-pipeline \
+            gateway-exposure gateway-exposure-v2 gateway-exposure-v2-protected \
+            gateway-auth-conformance gateway-auth-tailscale gateway-auth-proxy \
+            pairing pairing-cap pairing-idempotency pairing-refresh pairing-refresh-race \
+            ingress-gating ingress-idempotency ingress-dedupe-fallback ingress-trace ingress-trace2 \
+            routing-isolation routing-precedence routing-identitylinks routing-identity-transitive routing-identity-symmetry routing-identity-channel-override \
+            routing-thread-parent discord-pluralkit \
+            ingress-retry session-key-stability session-explosion-bound config-normalization \
+            queue-drain delivery-route-stability delivery-pipeline retry-termination retry-eventual-success \
+            no-cross-stream multi-event-eventual-emission \
+            dedupe-collision-fallback crash-restart-dedupe two-worker-dedupe openclaw-session-key-conformance \
+            routing-thread-parent-channel-override routing-trirule gateway-auth-proxy-header-spoof \
+            group-alias-check
+
+      - name: Model check (negative suite, expected violations)
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cd clawdbot-formal-models
+          make -k \
+            precedence-negative groups-negative elevated-negative nodes-policy-negative \
+            attacker-negative attacker-nodes-negative attacker-nodes-allowlist-negative attacker-nodes-allowlist-negative \
+            approvals-negative approvals-token-negative nodes-pipeline-negative \
+            gateway-exposure-negative gateway-exposure-v2-negative gateway-exposure-v2-protected-negative \
+            gateway-exposure-v2-unsafe-custom gateway-exposure-v2-unsafe-tailnet gateway-exposure-v2-unsafe-auto \
+            gateway-auth-conformance-negative gateway-auth-tailscale-negative gateway-auth-proxy-negative \
+            pairing-negative pairing-cap-negative pairing-idempotency-negative pairing-refresh-negative pairing-refresh-race-negative \
+            ingress-gating-negative ingress-idempotency-negative ingress-dedupe-fallback-negative ingress-trace-negative ingress-trace2-negative \
+            routing-isolation-negative routing-precedence-negative routing-identitylinks-negative routing-identity-transitive-negative routing-identity-symmetry-negative routing-identity-channel-override-negative \
+            routing-thread-parent-negative discord-pluralkit-negative \
+            ingress-retry-negative session-key-stability-negative config-normalization-negative \
+            queue-drain delivery-route-stability-negative delivery-pipeline-negative retry-termination-negative retry-eventual-success-negative \
+            no-cross-stream-negative multi-event-eventual-emission-negative \
+            dedupe-collision-fallback-negative crash-restart-dedupe-negative two-worker-dedupe-negative openclaw-session-key-conformance-negative \
+            routing-thread-parent-channel-override-negative routing-trirule-negative gateway-auth-proxy-header-spoof-negative
 
       - name: Upload drift diff artifact
         if: steps.drift.outputs.drift == 'true'

@@ -3,6 +3,42 @@ import type { SkillMessageMap } from "../controllers/skills";
 import type { SkillStatusEntry, SkillStatusReport } from "../types";
 import { clampText } from "../format";
 
+type SkillGroup = {
+  id: string;
+  label: string;
+  skills: SkillStatusEntry[];
+};
+
+const SKILL_SOURCE_GROUPS: Array<{ id: string; label: string; sources: string[] }> = [
+  { id: "workspace", label: "Workspace Skills", sources: ["openclaw-workspace"] },
+  { id: "built-in", label: "Built-in Skills", sources: ["openclaw-bundled"] },
+  { id: "installed", label: "Installed Skills", sources: ["openclaw-managed"] },
+  { id: "extra", label: "Extra Skills", sources: ["openclaw-extra"] },
+];
+
+function groupSkills(skills: SkillStatusEntry[]): SkillGroup[] {
+  const groups = new Map<string, SkillGroup>();
+  for (const def of SKILL_SOURCE_GROUPS) {
+    groups.set(def.id, { id: def.id, label: def.label, skills: [] });
+  }
+  const other: SkillGroup = { id: "other", label: "Other Skills", skills: [] };
+  for (const skill of skills) {
+    const match = SKILL_SOURCE_GROUPS.find((group) => group.sources.includes(skill.source));
+    if (match) {
+      groups.get(match.id)?.skills.push(skill);
+    } else {
+      other.skills.push(skill);
+    }
+  }
+  const ordered = SKILL_SOURCE_GROUPS.map((group) => groups.get(group.id)).filter(
+    (group): group is SkillGroup => Boolean(group && group.skills.length > 0),
+  );
+  if (other.skills.length > 0) {
+    ordered.push(other);
+  }
+  return ordered;
+}
+
 export type SkillsProps = {
   loading: boolean;
   report: SkillStatusReport | null;
@@ -27,6 +63,7 @@ export function renderSkills(props: SkillsProps) {
         [skill.name, skill.description, skill.source].join(" ").toLowerCase().includes(filter),
       )
     : skills;
+  const groups = groupSkills(filtered);
 
   return html`
     <section class="card">
@@ -64,8 +101,21 @@ export function renderSkills(props: SkillsProps) {
               <div class="muted" style="margin-top: 16px">No skills found.</div>
             `
           : html`
-            <div class="list" style="margin-top: 16px;">
-              ${filtered.map((skill) => renderSkill(skill, props))}
+            <div class="agent-skills-groups" style="margin-top: 16px;">
+              ${groups.map((group) => {
+                const collapsedByDefault = group.id === "workspace" || group.id === "built-in";
+                return html`
+                  <details class="agent-skills-group" ?open=${!collapsedByDefault}>
+                    <summary class="agent-skills-header">
+                      <span>${group.label}</span>
+                      <span class="muted">${group.skills.length}</span>
+                    </summary>
+                    <div class="list skills-grid">
+                      ${group.skills.map((skill) => renderSkill(skill, props))}
+                    </div>
+                  </details>
+                `;
+              })}
             </div>
           `
       }
@@ -85,8 +135,12 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
     ...skill.missing.os.map((o) => `os:${o}`),
   ];
   const reasons: string[] = [];
-  if (skill.disabled) reasons.push("disabled");
-  if (skill.blockedByAllowlist) reasons.push("blocked by allowlist");
+  if (skill.disabled) {
+    reasons.push("disabled");
+  }
+  if (skill.blockedByAllowlist) {
+    reasons.push("blocked by allowlist");
+  }
   return html`
     <div class="list-item">
       <div class="list-main">
