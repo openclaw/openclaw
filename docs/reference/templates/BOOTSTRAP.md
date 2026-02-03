@@ -46,6 +46,7 @@ Write it down. Make it real.
 
 Since this is a new install, run the recommended host healthcheck using the `healthcheck` skill.
 At minimum, run:
+
 - `openclaw security audit --deep`
 - `openclaw update status`
 
