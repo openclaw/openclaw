@@ -213,18 +213,27 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       }
 
       // Note: This reads from local history persisted by the Telegram provider.
-      const chatId =
+      const rawChatId =
         readStringOrNumberParam(params, "chatId") ??
         readStringOrNumberParam(params, "channelId") ??
         readStringOrNumberParam(params, "to") ??
         readStringOrNumberParam(params, "target", { required: true })!;
+
+      // CLI targets may be prefixed (e.g. "telegram:1338202593" or "telegram:group:-100...").
+      // History store persists the raw chat_id (e.g. "1338202593" or "-100...").
+      const chatId =
+        typeof rawChatId === "string" ? rawChatId.replace(/^telegram:/, "") : rawChatId;
+      const normalizedChatId =
+        typeof chatId === "string"
+          ? chatId.replace(/^group:/, "").replace(/:topic:.*$/, "")
+          : chatId;
       const threadId = readStringOrNumberParam(params, "threadId");
       const limit = readNumberParam(params, "limit", { integer: true }) ?? 30;
       const before = readNumberParam(params, "before", { integer: true });
 
       const messages = await readTelegramHistoryMessages({
         accountId: accountId ?? "default",
-        chatId,
+        chatId: normalizedChatId,
         threadId: threadId ?? undefined,
         limit,
         beforeMessageId: before ?? undefined,
@@ -232,7 +241,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
 
       return jsonResult({
         channel: "telegram",
-        chatId: String(chatId),
+        chatId: String(normalizedChatId),
         threadId: threadId != null ? String(threadId) : undefined,
         messages,
       });
