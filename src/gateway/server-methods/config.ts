@@ -86,6 +86,58 @@ function requireConfigBaseHash(
   return true;
 }
 
+const CRITICAL_CONFIG_KEYS = ["auth", "channels", "plugins", "agents", "server"] as const;
+const MIN_SIZE_RATIO = 0.5;
+
+type ConfigGuardrailResult =
+  | { ok: true }
+  | { ok: false; error: string; details?: { removedKeys?: string[]; sizeRatio?: number } };
+
+function checkConfigGuardrails(
+  existingConfig: Record<string, unknown> | null,
+  newConfig: Record<string, unknown>,
+  opts: { force?: boolean },
+): ConfigGuardrailResult {
+  if (opts.force) {
+    return { ok: true };
+  }
+  if (!existingConfig || typeof existingConfig !== "object") {
+    return { ok: true };
+  }
+
+  const existingStr = JSON.stringify(existingConfig);
+  const newStr = JSON.stringify(newConfig);
+  const sizeRatio = newStr.length / existingStr.length;
+
+  if (sizeRatio < MIN_SIZE_RATIO) {
+    return {
+      ok: false,
+      error: `New config is ${Math.round(sizeRatio * 100)}% the size of current config. This may indicate accidental data loss. Use force: true to override.`,
+      details: { sizeRatio },
+    };
+  }
+
+  const existingKeys = new Set(Object.keys(existingConfig));
+  const newKeys = new Set(Object.keys(newConfig));
+  const removedKeys: string[] = [];
+
+  for (const key of CRITICAL_CONFIG_KEYS) {
+    if (existingKeys.has(key) && !newKeys.has(key)) {
+      removedKeys.push(key);
+    }
+  }
+
+  if (removedKeys.length > 0) {
+    return {
+      ok: false,
+      error: `Critical config sections would be removed: ${removedKeys.join(", ")}. Use force: true to override.`,
+      details: { removedKeys },
+    };
+  }
+
+  return { ok: true };
+}
+
 export const configHandlers: GatewayRequestHandlers = {
   "config.get": async ({ params, respond }) => {
     if (!validateConfigGetParams(params)) {
@@ -360,6 +412,24 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+
+    const forceApply = (params as { force?: unknown }).force === true;
+    const guardrailResult = checkConfigGuardrails(
+      snapshot.config as Record<string, unknown> | null,
+      validated.config as Record<string, unknown>,
+      { force: forceApply },
+    );
+    if (!guardrailResult.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, guardrailResult.error, {
+          details: guardrailResult.details,
+        }),
+      );
+      return;
+    }
+
     await writeConfigFile(validated.config);
 
     const sessionKey =
@@ -414,3 +484,5 @@ export const configHandlers: GatewayRequestHandlers = {
     );
   },
 };
+
+export { checkConfigGuardrails, CRITICAL_CONFIG_KEYS, MIN_SIZE_RATIO };
