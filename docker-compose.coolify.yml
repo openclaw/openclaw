@@ -3,72 +3,129 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+
     environment:
-      HOME: /home/node
-      TERM: xterm-256color
-      OPENCLAW_STATE_DIR: /home/node/.openclaw
-      OPENCLAW_GATEWAY_BIND: ${OPENCLAW_GATEWAY_BIND:-lan}
-      OPENCLAW_GATEWAY_PORT: ${OPENCLAW_GATEWAY_PORT:-18789}
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:?set_in_coolify}
-      ZAI_API_KEY: ${ZAI_API_KEY:?set_in_coolify}
+      # Required settings
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-}
+      - ZAI_API_KEY=${ZAI_API_KEY:-PLACEHOLDER_KEY}
+
+      # Optional with defaults
+      - OPENCLAW_GATEWAY_PORT=${OPENCLAW_GATEWAY_PORT:-28471}
+      - OPENCLAW_GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND:-0.0.0.0}
+      - NODE_ENV=production
+      - HOME=/home/node
+      - TERM=xterm-256color
+
     volumes:
-      - openclaw-config:/home/node/.openclaw
-      - openclaw-workspace:/home/node/.openclaw/workspace
-    expose:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}"
-    user: "0"
+      - openclaw-data:/home/node/.openclaw
+
+    # Security hardening
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=512M,noexec,nosuid,nodev
+      - /var/tmp:size=256M,noexec,nosuid,nodev
+      - /run:size=128M,noexec,nosuid,nodev
+
+    # Healthcheck
+    healthcheck:
+      test: ["CMD-SHELL", "nc -zv localhost ${OPENCLAW_GATEWAY_PORT:-28471} || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+    # Resources (8GB RAM / 2 vCPU)
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+          cpus: '1.8'
+        reservations:
+          memory: 2G
+          cpus: '0.5'
+      restart_policy:
+        condition: unless-stopped
+        delay: 5s
+        max_attempts: 3
+
+    # Logging
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+    # Network
+    expose:
+      - "${OPENCLAW_GATEWAY_PORT:-28471}"
+
     init: true
-    restart: unless-stopped
     stop_grace_period: 30s
+
+    # Entrypoint with token persistence and config generation
     entrypoint: ["/bin/sh", "-lc"]
     command:
       - |
+        # Gateway token persistence
+        TOKEN_FILE="/home/node/.openclaw/.gateway_token"
+        if [ -z "$$OPENCLAW_GATEWAY_TOKEN" ]; then
+          if [ -f "$$TOKEN_FILE" ]; then
+            export OPENCLAW_GATEWAY_TOKEN=$$(cat "$$TOKEN_FILE")
+            echo "[openclaw] Loaded existing gateway token"
+          else
+            export OPENCLAW_GATEWAY_TOKEN=$$(openssl rand -hex 32 2>/dev/null || head -c 64 /dev/urandom | xxd -p | tr -d '\n')
+            mkdir -p /home/node/.openclaw
+            echo "$$OPENCLAW_GATEWAY_TOKEN" > "$$TOKEN_FILE"
+            chmod 600 "$$TOKEN_FILE"
+            echo "[openclaw] Generated new gateway token: $$OPENCLAW_GATEWAY_TOKEN"
+          fi
+        fi
+
+        # ZAI config generation (required - no built-in defaults)
         node - <<'NODE'
         const fs = require("fs");
-        const JSON5 = require("json5");
-
         const dir = "/home/node/.openclaw";
         const filePath = dir + "/openclaw.json";
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 
-        let valid = false;
+        let existing = null;
         if (fs.existsSync(filePath)) {
           try {
-            JSON5.parse(fs.readFileSync(filePath, "utf8"));
-            valid = true;
-          } catch {
-            valid = false;
+            existing = JSON.parse(fs.readFileSync(filePath, "utf8"));
+          } catch (e) {
+            console.log("[openclaw] Warning: existing config invalid, regenerating");
           }
         }
 
-        if (!valid) {
-          const data = {
-            env: { ZAI_API_KEY: process.env.ZAI_API_KEY || "" },
-            gateway: { mode: "local" },
-            models: {
-              providers: {
-                zai: {
-                  baseUrl: "https://api.z.ai/api/coding/paas/v4",
-                  api: "openai-completions",
-                  auth: "api-key",
-                  authHeader: true,
-                  models: [{ id: "glm-4.7", name: "GLM-4.7" }],
-                },
+        const data = {
+          ...(existing || {}),
+          env: { ...(existing?.env || {}), ZAI_API_KEY: process.env.ZAI_API_KEY || "" },
+          gateway: { mode: "local", ...(existing?.gateway || {}) },
+          models: {
+            providers: {
+              zai: {
+                baseUrl: "https://api.z.ai/api/coding/paas/v4",
+                api: "openai-completions",
+                auth: "api-key",
+                authHeader: true,
+                models: [{ id: "glm-4.7", name: "GLM-4.7" }],
               },
             },
-            agents: { defaults: { model: { primary: "zai/glm-4.7" } } },
-          };
-          fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n");
-          fs.chmodSync(filePath, 0o600);
-          console.log("[openclaw] wrote fresh openclaw.json");
-        }
+          },
+          agents: { defaults: { model: { primary: "zai/glm-4.7" } } },
+        };
+
+        fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + "\n");
+        fs.chmodSync(filePath, 0o600);
+        console.log("[openclaw] Config ready at " + filePath);
         NODE
+
         exec node dist/index.js gateway --bind "$$OPENCLAW_GATEWAY_BIND" --port "$$OPENCLAW_GATEWAY_PORT"
 
 volumes:
-  openclaw-config:
-  openclaw-workspace:
+  openclaw-data:
+    driver: local
