@@ -5,6 +5,8 @@ import { resolveStateDir } from "../config/paths.js";
 
 type EncryptedEnvelopeV1 = {
   version: 1;
+  algorithm: "aes-256-gcm";
+  keyId: string;
   nonce: string;
   ciphertext: string;
   tag: string;
@@ -15,6 +17,14 @@ type EncryptedEnvelope = EncryptedEnvelopeV1;
 const MASTER_KEY_FILENAME = "master.key";
 const MASTER_KEY_BYTES = 32;
 const NONCE_BYTES = 12;
+
+/**
+ * Compute a short hash of the master key for tracking in envelopes.
+ * This allows detection of which key encrypted a file without exposing the key.
+ */
+function computeKeyId(key: Buffer): string {
+  return crypto.createHash("sha256").update(key).digest("hex").slice(0, 8);
+}
 
 export function isEncryptedEnvelope(value: unknown): value is EncryptedEnvelope {
   if (!value || typeof value !== "object") {
@@ -28,6 +38,7 @@ export function isEncryptedEnvelope(value: unknown): value is EncryptedEnvelope 
     typeof record.nonce === "string" &&
     typeof record.ciphertext === "string" &&
     typeof record.tag === "string"
+    // keyId and algorithm are optional for backwards compatibility with early v1 files
   );
 }
 
@@ -83,6 +94,8 @@ export function encryptJson(data: unknown, key: Buffer): EncryptedEnvelopeV1 {
   const tag = cipher.getAuthTag();
   return {
     version: 1,
+    algorithm: "aes-256-gcm",
+    keyId: computeKeyId(key),
     nonce: nonce.toString("hex"),
     ciphertext: ciphertext.toString("hex"),
     tag: tag.toString("hex"),
@@ -128,7 +141,11 @@ export function saveSecureJsonFile(pathname: string, data: unknown) {
   }
   const key = loadOrCreateMasterKey();
   const encrypted = encryptJson(data, key);
-  fs.writeFileSync(pathname, `${JSON.stringify(encrypted, null, 2)}\n`, "utf8");
+  // Set mode on write + chmod after to guarantee permissions regardless of umask
+  fs.writeFileSync(pathname, `${JSON.stringify(encrypted, null, 2)}\n`, {
+    mode: 0o600,
+    encoding: "utf8",
+  });
   fs.chmodSync(pathname, 0o600);
 }
 
@@ -155,7 +172,11 @@ export function migratePlaintextJsonFile(pathname: string): boolean {
   const tempPath = `${pathname}.tmp`;
   const backupPath = `${pathname}.bak`;
   try {
-    fs.writeFileSync(tempPath, `${JSON.stringify(encrypted, null, 2)}\n`, "utf8");
+    // Set mode on write + chmod after to guarantee permissions regardless of umask
+    fs.writeFileSync(tempPath, `${JSON.stringify(encrypted, null, 2)}\n`, {
+      mode: 0o600,
+      encoding: "utf8",
+    });
     fs.chmodSync(tempPath, 0o600);
     fs.renameSync(pathname, backupPath);
     fs.renameSync(tempPath, pathname);
