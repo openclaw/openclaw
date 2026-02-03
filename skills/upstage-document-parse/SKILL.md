@@ -13,12 +13,6 @@ Extract structured content from documents using Upstage's Document Parse API.
 
 PDF (up to 1000 pages with async), PNG, JPG, JPEG, TIFF, BMP, GIF, WEBP, DOCX, PPTX, XLSX, HWP
 
-## Installation
-
-```bash
-openclaw install upstage-document-parse
-```
-
 ## API Key Setup
 
 1. Get your API key from [Upstage Console](https://console.upstage.ai)
@@ -65,9 +59,9 @@ For small documents (recommended < 20 pages).
 | `document` | file | required | Document file to parse |
 | `mode` | string | `standard` | `standard` (text-focused), `enhanced` (complex tables/images), `auto` |
 | `ocr` | string | `auto` | `auto` (images only) or `force` (always OCR) |
-| `output_formats` | string | `['html']` | `text`, `html`, `markdown` (array format) |
+| `output_format` | string | `html` | Comma-separated: `markdown`, `html`, `text` (e.g. `markdown,html,text`) |
 | `coordinates` | boolean | `true` | Include bounding box coordinates |
-| `base64_encoding` | string | `[]` | Elements to base64: `["table"]`, `["figure"]`, etc. |
+| `base64_encoding` | string[] | `[]` | Element names to return as base64; pass as JSON in form, e.g. `["table"]`, `["figure"]`, or `["table","figure"]`. Omit for none. |
 | `chart_recognition` | boolean | `true` | Convert charts to tables (Beta) |
 | `merge_multipage_tables` | boolean | `false` | Merge tables across pages (Beta, max 20 pages if true) |
 
@@ -87,7 +81,7 @@ curl -X POST "https://api.upstage.ai/v1/document-digitization" \
   -H "Authorization: Bearer $UPSTAGE_API_KEY" \
   -F "document=@report.pdf" \
   -F "model=document-parse" \
-  -F "output_formats=['markdown']"
+  -F "output_format=markdown"
 ```
 
 ### Enhanced Mode for Complex Documents
@@ -98,7 +92,7 @@ curl -X POST "https://api.upstage.ai/v1/document-digitization" \
   -F "document=@complex.pdf" \
   -F "model=document-parse" \
   -F "mode=enhanced" \
-  -F "output_formats=['html', 'markdown']"
+  -F "output_format=markdown,html,text"
 ```
 
 ### Force OCR for Scanned Documents
@@ -118,7 +112,7 @@ curl -X POST "https://api.upstage.ai/v1/document-digitization" \
   -H "Authorization: Bearer $UPSTAGE_API_KEY" \
   -F "document=@invoice.pdf" \
   -F "model=document-parse" \
-  -F "base64_encoding=['table']"
+  -F 'base64_encoding=["table","figure"]'
 ```
 
 ---
@@ -164,7 +158,7 @@ curl -X POST "https://api.upstage.ai/v1/document-digitization/async" \
   -H "Authorization: Bearer $UPSTAGE_API_KEY" \
   -F "document=@large.pdf" \
   -F "model=document-parse" \
-  -F "output_formats=['markdown']"
+  -F "output_format=markdown,html,text"
 ```
 
 Response:
@@ -216,7 +210,7 @@ with open("doc.pdf", "rb") as f:
         "https://api.upstage.ai/v1/document-digitization",
         headers={"Authorization": f"Bearer {api_key}"},
         files={"document": f},
-        data={"model": "document-parse", "output_formats": "['markdown']"}
+        data={"model": "document-parse", "output_format": "markdown,html,text"}
     )
 print(response.json()["content"]["markdown"])
 
