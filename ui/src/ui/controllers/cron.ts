@@ -21,7 +21,7 @@ export async function loadCronStatus(state: CronState) {
     return;
   }
   try {
-    const res = await state.client.request("cron.status", {});
+    const res = await state.client.request<CronStatus>("cron.status", {});
     state.cronStatus = res;
   } catch (err) {
     state.cronError = String(err);
@@ -38,7 +38,7 @@ export async function loadCronJobs(state: CronState) {
   state.cronLoading = true;
   state.cronError = null;
   try {
-    const res = await state.client.request("cron.list", {
+    const res = await state.client.request<{ jobs?: Array<CronJob> }>("cron.list", {
       includeDisabled: true,
     });
     state.cronJobs = Array.isArray(res.jobs) ? res.jobs : [];
@@ -211,7 +211,7 @@ export async function loadCronRuns(state: CronState, jobId: string) {
     return;
   }
   try {
-    const res = await state.client.request("cron.runs", {
+    const res = await state.client.request<{ entries?: Array<CronRunLogEntry> }>("cron.runs", {
       id: jobId,
       limit: 50,
     });
