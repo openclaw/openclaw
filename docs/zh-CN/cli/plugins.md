@@ -1,26 +1,26 @@
 ---
 read_when:
-  - 你想安装或管理进程内 Gateway网关插件
+  - 你想安装或管理进程内 Gateway 网关插件
   - 你想调试插件加载失败问题
-summary: "`openclaw plugins` 的 CLI 参考（list、install、enable/disable、doctor）"
+summary: "`openclaw plugins` 的 CLI 参考（列出、安装、启用/禁用、诊断）"
 title: plugins
 x-i18n:
-  generated_at: "2026-02-01T20:21:23Z"
+  generated_at: "2026-02-03T07:45:08Z"
   model: claude-opus-4-5
   provider: pi
   source_hash: c6bf76b1e766b912ec30a0101d455151c88f1a778bffa121cdd1d0b4fbe73e1c
   source_path: cli/plugins.md
-  workflow: 14
+  workflow: 15
 ---
 
 # `openclaw plugins`
 
-管理 Gateway网关插件/扩展（进程内加载）。
+管理 Gateway 网关插件/扩展（进程内加载）。
 
 相关内容：
 
 - 插件系统：[插件](/plugin)
-- 插件清单 + schema：[插件清单](/plugins/manifest)
+- 插件清单 + 模式：[插件清单](/plugins/manifest)
 - 安全加固：[安全](/gateway/security)
 
 ## 命令
@@ -35,9 +35,9 @@ openclaw plugins update <id>
 openclaw plugins update --all
 ```
 
-内置插件随 OpenClaw 一起分发，但默认处于禁用状态。使用 `plugins enable` 来激活它们。
+内置插件随 OpenClaw 一起发布，但默认禁用。使用 `plugins enable` 来激活它们。
 
-所有插件必须附带一个 `openclaw.plugin.json` 文件，其中包含内联 JSON Schema（`configSchema`，即使为空也需要）。缺失或无效的清单或 schema 会导致插件无法加载，并使配置验证失败。
+所有插件必须提供 `openclaw.plugin.json` 文件，其中包含内联 JSON Schema（`configSchema`，即使为空）。缺少或无效的清单或模式会阻止插件加载并导致配置验证失败。
 
 ### 安装
 
@@ -45,11 +45,11 @@ openclaw plugins update --all
 openclaw plugins install <path-or-spec>
 ```
 
-安全提示：安装插件等同于运行代码，请优先使用固定版本。
+安全提示：将插件安装视为运行代码。优先使用固定版本。
 
 支持的归档格式：`.zip`、`.tgz`、`.tar.gz`、`.tar`。
 
-使用 `--link` 可避免复制本地目录（会添加到 `plugins.load.paths`）：
+使用 `--link` 避免复制本地目录（添加到 `plugins.load.paths`）：
 
 ```bash
 openclaw plugins install -l ./my-plugin
