@@ -294,17 +294,24 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
 export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const agents = cfg.agents;
   const defaults = agents?.defaults;
+  const legacyMemorySearch = cfg.memorySearch;
+  const shouldApplyLegacyMemorySearch =
+    legacyMemorySearch !== undefined && defaults?.memorySearch === undefined;
   const hasMax =
     typeof defaults?.maxConcurrent === "number" && Number.isFinite(defaults.maxConcurrent);
   const hasSubMax =
     typeof defaults?.subagents?.maxConcurrent === "number" &&
     Number.isFinite(defaults.subagents.maxConcurrent);
-  if (hasMax && hasSubMax) {
+  if (hasMax && hasSubMax && !shouldApplyLegacyMemorySearch) {
     return cfg;
   }
 
   let mutated = false;
   const nextDefaults = defaults ? { ...defaults } : {};
+  if (shouldApplyLegacyMemorySearch) {
+    nextDefaults.memorySearch = legacyMemorySearch;
+    mutated = true;
+  }
   if (!hasMax) {
     nextDefaults.maxConcurrent = DEFAULT_AGENT_MAX_CONCURRENT;
     mutated = true;
