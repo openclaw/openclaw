@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Web UI: add Agents dashboard for managing agent files, tools, skills, models, channels, and cron jobs.
 - Docs: seed zh-CN translations. (#6619) Thanks @joshp123.
 - Docs: expand zh-Hans navigation and fix zh-CN index asset paths. (#7242) Thanks @joshp123.
 - Docs: add zh-CN landing notice + AI-translated image. (#7303) Thanks @joshp123.
