@@ -279,8 +279,15 @@ async function runImagePrompt(params: {
         provider: model.provider,
         modelId: model.id,
       });
+      // Validate maxTokens: must be a finite positive integer, otherwise use default
+      const rawMaxTokens = modelExtraParams?.maxTokens;
       const configuredMaxTokens =
-        typeof modelExtraParams?.maxTokens === "number" ? modelExtraParams.maxTokens : 512;
+        typeof rawMaxTokens === "number" &&
+        Number.isFinite(rawMaxTokens) &&
+        Number.isInteger(rawMaxTokens) &&
+        rawMaxTokens > 0
+          ? rawMaxTokens
+          : 512;
       const message = await complete(model, context, {
         apiKey,
         maxTokens: configuredMaxTokens,

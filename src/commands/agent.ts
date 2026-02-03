@@ -327,16 +327,22 @@ export async function agentCommand(
       const [overrideProvider, overrideModel] = directModelOverride.includes("/")
         ? directModelOverride.split("/", 2)
         : [undefined, directModelOverride];
-      const candidateProvider = overrideProvider || defaultProvider;
-      const candidateModel = overrideModel || directModelOverride;
-      const key = modelKey(candidateProvider, candidateModel);
-      if (
-        isCliProvider(candidateProvider, cfg) ||
-        allowedModelKeys.size === 0 ||
-        allowedModelKeys.has(key)
-      ) {
-        provider = candidateProvider;
-        model = candidateModel;
+      // Reject invalid model formats (e.g., "openai/" with empty model segment)
+      const hasSlash = directModelOverride.includes("/");
+      const validFormat = !hasSlash || (overrideProvider?.trim() && overrideModel?.trim());
+      
+      if (validFormat) {
+        const candidateProvider = overrideProvider || defaultProvider;
+        const candidateModel = overrideModel || directModelOverride;
+        const key = modelKey(candidateProvider, candidateModel);
+        if (
+          isCliProvider(candidateProvider, cfg) ||
+          allowedModelKeys.size === 0 ||
+          allowedModelKeys.has(key)
+        ) {
+          provider = candidateProvider;
+          model = candidateModel;
+        }
       }
     }
     if (sessionEntry) {
