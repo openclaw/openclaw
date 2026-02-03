@@ -9,7 +9,6 @@ RUN apt-get update \
 
 WORKDIR /repo
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY scripts/setup-git-hooks.js ./scripts/setup-git-hooks.js
 RUN corepack enable \
   && pnpm install --frozen-lockfile
 
