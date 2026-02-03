@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { confirm, isCancel, select, spinner } from "@clack/prompts";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -197,6 +198,29 @@ async function pathExists(targetPath: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
+  const binPath = path.join(root, "openclaw.mjs");
+  if (!(await pathExists(binPath))) {
+    return;
+  }
+  const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
+    cwd: root,
+    env: { ...process.env, OPENCLAW_SKIP_POSTINSTALL: "1" },
+    encoding: "utf-8",
+  });
+  if (result.error) {
+    if (!jsonMode) {
+      defaultRuntime.log(theme.warn(`Completion cache update failed: ${String(result.error)}`));
+    }
+    return;
+  }
+  if (result.status !== 0 && !jsonMode) {
+    const stderr = (result.stderr ?? "").toString().trim();
+    const detail = stderr ? ` (${stderr})` : "";
+    defaultRuntime.log(theme.warn(`Completion cache update failed${detail}.`));
   }
 }
 
@@ -958,6 +982,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   } else if (!opts.json) {
     defaultRuntime.log(theme.warn("Skipping plugin updates: config is invalid."));
   }
+
+  await tryWriteCompletionCache(root, Boolean(opts.json));
 
   // Restart service if requested
   if (shouldRestart) {
