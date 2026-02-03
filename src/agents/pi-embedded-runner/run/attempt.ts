@@ -447,9 +447,10 @@ export async function runEmbeddedAttempt(
         model: params.model,
       });
 
-      const { builtInTools, customTools } = splitSdkTools({
+      const { builtInTools, customTools} = splitSdkTools({
         tools,
         sandboxEnabled: !!sandbox?.enabled,
+        config: params.config,
       });
 
       // Add client tools (OpenResponses hosted tools) to customTools

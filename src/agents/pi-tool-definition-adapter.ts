@@ -5,7 +5,8 @@ import type {
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
-import { logDebug, logError } from "../logger.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { logDebug, logError, logWarn } from "../logger.js";
 import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
@@ -31,6 +32,96 @@ type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => u
   ? P
   : ToolExecuteArgsCurrent;
 type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
+
+const DEFAULT_TOOL_CALL_TIMEOUT_SECONDS = 60;
+
+/**
+ * Resolves the per-tool-call timeout in milliseconds from config.
+ * Returns 0 if explicitly disabled, or the configured value (default: 60 seconds).
+ */
+function resolveToolCallTimeoutMs(cfg?: OpenClawConfig): number {
+  const configuredSeconds = cfg?.agents?.defaults?.toolCallTimeoutSeconds;
+  if (configuredSeconds === 0) {
+    return 0; // Explicitly disabled
+  }
+  if (typeof configuredSeconds === "number" && configuredSeconds > 0) {
+    return Math.floor(configuredSeconds * 1000);
+  }
+  return DEFAULT_TOOL_CALL_TIMEOUT_SECONDS * 1000;
+}
+
+/**
+ * Wraps a tool execution promise with a timeout.
+ * If the tool call exceeds the timeout, returns an error result.
+ * Respects the signal's abort state and propagates abort errors.
+ */
+async function withToolCallTimeout<T>(params: {
+  toolName: string;
+  timeoutMs: number;
+  signal: AbortSignal | undefined;
+  execute: () => Promise<T>;
+}): Promise<T> {
+  const { toolName, timeoutMs, signal, execute } = params;
+
+  // If timeout is disabled (0), just execute directly
+  if (timeoutMs === 0) {
+    return execute();
+  }
+
+  // If already aborted, throw immediately
+  if (signal?.aborted) {
+    throw new Error("Tool call aborted before execution");
+  }
+
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timeoutId: NodeJS.Timeout | undefined;
+
+    const finish = (value: T | Error) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+      if (value instanceof Error) {
+        reject(value);
+      } else {
+        resolve(value);
+      }
+    };
+
+    // Set up timeout
+    timeoutId = setTimeout(() => {
+      if (settled) return;
+      const timeoutSeconds = Math.floor(timeoutMs / 1000);
+      logWarn(
+        `[tools] ${toolName} exceeded timeout (${timeoutSeconds}s) - returning error to model`,
+      );
+      finish(
+        new Error(
+          `Tool call timed out after ${timeoutSeconds} seconds. The operation may still be running in the background.`,
+        ),
+      );
+    }, timeoutMs);
+
+    // Set up abort handler if signal provided
+    const onAbort = () => {
+      finish(new Error("Tool call aborted"));
+    };
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    // Execute the tool
+    execute()
+      .then((result) => {
+        if (signal) signal.removeEventListener("abort", onAbort);
+        finish(result);
+      })
+      .catch((error) => {
+        if (signal) signal.removeEventListener("abort", onAbort);
+        finish(error);
+      });
+  });
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -81,7 +172,12 @@ function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   };
 }
 
-export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
+export function toToolDefinitions(
+  tools: AnyAgentTool[],
+  config?: OpenClawConfig,
+): ToolDefinition[] {
+  const timeoutMs = resolveToolCallTimeoutMs(config);
+
   return tools.map((tool) => {
     const name = tool.name || "tool";
     const normalizedName = normalizeToolName(name);
@@ -93,7 +189,12 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         try {
-          return await tool.execute(toolCallId, params, signal, onUpdate);
+          return await withToolCallTimeout({
+            toolName: normalizedName,
+            timeoutMs,
+            signal,
+            execute: () => tool.execute(toolCallId, params, signal, onUpdate),
+          });
         } catch (err) {
           if (signal?.aborted) {
             throw err;
