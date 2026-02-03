@@ -326,25 +326,31 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
   }
 
   // Trigger internal hook for stop command
-  const hookEvent = createInternalHookEvent(
-    "command",
-    "stop",
-    abortTarget.key ?? params.sessionKey ?? "",
-    {
+  const sessionKeyForHook = abortTarget.key ?? params.sessionKey;
+  let hookMessages: string[] = [];
+  if (sessionKeyForHook) {
+    const hookEvent = createInternalHookEvent("command", "stop", sessionKeyForHook, {
       sessionEntry: abortTarget.entry ?? params.sessionEntry,
       sessionId: abortTarget.sessionId,
       commandSource: params.command.surface,
       senderId: params.command.senderId,
-    },
-  );
-  await triggerInternalHook(hookEvent);
+    });
+    await triggerInternalHook(hookEvent);
+    hookMessages = hookEvent.messages;
+  }
 
   const { stopped } = stopSubagentsForRequester({
     cfg: params.cfg,
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
   });
 
-  return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
+  // Build reply text and prepend hook messages if present
+  let replyText = formatAbortReplyText(stopped);
+  if (hookMessages.length > 0) {
+    replyText = `${hookMessages.join("\n\n")}\n\n${replyText}`;
+  }
+
+  return { shouldContinue: false, reply: { text: replyText } };
 };
 
 export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {
