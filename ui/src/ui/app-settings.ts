@@ -99,7 +99,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
   if (passwordRaw != null) {
     const password = passwordRaw.trim();
     if (password) {
-      (host as { password: string }).password = password;
+      (host as unknown as { password: string }).password = password;
     }
     params.delete("password");
     shouldCleanUrl = true;
@@ -189,23 +189,24 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadSkills(host as unknown as OpenClawApp);
   }
   if (host.tab === "agents") {
-    await loadAgents(host as unknown as OpenClawApp);
-    await loadConfig(host as unknown as OpenClawApp);
-    const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
+    const app = host as unknown as OpenClawApp;
+    await loadAgents(app);
+    await loadConfig(app);
+    const agentIds = app.agentsList?.agents?.map((entry) => entry.id) ?? [];
     if (agentIds.length > 0) {
-      void loadAgentIdentities(host as unknown as OpenClawApp, agentIds);
+      void loadAgentIdentities(app, agentIds);
     }
     const agentId =
-      host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
+      app.agentsSelectedId ?? app.agentsList?.defaultId ?? app.agentsList?.agents?.[0]?.id;
     if (agentId) {
-      void loadAgentIdentity(host as unknown as OpenClawApp, agentId);
-      if (host.agentsPanel === "skills") {
-        void loadAgentSkills(host as unknown as OpenClawApp, agentId);
+      void loadAgentIdentity(app, agentId);
+      if (app.agentsPanel === "skills") {
+        void loadAgentSkills(app, agentId);
       }
-      if (host.agentsPanel === "channels") {
-        void loadChannels(host as unknown as OpenClawApp, false);
+      if (app.agentsPanel === "channels") {
+        void loadChannels(app, false);
       }
-      if (host.agentsPanel === "cron") {
+      if (app.agentsPanel === "cron") {
         void loadCron(host);
       }
     }
@@ -380,7 +381,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   }
 }
 
-export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
+export function syncUrlWithSessionKey(sessionKey: string, replace: boolean) {
   if (typeof window === "undefined") {
     return;
   }

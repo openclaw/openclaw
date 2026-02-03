@@ -1,16 +1,18 @@
 import { html, nothing } from "lit";
 import type { AppViewState } from "./app-view-state";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
-import { refreshChatAvatar } from "./app-chat";
+import { OpenClawApp } from "./app";
+import { ChatHost, refreshChatAvatar } from "./app-chat";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity";
 import { loadAgentSkills } from "./controllers/agent-skills";
 import { loadAgents } from "./controllers/agents";
 import { loadChannels } from "./controllers/channels";
-import { loadChatHistory } from "./controllers/chat";
+import { ChatState, loadChatHistory } from "./controllers/chat";
 import {
   applyConfig,
+  ConfigState,
   loadConfig,
   runUpdate,
   saveConfig,
@@ -38,7 +40,7 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals";
-import { loadLogs } from "./controllers/logs";
+import { loadLogs, LogsState } from "./controllers/logs";
 import { loadNodes } from "./controllers/nodes";
 import { loadPresence } from "./controllers/presence";
 import { deleteSession, loadSessions, patchSession } from "./controllers/sessions";
@@ -51,6 +53,7 @@ import {
 } from "./controllers/skills";
 import { icons } from "./icons";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation";
+import { ConfigUiHints } from "./types";
 import { renderAgents } from "./views/agents";
 import { renderChannels } from "./views/channels";
 import { renderChat } from "./views/chat";
@@ -213,7 +216,7 @@ export function renderApp(state: AppViewState) {
                 onSessionKeyChange: (next) => {
                   state.sessionKey = next;
                   state.chatMessage = "";
-                  state.resetToolStream();
+                  (state as unknown as OpenClawApp).resetToolStream();
                   state.applySettings({
                     ...state.settings,
                     sessionKey: next,
@@ -242,7 +245,7 @@ export function renderApp(state: AppViewState) {
                 configSchema: state.configSchema,
                 configSchemaLoading: state.configSchemaLoading,
                 configForm: state.configForm,
-                configUiHints: state.configUiHints,
+                configUiHints: state.configUiHints as ConfigUiHints,
                 configSaving: state.configSaving,
                 configFormDirty: state.configFormDirty,
                 nostrProfileFormState: state.nostrProfileFormState,
@@ -251,7 +254,8 @@ export function renderApp(state: AppViewState) {
                 onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
                 onWhatsAppWait: () => state.handleWhatsAppWait(),
                 onWhatsAppLogout: () => state.handleWhatsAppLogout(),
-                onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
+                onConfigPatch: (path, value) =>
+                  updateConfigFormValue(state as unknown as ConfigState, path, value),
                 onConfigSave: () => state.handleChannelConfigSave(),
                 onConfigReload: () => state.handleChannelConfigReload(),
                 onNostrProfileEdit: (accountId, profile) =>
@@ -460,12 +464,19 @@ export function renderApp(state: AppViewState) {
                   }
                   const basePath = ["agents", "list", index, "tools"];
                   if (profile) {
-                    updateConfigFormValue(state, [...basePath, "profile"], profile);
+                    updateConfigFormValue(
+                      state as unknown as ConfigState,
+                      [...basePath, "profile"],
+                      profile,
+                    );
                   } else {
-                    removeConfigFormValue(state, [...basePath, "profile"]);
+                    removeConfigFormValue(state as unknown as ConfigState, [
+                      ...basePath,
+                      "profile",
+                    ]);
                   }
                   if (clearAllow) {
-                    removeConfigFormValue(state, [...basePath, "allow"]);
+                    removeConfigFormValue(state as unknown as ConfigState, [...basePath, "allow"]);
                   }
                 },
                 onToolsOverridesChange: (agentId, alsoAllow, deny) => {
@@ -488,18 +499,29 @@ export function renderApp(state: AppViewState) {
                   }
                   const basePath = ["agents", "list", index, "tools"];
                   if (alsoAllow.length > 0) {
-                    updateConfigFormValue(state, [...basePath, "alsoAllow"], alsoAllow);
+                    updateConfigFormValue(
+                      state as unknown as ConfigState,
+                      [...basePath, "alsoAllow"],
+                      alsoAllow,
+                    );
                   } else {
-                    removeConfigFormValue(state, [...basePath, "alsoAllow"]);
+                    removeConfigFormValue(state as unknown as ConfigState, [
+                      ...basePath,
+                      "alsoAllow",
+                    ]);
                   }
                   if (deny.length > 0) {
-                    updateConfigFormValue(state, [...basePath, "deny"], deny);
+                    updateConfigFormValue(
+                      state as unknown as ConfigState,
+                      [...basePath, "deny"],
+                      deny,
+                    );
                   } else {
-                    removeConfigFormValue(state, [...basePath, "deny"]);
+                    removeConfigFormValue(state as unknown as ConfigState, [...basePath, "deny"]);
                   }
                 },
-                onConfigReload: () => loadConfig(state),
-                onConfigSave: () => saveConfig(state),
+                onConfigReload: () => loadConfig(state as unknown as ConfigState),
+                onConfigSave: () => saveConfig(state as unknown as ConfigState),
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
                 onSkillsFilterChange: (next) => (state.skillsFilter = next),
@@ -544,7 +566,11 @@ export function renderApp(state: AppViewState) {
                   } else {
                     next.delete(normalizedSkill);
                   }
-                  updateConfigFormValue(state, ["agents", "list", index, "skills"], [...next]);
+                  updateConfigFormValue(
+                    state as unknown as ConfigState,
+                    ["agents", "list", index, "skills"],
+                    [...next],
+                  );
                 },
                 onAgentSkillsClear: (agentId) => {
                   if (!configValue) {
@@ -564,7 +590,12 @@ export function renderApp(state: AppViewState) {
                   if (index < 0) {
                     return;
                   }
-                  removeConfigFormValue(state, ["agents", "list", index, "skills"]);
+                  removeConfigFormValue(state as unknown as ConfigState, [
+                    "agents",
+                    "list",
+                    index,
+                    "skills",
+                  ]);
                 },
                 onAgentSkillsDisableAll: (agentId) => {
                   if (!configValue) {
@@ -584,7 +615,11 @@ export function renderApp(state: AppViewState) {
                   if (index < 0) {
                     return;
                   }
-                  updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
+                  updateConfigFormValue(
+                    state as unknown as ConfigState,
+                    ["agents", "list", index, "skills"],
+                    [],
+                  );
                 },
                 onModelChange: (agentId, modelId) => {
                   if (!configValue) {
@@ -606,7 +641,7 @@ export function renderApp(state: AppViewState) {
                   }
                   const basePath = ["agents", "list", index, "model"];
                   if (!modelId) {
-                    removeConfigFormValue(state, basePath);
+                    removeConfigFormValue(state as unknown as ConfigState, basePath);
                     return;
                   }
                   const entry = list[index] as { model?: unknown };
@@ -617,9 +652,9 @@ export function renderApp(state: AppViewState) {
                       primary: modelId,
                       ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
                     };
-                    updateConfigFormValue(state, basePath, next);
+                    updateConfigFormValue(state as unknown as ConfigState, basePath, next);
                   } else {
-                    updateConfigFormValue(state, basePath, modelId);
+                    updateConfigFormValue(state as unknown as ConfigState, basePath, modelId);
                   }
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
@@ -660,16 +695,16 @@ export function renderApp(state: AppViewState) {
                   const primary = resolvePrimary();
                   if (normalized.length === 0) {
                     if (primary) {
-                      updateConfigFormValue(state, basePath, primary);
+                      updateConfigFormValue(state as unknown as ConfigState, basePath, primary);
                     } else {
-                      removeConfigFormValue(state, basePath);
+                      removeConfigFormValue(state as unknown as ConfigState, basePath);
                     }
                     return;
                   }
                   const next = primary
                     ? { primary, fallbacks: normalized }
                     : { fallbacks: normalized };
-                  updateConfigFormValue(state, basePath, next);
+                  updateConfigFormValue(state as unknown as ConfigState, basePath, next);
                 },
               })
             : nothing
@@ -726,7 +761,7 @@ export function renderApp(state: AppViewState) {
                 onDeviceRotate: (deviceId, role, scopes) =>
                   rotateDeviceToken(state, { deviceId, role, scopes }),
                 onDeviceRevoke: (deviceId, role) => revokeDeviceToken(state, { deviceId, role }),
-                onLoadConfig: () => loadConfig(state),
+                onLoadConfig: () => loadConfig(state as unknown as ConfigState),
                 onLoadExecApprovals: () => {
                   const target =
                     state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
@@ -736,20 +771,28 @@ export function renderApp(state: AppViewState) {
                 },
                 onBindDefault: (nodeId) => {
                   if (nodeId) {
-                    updateConfigFormValue(state, ["tools", "exec", "node"], nodeId);
+                    updateConfigFormValue(
+                      state as unknown as ConfigState,
+                      ["tools", "exec", "node"],
+                      nodeId,
+                    );
                   } else {
-                    removeConfigFormValue(state, ["tools", "exec", "node"]);
+                    removeConfigFormValue(state as unknown as ConfigState, [
+                      "tools",
+                      "exec",
+                      "node",
+                    ]);
                   }
                 },
                 onBindAgent: (agentIndex, nodeId) => {
                   const basePath = ["agents", "list", agentIndex, "tools", "exec", "node"];
                   if (nodeId) {
-                    updateConfigFormValue(state, basePath, nodeId);
+                    updateConfigFormValue(state as unknown as ConfigState, basePath, nodeId);
                   } else {
-                    removeConfigFormValue(state, basePath);
+                    removeConfigFormValue(state as unknown as ConfigState, basePath);
                   }
                 },
-                onSaveBindings: () => saveConfig(state),
+                onSaveBindings: () => saveConfig(state as unknown as ConfigState),
                 onExecApprovalsTargetChange: (kind, nodeId) => {
                   state.execApprovalsTarget = kind;
                   state.execApprovalsTargetNodeId = nodeId;
@@ -784,30 +827,29 @@ export function renderApp(state: AppViewState) {
                   state.chatMessage = "";
                   state.chatAttachments = [];
                   state.chatStream = null;
-                  state.chatStreamStartedAt = null;
                   state.chatRunId = null;
+                  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
                   state.chatQueue = [];
-                  state.resetToolStream();
-                  state.resetChatScroll();
+                  (state as unknown as OpenClawApp).resetToolStream();
+                  (state as unknown as OpenClawApp).resetChatScroll();
                   state.applySettings({
                     ...state.settings,
                     sessionKey: next,
                     lastActiveSessionKey: next,
                   });
                   void state.loadAssistantIdentity();
-                  void loadChatHistory(state);
-                  void refreshChatAvatar(state);
+                  void loadChatHistory(state as unknown as ChatState);
+                  void refreshChatAvatar(state as unknown as ChatHost);
                 },
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,
                 loading: state.chatLoading,
                 sending: state.chatSending,
-                compactionStatus: state.compactionStatus,
                 assistantAvatarUrl: chatAvatarUrl,
                 messages: state.chatMessages,
                 toolMessages: state.chatToolMessages,
                 stream: state.chatStream,
-                streamStartedAt: state.chatStreamStartedAt,
+                streamStartedAt: null,
                 draft: state.chatMessage,
                 queue: state.chatQueue,
                 connected: state.connected,
@@ -817,8 +859,10 @@ export function renderApp(state: AppViewState) {
                 sessions: state.sessionsResult,
                 focusMode: chatFocus,
                 onRefresh: () => {
-                  state.resetToolStream();
-                  return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
+                  return Promise.all([
+                    loadChatHistory(state as unknown as ChatState),
+                    refreshChatAvatar(state as unknown as ChatHost),
+                  ]);
                 },
                 onToggleFocusMode: () => {
                   if (state.onboarding) {
@@ -829,25 +873,28 @@ export function renderApp(state: AppViewState) {
                     chatFocusMode: !state.settings.chatFocusMode,
                   });
                 },
-                onChatScroll: (event) => state.handleChatScroll(event),
+                onChatScroll: (event) => (state as unknown as OpenClawApp).handleChatScroll(event),
                 onDraftChange: (next) => (state.chatMessage = next),
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),
-                onSend: () => state.handleSendChat(),
+                onSend: () => (state as unknown as OpenClawApp).handleSendChat(),
                 canAbort: Boolean(state.chatRunId),
-                onAbort: () => void state.handleAbortChat(),
-                onQueueRemove: (id) => state.removeQueuedMessage(id),
-                onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+                onAbort: () => void (state as unknown as OpenClawApp).handleAbortChat(),
+                onQueueRemove: (id) => (state as unknown as OpenClawApp).removeQueuedMessage(id),
+                onNewSession: () =>
+                  (state as unknown as OpenClawApp).handleSendChat("/new", { restoreDraft: true }),
                 showNewMessages: state.chatNewMessagesBelow,
                 onScrollToBottom: () => state.scrollToBottom(),
                 // Sidebar props for tool output viewing
-                sidebarOpen: state.sidebarOpen,
-                sidebarContent: state.sidebarContent,
-                sidebarError: state.sidebarError,
-                splitRatio: state.splitRatio,
-                onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
-                onCloseSidebar: () => state.handleCloseSidebar(),
-                onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
+                sidebarOpen: (state as unknown as OpenClawApp).sidebarOpen,
+                sidebarContent: (state as unknown as OpenClawApp).sidebarContent,
+                sidebarError: (state as unknown as OpenClawApp).sidebarError,
+                splitRatio: (state as unknown as OpenClawApp).splitRatio,
+                onOpenSidebar: (content: string) =>
+                  (state as unknown as OpenClawApp).handleOpenSidebar(content),
+                onCloseSidebar: () => (state as unknown as OpenClawApp).handleCloseSidebar(),
+                onSplitRatioChange: (ratio: number) =>
+                  (state as unknown as OpenClawApp).handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
               })
@@ -868,28 +915,31 @@ export function renderApp(state: AppViewState) {
                 connected: state.connected,
                 schema: state.configSchema,
                 schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints,
+                uiHints: state.configUiHints as ConfigUiHints,
                 formMode: state.configFormMode,
                 formValue: state.configForm,
                 originalValue: state.configFormOriginal,
-                searchQuery: state.configSearchQuery,
-                activeSection: state.configActiveSection,
-                activeSubsection: state.configActiveSubsection,
+                searchQuery: (state as unknown as OpenClawApp).configSearchQuery,
+                activeSection: (state as unknown as OpenClawApp).configActiveSection,
+                activeSubsection: (state as unknown as OpenClawApp).configActiveSubsection,
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
                 onFormModeChange: (mode) => (state.configFormMode = mode),
-                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
-                onSearchChange: (query) => (state.configSearchQuery = query),
+                onFormPatch: (path, value) =>
+                  updateConfigFormValue(state as unknown as OpenClawApp, path, value),
+                onSearchChange: (query) =>
+                  ((state as unknown as OpenClawApp).configSearchQuery = query),
                 onSectionChange: (section) => {
-                  state.configActiveSection = section;
-                  state.configActiveSubsection = null;
+                  (state as unknown as OpenClawApp).configActiveSection = section;
+                  (state as unknown as OpenClawApp).configActiveSubsection = null;
                 },
-                onSubsectionChange: (section) => (state.configActiveSubsection = section),
-                onReload: () => loadConfig(state),
-                onSave: () => saveConfig(state),
-                onApply: () => applyConfig(state),
-                onUpdate: () => runUpdate(state),
+                onSubsectionChange: (section) =>
+                  ((state as unknown as OpenClawApp).configActiveSubsection = section),
+                onReload: () => loadConfig(state as unknown as OpenClawApp),
+                onSave: () => saveConfig(state as unknown as OpenClawApp),
+                onApply: () => applyConfig(state as unknown as OpenClawApp),
+                onUpdate: () => runUpdate(state as unknown as OpenClawApp),
               })
             : nothing
         }
@@ -931,9 +981,10 @@ export function renderApp(state: AppViewState) {
                   state.logsLevelFilters = { ...state.logsLevelFilters, [level]: enabled };
                 },
                 onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
-                onRefresh: () => loadLogs(state, { reset: true }),
-                onExport: (lines, label) => state.exportLogs(lines, label),
-                onScroll: (event) => state.handleLogsScroll(event),
+                onRefresh: () => loadLogs(state as unknown as LogsState, { reset: true }),
+                onExport: (lines, label) =>
+                  (state as unknown as OpenClawApp).exportLogs(lines, label),
+                onScroll: (event) => (state as unknown as OpenClawApp).handleLogsScroll(event),
               })
             : nothing
         }
