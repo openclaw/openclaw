@@ -42,6 +42,15 @@ Then open `SOUL.md` together and talk about:
 
 Write it down. Make it real.
 
+## One-time system admin check
+
+Run an initial host hardening check using the `openclaw-system-admin` skill.
+At minimum, run:
+- `openclaw security audit --deep`
+- `openclaw update status`
+
+Offer to set up an OpenClaw cron job for ongoing monitoring.
+
 ## Connect (Optional)
 
 Ask how they want to reach you:
