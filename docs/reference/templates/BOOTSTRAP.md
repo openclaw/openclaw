@@ -44,7 +44,7 @@ Write it down. Make it real.
 
 ## One-time system admin check
 
-Run an initial host hardening check using the `healthcheck` skill.
+Since this is a new install, run the recommended host healthcheck using the `healthcheck` skill.
 At minimum, run:
 - `openclaw security audit --deep`
 - `openclaw update status`
