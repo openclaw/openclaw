@@ -1,23 +1,6 @@
-import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
 import { loginChutes } from "./chutes-oauth.js";
-
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("No TCP address")));
-        return;
-      }
-      const port = address.port;
-      server.close((err) => (err ? reject(err) : resolve(port)));
-    });
-  });
-}
 
 const urlToString = (url: Request | URL | string): string => {
   if (typeof url === "string") {
@@ -28,8 +11,10 @@ const urlToString = (url: Request | URL | string): string => {
 
 describe("loginChutes", () => {
   it("captures local redirect and exchanges code for tokens", async () => {
-    const port = await getFreePort();
-    const redirectUri = `http://127.0.0.1:${port}/oauth-callback`;
+    // Use port 0 so the OS assigns a free port — avoids TOCTOU race from
+    // finding-then-releasing a port before the callback server can bind it.
+    const redirectUri = "http://127.0.0.1:0/oauth-callback";
+    let boundPort = 0;
 
     const fetchFn: typeof fetch = async (input, init) => {
       const url = urlToString(input);
@@ -61,10 +46,15 @@ describe("loginChutes", () => {
       onAuth: async ({ url }) => {
         const state = new URL(url).searchParams.get("state");
         expect(state).toBeTruthy();
-        await fetch(`${redirectUri}?code=code_local&state=${state}`);
+        // Use the actual bound port (reported via onListening) instead of
+        // the placeholder port 0 from the redirect URI.
+        await fetch(`http://127.0.0.1:${boundPort}/oauth-callback?code=code_local&state=${state}`);
       },
       onPrompt,
       fetchFn,
+      onListening: (address) => {
+        boundPort = address.port;
+      },
     });
 
     expect(onPrompt).not.toHaveBeenCalled();
