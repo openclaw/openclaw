@@ -73,7 +73,9 @@ export async function deliverReplies(params: {
         : [markdown];
     const chunks: ReturnType<typeof markdownToTelegramChunks> = [];
     for (const chunk of markdownChunks) {
-      const nested = markdownToTelegramChunks(chunk, textLimit, { tableMode: params.tableMode });
+      const nested = markdownToTelegramChunks(chunk, textLimit, {
+        tableMode: params.tableMode,
+      });
       if (!nested.length && chunk) {
         chunks.push({
           html: markdownToTelegramHtml(chunk, { tableMode: params.tableMode }),

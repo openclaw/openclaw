@@ -50,7 +50,11 @@ export const registerTelegramHandlers = ({
 
   type TextFragmentEntry = {
     key: string;
-    messages: Array<{ msg: TelegramMessage; ctx: unknown; receivedAtMs: number }>;
+    messages: Array<{
+      msg: TelegramMessage;
+      ctx: unknown;
+      receivedAtMs: number;
+    }>;
     timer: ReturnType<typeof setTimeout>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
@@ -138,7 +142,13 @@ export const registerTelegramHandlers = ({
           chatId: msg.chat.id,
           messageId: msg.message_id,
         };
-        const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch, mediaMeta);
+        const media = await resolveMedia(
+          ctx,
+          mediaMaxBytes,
+          opts.token,
+          opts.proxyFetch,
+          mediaMeta,
+        );
         if (media) {
           allMedia.push({
             path: media.path,
@@ -325,7 +335,11 @@ export const registerTelegramHandlers = ({
         const groupAllowlist = resolveGroupPolicy(chatId);
         if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
           logger.info(
-            { chatId, title: callbackMessage.chat.title, reason: "not-allowed" },
+            {
+              chatId,
+              title: callbackMessage.chat.title,
+              reason: "not-allowed",
+            },
             "skipping group message",
           );
           return;

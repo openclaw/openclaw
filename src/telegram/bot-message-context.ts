@@ -181,11 +181,17 @@ export const buildTelegramMessageContext = async ({
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const threadKeys =
     dmThreadId != null
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
+      ? resolveThreadSessionKeys({
+          baseSessionKey,
+          threadId: String(dmThreadId),
+        })
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  const effectiveDmAllow = normalizeAllowFromWithStore({ allowFrom, storeAllowFrom });
+  const effectiveDmAllow = normalizeAllowFromWithStore({
+    allowFrom,
+    storeAllowFrom,
+  });
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   const effectiveGroupAllow = normalizeAllowFromWithStore({
     allowFrom: groupAllowOverride ?? groupAllowFrom,
@@ -334,7 +340,12 @@ export const buildTelegramMessageContext = async ({
   });
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
-    authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
+    authorizers: [
+      {
+        configured: allowForCommands.hasEntries,
+        allowed: senderAllowedForCommands,
+      },
+    ],
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
   });

@@ -271,11 +271,7 @@ export async function describeReplyTarget(
       // Look up cached media if we have message context
       if (body.startsWith("<media:") && effectiveChatId != null && replyMessageId != null) {
         try {
-          const cached = await lookupMediaByMessageId(
-            "telegram",
-            effectiveChatId,
-            replyMessageId,
-          );
+          const cached = await lookupMediaByMessageId("telegram", effectiveChatId, replyMessageId);
           if (cached) {
             mediaPath = cached.path;
             mediaType = cached.contentType;
