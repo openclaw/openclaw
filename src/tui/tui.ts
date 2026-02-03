@@ -662,4 +662,10 @@ export async function runTui(opts: TuiOptions) {
   updateFooter();
   tui.start();
   client.start();
+  await new Promise<void>((resolve) => {
+    const finish = () => resolve();
+    process.once("exit", finish);
+    process.once("SIGINT", finish);
+    process.once("SIGTERM", finish);
+  });
 }
