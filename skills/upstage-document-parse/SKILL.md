@@ -2,7 +2,15 @@
 name: upstage-document-parse
 description: Parse documents (PDF, images, DOCX, PPTX, XLSX, HWP) using Upstage Document Parse API. Extracts text, tables, figures, and layout elements with bounding boxes. Use when user asks to parse, extract, or analyze document content, convert documents to markdown/HTML, or extract structured data from PDFs and images.
 homepage: https://console.upstage.ai/api/document-digitization/document-parsing
-metadata: {"openclaw":{"emoji":"📑","requires":{"bins":["curl"],"env":["UPSTAGE_API_KEY"]},"primaryEnv":"UPSTAGE_API_KEY"}}
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "📑",
+        "requires": { "bins": ["curl"], "env": ["UPSTAGE_API_KEY"] },
+        "primaryEnv": "UPSTAGE_API_KEY",
+      },
+  }
 ---
 
 # Upstage Document Parse
@@ -24,7 +32,7 @@ openclaw config set skills.entries.upstage-document-parse.apiKey "your-api-key"
 
 Or add to `~/.openclaw/openclaw.json`:
 
-```json5
+```json
 {
   "skills": {
     "entries": {
@@ -53,17 +61,17 @@ For small documents (recommended < 20 pages).
 
 ### Parameters
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `model` | string | required | Use `document-parse` (latest) or `document-parse-nightly` |
-| `document` | file | required | Document file to parse |
-| `mode` | string | `standard` | `standard` (text-focused), `enhanced` (complex tables/images), `auto` |
-| `ocr` | string | `auto` | `auto` (images only) or `force` (always OCR) |
-| `output_format` | string | `html` | Comma-separated: `markdown`, `html`, `text` (e.g. `markdown,html,text`) |
-| `coordinates` | boolean | `true` | Include bounding box coordinates |
-| `base64_encoding` | string[] | `[]` | Element names to return as base64; pass as JSON in form, e.g. `["table"]`, `["figure"]`, or `["table","figure"]`. Omit for none. |
-| `chart_recognition` | boolean | `true` | Convert charts to tables (Beta) |
-| `merge_multipage_tables` | boolean | `false` | Merge tables across pages (Beta, max 20 pages if true) |
+| Parameter                | Type     | Default    | Description                                                                                                                      |
+| ------------------------ | -------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `model`                  | string   | required   | Use `document-parse` (latest) or `document-parse-nightly`                                                                        |
+| `document`               | file     | required   | Document file to parse                                                                                                           |
+| `mode`                   | string   | `standard` | `standard` (text-focused), `enhanced` (complex tables/images), `auto`                                                            |
+| `ocr`                    | string   | `auto`     | `auto` (images only) or `force` (always OCR)                                                                                     |
+| `output_format`          | string   | `html`     | Comma-separated: `markdown`, `html`, `text` (e.g. `markdown,html,text`)                                                          |
+| `coordinates`            | boolean  | `true`     | Include bounding box coordinates                                                                                                 |
+| `base64_encoding`        | string[] | `[]`       | Element names to return as base64; pass as JSON in form, e.g. `["table"]`, `["figure"]`, or `["table","figure"]`. Omit for none. |
+| `chart_recognition`      | boolean  | `true`     | Convert charts to tables (Beta)                                                                                                  |
+| `merge_multipage_tables` | boolean  | `false`    | Merge tables across pages (Beta, max 20 pages if true)                                                                           |
 
 ### Basic Parsing
 
@@ -162,8 +170,9 @@ curl -X POST "https://api.upstage.ai/v1/document-digitization/async" \
 ```
 
 Response:
+
 ```json
-{"request_id": "uuid-here"}
+{ "request_id": "uuid-here" }
 ```
 
 ### Check Status & Get Results
