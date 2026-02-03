@@ -148,6 +148,34 @@ describe("validateProviderConfig", () => {
         "plugins.entries.voice-call.config.telnyx.apiKey is required (or set TELNYX_API_KEY env)",
       );
     });
+
+    it("fails validation when allowlist inbound policy lacks public key", () => {
+      const config = createBaseConfig("telnyx");
+      config.inboundPolicy = "allowlist";
+      config.telnyx = { apiKey: "KEY123", connectionId: "CONN456" };
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        "plugins.entries.voice-call.config.telnyx.publicKey is required for inboundPolicy allowlist/pairing",
+      );
+    });
+
+    it("passes validation when allowlist inbound policy has public key", () => {
+      const config = createBaseConfig("telnyx");
+      config.inboundPolicy = "allowlist";
+      config.telnyx = {
+        apiKey: "KEY123",
+        connectionId: "CONN456",
+        publicKey: "public-key",
+      };
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
   });
 
   describe("plivo provider", () => {
