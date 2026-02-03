@@ -107,4 +107,6 @@ echo "=================================================================="
 # ----------------------------
 # Run OpenClaw Gateway
 # ----------------------------
-exec node dist/index.js gateway --bind "$OPENCLAW_GATEWAY_BIND" --port "$OPENCLAW_GATEWAY_PORT"
+# Note: Using 'openclaw gateway run' which reads config from file
+# Config is generated above with correct bind/port values
+exec openclaw gateway run
