@@ -302,18 +302,20 @@ export type ConfigSchemaResponse = {
 };
 
 export type PresenceEntry = {
-  instanceId?: string | null;
-  host?: string | null;
-  ip?: string | null;
-  version?: string | null;
-  platform?: string | null;
   deviceFamily?: string | null;
-  modelIdentifier?: string | null;
-  mode?: string | null;
+  host?: string | null;
+  instanceId?: string | null;
+  ip?: string | null;
   lastInputSeconds?: number | null;
+  mode?: string | null;
+  modelIdentifier?: string | null;
+  platform?: string | null;
   reason?: string | null;
+  roles?: Array<string | null> | null;
+  scopes?: Array<string | null> | null;
   text?: string | null;
   ts?: number | null;
+  version?: string | null;
 };
 
 export type GatewaySessionsDefaults = {

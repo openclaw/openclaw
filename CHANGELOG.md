@@ -13,9 +13,16 @@ Docs: https://docs.openclaw.ai
 - Docs: add zh-CN landing notice + AI-translated image. (#7303) Thanks @joshp123.
 - Docs: fix typo - clawdbot is the compatibility shim, not openclaw. (#7415) Thanks @lailoo.
 - Config: allow setting a default subagent thinking level via `agents.defaults.subagents.thinking` (and per-agent `agents.list[].subagents.thinking`). (#7372) Thanks @tyler6204.
+- Memory: implement the opt-in QMD backend for workspace memory. (#3160) Thanks @vignesh07.
 
 ### Fixes
 
+- Docs: finish renaming the QMD memory docs to reference the OpenClaw state dir.
+- Onboarding: keep TUI flow exclusive (skip completion prompt + background Web UI seed).
+- Onboarding: drop completion prompt now handled by install/update.
+- TUI: block onboarding output while TUI is active and restore terminal state on exit.
+- CLI: cache shell completion scripts in state dir and source cached files in profiles.
+- Zsh completion: escape option descriptions to avoid invalid option errors.
 - Agents: repair malformed tool calls and session transcripts. (#7473) Thanks @justinhuangcode.
 - fix(agents): validate AbortSignal instances before calling AbortSignal.any() (#7277) (thanks @Elarwei001)
 - fix(webchat): respect user scroll position during streaming and refresh (#7226) (thanks @marcomarandiz)
