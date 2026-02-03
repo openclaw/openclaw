@@ -21,8 +21,8 @@ import type { RetryRunner } from "../infra/retry-policy.js";
 
 const execFileAsync = promisify(execFile);
 
-const DISCORD_VOICE_MESSAGE_FLAG = 8192;
-const SUPPRESS_NOTIFICATIONS_FLAG = 4096;
+const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
+const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
 
 export type VoiceMessageMetadata = {
