@@ -4,13 +4,13 @@ import type {
   DeviceTokenSummary,
   PairedDevice,
   PendingDevice,
-} from "../controllers/devices";
+} from "../controllers/devices.ts";
 import type {
   ExecApprovalsAllowlistEntry,
   ExecApprovalsFile,
   ExecApprovalsSnapshot,
-} from "../controllers/exec-approvals";
-import { clampText, formatAgo, formatList } from "../format";
+} from "../controllers/exec-approvals.ts";
+import { clampText, formatAgo, formatList } from "../format.ts";
 
 export type NodesProps = {
   loading: boolean;
