@@ -355,8 +355,7 @@ export async function sendMessageTelegram(
       ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
     };
     const mediaParams = {
-      caption: htmlCaption,
-      ...(htmlCaption ? { parse_mode: "HTML" as const } : {}),
+      ...(htmlCaption ? { caption: htmlCaption, parse_mode: "HTML" as const } : {}),
       ...baseMediaParams,
       ...(opts.silent === true ? { disable_notification: true } : {}),
     };

@@ -87,9 +87,7 @@ describe("sendMessageTelegram video notes", () => {
     });
 
     // Video note sent WITHOUT caption (video notes cannot have captions)
-    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {
-      caption: undefined,
-    });
+    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
 
     // Text sent as separate message
     expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
@@ -165,9 +163,7 @@ describe("sendMessageTelegram video notes", () => {
     });
 
     // Video note sent WITHOUT reply_markup (it goes to text)
-    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {
-      caption: undefined,
-    });
+    expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {});
 
     // Text message gets reliability markup
     expect(sendMessage).toHaveBeenCalledWith(chatId, text, {
@@ -211,7 +207,6 @@ describe("sendMessageTelegram video notes", () => {
 
     // Video note threaded
     expect(sendVideoNote).toHaveBeenCalledWith(chatId, expect.anything(), {
-      caption: undefined,
       reply_to_message_id: 999,
     });
 
