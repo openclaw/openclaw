@@ -250,6 +250,16 @@ export type ChannelThreadingToolContext = {
    * not forwarding/relaying a message from another conversation.
    */
   skipCrossContextDecoration?: boolean;
+  /**
+   * Channel where the control message originated (e.g. "x", "feishu").
+   * Used for X reply permission: when "x", reply only allowed to the mentioning user.
+   */
+  originatingChannel?: string;
+  /**
+   * Sender ID of the control message (channel-specific, e.g. X user ID or Feishu user ID).
+   * Used for X reply permission: when originating from X, target tweet author must match.
+   */
+  originatingSenderId?: string;
 };
 
 export type ChannelMessagingAdapter = {

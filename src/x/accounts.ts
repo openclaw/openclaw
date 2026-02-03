@@ -52,9 +52,12 @@ export function resolveXAccount(
 
   // Multi-account mode
   if (accounts && resolvedAccountId in accounts) {
+    const acc = accounts[resolvedAccountId];
     return {
-      ...accounts[resolvedAccountId],
-      enabled: accounts[resolvedAccountId].enabled ?? true,
+      ...acc,
+      enabled: acc.enabled ?? true,
+      allowFrom: acc.allowFrom,
+      actionsAllowFrom: acc.actionsAllowFrom,
     };
   }
 
@@ -68,7 +71,9 @@ export function resolveXAccount(
       enabled: (xConfig.enabled as boolean) ?? true,
       pollIntervalSeconds: xConfig.pollIntervalSeconds as number | undefined,
       allowFrom: xConfig.allowFrom as string[] | undefined,
+      actionsAllowFrom: xConfig.actionsAllowFrom as string[] | undefined,
       name: xConfig.name as string | undefined,
+      proxy: xConfig.proxy as string | undefined,
     };
   }
 

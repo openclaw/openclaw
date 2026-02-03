@@ -123,9 +123,18 @@ export type FeishuAccountConfig = {
   /** Per-group configuration. */
   groups?: Record<string, FeishuGroupConfig>;
 
-  /** Allowlist for DM senders (user IDs or open_ids). */
+  /**
+   * Allowlist for DM senders (user IDs or open_ids). When dmPolicy is "allowlist", only these users can send.
+   * Server config only; cannot be changed via conversation.
+   */
   allowFrom?: string[];
-  /** Optional allowlist for Feishu group senders. */
+  /**
+   * Allowlist of Feishu user IDs who can trigger X actions (follow, like, reply, dm).
+   * Separate from allowFrom: use for auto-operations; do not reuse mention/DM allowlist.
+   * Server config only.
+   */
+  xActionsAllowFrom?: string[];
+  /** Optional allowlist for Feishu group senders. Server config only. */
   groupAllowFrom?: string[];
 
   /**

@@ -62,3 +62,6 @@ export {
   createFeishuDriveTool,
   createFeishuPermTool,
 } from "./tools/index.js";
+
+// Cross-channel X commands
+export { handleXCommand, type XCommandResult } from "./x-commands.js";

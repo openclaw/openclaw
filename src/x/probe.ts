@@ -2,6 +2,7 @@
  * X channel probe - verify credentials are valid.
  */
 
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { TwitterApi } from "twitter-api-v2";
 import type { XAccountConfig } from "./types.js";
 
@@ -38,12 +39,18 @@ export async function probeX(account: XAccountConfig, timeoutMs: number): Promis
       };
     }
 
-    const client = new TwitterApi({
-      appKey: account.consumerKey,
-      appSecret: account.consumerSecret,
-      accessToken: account.accessToken,
-      accessSecret: account.accessTokenSecret,
-    });
+    // Configure proxy agent if proxy URL is set
+    const httpAgent = account.proxy ? new HttpsProxyAgent(account.proxy) : undefined;
+
+    const client = new TwitterApi(
+      {
+        appKey: account.consumerKey,
+        appSecret: account.consumerSecret,
+        accessToken: account.accessToken,
+        accessSecret: account.accessTokenSecret,
+      },
+      httpAgent ? { httpAgent } : undefined,
+    );
 
     // Use AbortController for timeout
     const controller = new AbortController();

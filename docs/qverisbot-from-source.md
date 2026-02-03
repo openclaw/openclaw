@@ -27,7 +27,7 @@
 
 - **QVeris 万能工具箱**：集成 QVeris 平台，可搜索和调用金融、科研、医疗、体育等领域的专业工具
 - **飞书原生支持**：深度集成飞书（Feishu/Lark），特别适合中国企业用户
-- **多渠道接入**：支持 WhatsApp、Telegram、Slack、Discord、Signal、飞书等多种消息平台
+- **多渠道接入**：支持飞书、X (Twitter)、WhatsApp、Telegram、Slack、Discord、Signal 等多种消息平台
 - **本地部署**：在你自己的设备上运行，数据安全可控
 - **大模型代理**：支持 HTTP 代理，方便在网络受限环境中使用
 
@@ -105,7 +105,7 @@ pnpm openclaw gateway --port 18789 --verbose
 pnpm openclaw agent --message "使用 QVeris 搜索比特币价格相关的工具"
 ```
 
-> ⚡ **提示**：QVeris 详细配置选项（超时时间、响应大小限制等）请参考 [6.3.3 QVeris 配置](#633-qveris-配置)。
+> ⚡ **提示**：QVeris 详细配置选项（超时时间、响应大小限制等）请参考 [6.3.5 QVeris 配置](#635-qveris-配置)。
 
 ### 1.3 飞书深度支持
 
@@ -114,10 +114,21 @@ QVerisBot 原生支持飞书（Feishu/Lark），特别适合中国企业用户�
 - **群聊支持**：支持飞书群组消息处理
 - **WebSocket 长连接**：无需公网 IP，本地开发环境友好
 - **消息撤回处理**：支持消息撤回事件，自动停止正在处理的任务 *(🚧 开发中)*
-- **富文本消息**：支持 Markdown 格式的消息渲染
+- **富文本消息**：支持 Markdown 格式的消息渲染（renderMode：auto/raw/card）
+- **飞书动作**：可配置 reactions、sendMessage、deleteMessage、editMessage
+- **飞书文档/知识库/云盘工具**：feishu_doc、feishu_wiki、feishu_drive、feishu_perm（可按账号开关）
 - **图片消息**：支持发送和接收图片 *(🚧 开发中)*
 
-### 1.4 大模型代理支持
+### 1.4 X (Twitter) 渠道与 x-actions
+
+QVerisBot 通过 X 扩展支持 X (Twitter) 渠道与 **x-actions** 技能：
+
+- **X 渠道**：轮询 @ 提及，在 X 上 @ 机器人后可获得回复；需配置 API 凭证（consumerKey/consumerSecret、accessToken/accessTokenSecret）。
+- **x-actions**：通过 message 工具执行 x-follow、x-unfollow、x-like、x-unlike、x-reply、x-dm，无需浏览器。
+- **飞书内操作 X**：在飞书内可用自然语言（如「帮我关注 @xxx」）或斜杠命令（如 `/x follow @xxx`、`/x like <推文链接>`）触发 X 操作；需配置 `channels.feishu.xActionsAllowFrom`。
+- **权限分离**：提及白名单（allowFrom / xActionsAllowFrom）与 X 操作白名单（actionsAllowFrom / xActionsAllowFrom）相互独立，勿混用。
+
+### 1.5 大模型代理支持
 
 支持为所有 LLM API 调用配置 HTTP 代理，方便在网络受限环境中使用：
 
@@ -129,7 +140,7 @@ QVerisBot 原生支持飞书（Feishu/Lark），特别适合中国企业用户�
 }
 ```
 
-### 1.5 OpenClaw 基础平台
+### 1.6 OpenClaw 基础平台
 
 QVerisBot 基于 [OpenClaw](https://github.com/openclaw/openclaw)（前身为 Clawdbot）开发，继承了其强大的平台能力：
 
@@ -461,8 +472,15 @@ mkdir -p ~/.openclaw
 
 ```json
 {
-  "agent": {
-    "model": "anthropic/claude-opus-4-5"
+  "agents": {
+    "defaults": {
+      "model": { "primary": "anthropic/claude-opus-4-5" },
+      "workspace": "~/clawd"
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "bind": "loopback"
   },
   "channels": {
     "feishu": {
@@ -472,7 +490,17 @@ mkdir -p ~/.openclaw
       "eventMode": "websocket",
       "startupChatId": "oc_xxxxxxxxxxxxxxxxxxxxxxxxxx",
       "dmPolicy": "open",
-      "groupPolicy": "open"
+      "groupPolicy": "open",
+      "promptSuffix": "请用中文回答。"
+    },
+    "x": {
+      "enabled": true,
+      "consumerKey": "your-consumer-key",
+      "consumerSecret": "your-consumer-secret",
+      "accessToken": "your-access-token",
+      "accessTokenSecret": "your-access-token-secret",
+      "allowFrom": [],
+      "actionsAllowFrom": []
     }
   },
   "tools": {
@@ -487,7 +515,8 @@ mkdir -p ~/.openclaw
         "qveris": {
           "toolId": "xiaosu.smartsearch.search.retrieve.v2.6c50f296_domestic"
         }
-      }
+      },
+      "fetch": { "enabled": true }
     }
   },
   "models": {
@@ -500,18 +529,25 @@ mkdir -p ~/.openclaw
 
 #### 6.3.1 Agent 配置
 
+Agent 默认配置位于 `agents.defaults`，包括模型、工作区等：
+
 ```json
 {
-  "agent": {
-    "model": "anthropic/claude-opus-4-5"
+  "agents": {
+    "defaults": {
+      "model": { "primary": "anthropic/claude-opus-4-5" },
+      "workspace": "~/clawd"
+    }
   }
 }
 ```
 
-支持的模型格式：`provider/model-name`，例如：
+模型格式为 `provider/model-name`，例如：
 - `anthropic/claude-opus-4-5`
 - `openai/gpt-4o`
 - `google/gemini-2.0-flash`
+
+`model` 可配置主模型与回退：`"model": { "primary": "anthropic/claude-opus-4-5", "fallbacks": ["openai/gpt-4o"] }`。
 
 #### 6.3.2 飞书配置
 
@@ -550,9 +586,13 @@ mkdir -p ~/.openclaw
 | dmPolicy | string | "pairing" | 私聊策略：open/pairing/allowlist/disabled |
 | groupPolicy | string | "open" | 群聊策略：open/allowlist/disabled |
 | requireMention | boolean | true | 群聊是否需要 @机器人 |
-| allowFrom | string[] | - | 允许的用户 ID 列表 |
+| allowFrom | string[] | - | 允许的用户 ID 列表（私聊/提及权限） |
+| xActionsAllowFrom | string[] | - | **X 操作白名单**：允许触发 X 操作（关注/点赞/回复/私信）的飞书用户 ID，勿与 allowFrom 混用 |
 | groupAllowFrom | string[] | - | 允许的群组发送者列表 |
 | promptSuffix | string | - | **提示词增强后缀**（详见下方说明） |
+| actions | object | - | 飞书动作开关：reactions / sendMessage / deleteMessage / editMessage（默认 true） |
+| tools | object | - | 飞书文档/知识库/云盘工具：doc / wiki / drive / perm（默认 doc/wiki/drive 为 true） |
+| renderMode | string | "auto" | 回复渲染：auto（自动）/ raw（纯文本）/ card（卡片） |
 
 ##### startupChatId 配置说明
 
@@ -662,7 +702,91 @@ mkdir -p ~/.openclaw
 - 群组级别的 promptSuffix 会完全覆盖（而非追加）账户级别的设置
 - 建议保持 promptSuffix 简洁，避免过长影响对话效率
 
-#### 6.3.3 QVeris 配置
+##### xActionsAllowFrom 与飞书内触发 X 操作
+
+在飞书中可通过自然语言或 `/x` 命令触发 X（Twitter）操作（关注、点赞、回复、私信）。只有列入 `channels.feishu.xActionsAllowFrom` 的飞书用户 ID 才有权限触发，与私聊/提及白名单 `allowFrom` 相互独立，请勿混用。
+
+#### 6.3.3 X (Twitter) 渠道配置
+
+X 渠道以插件形式提供，支持单账号与多账号。
+
+**单账号配置**（凭证写在顶层）：
+
+```json
+{
+  "channels": {
+    "x": {
+      "enabled": true,
+      "consumerKey": "your-consumer-key",
+      "consumerSecret": "your-consumer-secret",
+      "accessToken": "your-access-token",
+      "accessTokenSecret": "your-access-token-secret",
+      "allowFrom": ["12345678"],
+      "actionsAllowFrom": ["12345678"],
+      "pollIntervalSeconds": 60,
+      "proxy": "http://127.0.0.1:7890"
+    }
+  }
+}
+```
+
+**多账号配置**（使用 `accounts`）：
+
+```json
+{
+  "channels": {
+    "x": {
+      "enabled": true,
+      "accounts": {
+        "main": {
+          "consumerKey": "...",
+          "consumerSecret": "...",
+          "accessToken": "...",
+          "accessTokenSecret": "...",
+          "allowFrom": ["12345678"],
+          "actionsAllowFrom": ["12345678"]
+        },
+        "alt": {
+          "consumerKey": "...",
+          "consumerSecret": "...",
+          "accessToken": "...",
+          "accessTokenSecret": "..."
+        }
+      }
+    }
+  }
+}
+```
+
+| 配置项 | 类型 | 说明 |
+|-------|------|------|
+| consumerKey / consumerSecret | string | 开发者门户 API Key / Secret |
+| accessToken / accessTokenSecret | string | 账号 Access Token / Secret |
+| allowFrom | string[] | 可 @ 机器人并得到回复的 X 用户 ID 白名单 |
+| actionsAllowFrom | string[] | 可触发 X 操作（关注/点赞/回复/私信）的 X 用户 ID 白名单，勿与 allowFrom 混用 |
+| pollIntervalSeconds | number | 轮询间隔（秒），最小 15 |
+| proxy | string | API 请求的 HTTP 代理 URL |
+
+#### 6.3.4 x-actions 技能与飞书 /x 命令
+
+安装 X 扩展后，助手可通过 **message 工具的 X 动作** 执行：`x-follow`、`x-unfollow`、`x-like`、`x-unlike`、`x-reply`、`x-dm`。**请始终用 message 工具的 X 动作操作 X，不要用 browser 工具。**
+
+在飞书内还可使用 **斜杠命令** 直接操作 X（由飞书消息处理，不经过 Agent）：
+
+| 命令 | 说明 |
+|------|------|
+| `/x follow @用户名` | 关注该用户 |
+| `/x unfollow @用户名` | 取消关注 |
+| `/x like <推文链接>` | 点赞推文 |
+| `/x unlike <推文链接>` | 取消点赞 |
+| `/x dm @用户名 <消息>` | 发送私信 |
+| `/x me` | 查看当前 X 账号信息 |
+
+权限规则（两套白名单，勿混用）：
+- **提及 → 回复**：X 用 `channels.x.allowFrom`，飞书用 `channels.feishu.allowFrom`
+- **触发 X 操作**：X 用 `channels.x.actionsAllowFrom`，飞书用 `channels.feishu.xActionsAllowFrom`
+
+#### 6.3.5 QVeris 配置
 
 ```json
 {
@@ -688,7 +812,7 @@ mkdir -p ~/.openclaw
 | maxResponseSize | number | 20480 | 最大响应大小（字节） |
 | searchLimit | number | 10 | 搜索结果数量限制 |
 
-#### 6.3.4 大模型代理配置
+#### 6.3.6 大模型代理配置
 
 ```json
 {
@@ -715,7 +839,7 @@ mkdir -p ~/.openclaw
 }
 ```
 
-#### 6.3.5 web_search配置
+#### 6.3.7 web_search 配置
 
 默认的web_search是Brave Search，需要申请Apikey并产生费用。可以设置成使用QVeris的工具进行web search，有多个QVeris的工具可选，例如小宿的搜索工具，配置如下：
 
@@ -798,6 +922,9 @@ pnpm openclaw channels status --deep
 
 # 检查飞书连接
 pnpm openclaw channels status feishu
+
+# 检查 X 连接
+pnpm openclaw channels status x
 ```
 
 ### 7.4 运行诊断
@@ -844,7 +971,12 @@ feishu: connected as "QVerisBot" (ou_xxx)
 | `/verbose on/off` | 开关详细模式 |
 | `/usage off/tokens/full` | 设置使用量显示级别 |
 
-### 8.3 使用 QVeris 工具
+### 8.3 X 操作与飞书 /x 命令
+
+- **X 渠道**：在 X 上 @ 机器人后，助手可通过 message 工具的 x-follow、x-like、x-reply、x-dm 等动作执行操作；需在 `channels.x.allowFrom` 与 `channels.x.actionsAllowFrom` 中配置允许的用户 ID。
+- **飞书内操作 X**：在飞书群聊或私聊中发送 `/x follow @用户名`、`/x like <推文链接>`、`/x dm @用户名 消息` 等，或使用自然语言（如「帮我关注 @elonmusk」），由助手调用 x-actions 执行；需在 `channels.feishu.xActionsAllowFrom` 中配置允许的飞书用户 ID。
+
+### 8.4 使用 QVeris 工具
 
 QVerisBot 会自动识别需要使用外部工具的场景。你也可以显式请求：
 
@@ -856,7 +988,7 @@ QVerisBot 会自动识别需要使用外部工具的场景。你也可以显式�
 查询腾讯股票的实时行情
 ```
 
-### 8.4 CLI 命令
+### 8.5 CLI 命令
 
 ```bash
 # 发送消息
@@ -871,7 +1003,7 @@ pnpm openclaw gateway --help
 pnpm openclaw channels --help
 ```
 
-### 8.5 日志查看
+### 8.6 日志查看
 
 ```bash
 # 查看网关日志
@@ -884,7 +1016,7 @@ pnpm openclaw gateway --verbose
 DEBUG=* pnpm openclaw gateway
 ```
 
-### 8.6 常见问题
+### 8.7 常见问题
 
 #### Q: 飞书消息收不到？
 
@@ -907,6 +1039,12 @@ DEBUG=* pnpm openclaw gateway
 2. 检查代理服务是否正常工作
 3. 尝试切换模型提供商
 
+#### Q: X 操作提示 Permission denied？
+
+1. 在 X 上触发：需在 `channels.x.actionsAllowFrom` 中配置你的 X 用户 ID
+2. 在飞书内触发：需在 `channels.feishu.xActionsAllowFrom` 中配置你的飞书用户 ID
+3. 勿将「提及白名单」（allowFrom）与「X 操作白名单」（actionsAllowFrom / xActionsAllowFrom）混用
+
 ---
 
 ## 附录
@@ -917,11 +1055,9 @@ DEBUG=* pnpm openclaw gateway
 
 ```json
 {
-  "agent": {
-    "model": "anthropic/claude-opus-4-5"
-  },
   "agents": {
     "defaults": {
+      "model": { "primary": "anthropic/claude-opus-4-5" },
       "workspace": "~/clawd"
     }
   },
@@ -939,31 +1075,55 @@ DEBUG=* pnpm openclaw gateway
       "dmPolicy": "open",
       "groupPolicy": "open",
       "promptSuffix": "请用中文回答。",
+      "allowFrom": [],
+      "xActionsAllowFrom": [],
+      "actions": {
+        "reactions": true,
+        "sendMessage": true,
+        "deleteMessage": true,
+        "editMessage": true
+      },
+      "tools": {
+        "doc": true,
+        "wiki": true,
+        "drive": true,
+        "perm": false
+      },
+      "renderMode": "auto",
       "groups": {
         "oc_xxx": {
           "requireMention": false,
           "promptSuffix": "这是技术讨论群，请提供代码示例。"
         }
       }
+    },
+    "x": {
+      "enabled": true,
+      "consumerKey": "your-consumer-key",
+      "consumerSecret": "your-consumer-secret",
+      "accessToken": "your-access-token",
+      "accessTokenSecret": "your-access-token-secret",
+      "allowFrom": [],
+      "actionsAllowFrom": [],
+      "pollIntervalSeconds": 60,
+      "proxy": "http://127.0.0.1:7890"
     }
   },
   "tools": {
-      "qveris": {
-          "enabled": true,
-          "apiKey": "your-qveris-api-key"
+    "qveris": {
+      "enabled": true,
+      "apiKey": "your-qveris-api-key"
+    },
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "qveris",
+        "qveris": {
+          "toolId": "xiaosu.smartsearch.search.retrieve.v2.6c50f296_domestic"
+        }
       },
-      "web": {
-          "search": {
-              "enabled": true,
-              "provider": "qveris",
-              "qveris": {
-                "toolId": "xiaosu.smartsearch.search.retrieve.v2.6c50f296_domestic"
-              }            
-          },
-          "fetch": {
-              "enabled": true
-          }
-      }
+      "fetch": { "enabled": true }
+    }
   },
   "models": {
     "proxy": "http://127.0.0.1:7890"

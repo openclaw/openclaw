@@ -155,6 +155,10 @@ export function createOpenClawCodingTools(options?: {
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /** Channel where the control message originated (e.g. "x", "feishu"). Used for X reply permission. */
+  originatingChannel?: string;
+  /** Sender ID of the control message. When originating from X, x-reply only allowed to this user's tweets. */
+  originatingSenderId?: string;
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
 }): AnyAgentTool[] {
@@ -347,6 +351,8 @@ export function createOpenClawCodingTools(options?: {
       currentThreadTs: options?.currentThreadTs,
       replyToMode: options?.replyToMode,
       hasRepliedRef: options?.hasRepliedRef,
+      originatingChannel: options?.originatingChannel,
+      originatingSenderId: options?.originatingSenderId,
       modelHasVision: options?.modelHasVision,
       requesterAgentIdOverride: agentId,
     }),

@@ -14,7 +14,9 @@ import type {
   ChannelAccountSnapshot,
   ChannelCapabilities,
   ChannelMeta,
+  ChannelMessageActionName,
 } from "../../../src/channels/plugins/types.core.js";
+import { handleXAction } from "../../../src/agents/tools/x-actions.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
 
@@ -27,6 +29,7 @@ type XAccountConfig = {
   pollIntervalSeconds?: number;
   allowFrom?: string[];
   name?: string;
+  proxy?: string;
 };
 
 /**
@@ -61,7 +64,26 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
   agentPrompt: {
     messageToolHints: () => [
       "X/Twitter has a 280-character limit. Use plain text without markdown formatting (no **bold**, *italic*, `code`, or other markdown syntax). Keep responses concise.",
+      "For X/Twitter actions (follow/unfollow users, like/unlike tweets, reply to tweets, send DMs), ALWAYS use the message tool with X-specific actions (x-follow, x-unfollow, x-like, x-unlike, x-reply, x-dm). Do NOT use the browser tool for these operations - the message tool's X actions are faster, more reliable, and use the configured API credentials.",
     ],
+  },
+
+  actions: {
+    listActions: (): ChannelMessageActionName[] => [
+      "x-follow",
+      "x-unfollow",
+      "x-dm",
+      "x-like",
+      "x-unlike",
+      "x-reply",
+    ],
+    supportsAction: ({ action }) =>
+      ["x-follow", "x-unfollow", "x-dm", "x-like", "x-unlike", "x-reply"].includes(action),
+    handleAction: async (ctx) => {
+      return handleXAction(ctx.params, ctx.cfg, ctx.accountId ?? undefined, {
+        toolContext: ctx.toolContext,
+      });
+    },
   },
 
   config: {

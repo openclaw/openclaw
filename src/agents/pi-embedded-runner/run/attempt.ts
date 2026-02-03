@@ -240,6 +240,8 @@ export async function runEmbeddedAttempt(
           currentThreadTs: params.currentThreadTs,
           replyToMode: params.replyToMode,
           hasRepliedRef: params.hasRepliedRef,
+          originatingChannel: params.originatingChannel,
+          originatingSenderId: params.originatingSenderId,
           modelHasVision,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });

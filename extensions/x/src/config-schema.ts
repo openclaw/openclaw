@@ -16,10 +16,21 @@ const XAccountSchema = z.object({
   enabled: z.boolean().optional(),
   /** Polling interval in seconds (default: 60, min: 15) */
   pollIntervalSeconds: z.number().min(15).optional(),
-  /** Allowlist of X user IDs who can trigger the bot */
+  /**
+   * Allowlist of X user IDs who can mention the bot (mention → reply). When set, only these users can trigger.
+   * Server config only; cannot be changed via conversation.
+   */
   allowFrom: z.array(z.string()).optional(),
+  /**
+   * Allowlist of X user IDs who can trigger proactive X actions (follow, like, reply, dm).
+   * Do not reuse allowFrom: this is for auto-operations. When request is from X, the mentioner must be in this list.
+   * Server config only.
+   */
+  actionsAllowFrom: z.array(z.string()).optional(),
   /** Account display name */
   name: z.string().optional(),
+  /** HTTP proxy URL for API requests (e.g., http://127.0.0.1:7890) */
+  proxy: z.string().optional(),
 });
 
 /**

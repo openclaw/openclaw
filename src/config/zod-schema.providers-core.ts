@@ -371,6 +371,8 @@ export const FeishuAccountSchemaBase = z
 
     groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
     allowFrom: z.array(z.string()).optional(),
+    /** Allowlist of Feishu user IDs who can trigger X actions (follow, like, reply, dm). Do not reuse allowFrom. */
+    xActionsAllowFrom: z.array(z.string()).optional(),
     groupAllowFrom: z.array(z.string()).optional(),
     groupPolicy: GroupPolicySchema.optional().default("open"),
 

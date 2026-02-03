@@ -7,10 +7,10 @@
 
 import type { OpenClawConfig } from "../config/config.js";
 import type { XAccountConfig, XMention, XLogSink } from "./types.js";
-import { getOrCreateClientManager } from "./client.js";
-import { loadXPollState, updateXLastTweetId } from "./state.js";
-import { chunkTextForX, X_CHAR_LIMIT } from "./send.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
+import { getOrCreateClientManager } from "./client.js";
+import { chunkTextForX, X_CHAR_LIMIT } from "./send.js";
+import { loadXPollState, updateXLastTweetId } from "./state.js";
 
 export type XMonitorDeps = {
   resolveAgentRoute: (params: {
@@ -154,7 +154,7 @@ async function processXMention(params: {
     },
   });
 
-  const clientManager = getOrCreateClientManager(accountId, logger);
+  const clientManager = getOrCreateClientManager(accountId, logger, { proxyUrl: account.proxy });
 
   await deps.dispatchReply({
     ctx: ctxPayload,
@@ -199,7 +199,7 @@ export async function monitorXProvider(options: XMonitorOptions): Promise<XMonit
   let stopped = false;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const clientManager = getOrCreateClientManager(accountId, logger);
+  const clientManager = getOrCreateClientManager(accountId, logger, { proxyUrl: account.proxy });
 
   // Get bot user info
   let botUserId: string;

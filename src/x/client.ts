@@ -4,16 +4,32 @@
  * Handles authentication and API interactions using OAuth 1.0a credentials.
  */
 
+import { HttpsProxyAgent } from "https-proxy-agent";
 import { TwitterApi } from "twitter-api-v2";
-import type { XAccountConfig, XMention, XSendResult, XLogSink } from "./types.js";
+import type {
+  XAccountConfig,
+  XMention,
+  XSendResult,
+  XLogSink,
+  XFollowResult,
+  XDmResult,
+  XLikeResult,
+  XUserInfo,
+} from "./types.js";
 
 /**
  * Manages X API client connections
  */
 export class XClientManager {
   private clients = new Map<string, TwitterApi>();
+  private proxyUrl?: string;
 
-  constructor(private logger: XLogSink) {}
+  constructor(
+    private logger: XLogSink,
+    options?: { proxyUrl?: string },
+  ) {
+    this.proxyUrl = options?.proxyUrl;
+  }
 
   /**
    * Get or create an authenticated client for an account
@@ -31,15 +47,23 @@ export class XClientManager {
       throw new Error("Missing X access token/secret");
     }
 
-    const client = new TwitterApi({
-      appKey: account.consumerKey,
-      appSecret: account.consumerSecret,
-      accessToken: account.accessToken,
-      accessSecret: account.accessTokenSecret,
-    });
+    // Configure proxy agent if proxy URL is set
+    const httpAgent = this.proxyUrl ? new HttpsProxyAgent(this.proxyUrl) : undefined;
+
+    const client = new TwitterApi(
+      {
+        appKey: account.consumerKey,
+        appSecret: account.consumerSecret,
+        accessToken: account.accessToken,
+        accessSecret: account.accessTokenSecret,
+      },
+      httpAgent ? { httpAgent } : undefined,
+    );
 
     this.clients.set(accountId, client);
-    this.logger.info(`Created X client for account ${accountId}`);
+    this.logger.info(
+      `Created X client for account ${accountId}${this.proxyUrl ? ` (proxy: ${this.proxyUrl})` : ""}`,
+    );
 
     return client;
   }
@@ -56,14 +80,35 @@ export class XClientManager {
     name: string;
   }> {
     const client = this.getClient(account, accountId);
-    const me = await client.v2.me({
-      "user.fields": ["id", "username", "name"],
-    });
-    return {
-      id: me.data.id,
-      username: me.data.username,
-      name: me.data.name,
-    };
+    try {
+      const me = await client.v2.me({
+        "user.fields": ["id", "username", "name"],
+      });
+      return {
+        id: me.data.id,
+        username: me.data.username,
+        name: me.data.name,
+      };
+    } catch (error: unknown) {
+      // Log detailed error info for debugging
+      const apiError = error as {
+        code?: number;
+        data?: { detail?: string; title?: string; errors?: Array<{ message?: string }> };
+        rateLimitError?: boolean;
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+      };
+      if (apiError.data) {
+        this.logger.error(
+          `X API error - code: ${apiError.code}, detail: ${JSON.stringify(apiError.data)}`,
+        );
+      }
+      if (apiError.rateLimitError) {
+        this.logger.error(
+          `X API rate limit hit - limit: ${apiError.rateLimit?.limit}, remaining: ${apiError.rateLimit?.remaining}`,
+        );
+      }
+      throw error;
+    }
   }
 
   /**
@@ -222,6 +267,237 @@ export class XClientManager {
   }
 
   /**
+   * Get a single tweet by ID (for permission checks: reply only to same author when triggered from X).
+   * Returns the tweet author ID or null if not found.
+   */
+  async getTweetAuthor(
+    account: XAccountConfig,
+    accountId: string,
+    tweetId: string,
+  ): Promise<string | null> {
+    try {
+      const client = this.getClient(account, accountId);
+      const result = await client.v2.singleTweet(tweetId, {
+        "tweet.fields": ["author_id"],
+      });
+      const authorId = result.data?.author_id ?? null;
+      return authorId;
+    } catch (error: unknown) {
+      this.logger.debug?.(
+        `Failed to get tweet ${tweetId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Look up a user by username (handle).
+   * Strips leading @ if present.
+   */
+  async getUserByUsername(
+    account: XAccountConfig,
+    accountId: string,
+    username: string,
+  ): Promise<XUserInfo | null> {
+    try {
+      const client = this.getClient(account, accountId);
+      // Strip @ prefix if present
+      const cleanUsername = username.replace(/^@/, "");
+      const result = await client.v2.userByUsername(cleanUsername, {
+        "user.fields": ["id", "username", "name"],
+      });
+
+      if (!result.data) {
+        return null;
+      }
+
+      return {
+        id: result.data.id,
+        username: result.data.username,
+        name: result.data.name,
+      };
+    } catch (error: unknown) {
+      this.logger.error(
+        `Failed to look up user @${username}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Follow a user by their ID
+   */
+  async followUser(
+    account: XAccountConfig,
+    accountId: string,
+    targetUserId: string,
+  ): Promise<XFollowResult> {
+    try {
+      const client = this.getClient(account, accountId);
+      const me = await this.getMe(account, accountId);
+
+      const result = await client.v2.follow(me.id, targetUserId);
+
+      this.logger.info(`Followed user ${targetUserId}`);
+
+      return {
+        ok: true,
+        following: result.data.following,
+      };
+    } catch (error: unknown) {
+      const errorMsg = this.extractApiError(error);
+      this.logger.error(`Failed to follow user ${targetUserId}: ${errorMsg}`);
+      return {
+        ok: false,
+        error: errorMsg,
+      };
+    }
+  }
+
+  /**
+   * Unfollow a user by their ID
+   */
+  async unfollowUser(
+    account: XAccountConfig,
+    accountId: string,
+    targetUserId: string,
+  ): Promise<XFollowResult> {
+    try {
+      const client = this.getClient(account, accountId);
+      const me = await this.getMe(account, accountId);
+
+      const result = await client.v2.unfollow(me.id, targetUserId);
+
+      this.logger.info(`Unfollowed user ${targetUserId}`);
+
+      return {
+        ok: true,
+        following: result.data.following,
+      };
+    } catch (error: unknown) {
+      const errorMsg = this.extractApiError(error);
+      this.logger.error(`Failed to unfollow user ${targetUserId}: ${errorMsg}`);
+      return {
+        ok: false,
+        error: errorMsg,
+      };
+    }
+  }
+
+  /**
+   * Send a direct message to a user
+   */
+  async sendDirectMessage(
+    account: XAccountConfig,
+    accountId: string,
+    recipientId: string,
+    text: string,
+  ): Promise<XDmResult> {
+    try {
+      const client = this.getClient(account, accountId);
+
+      const result = await client.v2.sendDmToParticipant(recipientId, { text });
+
+      this.logger.info(`Sent DM to user ${recipientId}: ${result.dm_event_id}`);
+
+      return {
+        ok: true,
+        dmId: result.dm_event_id,
+        conversationId: result.dm_conversation_id,
+      };
+    } catch (error: unknown) {
+      const errorMsg = this.extractApiError(error);
+      this.logger.error(`Failed to send DM to user ${recipientId}: ${errorMsg}`);
+      return {
+        ok: false,
+        error: errorMsg,
+      };
+    }
+  }
+
+  /**
+   * Like a tweet
+   */
+  async likeTweet(
+    account: XAccountConfig,
+    accountId: string,
+    tweetId: string,
+  ): Promise<XLikeResult> {
+    try {
+      const client = this.getClient(account, accountId);
+      const me = await this.getMe(account, accountId);
+
+      const result = await client.v2.like(me.id, tweetId);
+
+      this.logger.info(`Liked tweet ${tweetId}`);
+
+      return {
+        ok: true,
+        liked: result.data.liked,
+      };
+    } catch (error: unknown) {
+      const errorMsg = this.extractApiError(error);
+      this.logger.error(`Failed to like tweet ${tweetId}: ${errorMsg}`);
+      return {
+        ok: false,
+        error: errorMsg,
+      };
+    }
+  }
+
+  /**
+   * Unlike a tweet
+   */
+  async unlikeTweet(
+    account: XAccountConfig,
+    accountId: string,
+    tweetId: string,
+  ): Promise<XLikeResult> {
+    try {
+      const client = this.getClient(account, accountId);
+      const me = await this.getMe(account, accountId);
+
+      const result = await client.v2.unlike(me.id, tweetId);
+
+      this.logger.info(`Unliked tweet ${tweetId}`);
+
+      return {
+        ok: true,
+        liked: result.data.liked,
+      };
+    } catch (error: unknown) {
+      const errorMsg = this.extractApiError(error);
+      this.logger.error(`Failed to unlike tweet ${tweetId}: ${errorMsg}`);
+      return {
+        ok: false,
+        error: errorMsg,
+      };
+    }
+  }
+
+  /**
+   * Extract error message from twitter-api-v2 errors
+   */
+  private extractApiError(error: unknown): string {
+    let errorMsg = error instanceof Error ? error.message : String(error);
+
+    const apiError = error as {
+      code?: number;
+      data?: { detail?: string; title?: string; errors?: Array<{ message?: string }> };
+    };
+    if (apiError.data) {
+      const detail = apiError.data.detail || apiError.data.title || "";
+      const errors = apiError.data.errors?.map((e) => e.message).join(", ") || "";
+      if (detail || errors) {
+        errorMsg = `${errorMsg} - ${detail} ${errors}`.trim();
+      }
+      this.logger.error(`X API error details: ${JSON.stringify(apiError.data)}`);
+    }
+
+    return errorMsg;
+  }
+
+  /**
    * Remove a client from the cache
    */
   removeClient(accountId: string): void {
@@ -241,11 +517,20 @@ export class XClientManager {
 // Global client manager registry (one per account)
 const clientManagers = new Map<string, XClientManager>();
 
-export function getOrCreateClientManager(accountId: string, logger: XLogSink): XClientManager {
-  let manager = clientManagers.get(accountId);
+export type XClientManagerOptions = {
+  proxyUrl?: string;
+};
+
+export function getOrCreateClientManager(
+  accountId: string,
+  logger: XLogSink,
+  options?: XClientManagerOptions,
+): XClientManager {
+  const cacheKey = options?.proxyUrl ? `${accountId}:${options.proxyUrl}` : accountId;
+  let manager = clientManagers.get(cacheKey);
   if (!manager) {
-    manager = new XClientManager(logger);
-    clientManagers.set(accountId, manager);
+    manager = new XClientManager(logger, { proxyUrl: options?.proxyUrl });
+    clientManagers.set(cacheKey, manager);
   }
   return manager;
 }

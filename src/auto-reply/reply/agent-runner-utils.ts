@@ -30,12 +30,21 @@ export function buildThreadingToolContext(params: {
   const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
   // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
   const dock = provider ? getChannelDock(provider) : undefined;
+  const originatingChannel =
+    typeof sessionCtx.OriginatingChannel === "string"
+      ? sessionCtx.OriginatingChannel.trim().toLowerCase()
+      : undefined;
+  const originatingSenderId =
+    typeof sessionCtx.SenderId === "string" ? sessionCtx.SenderId.trim() || undefined : undefined;
+  const baseContext = {
+    currentChannelId: sessionCtx.To?.trim() || undefined,
+    currentChannelProvider: provider ?? (rawProvider as ChannelId),
+    hasRepliedRef,
+    originatingChannel: originatingChannel || undefined,
+    originatingSenderId: originatingSenderId || undefined,
+  };
   if (!dock?.threading?.buildToolContext) {
-    return {
-      currentChannelId: sessionCtx.To?.trim() || undefined,
-      currentChannelProvider: provider ?? (rawProvider as ChannelId),
-      hasRepliedRef,
-    };
+    return baseContext;
   }
   const context =
     dock.threading.buildToolContext({
@@ -54,6 +63,7 @@ export function buildThreadingToolContext(params: {
     }) ?? {};
   return {
     ...context,
+    ...baseContext,
     currentChannelProvider: provider!, // guaranteed non-null since dock exists
   };
 }

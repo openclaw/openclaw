@@ -7,13 +7,11 @@
 
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { getStartupChatIds, type ResolvedFeishuAccount } from "./accounts.js";
 import type { FeishuMessageContext } from "./monitor.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { dispatchInboundMessageWithBufferedDispatcher } from "../auto-reply/dispatch.js";
-import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { normalizeCommandBody } from "../auto-reply/commands-registry.js";
+import { dispatchInboundMessageWithBufferedDispatcher } from "../auto-reply/dispatch.js";
+import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -22,9 +20,12 @@ import { danger } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { formatUncaughtError } from "../infra/errors.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { loadWebMedia } from "../web/media.js";
-import { sendMediaFeishu, sendMessageFeishu } from "./send.js";
+import { getStartupChatIds, type ResolvedFeishuAccount } from "./accounts.js";
 import { downloadFeishuInboundMedia, type FeishuInboundMedia } from "./download.js";
+import { sendMediaFeishu, sendMessageFeishu } from "./send.js";
+import { handleXCommand } from "./x-commands.js";
 
 // Message deduplication cache to prevent processing duplicate messages
 const feishuMessageDedupe = createDedupeCache({
@@ -261,6 +262,31 @@ export async function dispatchFeishuMessage(params: DispatchFeishuMessageParams)
   if (!rawMessageText) {
     log(`feishu: skipping empty message (no text/media)`);
     return;
+  }
+
+  // Handle X commands (e.g., /x follow @username)
+  // These are intercepted before agent dispatch for direct execution
+  try {
+    const xResult = await handleXCommand(rawMessageText, cfg, { accountId: account.accountId });
+    if (xResult.handled) {
+      log(`feishu: X command handled - success=${xResult.success}`);
+      const replyText = xResult.success ? xResult.message : `❌ ${xResult.error}`;
+      if (replyText) {
+        await sendMessageFeishu({
+          to: ctx.chatId,
+          text: replyText,
+          accountId: account.accountId,
+          config: cfg,
+          receiveIdType: "chat_id",
+          autoRichText: false,
+          runtime,
+        });
+      }
+      return; // X command handled, skip agent dispatch
+    }
+  } catch (xErr) {
+    runtime?.error?.(danger(`feishu: X command error: ${formatUncaughtError(xErr)}`));
+    // Continue with normal message processing on X command error
   }
 
   // Normalize command body (strip bot mention prefix if present)

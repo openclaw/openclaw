@@ -254,6 +254,10 @@ type MessageToolOptions = {
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
+  /** Channel where the control message originated (e.g. "x", "feishu"). Used for X reply permission. */
+  originatingChannel?: string;
+  /** Sender ID of the control message. When originating from X, x-reply only allowed to this user's tweets. */
+  originatingSenderId?: string;
 };
 
 function buildMessageToolSchema(cfg: OpenClawConfig) {
@@ -394,13 +398,17 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         options?.currentChannelProvider ||
         options?.currentThreadTs ||
         options?.replyToMode ||
-        options?.hasRepliedRef
+        options?.hasRepliedRef ||
+        options?.originatingChannel ||
+        options?.originatingSenderId
           ? {
               currentChannelId: options?.currentChannelId,
               currentChannelProvider: options?.currentChannelProvider,
               currentThreadTs: options?.currentThreadTs,
               replyToMode: options?.replyToMode,
               hasRepliedRef: options?.hasRepliedRef,
+              originatingChannel: options?.originatingChannel,
+              originatingSenderId: options?.originatingSenderId,
               // Direct tool invocations should not add cross-context decoration.
               // The agent is composing a message, not forwarding from another chat.
               skipCrossContextDecoration: true,
