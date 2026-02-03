@@ -16,6 +16,8 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
+  quoteTimestamp?: number;
+  quoteAuthor?: string;
 };
 
 export type SignalSendResult = {
@@ -201,6 +203,12 @@ export async function sendMessageSignal(
   }
   if (attachments && attachments.length > 0) {
     params.attachments = attachments;
+  }
+
+  // Quote support for replies
+  if (opts.quoteTimestamp && opts.quoteAuthor) {
+    params.quoteTimestamp = opts.quoteTimestamp;
+    params.quoteAuthor = opts.quoteAuthor;
   }
 
   const targetParams = buildTargetParams(target, {

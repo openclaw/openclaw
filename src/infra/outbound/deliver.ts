@@ -22,6 +22,7 @@ import {
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
+import { parseSignalQuoteParams } from "../../signal/quote-params.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 
@@ -268,6 +269,9 @@ export async function deliverOutboundPayloads(params: {
     }
   };
 
+  // Parse quote params for Signal quote-replies (replyToId is the message timestamp)
+  const signalQuoteParams = parseSignalQuoteParams(to, params.replyToId);
+
   const sendSignalText = async (text: string, styles: SignalTextStyleRange[]) => {
     throwIfAborted(abortSignal);
     return {
@@ -277,6 +281,7 @@ export async function deliverOutboundPayloads(params: {
         accountId: accountId ?? undefined,
         textMode: "plain",
         textStyles: styles,
+        ...signalQuoteParams,
       })),
     };
   };
@@ -314,6 +319,7 @@ export async function deliverOutboundPayloads(params: {
         accountId: accountId ?? undefined,
         textMode: "plain",
         textStyles: formatted.styles,
+        ...signalQuoteParams,
       })),
     };
   };

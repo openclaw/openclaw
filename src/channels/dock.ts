@@ -326,6 +326,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
           .filter(Boolean),
     },
     threading: {
+      resolveReplyToMode: ({ cfg }) => cfg.channels?.signal?.replyToMode ?? "off",
+      allowTagsWhenOff: true,
       buildToolContext: ({ context, hasRepliedRef }) => {
         const isDirect = context.ChatType?.toLowerCase() === "direct";
         const channelId =

@@ -527,7 +527,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       placeholder = "<media:attachment>";
     }
 
-    const bodyText = messageText || placeholder || dataMessage.quote?.text?.trim() || "";
+    // Build body text with quote context if present
+    let bodyText = messageText || placeholder || "";
+    const quote = dataMessage.quote;
+    if (quote?.text?.trim()) {
+      const quotedText = quote.text.trim();
+      if (bodyText) {
+        // Reply with quote: prepend quoted text
+        bodyText = `> ${quotedText}\n${bodyText}`;
+      } else {
+        // Quote only, no reply text
+        bodyText = quotedText;
+      }
+    }
     if (!bodyText) {
       return;
     }
