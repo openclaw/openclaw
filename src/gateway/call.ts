@@ -118,6 +118,7 @@ export async function callGateway<T = Record<string, unknown>>(
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
+  const hasUrlOverride = !!urlOverride;
   const remoteUrl =
     typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
   if (isRemoteMode && !urlOverride && !remoteUrl) {
@@ -152,32 +153,38 @@ export async function callGateway<T = Record<string, unknown>>(
     overrideTlsFingerprint ||
     remoteTlsFingerprint ||
     (tlsRuntime?.enabled ? tlsRuntime.fingerprintSha256 : undefined);
-  const token =
-    (typeof opts.token === "string" && opts.token.trim().length > 0
-      ? opts.token.trim()
-      : undefined) ||
-    (isRemoteMode
-      ? typeof remote?.token === "string" && remote.token.trim().length > 0
-        ? remote.token.trim()
-        : undefined
-      : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-        process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
-        (typeof authToken === "string" && authToken.trim().length > 0
-          ? authToken.trim()
-          : undefined));
-  const password =
-    (typeof opts.password === "string" && opts.password.trim().length > 0
+  const explicitToken =
+    typeof opts.token === "string" && opts.token.trim().length > 0 ? opts.token.trim() : undefined;
+  const explicitPassword =
+    typeof opts.password === "string" && opts.password.trim().length > 0
       ? opts.password.trim()
-      : undefined) ||
-    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-    process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
-    (isRemoteMode
-      ? typeof remote?.password === "string" && remote.password.trim().length > 0
-        ? remote.password.trim()
-        : undefined
-      : typeof authPassword === "string" && authPassword.trim().length > 0
-        ? authPassword.trim()
-        : undefined);
+      : undefined;
+  const token =
+    explicitToken ||
+    (!hasUrlOverride
+      ? isRemoteMode
+        ? typeof remote?.token === "string" && remote.token.trim().length > 0
+          ? remote.token.trim()
+          : undefined
+        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+          process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
+          (typeof authToken === "string" && authToken.trim().length > 0
+            ? authToken.trim()
+            : undefined)
+      : undefined);
+  const password =
+    explicitPassword ||
+    (!hasUrlOverride
+      ? process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
+        process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
+        (isRemoteMode
+          ? typeof remote?.password === "string" && remote.password.trim().length > 0
+            ? remote.password.trim()
+            : undefined
+          : typeof authPassword === "string" && authPassword.trim().length > 0
+            ? authPassword.trim()
+            : undefined)
+      : undefined);
 
   const formatCloseError = (code: number, reason: string) => {
     const reasonText = reason?.trim() || "no close reason";

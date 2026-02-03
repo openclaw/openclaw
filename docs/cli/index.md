@@ -715,6 +715,8 @@ openclaw logs --no-color
 ### `gateway <subcommand>`
 
 Gateway CLI helpers (use `--url`, `--token`, `--password`, `--timeout`, `--expect-final` for RPC subcommands).
+When you pass `--url`, the CLI does not auto-apply config/env credentials, so include
+`--token` or `--password` explicitly.
 
 Subcommands:
 
