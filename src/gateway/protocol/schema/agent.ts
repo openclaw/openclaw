@@ -84,6 +84,7 @@ export const AgentIdentityResultSchema = Type.Object(
     agentId: NonEmptyString,
     name: Type.Optional(NonEmptyString),
     avatar: Type.Optional(NonEmptyString),
+    emoji: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

@@ -18,23 +18,35 @@ function normalizeRole(role: string): string {
 }
 
 function normalizeScopes(scopes: string[] | undefined): string[] {
-  if (!Array.isArray(scopes)) return [];
+  if (!Array.isArray(scopes)) {
+    return [];
+  }
   const out = new Set<string>();
   for (const scope of scopes) {
     const trimmed = scope.trim();
-    if (trimmed) out.add(trimmed);
+    if (trimmed) {
+      out.add(trimmed);
+    }
   }
-  return [...out].sort();
+  return [...out].toSorted();
 }
 
 function readStore(): DeviceAuthStore | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
+    if (!raw) {
+      return null;
+    }
     const parsed = JSON.parse(raw) as DeviceAuthStore;
-    if (!parsed || parsed.version !== 1) return null;
-    if (!parsed.deviceId || typeof parsed.deviceId !== "string") return null;
-    if (!parsed.tokens || typeof parsed.tokens !== "object") return null;
+    if (!parsed || parsed.version !== 1) {
+      return null;
+    }
+    if (!parsed.deviceId || typeof parsed.deviceId !== "string") {
+      return null;
+    }
+    if (!parsed.tokens || typeof parsed.tokens !== "object") {
+      return null;
+    }
     return parsed;
   } catch {
     return null;
@@ -54,10 +66,14 @@ export function loadDeviceAuthToken(params: {
   role: string;
 }): DeviceAuthEntry | null {
   const store = readStore();
-  if (!store || store.deviceId !== params.deviceId) return null;
+  if (!store || store.deviceId !== params.deviceId) {
+    return null;
+  }
   const role = normalizeRole(params.role);
   const entry = store.tokens[role];
-  if (!entry || typeof entry.token !== "string") return null;
+  if (!entry || typeof entry.token !== "string") {
+    return null;
+  }
   return entry;
 }
 
@@ -90,9 +106,13 @@ export function storeDeviceAuthToken(params: {
 
 export function clearDeviceAuthToken(params: { deviceId: string; role: string }) {
   const store = readStore();
-  if (!store || store.deviceId !== params.deviceId) return;
+  if (!store || store.deviceId !== params.deviceId) {
+    return;
+  }
   const role = normalizeRole(params.role);
-  if (!store.tokens[role]) return;
+  if (!store.tokens[role]) {
+    return;
+  }
   const next = { ...store, tokens: { ...store.tokens } };
   delete next.tokens[role];
   writeStore(next);

@@ -43,7 +43,7 @@ const processSchema = Type.Object({
 
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
-  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any> {
   if (defaults?.cleanupMs !== undefined) {
     setJobTtlMs(defaults.cleanupMs);

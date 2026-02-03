@@ -78,6 +78,7 @@ describe("normalizeForwardedContext", () => {
         sender_user: { first_name: "Ada", last_name: "Lovelace", username: "ada", id: 42 },
         date: 123,
       },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Ada Lovelace (@ada)");
@@ -91,6 +92,7 @@ describe("normalizeForwardedContext", () => {
   it("handles hidden forward_origin names", () => {
     const ctx = normalizeForwardedContext({
       forward_origin: { type: "hidden_user", sender_user_name: "Hidden Name", date: 456 },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Hidden Name");
@@ -109,6 +111,7 @@ describe("normalizeForwardedContext", () => {
       },
       forward_signature: "Stan",
       forward_date: 789,
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("OpenClaw Updates (Stan)");
@@ -124,6 +127,7 @@ describe("normalizeForwardedContext", () => {
     const ctx = normalizeForwardedContext({
       forward_sender_name: "Legacy Hidden",
       forward_date: 111,
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
     expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Legacy Hidden");
