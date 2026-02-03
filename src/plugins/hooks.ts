@@ -25,9 +25,6 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
   PluginHookName,
-  PluginHookPreLlmRequestContext,
-  PluginHookPreLlmRequestEvent,
-  PluginHookPreLlmRequestResult,
   PluginHookRegistration,
   PluginHookSessionContext,
   PluginHookSessionEndEvent,
@@ -64,9 +61,6 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
-  PluginHookPreLlmRequestContext,
-  PluginHookPreLlmRequestEvent,
-  PluginHookPreLlmRequestResult,
 };
 
 export type HookRunnerLogger = {
@@ -430,30 +424,6 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
-  // LLM Request Hooks
-  // =========================================================================
-
-  /**
-   * Run pre_llm_request hook.
-   * Allows plugins to modify messages before they are sent to the LLM.
-   * Runs sequentially, merging messages and prompt from all handlers.
-   */
-  async function runPreLlmRequest(
-    event: PluginHookPreLlmRequestEvent,
-    ctx: PluginHookPreLlmRequestContext,
-  ): Promise<PluginHookPreLlmRequestResult | undefined> {
-    return runModifyingHook<"pre_llm_request", PluginHookPreLlmRequestResult>(
-      "pre_llm_request",
-      event,
-      ctx,
-      (acc, next) => ({
-        messages: next.messages ?? acc?.messages,
-        prompt: next.prompt ?? acc?.prompt,
-      }),
-    );
-  }
-
-  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -491,8 +461,6 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
-    // LLM request hooks
-    runPreLlmRequest,
     // Utility
     hasHooks,
     getHookCount,

@@ -814,37 +814,30 @@ export async function runEmbeddedAttempt(
             });
           }
 
-          // Run pre_llm_request hook to allow plugins to modify messages before LLM call
-          if (hookRunner?.hasHooks("pre_llm_request")) {
-            try {
-              const preLlmResult = await hookRunner.runPreLlmRequest(
+          // HARDCODED OPTIMIZATION: Inject Anthropic cache headers for system prompt
+          // This saves ~90% on system prompt tokens by marking it as cacheable
+          // Note: For OpenRouter with Claude models, cache_control headers enable prompt caching
+          const isAnthropicModel =
+            params.provider?.includes("anthropic") || params.modelId?.includes("claude");
+
+          if (isAnthropicModel) {
+            // Cast to any to access system messages which may exist at runtime
+            // but aren't in the AgentMessage type definition
+            const messages = activeSession.messages as unknown as Array<{
+              role: string;
+              content: unknown;
+            }>;
+            const sysMsg = messages.find((m) => m.role === "system");
+            if (sysMsg && typeof sysMsg.content === "string") {
+              // Convert string content to content blocks with cache_control
+              sysMsg.content = [
                 {
-                  prompt: effectivePrompt,
-                  messages: activeSession.messages,
-                  images: imageResult.images,
+                  type: "text",
+                  text: sysMsg.content,
+                  cache_control: { type: "ephemeral" },
                 },
-                {
-                  agentId: params.sessionKey?.split(":")[0] ?? "main",
-                  sessionKey: params.sessionKey,
-                  workspaceDir: params.workspaceDir,
-                  provider: params.provider,
-                  modelId: params.modelId,
-                },
-              );
-              if (preLlmResult?.messages) {
-                activeSession.agent.replaceMessages(preLlmResult.messages);
-                log.debug(
-                  `pre_llm_request hook modified messages (${preLlmResult.messages.length} messages)`,
-                );
-              }
-              if (preLlmResult?.prompt) {
-                effectivePrompt = preLlmResult.prompt;
-                log.debug(
-                  `pre_llm_request hook modified prompt (${preLlmResult.prompt.length} chars)`,
-                );
-              }
-            } catch (hookErr) {
-              log.warn(`pre_llm_request hook failed: ${String(hookErr)}`);
+              ];
+              log.debug("Injected Anthropic cache_control header on system prompt");
             }
           }
 
