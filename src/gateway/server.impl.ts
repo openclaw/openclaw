@@ -435,6 +435,7 @@ export async function startGatewayServer(
   } = runtimeConfig;
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
+  const canvasHostAdvertisedUrl = runtimeConfig.canvasHostAdvertisedUrl;
 
   // Create auth rate limiters used by connect/auth flows.
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
@@ -709,6 +710,7 @@ export async function startGatewayServer(
     gatewayHost: bindHost ?? undefined,
     canvasHostEnabled: Boolean(canvasHost),
     canvasHostServerPort,
+    canvasHostAdvertisedUrl,
     resolvedAuth,
     rateLimiter: authRateLimiter,
     browserRateLimiter: browserAuthRateLimiter,
