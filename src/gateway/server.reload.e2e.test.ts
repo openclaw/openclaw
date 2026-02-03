@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   connectOk,
@@ -6,6 +8,8 @@ import {
   rpcReq,
   startGatewayServer,
   startServerWithClient,
+  testState,
+  writeSessionStore,
 } from "./test-helpers.js";
 
 const hoisted = vi.hoisted(() => {
@@ -306,6 +310,35 @@ describe("gateway agents", () => {
     const res = await rpcReq<{ agents: Array<{ id: string }> }>(ws, "agents.list", {});
     expect(res.ok).toBe(true);
     expect(res.payload?.agents.map((agent) => agent.id)).toContain("main");
+    ws.close();
+    await server.close();
+  });
+
+  it("describes an agent via agents.describe RPC", async () => {
+    const storePath = path.join(os.tmpdir(), `openclaw-agents-describe-${Date.now()}.json`);
+    testState.sessionStorePath = storePath;
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-1", updatedAt: Date.now() - 1000 },
+        "discord:group:dev": { sessionId: "sess-2", updatedAt: Date.now() - 2000 },
+      },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+    const res = await rpcReq<{
+      agentId: string;
+      agent: { id: string };
+      files?: unknown[];
+      activeSessions?: { count: number };
+      bindings: unknown[];
+    }>(ws, "agents.describe", { agentId: "main", includeFiles: true, includeSessions: true });
+    expect(res.ok).toBe(true);
+    expect(res.payload?.agentId).toBe("main");
+    expect(res.payload?.agent.id).toBe("main");
+    expect(Array.isArray(res.payload?.bindings)).toBe(true);
+    expect(Array.isArray(res.payload?.files)).toBe(true);
+    expect(res.payload?.activeSessions?.count).toBe(2);
     ws.close();
     await server.close();
   });

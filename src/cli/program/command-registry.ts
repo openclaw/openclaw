@@ -92,7 +92,8 @@ const routeAgentsList: RouteSpec = {
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
     const bindings = hasFlag(argv, "--bindings");
-    await agentsListCommand({ json, bindings }, defaultRuntime);
+    const verbose = hasFlag(argv, "--verbose");
+    await agentsListCommand({ json, bindings, verbose }, defaultRuntime);
     return true;
   },
 };

@@ -67,6 +67,7 @@ const READ_METHODS = new Set([
   "tts.providers",
   "models.list",
   "agents.list",
+  "agents.describe",
   "agent.identity.get",
   "skills.status",
   "voicewake.get",

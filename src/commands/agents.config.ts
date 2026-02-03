@@ -26,6 +26,27 @@ export type AgentSummary = {
   routes?: string[];
   providers?: string[];
   isDefault: boolean;
+  verbose?: {
+    model?: { primary?: string; fallbacks?: string[] };
+    runtime?: "pi" | "claude";
+    tools?: {
+      allow?: string[];
+      deny?: string[];
+      sandbox?: { allow?: string[]; deny?: string[] };
+    };
+    sandbox?: {
+      mode?: string;
+      scope?: string;
+      workspaceAccess?: string;
+    };
+    gateway?: {
+      /** Sessions updated within `activeWindowMinutes` (when Gateway is reachable). */
+      activeSessions?: number;
+      activeWindowMinutes?: number;
+      /** Most recent `updatedAt` timestamp across all sessions for the agent. */
+      lastActivityAt?: number;
+    };
+  };
 };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];

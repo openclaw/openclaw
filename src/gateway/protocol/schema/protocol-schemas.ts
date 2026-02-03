@@ -11,6 +11,8 @@ import {
 } from "./agent.js";
 import {
   AgentSummarySchema,
+  AgentsDescribeParamsSchema,
+  AgentsDescribeResultSchema,
   AgentsFileEntrySchema,
   AgentsFilesGetParamsSchema,
   AgentsFilesGetResultSchema,
@@ -213,6 +215,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   AgentsFilesSetResult: AgentsFilesSetResultSchema,
   AgentsListParams: AgentsListParamsSchema,
   AgentsListResult: AgentsListResultSchema,
+  AgentsDescribeParams: AgentsDescribeParamsSchema,
+  AgentsDescribeResult: AgentsDescribeResultSchema,
   ModelChoice: ModelChoiceSchema,
   ModelsListParams: ModelsListParamsSchema,
   ModelsListResult: ModelsListResultSchema,

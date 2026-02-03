@@ -70,6 +70,42 @@ Verify with:
 openclaw agents list --bindings
 ```
 
+## When to create a new agent
+
+Create a new agent when you need **true isolation**:
+
+- **Different humans:** each person should have their own `agentId` (separate sessions + memory + auth).
+- **Different channel accounts:** keep WhatsApp/Telegram/Discord accounts isolated per agent (auth profiles are per-agent).
+- **Different workspaces:** separate files, prompts, policies, and long-lived notes (`AGENTS.md`, `SOUL.md`, `USER.md`).
+- **Different runtime or model:** e.g. one agent on `claude` runtime for coding tasks, another on `pi` for chat.
+- **Different sandbox/tool policy:** lock down a “high-trust” agent vs a “read-only” agent with sandboxing.
+
+Avoid creating a new agent if you only need a different routing rule for a specific peer/group and you’re fine sharing
+the same workspace + auth + session store — use a binding instead.
+
+## Inspect agents
+
+Use `--verbose` to see full paths and key per-agent overrides:
+
+```bash
+openclaw agents list --verbose
+```
+
+Example (abridged):
+
+```text
+Agents:
+- main (default)
+  Workspace: /Users/<user>/.openclaw/workspace
+  Agent dir: /Users/<user>/.openclaw/agents/main/agent
+  Model: anthropic/claude-opus-4-5
+  Model fallbacks: anthropic/claude-sonnet-4-5
+  Runtime: pi
+  Sandbox: non-main scope=agent workspaceAccess=ro
+  Active sessions: 3 (last 60m)
+  Last activity: 2026-02-03T18:41:12.345Z
+```
+
 ## Multiple agents = multiple people, multiple personalities
 
 With **multiple agents**, each `agentId` becomes a **fully isolated persona**:

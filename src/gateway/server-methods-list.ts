@@ -32,6 +32,7 @@ const BASE_METHODS = [
   "talk.mode",
   "models.list",
   "agents.list",
+  "agents.describe",
   "agents.files.list",
   "agents.files.get",
   "agents.files.set",

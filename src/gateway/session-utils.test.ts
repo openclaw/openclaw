@@ -7,6 +7,7 @@ import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  listAgentsForGateway,
   listSessionsFromStore,
   parseGroupKey,
   resolveGatewaySessionStoreTarget,
@@ -91,6 +92,58 @@ describe("gateway session utils", () => {
     expect(target.canonicalKey).toBe("agent:ops:main");
     expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:main", "main"]));
     expect(target.storePath).toBe(path.resolve(storeTemplate.replace("{agentId}", "ops")));
+  });
+
+  test("listAgentsForGateway includes runtime/model/workspace/tool/sandbox info", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          sandbox: { mode: "non-main", scope: "agent" },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            name: "Main",
+            runtime: "claude",
+            workspace: "/tmp/openclaw-ws-main",
+            agentDir: "/tmp/openclaw-agent-main",
+            tools: { allow: ["status"], deny: [] },
+            sandbox: { mode: "all", scope: "session" },
+          },
+          {
+            id: "ops",
+            name: "Ops",
+            workspace: "/tmp/openclaw-ws-ops",
+            tools: { deny: ["sandbox"] },
+          },
+        ],
+      },
+      session: { mainKey: "main", scope: "per-sender" },
+    } as unknown as OpenClawConfig;
+
+    const res = listAgentsForGateway(cfg);
+    expect(res.defaultId).toBe("main");
+    expect(res.agents.map((a) => a.id)).toEqual(expect.arrayContaining(["main", "ops"]));
+
+    const main = res.agents.find((a) => a.id === "main");
+    expect(main?.runtime).toBe("claude");
+    expect(main?.model).toBe("anthropic/claude-opus-4-5");
+    expect(main?.workspace).toBe("/tmp/openclaw-ws-main");
+    expect(main?.agentDir).toBe("/tmp/openclaw-agent-main");
+    expect(main?.toolRestrictions?.allow).toEqual(["status"]);
+    expect(main?.toolRestrictions?.deny).toEqual([]);
+    expect(main?.sandbox?.mode).toBe("all");
+    expect(main?.sandbox?.scope).toBe("session");
+
+    const ops = res.agents.find((a) => a.id === "ops");
+    expect(ops?.runtime).toBe("pi");
+    expect(ops?.model).toBe("anthropic/claude-opus-4-5");
+    expect(ops?.workspace).toBe("/tmp/openclaw-ws-ops");
+    expect(ops?.toolRestrictions?.deny).toEqual(["sandbox"]);
+    expect(ops?.sandbox?.mode).toBe("non-main");
+    expect(ops?.sandbox?.scope).toBe("agent");
   });
 });
 

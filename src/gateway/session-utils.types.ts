@@ -54,6 +54,12 @@ export type GatewaySessionRow = {
 export type GatewayAgentRow = {
   id: string;
   name?: string;
+  model?: string;
+  runtime?: "pi" | "claude";
+  workspace?: string;
+  agentDir?: string;
+  toolRestrictions?: { allow?: string[]; deny?: string[] };
+  sandbox?: { mode: string; scope?: string };
   identity?: {
     name?: string;
     theme?: string;

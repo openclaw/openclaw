@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { GatewayRequestHandlers } from "./types.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { loadAgentIdentityFromWorkspace } from "../../agents/identity-file.js";
 import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -14,17 +15,18 @@ import {
   DEFAULT_USER_FILENAME,
 } from "../../agents/workspace.js";
 import { loadConfig } from "../../config/config.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateAgentsDescribeParams,
   validateAgentsFilesGetParams,
   validateAgentsFilesListParams,
   validateAgentsFilesSetParams,
   validateAgentsListParams,
 } from "../protocol/index.js";
-import { listAgentsForGateway } from "../session-utils.js";
+import { listAgentsForGateway, loadCombinedSessionStoreForGateway } from "../session-utils.js";
 
 const BOOTSTRAP_FILE_NAMES = [
   DEFAULT_AGENTS_FILENAME,
@@ -123,6 +125,50 @@ function resolveAgentIdOrError(agentIdRaw: string, cfg: ReturnType<typeof loadCo
   return agentId;
 }
 
+function resolveIdentityFromFile(workspaceDir: string) {
+  const identity = loadAgentIdentityFromWorkspace(workspaceDir);
+  if (!identity) {
+    return null;
+  }
+  const avatar = identity.avatar?.trim();
+  const avatarUrl =
+    avatar &&
+    (avatar.startsWith("data:") || avatar.startsWith("http://") || avatar.startsWith("https://"))
+      ? avatar
+      : undefined;
+  return {
+    ...(identity.name ? { name: identity.name } : {}),
+    ...(identity.theme ? { theme: identity.theme } : {}),
+    ...(identity.emoji ? { emoji: identity.emoji } : {}),
+    ...(identity.avatar ? { avatar: identity.avatar } : {}),
+    ...(avatarUrl ? { avatarUrl } : {}),
+  };
+}
+
+function computeAgentSessionStats(cfg: ReturnType<typeof loadConfig>, agentId: string) {
+  const { store } = loadCombinedSessionStoreForGateway(cfg);
+  let count = 0;
+  let lastActivityAt: number | undefined;
+  for (const [key, entry] of Object.entries(store)) {
+    if (key === "global" || key === "unknown") {
+      continue;
+    }
+    const parsed = parseAgentSessionKey(key);
+    if (!parsed) {
+      continue;
+    }
+    if (normalizeAgentId(parsed.agentId) !== agentId) {
+      continue;
+    }
+    count += 1;
+    const updatedAt = entry?.updatedAt ?? null;
+    if (typeof updatedAt === "number" && (!lastActivityAt || updatedAt > lastActivityAt)) {
+      lastActivityAt = updatedAt;
+    }
+  }
+  return { count, ...(lastActivityAt ? { lastActivityAt } : {}) };
+}
+
 export const agentsHandlers: GatewayRequestHandlers = {
   "agents.list": ({ params, respond }) => {
     if (!validateAgentsListParams(params)) {
@@ -140,6 +186,60 @@ export const agentsHandlers: GatewayRequestHandlers = {
     const cfg = loadConfig();
     const result = listAgentsForGateway(cfg);
     respond(true, result, undefined);
+  },
+  "agents.describe": async ({ params, respond }) => {
+    if (!validateAgentsDescribeParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agents.describe params: ${formatValidationErrors(
+            validateAgentsDescribeParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+
+    const cfg = loadConfig();
+    const agentId = resolveAgentIdOrError(String(params.agentId ?? ""), cfg);
+    if (!agentId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+      return;
+    }
+
+    const includeFiles = params.includeFiles === true;
+    const includeSessions = params.includeSessions === true;
+
+    const list = listAgentsForGateway(cfg);
+    const agent = list.agents.find((row) => normalizeAgentId(row.id) === agentId);
+    if (!agent) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+      return;
+    }
+
+    const bindings = (cfg.bindings ?? []).filter(
+      (binding) => normalizeAgentId(binding.agentId) === agentId,
+    );
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const identity = resolveIdentityFromFile(workspaceDir);
+
+    const files = includeFiles ? await listAgentFiles(workspaceDir) : undefined;
+    const activeSessions = includeSessions ? computeAgentSessionStats(cfg, agentId) : undefined;
+
+    respond(
+      true,
+      {
+        agentId,
+        agent,
+        bindings,
+        ...(identity ? { identity } : {}),
+        ...(files ? { files } : {}),
+        ...(activeSessions ? { activeSessions } : {}),
+      },
+      undefined,
+    );
   },
   "agents.files.list": async ({ params, respond }) => {
     if (!validateAgentsFilesListParams(params)) {

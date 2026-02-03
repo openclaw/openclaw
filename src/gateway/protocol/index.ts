@@ -27,6 +27,10 @@ import {
   AgentsListParamsSchema,
   type AgentsListResult,
   AgentsListResultSchema,
+  type AgentsDescribeParams,
+  AgentsDescribeParamsSchema,
+  type AgentsDescribeResult,
+  AgentsDescribeResultSchema,
   type AgentWaitParams,
   AgentWaitParamsSchema,
   type ChannelsLogoutParams,
@@ -294,6 +298,9 @@ export const validateAgentIdentityParams =
 export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(AgentWaitParamsSchema);
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
 export const validateAgentsListParams = ajv.compile<AgentsListParams>(AgentsListParamsSchema);
+export const validateAgentsDescribeParams = ajv.compile<AgentsDescribeParams>(
+  AgentsDescribeParamsSchema,
+);
 export const validateAgentsFilesListParams = ajv.compile<AgentsFilesListParams>(
   AgentsFilesListParamsSchema,
 );
@@ -559,6 +566,8 @@ export {
   AgentsFilesSetResultSchema,
   AgentsListParamsSchema,
   AgentsListResultSchema,
+  AgentsDescribeParamsSchema,
+  AgentsDescribeResultSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   SkillsInstallParamsSchema,
@@ -671,6 +680,8 @@ export type {
   AgentsFilesSetResult,
   AgentsListParams,
   AgentsListResult,
+  AgentsDescribeParams,
+  AgentsDescribeResult,
   SkillsStatusParams,
   SkillsBinsParams,
   SkillsBinsResult,

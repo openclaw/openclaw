@@ -12,22 +12,46 @@ export const ModelChoiceSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentIdentitySchema = Type.Object(
+  {
+    name: Type.Optional(NonEmptyString),
+    theme: Type.Optional(NonEmptyString),
+    emoji: Type.Optional(NonEmptyString),
+    avatar: Type.Optional(NonEmptyString),
+    avatarUrl: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentSummarySchema = Type.Object(
   {
     id: NonEmptyString,
     name: Type.Optional(NonEmptyString),
-    identity: Type.Optional(
+    model: Type.Optional(NonEmptyString),
+    runtime: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("claude")])),
+    workspace: Type.Optional(NonEmptyString),
+    agentDir: Type.Optional(NonEmptyString),
+    toolRestrictions: Type.Optional(
       Type.Object(
         {
-          name: Type.Optional(NonEmptyString),
-          theme: Type.Optional(NonEmptyString),
-          emoji: Type.Optional(NonEmptyString),
-          avatar: Type.Optional(NonEmptyString),
-          avatarUrl: Type.Optional(NonEmptyString),
+          allow: Type.Optional(Type.Array(NonEmptyString)),
+          deny: Type.Optional(Type.Array(NonEmptyString)),
         },
         { additionalProperties: false },
       ),
     ),
+    sandbox: Type.Optional(
+      Type.Object(
+        {
+          mode: Type.Union([Type.Literal("off"), Type.Literal("non-main"), Type.Literal("all")]),
+          scope: Type.Optional(
+            Type.Union([Type.Literal("session"), Type.Literal("agent"), Type.Literal("shared")]),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    identity: Type.Optional(AgentIdentitySchema),
   },
   { additionalProperties: false },
 );
@@ -104,6 +128,35 @@ export const AgentsFilesSetResultSchema = Type.Object(
     agentId: NonEmptyString,
     workspace: NonEmptyString,
     file: AgentsFileEntrySchema,
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsDescribeParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    includeFiles: Type.Optional(Type.Boolean()),
+    includeSessions: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsDescribeResultSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    agent: AgentSummarySchema,
+    bindings: Type.Array(Type.Unknown()),
+    identity: Type.Optional(AgentIdentitySchema),
+    files: Type.Optional(Type.Array(AgentsFileEntrySchema)),
+    activeSessions: Type.Optional(
+      Type.Object(
+        {
+          count: Type.Integer({ minimum: 0 }),
+          lastActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

@@ -9,6 +9,8 @@ import type {
 } from "./agent.js";
 import type {
   AgentSummarySchema,
+  AgentsDescribeParamsSchema,
+  AgentsDescribeResultSchema,
   AgentsFileEntrySchema,
   AgentsFilesGetParamsSchema,
   AgentsFilesGetResultSchema,
@@ -207,6 +209,8 @@ export type AgentsFilesSetParams = Static<typeof AgentsFilesSetParamsSchema>;
 export type AgentsFilesSetResult = Static<typeof AgentsFilesSetResultSchema>;
 export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
+export type AgentsDescribeParams = Static<typeof AgentsDescribeParamsSchema>;
+export type AgentsDescribeResult = Static<typeof AgentsDescribeResultSchema>;
 export type ModelChoice = Static<typeof ModelChoiceSchema>;
 export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
