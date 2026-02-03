@@ -78,7 +78,7 @@ async function extractZip(params: { archivePath: string; destDir: string }): Pro
     const entryPath = entry.name.replaceAll("\\", "/");
     if (!entryPath || entryPath.endsWith("/")) {
       const dirPath = path.resolve(params.destDir, entryPath);
-      if (!dirPath.startsWith(params.destDir)) {
+      if (dirPath !== params.destDir && !dirPath.startsWith(params.destDir + path.sep)) {
         throw new Error(`zip entry escapes destination: ${entry.name}`);
       }
       await fs.mkdir(dirPath, { recursive: true });
@@ -86,7 +86,7 @@ async function extractZip(params: { archivePath: string; destDir: string }): Pro
     }
 
     const outPath = path.resolve(params.destDir, entryPath);
-    if (!outPath.startsWith(params.destDir)) {
+    if (outPath !== params.destDir && !outPath.startsWith(params.destDir + path.sep)) {
       throw new Error(`zip entry escapes destination: ${entry.name}`);
     }
     await fs.mkdir(path.dirname(outPath), { recursive: true });
