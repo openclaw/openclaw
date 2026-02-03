@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toSanitizedMarkdownHtml } from "./markdown";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 describe("toSanitizedMarkdownHtml", () => {
   it("renders basic markdown", () => {
