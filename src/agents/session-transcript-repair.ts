@@ -23,7 +23,12 @@ function extractToolCallsFromAssistant(
       continue;
     }
 
-    if (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") {
+    if (
+      rec.type === "toolCall" ||
+      rec.type === "toolUse" ||
+      rec.type === "tool_use" ||
+      rec.type === "functionCall"
+    ) {
       toolCalls.push({
         id: rec.id,
         name: typeof rec.name === "string" ? rec.name : undefined,
