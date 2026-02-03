@@ -1,6 +1,7 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { recordToolCall, updateWorkingMemory } from "./friday-optimizations/index.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import {
@@ -40,6 +41,9 @@ export async function handleToolExecutionStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
+  // FRIDAY OPTIMIZATION: Record tool call for cost guard
+  recordToolCall();
+
   // Flush pending block replies to preserve message boundaries before tool execution.
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
@@ -164,6 +168,16 @@ export function handleToolExecutionEnd(
   ctx.state.toolMetas.push({ toolName, meta });
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
+
+  // FRIDAY OPTIMIZATION: Update working memory with tool result summary
+  try {
+    const resultText = extractToolResultText(sanitizedResult);
+    const summary = `${toolName}: ${isToolError ? "ERROR" : "OK"}${meta ? ` (${meta})` : ""}${resultText ? ` - ${resultText.slice(0, 80)}` : ""}`;
+    updateWorkingMemory("tool_result", summary);
+  } catch {
+    // Don't fail on working memory errors
+  }
+
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
     ctx.state.lastToolError = {

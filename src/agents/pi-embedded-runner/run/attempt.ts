@@ -29,6 +29,17 @@ import {
 } from "../../channel-tools.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import {
+  getWorkingMemoryContext,
+  hasActiveWorkingMemory,
+  updateWorkingMemory,
+  checkCost,
+  recordCost,
+  recordToolCall,
+  resetRun,
+  getCostStatusString,
+  recordCacheInjection,
+} from "../../friday-optimizations/index.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import {
@@ -748,6 +759,21 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        // FRIDAY OPTIMIZATION: Inject working memory context
+        // This provides rolling context about current task, progress, and key facts
+        if (hasActiveWorkingMemory()) {
+          const workingMemoryContext = getWorkingMemoryContext();
+          if (workingMemoryContext) {
+            effectivePrompt = `${effectivePrompt}${workingMemoryContext}`;
+            log.info(
+              `[friday-opt] Injected working memory context (${workingMemoryContext.length} chars)`,
+            );
+          }
+        }
+
+        // FRIDAY OPTIMIZATION: Reset per-run cost counters
+        resetRun();
+
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,
@@ -803,6 +829,22 @@ export async function runEmbeddedAttempt(
             note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
           });
 
+          // FRIDAY OPTIMIZATION: Cost guard check before LLM call
+          // Estimates input tokens and checks against budget limits
+          const estimatedInputTokens = Math.ceil(
+            (effectivePrompt.length + JSON.stringify(activeSession.messages).length) / 4,
+          );
+          const costCheck = checkCost(estimatedInputTokens, params.modelId ?? "unknown");
+          if (!costCheck.allowed) {
+            log.warn(`[friday-opt] Cost guard BLOCKED call: ${costCheck.reason}`);
+            throw new Error(`Cost limit exceeded: ${costCheck.reason}`);
+          }
+          if (costCheck.suggestedModel) {
+            log.info(
+              `[friday-opt] Cost guard suggests downgrade to ${costCheck.suggestedModel} (budget ${getCostStatusString()})`,
+            );
+          }
+
           const shouldTrackCacheTtl =
             params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
             isCacheTtlEligibleProvider(params.provider, params.modelId);
@@ -837,7 +879,11 @@ export async function runEmbeddedAttempt(
                   cache_control: { type: "ephemeral" },
                 },
               ];
-              log.debug("Injected Anthropic cache_control header on system prompt");
+              // FRIDAY OPTIMIZATION: Record cache injection for metrics
+              recordCacheInjection(params.modelId ?? "unknown");
+              log.info(
+                `[friday-opt] Injected Anthropic cache_control header (model: ${params.modelId})`,
+              );
             }
           }
 
