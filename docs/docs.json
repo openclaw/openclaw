@@ -946,6 +946,7 @@
                   "concepts/agent",
                   "concepts/agent-loop",
                   "concepts/system-prompt",
+                  "concepts/secure-coding",
                   "concepts/context",
                   "concepts/agent-workspace",
                   "concepts/oauth"
