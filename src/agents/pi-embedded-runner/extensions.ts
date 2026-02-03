@@ -3,6 +3,7 @@ import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isSubagentSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
@@ -67,13 +68,6 @@ function buildContextPruningExtension(params: {
   };
 }
 
-function isSubagentSessionKey(sessionKey?: string): boolean {
-  if (!sessionKey) {
-    return false;
-  }
-  return sessionKey.includes(":subagent:");
-}
-
 function resolveCompactionMode(cfg?: OpenClawConfig, sessionKey?: string): "default" | "safeguard" {
   // For subagent sessions, check subagents.compaction config
   if (isSubagentSessionKey(sessionKey)) {
@@ -118,7 +112,9 @@ export function buildEmbeddedExtensionPaths(params: {
 }): string[] {
   const paths: string[] = [];
   if (resolveCompactionMode(params.cfg, params.sessionKey) === "safeguard") {
-    const compactionCfg = resolveCompactionConfig(params.cfg, params.sessionKey) as { maxHistoryShare?: number } | undefined;
+    const compactionCfg = resolveCompactionConfig(params.cfg, params.sessionKey) as
+      | { maxHistoryShare?: number }
+      | undefined;
     const contextWindowInfo = resolveContextWindowInfo({
       cfg: params.cfg,
       provider: params.provider,
