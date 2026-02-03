@@ -125,7 +125,7 @@ export async function executeJob(
       emit(state, { jobId: job.id, action: "removed" });
     }
 
-    if (job.sessionTarget === "isolated") {
+    if (job.sessionTarget === "isolated" && !job.delivery) {
       const prefix = job.isolation?.postToMainPrefix?.trim() || "Cron";
       const mode = job.isolation?.postToMainMode ?? "summary";
 

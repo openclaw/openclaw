@@ -46,9 +46,10 @@ export function registerCronEditCommand(cron: Command) {
       .option("--thinking <level>", "Thinking level for agent jobs")
       .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option("--announce", "Announce summary to a chat (subagent-style)")
       .option(
         "--deliver",
-        "Deliver agent output (required when using last-route delivery without --to)",
+        "Deliver full output to a chat (required when using last-route delivery without --to)",
       )
       .option("--no-deliver", "Disable delivery")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
@@ -73,6 +74,9 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (opts.session === "main" && typeof opts.postPrefix === "string") {
             throw new Error("--post-prefix only applies to isolated jobs.");
+          }
+          if (opts.announce && typeof opts.deliver === "boolean") {
+            throw new Error("Choose --announce, --deliver, or --no-deliver (not multiple).");
           }
 
           const patch: Record<string, unknown> = {};
@@ -151,15 +155,16 @@ export function registerCronEditCommand(cron: Command) {
             ? Number.parseInt(String(opts.timeoutSeconds), 10)
             : undefined;
           const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
+          const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
+          const hasDeliveryTarget = typeof opts.channel === "string" || typeof opts.to === "string";
+          const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
           const hasAgentTurnPatch =
             typeof opts.message === "string" ||
             Boolean(model) ||
             Boolean(thinking) ||
             hasTimeoutSeconds ||
-            typeof opts.deliver === "boolean" ||
-            typeof opts.channel === "string" ||
-            typeof opts.to === "string" ||
-            typeof opts.bestEffortDeliver === "boolean";
+            hasDeliveryModeFlag ||
+            (!hasDeliveryModeFlag && (hasDeliveryTarget || hasBestEffort));
           if (hasSystemEventPatch && hasAgentTurnPatch) {
             throw new Error("Choose at most one payload change");
           }
@@ -174,21 +179,45 @@ export function registerCronEditCommand(cron: Command) {
             assignIf(payload, "model", model, Boolean(model));
             assignIf(payload, "thinking", thinking, Boolean(thinking));
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
-            assignIf(payload, "deliver", opts.deliver, typeof opts.deliver === "boolean");
-            assignIf(payload, "channel", opts.channel, typeof opts.channel === "string");
-            assignIf(payload, "to", opts.to, typeof opts.to === "string");
-            assignIf(
-              payload,
-              "bestEffortDeliver",
-              opts.bestEffortDeliver,
-              typeof opts.bestEffortDeliver === "boolean",
-            );
+            if (!hasDeliveryModeFlag) {
+              const channel =
+                typeof opts.channel === "string" && opts.channel.trim()
+                  ? opts.channel.trim()
+                  : undefined;
+              const to = typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined;
+              assignIf(payload, "channel", channel, Boolean(channel));
+              assignIf(payload, "to", to, Boolean(to));
+              assignIf(
+                payload,
+                "bestEffortDeliver",
+                opts.bestEffortDeliver,
+                typeof opts.bestEffortDeliver === "boolean",
+              );
+            }
             patch.payload = payload;
           }
 
           if (typeof opts.postPrefix === "string") {
             patch.isolation = {
               postToMainPrefix: opts.postPrefix.trim() ? opts.postPrefix : "Cron",
+            };
+          }
+
+          if (hasDeliveryModeFlag) {
+            const deliveryMode = opts.announce
+              ? "announce"
+              : opts.deliver === true
+                ? "deliver"
+                : "none";
+            patch.delivery = {
+              mode: deliveryMode,
+              channel:
+                typeof opts.channel === "string" && opts.channel.trim()
+                  ? opts.channel.trim()
+                  : undefined,
+              to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+              bestEffort:
+                typeof opts.bestEffortDeliver === "boolean" ? opts.bestEffortDeliver : undefined,
             };
           }
 

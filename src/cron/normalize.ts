@@ -61,6 +61,30 @@ function coercePayload(payload: UnknownRecord) {
   return next;
 }
 
+function coerceDelivery(delivery: UnknownRecord) {
+  const next: UnknownRecord = { ...delivery };
+  if (typeof delivery.mode === "string") {
+    next.mode = delivery.mode.trim().toLowerCase();
+  }
+  if (typeof delivery.channel === "string") {
+    const trimmed = delivery.channel.trim().toLowerCase();
+    if (trimmed) {
+      next.channel = trimmed;
+    } else {
+      delete next.channel;
+    }
+  }
+  if (typeof delivery.to === "string") {
+    const trimmed = delivery.to.trim();
+    if (trimmed) {
+      next.to = trimmed;
+    } else {
+      delete next.to;
+    }
+  }
+  return next;
+}
+
 function unwrapJob(raw: UnknownRecord) {
   if (isRecord(raw.data)) {
     return raw.data;
@@ -116,6 +140,10 @@ export function normalizeCronJobInput(
 
   if (isRecord(base.payload)) {
     next.payload = coercePayload(base.payload);
+  }
+
+  if (isRecord(base.delivery)) {
+    next.delivery = coerceDelivery(base.delivery);
   }
 
   if (options.applyDefaults) {

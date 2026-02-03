@@ -10,6 +10,17 @@ export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronMessageChannel = ChannelId | "last";
 
+export type CronDeliveryMode = "none" | "announce" | "deliver";
+
+export type CronDelivery = {
+  mode: CronDeliveryMode;
+  channel?: CronMessageChannel;
+  to?: string;
+  bestEffort?: boolean;
+};
+
+export type CronDeliveryPatch = Partial<CronDelivery>;
+
 export type CronPayload =
   | { kind: "systemEvent"; text: string }
   | {
@@ -75,6 +86,7 @@ export type CronJob = {
   sessionTarget: CronSessionTarget;
   wakeMode: CronWakeMode;
   payload: CronPayload;
+  delivery?: CronDelivery;
   isolation?: CronIsolation;
   state: CronJobState;
 };
@@ -90,5 +102,6 @@ export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" |
 
 export type CronJobPatch = Partial<Omit<CronJob, "id" | "createdAtMs" | "state" | "payload">> & {
   payload?: CronPayloadPatch;
+  delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;
 };

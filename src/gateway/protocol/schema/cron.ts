@@ -75,6 +75,28 @@ export const CronPayloadPatchSchema = Type.Union([
   ),
 ]);
 
+export const CronDeliverySchema = Type.Object(
+  {
+    mode: Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("deliver")]),
+    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+    to: Type.Optional(Type.String()),
+    bestEffort: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const CronDeliveryPatchSchema = Type.Object(
+  {
+    mode: Type.Optional(
+      Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("deliver")]),
+    ),
+    channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+    to: Type.Optional(Type.String()),
+    bestEffort: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 export const CronIsolationSchema = Type.Object(
   {
     postToMainPrefix: Type.Optional(Type.String()),
@@ -112,6 +134,7 @@ export const CronJobSchema = Type.Object(
     sessionTarget: Type.Union([Type.Literal("main"), Type.Literal("isolated")]),
     wakeMode: Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]),
     payload: CronPayloadSchema,
+    delivery: Type.Optional(CronDeliverySchema),
     isolation: Type.Optional(CronIsolationSchema),
     state: CronJobStateSchema,
   },
@@ -138,6 +161,7 @@ export const CronAddParamsSchema = Type.Object(
     sessionTarget: Type.Union([Type.Literal("main"), Type.Literal("isolated")]),
     wakeMode: Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]),
     payload: CronPayloadSchema,
+    delivery: Type.Optional(CronDeliverySchema),
     isolation: Type.Optional(CronIsolationSchema),
   },
   { additionalProperties: false },
@@ -154,6 +178,7 @@ export const CronJobPatchSchema = Type.Object(
     sessionTarget: Type.Optional(Type.Union([Type.Literal("main"), Type.Literal("isolated")])),
     wakeMode: Type.Optional(Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")])),
     payload: Type.Optional(CronPayloadPatchSchema),
+    delivery: Type.Optional(CronDeliveryPatchSchema),
     isolation: Type.Optional(CronIsolationSchema),
     state: Type.Optional(Type.Partial(CronJobStateSchema)),
   },

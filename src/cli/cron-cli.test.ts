@@ -213,20 +213,15 @@ describe("cron cli", () => {
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as {
       patch?: {
-        payload?: {
-          kind?: string;
-          message?: string;
-          deliver?: boolean;
-          channel?: string;
-          to?: string;
-        };
+        payload?: { kind?: string; message?: string };
+        delivery?: { mode?: string; channel?: string; to?: string };
       };
     };
 
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
-    expect(patch?.patch?.payload?.deliver).toBe(true);
-    expect(patch?.patch?.payload?.channel).toBe("telegram");
-    expect(patch?.patch?.payload?.to).toBe("19098680");
+    expect(patch?.patch?.delivery?.mode).toBe("deliver");
+    expect(patch?.patch?.delivery?.channel).toBe("telegram");
+    expect(patch?.patch?.delivery?.to).toBe("19098680");
     expect(patch?.patch?.payload?.message).toBeUndefined();
   });
 
@@ -242,11 +237,11 @@ describe("cron cli", () => {
 
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as {
-      patch?: { payload?: { kind?: string; deliver?: boolean } };
+      patch?: { payload?: { kind?: string }; delivery?: { mode?: string } };
     };
 
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
-    expect(patch?.patch?.payload?.deliver).toBe(false);
+    expect(patch?.patch?.delivery?.mode).toBe("none");
   });
 
   it("does not include undefined delivery fields when updating message", async () => {
@@ -272,6 +267,7 @@ describe("cron cli", () => {
           to?: string;
           bestEffortDeliver?: boolean;
         };
+        delivery?: unknown;
       };
     };
 
@@ -283,6 +279,7 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload).not.toHaveProperty("channel");
     expect(patch?.patch?.payload).not.toHaveProperty("to");
     expect(patch?.patch?.payload).not.toHaveProperty("bestEffortDeliver");
+    expect(patch?.patch).not.toHaveProperty("delivery");
   });
 
   it("includes delivery fields when explicitly provided with message", async () => {
@@ -313,20 +310,16 @@ describe("cron cli", () => {
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as {
       patch?: {
-        payload?: {
-          message?: string;
-          deliver?: boolean;
-          channel?: string;
-          to?: string;
-        };
+        payload?: { message?: string };
+        delivery?: { mode?: string; channel?: string; to?: string };
       };
     };
 
     // Should include everything
     expect(patch?.patch?.payload?.message).toBe("Updated message");
-    expect(patch?.patch?.payload?.deliver).toBe(true);
-    expect(patch?.patch?.payload?.channel).toBe("telegram");
-    expect(patch?.patch?.payload?.to).toBe("19098680");
+    expect(patch?.patch?.delivery?.mode).toBe("deliver");
+    expect(patch?.patch?.delivery?.channel).toBe("telegram");
+    expect(patch?.patch?.delivery?.to).toBe("19098680");
   });
 
   it("includes best-effort delivery when provided with message", async () => {
