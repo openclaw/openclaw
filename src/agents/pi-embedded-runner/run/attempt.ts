@@ -208,7 +208,7 @@ export async function runEmbeddedAttempt(
     const modelHasVision = params.model.input?.includes("image") ?? false;
     // Strip tools for models that don't support function calling (e.g. certain Venice models)
     const modelSupportsFc =
-      params.provider !== "venice" || veniceModelSupportsFunctionCalling(params.modelId);
+      params.model.provider !== "venice" || veniceModelSupportsFunctionCalling(params.modelId);
     const toolsRaw =
       params.disableTools || !modelSupportsFc
         ? []
