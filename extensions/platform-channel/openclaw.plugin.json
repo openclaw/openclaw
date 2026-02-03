@@ -1,0 +1,9 @@
+{
+  "id": "platform-channel",
+  "channels": ["platform-channel"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

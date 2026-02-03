@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/platform-channel",
+  "version": "0.1.0",
+  "description": "OpenClaw platform-channel plugin for else-platform integration",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
