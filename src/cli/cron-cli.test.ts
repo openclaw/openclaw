@@ -65,6 +65,36 @@ describe("cron cli", () => {
     expect(params?.payload?.thinking).toBe("low");
   });
 
+  it("defaults isolated cron add to announce delivery", async () => {
+    callGatewayFromCli.mockClear();
+
+    const { registerCronCli } = await import("./cron-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerCronCli(program);
+
+    await program.parseAsync(
+      [
+        "cron",
+        "add",
+        "--name",
+        "Daily",
+        "--cron",
+        "* * * * *",
+        "--session",
+        "isolated",
+        "--message",
+        "hello",
+      ],
+      { from: "user" },
+    );
+
+    const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
+    const params = addCall?.[2] as { delivery?: { mode?: string } };
+
+    expect(params?.delivery?.mode).toBe("announce");
+  });
+
   it("sends agent id on cron add", async () => {
     callGatewayFromCli.mockClear();
 

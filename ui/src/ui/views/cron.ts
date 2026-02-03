@@ -212,7 +212,7 @@ export function renderCron(props: CronProps) {
                         })}
                     >
                       <option value="legacy">Main summary (legacy)</option>
-                      <option value="announce">Announce summary</option>
+                      <option value="announce">Announce summary (default)</option>
                       <option value="deliver">Deliver full output</option>
                       <option value="none">None (internal)</option>
                     </select>

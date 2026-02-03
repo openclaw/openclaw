@@ -100,7 +100,7 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--post-max-chars <n>", "Max chars when --post-mode=full (default 8000)", "8000")
       .option("--json", "Output JSON", false)
-      .action(async (opts: GatewayRpcOpts & Record<string, unknown>) => {
+      .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
         try {
           const schedule = (() => {
             const at = typeof opts.at === "string" ? opts.at : "";
@@ -148,6 +148,14 @@ export function registerCronAddCommand(cron: Command) {
               ? sanitizeAgentId(opts.agent.trim())
               : undefined;
 
+          const hasAnnounce = Boolean(opts.announce);
+          const hasDeliver = opts.deliver === true;
+          const hasNoDeliver = opts.deliver === false;
+          const deliveryFlagCount = [hasAnnounce, hasDeliver, hasNoDeliver].filter(Boolean).length;
+          if (deliveryFlagCount > 1) {
+            throw new Error("Choose at most one of --announce, --deliver, or --no-deliver");
+          }
+
           const payload = (() => {
             const systemEvent = typeof opts.systemEvent === "string" ? opts.systemEvent.trim() : "";
             const message = typeof opts.message === "string" ? opts.message.trim() : "";
@@ -159,15 +167,6 @@ export function registerCronAddCommand(cron: Command) {
               return { kind: "systemEvent" as const, text: systemEvent };
             }
             const timeoutSeconds = parsePositiveIntOrUndefined(opts.timeoutSeconds);
-            const hasAnnounce = Boolean(opts.announce);
-            const hasDeliver = opts.deliver === true;
-            const hasNoDeliver = opts.deliver === false;
-            const deliveryFlagCount = [hasAnnounce, hasDeliver, hasNoDeliver].filter(
-              Boolean,
-            ).length;
-            if (deliveryFlagCount > 1) {
-              throw new Error("Choose at most one of --announce, --deliver, or --no-deliver");
-            }
             return {
               kind: "agentTurn" as const,
               message,
@@ -179,15 +178,6 @@ export function registerCronAddCommand(cron: Command) {
                   : undefined,
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
-              channel:
-                typeof opts.channel === "string" && opts.channel.trim()
-                  ? opts.channel.trim()
-                  : "last",
-              to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
-              bestEffortDeliver:
-                !hasAnnounce && !hasDeliver && !hasNoDeliver && opts.bestEffortDeliver
-                  ? true
-                  : undefined,
             };
           })();
 
@@ -204,8 +194,30 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("--announce/--deliver/--no-deliver require --session isolated.");
           }
 
+          const optionSource =
+            typeof cmd?.getOptionValueSource === "function"
+              ? (name: string) => cmd.getOptionValueSource(name)
+              : () => undefined;
+          const hasLegacyPostConfig =
+            optionSource("postPrefix") === "cli" ||
+            optionSource("postMode") === "cli" ||
+            optionSource("postMaxChars") === "cli";
+
+          if (
+            hasLegacyPostConfig &&
+            (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
+          ) {
+            throw new Error(
+              "--post-prefix/--post-mode/--post-max-chars require --session isolated.",
+            );
+          }
+
+          if (hasLegacyPostConfig && (hasAnnounce || hasDeliver || hasNoDeliver)) {
+            throw new Error("Choose legacy main-summary options or a delivery mode (not both).");
+          }
+
           const isolation =
-            sessionTarget === "isolated"
+            sessionTarget === "isolated" && hasLegacyPostConfig
               ? {
                   postToMainPrefix:
                     typeof opts.postPrefix === "string" && opts.postPrefix.trim()
@@ -216,10 +228,23 @@ export function registerCronAddCommand(cron: Command) {
                       ? opts.postMode
                       : undefined,
                   postToMainMaxChars:
-                    typeof opts.postMaxChars === "string" && /^\d+$/.test(opts.postMaxChars)
+                    opts.postMode === "full" &&
+                    typeof opts.postMaxChars === "string" &&
+                    /^\d+$/.test(opts.postMaxChars)
                       ? Number.parseInt(opts.postMaxChars, 10)
                       : undefined,
                 }
+              : undefined;
+
+          const deliveryMode =
+            sessionTarget === "isolated" && payload.kind === "agentTurn" && !hasLegacyPostConfig
+              ? hasAnnounce
+                ? "announce"
+                : hasDeliver
+                  ? "deliver"
+                  : hasNoDeliver
+                    ? "none"
+                    : "announce"
               : undefined;
 
           const nameRaw = typeof opts.name === "string" ? opts.name : "";
@@ -243,20 +268,18 @@ export function registerCronAddCommand(cron: Command) {
             sessionTarget,
             wakeMode,
             payload,
-            delivery:
-              payload.kind === "agentTurn" &&
-              sessionTarget === "isolated" &&
-              (opts.announce || typeof opts.deliver === "boolean")
-                ? {
-                    mode: opts.announce ? "announce" : opts.deliver === true ? "deliver" : "none",
-                    channel:
-                      typeof opts.channel === "string" && opts.channel.trim()
-                        ? opts.channel.trim()
-                        : "last",
-                    to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
-                    bestEffort: opts.bestEffortDeliver ? true : undefined,
-                  }
-                : undefined,
+            delivery: deliveryMode
+              ? {
+                  mode: deliveryMode,
+                  channel:
+                    typeof opts.channel === "string" && opts.channel.trim()
+                      ? opts.channel.trim()
+                      : undefined,
+                  to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                  bestEffort:
+                    deliveryMode === "deliver" && opts.bestEffortDeliver ? true : undefined,
+                }
+              : undefined,
             isolation,
           };
 
