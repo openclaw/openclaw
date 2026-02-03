@@ -18,7 +18,7 @@ Assess and harden the host running OpenClaw, then align it to a user-defined ris
 - Never claim OpenClaw changes the host firewall, SSH, or OS updates; it does not.
 - If role/identity is unknown, provide recommendations only.
 - Formatting: every set of user choices must be numbered so the user can reply with a single digit.
-- Ensure backups are enabled. Ask the user what backup system they use, check status, and (with explicit approval) offer to enable or configure backups appropriate to the OS.
+- System-level backups are recommended; try to verify status.
 
 ## Workflow (follow in order)
 
@@ -55,9 +55,10 @@ If you must ask, use non-technical prompts:
 - “Is disk encryption turned on (FileVault/BitLocker/LUKS)?”
 - “Are automatic security updates enabled?”
 - “How do you use this machine?”
-  1. Personal/workstation (mostly local dev)
-  2. Headless server (always on, accessed remotely)
-  3. Something else?
+  1. Personal machine shared with the assistant
+  2. Dedicated local machine for the assistant
+  3. Dedicated remote machine/server accessed remotely (always on)
+  4. Something else?
 
 Only ask for the risk profile after system context is known.
 
@@ -74,7 +75,7 @@ If the user grants read-only permission, run the OS-appropriate checks by defaul
 
 ### 2) Run OpenClaw security audits (read-only)
 
-As part of the default read-only checks, run `openclaw security audit --deep` without a separate permission prompt. Only offer alternatives if the user requests them:
+As part of the default read-only checks, run `openclaw security audit --deep`. Only offer alternatives if the user requests them:
 
 1. `openclaw security audit` (faster, non-probing)
 2. `openclaw security audit --json` (structured output)
@@ -89,9 +90,7 @@ If browser control is enabled, recommend that 2FA be enabled on all important ac
 
 ### 3) Check OpenClaw version/update status (read-only)
 
-If the user grants permission, run `openclaw update status` by default. Otherwise, offer it (numbered):
-
-1. `openclaw update status`
+As part of the default read-only checks, run `openclaw update status`.
 
 Report the current channel and whether an update is available.
 
