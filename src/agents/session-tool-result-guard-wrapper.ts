@@ -5,8 +5,44 @@ import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
 /**
+ * Recursively redact sensitive content from any value (string, object, array).
+ * Returns the redacted value and whether any changes were made.
+ */
+function redactValue(value: unknown): { result: unknown; modified: boolean } {
+  if (typeof value === "string") {
+    const redacted = redactSensitiveText(value, { mode: "tools" });
+    return { result: redacted, modified: redacted !== value };
+  }
+
+  if (Array.isArray(value)) {
+    let modified = false;
+    const result = value.map((item) => {
+      const r = redactValue(item);
+      if (r.modified) modified = true;
+      return r.result;
+    });
+    return { result, modified };
+  }
+
+  if (value && typeof value === "object") {
+    let modified = false;
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      const r = redactValue(v);
+      if (r.modified) modified = true;
+      result[k] = r.result;
+    }
+    return { result, modified };
+  }
+
+  return { result: value, modified: false };
+}
+
+/**
  * Redact sensitive content (API keys, tokens, secrets) from tool result messages
  * before they are persisted to session transcripts.
+ *
+ * Redacts content, details, and any other fields that may contain secrets.
  */
 function redactToolResultContent(message: AgentMessage): AgentMessage {
   const role = (message as { role?: unknown }).role;
@@ -14,45 +50,25 @@ function redactToolResultContent(message: AgentMessage): AgentMessage {
     return message;
   }
 
-  const content = (message as { content?: unknown }).content;
-
-  // Handle string content (some tool results use plain strings)
-  if (typeof content === "string") {
-    const redacted = redactSensitiveText(content, { mode: "tools" });
-    if (redacted !== content) {
-      return { ...message, content: redacted } as AgentMessage;
-    }
-    return message;
-  }
-
-  // Handle array content (standard block format)
-  if (!Array.isArray(content)) {
-    return message;
-  }
-
+  const msg = message as unknown as Record<string, unknown>;
   let modified = false;
-  const redactedContent = content.map((block) => {
-    if (
-      block &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "text" &&
-      typeof (block as { text?: unknown }).text === "string"
-    ) {
-      const original = (block as { text: string }).text;
-      const redacted = redactSensitiveText(original, { mode: "tools" });
-      if (redacted !== original) {
-        modified = true;
-        return { ...block, text: redacted };
-      }
+  const result: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(msg)) {
+    if (key === "role" || key === "toolCallId" || key === "isError") {
+      result[key] = value;
+      continue;
     }
-    return block;
-  });
+    const r = redactValue(value);
+    if (r.modified) modified = true;
+    result[key] = r.result;
+  }
 
   if (!modified) {
     return message;
   }
 
-  return { ...message, content: redactedContent } as AgentMessage;
+  return result as unknown as AgentMessage;
 }
 
 export type GuardedSessionManager = SessionManager & {

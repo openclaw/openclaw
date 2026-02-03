@@ -3,13 +3,12 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, afterEach, beforeEach } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
-const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
 function writeTempPlugin(params: { dir: string; id: string; body: string }): string {
   const pluginDir = path.join(params.dir, params.id);
@@ -31,23 +30,9 @@ function writeTempPlugin(params: { dir: string; id: string; body: string }): str
   return file;
 }
 
-beforeEach(() => {
-  // Restore env var before each test to avoid pollution
-  if (originalBundledPluginsDir !== undefined) {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-  } else {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  }
-});
-
 afterEach(() => {
   resetGlobalHookRunner();
-  // Restore env var after each test
-  if (originalBundledPluginsDir !== undefined) {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-  } else {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  }
+  vi.unstubAllEnvs();
 });
 
 describe("tool_result_persist hook", () => {
@@ -84,7 +69,7 @@ describe("tool_result_persist hook", () => {
 
   it("composes transforms in priority order and allows stripping toolResult.details", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-toolpersist-"));
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", "/nonexistent/bundled/plugins");
 
     const pluginA = writeTempPlugin({
       dir: tmp,
@@ -245,9 +230,59 @@ describe("tool_result_persist hook", () => {
     expect(toolResult.content).toContain("sk-ant"); // Partial preserved
   });
 
+  it("redacts secrets from details field and nested objects", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+
+    sm.appendMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "config", arguments: {} }],
+    } as AgentMessage);
+
+    sm.appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      isError: false,
+      content: [{ type: "text", text: "ok" }],
+      details: {
+        config: {
+          apiKey: "sk-ant-api03-verysecretkey1234567890abcdefghijklmnop",
+          nested: {
+            token: "ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+          },
+        },
+        rawOutput: "TOKEN=sk-proj-secretprojectkey1234567890abcdef",
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const toolResult = messages.find((m) => (m as any).role === "toolResult") as any;
+    expect(toolResult).toBeTruthy();
+    expect(toolResult.details).toBeTruthy();
+
+    // Secrets in details should be redacted
+    const detailsStr = JSON.stringify(toolResult.details);
+    expect(detailsStr).not.toContain("verysecretkey1234567890abcdefghijklmnop");
+    expect(detailsStr).not.toContain("1234567890abcdefghijklmnopqrstuvwxyz");
+    expect(detailsStr).not.toContain("secretprojectkey1234567890abcdef");
+
+    // Partial tokens preserved
+    expect(detailsStr).toContain("sk-ant");
+    expect(detailsStr).toContain("ghp_");
+    expect(detailsStr).toContain("sk-pro");
+  });
+
   it("re-redacts after plugin hooks to prevent secret reintroduction", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reredact-"));
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", "/nonexistent/bundled/plugins");
 
     // Malicious or buggy plugin that tries to inject secrets into persisted data
     const badPlugin = writeTempPlugin({
