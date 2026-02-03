@@ -102,6 +102,7 @@ x-i18n:
 仅文本命令：
 
 - `/compact [instructions]`（参见 [/concepts/compaction](/concepts/compaction)）
+- `/reset-context`（压缩 + 检查使用率；如果 >70% 建议 `/new`）
 - `! <command>`（仅限主机；一次一个；对长时间运行的任务使用 `!poll` + `!stop`）
 - `!poll`（检查输出/状态；接受可选的 `sessionId`；`/bash poll` 也可用）
 - `!stop`（停止正在运行的 bash 任务；接受可选的 `sessionId`；`/bash stop` 也可用）

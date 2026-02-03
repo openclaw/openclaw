@@ -423,6 +423,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       ],
     }),
     defineChatCommand({
+      key: "reset-context",
+      description: "Compact context; if still >70%, create new session.",
+      textAlias: "/reset-context",
+      scope: "text",
+      category: "session",
+    }),
+    defineChatCommand({
       key: "think",
       nativeName: "think",
       description: "Set thinking level.",
