@@ -2,10 +2,13 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+export type RerankerType = "rrf" | "linear";
+
 export type HybridConfig = {
   enabled?: boolean; // default: true
-  vectorWeight?: number; // 0-1, default: 0.7
-  textWeight?: number; // 0-1, default: 0.3
+  reranker?: RerankerType; // default: "rrf" (RRF is only available reranker in JS SDK)
+  vectorWeight?: number; // 0-1, default: 0.7 (only used with "linear" reranker)
+  textWeight?: number; // 0-1, default: 0.3 (only used with "linear" reranker)
 };
 
 export type MemoryConfig = {
@@ -92,13 +95,16 @@ function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
 
 function parseHybridConfig(hybrid: unknown): HybridConfig {
   if (!hybrid || typeof hybrid !== "object" || Array.isArray(hybrid)) {
-    return { enabled: true, vectorWeight: 0.7, textWeight: 0.3 };
+    return { enabled: true, reranker: "rrf", vectorWeight: 0.7, textWeight: 0.3 };
   }
   const h = hybrid as Record<string, unknown>;
-  assertAllowedKeys(h, ["enabled", "vectorWeight", "textWeight"], "hybrid config");
+  assertAllowedKeys(h, ["enabled", "reranker", "vectorWeight", "textWeight"], "hybrid config");
+
+  const reranker = h.reranker === "linear" ? "linear" : "rrf";
 
   return {
     enabled: h.enabled !== false,
+    reranker,
     vectorWeight: typeof h.vectorWeight === "number" ? h.vectorWeight : 0.7,
     textWeight: typeof h.textWeight === "number" ? h.textWeight : 0.3,
   };
@@ -165,16 +171,22 @@ export const memoryConfigSchema = {
       label: "Hybrid Search",
       help: "Combine vector search with BM25 keyword search for better recall",
     },
+    "hybrid.reranker": {
+      label: "Reranker",
+      placeholder: "rrf",
+      help: "Reranking algorithm: 'rrf' (Reciprocal Rank Fusion) or 'linear' (weighted combination)",
+      advanced: true,
+    },
     "hybrid.vectorWeight": {
       label: "Vector Weight",
       placeholder: "0.7",
-      help: "Weight for semantic vector search (0-1)",
+      help: "Weight for semantic vector search (0-1, only used with 'linear' reranker)",
       advanced: true,
     },
     "hybrid.textWeight": {
       label: "Text Weight",
       placeholder: "0.3",
-      help: "Weight for BM25 keyword search (0-1)",
+      help: "Weight for BM25 keyword search (0-1, only used with 'linear' reranker)",
       advanced: true,
     },
   },

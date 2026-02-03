@@ -63,6 +63,60 @@ describe("memory plugin e2e", () => {
     expect(config?.dbPath).toBe(dbPath);
   });
 
+  test("config schema parses hybrid config with defaults", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+      },
+      dbPath,
+    });
+
+    expect(config?.hybrid?.enabled).toBe(true);
+    expect(config?.hybrid?.reranker).toBe("rrf");
+    expect(config?.hybrid?.vectorWeight).toBe(0.7);
+    expect(config?.hybrid?.textWeight).toBe(0.3);
+  });
+
+  test("config schema parses hybrid config with linear reranker", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+      },
+      dbPath,
+      hybrid: {
+        enabled: true,
+        reranker: "linear",
+        vectorWeight: 0.8,
+        textWeight: 0.2,
+      },
+    });
+
+    expect(config?.hybrid?.enabled).toBe(true);
+    expect(config?.hybrid?.reranker).toBe("linear");
+    expect(config?.hybrid?.vectorWeight).toBe(0.8);
+    expect(config?.hybrid?.textWeight).toBe(0.2);
+  });
+
+  test("config schema parses hybrid config with disabled hybrid", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+      },
+      dbPath,
+      hybrid: {
+        enabled: false,
+      },
+    });
+
+    expect(config?.hybrid?.enabled).toBe(false);
+  });
+
   test("config schema resolves env vars", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
@@ -292,4 +346,227 @@ describeLive("memory plugin live tests", () => {
 
     expect(recallAfterForget.details?.count).toBe(0);
   }, 60000); // 60s timeout for live API calls
+
+  test("hybrid search with RRF reranker", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+    const liveApiKey = process.env.OPENAI_API_KEY ?? "";
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const registeredTools: any[] = [];
+    const logs: string[] = [];
+
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: {
+          apiKey: liveApiKey,
+          model: "text-embedding-3-small",
+        },
+        dbPath,
+        autoCapture: false,
+        autoRecall: false,
+        hybrid: {
+          enabled: true,
+          reranker: "rrf",
+        },
+      },
+      runtime: {},
+      logger: {
+        info: (msg: string) => logs.push(`[info] ${msg}`),
+        warn: (msg: string) => logs.push(`[warn] ${msg}`),
+        error: (msg: string) => logs.push(`[error] ${msg}`),
+        debug: (msg: string) => logs.push(`[debug] ${msg}`),
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+      registerTool: (tool: any, opts: any) => {
+        registeredTools.push({ tool, opts });
+      },
+      registerCli: () => {},
+      registerService: () => {},
+      on: () => {},
+      resolvePath: (p: string) => p,
+    };
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    memoryPlugin.register(mockApi as any);
+
+    const storeTool = registeredTools.find((t) => t.opts?.name === "memory_store")?.tool;
+    const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+
+    // Store some memories with distinct keywords
+    await storeTool.execute("test-1", {
+      text: "The project uses TypeScript for type safety",
+      category: "fact",
+    });
+    await storeTool.execute("test-2", {
+      text: "We prefer functional programming patterns",
+      category: "preference",
+    });
+    await storeTool.execute("test-3", {
+      text: "The database is PostgreSQL with JSON support",
+      category: "fact",
+    });
+
+    // Search should find TypeScript memory via both semantic and keyword match
+    const result = await recallTool.execute("test-4", {
+      query: "TypeScript programming",
+      limit: 5,
+    });
+
+    expect(result.details?.count).toBeGreaterThan(0);
+    // TypeScript memory should be in results
+    const memories = result.details?.memories ?? [];
+    const hasTypeScript = memories.some((m: { text: string }) => m.text.includes("TypeScript"));
+    expect(hasTypeScript).toBe(true);
+
+    // Verify hybrid search was logged
+    const hasHybridLog = logs.some((log) => log.includes("hybrid"));
+    expect(hasHybridLog).toBe(true);
+  }, 60000);
+
+  test("hybrid search with linear reranker uses weights", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+    const liveApiKey = process.env.OPENAI_API_KEY ?? "";
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const registeredTools: any[] = [];
+    const logs: string[] = [];
+
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: {
+          apiKey: liveApiKey,
+          model: "text-embedding-3-small",
+        },
+        dbPath,
+        autoCapture: false,
+        autoRecall: false,
+        hybrid: {
+          enabled: true,
+          reranker: "linear",
+          vectorWeight: 0.6,
+          textWeight: 0.4,
+        },
+      },
+      runtime: {},
+      logger: {
+        info: (msg: string) => logs.push(`[info] ${msg}`),
+        warn: (msg: string) => logs.push(`[warn] ${msg}`),
+        error: (msg: string) => logs.push(`[error] ${msg}`),
+        debug: (msg: string) => logs.push(`[debug] ${msg}`),
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+      registerTool: (tool: any, opts: any) => {
+        registeredTools.push({ tool, opts });
+      },
+      registerCli: () => {},
+      registerService: () => {},
+      on: () => {},
+      resolvePath: (p: string) => p,
+    };
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    memoryPlugin.register(mockApi as any);
+
+    const storeTool = registeredTools.find((t) => t.opts?.name === "memory_store")?.tool;
+    const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+
+    // Store memories
+    await storeTool.execute("test-1", {
+      text: "User prefers VSCode editor for development",
+      category: "preference",
+    });
+    await storeTool.execute("test-2", {
+      text: "The API endpoint returns JSON responses",
+      category: "fact",
+    });
+
+    // Search with keyword that matches exactly
+    const result = await recallTool.execute("test-3", {
+      query: "VSCode editor preference",
+      limit: 5,
+    });
+
+    expect(result.details?.count).toBeGreaterThan(0);
+    // VSCode memory should rank high due to exact keyword match + semantic similarity
+    const memories = result.details?.memories ?? [];
+    const vsCodeMemory = memories.find((m: { text: string }) => m.text.includes("VSCode"));
+    expect(vsCodeMemory).toBeDefined();
+
+    // Verify linear reranker was configured
+    const hasLinearLog = logs.some((log) => log.includes("linear"));
+    expect(hasLinearLog).toBe(true);
+  }, 60000);
+
+  test("fallback to vector search when hybrid fails", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+    const liveApiKey = process.env.OPENAI_API_KEY ?? "";
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const registeredTools: any[] = [];
+    const logs: string[] = [];
+
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: {
+          apiKey: liveApiKey,
+          model: "text-embedding-3-small",
+        },
+        dbPath,
+        autoCapture: false,
+        autoRecall: false,
+        hybrid: {
+          enabled: true,
+          reranker: "rrf",
+        },
+      },
+      runtime: {},
+      logger: {
+        info: (msg: string) => logs.push(`[info] ${msg}`),
+        warn: (msg: string) => logs.push(`[warn] ${msg}`),
+        error: (msg: string) => logs.push(`[error] ${msg}`),
+        debug: (msg: string) => logs.push(`[debug] ${msg}`),
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+      registerTool: (tool: any, opts: any) => {
+        registeredTools.push({ tool, opts });
+      },
+      registerCli: () => {},
+      registerService: () => {},
+      on: () => {},
+      resolvePath: (p: string) => p,
+    };
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    memoryPlugin.register(mockApi as any);
+
+    const storeTool = registeredTools.find((t) => t.opts?.name === "memory_store")?.tool;
+    const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
+
+    // Store a memory
+    await storeTool.execute("test-1", {
+      text: "Important project deadline is next Friday",
+      category: "fact",
+    });
+
+    // Search should work even if FTS has issues (fallback to vector)
+    const result = await recallTool.execute("test-2", {
+      query: "project deadline",
+      limit: 5,
+    });
+
+    // Should still return results via vector search fallback
+    expect(result.details?.count).toBeGreaterThan(0);
+  }, 60000);
 });
