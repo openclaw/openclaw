@@ -84,6 +84,19 @@ describe("resolveDiscordReplyDeliveryPlan", () => {
     });
     expect(plan.replyReference.use()).toBe("m1");
   });
+
+  it("routes to existing thread when message is from thread (not parent)", () => {
+    const plan = resolveDiscordReplyDeliveryPlan({
+      replyTarget: "channel:parent",
+      replyToMode: "all",
+      messageId: "m1",
+      threadChannel: { id: "thread" },
+      createdThreadId: null,
+    });
+    expect(plan.deliverTarget).toBe("channel:thread");
+    expect(plan.replyTarget).toBe("channel:thread");
+    expect(plan.replyReference.use()).toBe("m1");
+  });
 });
 
 describe("resolveDiscordAutoThreadReplyPlan", () => {

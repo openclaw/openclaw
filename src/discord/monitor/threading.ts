@@ -334,6 +334,11 @@ export function resolveDiscordReplyDeliveryPlan(params: {
   if (params.createdThreadId) {
     deliverTarget = `channel:${params.createdThreadId}`;
     replyTarget = deliverTarget;
+  } else if (params.threadChannel) {
+    // If message is from an existing thread (not a newly created one),
+    // ensure replies go to that thread instead of the parent channel
+    deliverTarget = `channel:${params.threadChannel.id}`;
+    replyTarget = deliverTarget;
   }
   const allowReference = deliverTarget === originalReplyTarget;
   const replyReference = createReplyReferencePlanner({
