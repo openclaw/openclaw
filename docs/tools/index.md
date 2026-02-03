@@ -465,8 +465,9 @@ Gateway-backed tools (`canvas`, `nodes`, `cron`):
 - `gatewayToken` (if auth enabled)
 - `timeoutMs`
 
-Note: when `gatewayUrl` is set, include `gatewayToken` explicitly; tools do not inherit
-config or environment credentials for custom URLs.
+Note: when `gatewayUrl` is set to a non-local address, include `gatewayToken` explicitly;
+tools do not inherit config or environment credentials for non-local URLs to prevent
+credential leakage. Local addresses (loopback, private IPs) still use credential fallback.
 
 Browser tool:
 
