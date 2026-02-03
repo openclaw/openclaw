@@ -144,6 +144,8 @@ If your laptop needs to switch between remote (at home) and local (traveling), k
 
 All three files should be gitignored.
 
+**Security note:** For laptop local mode, use `"bind": "loopback"` instead of `"lan"` — this prevents the gateway from being exposed on public networks (coffee shops, airports, etc.). Only use `"lan"` when you need other devices on the same network to connect.
+
 **openclaw.local** script:
 
 ```bash
