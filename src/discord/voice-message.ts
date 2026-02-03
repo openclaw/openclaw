@@ -22,6 +22,7 @@ import type { RetryRunner } from "../infra/retry-policy.js";
 const execFileAsync = promisify(execFile);
 
 const DISCORD_VOICE_MESSAGE_FLAG = 8192;
+const SUPPRESS_NOTIFICATIONS_FLAG = 4096;
 const WAVEFORM_SAMPLES = 256;
 
 export type VoiceMessageMetadata = {
@@ -225,6 +226,7 @@ export async function sendDiscordVoiceMessage(
   replyTo: string | undefined,
   request: RetryRunner,
   token: string,
+  silent?: boolean,
 ): Promise<{ id: string; channel_id: string }> {
   const filename = "voice-message.ogg";
   const fileSize = audioBuffer.byteLength;
@@ -278,6 +280,9 @@ export async function sendDiscordVoiceMessage(
   }
 
   // Step 3: Send the message with voice message flag and metadata
+  const flags = silent
+    ? DISCORD_VOICE_MESSAGE_FLAG | SUPPRESS_NOTIFICATIONS_FLAG
+    : DISCORD_VOICE_MESSAGE_FLAG;
   const messagePayload: {
     flags: number;
     attachments: Array<{
@@ -289,7 +294,7 @@ export async function sendDiscordVoiceMessage(
     }>;
     message_reference?: { message_id: string; fail_if_not_exists: boolean };
   } = {
-    flags: DISCORD_VOICE_MESSAGE_FLAG,
+    flags,
     attachments: [
       {
         id: "0",
