@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 export function resolveControlUiRepoRoot(
   argv1: string | undefined = process.argv[1],
@@ -57,6 +58,86 @@ export async function resolveControlUiDistIndexPath(
     return null;
   }
   return path.join(packageRoot, "dist", "control-ui", "index.html");
+}
+
+export type ControlUiRootResolveOptions = {
+  argv1?: string;
+  moduleUrl?: string;
+  cwd?: string;
+  execPath?: string;
+};
+
+function addCandidate(candidates: Set<string>, value: string | null) {
+  if (!value) {
+    return;
+  }
+  candidates.add(path.resolve(value));
+}
+
+export function resolveControlUiRootOverrideSync(rootOverride: string): string | null {
+  const resolved = path.resolve(rootOverride);
+  try {
+    const stats = fs.statSync(resolved);
+    if (stats.isFile()) {
+      return path.basename(resolved) === "index.html" ? path.dirname(resolved) : null;
+    }
+    if (stats.isDirectory()) {
+      const indexPath = path.join(resolved, "index.html");
+      return fs.existsSync(indexPath) ? resolved : null;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {}): string | null {
+  const candidates = new Set<string>();
+  const argv1 = opts.argv1 ?? process.argv[1];
+  const cwd = opts.cwd ?? process.cwd();
+  const moduleDir = opts.moduleUrl ? path.dirname(fileURLToPath(opts.moduleUrl)) : null;
+  const argv1Dir = argv1 ? path.dirname(path.resolve(argv1)) : null;
+  const execDir = (() => {
+    try {
+      const execPath = opts.execPath ?? process.execPath;
+      return path.dirname(fs.realpathSync(execPath));
+    } catch {
+      return null;
+    }
+  })();
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1,
+    moduleUrl: opts.moduleUrl,
+    cwd,
+  });
+
+  // Packaged app: control-ui lives alongside the executable.
+  addCandidate(candidates, execDir ? path.join(execDir, "control-ui") : null);
+  if (moduleDir) {
+    // dist/<bundle>.js -> dist/control-ui
+    addCandidate(candidates, path.join(moduleDir, "control-ui"));
+    // dist/gateway/control-ui.js -> dist/control-ui
+    addCandidate(candidates, path.join(moduleDir, "../control-ui"));
+    // src/gateway/control-ui.ts -> dist/control-ui
+    addCandidate(candidates, path.join(moduleDir, "../../dist/control-ui"));
+  }
+  if (argv1Dir) {
+    // openclaw.mjs or dist/<bundle>.js
+    addCandidate(candidates, path.join(argv1Dir, "dist", "control-ui"));
+    addCandidate(candidates, path.join(argv1Dir, "control-ui"));
+  }
+  if (packageRoot) {
+    addCandidate(candidates, path.join(packageRoot, "dist", "control-ui"));
+  }
+  addCandidate(candidates, path.join(cwd, "dist", "control-ui"));
+
+  for (const dir of candidates) {
+    const indexPath = path.join(dir, "index.html");
+    if (fs.existsSync(indexPath)) {
+      return dir;
+    }
+  }
+  return null;
 }
 
 export type EnsureControlUiAssetsResult = {
