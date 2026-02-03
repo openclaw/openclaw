@@ -46,6 +46,10 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "kimi-code") {
     return "kimi-coding";
   }
+  // Backward compatibility for older provider naming.
+  if (normalized === "bytedance" || normalized === "doubao") {
+    return "volcengine";
+  }
   return normalized;
 }
 
