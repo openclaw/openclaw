@@ -178,11 +178,13 @@ describe("checkCommandSecurity", () => {
     expect(child_process.execFileSync).not.toHaveBeenCalled();
   });
 
-  it("auto-disables in NODE_ENV=test environment", () => {
+  it("does NOT auto-disable in NODE_ENV=test (security risk in staging)", () => {
+    // NODE_ENV=test should NOT bypass security checks because staging
+    // environments often use NODE_ENV=test, which would be a security risk
     vi.stubEnv("NODE_ENV", "test");
-    const result = checkCommandSecurity("curl | bash");
-    expect(result.action).toBe("allow");
-    expect(child_process.execFileSync).not.toHaveBeenCalled();
+    checkCommandSecurity("curl | bash");
+    // Should still run security checks (not auto-allow)
+    expect(child_process.execFileSync).toHaveBeenCalled();
   });
 });
 

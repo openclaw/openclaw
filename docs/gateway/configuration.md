@@ -2049,23 +2049,23 @@ brew install sheeki03/tap/tirith
   tools: {
     exec: {
       commandCheck: {
-        enabled: true,       // Enable validation (default: true)
-        timeoutMs: 5000,     // Check timeout (default: 5000ms)
-        blockOnError: false  // Fail-open on errors (default: false)
-      }
-    }
-  }
+        enabled: true, // Enable validation (default: true)
+        timeoutMs: 5000, // Check timeout (default: 5000ms)
+        blockOnError: false, // Fail-open on errors (default: false)
+      },
+    },
+  },
 }
 ```
 
 **Behavior:**
 
-| Scenario | Result |
-|----------|--------|
-| tirith returns `block` | Command rejected with error |
-| tirith returns `warn` | Warning shown in approval UI, command proceeds |
-| tirith not installed | Graceful skip (logged once), commands proceed |
-| tirith times out | Allow (unless `blockOnError: true`) |
+| Scenario               | Result                                         |
+| ---------------------- | ---------------------------------------------- |
+| tirith returns `block` | Command rejected with error                    |
+| tirith returns `warn`  | Warning shown in approval UI, command proceeds |
+| tirith not installed   | Graceful skip (logged once), commands proceed  |
+| tirith times out       | Allow (unless `blockOnError: true`)            |
 
 **Edge cases:**
 
@@ -2078,9 +2078,9 @@ To disable command security checks entirely:
 {
   tools: {
     exec: {
-      commandCheck: { enabled: false }
-    }
-  }
+      commandCheck: { enabled: false },
+    },
+  },
 }
 ```
 

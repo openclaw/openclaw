@@ -47,8 +47,10 @@ export function checkCommandSecurity(
   command: string,
   config?: CommandCheckConfig,
 ): CommandSecurityVerdict {
-  // Auto-disable in test environment to avoid breaking existing tests
-  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  // Auto-disable in vitest to avoid breaking existing tests
+  // Note: Only VITEST env var is checked (not NODE_ENV=test) to prevent
+  // accidental bypass in staging environments that use NODE_ENV=test
+  if (process.env.VITEST) {
     return { action: "allow", findings: [] };
   }
 
@@ -138,7 +140,9 @@ export function checkCommandSecurity(
  * Format findings for display in warnings array.
  */
 export function formatSecurityWarning(findings: CommandSecurityFinding[]): string {
-  if (findings.length === 0) return "";
+  if (findings.length === 0) {
+    return "";
+  }
 
   const lines = findings.map((f) => `  [${f.severity}] ${f.rule_id}: ${f.title}`);
   return `Security warning:\n${lines.join("\n")}`;
