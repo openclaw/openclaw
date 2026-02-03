@@ -85,6 +85,19 @@ function coerceDelivery(delivery: UnknownRecord) {
   return next;
 }
 
+function hasLegacyDeliveryHints(payload: UnknownRecord) {
+  if (typeof payload.deliver === "boolean") {
+    return true;
+  }
+  if (typeof payload.bestEffortDeliver === "boolean") {
+    return true;
+  }
+  if (typeof payload.to === "string" && payload.to.trim()) {
+    return true;
+  }
+  return false;
+}
+
 function unwrapJob(raw: UnknownRecord) {
   if (isRecord(raw.data)) {
     return raw.data;
@@ -158,6 +171,21 @@ export function normalizeCronJobInput(
       if (kind === "agentTurn") {
         next.sessionTarget = "isolated";
       }
+    }
+    const hasDelivery = "delivery" in next && next.delivery !== undefined;
+    const payload = isRecord(next.payload) ? next.payload : null;
+    const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
+    const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
+    const hasLegacyIsolation = isRecord(next.isolation);
+    const hasLegacyDelivery = payload ? hasLegacyDeliveryHints(payload) : false;
+    if (
+      !hasDelivery &&
+      !hasLegacyIsolation &&
+      !hasLegacyDelivery &&
+      sessionTarget === "isolated" &&
+      payloadKind === "agentTurn"
+    ) {
+      next.delivery = { mode: "announce" };
     }
   }
 
