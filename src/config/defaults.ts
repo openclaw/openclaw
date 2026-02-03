@@ -467,3 +467,113 @@ export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
 export function resetSessionDefaultsWarningForTests() {
   defaultWarnState = { warned: false };
 }
+
+export function applyHolochainDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  const holochain = cfg.holochain;
+  if (!holochain || holochain.mode === "disabled" || !holochain.mode) {
+    return cfg;
+  }
+
+  const nextHolochain = { ...holochain };
+  let mutated = false;
+
+  // Only create conductor config if it's explicitly provided or if autoStart is enabled
+  const wantsConductor =
+    holochain.conductor?.autoStart === true || holochain.conductor !== undefined;
+
+  if (wantsConductor) {
+    const conductor = nextHolochain.conductor ? { ...nextHolochain.conductor } : {};
+    let conductorMutated = !nextHolochain.conductor;
+
+    if (conductor.adminPort === undefined) {
+      conductor.adminPort = 4444;
+      conductorMutated = true;
+    }
+
+    if (conductor.appPort === undefined) {
+      conductor.appPort = 4445;
+      conductorMutated = true;
+    }
+
+    if (conductor.autoStart === undefined) {
+      conductor.autoStart = true;
+      conductorMutated = true;
+    }
+
+    if (conductorMutated) {
+      nextHolochain.conductor = conductor;
+      mutated = true;
+    }
+  }
+
+  if (holochain.mode === "hybrid" || holochain.mode === "full-p2p") {
+    if (!nextHolochain.sessionStorage) {
+      nextHolochain.sessionStorage = {};
+      mutated = true;
+    }
+
+    if (nextHolochain.sessionStorage.fallbackToLocal === undefined) {
+      nextHolochain.sessionStorage.fallbackToLocal = true;
+      mutated = true;
+    }
+
+    if (nextHolochain.sessionStorage.retentionDays === undefined) {
+      nextHolochain.sessionStorage.retentionDays = 30;
+      mutated = true;
+    }
+
+    if (nextHolochain.sessionStorage.encryption === undefined) {
+      nextHolochain.sessionStorage.encryption = true;
+      mutated = true;
+    }
+  }
+
+  if (nextHolochain.security?.rateLimitPerHour === undefined && nextHolochain.security) {
+    nextHolochain.security = {
+      ...nextHolochain.security,
+      rateLimitPerHour: 10,
+    };
+    mutated = true;
+  }
+
+  if (nextHolochain.a2a?.commissionRate === undefined && nextHolochain.a2a) {
+    nextHolochain.a2a = {
+      ...nextHolochain.a2a,
+      commissionRate: 0.05,
+    };
+    mutated = true;
+  }
+
+  if (nextHolochain.a2a?.maxPingPongTurns === undefined && nextHolochain.a2a) {
+    nextHolochain.a2a = {
+      ...nextHolochain.a2a,
+      maxPingPongTurns: 5,
+    };
+    mutated = true;
+  }
+
+  if (nextHolochain.p2p?.kitsuneTransport === undefined && nextHolochain.p2p) {
+    nextHolochain.p2p = {
+      ...nextHolochain.p2p,
+      kitsuneTransport: true,
+    };
+    mutated = true;
+  }
+
+  if (nextHolochain.p2p?.networkId === undefined && nextHolochain.p2p) {
+    nextHolochain.p2p = {
+      ...nextHolochain.p2p,
+      networkId: "openclaw-mainnet",
+    };
+    mutated = true;
+  }
+
+  if (!mutated) {
+    return cfg;
+  }
+
+  return {
+    ...cfg,
+    holochain: nextHolochain,
+  };
+}

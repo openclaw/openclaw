@@ -101,4 +101,9 @@ describe("config schema", () => {
     expect(defaultsHint?.help).toContain("last");
     expect(listHint?.help).toContain("bluebubbles");
   });
+
+  it("marks holochain seed phrase as sensitive", () => {
+    const res = buildConfigSchema();
+    expect(res.uiHints["holochain.a2a.wallet.seedPhrase"]?.sensitive).toBe(true);
+  });
 });

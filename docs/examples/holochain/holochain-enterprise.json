@@ -1,0 +1,29 @@
+{
+  "holochain": {
+    "mode": "hybrid",
+    "conductor": {
+      "adminPort": 4444,
+      "appPort": 4445,
+      "autoStart": true
+    },
+    "sessionStorage": {
+      "enabled": true,
+      "fallbackToLocal": true,
+      "retentionDays": 90,
+      "encryption": true
+    },
+    "security": {
+      "promptValidation": true,
+      "auditLog": true,
+      "rateLimitPerHour": 10,
+      "sandboxHardening": true
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "auth": {
+      "mode": "token"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "holochain": {
+    "mode": "full-p2p",
+    "conductor": {
+      "adminPort": 4444,
+      "appPort": 4445,
+      "autoStart": true
+    },
+    "sessionStorage": {
+      "enabled": true,
+      "fallbackToLocal": true,
+      "retentionDays": 30,
+      "encryption": true
+    },
+    "p2p": {
+      "enabled": true,
+      "bootstrapNodes": ["wss://bootstrap1.openclaw.ai", "wss://bootstrap2.openclaw.ai"],
+      "networkId": "openclaw-mainnet",
+      "kitsuneTransport": true
+    }
+  },
+  "gateway": {
+    "mode": "local"
+  }
+}

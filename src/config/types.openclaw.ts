@@ -11,6 +11,7 @@ import type {
   GatewayConfig,
   TalkConfig,
 } from "./types.gateway.js";
+import type { HolochainConfig } from "./types.holochain.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type {
   AudioConfig,
@@ -95,6 +96,7 @@ export type OpenClawConfig = {
   canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
   gateway?: GatewayConfig;
+  holochain?: HolochainConfig;
 };
 
 export type ConfigValidationIssue = {

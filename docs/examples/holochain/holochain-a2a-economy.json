@@ -1,0 +1,39 @@
+{
+  "holochain": {
+    "mode": "hybrid",
+    "conductor": {
+      "adminPort": 4444,
+      "appPort": 4445,
+      "autoStart": true
+    },
+    "sessionStorage": {
+      "enabled": true,
+      "fallbackToLocal": true,
+      "retentionDays": 30,
+      "encryption": true
+    },
+    "security": {
+      "promptValidation": true,
+      "auditLog": true,
+      "rateLimitPerHour": 10
+    },
+    "a2a": {
+      "enabled": true,
+      "wallet": {
+        "enabled": true,
+        "network": "devnet"
+      },
+      "commissionRate": 0.05,
+      "maxPingPongTurns": 5
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "port": 18789
+  },
+  "session": {
+    "agentToAgent": {
+      "maxPingPongTurns": 5
+    }
+  }
+}

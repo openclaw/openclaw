@@ -51,6 +51,7 @@ const GROUP_LABELS: Record<string, string> = {
   diagnostics: "Diagnostics",
   logging: "Logging",
   gateway: "Gateway",
+  holochain: "Holochain P2P",
   nodeHost: "Node Host",
   agents: "Agents",
   tools: "Tools",
@@ -78,6 +79,7 @@ const GROUP_ORDER: Record<string, number> = {
   update: 25,
   diagnostics: 27,
   gateway: 30,
+  holochain: 32,
   nodeHost: 35,
   agents: 40,
   tools: 50,
@@ -407,6 +409,32 @@ const FIELD_HELP: Record<string, string> = {
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings).",
   "gateway.nodes.denyCommands":
     "Commands to block even if present in node claims or default allowlist.",
+  "holochain.mode": "Holochain integration mode (disabled, hybrid, full-p2p).",
+  "holochain.conductor.binPath": "Path to Holochain conductor binary (auto-detect if unset).",
+  "holochain.conductor.adminPort": "Admin port for conductor control (default: 4444).",
+  "holochain.conductor.appPort": "App port for zome calls (default: 4445).",
+  "holochain.conductor.autoStart": "Auto-start conductor if not running (default: true).",
+  "holochain.conductor.dataDir": "Conductor data directory (default: ~/.openclaw/holochain).",
+  "holochain.sessionStorage.enabled": "Enable DHT-based session storage (default: false).",
+  "holochain.sessionStorage.fallbackToLocal":
+    "Fallback to local storage if DHT unavailable (default: true).",
+  "holochain.sessionStorage.retentionDays": "Session retention period in days (default: 30).",
+  "holochain.sessionStorage.encryption": "Enable AES-256 session encryption (default: true).",
+  "holochain.security.promptValidation": "Enable prompt injection prevention (default: false).",
+  "holochain.security.auditLog": "Enable immutable audit logging to DHT (default: false).",
+  "holochain.security.rateLimitPerHour": "Rate limit per IP/hour (default: 10).",
+  "holochain.security.sandboxHardening":
+    "Enable AppArmor/seccomp sandbox profiles (default: false).",
+  "holochain.a2a.enabled": "Enable Agent-to-Agent economy features (default: false).",
+  "holochain.a2a.wallet.enabled": "Enable Solana/USDC wallet integration (default: false).",
+  "holochain.a2a.wallet.seedPhrase": "Managed wallet seed phrase (encrypted).",
+  "holochain.a2a.wallet.network": "Solana network (mainnet-beta, devnet, testnet).",
+  "holochain.a2a.commissionRate": "Commission rate for verified skills (0.0-1.0, default: 0.05).",
+  "holochain.a2a.maxPingPongTurns": "Max ping-pong turns for A2A sessions (default: 5).",
+  "holochain.p2p.enabled": "Enable full P2P mode (disables gateway routing).",
+  "holochain.p2p.bootstrapNodes": "Bootstrap nodes for DHT peer discovery.",
+  "holochain.p2p.networkId": "Network identifier (default: openclaw-mainnet).",
+  "holochain.p2p.kitsuneTransport": "Enable Kitsune P2P transport (default: true).",
   "nodeHost.browserProxy.enabled": "Expose the local browser control server via node proxy.",
   "nodeHost.browserProxy.allowProfiles":
     "Optional allowlist of browser profile names exposed via the node proxy.",
@@ -695,11 +723,26 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",
   "gateway.controlUi.basePath": "/openclaw",
+  "holochain.conductor.binPath": "/usr/local/bin/holochain",
+  "holochain.conductor.dataDir": "~/.openclaw/holochain",
+  "holochain.a2a.wallet.seedPhrase": "word1 word2 ... word24",
+  "holochain.p2p.bootstrapNodes": "wss://bootstrap1.openclaw.ai,wss://bootstrap2.openclaw.ai",
+  "holochain.p2p.networkId": "openclaw-mainnet",
   "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.list[].identity.avatar": "avatars/openclaw.png",
 };
 
-const SENSITIVE_PATTERNS = [/token/i, /password/i, /secret/i, /api.?key/i];
+const SENSITIVE_PATTERNS = [
+  /token/i,
+  /password/i,
+  /secret/i,
+  /api.?key/i,
+  /seed/i,
+  /phrase/i,
+  /mnemonic/i,
+  /private.?key/i,
+  /wallet.?key/i,
+];
 
 function isSensitivePath(path: string): boolean {
   return SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
