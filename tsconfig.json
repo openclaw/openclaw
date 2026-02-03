@@ -16,7 +16,8 @@
     "rootDir": "src",
     "skipLibCheck": true,
     "strict": true,
-    "target": "es2023"
+    "target": "es2023",
+    "useDefineForClassFields": false
   },
   "include": ["src/**/*", "ui/**/*"],
   "exclude": [

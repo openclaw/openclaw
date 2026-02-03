@@ -2952,6 +2952,7 @@ Control UI base path:
 - `gateway.controlUi.basePath` sets the URL prefix where the Control UI is served.
 - Examples: `"/ui"`, `"/openclaw"`, `"/apps/openclaw"`.
 - Default: root (`/`) (unchanged).
+- `gateway.controlUi.root` sets the filesystem root for Control UI assets (default: `dist/control-ui`).
 - `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI when
   device identity is omitted (typically over HTTP). Default: `false`. Prefer HTTPS
   (Tailscale Serve) or `127.0.0.1`.

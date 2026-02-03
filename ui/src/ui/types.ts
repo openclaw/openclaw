@@ -515,6 +515,7 @@ export type SkillStatusEntry = {
   name: string;
   description: string;
   source: string;
+  bundled?: boolean;
   filePath: string;
   baseDir: string;
   skillKey: string;
