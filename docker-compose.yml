@@ -2,6 +2,7 @@ services:
   openclaw-gateway:
     container_name: openclaw-gateway
     image: ${OPENCLAW_IMAGE:-openclaw:local}
+    pull_policy: never
     environment:
       HOME: /data
       TERM: xterm-256color
@@ -31,6 +32,7 @@ services:
 
   openclaw-cli:
     container_name: openclaw-cli
+    pull_policy: never
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     environment:
       HOME: /data
