@@ -1,5 +1,5 @@
-import type { GatewayBrowserClient } from "../gateway";
-import { normalizeAssistantIdentity } from "../assistant-identity";
+import type { GatewayBrowserClient } from "../gateway.ts";
+import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 
 export type AssistantIdentityState = {
   client: GatewayBrowserClient | null;
