@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
+import { validateHostHeader } from "../gateway/auth.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { deleteBridgeAuthForPort, setBridgeAuthForPort } from "./bridge-auth-registry.js";
 import type { ResolvedBrowserConfig } from "./config.js";
@@ -23,12 +24,16 @@ export type BrowserBridge = {
   state: BrowserServerState;
 };
 
+/** Default allowed Host header values for DNS rebinding protection. */
+const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1"];
+
 export async function startBrowserBridgeServer(params: {
   resolved: ResolvedBrowserConfig;
   host?: string;
   port?: number;
   authToken?: string;
   authPassword?: string;
+  allowedHosts?: string[];
   onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
@@ -39,6 +44,17 @@ export async function startBrowserBridgeServer(params: {
 
   const app = express();
   installBrowserCommonMiddleware(app);
+
+  // DNS rebinding protection: validate Host header on all requests
+  const allowedHosts = ["localhost", "127.0.0.1", "::1", ...(params.allowedHosts ?? [])];
+  app.use((req, res, next) => {
+    const hostCheck = validateHostHeader(req, allowedHosts);
+    if (!hostCheck.valid) {
+      res.status(403).send("Forbidden: Invalid Host header");
+      return;
+    }
+    next();
+  });
 
   const authToken = params.authToken?.trim() || undefined;
   const authPassword = params.authPassword?.trim() || undefined;

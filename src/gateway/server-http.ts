@@ -23,6 +23,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   authorizeGatewayConnect,
   isLocalDirectRequest,
+  validateHostHeader,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
@@ -497,6 +498,15 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      // DNS rebinding protection: validate Host header against allowed hosts
+      const hostCheck = validateHostHeader(req, resolvedAuth.allowedHosts);
+      if (!hostCheck.valid) {
+        res.statusCode = 403;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Forbidden: Invalid Host header");
+        return;
+      }
+
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
