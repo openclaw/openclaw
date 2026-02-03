@@ -261,14 +261,6 @@ else
     exit 1
   fi
 fi
-    --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
-    -t "$IMAGE_NAME" \
-    -f "$ROOT_DIR/Dockerfile" \
-    "$ROOT_DIR"
-else
-  echo "==> Pulling Docker image: $IMAGE_NAME"
-  docker pull "$IMAGE_NAME"
-fi
 
 echo ""
 echo "==> Onboarding (interactive)"
