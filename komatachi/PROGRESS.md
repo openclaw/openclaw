@@ -109,6 +109,25 @@ Key validations:
 
 This validates both the distilled code and the distillation process itself.
 
+### 6. Rust Portability Validation (Complete, Cleaned Up)
+
+Built an experimental Rust implementation of compaction to validate decision #5 ("TypeScript with Rust portability"). The experiment confirmed:
+
+- Type mapping works cleanly between TypeScript and Rust
+- Pure functions port 1:1
+- Hybrid architecture (Rust computation, TypeScript async) is viable
+
+**Outcome**: Validation successful. Experimental code removed; lessons documented in [docs/rust-porting.md](./docs/rust-porting.md) for future reference.
+
+### 7. Documentation Reorganization (Complete)
+
+Restructured documentation for discoverability:
+
+- Created `docs/` directory for supplementary documentation
+- Added `docs/INDEX.md` as central navigation hub
+- Updated `CLAUDE.md` with document map
+- Preserved lessons from Rust experiment in `docs/rust-porting.md`
+
 ---
 
 ## Key Decisions Made
@@ -175,12 +194,15 @@ None currently. Cross-agent session access question resolved—deferred until re
 
 ```
 komatachi/
-├── CLAUDE.md           # Project context
-├── DISTILLATION.md     # Principles and process
+├── CLAUDE.md           # Project context (includes document map)
 ├── PROGRESS.md         # This file - update as work progresses
+├── DISTILLATION.md     # Principles and process
 ├── package.json        # Dependencies (vitest, typescript)
 ├── tsconfig.json       # TypeScript config
 ├── vitest.config.ts    # Test runner config
+├── docs/               # Supplementary documentation
+│   ├── INDEX.md        # Central navigation hub
+│   └── rust-porting.md # Rust migration guide (from validation)
 ├── scouting/           # Analysis of OpenClaw components
 │   ├── context-management.md
 │   ├── long-term-memory-search.md
