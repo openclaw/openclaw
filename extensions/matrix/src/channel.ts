@@ -24,7 +24,7 @@ import {
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
 import { resolveMatrixAuth } from "./matrix/client.js";
-import { normalizeAllowListLower } from "./matrix/monitor/allowlist.js";
+import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import { probeMatrix } from "./matrix/probe.js";
 import { sendMessageMatrix } from "./matrix/send.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
@@ -144,7 +144,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     }),
     resolveAllowFrom: ({ cfg }) =>
       ((cfg as CoreConfig).channels?.matrix?.dm?.allowFrom ?? []).map((entry) => String(entry)),
-    formatAllowFrom: ({ allowFrom }) => normalizeAllowListLower(allowFrom),
+    formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
   },
   security: {
     resolveDmPolicy: ({ account }) => ({
@@ -153,11 +153,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       policyPath: "channels.matrix.dm.policy",
       allowFromPath: "channels.matrix.dm.allowFrom",
       approveHint: formatPairingApproveHint("matrix"),
-      normalizeEntry: (raw) =>
-        raw
-          .replace(/^matrix:/i, "")
-          .trim()
-          .toLowerCase(),
+      normalizeEntry: (raw) => normalizeMatrixUserId(raw),
     }),
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = (cfg as CoreConfig).channels?.defaults?.groupPolicy;
