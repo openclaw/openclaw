@@ -1,36 +1,36 @@
 ---
 read_when:
-  - 需要了解加载了哪些环境变量及其加载顺序
-  - 正在调试 Gateway网关中缺失的 API 密钥
-  - 正在编写提供商认证或部署环境的文档
-summary: OpenClaw 从哪里加载环境变量及其优先级顺序
+  - 你需要知道哪些环境变量被加载，以及加载顺序
+  - 你在调试 Gateway 网关中缺失的 API 密钥
+  - 你在编写提供商认证或部署环境的文档
+summary: OpenClaw 从哪里加载环境变量以及优先级顺序
 title: 环境变量
 x-i18n:
-  generated_at: "2026-02-01T20:24:58Z"
+  generated_at: "2026-02-03T07:47:11Z"
   model: claude-opus-4-5
   provider: pi
   source_hash: b49ae50e5d306612f89f93a86236188a4f2ec23f667e2388b043832be3ac1546
   source_path: environment.md
-  workflow: 14
+  workflow: 15
 ---
 
 # 环境变量
 
-OpenClaw 从多个来源获取环境变量。规则是**永远不覆盖已有的值**。
+OpenClaw 从多个来源拉取环境变量。规则是**永不覆盖现有值**。
 
 ## 优先级（从高到低）
 
-1. **进程环境**（Gateway网关进程从父 shell/守护进程继承的变量）。
-2. **当前工作目录下的 `.env`**（dotenv 默认行为；不覆盖已有值）。
-3. **全局 `.env`**，位于 `~/.openclaw/.env`（即 `$OPENCLAW_STATE_DIR/.env`；不覆盖已有值）。
-4. **配置文件中的 `env` 块**，位于 `~/.openclaw/openclaw.json`（仅在变量缺失时应用）。
-5. **可选的登录 shell 导入**（`env.shellEnv.enabled` 或 `OPENCLAW_LOAD_SHELL_ENV=1`），仅对缺失的预期键生效。
+1. **进程环境**（Gateway 网关进程从父 shell/守护进程已有的内容）。
+2. **当前工作目录中的 `.env`**（dotenv 默认；不覆盖）。
+3. **全局 `.env`** 位于 `~/.openclaw/.env`（即 `$OPENCLAW_STATE_DIR/.env`；不覆盖）。
+4. **配置 `env` 块** 位于 `~/.openclaw/openclaw.json`（仅在缺失时应用）。
+5. **可选的登录 shell 导入**（`env.shellEnv.enabled` 或 `OPENCLAW_LOAD_SHELL_ENV=1`），仅对缺失的预期键名应用。
 
-如果配置文件完全不存在，则跳过步骤 4；如果已启用，shell 导入仍会运行。
+如果配置文件完全缺失，步骤 4 将被跳过；如果启用了 shell 导入，它仍会运行。
 
-## 配置文件 `env` 块
+## 配置 `env` 块
 
-有两种等效方式设置内联环境变量（两者都不覆盖已有值）：
+两种等效方式设置内联环境变量（都是非覆盖的）：
 
 ```json5
 {
@@ -45,7 +45,7 @@ OpenClaw 从多个来源获取环境变量。规则是**永远不覆盖已有的
 
 ## Shell 环境导入
 
-`env.shellEnv` 会运行你的登录 shell，并仅导入**缺失的**预期键：
+`env.shellEnv` 运行你的登录 shell 并仅导入**缺失的**预期键名：
 
 ```json5
 {
@@ -58,7 +58,7 @@ OpenClaw 从多个来源获取环境变量。规则是**永远不覆盖已有的
 }
 ```
 
-等效的环境变量：
+环境变量等效项：
 
 - `OPENCLAW_LOAD_SHELL_ENV=1`
 - `OPENCLAW_SHELL_ENV_TIMEOUT_MS=15000`
@@ -79,10 +79,10 @@ OpenClaw 从多个来源获取环境变量。规则是**永远不覆盖已有的
 }
 ```
 
-详情请参阅[配置：环境变量替换](/gateway/configuration#env-var-substitution-in-config)。
+完整详情参见[配置：环境变量替换](/gateway/configuration#env-var-substitution-in-config)。
 
 ## 相关内容
 
-- [Gateway网关配置](/gateway/configuration)
-- [常见问题：环境变量与 .env 加载](/help/faq#env-vars-and-env-loading)
-- [模型概览](/concepts/models)
+- [Gateway 网关配置](/gateway/configuration)
+- [常见问题：环境变量和 .env 加载](/help/faq#env-vars-and-env-loading)
+- [模型概述](/concepts/models)

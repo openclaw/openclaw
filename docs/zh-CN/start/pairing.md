@@ -1,12 +1,12 @@
 ---
 read_when:
-  - 设置私信访问控制时
-  - 配对新的 iOS/Android 节点时
-  - 审查 OpenClaw 安全态势时
-summary: 配对概览：审批谁可以私信你 + 哪些节点可以加入
+  - 设置私信访问控制
+  - 配对新的 iOS/Android 节点
+  - 审查 OpenClaw 安全态势
+summary: 配对概述：批准谁可以向你发送私信 + 哪些节点可以加入
 title: 配对
 x-i18n:
-  generated_at: "2026-02-01T21:38:45Z"
+  generated_at: "2026-02-03T07:54:19Z"
   model: claude-opus-4-5
   provider: pi
   source_hash: c46a5c39f289c8fd0783baacd927f550c3d3ae8889a7bc7de133b795f16fa08a
@@ -16,25 +16,24 @@ x-i18n:
 
 # 配对
 
-"配对"是 OpenClaw 的显式**所有者审批**步骤。
-它用于两个场景：
+"配对"是 OpenClaw 的显式**所有者批准**步骤。它用于两个地方：
 
 1. **私信配对**（谁被允许与机器人对话）
-2. **节点配对**（哪些设备/节点被允许加入 Gateway网关网络）
+2. **节点配对**（哪些设备/节点被允许加入 Gateway 网关网络）
 
 安全上下文：[安全](/gateway/security)
 
-## 1) 私信配对（入站聊天访问）
+## 1）私信配对（入站聊天访问）
 
-当渠道配置了私信策略 `pairing` 时，未知发送者会收到一个短码，其消息在你批准之前**不会被处理**。
+当渠道配置为私信策略 `pairing` 时，未知发送者会收到一个短代码，他们的消息**不会被处理**，直到你批准。
 
 默认私信策略记录在：[安全](/gateway/security)
 
-配对码：
+配对代码：
 
-- 8 个字符，大写，不含歧义字符（`0O1I`）。
-- **1 小时后过期**。机器人仅在创建新请求时发送配对消息（每个发送者大约每小时一次）。
-- 待处理的私信配对请求默认每个渠道上限为 **3 个**；额外请求将被忽略，直到有请求过期或被批准。
+- 8 个字符，大写，无歧义字符（`0O1I`）。
+- **1 小时后过期**。机器人仅在创建新请求时发送配对消息（大约每个发送者每小时一次）。
+- 待处理的私信配对请求默认上限为**每个渠道 3 个**；在一个过期或被批准之前，额外的请求将被忽略。
 
 ### 批准发送者
 
@@ -50,13 +49,13 @@ openclaw pairing approve telegram <CODE>
 存储在 `~/.openclaw/credentials/` 下：
 
 - 待处理请求：`<channel>-pairing.json`
-- 已批准的允许列表存储：`<channel>-allowFrom.json`
+- 已批准允许列表存储：`<channel>-allowFrom.json`
 
-请将这些文件视为敏感信息（它们控制着对你助手的访问权限）。
+将这些视为敏感信息（它们控制对你助手的访问）。
 
-## 2) 节点设备配对（iOS/Android/macOS/无头节点）
+## 2）节点设备配对（iOS/Android/macOS/无头节点）
 
-节点以 `role: node` 的**设备**身份连接到 Gateway网关。Gateway网关会创建一个需要批准的设备配对请求。
+节点作为 `role: node` 的**设备**连接到 Gateway 网关。Gateway 网关创建一个必须被批准的设备配对请求。
 
 ### 批准节点设备
 
@@ -70,12 +69,12 @@ openclaw devices reject <requestId>
 
 存储在 `~/.openclaw/devices/` 下：
 
-- `pending.json`（短期有效；待处理请求会过期）
+- `pending.json`（短期；待处理请求会过期）
 - `paired.json`（已配对设备 + 令牌）
 
-### 注意事项
+### 说明
 
-- 旧版 `node.pair.*` API（CLI：`openclaw nodes pending/approve`）是一个独立的 Gateway网关所拥有的配对存储。WebSocket 节点仍然需要设备配对。
+- 旧版 `node.pair.*` API（CLI：`openclaw nodes pending/approve`）是一个单独的 Gateway 网关拥有的配对存储。WS 节点仍然需要设备配对。
 
 ## 相关文档
 

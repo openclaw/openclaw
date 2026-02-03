@@ -1,37 +1,37 @@
 ---
 read_when:
-  - 你需要定时任务和唤醒功能
-  - 你正在调试定时任务的执行和日志
-summary: "`openclaw cron` 的 CLI 参考（调度和运行后台任务）"
+  - 你需要定时作业和唤醒功能
+  - 你正在调试 cron 执行和日志
+summary: "`openclaw cron` 的 CLI 参考（调度和运行后台作业）"
 title: cron
 x-i18n:
-  generated_at: "2026-02-01T19:58:49Z"
+  generated_at: "2026-02-03T07:44:47Z"
   model: claude-opus-4-5
   provider: pi
   source_hash: bc9317c824f3b6339df657cc269961d9b5f121da65ec2b23a07d454e6d611135
   source_path: cli/cron.md
-  workflow: 14
+  workflow: 15
 ---
 
 # `openclaw cron`
 
-管理 Gateway网关调度器的定时任务。
+管理 Gateway 网关调度器的 cron 作业。
 
 相关内容：
 
-- 定时任务：[定时任务](/automation/cron-jobs)
+- Cron 作业：[Cron 作业](/automation/cron-jobs)
 
-提示：运行 `openclaw cron --help` 查看完整的命令列表。
+提示：运行 `openclaw cron --help` 查看完整的命令集。
 
-## 常见编辑
+## 常用编辑
 
-更新投递设置而不更改消息内容：
+更新投递设置而不更改消息：
 
 ```bash
 openclaw cron edit <job-id> --deliver --channel telegram --to "123456789"
 ```
 
-为隔离任务禁用投递：
+为隔离的作业禁用投递：
 
 ```bash
 openclaw cron edit <job-id> --no-deliver

@@ -1,75 +1,76 @@
 ---
 read_when:
-  - 你想要容器化的 Gateway网关而非本地安装
+  - 你想要容器化的 Gateway 网关而不是本地安装
   - 你正在验证 Docker 流程
-summary: 可选的基于 Docker 的 OpenClaw 设置和新手引导
+summary: OpenClaw 的可选 Docker 设置和新手引导
 title: Docker
 x-i18n:
-  generated_at: "2026-02-01T21:07:14Z"
+  generated_at: "2026-02-03T07:51:20Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: 781dd01ca99a2101f622f03162eb1776079c3c444f54c5a054d6816ec203e2f2
+  source_hash: bd823e49b6ce76fe1136a42bf48f436b316ed1cd2f9612e3f4919f1e6b2cdee9
   source_path: install/docker.md
-  workflow: 14
+  workflow: 15
 ---
 
 # Docker（可选）
 
-Docker 是**可选的**。仅在你需要容器化 Gateway网关或验证 Docker 流程时使用。
+Docker 是**可选的**。仅当你想要容器化的 Gateway 网关或验证 Docker 流程时才使用它。
 
 ## Docker 适合我吗？
 
-- **适合**：你需要一个隔离的、可随时销毁的 Gateway网关环境，或者想在无需本地安装的主机上运行 OpenClaw。
-- **不适合**：你在自己的机器上运行，只想要最快的开发循环。请改用常规安装流程。
-- **沙箱说明**：智能体沙箱也使用 Docker，但它**不需要**完整的 Gateway网关运行在 Docker 中。详见 [沙箱](/gateway/sandboxing)。
+- **是**：你想要一个隔离的、可丢弃的 Gateway 网关环境，或在没有本地安装的主机上运行 OpenClaw。
+- **否**：你在自己的机器上运行，只想要最快的开发循环。请改用正常的安装流程。
+- **沙箱注意事项**：智能体沙箱隔离也使用 Docker，但它**不需要**完整的 Gateway 网关在 Docker 中运行。参阅[沙箱隔离](/gateway/sandboxing)。
 
 本指南涵盖：
 
-- 容器化 Gateway网关（完整的 OpenClaw 运行在 Docker 中）
-- 按会话的智能体沙箱（主机 Gateway网关 + Docker 隔离的智能体工具）
+- 容器化 Gateway 网关（完整的 OpenClaw 在 Docker 中）
+- 每会话智能体沙箱（主机 Gateway 网关 + Docker 隔离的智能体工具）
 
-沙箱详情：[沙箱](/gateway/sandboxing)
+沙箱隔离详情：[沙箱隔离](/gateway/sandboxing)
 
-## 前置要求
+## 要求
 
 - Docker Desktop（或 Docker Engine）+ Docker Compose v2
-- 足够的磁盘空间用于镜像和日志
+- 足够的磁盘空间用于镜像 + 日志
 
-## 容器化 Gateway网关（Docker Compose）
+## 容器化 Gateway 网关（Docker Compose）
 
 ### 快速开始（推荐）
 
-在仓库根目录运行：
+从仓库根目录：
 
 ```bash
 ./docker-setup.sh
 ```
 
-该脚本会：
+此脚本：
 
-- 构建 Gateway网关镜像
+- 构建 Gateway 网关镜像
 - 运行新手引导向导
 - 打印可选的提供商设置提示
-- 通过 Docker Compose 启动 Gateway网关
-- 生成 Gateway网关令牌并写入 `.env`
+- 通过 Docker Compose 启动 Gateway 网关
+- 生成 Gateway 网关令牌并写入 `.env`
 
 可选环境变量：
 
-- `OPENCLAW_DOCKER_APT_PACKAGES` — 在构建期间安装额外的 apt 软件包
+- `OPENCLAW_DOCKER_APT_PACKAGES` — 在构建期间安装额外的 apt 包
 - `OPENCLAW_EXTRA_MOUNTS` — 添加额外的主机绑定挂载
-- `OPENCLAW_HOME_VOLUME` — 将 `/home/node` 持久化到命名卷
+- `OPENCLAW_HOME_VOLUME` — 在命名卷中持久化 `/home/node`
 
 完成后：
 
 - 在浏览器中打开 `http://127.0.0.1:18789/`。
-- 在控制界面中粘贴令牌（设置 → 令牌）。
+- 将令牌粘贴到控制 UI（设置 → token）。
+- 需要再次获取带令牌的 URL？运行 `docker compose run --rm openclaw-cli dashboard --no-open`。
 
-配置和工作区写入主机：
+它在主机上写入配置/工作区：
 
 - `~/.openclaw/`
 - `~/.openclaw/workspace`
 
-在 VPS 上运行？参见 [Hetzner（Docker VPS）](/platforms/hetzner)。
+在 VPS 上运行？参阅 [Hetzner（Docker VPS）](/platforms/hetzner)。
 
 ### 手动流程（compose）
 
@@ -79,9 +80,27 @@ docker compose run --rm openclaw-cli onboard
 docker compose up -d openclaw-gateway
 ```
 
+注意：从仓库根目录运行 `docker compose ...`。如果你启用了 `OPENCLAW_EXTRA_MOUNTS` 或 `OPENCLAW_HOME_VOLUME`，设置脚本会写入 `docker-compose.extra.yml`；在其他地方运行 Compose 时包含它：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml <command>
+```
+
+### 控制 UI 令牌 + 配对（Docker）
+
+如果你看到"unauthorized"或"disconnected (1008): pairing required"，获取新的仪表板链接并批准浏览器设备：
+
+```bash
+docker compose run --rm openclaw-cli dashboard --no-open
+docker compose run --rm openclaw-cli devices list
+docker compose run --rm openclaw-cli devices approve <requestId>
+```
+
+更多详情：[仪表板](/web/dashboard)，[设备](/cli/devices)。
+
 ### 额外挂载（可选）
 
-如果你想将额外的主机目录挂载到容器中，请在运行 `docker-setup.sh` 之前设置 `OPENCLAW_EXTRA_MOUNTS`。该变量接受逗号分隔的 Docker 绑定挂载列表，并通过生成 `docker-compose.extra.yml` 将其应用到 `openclaw-gateway` 和 `openclaw-cli`。
+如果你想将额外的主机目录挂载到容器中，在运行 `docker-setup.sh` 之前设置 `OPENCLAW_EXTRA_MOUNTS`。这接受逗号分隔的 Docker 绑定挂载列表，并通过生成 `docker-compose.extra.yml` 将它们应用到 `openclaw-gateway` 和 `openclaw-cli`。
 
 示例：
 
@@ -90,15 +109,15 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 ./docker-setup.sh
 ```
 
-注意事项：
+注意：
 
-- 在 macOS/Windows 上，路径必须与 Docker Desktop 共享。
-- 如果修改了 `OPENCLAW_EXTRA_MOUNTS`，请重新运行 `docker-setup.sh` 以重新生成额外的 compose 文件。
-- `docker-compose.extra.yml` 是自动生成的。请勿手动编辑。
+- 路径必须在 macOS/Windows 上与 Docker Desktop 共享。
+- 如果你编辑 `OPENCLAW_EXTRA_MOUNTS`，重新运行 `docker-setup.sh` 以重新生成额外的 compose 文件。
+- `docker-compose.extra.yml` 是生成的。不要手动编辑它。
 
-### 持久化整个容器 home 目录（可选）
+### 持久化整个容器 home（可选）
 
-如果你希望 `/home/node` 在容器重建后持久保留，请通过 `OPENCLAW_HOME_VOLUME` 设置命名卷。这会创建一个 Docker 卷并挂载到 `/home/node`，同时保留标准的配置/工作区绑定挂载。此处请使用命名卷（而非绑定路径）；绑定挂载请使用 `OPENCLAW_EXTRA_MOUNTS`。
+如果你想让 `/home/node` 在容器重建后持久化，通过 `OPENCLAW_HOME_VOLUME` 设置一个命名卷。这会创建一个 Docker 卷并将其挂载到 `/home/node`，同时保持标准的配置/工作区绑定挂载。这里使用命名卷（不是绑定路径）；对于绑定挂载，使用 `OPENCLAW_EXTRA_MOUNTS`。
 
 示例：
 
@@ -107,7 +126,7 @@ export OPENCLAW_HOME_VOLUME="openclaw_home"
 ./docker-setup.sh
 ```
 
-可以与额外挂载组合使用：
+你可以将其与额外挂载结合使用：
 
 ```bash
 export OPENCLAW_HOME_VOLUME="openclaw_home"
@@ -115,14 +134,14 @@ export OPENCLAW_EXTRA_MOUNTS="$HOME/.codex:/home/node/.codex:ro,$HOME/github:/ho
 ./docker-setup.sh
 ```
 
-注意事项：
+注意：
 
-- 如果修改了 `OPENCLAW_HOME_VOLUME`，请重新运行 `docker-setup.sh` 以重新生成额外的 compose 文件。
-- 命名卷会一直保留，直到通过 `docker volume rm <name>` 删除。
+- 如果你更改 `OPENCLAW_HOME_VOLUME`，重新运行 `docker-setup.sh` 以重新生成额外的 compose 文件。
+- 命名卷会持久化直到使用 `docker volume rm <name>` 删除。
 
-### 安装额外的 apt 软件包（可选）
+### 安装额外的 apt 包（可选）
 
-如果你需要在镜像中安装系统软件包（例如构建工具或媒体库），请在运行 `docker-setup.sh` 之前设置 `OPENCLAW_DOCKER_APT_PACKAGES`。这会在镜像构建期间安装软件包，因此即使容器被删除也会保留。
+如果你需要镜像内的系统包（例如构建工具或媒体库），在运行 `docker-setup.sh` 之前设置 `OPENCLAW_DOCKER_APT_PACKAGES`。这会在镜像构建期间安装包，因此即使容器被删除它们也会持久化。
 
 示例：
 
@@ -131,14 +150,64 @@ export OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg build-essential"
 ./docker-setup.sh
 ```
 
-注意事项：
+注意：
 
-- 该变量接受以空格分隔的 apt 软件包名称列表。
-- 如果修改了 `OPENCLAW_DOCKER_APT_PACKAGES`，请重新运行 `docker-setup.sh` 以重建镜像。
+- 这接受空格分隔的 apt 包名称列表。
+- 如果你更改 `OPENCLAW_DOCKER_APT_PACKAGES`，重新运行 `docker-setup.sh` 以重建镜像。
 
-### 加速重建（推荐）
+### 高级用户/功能完整的容器（选择加入）
 
-为加速重建，请调整 Dockerfile 中的顺序以利用依赖层缓存。这样只有在锁文件变更时才会重新运行 `pnpm install`：
+默认的 Docker 镜像是**安全优先**的，以非 root 的 `node` 用户运行。这保持了较小的攻击面，但这意味着：
+
+- 运行时无法安装系统包
+- 默认没有 Homebrew
+- 没有捆绑的 Chromium/Playwright 浏览器
+
+如果你想要功能更完整的容器，使用这些选择加入选项：
+
+1. **持久化 `/home/node`** 以便浏览器下载和工具缓存能够保留：
+
+```bash
+export OPENCLAW_HOME_VOLUME="openclaw_home"
+./docker-setup.sh
+```
+
+2. **将系统依赖烘焙到镜像中**（可重复 + 持久化）：
+
+```bash
+export OPENCLAW_DOCKER_APT_PACKAGES="git curl jq"
+./docker-setup.sh
+```
+
+3. **不使用 `npx` 安装 Playwright 浏览器**（避免 npm 覆盖冲突）：
+
+```bash
+docker compose run --rm openclaw-cli \
+  node /app/node_modules/playwright-core/cli.js install chromium
+```
+
+如果你需要 Playwright 安装系统依赖，使用 `OPENCLAW_DOCKER_APT_PACKAGES` 重建镜像，而不是在运行时使用 `--with-deps`。
+
+4. **持久化 Playwright 浏览器下载**：
+
+- 在 `docker-compose.yml` 中设置 `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright`。
+- 确保 `/home/node` 通过 `OPENCLAW_HOME_VOLUME` 持久化，或通过 `OPENCLAW_EXTRA_MOUNTS` 挂载 `/home/node/.cache/ms-playwright`。
+
+### 权限 + EACCES
+
+镜像以 `node`（uid 1000）运行。如果你在 `/home/node/.openclaw` 上看到权限错误，确保你的主机绑定挂载由 uid 1000 拥有。
+
+示例（Linux 主机）：
+
+```bash
+sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
+```
+
+如果你选择以 root 运行以方便使用，你接受了安全权衡。
+
+### 更快的重建（推荐）
+
+要加速重建，排序你的 Dockerfile 以便依赖层被缓存。这避免了除非锁文件更改否则重新运行 `pnpm install`：
 
 ```dockerfile
 FROM node:22-bookworm
@@ -151,7 +220,7 @@ RUN corepack enable
 
 WORKDIR /app
 
-# 除非包元数据变更，否则缓存依赖
+# 缓存依赖，除非包元数据更改
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY ui/package.json ./ui/package.json
 COPY scripts ./scripts
@@ -170,27 +239,31 @@ CMD ["node","dist/index.js"]
 
 ### 渠道设置（可选）
 
-使用 CLI 容器配置渠道，然后根据需要重启 Gateway网关。
+使用 CLI 容器配置渠道，然后在需要时重启 Gateway 网关。
 
-WhatsApp（二维码）：
+WhatsApp（QR）：
 
 ```bash
 docker compose run --rm openclaw-cli channels login
 ```
 
-Telegram（机器人令牌）：
+Telegram（bot token）：
 
 ```bash
 docker compose run --rm openclaw-cli channels add --channel telegram --token "<token>"
 ```
 
-Discord（机器人令牌）：
+Discord（bot token）：
 
 ```bash
 docker compose run --rm openclaw-cli channels add --channel discord --token "<token>"
 ```
 
-文档：[WhatsApp](/channels/whatsapp)、[Telegram](/channels/telegram)、[Discord](/channels/discord)
+文档：[WhatsApp](/channels/whatsapp)，[Telegram](/channels/telegram)，[Discord](/channels/discord)
+
+### OpenAI Codex OAuth（无头 Docker）
+
+如果你在向导中选择 OpenAI Codex OAuth，它会打开浏览器 URL 并尝试在 `http://127.0.0.1:1455/auth/callback` 捕获回调。在 Docker 或无头设置中，该回调可能显示浏览器错误。复制你到达的完整重定向 URL 并将其粘贴回向导以完成认证。
 
 ### 健康检查
 
@@ -198,70 +271,71 @@ docker compose run --rm openclaw-cli channels add --channel discord --token "<to
 docker compose exec openclaw-gateway node dist/index.js health --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
-### 端到端冒烟测试（Docker）
+### E2E 冒烟测试（Docker）
 
 ```bash
 scripts/e2e/onboard-docker.sh
 ```
 
-### 二维码导入冒烟测试（Docker）
+### QR 导入冒烟测试（Docker）
 
 ```bash
 pnpm test:docker:qr
 ```
 
-### 注意事项
+### 注意
 
-- Gateway网关绑定默认设为 `lan` 以适配容器使用。
-- Gateway网关容器是会话的权威来源（`~/.openclaw/agents/<agentId>/sessions/`）。
+- Gateway 网关绑定默认为 `lan` 用于容器使用。
+- Dockerfile CMD 使用 `--allow-unconfigured`；挂载的配置如果 `gateway.mode` 不是 `local` 仍会启动。覆盖 CMD 以强制执行检查。
+- Gateway 网关容器是会话的真实来源（`~/.openclaw/agents/<agentId>/sessions/`）。
 
-## 智能体沙箱（主机 Gateway网关 + Docker 工具）
+## 智能体沙箱（主机 Gateway 网关 + Docker 工具）
 
-深入了解：[沙箱](/gateway/sandboxing)
+深入了解：[沙箱隔离](/gateway/sandboxing)
 
-### 功能说明
+### 它做什么
 
-当启用 `agents.defaults.sandbox` 时，**非 main 会话**会在 Docker 容器内运行工具。Gateway网关仍在主机上运行，但工具执行是隔离的：
+当启用 `agents.defaults.sandbox` 时，**非主会话**在 Docker 容器内运行工具。Gateway 网关保持在你的主机上，但工具执行是隔离的：
 
-- 作用域：默认为 `"agent"`（每个智能体一个容器 + 工作区）
-- 作用域：`"session"` 用于按会话隔离
-- 按作用域的工作区文件夹挂载到 `/workspace`
+- scope：默认为 `"agent"`（每个智能体一个容器 + 工作区）
+- scope：`"session"` 用于每会话隔离
+- 每作用域工作区文件夹挂载在 `/workspace`
 - 可选的智能体工作区访问（`agents.defaults.sandbox.workspaceAccess`）
 - 允许/拒绝工具策略（拒绝优先）
-- 入站媒体会复制到活动沙箱工作区（`media/inbound/*`），以便工具可以读取（使用 `workspaceAccess: "rw"` 时，媒体会落入智能体工作区）
+- 入站媒体被复制到活动沙箱工作区（`media/inbound/*`），以便工具可以读取它（使用 `workspaceAccess: "rw"` 时，这会落在智能体工作区中）
 
-警告：`scope: "shared"` 会禁用跨会话隔离。所有会话共享一个容器和一个工作区。
+警告：`scope: "shared"` 禁用跨会话隔离。所有会话共享一个容器和一个工作区。
 
-### 按智能体的沙箱配置（多智能体）
+### 每智能体沙箱配置文件（多智能体）
 
-如果使用多智能体路由，每个智能体可以覆盖沙箱和工具设置：`agents.list[].sandbox` 和 `agents.list[].tools`（以及 `agents.list[].tools.sandbox.tools`）。这允许你在一个 Gateway网关中运行混合访问级别：
+如果你使用多智能体路由，每个智能体可以覆盖沙箱 + 工具设置：`agents.list[].sandbox` 和 `agents.list[].tools`（加上 `agents.list[].tools.sandbox.tools`）。这让你可以在一个 Gateway 网关中运行混合访问级别：
 
 - 完全访问（个人智能体）
 - 只读工具 + 只读工作区（家庭/工作智能体）
 - 无文件系统/shell 工具（公共智能体）
 
-示例、优先级和故障排除详见 [多智能体沙箱与工具](/multi-agent-sandbox-tools)。
+参阅[多智能体沙箱与工具](/multi-agent-sandbox-tools)了解示例、优先级和故障排除。
 
 ### 默认行为
 
 - 镜像：`openclaw-sandbox:bookworm-slim`
 - 每个智能体一个容器
 - 智能体工作区访问：`workspaceAccess: "none"`（默认）使用 `~/.openclaw/sandboxes`
-  - `"ro"` 将沙箱工作区保留在 `/workspace`，并将智能体工作区以只读方式挂载到 `/agent`（禁用 `write`/`edit`/`apply_patch`）
-  - `"rw"` 将智能体工作区以读写方式挂载到 `/workspace`
-- 自动清理：空闲超过 24 小时或创建超过 7 天
-- 网络：默认为 `none`（需要出站访问时请显式启用）
+  - `"ro"` 保持沙箱工作区在 `/workspace` 并将智能体工作区只读挂载在 `/agent`（禁用 `write`/`edit`/`apply_patch`）
+  - `"rw"` 将智能体工作区读写挂载在 `/workspace`
+- 自动清理：空闲 > 24h 或 年龄 > 7d
+- 网络：默认为 `none`（如果需要出站则明确选择加入）
 - 默认允许：`exec`、`process`、`read`、`write`、`edit`、`sessions_list`、`sessions_history`、`sessions_send`、`sessions_spawn`、`session_status`
 - 默认拒绝：`browser`、`canvas`、`nodes`、`cron`、`discord`、`gateway`
 
-### 启用沙箱
+### 启用沙箱隔离
 
-如果你计划在 `setupCommand` 中安装软件包，请注意：
+如果你计划在 `setupCommand` 中安装包，请注意：
 
-- 默认 `docker.network` 为 `"none"`（无出站访问）。
-- `readOnlyRoot: true` 会阻止软件包安装。
+- 默认 `docker.network` 是 `"none"`（无出站）。
+- `readOnlyRoot: true` 阻止包安装。
 - `user` 必须是 root 才能运行 `apt-get`（省略 `user` 或设置 `user: "0:0"`）。
-  当 `setupCommand`（或 docker 配置）发生变更时，OpenClaw 会自动重建容器，除非容器**最近被使用过**（约 5 分钟内）。活跃容器会记录一条警告，包含确切的 `openclaw sandbox recreate ...` 命令。
+  当 `setupCommand`（或 docker 配置）更改时，OpenClaw 会自动重建容器，除非容器是**最近使用的**（在约 5 分钟内）。热容器会记录警告，包含确切的 `openclaw sandbox recreate ...` 命令。
 
 ```json5
 {
@@ -297,7 +371,7 @@ pnpm test:docker:qr
         },
         prune: {
           idleHours: 24, // 0 禁用空闲清理
-          maxAgeDays: 7, // 0 禁用最大时限清理
+          maxAgeDays: 7, // 0 禁用最大年龄清理
         },
       },
     },
@@ -324,12 +398,9 @@ pnpm test:docker:qr
 }
 ```
 
-加固选项位于 `agents.defaults.sandbox.docker` 下：
-`network`、`user`、`pidsLimit`、`memory`、`memorySwap`、`cpus`、`ulimits`、
-`seccompProfile`、`apparmorProfile`、`dns`、`extraHosts`。
+加固选项位于 `agents.defaults.sandbox.docker` 下：`network`、`user`、`pidsLimit`、`memory`、`memorySwap`、`cpus`、`ulimits`、`seccompProfile`、`apparmorProfile`、`dns`、`extraHosts`。
 
-多智能体：通过 `agents.list[].sandbox.{docker,browser,prune}.*` 按智能体覆盖 `agents.defaults.sandbox.{docker,browser,prune}.*`
-（当 `agents.defaults.sandbox.scope` / `agents.list[].sandbox.scope` 为 `"shared"` 时忽略）。
+多智能体：通过 `agents.list[].sandbox.{docker,browser,prune}.*` 按智能体覆盖 `agents.defaults.sandbox.{docker,browser,prune}.*`（当 `agents.defaults.sandbox.scope` / `agents.list[].sandbox.scope` 是 `"shared"` 时忽略）。
 
 ### 构建默认沙箱镜像
 
@@ -337,17 +408,17 @@ pnpm test:docker:qr
 scripts/sandbox-setup.sh
 ```
 
-这会使用 `Dockerfile.sandbox` 构建 `openclaw-sandbox:bookworm-slim`。
+这使用 `Dockerfile.sandbox` 构建 `openclaw-sandbox:bookworm-slim`。
 
 ### 沙箱通用镜像（可选）
 
-如果你需要包含常用构建工具（Node、Go、Rust 等）的沙箱镜像，请构建通用镜像：
+如果你想要一个带有常见构建工具（Node、Go、Rust 等）的沙箱镜像，构建通用镜像：
 
 ```bash
 scripts/sandbox-common-setup.sh
 ```
 
-这会构建 `openclaw-sandbox-common:bookworm-slim`。使用方法：
+这构建 `openclaw-sandbox-common:bookworm-slim`。要使用它：
 
 ```json5
 {
@@ -361,21 +432,21 @@ scripts/sandbox-common-setup.sh
 
 ### 沙箱浏览器镜像
 
-要在沙箱内运行浏览器工具，请构建浏览器镜像：
+要在沙箱内运行浏览器工具，构建浏览器镜像：
 
 ```bash
 scripts/sandbox-browser-setup.sh
 ```
 
-这会使用 `Dockerfile.sandbox-browser` 构建 `openclaw-sandbox-browser:bookworm-slim`。容器运行启用了 CDP 的 Chromium，并提供可选的 noVNC 观察器（通过 Xvfb 实现有头模式）。
+这使用 `Dockerfile.sandbox-browser` 构建 `openclaw-sandbox-browser:bookworm-slim`。容器运行启用 CDP 的 Chromium 和可选的 noVNC 观察器（通过 Xvfb 有头）。
 
-注意事项：
+注意：
 
-- 有头模式（Xvfb）比无头模式更能减少机器人检测。
-- 仍可通过设置 `agents.defaults.sandbox.browser.headless=true` 使用无头模式。
+- 有头（Xvfb）比无头减少机器人阻止。
+- 通过设置 `agents.defaults.sandbox.browser.headless=true` 仍然可以使用无头模式。
 - 不需要完整的桌面环境（GNOME）；Xvfb 提供显示。
 
-配置用法：
+使用配置：
 
 ```json5
 {
@@ -401,17 +472,17 @@ scripts/sandbox-browser-setup.sh
 }
 ```
 
-启用后，智能体会收到：
+启用后，智能体接收：
 
 - 沙箱浏览器控制 URL（用于 `browser` 工具）
-- noVNC URL（如果已启用且 headless=false）
+- noVNC URL（如果启用且 headless=false）
 
-注意：如果你使用了工具允许列表，请添加 `browser`（并从拒绝列表中移除），否则该工具仍会被阻止。
+记住：如果你使用工具允许列表，添加 `browser`（并从拒绝中移除它）否则工具仍然被阻止。
 清理规则（`agents.defaults.sandbox.prune`）也适用于浏览器容器。
 
 ### 自定义沙箱镜像
 
-构建你自己的镜像并在配置中指向它：
+构建你自己的镜像并将配置指向它：
 
 ```bash
 docker build -t my-openclaw-sbx -f Dockerfile.sandbox .
@@ -430,32 +501,32 @@ docker build -t my-openclaw-sbx -f Dockerfile.sandbox .
 ### 工具策略（允许/拒绝）
 
 - `deny` 优先于 `allow`。
-- 如果 `allow` 为空：所有工具（除拒绝的）均可用。
-- 如果 `allow` 不为空：仅 `allow` 中的工具可用（减去拒绝的）。
+- 如果 `allow` 为空：所有工具（除了 deny）都可用。
+- 如果 `allow` 非空：只有 `allow` 中的工具可用（减去 deny）。
 
 ### 清理策略
 
-两个配置项：
+两个选项：
 
-- `prune.idleHours`：移除超过 X 小时未使用的容器（0 = 禁用）
+- `prune.idleHours`：移除 X 小时未使用的容器（0 = 禁用）
 - `prune.maxAgeDays`：移除超过 X 天的容器（0 = 禁用）
 
 示例：
 
-- 保留活跃会话但限制生命周期：
-  `idleHours: 24`，`maxAgeDays: 7`
-- 从不清理：
-  `idleHours: 0`，`maxAgeDays: 0`
+- 保留繁忙会话但限制生命周期：
+  `idleHours: 24`、`maxAgeDays: 7`
+- 永不清理：
+  `idleHours: 0`、`maxAgeDays: 0`
 
-### 安全说明
+### 安全注意事项
 
 - 硬隔离仅适用于**工具**（exec/read/write/edit/apply_patch）。
-- 仅限主机的工具（如 browser/camera/canvas）默认被阻止。
-- 在沙箱中允许 `browser` 会**破坏隔离**（浏览器运行在主机上）。
+- 仅主机工具如 browser/camera/canvas 默认被阻止。
+- 在沙箱中允许 `browser` **会破坏隔离**（浏览器在主机上运行）。
 
 ## 故障排除
 
 - 镜像缺失：使用 [`scripts/sandbox-setup.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/sandbox-setup.sh) 构建或设置 `agents.defaults.sandbox.docker.image`。
-- 容器未运行：它会按需在每个会话中自动创建。
-- 沙箱中的权限错误：将 `docker.user` 设置为与挂载工作区所有权匹配的 UID:GID（或对工作区文件夹执行 chown）。
-- 找不到自定义工具：OpenClaw 使用 `sh -lc`（登录 shell）运行命令，这会加载 `/etc/profile` 并可能重置 PATH。请设置 `docker.env.PATH` 以前置你的自定义工具路径（例如 `/custom/bin:/usr/local/share/npm-global/bin`），或在 Dockerfile 中的 `/etc/profile.d/` 下添加脚本。
+- 容器未运行：它会按需为每个会话自动创建。
+- 沙箱中的权限错误：将 `docker.user` 设置为与你挂载的工作区所有权匹配的 UID:GID（或 chown 工作区文件夹）。
+- 找不到自定义工具：OpenClaw 使用 `sh -lc`（登录 shell）运行命令，这会 source `/etc/profile` 并可能重置 PATH。设置 `docker.env.PATH` 以在前面添加你的自定义工具路径（例如 `/custom/bin:/usr/local/share/npm-global/bin`），或在你的 Dockerfile 中在 `/etc/profile.d/` 下添加脚本。
