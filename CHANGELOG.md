@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - TUI: block onboarding output while TUI is active and restore terminal state on exit.
 - CLI/Zsh completion: cache scripts in state dir and escape option descriptions to avoid invalid option errors.
 - fix(ui): resolve Control UI asset path correctly.
+- fix(ui): refresh agent files after external edits.
 - Docs: finish renaming the QMD memory docs to reference the OpenClaw state dir.
 - Tests: stub SSRF DNS pinning in web auto-reply + Gemini video coverage. (#6619) Thanks @joshp123.
 
