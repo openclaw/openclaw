@@ -84,4 +84,40 @@ describe("memory search citations", () => {
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
     expect(details.results[0]?.snippet.length).toBeLessThanOrEqual(20);
   });
+
+  it("honors auto mode for direct chats", async () => {
+    backend = "builtin";
+    const cfg = {
+      memory: { citations: "auto" },
+      agents: { list: [{ id: "main", default: true }] },
+    };
+    const tool = createMemorySearchTool({
+      config: cfg,
+      agentSessionKey: "agent:main:discord:dm:u123",
+    });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+    const result = await tool.execute("auto_mode_direct", { query: "notes" });
+    const details = result.details as { results: Array<{ snippet: string }> };
+    expect(details.results[0]?.snippet).toMatch(/Source:/);
+  });
+
+  it("suppresses citations for auto mode in group chats", async () => {
+    backend = "builtin";
+    const cfg = {
+      memory: { citations: "auto" },
+      agents: { list: [{ id: "main", default: true }] },
+    };
+    const tool = createMemorySearchTool({
+      config: cfg,
+      agentSessionKey: "agent:main:discord:group:c123",
+    });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+    const result = await tool.execute("auto_mode_group", { query: "notes" });
+    const details = result.details as { results: Array<{ snippet: string }> };
+    expect(details.results[0]?.snippet).not.toMatch(/Source:/);
+  });
 });
