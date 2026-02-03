@@ -121,6 +121,7 @@ export async function addCronJob(state: CronState) {
             to: state.cronForm.deliveryTo.trim() || undefined,
           }
         : undefined;
+    const legacyPrefix = state.cronForm.postToMainPrefix.trim() || "Cron";
     const agentId = state.cronForm.agentId.trim();
     const job = {
       name: state.cronForm.name.trim(),
@@ -133,10 +134,8 @@ export async function addCronJob(state: CronState) {
       payload,
       delivery,
       isolation:
-        state.cronForm.postToMainPrefix.trim() &&
-        state.cronForm.sessionTarget === "isolated" &&
-        state.cronForm.deliveryMode === "legacy"
-          ? { postToMainPrefix: state.cronForm.postToMainPrefix.trim() }
+        state.cronForm.sessionTarget === "isolated" && state.cronForm.deliveryMode === "legacy"
+          ? { postToMainPrefix: legacyPrefix }
           : undefined,
     };
     if (!job.name) {

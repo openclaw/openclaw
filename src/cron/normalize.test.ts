@@ -134,4 +134,50 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.channel).toBe("telegram");
     expect(delivery.to).toBe("7200373102");
   });
+
+  it("defaults isolated agentTurn delivery to announce", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "default-announce",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.mode).toBe("announce");
+  });
+
+  it("does not override explicit legacy delivery fields", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy deliver",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+        deliver: true,
+        to: "7200373102",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.delivery).toBeUndefined();
+  });
+
+  it("does not override legacy isolation settings", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy isolation",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+      isolation: { postToMainPrefix: "Cron" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.delivery).toBeUndefined();
+  });
 });

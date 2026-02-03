@@ -181,11 +181,14 @@ JOB SCHEMA (for add action):
 
 SCHEDULE TYPES (schedule.kind):
 - "at": One-shot at absolute time
-  { "kind": "at", "atMs": <unix-ms-timestamp> }
+  { "kind": "at", "at": "<ISO-8601 timestamp>" }     // preferred
+  { "kind": "at", "atMs": <unix-ms-timestamp> }      // also accepted
 - "every": Recurring interval
   { "kind": "every", "everyMs": <interval-ms>, "anchorMs": <optional-start-ms> }
 - "cron": Cron expression
   { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-timezone>" }
+
+ISO timestamps without an explicit timezone are treated as UTC.
 
 PAYLOAD TYPES (payload.kind):
 - "systemEvent": Injects text as system event into session
@@ -195,6 +198,7 @@ PAYLOAD TYPES (payload.kind):
 
 DELIVERY (isolated-only, top-level):
   { "mode": "none|announce|deliver", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
+  - Default for isolated agentTurn jobs (when delivery omitted): "announce"
 
 LEGACY DELIVERY (payload, only when delivery is omitted):
   { "deliver": <optional-bool>, "channel": "<optional>", "to": "<optional>", "bestEffortDeliver": <optional-bool> }
