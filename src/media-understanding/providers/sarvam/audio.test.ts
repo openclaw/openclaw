@@ -1,7 +1,7 @@
 ﻿import { describe, expect, it } from "vitest";
 import { transcribeSarvamAudio, DEFAULT_SARVAM_AUDIO_MODEL } from "./audio.js";
 
-const resolveRequestUrl = (input: RequestInfo | URL) => {
+const resolveRequestUrl = (input: Request | string | URL) => {
   if (typeof input === "string") {
     return input;
   }

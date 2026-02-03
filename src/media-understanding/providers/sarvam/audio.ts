@@ -1,5 +1,6 @@
-﻿import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "../../types.js";
-import { fetchWithTimeout, normalizeBaseUrl, readErrorResponse } from "../shared.js";
+﻿import path from "node:path";
+import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "../../types.js";
+import { fetchWithTimeoutGuarded, normalizeBaseUrl, readErrorResponse } from "../shared.js";
 
 export const DEFAULT_SARVAM_AUDIO_BASE_URL = "https://api.sarvam.ai";
 export const DEFAULT_SARVAM_AUDIO_MODEL = "saarika:v2.5";
@@ -31,6 +32,7 @@ export async function transcribeSarvamAudio(
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
   const baseUrl = normalizeBaseUrl(params.baseUrl, DEFAULT_SARVAM_AUDIO_BASE_URL);
+  const allowPrivate = Boolean(params.baseUrl?.trim());
   const url = `${baseUrl}/speech-to-text`;
 
   const form = new FormData();
@@ -39,7 +41,8 @@ export async function transcribeSarvamAudio(
     type: params.mime ?? "application/octet-stream",
   });
 
-  form.append("file", blob, params.fileName ?? "audio.wav");
+  const fileName = params.fileName?.trim() ? path.basename(params.fileName.trim()) : "audio.wav";
+  form.append("file", blob, fileName);
 
   // Model - default to saarika:v2.5
   const model = params.model?.trim() || DEFAULT_SARVAM_AUDIO_MODEL;
@@ -82,7 +85,7 @@ export async function transcribeSarvamAudio(
   }
   // Note: Don't set content-type, FormData sets its own with boundary
 
-  const res = await fetchWithTimeout(
+  const { response: res, release } = await fetchWithTimeoutGuarded(
     url,
     {
       method: "POST",
@@ -91,28 +94,33 @@ export async function transcribeSarvamAudio(
     },
     params.timeoutMs,
     fetchFn,
+    allowPrivate ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
   );
 
-  if (!res.ok) {
-    const detail = await readErrorResponse(res);
-    const suffix = detail ? `: ${detail}` : "";
-    throw new Error(`Audio transcription failed (HTTP ${res.status})${suffix}`);
+  try {
+    if (!res.ok) {
+      const detail = await readErrorResponse(res);
+      const suffix = detail ? `: ${detail}` : "";
+      throw new Error(`Audio transcription failed (HTTP ${res.status})${suffix}`);
+    }
+
+    const payload = (await res.json()) as SarvamTranscriptResponse;
+    let transcript = payload.transcript?.trim();
+
+    // If no top-level transcript but diarized output exists, join segments
+    if (!transcript && payload.diarized_transcript?.entries?.length) {
+      transcript = payload.diarized_transcript.entries
+        .map((e) => e.transcript)
+        .filter(Boolean)
+        .join(" ");
+    }
+
+    if (!transcript) {
+      throw new Error("Audio transcription response missing transcript");
+    }
+
+    return { text: transcript, model };
+  } finally {
+    await release();
   }
-
-  const payload = (await res.json()) as SarvamTranscriptResponse;
-  let transcript = payload.transcript?.trim();
-
-  // If no top-level transcript but diarized output exists, join segments
-  if (!transcript && payload.diarized_transcript?.entries?.length) {
-    transcript = payload.diarized_transcript.entries
-      .map((e) => e.transcript)
-      .filter(Boolean)
-      .join(" ");
-  }
-
-  if (!transcript) {
-    throw new Error("Audio transcription response missing transcript");
-  }
-
-  return { text: transcript, model };
 }
