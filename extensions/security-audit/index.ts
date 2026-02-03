@@ -396,7 +396,7 @@ function hasUnquotedRedirection(command: string): boolean {
       inSingle = !inSingle;
       continue;
     }
-    if (ch === "\"" && !inSingle) {
+    if (ch === '"' && !inSingle) {
       inDouble = !inDouble;
       continue;
     }
