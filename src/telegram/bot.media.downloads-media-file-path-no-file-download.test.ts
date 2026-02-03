@@ -13,7 +13,7 @@ const getCachedStickerSpy = vi.fn();
 const describeStickerImageSpy = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
 const lookupMock = vi.fn();
-let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn> | null = null;
+let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn> = null;
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
