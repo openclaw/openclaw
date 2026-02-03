@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { getChildLogger } from "../logging/logger.js";
@@ -44,7 +45,14 @@ export async function sendMessageWhatsApp(
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
     if (options.mediaUrl) {
-      const media = await loadWebMedia(options.mediaUrl);
+      const maxBytes = resolveChannelMediaMaxBytes({
+        cfg,
+        resolveChannelLimitMb: ({ cfg, accountId }) =>
+          cfg.channels?.whatsapp?.accounts?.[accountId]?.mediaMaxMb ??
+          cfg.channels?.whatsapp?.mediaMaxMb,
+        accountId: resolvedAccountId ?? options.accountId,
+      });
+      const media = await loadWebMedia(options.mediaUrl, maxBytes);
       const caption = text || undefined;
       mediaBuffer = media.buffer;
       mediaType = media.contentType;

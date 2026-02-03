@@ -7,6 +7,15 @@ vi.mock("./media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
 }));
 
+const loadConfigMock = vi.fn();
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => loadConfigMock(),
+  };
+});
+
 import { sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } from "./outbound.js";
 
 describe("web outbound", () => {
@@ -17,6 +26,7 @@ describe("web outbound", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    loadConfigMock.mockReturnValue({});
     setActiveWebListener({
       sendComposingTo,
       sendMessage,
@@ -163,5 +173,96 @@ describe("web outbound", () => {
       false,
       undefined,
     );
+  });
+
+  it("passes channel-level mediaMaxMb to loadWebMedia", async () => {
+    loadConfigMock.mockReturnValue({
+      channels: {
+        whatsapp: {
+          mediaMaxMb: 25,
+        },
+      },
+    });
+    const buf = Buffer.from("img");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrl: "/tmp/pic.jpg",
+    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", 25 * 1024 * 1024);
+  });
+
+  it("passes account-level mediaMaxMb to loadWebMedia (priority over channel)", async () => {
+    setActiveWebListener("work", {
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+    loadConfigMock.mockReturnValue({
+      channels: {
+        whatsapp: {
+          mediaMaxMb: 25,
+          accounts: {
+            work: {
+              mediaMaxMb: 10,
+            },
+          },
+        },
+      },
+    });
+    const buf = Buffer.from("img");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrl: "/tmp/pic.jpg",
+      accountId: "work",
+    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", 10 * 1024 * 1024);
+    setActiveWebListener("work", null);
+  });
+
+  it("falls back to agents.defaults.mediaMaxMb when no channel config", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          mediaMaxMb: 50,
+        },
+      },
+    });
+    const buf = Buffer.from("img");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrl: "/tmp/pic.jpg",
+    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", 50 * 1024 * 1024);
+  });
+
+  it("passes undefined maxBytes when no mediaMaxMb config exists", async () => {
+    loadConfigMock.mockReturnValue({});
+    const buf = Buffer.from("img");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrl: "/tmp/pic.jpg",
+    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", undefined);
   });
 });
