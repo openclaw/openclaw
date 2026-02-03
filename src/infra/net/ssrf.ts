@@ -285,6 +285,10 @@ export type PinnedDispatcherOptions = {
  *
  * Note: When using a proxy, DNS pinning is applied via both `connect` (for HTTP)
  * and `requestTls` (for HTTPS) to ensure SSRF protection regardless of protocol.
+ *
+ * ProxyAgent options used here require Undici 5.x+. The `requestTls` option
+ * is used for TLS connection options when connecting to the target through proxy.
+ * See: https://undici.nodejs.org/#/docs/api/ProxyAgent
  */
 export function createPinnedDispatcher(
   pinned: PinnedHostname,
@@ -298,6 +302,7 @@ export function createPinnedDispatcher(
     // ProxyAgent with custom lookup for DNS pinning through proxy.
     // Apply pinning to both connect (HTTP) and requestTls (HTTPS) to
     // ensure SSRF protection regardless of target protocol.
+    // Note: requestTls is documented in Undici 5.x+ for TLS options.
     return new ProxyAgent({
       uri: options.proxyUrl,
       connect: connectOptions,
