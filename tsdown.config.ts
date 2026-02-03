@@ -18,7 +18,9 @@ export default defineConfig([
     platform: "node",
   },
   {
+    dts: true,
     entry: "src/plugin-sdk/index.ts",
+    outDir: "dist/plugin-sdk",
     env,
     fixedExtension: false,
     platform: "node",
