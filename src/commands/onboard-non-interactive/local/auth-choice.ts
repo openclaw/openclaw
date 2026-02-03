@@ -34,6 +34,7 @@ import {
   setXiaomiApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
+import { validateVeniceApiKey } from "../../venice-api-key-validation.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
 
 export async function applyNonInteractiveAuthChoice(params: {
@@ -361,7 +362,22 @@ export async function applyNonInteractiveAuthChoice(params: {
     if (!resolved) {
       return null;
     }
+
+    // Validate the Venice API key before proceeding
     if (resolved.source !== "profile") {
+      const validation = await validateVeniceApiKey(resolved.key);
+      if (!validation.valid) {
+        runtime.error(
+          [
+            `Venice API key validation failed: ${validation.error ?? "Invalid key"}`,
+            validation.warning ?? "Please get a valid API key from https://venice.ai/settings/api",
+          ].join("\n"),
+        );
+        return null;
+      }
+      if (validation.warning) {
+        runtime.log(`⚠️  Venice API key warning: ${validation.warning}`);
+      }
       await setVeniceApiKey(resolved.key);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {

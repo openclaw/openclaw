@@ -50,6 +50,7 @@ import {
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
+import { validateVeniceApiKey } from "./venice-api-key-validation.js";
 
 export async function applyAuthChoiceApiProviders(
   params: ApplyAuthChoiceParams,
@@ -530,9 +531,46 @@ export async function applyAuthChoiceApiProviders(
   if (authChoice === "venice-api-key") {
     let hasCredential = false;
 
+    // Helper to validate and set Venice key with user feedback
+    const validateAndSetKey = async (key: string, _source: string): Promise<boolean> => {
+      const normalized = normalizeApiKeyInput(key);
+
+      if (!normalized) {
+        await params.prompter.note("API key is empty. Please enter a valid key.", "Invalid Key");
+        return false;
+      }
+
+      // Validate against the Venice API
+      await params.prompter.note("Validating API key...", "Venice AI");
+      const result = await validateVeniceApiKey(normalized);
+
+      if (!result.valid) {
+        await params.prompter.note(
+          `❌ ${result.error ?? "Invalid API key"}\n\n${result.warning ?? "Please get a valid key from https://venice.ai/settings/api"}`,
+          "Invalid API Key",
+        );
+        return false;
+      }
+
+      // Show warning if any (key is valid but with caveats)
+      if (result.warning) {
+        await params.prompter.note(`⚠️ ${result.warning}`, "Note");
+      }
+
+      await setVeniceApiKey(normalized, params.agentDir);
+      return true;
+    };
+
+    // Try token from CLI options first
     if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "venice") {
-      await setVeniceApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
-      hasCredential = true;
+      hasCredential = await validateAndSetKey(params.opts.token, "CLI option");
+      if (!hasCredential) {
+        // CLI-provided token failed validation, fall through to prompt
+        await params.prompter.note(
+          "The provided API key is invalid. Please enter a valid key.",
+          "Venice AI",
+        );
+      }
     }
 
     if (!hasCredential) {
@@ -546,24 +584,49 @@ export async function applyAuthChoiceApiProviders(
       );
     }
 
-    const envKey = resolveEnvApiKey("venice");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing VENICE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setVeniceApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
+    // Try environment variable
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("venice");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing VENICE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          hasCredential = await validateAndSetKey(envKey.apiKey, envKey.source);
+          // If env key is invalid, don't block - just fall through to prompt
+        }
       }
     }
+
+    // Prompt for manual entry with validation loop
     if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter Venice AI API key",
-        validate: validateApiKeyInput,
-      });
-      await setVeniceApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+      let attempts = 0;
+      const maxAttempts = 3;
+
+      while (!hasCredential && attempts < maxAttempts) {
+        const key = await params.prompter.text({
+          message: attempts > 0 ? "Enter Venice AI API key (try again)" : "Enter Venice AI API key",
+          validate: validateApiKeyInput,
+        });
+
+        hasCredential = await validateAndSetKey(String(key), "manual entry");
+        attempts++;
+
+        if (!hasCredential && attempts >= maxAttempts) {
+          await params.prompter.note(
+            "Too many failed attempts. Please verify your API key at https://venice.ai/settings/api and try again.",
+            "Setup Cancelled",
+          );
+          return null;
+        }
+      }
     }
+
+    if (!hasCredential) {
+      return null;
+    }
+
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "venice:default",
       provider: "venice",

@@ -67,3 +67,9 @@ export {
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
 } from "./onboard-auth.models.js";
+export {
+  checkSuspiciousKeyFormat,
+  createVeniceKeyValidator,
+  validateVeniceApiKey,
+  type VeniceKeyValidationResult,
+} from "./venice-api-key-validation.js";
