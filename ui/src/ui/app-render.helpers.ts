@@ -4,9 +4,10 @@ import type { AppViewState } from "./app-view-state";
 import type { ThemeMode } from "./theme";
 import type { ThemeTransitionContext } from "./theme-transition";
 import type { SessionsListResult } from "./types";
+import { OpenClawApp } from "./app";
 import { refreshChat } from "./app-chat";
 import { syncUrlWithSessionKey } from "./app-settings";
-import { loadChatHistory } from "./controllers/chat";
+import { ChatState, loadChatHistory } from "./controllers/chat";
 import { icons } from "./icons";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation";
 
@@ -94,18 +95,18 @@ export function renderChatControls(state: AppViewState) {
             state.sessionKey = next;
             state.chatMessage = "";
             state.chatStream = null;
-            state.chatStreamStartedAt = null;
+            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
             state.chatRunId = null;
-            state.resetToolStream();
-            state.resetChatScroll();
+            (state as unknown as OpenClawApp).resetToolStream();
+            (state as unknown as OpenClawApp).resetChatScroll();
             state.applySettings({
               ...state.settings,
               sessionKey: next,
               lastActiveSessionKey: next,
             });
             void state.loadAssistantIdentity();
-            syncUrlWithSessionKey(state, next, true);
-            void loadChatHistory(state);
+            syncUrlWithSessionKey(next, true);
+            void loadChatHistory(state as unknown as ChatState);
           }}
         >
           ${repeat(
@@ -122,7 +123,7 @@ export function renderChatControls(state: AppViewState) {
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}
         @click=${() => {
-          state.resetToolStream();
+          (state as unknown as OpenClawApp).resetToolStream();
           void refreshChat(state as unknown as Parameters<typeof refreshChat>[0]);
         }}
         title="Refresh chat data"
@@ -228,7 +229,7 @@ function resolveSessionOptions(
     seen.add(mainSessionKey);
     options.push({
       key: mainSessionKey,
-      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain),
+      displayName: resolveSessionDisplayName(mainSessionKey, resolvedMain || undefined),
     });
   }
 
