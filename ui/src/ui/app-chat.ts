@@ -10,7 +10,7 @@ import { loadSessions } from "./controllers/sessions";
 import { normalizeBasePath } from "./navigation";
 import { generateUUID } from "./uuid";
 
-type ChatHost = {
+export type ChatHost = {
   connected: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];

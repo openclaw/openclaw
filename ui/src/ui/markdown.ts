@@ -5,7 +5,6 @@ import { truncateText } from "./format";
 marked.setOptions({
   gfm: true,
   breaks: true,
-  mangle: false,
 });
 
 const allowedTags = [
