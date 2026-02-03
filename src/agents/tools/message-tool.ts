@@ -197,6 +197,13 @@ function buildThreadSchema() {
   return {
     threadName: Type.Optional(Type.String()),
     autoArchiveMin: Type.Optional(Type.Number()),
+    appliedTagIds: Type.Optional(
+      Type.Array(Type.String(), {
+        description:
+          "Tag IDs to apply to forum posts. For forum channels, the 'message' field " +
+          "is used as the initial post content.",
+      }),
+    ),
   };
 }
 
