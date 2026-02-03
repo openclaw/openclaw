@@ -253,6 +253,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   }
 
   if (normalized === "bonsai") {
+    // ANTHROPIC_AUTH_TOKEN is used by the Bonsai CLI / Claude Code setup.
     return pick("ANTHROPIC_AUTH_TOKEN") ?? pick("BONSAI_API_KEY");
   }
 

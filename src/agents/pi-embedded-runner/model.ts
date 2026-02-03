@@ -95,7 +95,7 @@ export function resolveModel(
         provider,
         baseUrl: providerCfg?.baseUrl ?? (isBonsai ? "https://go.trybons.ai" : undefined),
         reasoning: false,
-        input: ["text"],
+        input: isBonsai ? ["text", "image"] : ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: providerCfg?.models?.[0]?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
         maxTokens: providerCfg?.models?.[0]?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
