@@ -116,6 +116,8 @@ function formatGatewayAuthFailureMessage(params: {
       return "unauthorized: tailscale identity check failed (use Tailscale Serve auth or gateway token/password)";
     case "tailscale_user_mismatch":
       return "unauthorized: tailscale identity mismatch (use Tailscale Serve auth or gateway token/password)";
+    case "rate_limited":
+      return "unauthorized: too many authentication attempts; retry later";
     default:
       break;
   }
