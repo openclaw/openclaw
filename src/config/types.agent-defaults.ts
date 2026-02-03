@@ -244,6 +244,8 @@ export type AgentDefaultsConfig = {
     model?: string | { primary?: string; fallbacks?: string[] };
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
+    /** Suppress sub-agent completion announcements to the parent session (default: false). */
+    suppressAnnounce?: boolean;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {

@@ -412,6 +412,7 @@ export function registerSubagentRun(params: {
   label?: string;
   model?: string;
   runTimeoutSeconds?: number;
+  silent?: boolean;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
