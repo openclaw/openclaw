@@ -122,6 +122,8 @@ services:
     depends_on:
       docker-proxy:
         condition: service_started
+    networks:
+      - coolify
 
   # Docker Socket Proxy for secure sandboxing (optional)
   # Allows OpenClaw to spawn sandbox containers securely
@@ -142,7 +144,12 @@ services:
       VERSION: 1
       EXEC: 1 # Run commands in containers
       EVENTS: 1 # Listen for events
+    networks:
+      - coolify
 
 volumes:
   openclaw-config:
   openclaw-workspace:
+networks:
+  coolify:
+    external: true

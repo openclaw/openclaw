@@ -86,10 +86,10 @@ services:
       resources:
         limits:
           memory: 6G
-          cpus: '1.8'
+          cpus: "1.8"
         reservations:
           memory: 2G
-          cpus: '0.5'
+          cpus: "0.5"
       restart_policy:
         condition: unless-stopped
         delay: 5s
@@ -122,27 +122,34 @@ services:
     depends_on:
       docker-proxy:
         condition: service_started
+    networks:
+      - coolify
 
   # Docker Socket Proxy for secure sandboxing (optional)
   # Allows OpenClaw to spawn sandbox containers securely
   docker-proxy:
     image: tecnativa/docker-socket-proxy:latest
     restart: unless-stopped
-    exclude_from_hc: true  # Coolify: exclude from health checks
+    exclude_from_hc: true # Coolify: exclude from health checks
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       LOG_LEVEL: info
       # Security: Only enable necessary Docker APIs
-      POST: 1        # Create containers
-      CONTAINERS: 1  # List/manage containers
-      IMAGES: 1      # Pull images
-      NETWORKS: 1    # Connect to networks
-      INFO: 1        # Version check
+      POST: 1 # Create containers
+      CONTAINERS: 1 # List/manage containers
+      IMAGES: 1 # Pull images
+      NETWORKS: 1 # Connect to networks
+      INFO: 1 # Version check
       VERSION: 1
-      EXEC: 1        # Run commands in containers
-      EVENTS: 1      # Listen for events
+      EXEC: 1 # Run commands in containers
+      EVENTS: 1 # Listen for events
+    networks:
+      - coolify
 
 volumes:
   openclaw-config:
   openclaw-workspace:
+networks:
+  coolify:
+    external: true
