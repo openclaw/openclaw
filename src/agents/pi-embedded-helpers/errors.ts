@@ -1,8 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-
 import type { OpenClawConfig } from "../../config/config.js";
-import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import type { FailoverReason } from "./types.js";
+import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
@@ -352,6 +351,14 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isMissingToolCallInputError(raw)) {
+    return (
+      "Session history looks corrupted (tool call input missing). " +
+      "Use /new to start a fresh session. " +
+      "If this keeps happening, reset the session or delete the corrupted session transcript."
+    );
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
@@ -466,6 +473,11 @@ const ERROR_PATTERNS = {
   ],
 } as const;
 
+const TOOL_CALL_INPUT_MISSING_RE =
+  /tool_(?:use|call)\.(?:input|arguments).*?(?:field required|required)/i;
+const TOOL_CALL_INPUT_PATH_RE =
+  /messages\.\d+\.content\.\d+\.tool_(?:use|call)\.(?:input|arguments)/i;
+
 const IMAGE_DIMENSION_ERROR_RE =
   /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
@@ -504,6 +516,13 @@ export function isBillingErrorMessage(raw: string): boolean {
       value.includes("payment") ||
       value.includes("plan"))
   );
+}
+
+export function isMissingToolCallInputError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
 }
 
 export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {

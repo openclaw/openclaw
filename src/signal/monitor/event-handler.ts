@@ -1,5 +1,7 @@
+import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
+import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   formatInboundEnvelope,
   formatInboundFromLabel,
@@ -9,15 +11,15 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
 } from "../../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
+import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
-import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
+import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
@@ -31,7 +33,6 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { normalizeE164 } from "../../utils.js";
-import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
@@ -42,8 +43,6 @@ import {
   resolveSignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
@@ -172,7 +171,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
-    const prefixContext = createReplyPrefixContext({ cfg: deps.cfg, agentId: route.agentId });
+    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      cfg: deps.cfg,
+      agentId: route.agentId,
+      channel: "signal",
+      accountId: route.accountId,
+    });
 
     const typingCallbacks = createTypingCallbacks({
       start: async () => {
@@ -196,8 +200,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
 
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-      responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       deliver: async (payload) => {
         await deps.deliverReplies({
@@ -225,9 +228,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ...replyOptions,
         disableBlockStreaming:
           typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
-        onModelSelected: (ctx) => {
-          prefixContext.onModelSelected(ctx);
-        },
+        onModelSelected,
       },
     });
     markDispatchIdle();

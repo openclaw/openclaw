@@ -41,7 +41,7 @@ Start with the smallest access that still works, then widen it as you gain confi
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
 - **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
-- **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel).
+- **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens).
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
@@ -205,7 +205,16 @@ By default, OpenClaw routes **all DMs into the main session** so your assistant 
 }
 ```
 
-This prevents cross-user context leakage while keeping group chats isolated. If you run multiple accounts on the same channel, use `per-account-channel-peer` instead. If the same person contacts you on multiple channels, use `session.identityLinks` to collapse those DM sessions into one canonical identity. See [Session Management](/concepts/session) and [Configuration](/gateway/configuration).
+This prevents cross-user context leakage while keeping group chats isolated.
+
+### Secure DM mode (recommended)
+
+Treat the snippet above as **secure DM mode**:
+
+- Default: `session.dmScope: "main"` (all DMs share one session for continuity).
+- Secure DM mode: `session.dmScope: "per-channel-peer"` (each channel+sender pair gets an isolated DM context).
+
+If you run multiple accounts on the same channel, use `per-account-channel-peer` instead. If the same person contacts you on multiple channels, use `session.identityLinks` to collapse those DM sessions into one canonical identity. See [Session Management](/concepts/session) and [Configuration](/gateway/configuration).
 
 ## Allowlists (DM + groups) — terminology
 
@@ -610,6 +619,7 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Disable browser sync/password managers in the agent profile if possible (reduces blast radius).
 - For remote gateways, assume “browser control” is equivalent to “operator access” to whatever that profile can reach.
 - Keep the Gateway and node hosts tailnet-only; avoid exposing relay/control ports to LAN or public Internet.
+- The Chrome extension relay’s CDP endpoint is auth-gated; only OpenClaw clients can connect.
 - Disable browser proxy routing when you don’t need it (`gateway.nodes.browser.mode="off"`).
 - Chrome extension relay mode is **not** “safer”; it can take over your existing Chrome tabs. Assume it can act as you in whatever that tab/profile can reach.
 

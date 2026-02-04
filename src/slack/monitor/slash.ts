@@ -1,7 +1,8 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import type { ChatCommandDefinition, CommandArgs } from "../../auto-reply/commands-registry.js";
+import type { ResolvedSlackAccount } from "../accounts.js";
+import type { SlackMonitorContext } from "./context.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
-import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -9,9 +10,13 @@ import {
   parseCommandArgs,
   resolveCommandArgMenu,
 } from "../../auto-reply/commands-registry.js";
-import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
-import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
+import { listSkillCommandsForAgents } from "../../auto-reply/skill-commands.js";
+import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { resolveConversationLabel } from "../../channels/conversation-label.js";
+import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { danger, logVerbose } from "../../globals.js";
@@ -21,12 +26,7 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { resolveConversationLabel } from "../../channels/conversation-label.js";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
-import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
-
-import type { ResolvedSlackAccount } from "../accounts.js";
-
+import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
 import {
   normalizeAllowList,
   normalizeAllowListLower,
@@ -35,7 +35,7 @@ import {
 } from "./allow-list.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
-import type { SlackMonitorContext } from "./context.js";
+import { normalizeSlackChannelType } from "./context.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import { deliverSlackSlashReplies } from "./replies.js";
 
@@ -178,8 +178,9 @@ export function registerSlackMonitorSlashCommands(params: {
       }
 
       const channelInfo = await ctx.resolveChannelName(command.channel_id);
-      const channelType =
+      const rawChannelType =
         channelInfo?.type ?? (command.channel_name === "directmessage" ? "im" : undefined);
+      const channelType = normalizeSlackChannelType(rawChannelType, command.channel_id);
       const isDirectMessage = channelType === "im";
       const isGroupDm = channelType === "mpim";
       const isRoom = channelType === "channel" || channelType === "group";
@@ -377,15 +378,16 @@ export function registerSlackMonitorSlashCommands(params: {
         },
       });
 
-      const channelDescription = [channelInfo?.topic, channelInfo?.purpose]
-        .map((entry) => entry?.trim())
-        .filter((entry): entry is string => Boolean(entry))
-        .filter((entry, index, list) => list.indexOf(entry) === index)
-        .join("\n");
-      const systemPromptParts = [
-        channelDescription ? `Channel description: ${channelDescription}` : null,
-        channelConfig?.systemPrompt?.trim() || null,
-      ].filter((entry): entry is string => Boolean(entry));
+      const untrustedChannelMetadata = isRoomish
+        ? buildUntrustedChannelMetadata({
+            source: "slack",
+            label: "Slack channel description",
+            entries: [channelInfo?.topic, channelInfo?.purpose],
+          })
+        : undefined;
+      const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
+        (entry): entry is string => Boolean(entry),
+      );
       const groupSystemPrompt =
         systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
 
@@ -414,6 +416,7 @@ export function registerSlackMonitorSlashCommands(params: {
           }) ?? (isDirectMessage ? senderName : roomLabel),
         GroupSubject: isRoomish ? roomLabel : undefined,
         GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
+        UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
         SenderName: senderName,
         SenderId: command.user_id,
         Provider: "slack" as const,
@@ -431,11 +434,18 @@ export function registerSlackMonitorSlashCommands(params: {
         OriginatingTo: `user:${command.user_id}`,
       });
 
+      const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+        cfg,
+        agentId: route.agentId,
+        channel: "slack",
+        accountId: route.accountId,
+      });
+
       const { counts } = await dispatchReplyWithDispatcher({
         ctx: ctxPayload,
         cfg,
         dispatcherOptions: {
-          responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
+          ...prefixOptions,
           deliver: async (payload) => {
             await deliverSlackSlashReplies({
               replies: [payload],
@@ -454,7 +464,10 @@ export function registerSlackMonitorSlashCommands(params: {
             runtime.error?.(danger(`slack slash ${info.kind} reply failed: ${String(err)}`));
           },
         },
-        replyOptions: { skillFilter: channelConfig?.skills },
+        replyOptions: {
+          skillFilter: channelConfig?.skills,
+          onModelSelected,
+        },
       });
       if (counts.final + counts.tool + counts.block === 0) {
         await deliverSlackSlashReplies({

@@ -14,8 +14,8 @@
     "oxc/no-accumulating-spread": "off",
     "oxc/no-async-endpoint-handlers": "off",
     "oxc/no-map-spread": "off",
+    "typescript/no-explicit-any": "error",
     "typescript/no-extraneous-class": "off",
-    "typescript/no-unnecessary-template-expression": "off",
     "typescript/no-unsafe-type-assertion": "off",
     "unicorn/consistent-function-scoping": "off",
     "unicorn/require-post-message-target-origin": "off"
@@ -30,7 +30,6 @@
     "skills/",
     "src/canvas-host/a2ui/a2ui.bundle.js",
     "Swabble/",
-    "vendor/",
-    "ui/"
+    "vendor/"
   ]
 }

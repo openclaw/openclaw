@@ -64,7 +64,7 @@ sudo apt-get install -y git curl jq ca-certificates openssl
 Run the OpenClaw install script:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 ## 4) Setup nginx to proxy OpenClaw to port 8000
@@ -103,8 +103,8 @@ server {
 
 ## 5) Access OpenClaw and grant privileges
 
-Access `https://<vm-name>.exe.xyz/?token=YOUR-TOKEN-FROM-TERMINAL`. Approve
-devices with `openclaw devices list` and `openclaw device approve`. When in doubt,
+Access `https://<vm-name>.exe.xyz/?token=YOUR-TOKEN-FROM-TERMINAL` (see the Control UI output from onboarding). Approve
+devices with `openclaw devices list` and `openclaw devices approve <requestId>`. When in doubt,
 use Shelley from your browser!
 
 ## Remote Access

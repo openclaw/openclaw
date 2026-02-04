@@ -9,14 +9,14 @@ import {
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
-
+import type { CoreConfig } from "./types.js";
 import { matrixMessageActions } from "./actions.js";
 import { MatrixConfigSchema } from "./config-schema.js";
+import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 import {
   resolveMatrixGroupRequireMention,
   resolveMatrixGroupToolPolicy,
 } from "./group-mentions.js";
-import type { CoreConfig } from "./types.js";
 import {
   listMatrixAccountIds,
   resolveDefaultMatrixAccountId,
@@ -24,13 +24,12 @@ import {
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
 import { resolveMatrixAuth } from "./matrix/client.js";
-import { normalizeAllowListLower } from "./matrix/monitor/allowlist.js";
+import { normalizeMatrixAllowList, normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import { probeMatrix } from "./matrix/probe.js";
 import { sendMessageMatrix } from "./matrix/send.js";
 import { matrixOnboardingAdapter } from "./onboarding.js";
 import { matrixOutbound } from "./outbound.js";
 import { resolveMatrixTargets } from "./resolve-targets.js";
-import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 
 const meta = {
   id: "matrix",
@@ -145,7 +144,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     }),
     resolveAllowFrom: ({ cfg }) =>
       ((cfg as CoreConfig).channels?.matrix?.dm?.allowFrom ?? []).map((entry) => String(entry)),
-    formatAllowFrom: ({ allowFrom }) => normalizeAllowListLower(allowFrom),
+    formatAllowFrom: ({ allowFrom }) => normalizeMatrixAllowList(allowFrom),
   },
   security: {
     resolveDmPolicy: ({ account }) => ({
@@ -154,11 +153,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       policyPath: "channels.matrix.dm.policy",
       allowFromPath: "channels.matrix.dm.allowFrom",
       approveHint: formatPairingApproveHint("matrix"),
-      normalizeEntry: (raw) =>
-        raw
-          .replace(/^matrix:/i, "")
-          .trim()
-          .toLowerCase(),
+      normalizeEntry: (raw) => normalizeMatrixUserId(raw),
     }),
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = (cfg as CoreConfig).channels?.defaults?.groupPolicy;

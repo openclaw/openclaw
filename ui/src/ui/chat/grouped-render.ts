@@ -1,17 +1,16 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-
-import type { AssistantIdentity } from "../assistant-identity";
-import { toSanitizedMarkdownHtml } from "../markdown";
-import type { MessageGroup } from "../types/chat-types";
-import { renderCopyAsMarkdownButton } from "./copy-as-markdown";
-import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer";
+import type { AssistantIdentity } from "../assistant-identity.ts";
+import type { MessageGroup } from "../types/chat-types.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
 import {
   extractTextCached,
   extractThinkingCached,
   formatReasoningMarkdown,
-} from "./message-extract";
-import { extractToolCards, renderToolCardSidebar } from "./tool-cards";
+} from "./message-extract.ts";
+import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
+import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
 
 type ImageBlock = {
   url: string;
@@ -25,14 +24,16 @@ function extractImages(message: unknown): ImageBlock[] {
 
   if (Array.isArray(content)) {
     for (const block of content) {
-      if (typeof block !== "object" || block === null) continue;
+      if (typeof block !== "object" || block === null) {
+        continue;
+      }
       const b = block as Record<string, unknown>;
 
       if (b.type === "image") {
         // Handle source object format (from sendChatMessage)
         const source = b.source as Record<string, unknown> | undefined;
         if (source?.type === "base64" && typeof source.data === "string") {
-          const data = source.data as string;
+          const data = source.data;
           const mediaType = (source.media_type as string) || "image/png";
           // If data is already a data URL, use it directly
           const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
@@ -189,12 +190,14 @@ function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" |
 
 function isAvatarUrl(value: string): boolean {
   return (
-    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || /^\//.test(value) // Relative paths from avatar endpoint
+    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/") // Relative paths from avatar endpoint
   );
 }
 
 function renderMessageImages(images: ImageBlock[]) {
-  if (images.length === 0) return nothing;
+  if (images.length === 0) {
+    return nothing;
+  }
 
   return html`
     <div class="chat-message-images">
@@ -252,7 +255,9 @@ function renderGroupedMessage(
     return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
-  if (!markdown && !hasToolCards && !hasImages) return nothing;
+  if (!markdown && !hasToolCards && !hasImages) {
+    return nothing;
+  }
 
   return html`
     <div class="${bubbleClasses}">

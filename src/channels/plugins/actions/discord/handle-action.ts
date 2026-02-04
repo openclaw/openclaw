@@ -1,13 +1,13 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ChannelMessageActionContext } from "../../types.js";
 import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
 } from "../../../../agents/tools/common.js";
 import { handleDiscordAction } from "../../../../agents/tools/discord-actions.js";
-import type { ChannelMessageActionContext } from "../../types.js";
-import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 import { resolveDiscordChannelId } from "../../../../discord/targets.js";
+import { tryHandleDiscordMessageActionGuildAdmin } from "./handle-action.guild-admin.js";
 
 const providerId = "discord";
 
@@ -213,6 +213,21 @@ export async function handleDiscordMessageAction(
         to: readStringParam(params, "to", { required: true }),
         stickerIds,
         content: readStringParam(params, "message"),
+      },
+      cfg,
+    );
+  }
+
+  if (action === "set-presence") {
+    return await handleDiscordAction(
+      {
+        action: "setPresence",
+        accountId: accountId ?? undefined,
+        status: readStringParam(params, "status"),
+        activityType: readStringParam(params, "activityType"),
+        activityName: readStringParam(params, "activityName"),
+        activityUrl: readStringParam(params, "activityUrl"),
+        activityState: readStringParam(params, "activityState"),
       },
       cfg,
     );

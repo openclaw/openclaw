@@ -1,8 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-
-import { makeMissingToolResult } from "./session-transcript-repair.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 
 type ToolCall = { id: string; name?: string };
 
@@ -97,16 +96,28 @@ export function installSessionToolResultGuard(
   };
 
   const guardedAppend = (message: AgentMessage) => {
+    let nextMessage = message;
     const role = (message as { role?: unknown }).role;
+    if (role === "assistant") {
+      const sanitized = sanitizeToolCallInputs([message]);
+      if (sanitized.length === 0) {
+        if (allowSyntheticToolResults && pending.size > 0) {
+          flushPendingToolResults();
+        }
+        return undefined;
+      }
+      nextMessage = sanitized[0];
+    }
+    const nextRole = (nextMessage as { role?: unknown }).role;
 
-    if (role === "toolResult") {
-      const id = extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>);
+    if (nextRole === "toolResult") {
+      const id = extractToolResultId(nextMessage as Extract<AgentMessage, { role: "toolResult" }>);
       const toolName = id ? pending.get(id) : undefined;
       if (id) {
         pending.delete(id);
       }
       return originalAppend(
-        persistToolResult(message, {
+        persistToolResult(nextMessage, {
           toolCallId: id ?? undefined,
           toolName,
           isSynthetic: false,
@@ -115,13 +126,13 @@ export function installSessionToolResultGuard(
     }
 
     const toolCalls =
-      role === "assistant"
-        ? extractAssistantToolCalls(message as Extract<AgentMessage, { role: "assistant" }>)
+      nextRole === "assistant"
+        ? extractAssistantToolCalls(nextMessage as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 
     if (allowSyntheticToolResults) {
       // If previous tool calls are still pending, flush before non-tool results.
-      if (pending.size > 0 && (toolCalls.length === 0 || role !== "assistant")) {
+      if (pending.size > 0 && (toolCalls.length === 0 || nextRole !== "assistant")) {
         flushPendingToolResults();
       }
       // If new tool calls arrive while older ones are pending, flush the old ones first.
@@ -130,7 +141,7 @@ export function installSessionToolResultGuard(
       }
     }
 
-    const result = originalAppend(message as never);
+    const result = originalAppend(nextMessage as never);
 
     const sessionFile = (
       sessionManager as { getSessionFile?: () => string | null }

@@ -1,18 +1,21 @@
+import type { ApiClientOptions } from "grammy";
 // @ts-nocheck
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import type { ApiClientOptions } from "grammy";
+import { type Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { Bot, webhookCallback } from "grammy";
+import type { OpenClawConfig, ReplyToMode } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramContext } from "./bot/types.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../config/commands.js";
-import type { OpenClawConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveChannelGroupPolicy,
@@ -20,20 +23,14 @@ import {
 } from "../config/group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
-import {
-  buildTelegramGroupPeerId,
-  resolveTelegramForumThreadId,
-  resolveTelegramStreamMode,
-} from "./bot/helpers.js";
-import type { TelegramContext, TelegramMessage } from "./bot/types.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
@@ -43,7 +40,11 @@ import {
   resolveTelegramUpdateId,
   type TelegramUpdateKeyContext,
 } from "./bot-updates.js";
-import { withTelegramApiErrorLogging } from "./api-logging.js";
+import {
+  buildTelegramGroupPeerId,
+  resolveTelegramForumThreadId,
+  resolveTelegramStreamMode,
+} from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
@@ -66,11 +67,11 @@ export type TelegramBotOptions = {
 
 export function getTelegramSequentialKey(ctx: {
   chat?: { id?: number };
-  message?: TelegramMessage;
+  message?: Message;
   update?: {
-    message?: TelegramMessage;
-    edited_message?: TelegramMessage;
-    callback_query?: { message?: TelegramMessage };
+    message?: Message;
+    edited_message?: Message;
+    callback_query?: { message?: Message };
     message_reaction?: { chat?: { id?: number } };
   };
 }): string {
@@ -417,11 +418,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       // Detect added reactions
       const oldEmojis = new Set(
         reaction.old_reaction
-          .filter((r): r is { type: "emoji"; emoji: string } => r.type === "emoji")
+          .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
           .map((r) => r.emoji),
       );
       const addedReactions = reaction.new_reaction
-        .filter((r): r is { type: "emoji"; emoji: string } => r.type === "emoji")
+        .filter((r): r is ReactionTypeEmoji => r.type === "emoji")
         .filter((r) => !oldEmojis.has(r.emoji));
 
       if (addedReactions.length === 0) {
@@ -445,7 +446,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       senderLabel = senderLabel || "unknown";
 
       // Extract forum thread info (similar to message processing)
+      // oxlint-disable-next-line typescript/no-explicit-any
       const messageThreadId = (reaction as any).message_thread_id;
+      // oxlint-disable-next-line typescript/no-explicit-any
       const isForum = (reaction.chat as any).is_forum === true;
       const resolvedThreadId = resolveTelegramForumThreadId({
         isForum,

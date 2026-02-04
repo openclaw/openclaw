@@ -1,34 +1,34 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-
 import {
   createAgentSession,
-  DefaultResourceLoader,
   estimateTokens,
   SessionManager,
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
-
-import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
+import fs from "node:fs/promises";
+import os from "node:os";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
-import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
-import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ExecElevatedDefaults } from "../bash-tools.js";
+import type { EmbeddedPiCompactResult } from "./types.js";
+import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
+import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
-import { resolveSignalReactionLevel } from "../../signal/reaction-level.js";
-import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
+import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
-import { resolveOpenClawDocsPath } from "../docs-path.js";
-import type { ExecElevatedDefaults } from "../bash-tools.js";
+import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
+import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
@@ -42,8 +42,8 @@ import {
 } from "../pi-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { resolveSandboxContext } from "../sandbox.js";
+import { repairSessionFileIfNeeded } from "../session-file-repair.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
-import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
 import {
   applySkillEnvOverrides,
@@ -52,6 +52,7 @@ import {
   resolveSkillsPromptForRun,
   type SkillSnapshot,
 } from "../skills.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { buildEmbeddedExtensionPaths } from "./extensions.js";
 import {
   logToolSchemasForGoogle,
@@ -64,12 +65,13 @@ import { log } from "./logger.js";
 import { buildModelAliasLines, resolveModel } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
-import { buildEmbeddedSystemPrompt, createSystemPromptOverride } from "./system-prompt.js";
+import {
+  applySystemPromptOverrideToSession,
+  buildEmbeddedSystemPrompt,
+  createSystemPromptOverride,
+} from "./system-prompt.js";
 import { splitSdkTools } from "./tool-split.js";
-import type { EmbeddedPiCompactResult } from "./types.js";
-import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { describeUnknownError, mapThinkingLevel, resolveExecToolDefaults } from "./utils.js";
-import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
@@ -349,13 +351,18 @@ export async function compactEmbeddedPiSessionDirect(
       userTime,
       userTimeFormat,
       contextFiles,
+      memoryCitationsMode: params.config?.memory?.citations,
     });
-    const systemPrompt = createSystemPromptOverride(appendPrompt);
+    const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
     });
     try {
+      await repairSessionFileIfNeeded({
+        sessionFile: params.sessionFile,
+        warn: (message) => log.warn(message),
+      });
       await prewarmSessionFile(params.sessionFile);
       const transcriptPolicy = resolveTranscriptPolicy({
         modelApi: model.api,
@@ -373,7 +380,8 @@ export async function compactEmbeddedPiSessionDirect(
         settingsManager,
         minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
       });
-      const additionalExtensionPaths = buildEmbeddedExtensionPaths({
+      // Call for side effects (sets compaction/pruning runtime state)
+      buildEmbeddedExtensionPaths({
         cfg: params.config,
         sessionManager,
         provider,
@@ -386,17 +394,6 @@ export async function compactEmbeddedPiSessionDirect(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
-      const resourceLoader = new DefaultResourceLoader({
-        cwd: resolvedWorkspace,
-        agentDir,
-        settingsManager,
-        additionalExtensionPaths,
-        noSkills: true,
-        systemPromptOverride: systemPrompt,
-        agentsFilesOverride: () => ({ agentsFiles: [] }),
-      });
-      await resourceLoader.reload();
-
       const { session } = await createAgentSession({
         cwd: resolvedWorkspace,
         agentDir,
@@ -408,8 +405,8 @@ export async function compactEmbeddedPiSessionDirect(
         customTools,
         sessionManager,
         settingsManager,
-        resourceLoader,
       });
+      applySystemPromptOverrideToSession(session, systemPromptOverride());
 
       try {
         const prior = await sanitizeSessionHistory({

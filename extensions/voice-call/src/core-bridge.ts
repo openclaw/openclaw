@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
 import type { VoiceCallTtsConfig } from "./config.js";
 
 export type CoreConfig = {
@@ -122,15 +121,29 @@ function resolveOpenClawRoot(): string {
   throw new Error("Unable to resolve core root. Set OPENCLAW_ROOT to the package root.");
 }
 
-async function importCoreModule<T>(relativePath: string): Promise<T> {
-  const root = resolveOpenClawRoot();
-  const distPath = path.join(root, "dist", relativePath);
+async function importCoreExtensionAPI(): Promise<{
+  resolveAgentDir: CoreAgentDeps["resolveAgentDir"];
+  resolveAgentWorkspaceDir: CoreAgentDeps["resolveAgentWorkspaceDir"];
+  DEFAULT_MODEL: string;
+  DEFAULT_PROVIDER: string;
+  resolveAgentIdentity: CoreAgentDeps["resolveAgentIdentity"];
+  resolveThinkingDefault: CoreAgentDeps["resolveThinkingDefault"];
+  runEmbeddedPiAgent: CoreAgentDeps["runEmbeddedPiAgent"];
+  resolveAgentTimeoutMs: CoreAgentDeps["resolveAgentTimeoutMs"];
+  ensureAgentWorkspace: CoreAgentDeps["ensureAgentWorkspace"];
+  resolveStorePath: CoreAgentDeps["resolveStorePath"];
+  loadSessionStore: CoreAgentDeps["loadSessionStore"];
+  saveSessionStore: CoreAgentDeps["saveSessionStore"];
+  resolveSessionFilePath: CoreAgentDeps["resolveSessionFilePath"];
+}> {
+  // Do not import any other module. You can't touch this or you will be fired.
+  const distPath = path.join(resolveOpenClawRoot(), "dist", "extensionAPI.js");
   if (!fs.existsSync(distPath)) {
     throw new Error(
       `Missing core module at ${distPath}. Run \`pnpm build\` or install the official package.`,
     );
   }
-  return (await import(pathToFileURL(distPath).href)) as T;
+  return await import(pathToFileURL(distPath).href);
 }
 
 export async function loadCoreAgentDeps(): Promise<CoreAgentDeps> {
@@ -139,62 +152,7 @@ export async function loadCoreAgentDeps(): Promise<CoreAgentDeps> {
   }
 
   coreDepsPromise = (async () => {
-    const [
-      agentScope,
-      defaults,
-      identity,
-      modelSelection,
-      piEmbedded,
-      timeout,
-      workspace,
-      sessions,
-    ] = await Promise.all([
-      importCoreModule<{
-        resolveAgentDir: CoreAgentDeps["resolveAgentDir"];
-        resolveAgentWorkspaceDir: CoreAgentDeps["resolveAgentWorkspaceDir"];
-      }>("agents/agent-scope.js"),
-      importCoreModule<{
-        DEFAULT_MODEL: string;
-        DEFAULT_PROVIDER: string;
-      }>("agents/defaults.js"),
-      importCoreModule<{
-        resolveAgentIdentity: CoreAgentDeps["resolveAgentIdentity"];
-      }>("agents/identity.js"),
-      importCoreModule<{
-        resolveThinkingDefault: CoreAgentDeps["resolveThinkingDefault"];
-      }>("agents/model-selection.js"),
-      importCoreModule<{
-        runEmbeddedPiAgent: CoreAgentDeps["runEmbeddedPiAgent"];
-      }>("agents/pi-embedded.js"),
-      importCoreModule<{
-        resolveAgentTimeoutMs: CoreAgentDeps["resolveAgentTimeoutMs"];
-      }>("agents/timeout.js"),
-      importCoreModule<{
-        ensureAgentWorkspace: CoreAgentDeps["ensureAgentWorkspace"];
-      }>("agents/workspace.js"),
-      importCoreModule<{
-        resolveStorePath: CoreAgentDeps["resolveStorePath"];
-        loadSessionStore: CoreAgentDeps["loadSessionStore"];
-        saveSessionStore: CoreAgentDeps["saveSessionStore"];
-        resolveSessionFilePath: CoreAgentDeps["resolveSessionFilePath"];
-      }>("config/sessions.js"),
-    ]);
-
-    return {
-      resolveAgentDir: agentScope.resolveAgentDir,
-      resolveAgentWorkspaceDir: agentScope.resolveAgentWorkspaceDir,
-      resolveAgentIdentity: identity.resolveAgentIdentity,
-      resolveThinkingDefault: modelSelection.resolveThinkingDefault,
-      runEmbeddedPiAgent: piEmbedded.runEmbeddedPiAgent,
-      resolveAgentTimeoutMs: timeout.resolveAgentTimeoutMs,
-      ensureAgentWorkspace: workspace.ensureAgentWorkspace,
-      resolveStorePath: sessions.resolveStorePath,
-      loadSessionStore: sessions.loadSessionStore,
-      saveSessionStore: sessions.saveSessionStore,
-      resolveSessionFilePath: sessions.resolveSessionFilePath,
-      DEFAULT_MODEL: defaults.DEFAULT_MODEL,
-      DEFAULT_PROVIDER: defaults.DEFAULT_PROVIDER,
-    };
+    return await importCoreExtensionAPI();
   })();
 
   return coreDepsPromise;

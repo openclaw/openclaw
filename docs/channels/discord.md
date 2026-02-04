@@ -100,7 +100,7 @@ In **Bot** → **Privileged Gateway Intents**, enable:
 - **Message Content Intent** (required to read message text in most guilds; without it you’ll see “Used disallowed intents” or the bot will connect but not react to messages)
 - **Server Members Intent** (recommended; required for some member/user lookups and allowlist matching in guilds)
 
-You usually do **not** need **Presence Intent**.
+You usually do **not** need **Presence Intent**. Setting the bot's own presence (`setPresence` action) uses gateway OP3 and does not require this intent; it is only needed if you want to receive presence updates about other guild members.
 
 ### 3) Generate an invite URL (OAuth2 URL Generator)
 
@@ -222,6 +222,11 @@ Notes:
 - `requireMention` must live under `channels.discord.guilds` (or a specific channel). `channels.discord.requireMention` at the top level is ignored.
 - **Permission audits** (`channels status --probe`) only check numeric channel IDs. If you use slugs/names as `channels.discord.guilds.*.channels` keys, the audit can’t verify permissions.
 - **DMs don’t work**: `channels.discord.dm.enabled=false`, `channels.discord.dm.policy="disabled"`, or you haven’t been approved yet (`channels.discord.dm.policy="pairing"`).
+- **Exec approvals in Discord**: Discord supports a **button UI** for exec approvals in DMs (Allow once / Always allow / Deny). `/approve <id> ...` is only for forwarded approvals and won’t resolve Discord’s button prompts. If you see `❌ Failed to submit approval: Error: unknown approval id` or the UI never shows up, check:
+  - `channels.discord.execApprovals.enabled: true` in your config.
+  - Your Discord user ID is listed in `channels.discord.execApprovals.approvers` (the UI is only sent to approvers).
+  - Use the buttons in the DM prompt (**Allow once**, **Always allow**, **Deny**).
+  - See [Exec approvals](/tools/exec-approvals) and [Slash commands](/tools/slash-commands) for the broader approvals and command flow.
 
 ## Capabilities & limits
 
@@ -273,6 +278,7 @@ Outbound Discord API calls retry on rate limits (429) using Discord `retry_after
         voiceStatus: true,
         events: true,
         moderation: false,
+        presence: false,
       },
       replyToMode: "off",
       dm: {
@@ -340,6 +346,7 @@ ack reaction after the bot replies.
 - `historyLimit`: number of recent guild messages to include as context when replying to a mention (default 20; falls back to `messages.groupChat.historyLimit`; `0` disables).
 - `dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `dms["<user_id>"].historyLimit`.
 - `retry`: retry policy for outbound Discord API calls (attempts, minDelayMs, maxDelayMs, jitter).
+- `pluralkit`: resolve PluralKit proxied messages so system members appear as distinct senders.
 - `actions`: per-action tool gates; omit to allow all (set `false` to disable).
   - `reactions` (covers react + read reactions)
   - `stickers`, `emojiUploads`, `stickerUploads`, `polls`, `permissions`, `messages`, `threads`, `pins`, `search`
@@ -347,6 +354,8 @@ ack reaction after the bot replies.
   - `channels` (create/edit/delete channels + categories + permissions)
   - `roles` (role add/remove, default `false`)
   - `moderation` (timeout/kick/ban, default `false`)
+  - `presence` (bot status/activity, default `false`)
+- `execApprovals`: Discord-only exec approval DMs (button UI). Supports `enabled`, `approvers`, `agentFilter`, `sessionFilter`.
 
 Reaction notifications use `guilds.<id>.reactionNotifications`:
 
@@ -354,6 +363,34 @@ Reaction notifications use `guilds.<id>.reactionNotifications`:
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
+
+### PluralKit (PK) support
+
+Enable PK lookups so proxied messages resolve to the underlying system + member.
+When enabled, OpenClaw uses the member identity for allowlists and labels the
+sender as `Member (PK:System)` to avoid accidental Discord pings.
+
+```json5
+{
+  channels: {
+    discord: {
+      pluralkit: {
+        enabled: true,
+        token: "pk_live_...", // optional; required for private systems
+      },
+    },
+  },
+}
+```
+
+Allowlist notes (PK-enabled):
+
+- Use `pk:<memberId>` in `dm.allowFrom`, `guilds.<id>.users`, or per-channel `users`.
+- Member display names are also matched by name/slug.
+- Lookups use the **original** Discord message ID (the pre-proxy message), so
+  the PK API only resolves it within its 30-minute window.
+- If PK lookups fail (e.g., private system without a token), proxied messages
+  are treated as bot messages and are dropped unless `channels.discord.allowBots=true`.
 
 ### Tool action defaults
 
@@ -377,6 +414,7 @@ Reaction notifications use `guilds.<id>.reactionNotifications`:
 | events         | enabled  | List/create scheduled events       |
 | roles          | disabled | Role add/remove                    |
 | moderation     | disabled | Timeout/kick/ban                   |
+| presence       | disabled | Bot status/activity (setPresence)  |
 
 - `replyToMode`: `off` (default), `first`, or `all`. Applies only when the model includes a reply tag.
 
@@ -425,6 +463,7 @@ The agent can call `discord` with actions like:
 - `searchMessages`, `memberInfo`, `roleInfo`, `roleAdd`, `roleRemove`, `emojiList`
 - `channelInfo`, `channelList`, `voiceStatus`, `eventList`, `eventCreate`
 - `timeout`, `kick`, `ban`
+- `setPresence` (bot activity and online status)
 
 Discord message ids are surfaced in the injected context (`[discord message id: …]` and history lines) so the agent can target them.
 Emoji can be unicode (e.g., `✅`) or custom emoji syntax like `<:party_blob:1234567890>`.

@@ -1,8 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
-
-let createTelegramBot: typeof import("./bot.js").createTelegramBot;
-let resetInboundDedupe: typeof import("../auto-reply/reply/inbound-dedupe.js").resetInboundDedupe;
+import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import { createTelegramBot } from "./bot.js";
 
 const { sessionStorePath } = vi.hoisted(() => ({
   sessionStorePath: `/tmp/openclaw-telegram-${Math.random().toString(16).slice(2)}.json`,
@@ -35,17 +34,17 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
   };
 });
 
-const { readTelegramAllowFromStore, upsertTelegramPairingRequest } = vi.hoisted(() => ({
-  readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
-  upsertTelegramPairingRequest: vi.fn(async () => ({
+const { readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(() => ({
+  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
+  upsertChannelPairingRequest: vi.fn(async () => ({
     code: "PAIRCODE",
     created: true,
   })),
 }));
 
-vi.mock("./pairing-store.js", () => ({
-  readTelegramAllowFromStore,
-  upsertTelegramPairingRequest,
+vi.mock("../pairing/pairing-store.js", () => ({
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
 }));
 
 const useSpy = vi.fn();
@@ -137,11 +136,11 @@ const getOnHandler = (event: string) => {
 
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resetInboundDedupe } = await import("../auto-reply/reply/inbound-dedupe.js"));
-    ({ createTelegramBot } = await import("./bot.js"));
+  beforeAll(async () => {
     replyModule = await import("../auto-reply/reply.js");
+  });
+
+  beforeEach(() => {
     process.env.TZ = "UTC";
     resetInboundDedupe();
     loadConfig.mockReturnValue({

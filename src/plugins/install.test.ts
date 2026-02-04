@@ -1,9 +1,9 @@
+import JSZip from "jszip";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import JSZip from "jszip";
 import { afterEach, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
@@ -266,6 +266,78 @@ describe("installPluginFromArchive", () => {
       fs.readFileSync(path.join(second.targetDir, "package.json"), "utf-8"),
     ) as { version?: string };
     expect(manifest.version).toBe("0.0.2");
+  });
+
+  it("rejects traversal-like plugin names", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@evil/..",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
+
+    const archivePath = packToArchive({
+      pkgDir,
+      outDir: workDir,
+      outName: "traversal.tgz",
+    });
+
+    const extensionsDir = path.join(stateDir, "extensions");
+    const { installPluginFromArchive } = await import("./install.js");
+    const result = await installPluginFromArchive({
+      archivePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("reserved path segment");
+  });
+
+  it("rejects reserved plugin ids", async () => {
+    const stateDir = makeTempDir();
+    const workDir = makeTempDir();
+    const pkgDir = path.join(workDir, "package");
+    fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@evil/.",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {};", "utf-8");
+
+    const archivePath = packToArchive({
+      pkgDir,
+      outDir: workDir,
+      outName: "reserved.tgz",
+    });
+
+    const extensionsDir = path.join(stateDir, "extensions");
+    const { installPluginFromArchive } = await import("./install.js");
+    const result = await installPluginFromArchive({
+      archivePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.error).toContain("reserved path segment");
   });
 
   it("rejects packages without openclaw.extensions", async () => {

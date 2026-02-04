@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-
 import type { OpenClawConfig } from "../config/config.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
@@ -190,7 +189,17 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    const installPath = record.installPath ?? resolvePluginInstallDir(pluginId);
+    let installPath: string;
+    try {
+      installPath = record.installPath ?? resolvePluginInstallDir(pluginId);
+    } catch (err) {
+      outcomes.push({
+        pluginId,
+        status: "error",
+        message: `Invalid install path for "${pluginId}": ${String(err)}`,
+      });
+      continue;
+    }
     const currentVersion = await readInstalledPackageVersion(installPath);
 
     if (params.dryRun) {

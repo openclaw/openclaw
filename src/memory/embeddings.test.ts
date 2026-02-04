@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -325,5 +324,159 @@ describe("embedding provider local fallback", () => {
         fallback: "none",
       }),
     ).rejects.toThrow(/optional dependency node-llama-cpp/i);
+  });
+});
+
+describe("local embedding normalization", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.doUnmock("./node-llama.js");
+  });
+
+  it("normalizes local embeddings to magnitude ~1.0", async () => {
+    const unnormalizedVector = [2.35, 3.45, 0.63, 4.3, 1.2, 5.1, 2.8, 3.9];
+
+    vi.doMock("./node-llama.js", () => ({
+      importNodeLlamaCpp: async () => ({
+        getLlama: async () => ({
+          loadModel: vi.fn().mockResolvedValue({
+            createEmbeddingContext: vi.fn().mockResolvedValue({
+              getEmbeddingFor: vi.fn().mockResolvedValue({
+                vector: new Float32Array(unnormalizedVector),
+              }),
+            }),
+          }),
+        }),
+        resolveModelFile: async () => "/fake/model.gguf",
+        LlamaLogLevel: { error: 0 },
+      }),
+    }));
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const embedding = await result.provider.embedQuery("test query");
+
+    const magnitude = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
+
+    expect(magnitude).toBeCloseTo(1.0, 5);
+  });
+
+  it("handles zero vector without division by zero", async () => {
+    const zeroVector = [0, 0, 0, 0];
+
+    vi.doMock("./node-llama.js", () => ({
+      importNodeLlamaCpp: async () => ({
+        getLlama: async () => ({
+          loadModel: vi.fn().mockResolvedValue({
+            createEmbeddingContext: vi.fn().mockResolvedValue({
+              getEmbeddingFor: vi.fn().mockResolvedValue({
+                vector: new Float32Array(zeroVector),
+              }),
+            }),
+          }),
+        }),
+        resolveModelFile: async () => "/fake/model.gguf",
+        LlamaLogLevel: { error: 0 },
+      }),
+    }));
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const embedding = await result.provider.embedQuery("test");
+
+    expect(embedding).toEqual([0, 0, 0, 0]);
+    expect(embedding.every((value) => Number.isFinite(value))).toBe(true);
+  });
+
+  it("sanitizes non-finite values before normalization", async () => {
+    const nonFiniteVector = [1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+
+    vi.doMock("./node-llama.js", () => ({
+      importNodeLlamaCpp: async () => ({
+        getLlama: async () => ({
+          loadModel: vi.fn().mockResolvedValue({
+            createEmbeddingContext: vi.fn().mockResolvedValue({
+              getEmbeddingFor: vi.fn().mockResolvedValue({
+                vector: new Float32Array(nonFiniteVector),
+              }),
+            }),
+          }),
+        }),
+        resolveModelFile: async () => "/fake/model.gguf",
+        LlamaLogLevel: { error: 0 },
+      }),
+    }));
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const embedding = await result.provider.embedQuery("test");
+
+    expect(embedding).toEqual([1, 0, 0, 0]);
+    expect(embedding.every((value) => Number.isFinite(value))).toBe(true);
+  });
+
+  it("normalizes batch embeddings to magnitude ~1.0", async () => {
+    const unnormalizedVectors = [
+      [2.35, 3.45, 0.63, 4.3],
+      [10.0, 0.0, 0.0, 0.0],
+      [1.0, 1.0, 1.0, 1.0],
+    ];
+
+    vi.doMock("./node-llama.js", () => ({
+      importNodeLlamaCpp: async () => ({
+        getLlama: async () => ({
+          loadModel: vi.fn().mockResolvedValue({
+            createEmbeddingContext: vi.fn().mockResolvedValue({
+              getEmbeddingFor: vi
+                .fn()
+                .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[0]) })
+                .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[1]) })
+                .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[2]) }),
+            }),
+          }),
+        }),
+        resolveModelFile: async () => "/fake/model.gguf",
+        LlamaLogLevel: { error: 0 },
+      }),
+    }));
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const embeddings = await result.provider.embedBatch(["text1", "text2", "text3"]);
+
+    for (const embedding of embeddings) {
+      const magnitude = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
+      expect(magnitude).toBeCloseTo(1.0, 5);
+    }
   });
 });

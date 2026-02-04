@@ -1,3 +1,7 @@
+import type { GuardedFetchResult } from "../../infra/net/fetch-guard.js";
+import type { LookupFn, SsrFPolicy } from "../../infra/net/ssrf.js";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+
 const MAX_ERROR_CHARS = 300;
 
 export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string {
@@ -18,6 +22,28 @@ export async function fetchWithTimeout(
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function fetchWithTimeoutGuarded(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+  options?: {
+    ssrfPolicy?: SsrFPolicy;
+    lookupFn?: LookupFn;
+    pinDns?: boolean;
+  },
+): Promise<GuardedFetchResult> {
+  return await fetchWithSsrFGuard({
+    url,
+    fetchImpl: fetchFn,
+    init,
+    timeoutMs,
+    policy: options?.ssrfPolicy,
+    lookupFn: options?.lookupFn,
+    pinDns: options?.pinDns,
+  });
 }
 
 export async function readErrorResponse(res: Response): Promise<string | undefined> {

@@ -1,8 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-
-import { linePlugin } from "./src/channel.js";
 import { registerLineCardCommand } from "./src/card-command.js";
+import { linePlugin } from "./src/channel.js";
 import { setLineRuntime } from "./src/runtime.js";
 
 const plugin = {

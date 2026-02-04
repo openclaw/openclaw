@@ -100,7 +100,6 @@ export function allocateColor(usedColors: Set<string>): string {
   }
   // All colors used, cycle based on count
   const index = usedColors.size % PROFILE_COLORS.length;
-  // biome-ignore lint/style/noNonNullAssertion: Array is non-empty constant
   return PROFILE_COLORS[index] ?? PROFILE_COLORS[0];
 }
 

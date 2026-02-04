@@ -1,7 +1,6 @@
 import type { ChannelGroupContext, GroupToolPolicyConfig } from "openclaw/plugin-sdk";
-
-import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
 import type { CoreConfig } from "./types.js";
+import { resolveMatrixRoomConfig } from "./matrix/monitor/rooms.js";
 
 export function resolveMatrixGroupRequireMention(params: ChannelGroupContext): boolean {
   const rawGroupId = params.groupId?.trim() ?? "";

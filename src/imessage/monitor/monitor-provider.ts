@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
-
+import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
+import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   formatInboundEnvelope,
   formatInboundFromLabel,
@@ -12,8 +13,6 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
@@ -21,10 +20,12 @@ import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
 } from "../../auto-reply/reply/history.js";
+import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop } from "../../channels/logging.js";
-import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
+import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -42,9 +43,9 @@ import {
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient } from "../client.js";
+import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import {
@@ -54,7 +55,6 @@ import {
 } from "../targets.js";
 import { deliverReplies } from "./deliver.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
-import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 
 /**
  * Try to detect remote host from an SSH wrapper script like:
@@ -111,6 +111,51 @@ function describeReplyContext(message: IMessagePayload): IMessageReplyContext | 
   return { body, id, sender };
 }
 
+/**
+ * Cache for recently sent messages, used for echo detection.
+ * Keys are scoped by conversation (accountId:target) so the same text in different chats is not conflated.
+ * Entries expire after 5 seconds; we do not forget on match so multiple echo deliveries are all filtered.
+ */
+class SentMessageCache {
+  private cache = new Map<string, number>();
+  private readonly ttlMs = 5000; // 5 seconds
+
+  remember(scope: string, text: string): void {
+    if (!text?.trim()) {
+      return;
+    }
+    const key = `${scope}:${text.trim()}`;
+    this.cache.set(key, Date.now());
+    this.cleanup();
+  }
+
+  has(scope: string, text: string): boolean {
+    if (!text?.trim()) {
+      return false;
+    }
+    const key = `${scope}:${text.trim()}`;
+    const timestamp = this.cache.get(key);
+    if (!timestamp) {
+      return false;
+    }
+    const age = Date.now() - timestamp;
+    if (age > this.ttlMs) {
+      this.cache.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  private cleanup(): void {
+    const now = Date.now();
+    for (const [text, timestamp] of this.cache.entries()) {
+      if (now - timestamp > this.ttlMs) {
+        this.cache.delete(text);
+      }
+    }
+  }
+}
+
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
@@ -126,6 +171,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
+  const sentMessageCache = new SentMessageCache();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
   const groupAllowFrom = normalizeAllowList(
@@ -140,6 +186,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
   const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
   const dbPath = opts.dbPath ?? imessageCfg.dbPath;
+  const probeTimeoutMs = imessageCfg.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
 
   // Resolve remoteHost: explicit config, or auto-detect from SSH wrapper script
   let remoteHost = imessageCfg.remoteHost;
@@ -346,6 +393,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
     const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
     const messageText = (message.text ?? "").trim();
+
+    // Echo detection: check if the received message matches a recently sent message (within 5 seconds).
+    // Scope by conversation so same text in different chats is not conflated.
+    const echoScope = `${accountInfo.accountId}:${isGroup ? formatIMessageChatTarget(chatId) : `imessage:${sender}`}`;
+    if (messageText && sentMessageCache.has(echoScope, messageText)) {
+      logVerbose(
+        `imessage: skipping echo message (matches recently sent text within 5s): "${truncateUtf16Safe(messageText, 50)}"`,
+      );
+      return;
+    }
+
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     // Filter to valid attachments with paths
     const validAttachments = attachments.filter((entry) => entry?.original_path && !entry?.missing);
@@ -552,11 +610,15 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
-    const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
+    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      cfg,
+      agentId: route.agentId,
+      channel: "imessage",
+      accountId: route.accountId,
+    });
 
     const dispatcher = createReplyDispatcher({
-      responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       deliver: async (payload) => {
         await deliverReplies({
@@ -567,6 +629,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           runtime,
           maxBytes: mediaMaxBytes,
           textLimit,
+          sentMessageCache,
         });
       },
       onError: (err, info) => {
@@ -583,7 +646,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           typeof accountInfo.config.blockStreaming === "boolean"
             ? !accountInfo.config.blockStreaming
             : undefined,
-        onModelSelected: prefixContext.onModelSelected,
+        onModelSelected,
       },
     });
     if (!queuedFinal) {
@@ -619,7 +682,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     abortSignal: opts.abortSignal,
     runtime,
     check: async () => {
-      const probe = await probeIMessage(2000, { cliPath, dbPath, runtime });
+      const probe = await probeIMessage(probeTimeoutMs, { cliPath, dbPath, runtime });
       if (probe.ok) {
         return { ok: true };
       }

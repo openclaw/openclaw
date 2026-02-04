@@ -1,19 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
-import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
-import { rawDataToString } from "../infra/ws.js";
-import { logDebug, logError } from "../logger.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-  signDevicePayload,
-} from "../infra/device-identity.js";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
   storeDeviceAuthToken,
 } from "../infra/device-auth-store.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+} from "../infra/device-identity.js";
+import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
+import { rawDataToString } from "../infra/ws.js";
+import { logDebug, logError } from "../logger.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -132,6 +132,7 @@ export class GatewayClient {
           return new Error("gateway tls fingerprint mismatch");
         }
         return undefined;
+        // oxlint-disable-next-line typescript/no-explicit-any
       }) as any;
     }
     this.ws = new WebSocket(url, wsOptions);

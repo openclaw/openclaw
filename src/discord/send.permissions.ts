@@ -1,11 +1,10 @@
-import { RequestClient } from "@buape/carbon";
 import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
+import { RequestClient } from "@buape/carbon";
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
-
-import { loadConfig } from "../config/config.js";
 import type { RetryConfig } from "../infra/retry.js";
-import { resolveDiscordAccount } from "./accounts.js";
 import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
+import { loadConfig } from "../config/config.js";
+import { resolveDiscordAccount } from "./accounts.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(

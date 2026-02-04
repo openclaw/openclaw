@@ -3,10 +3,9 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { resolveUserPath } from "./utils.js";
 import type { CallMode, VoiceCallConfig } from "./config.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import {
   type CallId,
   type CallRecord,
@@ -17,6 +16,7 @@ import {
   TerminalStates,
   type TranscriptEntry,
 } from "./types.js";
+import { resolveUserPath } from "./utils.js";
 import { escapeXml, mapVoiceToPolly } from "./voice-mapping.js";
 
 function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): string {
@@ -475,11 +475,12 @@ export class CallManager {
 
       case "allowlist":
       case "pairing": {
-        const normalized = from?.replace(/\D/g, "") || "";
-        const allowed = (allowFrom || []).some((num) => {
-          const normalizedAllow = num.replace(/\D/g, "");
-          return normalized.endsWith(normalizedAllow) || normalizedAllow.endsWith(normalized);
-        });
+        const normalized = normalizePhoneNumber(from);
+        if (!normalized) {
+          console.log("[voice-call] Inbound call rejected: missing caller ID");
+          return false;
+        }
+        const allowed = isAllowlistedCaller(normalized, allowFrom);
         const status = allowed ? "accepted" : "rejected";
         console.log(
           `[voice-call] Inbound call ${status}: ${from} ${allowed ? "is in" : "not in"} allowlist`,
@@ -552,7 +553,7 @@ export class CallManager {
     if (!call && event.direction === "inbound" && event.providerCallId) {
       // Check if we should accept this inbound call
       if (!this.shouldAcceptInbound(event.from)) {
-        // TODO: Could hang up the call here
+        void this.rejectInboundCall(event);
         return;
       }
 
@@ -652,6 +653,25 @@ export class CallManager {
     }
 
     this.persistCallRecord(call);
+  }
+
+  private async rejectInboundCall(event: NormalizedEvent): Promise<void> {
+    if (!this.provider || !event.providerCallId) {
+      return;
+    }
+    const callId = event.callId || event.providerCallId;
+    try {
+      await this.provider.hangupCall({
+        callId,
+        providerCallId: event.providerCallId,
+        reason: "hangup-bot",
+      });
+    } catch (err) {
+      console.warn(
+        `[voice-call] Failed to reject inbound call ${event.providerCallId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   private maybeSpeakInitialMessageOnAnswered(call: CallRecord): void {

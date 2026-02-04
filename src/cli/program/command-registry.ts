@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-
+import type { ProgramContext } from "./context.js";
 import { agentsListCommand } from "../../commands/agents.js";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCommand } from "../../commands/sessions.js";
@@ -17,7 +17,6 @@ import { registerOnboardCommand } from "./register.onboard.js";
 import { registerSetupCommand } from "./register.setup.js";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
 import { registerSubCliCommands } from "./register.subclis.js";
-import type { ProgramContext } from "./context.js";
 
 type CommandRegisterParams = {
   program: Command;

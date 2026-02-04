@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "../../config/types.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { formatZonedTimestamp } from "../../auto-reply/envelope.js";
-import type { OpenClawConfig } from "../../config/types.js";
 
 /**
  * Cron jobs inject "Current time: ..." into their messages.

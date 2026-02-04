@@ -1,12 +1,10 @@
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import path from "node:path";
-
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
-
 import type { SessionEntry } from "./types.js";
-import { loadSessionStore, updateSessionStore } from "./store.js";
-import { resolveDefaultSessionStorePath, resolveSessionTranscriptPath } from "./paths.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { resolveDefaultSessionStorePath, resolveSessionTranscriptPath } from "./paths.js";
+import { loadSessionStore, updateSessionStore } from "./store.js";
 
 function stripQuery(value: string): string {
   const noHash = value.split("#")[0] ?? value;

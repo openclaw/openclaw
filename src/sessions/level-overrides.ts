@@ -1,5 +1,5 @@
-import { normalizeVerboseLevel, type VerboseLevel } from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { normalizeVerboseLevel, type VerboseLevel } from "../auto-reply/thinking.js";
 
 export function parseVerboseOverride(
   raw: unknown,

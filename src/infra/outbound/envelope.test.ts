@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-
-import { buildOutboundResultEnvelope } from "./envelope.js";
 import type { OutboundDeliveryJson } from "./format.js";
+import { buildOutboundResultEnvelope } from "./envelope.js";
 
 describe("buildOutboundResultEnvelope", () => {
   it("flattens delivery-only payloads by default", () => {

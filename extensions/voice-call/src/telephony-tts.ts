@@ -1,5 +1,5 @@
-import type { CoreConfig } from "./core-bridge.js";
 import type { VoiceCallTtsConfig } from "./config.js";
+import type { CoreConfig } from "./core-bridge.js";
 import { convertPcmToMulaw8k } from "./telephony-audio.js";
 
 export type TelephonyTtsRuntime = {

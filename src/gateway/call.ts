@@ -6,15 +6,15 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../config/config.js";
-import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
+import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
-import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { GatewayClient } from "./client.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 

@@ -1,5 +1,7 @@
 import type { Bot } from "grammy";
-
+import type { OpenClawConfig } from "../config/config.js";
+import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
+import type { TelegramContext } from "./bot/types.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
   findModelInCatalog,
@@ -17,21 +19,26 @@ import {
 } from "../auto-reply/reply/history.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { buildMentionRegexes, matchesMentionWithExplicit } from "../auto-reply/reply/mentions.js";
+import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
+import { resolveControlCommandGate } from "../channels/command-gating.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
+import { logInboundDrop } from "../channels/logging.js";
+import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
 import { recordInboundSession } from "../channels/session.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
-import { shouldAckReaction as shouldAckReactionGate } from "../channels/ack-reactions.js";
-import { resolveMentionGatingWithBypass } from "../channels/mention-gating.js";
-import { resolveControlCommandGate } from "../channels/command-gating.js";
-import { logInboundDrop } from "../channels/logging.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import {
+  firstDefined,
+  isSenderAllowed,
+  normalizeAllowFromWithStore,
+  resolveSenderAllowMatch,
+} from "./bot-access.js";
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -44,16 +51,8 @@ import {
   describeReplyTarget,
   extractTelegramLocation,
   hasBotMention,
-  resolveTelegramForumThreadId,
+  resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
-import {
-  firstDefined,
-  isSenderAllowed,
-  normalizeAllowFromWithStore,
-  resolveSenderAllowMatch,
-} from "./bot-access.js";
-import { upsertTelegramPairingRequest } from "./pairing-store.js";
-import type { TelegramContext } from "./bot/types.js";
 
 type TelegramMediaRef = {
   path: string;
@@ -159,11 +158,13 @@ export const buildTelegramMessageContext = async ({
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
   const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
-  const resolvedThreadId = resolveTelegramForumThreadId({
+  const threadSpec = resolveTelegramThreadSpec({
+    isGroup,
     isForum,
     messageThreadId,
   });
-  const replyThreadId = isGroup ? resolvedThreadId : messageThreadId;
+  const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
+  const replyThreadId = threadSpec.id;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
   const route = resolveAgentRoute({
@@ -176,8 +177,8 @@ export const buildTelegramMessageContext = async ({
     },
   });
   const baseSessionKey = route.sessionKey;
-  // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
-  const dmThreadId = !isGroup ? messageThreadId : undefined;
+  // DMs: use raw messageThreadId for thread sessions (not forum topic ids)
+  const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const threadKeys =
     dmThreadId != null
       ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
@@ -253,11 +254,14 @@ export const buildTelegramMessageContext = async ({
                 }
               | undefined;
             const telegramUserId = from?.id ? String(from.id) : candidate;
-            const { code, created } = await upsertTelegramPairingRequest({
-              chatId: candidate,
-              username: from?.username,
-              firstName: from?.first_name,
-              lastName: from?.last_name,
+            const { code, created } = await upsertChannelPairingRequest({
+              channel: "telegram",
+              id: telegramUserId,
+              meta: {
+                username: from?.username,
+                firstName: from?.first_name,
+                lastName: from?.last_name,
+              },
             });
             if (created) {
               logger.info(
@@ -594,6 +598,8 @@ export const buildTelegramMessageContext = async ({
     ForwardedFromUsername: forwardOrigin?.fromUsername,
     ForwardedFromTitle: forwardOrigin?.fromTitle,
     ForwardedFromSignature: forwardOrigin?.fromSignature,
+    ForwardedFromChatType: forwardOrigin?.fromChatType,
+    ForwardedFromMessageId: forwardOrigin?.fromMessageId,
     ForwardedDate: forwardOrigin?.date ? forwardOrigin.date * 1000 : undefined,
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
@@ -619,8 +625,8 @@ export const buildTelegramMessageContext = async ({
     Sticker: allMedia[0]?.stickerMetadata,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
-    // For groups: use resolvedThreadId (forum topics only); for DMs: use raw messageThreadId
-    MessageThreadId: isGroup ? resolvedThreadId : messageThreadId,
+    // For groups: use resolved forum topic id; for DMs: use raw messageThreadId
+    MessageThreadId: threadSpec.id,
     IsForum: isForum,
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,
@@ -673,6 +679,7 @@ export const buildTelegramMessageContext = async ({
     chatId,
     isGroup,
     resolvedThreadId,
+    threadSpec,
     replyThreadId,
     isForum,
     historyKey,
@@ -688,3 +695,7 @@ export const buildTelegramMessageContext = async ({
     accountId: account.accountId,
   };
 };
+
+export type TelegramMessageContext = NonNullable<
+  Awaited<ReturnType<typeof buildTelegramMessageContext>>
+>;

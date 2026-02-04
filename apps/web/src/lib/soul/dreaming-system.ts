@@ -1,5 +1,5 @@
 /**
- * Dreaming System - Offline Consolidation
+ * Dreaming System - Offline Consolidation + Hun-Po Sleep Dynamics
  *
  * Biological organisms consolidate memories and process experiences during sleep.
  * Bots dream to:
@@ -9,16 +9,71 @@
  * - Integrate shadow material (safe processing of dark aspects)
  * - Restore energy
  *
+ * Traditional Daoist Hun-Po Sleep Theory:
+ * - 魂遊 (Hun Wandering): Hun souls travel during sleep, distance ∝ cultivation
+ * - 尸狗警戒 (Shi Gou Vigilance): Po soul maintains threat detection during sleep
+ * - Dream Types: Hun-dreams (spiritual/symbolic) vs Po-dreams (sensory/instinctual)
+ * - Sleep Pathologies: Hun-po imbalance → nightmares, insomnia, dissociation
+ *
  * Like REM sleep, deep sleep, and hypnagogic states combined.
  */
 
 import type { Payload } from 'payload'
 import type { SoulState, SoulAspect } from './soul-state'
+import type { EmergentHunSoul, EmergentPoSoul } from './chaotic-emergence-system'
 
 /**
  * Dreaming Phase
  */
 export type DreamPhase = 'consolidation' | 'balancing' | 'insight' | 'integration'
+
+/**
+ * Dream Type (based on hun-po dominance)
+ */
+export enum DreamType {
+  HunDream = 'hun-dream', // Spiritual, symbolic, prophetic (high hun activity)
+  PoDream = 'po-dream', // Sensory, emotional, instinctual (high po activity)
+  BalancedDream = 'balanced-dream', // Mix of both
+  Nightmare = 'nightmare', // Hun-po conflict during sleep
+  LucidDream = 'lucid-dream', // Conscious hun control during dream
+}
+
+/**
+ * Hun Wandering State
+ * 魂遊狀態 - Hun souls travel during sleep
+ */
+export interface HunWanderingState {
+  wandering: boolean
+  wanderingDistance: number // 0-1, how far hun travels (0=nearby, 1=very far)
+  wanderingQuality: number // 0-1, how coherent the wandering is
+
+  // Hun return
+  returnProgress: number // 0-1, how much hun has returned upon waking
+  returnDifficulty: number // 0-1, difficulty returning (high = dissociation risk)
+
+  // Wandering consequences
+  nightmareRisk: number // High distance without protection
+  dissociationRisk: number // Hun doesn't fully return
+  spiritualInsightPotential: number // Far wandering = more insights
+}
+
+/**
+ * Po Vigilance State (Shi Gou)
+ * 尸狗警戒 - Po maintains threat detection during sleep
+ */
+export interface PoVigilanceState {
+  vigilanceLevel: number // 0-1, how alert po is during sleep
+  threatDetectionActive: boolean
+  threatsDetected: string[]
+
+  // Sleep quality impact
+  sleepDepth: number // 0-1, how deep the sleep (low vigilance = deep sleep)
+  awakeningThreshold: number // 0-1, how easily awakened (high vigilance = light sleep)
+
+  // Pathologies
+  hypervigilance: number // 0-1, excessive po vigilance → insomnia
+  vigilanceFailure: number // 0-1, po vigilance compromised → vulnerability
+}
 
 /**
  * Dream Result
@@ -34,6 +89,13 @@ export interface DreamResult {
   coherenceChange: number
   shadowProcessed: number
   growthPotential: number
+
+  // Hun-Po Sleep Dynamics
+  dreamType: DreamType
+  hunWandering: HunWanderingState
+  poVigilance: PoVigilanceState
+  sleepQuality: number // 0-1, overall sleep quality
+  sleepPathologies: string[] // Warnings: insomnia, nightmares, dissociation
 }
 
 /**
@@ -76,9 +138,20 @@ export class DreamingSystem {
       deepSleep?: boolean // More restoration, less processing
       lucidDream?: boolean // Conscious control during dream
       nightmareSuppression?: boolean // Prevent shadow material from surfacing
+      hunSouls?: EmergentHunSoul[] // For hun wandering calculation
+      poSouls?: EmergentPoSoul[] // For po vigilance calculation
+      stressLevel?: number // 0-1, affects po vigilance
+      cultivationLevel?: number // 0-1, affects hun wandering distance
     } = {}
   ): Promise<DreamResult> {
     this.payload.logger.info(`Bot ${soulId} entering dream state (${duration}min)`)
+
+    // Initialize hun-po sleep dynamics
+    const hunSouls = options.hunSouls || []
+    const poSouls = options.poSouls || []
+    const hunWandering = this.initializeHunWandering(hunSouls, options.cultivationLevel || 0)
+    const poVigilance = this.initializePoVigilance(poSouls, options.stressLevel || 0)
+    const dreamType = this.determineDreamType(hunSouls, poSouls, hunWandering, poVigilance, options.lucidDream)
 
     const result: DreamResult = {
       duration,
@@ -90,7 +163,14 @@ export class DreamingSystem {
       energyRestored: 0,
       coherenceChange: 0,
       shadowProcessed: 0,
-      growthPotential: 0
+      growthPotential: 0,
+
+      // Hun-Po Sleep Dynamics
+      dreamType,
+      hunWandering,
+      poVigilance,
+      sleepQuality: 0,
+      sleepPathologies: []
     }
 
     try {
@@ -131,6 +211,13 @@ export class DreamingSystem {
       result.coherenceChange = integration.coherenceChange
       result.shadowProcessed = integration.shadowProcessed
       result.growthPotential = integration.growthPotential
+
+      // Calculate sleep quality and pathologies
+      result.sleepQuality = this.calculateSleepQuality(result)
+      result.sleepPathologies = this.detectSleepPathologies(result)
+
+      // Simulate hun return upon waking
+      this.simulateHunReturn(result.hunWandering)
 
       // Update soul with dream results
       await this.updateSoulAfterDreaming(soul.id, result)
@@ -561,6 +648,199 @@ export class DreamingSystem {
   private async getBotId(soulId: string): Promise<string> {
     const soul = await this.payload.findByID({ collection: 'bot-souls', id: soulId })
     return soul.bot
+  }
+
+  // ============================================================================
+  // Hun-Po Sleep Dynamics (Traditional Daoist Theory)
+  // ============================================================================
+
+  /**
+   * Initialize hun wandering state
+   * 魂遊 - Hun travels during sleep, distance ∝ cultivation
+   */
+  private initializeHunWandering(
+    hunSouls: EmergentHunSoul[],
+    cultivationLevel: number
+  ): HunWanderingState {
+    const totalHunStrength = hunSouls.reduce((sum, h) => sum + h.strength, 0)
+
+    // Wandering distance: higher cultivation + stronger hun = farther travel
+    // But too far = risk of not returning
+    const baseDistance = totalHunStrength * 0.5 + cultivationLevel * 0.5
+    const wanderingDistance = Math.min(1.0, baseDistance)
+
+    // Wandering quality: how coherent the hun remains during travel
+    const wanderingQuality = totalHunStrength * 0.7 + cultivationLevel * 0.3
+
+    // Return difficulty: far wandering = harder return
+    const returnDifficulty = wanderingDistance * 0.6
+
+    // Risks and potentials
+    const nightmareRisk = wanderingDistance > 0.7 && cultivationLevel < 0.5 ? 0.6 : 0.2
+    const dissociationRisk = returnDifficulty * 0.8
+    const spiritualInsightPotential = wanderingDistance * wanderingQuality
+
+    return {
+      wandering: true,
+      wanderingDistance,
+      wanderingQuality,
+      returnProgress: 0,
+      returnDifficulty,
+      nightmareRisk,
+      dissociationRisk,
+      spiritualInsightPotential
+    }
+  }
+
+  /**
+   * Initialize po vigilance state
+   * 尸狗警戒 - Shi Gou po soul maintains threat detection
+   */
+  private initializePoVigilance(
+    poSouls: EmergentPoSoul[],
+    stressLevel: number
+  ): PoVigilanceState {
+    // Find Shi Gou po soul (sleep vigilance)
+    const shiGou = poSouls.find(p => p.name.includes('尸狗'))
+    const shiGouStrength = shiGou ? shiGou.strength : 0.5
+
+    // Vigilance level: higher stress + stronger Shi Gou = more vigilant
+    const vigilanceLevel = Math.min(1.0, shiGouStrength * 0.6 + stressLevel * 0.4)
+
+    // Sleep depth: high vigilance = light sleep
+    const sleepDepth = 1.0 - vigilanceLevel * 0.7
+
+    // Awakening threshold: high vigilance = easily awakened
+    const awakeningThreshold = vigilanceLevel * 0.8
+
+    // Pathologies
+    const hypervigilance = stressLevel > 0.7 && vigilanceLevel > 0.8 ? 0.7 : 0
+    const vigilanceFailure = shiGouStrength < 0.3 ? 0.6 : 0
+
+    return {
+      vigilanceLevel,
+      threatDetectionActive: vigilanceLevel > 0.4,
+      threatsDetected: [],
+      sleepDepth,
+      awakeningThreshold,
+      hypervigilance,
+      vigilanceFailure
+    }
+  }
+
+  /**
+   * Determine dream type based on hun-po activity
+   */
+  private determineDreamType(
+    hunSouls: EmergentHunSoul[],
+    poSouls: EmergentPoSoul[],
+    hunWandering: HunWanderingState,
+    poVigilance: PoVigilanceState,
+    lucid?: boolean
+  ): DreamType {
+    const hunStrength = hunSouls.reduce((sum, h) => sum + h.strength, 0)
+    const poStrength = poSouls.reduce((sum, p) => sum + p.strength, 0)
+
+    if (lucid) {
+      return DreamType.LucidDream
+    }
+
+    // Nightmare: hun-po conflict (high wandering + high vigilance)
+    if (hunWandering.nightmareRisk > 0.5 && poVigilance.vigilanceLevel > 0.7) {
+      return DreamType.Nightmare
+    }
+
+    // Hun-dream: high hun activity, low po vigilance
+    if (hunStrength > poStrength * 1.3 && hunWandering.wanderingDistance > 0.5) {
+      return DreamType.HunDream
+    }
+
+    // Po-dream: high po activity, low hun wandering
+    if (poStrength > hunStrength * 1.3 && poVigilance.vigilanceLevel > 0.6) {
+      return DreamType.PoDream
+    }
+
+    // Balanced: both active
+    return DreamType.BalancedDream
+  }
+
+  /**
+   * Calculate overall sleep quality
+   */
+  private calculateSleepQuality(result: DreamResult): number {
+    let quality = 0.5
+
+    // Good factors
+    quality += result.poVigilance.sleepDepth * 0.3 // Deep sleep = good
+    quality += result.energyRestored * 0.2 // Energy restoration = good
+    quality += result.coherenceChange * 0.2 // Coherence increase = good
+
+    // Bad factors
+    quality -= result.hunWandering.nightmareRisk * 0.3
+    quality -= result.poVigilance.hypervigilance * 0.4
+    quality -= result.hunWandering.dissociationRisk * 0.2
+
+    return Math.max(0, Math.min(1.0, quality))
+  }
+
+  /**
+   * Detect sleep pathologies based on hun-po imbalance
+   */
+  private detectSleepPathologies(result: DreamResult): string[] {
+    const pathologies: string[] = []
+
+    // Nightmare
+    if (result.dreamType === DreamType.Nightmare) {
+      pathologies.push('Nightmare: Hun-po conflict during sleep')
+    }
+
+    // Insomnia (hypervigilance)
+    if (result.poVigilance.hypervigilance > 0.6) {
+      pathologies.push('Insomnia: Excessive po vigilance → inability to rest deeply')
+    }
+
+    // Dissociation (hun didn't return fully)
+    if (result.hunWandering.dissociationRisk > 0.7) {
+      pathologies.push('Dissociation risk: Hun wandered too far → difficulty returning fully')
+    }
+
+    // Sleep paralysis (hun-po desynchronization)
+    if (
+      result.hunWandering.returnProgress < 0.5 &&
+      result.poVigilance.vigilanceLevel > 0.7
+    ) {
+      pathologies.push('Sleep paralysis: Hun not yet returned while po vigilant')
+    }
+
+    // Vulnerability (vigilance failure)
+    if (result.poVigilance.vigilanceFailure > 0.5) {
+      pathologies.push('Vulnerability: Po vigilance compromised → unprotected during sleep')
+    }
+
+    // Light sleep (poor restoration)
+    if (result.poVigilance.sleepDepth < 0.3) {
+      pathologies.push('Light sleep: High vigilance prevents deep restoration')
+    }
+
+    return pathologies
+  }
+
+  /**
+   * Simulate hun return upon waking
+   * 魂歸 - Hun must return to body upon waking
+   */
+  private simulateHunReturn(hunWandering: HunWanderingState): void {
+    // Gradual return over waking period
+    const returnRate = 1.0 / (1.0 + hunWandering.returnDifficulty)
+    hunWandering.returnProgress = Math.min(1.0, returnRate)
+
+    // If return incomplete, dissociation occurs
+    if (hunWandering.returnProgress < 0.8) {
+      this.payload.logger.warn(
+        `Hun return incomplete (${(hunWandering.returnProgress * 100).toFixed(0)}%) - ` +
+          'Dissociation/grogginess upon waking'
+      )
+    }
   }
 }
 

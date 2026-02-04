@@ -1,3 +1,5 @@
+import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -8,9 +10,7 @@ import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../daemon/systemd-hints.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { isWSLEnv } from "../infra/wsl.js";
-import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 
 type RuntimeHintOptions = {

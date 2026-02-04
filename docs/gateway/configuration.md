@@ -1091,7 +1091,7 @@ Set `channels.telegram.configWrites: false` to block Telegram-initiated config w
         autoSelectFamily: false,
       },
       proxy: "socks5://localhost:9050",
-      webhookUrl: "https://example.com/telegram-webhook",
+      webhookUrl: "https://example.com/telegram-webhook", // requires webhookSecret
       webhookSecret: "secret",
       webhookPath: "/telegram-webhook",
     },
@@ -1516,6 +1516,25 @@ See [Messages](/concepts/messages) for queueing, sessions, and streaming context
 
 `responsePrefix` is applied to **all outbound replies** (tool summaries, block
 streaming, final replies) across channels unless already present.
+
+Overrides can be configured per channel and per account:
+
+- `channels.<channel>.responsePrefix`
+- `channels.<channel>.accounts.<id>.responsePrefix`
+
+Resolution order (most specific wins):
+
+1. `channels.<channel>.accounts.<id>.responsePrefix`
+2. `channels.<channel>.responsePrefix`
+3. `messages.responsePrefix`
+
+Semantics:
+
+- `undefined` falls through to the next level.
+- `""` explicitly disables the prefix and stops the cascade.
+- `"auto"` derives `[{identity.name}]` for the routed agent.
+
+Overrides apply to all channels, including extensions, and to every outbound reply kind.
 
 If `messages.responsePrefix` is unset, no prefix is applied by default. WhatsApp self-chat
 replies are the exception: they default to `[{identity.name}]` when set, otherwise
@@ -2039,6 +2058,7 @@ of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 - `tools.web.search.cacheTtlMinutes` (default 15)
 - `tools.web.fetch.enabled` (default true)
 - `tools.web.fetch.maxChars` (default 50000)
+- `tools.web.fetch.maxCharsCap` (default 50000; clamps maxChars from config/tool calls)
 - `tools.web.fetch.timeoutSeconds` (default 30)
 - `tools.web.fetch.cacheTtlMinutes` (default 15)
 - `tools.web.fetch.userAgent` (optional override)
@@ -2551,7 +2571,9 @@ Notes:
 
 - Set `MOONSHOT_API_KEY` in the environment or use `openclaw onboard --auth-choice moonshot-api-key`.
 - Model ref: `moonshot/kimi-k2.5`.
-- Use `https://api.moonshot.cn/v1` if you need the China endpoint.
+- For the China endpoint, either:
+  - Run `openclaw onboard --auth-choice moonshot-api-key-cn` (wizard will set `https://api.moonshot.cn/v1`), or
+  - Manually set `baseUrl: "https://api.moonshot.cn/v1"` in `models.providers.moonshot`.
 
 ### Kimi Coding
 
@@ -2763,6 +2785,7 @@ Fields:
   - `per-peer`: isolate DMs by sender id across channels.
   - `per-channel-peer`: isolate DMs per channel + sender (recommended for multi-user inboxes).
   - `per-account-channel-peer`: isolate DMs per account + channel + sender (recommended for multi-account inboxes).
+  - Secure DM mode (recommended): set `session.dmScope: "per-channel-peer"` when multiple people can DM the bot (shared inboxes, multi-person allowlists, or `dmPolicy: "open"`).
 - `identityLinks`: map canonical ids to provider-prefixed peers so the same person shares a DM session across channels when using `per-peer`, `per-channel-peer`, or `per-account-channel-peer`.
   - Example: `alice: ["telegram:123456789", "discord:987654321012345678"]`.
 - `reset`: primary reset policy. Defaults to daily resets at 4:00 AM local time on the gateway host.
@@ -2952,6 +2975,7 @@ Control UI base path:
 - `gateway.controlUi.basePath` sets the URL prefix where the Control UI is served.
 - Examples: `"/ui"`, `"/openclaw"`, `"/apps/openclaw"`.
 - Default: root (`/`) (unchanged).
+- `gateway.controlUi.root` sets the filesystem root for Control UI assets (default: `dist/control-ui`).
 - `gateway.controlUi.allowInsecureAuth` allows token-only auth for the Control UI when
   device identity is omitted (typically over HTTP). Default: `false`. Prefer HTTPS
   (Tailscale Serve) or `127.0.0.1`.

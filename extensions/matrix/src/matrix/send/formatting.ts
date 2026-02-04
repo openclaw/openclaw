@@ -1,5 +1,5 @@
-import { markdownToMatrixHtml } from "../format.js";
 import { getMatrixRuntime } from "../../runtime.js";
+import { markdownToMatrixHtml } from "../format.js";
 import {
   MsgType,
   RelationType,

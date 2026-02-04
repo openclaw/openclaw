@@ -1,9 +1,9 @@
+import type { ReplyPayload } from "../types.js";
+import type { TypingSignaler } from "./typing-mode.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import { isAudioFileName } from "../../media/mime.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
-import type { ReplyPayload } from "../types.js";
 import { scheduleFollowupDrain } from "./queue.js";
-import type { TypingSignaler } from "./typing-mode.js";
 
 const hasAudioMedia = (urls?: string[]): boolean =>
   Boolean(urls?.some((url) => isAudioFileName(url)));

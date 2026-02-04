@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { OpenClawApp } from "./app.ts";
 
-import { OpenClawApp } from "./app";
-
+// oxlint-disable-next-line typescript/unbound-method
 const originalConnect = OpenClawApp.prototype.connect;
 
 function mountApp(pathname: string) {

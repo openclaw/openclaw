@@ -5,13 +5,13 @@ import type {
   ReactionTypeEmoji,
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
+import type { RetryConfig } from "../infra/retry.js";
 import { loadConfig } from "../config/config.js";
+import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
-import type { RetryConfig } from "../infra/retry.js";
+import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -19,16 +19,16 @@ import { mediaKindFromMime } from "../media/constants.js";
 import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
-import { resolveTelegramFetch } from "./fetch.js";
-import { makeProxyFetch } from "./proxy.js";
-import { renderTelegramHtmlText } from "./format.js";
-import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { buildTelegramThreadParams } from "./bot/helpers.js";
 import { splitTelegramCaption } from "./caption.js";
+import { resolveTelegramFetch } from "./fetch.js";
+import { renderTelegramHtmlText } from "./format.js";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
-import { buildTelegramThreadParams } from "./bot/helpers.js";
 
 type TelegramSendOpts = {
   token?: string;
@@ -221,7 +221,9 @@ export async function sendMessageTelegram(
   // Only include these if actually provided to keep API calls clean.
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
-  const threadIdParams = buildTelegramThreadParams(messageThreadId);
+  const threadSpec =
+    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+  const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
   const quoteText = opts.quoteText?.trim();
   if (opts.replyToMessageId != null) {
@@ -694,7 +696,9 @@ export async function sendStickerTelegram(
 
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
-  const threadIdParams = buildTelegramThreadParams(messageThreadId);
+  const threadSpec =
+    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+  const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, number> = threadIdParams ? { ...threadIdParams } : {};
   if (opts.replyToMessageId != null) {
     threadParams.reply_to_message_id = Math.trunc(opts.replyToMessageId);

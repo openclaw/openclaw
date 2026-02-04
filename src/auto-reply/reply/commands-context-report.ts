@@ -1,20 +1,20 @@
+import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { ReplyPayload } from "../types.js";
+import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
+import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveBootstrapMaxChars } from "../../agents/pi-embedded-helpers.js";
 import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
-import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
-import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
+import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
+import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { buildToolSummaryMap } from "../../agents/tool-summaries.js";
-import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
-import type { ReplyPayload } from "../types.js";
-import type { HandleCommandsParams } from "./commands-types.js";
 
 function estimateTokensFromChars(chars: number): number {
   return Math.ceil(Math.max(0, chars) / 4);
@@ -156,6 +156,7 @@ async function resolveContextReport(
     ttsHint,
     runtimeInfo,
     sandboxInfo,
+    memoryCitationsMode: params.cfg?.memory?.citations,
   });
 
   return buildSystemPromptReport({

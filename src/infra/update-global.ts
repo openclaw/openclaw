@@ -11,6 +11,7 @@ export type CommandRunner = (
 
 const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
+const GLOBAL_RENAME_PREFIX = ".";
 
 async function pathExists(targetPath: string): Promise<boolean> {
   try {
@@ -141,4 +142,40 @@ export function globalInstallArgs(manager: GlobalInstallManager, spec: string): 
     return ["bun", "add", "-g", spec];
   }
   return ["npm", "i", "-g", spec];
+}
+
+export async function cleanupGlobalRenameDirs(params: {
+  globalRoot: string;
+  packageName: string;
+}): Promise<{ removed: string[] }> {
+  const removed: string[] = [];
+  const root = params.globalRoot.trim();
+  const name = params.packageName.trim();
+  if (!root || !name) {
+    return { removed };
+  }
+  const prefix = `${GLOBAL_RENAME_PREFIX}${name}-`;
+  let entries: string[] = [];
+  try {
+    entries = await fs.readdir(root);
+  } catch {
+    return { removed };
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) {
+      continue;
+    }
+    const target = path.join(root, entry);
+    try {
+      const stat = await fs.lstat(target);
+      if (!stat.isDirectory()) {
+        continue;
+      }
+      await fs.rm(target, { recursive: true, force: true });
+      removed.push(entry);
+    } catch {
+      // ignore cleanup failures
+    }
+  }
+  return { removed };
 }

@@ -2,30 +2,33 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
+import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
+import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
+import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
   resolveHeartbeatPrompt,
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
-import { resolveHeartbeatDeliveryTarget } from "./outbound/targets.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
-import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
-import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
+import {
+  resolveHeartbeatDeliveryTarget,
+  resolveHeartbeatSenderContext,
+} from "./outbound/targets.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -264,6 +267,42 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     });
   });
 
+  it("uses explicit heartbeat accountId when provided", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          heartbeat: { target: "telegram", to: "123", accountId: "work" },
+        },
+      },
+      channels: { telegram: { accounts: { work: { botToken: "token" } } } },
+    };
+    expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
+      channel: "telegram",
+      to: "123",
+      accountId: "work",
+      lastChannel: undefined,
+      lastAccountId: undefined,
+    });
+  });
+
+  it("skips when explicit heartbeat accountId is unknown", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          heartbeat: { target: "telegram", to: "123", accountId: "missing" },
+        },
+      },
+      channels: { telegram: { accounts: { work: { botToken: "token" } } } },
+    };
+    expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
+      channel: "none",
+      reason: "unknown-account",
+      accountId: "missing",
+      lastChannel: undefined,
+      lastAccountId: undefined,
+    });
+  });
+
   it("prefers per-agent heartbeat overrides when provided", () => {
     const cfg: OpenClawConfig = {
       agents: { defaults: { heartbeat: { target: "telegram", to: "123" } } },
@@ -282,6 +321,39 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       lastChannel: "whatsapp",
       lastAccountId: undefined,
     });
+  });
+});
+
+describe("resolveHeartbeatSenderContext", () => {
+  it("prefers delivery accountId for allowFrom resolution", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          allowFrom: ["111"],
+          accounts: {
+            work: { allowFrom: ["222"], botToken: "token" },
+          },
+        },
+      },
+    };
+    const entry = {
+      sessionId: "sid",
+      updatedAt: Date.now(),
+      lastChannel: "telegram" as const,
+      lastTo: "111",
+      lastAccountId: "default",
+    };
+    const delivery = {
+      channel: "telegram" as const,
+      to: "999",
+      accountId: "work",
+      lastChannel: "telegram" as const,
+      lastAccountId: "default",
+    };
+
+    const ctx = resolveHeartbeatSenderContext({ cfg, entry, delivery });
+
+    expect(ctx.allowFrom).toEqual(["222"]);
   });
 });
 

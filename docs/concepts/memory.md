@@ -3,7 +3,6 @@ summary: "How OpenClaw memory works (workspace files + automatic memory flush)"
 read_when:
   - You want the memory file layout and workflow
   - You want to tune the automatic pre-compaction memory flush
-title: "Memory"
 ---
 
 # Memory
@@ -26,7 +25,7 @@ The default workspace layout uses two memory layers:
   - **Only load in the main, private session** (never in group contexts).
 
 These files live under the workspace (`agents.defaults.workspace`, default
-`~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
+`~/clawd`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
 
 ## When to write memory
 
@@ -78,9 +77,8 @@ For the full compaction lifecycle, see
 
 ## Vector memory search
 
-OpenClaw can build a small vector index over `MEMORY.md` and `memory/*.md` (plus
-any extra directories or files you opt in) so semantic queries can find related
-notes even when wording differs.
+OpenClaw can build a small vector index over `MEMORY.md` and `memory/*.md` so
+semantic queries can find related notes even when wording differs.
 
 Defaults:
 
@@ -100,6 +98,123 @@ variables. Codex OAuth only covers chat/completions and does **not** satisfy
 embeddings for memory search. For Gemini, use `GEMINI_API_KEY` or
 `models.providers.google.apiKey`. When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
+
+### QMD backend (experimental)
+
+Set `memory.backend = "qmd"` to swap the built-in SQLite indexer for
+[QMD](https://github.com/tobi/qmd): a local-first search sidecar that combines
+BM25 + vectors + reranking. Markdown stays the source of truth; OpenClaw shells
+out to QMD for retrieval. Key points:
+
+**Prereqs**
+
+- Disabled by default. Opt in per-config (`memory.backend = "qmd"`).
+- Install the QMD CLI separately (`bun install -g github.com/tobi/qmd` or grab
+  a release) and make sure the `qmd` binary is on the gateway’s `PATH`.
+- QMD needs an SQLite build that allows extensions (`brew install sqlite` on
+  macOS).
+- QMD runs fully locally via Bun + `node-llama-cpp` and auto-downloads GGUF
+  models from HuggingFace on first use (no separate Ollama daemon required).
+- The gateway runs QMD in a self-contained XDG home under
+  `~/.openclaw/agents/<agentId>/qmd/` by setting `XDG_CONFIG_HOME` and
+  `XDG_CACHE_HOME`.
+- OS support: macOS and Linux work out of the box once Bun + SQLite are
+  installed. Windows is best supported via WSL2.
+
+**How the sidecar runs**
+
+- The gateway writes a self-contained QMD home under
+  `~/.openclaw/agents/<agentId>/qmd/` (config + cache + sqlite DB).
+- Collections are rewritten from `memory.qmd.paths` (plus default workspace
+  memory files) into `index.yml`, then `qmd update` + `qmd embed` run on boot and
+  on a configurable interval (`memory.qmd.update.interval`, default 5 m).
+- Searches run via `qmd query --json`. If QMD fails or the binary is missing,
+  OpenClaw automatically falls back to the builtin SQLite manager so memory tools
+  keep working.
+- **First search may be slow**: QMD may download local GGUF models (reranker/query
+  expansion) on the first `qmd query` run.
+  - OpenClaw sets `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` automatically when it runs QMD.
+  - If you want to pre-download models manually (and warm the same index OpenClaw
+    uses), run a one-off query with the agent’s XDG dirs.
+
+    OpenClaw’s QMD state lives under your **state dir** (defaults to `~/.openclaw`).
+    You can point `qmd` at the exact same index by exporting the same XDG vars
+    OpenClaw uses:
+
+    ```bash
+    # Pick the same state dir OpenClaw uses
+    STATE_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
+    if [ -d "$HOME/.moltbot" ] && [ ! -d "$HOME/.openclaw" ] \
+      && [ -z "${OPENCLAW_STATE_DIR:-}" ]; then
+      STATE_DIR="$HOME/.moltbot"
+    fi
+
+    export XDG_CONFIG_HOME="$STATE_DIR/agents/main/qmd/xdg-config"
+    export XDG_CACHE_HOME="$STATE_DIR/agents/main/qmd/xdg-cache"
+
+    # (Optional) force an index refresh + embeddings
+    qmd update
+    qmd embed
+
+    # Warm up / trigger first-time model downloads
+    qmd query "test" -c memory-root --json >/dev/null 2>&1
+    ```
+
+**Config surface (`memory.qmd.*`)**
+
+- `command` (default `qmd`): override the executable path.
+- `includeDefaultMemory` (default `true`): auto-index `MEMORY.md` + `memory/**/*.md`.
+- `paths[]`: add extra directories/files (`path`, optional `pattern`, optional
+  stable `name`).
+- `sessions`: opt into session JSONL indexing (`enabled`, `retentionDays`,
+  `exportDir`).
+- `update`: controls refresh cadence (`interval`, `debounceMs`, `onBoot`, `embedInterval`).
+- `limits`: clamp recall payload (`maxResults`, `maxSnippetChars`,
+  `maxInjectedChars`, `timeoutMs`).
+- `scope`: same schema as [`session.sendPolicy`](/gateway/configuration#session).
+  Default is DM-only (`deny` all, `allow` direct chats); loosen it to surface QMD
+  hits in groups/channels.
+- Snippets sourced outside the workspace show up as
+  `qmd/<collection>/<relative-path>` in `memory_search` results; `memory_get`
+  understands that prefix and reads from the configured QMD collection root.
+- When `memory.qmd.sessions.enabled = true`, OpenClaw exports sanitized session
+  transcripts (User/Assistant turns) into a dedicated QMD collection under
+  `~/.openclaw/agents/<id>/qmd/sessions/`, so `memory_search` can recall recent
+  conversations without touching the builtin SQLite index.
+- `memory_search` snippets now include a `Source: <path#line>` footer when
+  `memory.citations` is `auto`/`on`; set `memory.citations = "off"` to keep
+  the path metadata internal (the agent still receives the path for
+  `memory_get`, but the snippet text omits the footer and the system prompt
+  warns the agent not to cite it).
+
+**Example**
+
+```json5
+memory: {
+  backend: "qmd",
+  citations: "auto",
+  qmd: {
+    includeDefaultMemory: true,
+    update: { interval: "5m", debounceMs: 15000 },
+    limits: { maxResults: 6, timeoutMs: 4000 },
+    scope: {
+      default: "deny",
+      rules: [{ action: "allow", match: { chatType: "direct" } }]
+    },
+    paths: [
+      { name: "docs", path: "~/notes", pattern: "**/*.md" }
+    ]
+  }
+}
+```
+
+**Citations & fallback**
+
+- `memory.citations` applies regardless of backend (`auto`/`on`/`off`).
+- When `qmd` runs, we tag `status().backend = "qmd"` so diagnostics show which
+  engine served the results. If the QMD subprocess exits or JSON output can’t be
+  parsed, the search manager logs a warning and returns the builtin provider
+  (existing Markdown embeddings) until QMD recovers.
 
 ### Additional memory paths
 
@@ -222,14 +337,14 @@ Local mode:
 ### How the memory tools work
 
 - `memory_search` semantically searches Markdown chunks (~400 token target, 80-token overlap) from `MEMORY.md` + `memory/**/*.md`. It returns snippet text (capped ~700 chars), file path, line range, score, provider/model, and whether we fell back from local → remote embeddings. No full file payload is returned.
-- `memory_get` reads a specific memory Markdown file (workspace-relative), optionally from a starting line and for N lines. Paths outside `MEMORY.md` / `memory/` are allowed only when explicitly listed in `memorySearch.extraPaths`.
+- `memory_get` reads a specific memory Markdown file (workspace-relative), optionally from a starting line and for N lines. Paths outside `MEMORY.md` / `memory/` are rejected.
 - Both tools are enabled only when `memorySearch.enabled` resolves true for the agent.
 
 ### What gets indexed (and when)
 
-- File type: Markdown only (`MEMORY.md`, `memory/**/*.md`, plus any `.md` files under `memorySearch.extraPaths`).
+- File type: Markdown only (`MEMORY.md`, `memory/**/*.md`).
 - Index storage: per-agent SQLite at `~/.openclaw/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
-- Freshness: watcher on `MEMORY.md`, `memory/`, and `memorySearch.extraPaths` marks the index dirty (debounce 1.5s). Sync is scheduled on session start, on search, or on an interval and runs asynchronously. Session transcripts use delta thresholds to trigger background sync.
+- Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync is scheduled on session start, on search, or on an interval and runs asynchronously. Session transcripts use delta thresholds to trigger background sync.
 - Reindex triggers: the index stores the embedding **provider/model + endpoint fingerprint + chunking params**. If any of those change, OpenClaw automatically resets and reindexes the entire store.
 
 ### Hybrid search (BM25 + vector)

@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import {
   clearInternalHooks,
   registerInternalHook,
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
+import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import { DEFAULT_SOUL_FILENAME, type WorkspaceBootstrapFile } from "./workspace.js";
 
 function makeFile(name = DEFAULT_SOUL_FILENAME): WorkspaceBootstrapFile {

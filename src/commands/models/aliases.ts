@@ -1,6 +1,6 @@
+import type { RuntimeEnv } from "../../runtime.js";
 import { loadConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import {
   ensureFlagCompatibility,
   normalizeAlias,

@@ -1,8 +1,14 @@
+import type {
+  CommandHandler,
+  CommandHandlerResult,
+  HandleCommandsParams,
+} from "./commands-types.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { routeReply } from "./route-reply.js";
+import { handleAllowlistCommand } from "./commands-allowlist.js";
+import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
 import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
@@ -13,11 +19,8 @@ import {
   handleStatusCommand,
   handleWhoamiCommand,
 } from "./commands-info.js";
-import { handleAllowlistCommand } from "./commands-allowlist.js";
-import { handleApproveCommand } from "./commands-approve.js";
-import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleModelsCommand } from "./commands-models.js";
-import { handleTtsCommands } from "./commands-tts.js";
+import { handlePluginCommand } from "./commands-plugin.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
@@ -26,39 +29,39 @@ import {
   handleStopCommand,
   handleUsageCommand,
 } from "./commands-session.js";
-import { handlePluginCommand } from "./commands-plugin.js";
-import type {
-  CommandHandler,
-  CommandHandlerResult,
-  HandleCommandsParams,
-} from "./commands-types.js";
+import { handleSubagentsCommand } from "./commands-subagents.js";
+import { handleTtsCommands } from "./commands-tts.js";
+import { routeReply } from "./route-reply.js";
 
-const HANDLERS: CommandHandler[] = [
-  // Plugin commands are processed first, before built-in commands
-  handlePluginCommand,
-  handleBashCommand,
-  handleActivationCommand,
-  handleSendPolicyCommand,
-  handleUsageCommand,
-  handleRestartCommand,
-  handleTtsCommands,
-  handleHelpCommand,
-  handleCommandsListCommand,
-  handleStatusCommand,
-  handleAllowlistCommand,
-  handleApproveCommand,
-  handleContextCommand,
-  handleWhoamiCommand,
-  handleSubagentsCommand,
-  handleConfigCommand,
-  handleDebugCommand,
-  handleModelsCommand,
-  handleStopCommand,
-  handleCompactCommand,
-  handleAbortTrigger,
-];
+let HANDLERS: CommandHandler[] | null = null;
 
 export async function handleCommands(params: HandleCommandsParams): Promise<CommandHandlerResult> {
+  if (HANDLERS === null) {
+    HANDLERS = [
+      // Plugin commands are processed first, before built-in commands
+      handlePluginCommand,
+      handleBashCommand,
+      handleActivationCommand,
+      handleSendPolicyCommand,
+      handleUsageCommand,
+      handleRestartCommand,
+      handleTtsCommands,
+      handleHelpCommand,
+      handleCommandsListCommand,
+      handleStatusCommand,
+      handleAllowlistCommand,
+      handleApproveCommand,
+      handleContextCommand,
+      handleWhoamiCommand,
+      handleSubagentsCommand,
+      handleConfigCommand,
+      handleDebugCommand,
+      handleModelsCommand,
+      handleStopCommand,
+      handleCompactCommand,
+      handleAbortTrigger,
+    ];
+  }
   const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
   const resetRequested = Boolean(resetMatch);
   if (resetRequested && !params.command.isAuthorizedSender) {
@@ -83,6 +86,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
     // Send hook messages immediately if present
     if (hookEvent.messages.length > 0) {
       // Use OriginatingChannel/To if available, otherwise fall back to command channel/from
+      // oxlint-disable-next-line typescript/no-explicit-any
       const channel = params.ctx.OriginatingChannel || (params.command.channel as any);
       // For replies, use 'from' (the sender) not 'to' (which might be the bot itself)
       const to = params.ctx.OriginatingTo || params.command.from || params.command.to;

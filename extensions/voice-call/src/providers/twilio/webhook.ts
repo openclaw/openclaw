@@ -1,7 +1,6 @@
 import type { WebhookContext, WebhookVerificationResult } from "../../types.js";
-import { verifyTwilioWebhook } from "../../webhook-security.js";
-
 import type { TwilioProviderOptions } from "../twilio.js";
+import { verifyTwilioWebhook } from "../../webhook-security.js";
 
 export function verifyTwilioProviderWebhook(params: {
   ctx: WebhookContext;
@@ -13,6 +12,10 @@ export function verifyTwilioProviderWebhook(params: {
     publicUrl: params.currentPublicUrl || undefined,
     allowNgrokFreeTierLoopbackBypass: params.options.allowNgrokFreeTierLoopbackBypass ?? false,
     skipVerification: params.options.skipVerification,
+    allowedHosts: params.options.webhookSecurity?.allowedHosts,
+    trustForwardingHeaders: params.options.webhookSecurity?.trustForwardingHeaders,
+    trustedProxyIPs: params.options.webhookSecurity?.trustedProxyIPs,
+    remoteIP: params.ctx.remoteAddress,
   });
 
   if (!result.ok) {

@@ -1,5 +1,3 @@
-import WebSocket from "ws";
-
 import type {
   ChannelAccountSnapshot,
   OpenClawConfig,
@@ -7,7 +5,7 @@ import type {
   RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import {
-  createReplyPrefixContext,
+  createReplyPrefixOptions,
   createTypingCallbacks,
   logInboundDrop,
   logTypingFailure,
@@ -19,7 +17,7 @@ import {
   resolveChannelMediaMaxBytes,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
-
+import WebSocket from "ws";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
@@ -762,7 +760,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
     });
 
-    const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
+    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+      cfg,
+      agentId: route.agentId,
+      channel: "mattermost",
+      accountId: account.accountId,
+    });
 
     const typingCallbacks = createTypingCallbacks({
       start: () => sendTypingIndicator(channelId, threadRootId),
@@ -777,8 +780,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     });
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
-        responsePrefix: prefixContext.responsePrefix,
-        responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+        ...prefixOptions,
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         deliver: async (payload: ReplyPayload) => {
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
@@ -827,7 +829,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         ...replyOptions,
         disableBlockStreaming:
           typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-        onModelSelected: prefixContext.onModelSelected,
+        onModelSelected,
       },
     });
     markDispatchIdle();
