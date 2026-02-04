@@ -8,7 +8,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
 
 export const DEFAULT_MEMORY_FLUSH_PROMPT = [
-  "⚠️ COMPACTION IMMINENT - Save your work NOW.",
+  "** COMPACTION IMMINENT ** - Save your work NOW.",
   "",
   "Write to memory/YYYY-MM-DD.md (create memory/ if needed):",
   "1. ACTIVE TASKS: What are you currently working on? Status of each.",
@@ -18,11 +18,11 @@ export const DEFAULT_MEMORY_FLUSH_PROMPT = [
   "5. PENDING COMMITMENTS: Promises made that need follow-up.",
   "",
   "This context will be LOST after compaction. The summary alone won't preserve task state.",
-  `After writing, reply with ${SILENT_REPLY_TOKEN}.`,
+  `After writing, start with ${SILENT_REPLY_TOKEN}.`,
 ].join("\n");
 
 export const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
-  "🚨 PRE-COMPACTION MEMORY FLUSH - CRITICAL",
+  "[CRITICAL] PRE-COMPACTION MEMORY FLUSH",
   "",
   "Your context is about to be compacted. The summarizer will NOT preserve:",
   "- Active task state and progress",
@@ -31,7 +31,7 @@ export const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
   "",
   "You MUST write this to memory files NOW or it will be lost.",
   "This is not optional - active work that isn't saved will be forgotten.",
-  `After saving, reply ${SILENT_REPLY_TOKEN}.`,
+  `After saving, start with ${SILENT_REPLY_TOKEN}.`,
 ].join("\n");
 
 export type MemoryFlushSettings = {
