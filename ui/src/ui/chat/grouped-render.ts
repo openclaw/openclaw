@@ -215,6 +215,12 @@ function renderMessageImages(images: ImageBlock[]) {
   `;
 }
 
+const ARABIC_PATTERN = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+
+function isArabic(text: string): boolean {
+  return ARABIC_PATTERN.test(text);
+}
+
 function renderGroupedMessage(
   message: unknown,
   opts: { isStreaming: boolean; showReasoning: boolean },
@@ -241,6 +247,9 @@ function renderGroupedMessage(
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
+  
+  // RTL Detection
+  const directionClass = (markdown && isArabic(markdown)) ? " is-arabic" : "";
 
   const bubbleClasses = [
     "chat-bubble",
@@ -272,7 +281,7 @@ function renderGroupedMessage(
       }
       ${
         markdown
-          ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+          ? html`<div class="chat-text${directionClass}" dir="auto">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
           : nothing
       }
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}

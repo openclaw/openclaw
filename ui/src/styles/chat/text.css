@@ -25,7 +25,13 @@
   overflow-wrap: break-word;
 }
 
-[dir="rtl"] .chat-text {
+/* Smart RTL Support: Only apply RTL to specific text blocks if they are Arabic */
+.chat-text[dir="auto"] {
+    text-align: start; 
+}
+/* If you want to force it based on a parent class like .is-arabic */
+.chat-text.is-arabic {
+    direction: rtl;
     text-align: right;
     font-family: var(--font-arabic), sans-serif;
 }
@@ -42,7 +48,7 @@
   padding-left: 1.5em;
 }
 
-[dir="rtl"] .chat-text :where(ul, ol) {
+.chat-text.is-arabic :where(ul, ol) {
   padding-left: 0;
   padding-right: 1.5em;
 }
@@ -94,12 +100,11 @@
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
-[dir="rtl"] .chat-text :where(blockquote) {
+.chat-text.is-arabic :where(blockquote) {
     border-left: none;
     border-right: 3px solid var(--border-strong);
-    padding-left: 12px; /* Keep padding for balance or swap if strictly needed */
+    padding-left: 12px;
     padding-right: 12px;
-    margin-right: 0;
     border-radius: var(--radius-sm) 0 0 var(--radius-sm);
 }
 
