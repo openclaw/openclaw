@@ -5,30 +5,39 @@ import { formatAgo, formatDurationMs } from "../format.ts";
 import { formatNextRun } from "../presenter.ts";
 
 /**
- * Normalize session key input to ensure consistent agent:agentId:sessionKey format
- * This prevents format inconsistencies and enforces the three-segment structure
+ * Validate session key format
+ * Returns validation result with error message if invalid
  */
-function normalizeSessionKeyInput(input: string): string {
+function validateSessionKeyFormat(input: string): { isValid: boolean; error?: string } {
   const trimmed = input.trim();
+  
+  // Empty is allowed (will use default)
   if (!trimmed) {
-    return trimmed;
+    return { isValid: true };
   }
 
-  // If already in agent:x:y format, keep as-is
+  // Handle special cases that are always valid
+  if (trimmed === "main" || trimmed === "global" || trimmed === "unknown") {
+    return { isValid: true };
+  }
+
+  // Check if it's in proper agent:agentId:sessionKey format
   if (trimmed.startsWith("agent:")) {
     const parts = trimmed.split(":");
-    if (parts.length >= 3) {
-      return trimmed;
+    if (parts.length >= 3 && parts[1]?.trim() && parts[2]?.trim()) {
+      return { isValid: true };
     }
+    return { 
+      isValid: false, 
+      error: "Invalid format. Use: agent:agentId:sessionName (e.g., agent:main:xiaohua)" 
+    };
   }
 
-  // Handle special cases that should remain unchanged
-  if (trimmed === "main" || trimmed === "global" || trimmed === "unknown") {
-    return trimmed;
-  }
-
-  // For any other input, convert to agent:main:input format
-  return `agent:main:${trimmed}`;
+  // If not in agent: format, it's invalid
+  return { 
+    isValid: false, 
+    error: "Session key must be in format: agent:agentId:sessionName (e.g., agent:main:xiaohua)" 
+  };
 }
 
 export type OverviewProps = {
@@ -51,6 +60,12 @@ export type OverviewProps = {
 
 export function renderOverview(props: OverviewProps) {
   const snapshot = props.hello?.snapshot as
+    | { version?: string; agentId?: string; sessionDefaults?: Record<string, unknown> }
+    | undefined;
+
+  // Validate session key format
+  const sessionKeyValidation = validateSessionKeyFormat(props.settings.sessionKey);
+  const canConnect = sessionKeyValidation.isValid;
     | { uptimeMs?: number; policy?: { tickIntervalMs?: number } }
     | undefined;
   const uptime = snapshot?.uptimeMs ? formatDurationMs(snapshot.uptimeMs) : "n/a";
@@ -193,18 +208,39 @@ export function renderOverview(props: OverviewProps) {
               .value=${props.settings.sessionKey}
               @input=${(e: Event) => {
                 const v = (e.target as HTMLInputElement).value;
-                const normalized = normalizeSessionKeyInput(v);
-                props.onSessionKeyChange(normalized);
+                props.onSessionKeyChange(v);
               }}
-              placeholder="e.g., agent:main:xiaohua or just xiaohua"
-              title="Session key format: agent:agentId:sessionName or just sessionName (will auto-format to agent:main:sessionName)"
+              placeholder="agent:main:xiaohua"
+              title="Required format: agent:agentId:sessionName (e.g., agent:main:xiaohua)"
+              style=${sessionKeyValidation.isValid ? "" : "border-color: #e74c3c; background-color: #fdf2f2;"}
             />
+            ${sessionKeyValidation.error ? html`
+              <div style="color: #e74c3c; font-size: 12px; margin-top: 4px;">
+                ⚠️ ${sessionKeyValidation.error}
+              </div>
+            ` : ""}
           </label>
         </div>
         <div class="row" style="margin-top: 14px;">
-          <button class="btn" @click=${() => props.onConnect()}>Connect</button>
+          <button 
+            class="btn" 
+            ?disabled=${!canConnect}
+            @click=${() => {
+              if (canConnect) {
+                props.onConnect();
+              }
+            }}
+            title=${canConnect ? "Connect to gateway" : "Fix session key format before connecting"}
+            style=${canConnect ? "" : "opacity: 0.5; cursor: not-allowed;"}
+          >
+            Connect
+          </button>
           <button class="btn" @click=${() => props.onRefresh()}>Refresh</button>
-          <span class="muted">Click Connect to apply connection changes.</span>
+          <span class="muted">
+            ${canConnect 
+              ? "Click Connect to apply connection changes." 
+              : "⚠️ Fix session key format to enable connection."}
+          </span>
         </div>
       </div>
 
