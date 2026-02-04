@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
@@ -429,6 +430,16 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           const raw = readStringParam(params, key, { trim: false });
           if (raw) {
             await assertSandboxPath({ filePath: raw, cwd: sandboxRoot, root: sandboxRoot });
+          }
+        }
+        const mediaRaw = readStringParam(params, "media", { trim: false });
+        if (mediaRaw) {
+          const media = mediaRaw.trim();
+          const isHttpUrl = /^https?:\/\//i.test(media);
+          const isDataUrl = /^data:/i.test(media);
+          if (!isHttpUrl && !isDataUrl) {
+            const candidate = media.startsWith("file://") ? fileURLToPath(media) : media;
+            await assertSandboxPath({ filePath: candidate, cwd: sandboxRoot, root: sandboxRoot });
           }
         }
       }
