@@ -74,20 +74,12 @@ Always specify the language (`bash`, `javascript`, `json`, etc.).
 
 MDX files can use [Mintlify components](https://mintlify.com/docs/components) for richer documentation:
 
-```mdx
+````mdx
 <Tabs>
-  <Tab title="npm">
-    ```bash
-    npm install -g openclaw
-    ```
-  </Tab>
-  <Tab title="Docker">
-    ```bash
-    docker pull openclaw/openclaw
-    ```
-  </Tab>
+  <Tab title="npm">```bash npm install -g openclaw ```</Tab>
+  <Tab title="Docker">```bash docker pull openclaw/openclaw ```</Tab>
 </Tabs>
-```
+````
 
 Common components:
 
@@ -103,11 +95,7 @@ After creating a new page, add it to `docs.json` (in this directory) in the appr
 ```json
 {
   "group": "Get started",
-  "pages": [
-    "index",
-    "install/quickstart",
-    "your-new-page"
-  ]
+  "pages": ["index", "install/quickstart", "your-new-page"]
 }
 ```
 
