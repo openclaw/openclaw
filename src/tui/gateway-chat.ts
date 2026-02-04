@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig, resolveGatewayPort } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
+import { GATEWAY_CLIENT_CAPS } from "../gateway/protocol/client-info.js";
 import {
   type HelloOk,
   PROTOCOL_VERSION,
   type SessionsListParams,
+  type SessionsPatchResult,
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -22,6 +24,7 @@ export type ChatSendOptions = {
   thinking?: string;
   deliver?: boolean;
   timeoutMs?: number;
+  runId?: string;
 };
 
 export type GatewayEvent = {
@@ -116,6 +119,7 @@ export class GatewayChatClient {
       clientVersion: VERSION,
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
+      caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
       instanceId: randomUUID(),
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -153,7 +157,7 @@ export class GatewayChatClient {
   }
 
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
-    const runId = randomUUID();
+    const runId = opts.runId ?? randomUUID();
     await this.client.request("chat.send", {
       sessionKey: opts.sessionKey,
       message: opts.message,
@@ -195,8 +199,8 @@ export class GatewayChatClient {
     return await this.client.request<GatewayAgentsList>("agents.list", {});
   }
 
-  async patchSession(opts: SessionsPatchParams) {
-    return await this.client.request("sessions.patch", opts);
+  async patchSession(opts: SessionsPatchParams): Promise<SessionsPatchResult> {
+    return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
   }
 
   async resetSession(key: string) {

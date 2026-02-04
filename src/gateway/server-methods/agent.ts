@@ -28,6 +28,7 @@ import {
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -42,7 +43,7 @@ import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 
 export const agentHandlers: GatewayRequestHandlers = {
-  agent: async ({ params, respond, context }) => {
+  agent: async ({ params, respond, context, client }) => {
     const p = params;
     if (!validateAgentParams(p)) {
       respond(
@@ -296,6 +297,14 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     const runId = idem;
+    const connId = typeof client?.connId === "string" ? client.connId : undefined;
+    const wantsToolEvents = hasGatewayClientCap(
+      client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+    );
+    if (connId && wantsToolEvents) {
+      context.registerToolEventRecipient(runId, connId);
+    }
 
     const wantsDelivery = request.deliver === true;
     const explicitTo =
