@@ -10,7 +10,7 @@ import {
   tabFromPath,
   titleForTab,
   type Tab,
-} from "./navigation";
+} from "./navigation.ts";
 
 /** All valid tab identifiers derived from TAB_GROUPS */
 const ALL_TABS: Tab[] = TAB_GROUPS.flatMap((group) => group.tabs) as Tab[];

@@ -121,7 +121,6 @@ export async function handleNextcloudTalkInbound(params: {
   const senderAllowedForCommands = resolveNextcloudTalkAllowlistMatch({
     allowFrom: isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
     senderId,
-    senderName,
   }).allowed;
   const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
   const commandGate = resolveControlCommandGate({
@@ -143,7 +142,6 @@ export async function handleNextcloudTalkInbound(params: {
       outerAllowFrom: effectiveGroupAllowFrom,
       innerAllowFrom: roomAllowFrom,
       senderId,
-      senderName,
     });
     if (!groupAllow.allowed) {
       runtime.log?.(`nextcloud-talk: drop group sender ${senderId} (policy=${groupPolicy})`);
@@ -158,7 +156,6 @@ export async function handleNextcloudTalkInbound(params: {
       const dmAllowed = resolveNextcloudTalkAllowlistMatch({
         allowFrom: effectiveAllowFrom,
         senderId,
-        senderName,
       }).allowed;
       if (!dmAllowed) {
         if (dmPolicy === "pairing") {

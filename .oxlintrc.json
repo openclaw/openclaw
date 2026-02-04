@@ -16,7 +16,6 @@
     "oxc/no-map-spread": "off",
     "typescript/no-explicit-any": "error",
     "typescript/no-extraneous-class": "off",
-    "typescript/no-redundant-type-constituents": "off",
     "typescript/no-unsafe-type-assertion": "off",
     "unicorn/consistent-function-scoping": "off",
     "unicorn/require-post-message-target-origin": "off"
