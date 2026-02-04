@@ -8,7 +8,7 @@ services:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
     environment:
       - NODE_ENV=production
-      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
+      # - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
       - REDIS_URL=redis://redis:6379
       # Mem0 Memory System
       - MEM0_API_KEY=${MEM0_API_KEY}
