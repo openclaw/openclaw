@@ -370,6 +370,11 @@ function resolveForwardOrigin(origin: MessageOrigin): TelegramForwardedContext |
         type: "channel",
         signature: origin.author_signature,
       });
+    default:
+      // Exhaustiveness guard: if Grammy adds a new MessageOrigin variant,
+      // TypeScript will flag this assignment as an error.
+      origin satisfies never;
+      return null;
   }
 }
 
