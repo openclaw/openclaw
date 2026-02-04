@@ -292,7 +292,7 @@ export async function runCronIsolatedAgentTurn(params: {
   }
   if (deliveryRequested) {
     commandBody =
-      `${commandBody}\n\nDo not send messages via messaging tools. Return your summary as plain text; delivery is handled automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+      `${commandBody}\n\nReturn your summary as plain text; it will be delivered by the main agent. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
   }
 
   const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
