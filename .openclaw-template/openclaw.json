@@ -1,0 +1,37 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.2.2-3"
+  },
+  "agents": {
+    "defaults": {
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      }
+    }
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto"
+  },
+  "channels": {
+    "telegram": {
+      "dmPolicy": "pairing",
+      "botToken": "__TELEGRAM_BOT_TOKEN__",
+      "groupPolicy": "allowlist",
+      "streamMode": "partial",
+      "enabled": true
+    }
+  },
+  "gateway": {
+    "port": 3000,
+    "bind": "lan",
+    "trustedProxies": ["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]
+  }
+}

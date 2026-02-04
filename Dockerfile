@@ -31,8 +31,9 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
-# Copy entrypoint script
+# Copy entrypoint script and config template
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY .openclaw-template /app/.openclaw-template
 RUN chmod +x /app/docker-entrypoint.sh
 
 # Allow non-root user to write temp files during runtime/tests.

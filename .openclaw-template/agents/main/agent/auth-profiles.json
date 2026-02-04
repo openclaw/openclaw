@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "anthropic": {
+      "apiKey": "__ANTHROPIC_API_KEY__"
+    }
+  },
+  "default": "anthropic"
+}
