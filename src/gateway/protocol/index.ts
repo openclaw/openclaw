@@ -114,6 +114,12 @@ import {
   ExecApprovalRequestParamsSchema,
   type ExecApprovalResolveParams,
   ExecApprovalResolveParamsSchema,
+  type AgentShieldApprovalRequestParams,
+  AgentShieldApprovalRequestParamsSchema,
+  type AgentShieldApprovalResolveParams,
+  AgentShieldApprovalResolveParamsSchema,
+  type AgentShieldApprovalListParams,
+  AgentShieldApprovalListParamsSchema,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -363,6 +369,12 @@ export const validateExecApprovalRequestParams = ajv.compile<ExecApprovalRequest
 export const validateExecApprovalResolveParams = ajv.compile<ExecApprovalResolveParams>(
   ExecApprovalResolveParamsSchema,
 );
+export const validateAgentShieldApprovalRequestParams =
+  ajv.compile<AgentShieldApprovalRequestParams>(AgentShieldApprovalRequestParamsSchema);
+export const validateAgentShieldApprovalResolveParams =
+  ajv.compile<AgentShieldApprovalResolveParams>(AgentShieldApprovalResolveParamsSchema);
+export const validateAgentShieldApprovalListParams =
+  ajv.compile<AgentShieldApprovalListParams>(AgentShieldApprovalListParamsSchema);
 export const validateExecApprovalsNodeGetParams = ajv.compile<ExecApprovalsNodeGetParams>(
   ExecApprovalsNodeGetParamsSchema,
 );
