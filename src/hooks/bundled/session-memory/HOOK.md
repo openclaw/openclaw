@@ -59,11 +59,14 @@ The hook uses your configured LLM provider to generate slugs, so it works with a
 
 The hook supports optional configuration:
 
-| Option     | Type   | Default | Description                                                     |
-| ---------- | ------ | ------- | --------------------------------------------------------------- |
-| `messages` | number | 15      | Number of user/assistant messages to include in the memory file |
+| Option     | Type   | Default  | Description                                                              |
+| ---------- | ------ | -------- | ------------------------------------------------------------------------ |
+| `messages` | number | 15       | Number of user/assistant messages to include in the memory               |
+| `target`   | string | `"file"` | Storage target: `"file"` (markdown files) or `"lancedb"` (LanceDB store) |
 
-Example configuration:
+### File Target (Default)
+
+Saves session context to markdown files in `<workspace>/memory/`:
 
 ```json
 {
@@ -72,6 +75,7 @@ Example configuration:
       "entries": {
         "session-memory": {
           "enabled": true,
+          "target": "file",
           "messages": 25
         }
       }
@@ -80,11 +84,41 @@ Example configuration:
 }
 ```
 
+### LanceDB Target
+
+Stores session summaries in LanceDB via the Gateway API instead of creating files:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "entries": {
+        "session-memory": {
+          "enabled": true,
+          "target": "lancedb",
+          "messages": 15
+        }
+      }
+    }
+  }
+}
+```
+
+**LanceDB target features:**
+
+- Stores session context as searchable memory entries
+- Automatically truncates conversation content to 2000 chars
+- Includes date, time, session key, and LLM-generated slug
+- Category: `"fact"`, Importance: `0.7`
+- Requires Gateway API with `memory_store` tool available
+- Use `memory_recall` to search through stored sessions
+
 The hook automatically:
 
-- Uses your workspace directory (`~/.openclaw/workspace` by default)
+- Uses your workspace directory (`~/.openclaw/workspace` by default) for file target
 - Uses your configured LLM for slug generation
 - Falls back to timestamp slugs if LLM is unavailable
+- Uses Gateway API at `localhost:<gateway.port>` with `gateway.auth.token` for LanceDB target
 
 ## Disabling
 

@@ -350,7 +350,8 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const now = state.deps.nowMs();
-    const due = isJobDue(job, now, { forced: mode === "force" });
+    const forced = mode === "force";
+    const due = isJobDue(job, now, { forced });
     if (!due) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }

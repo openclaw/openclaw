@@ -1,0 +1,209 @@
+/**
+ * Configuration schema for memory-neo4j plugin.
+ *
+ * Matches the JSON Schema in openclaw.plugin.json.
+ * Provides runtime parsing with env var resolution and defaults.
+ */
+
+export type EmbeddingProvider = "openai" | "ollama";
+
+export type MemoryNeo4jConfig = {
+  neo4j: {
+    uri: string;
+    username: string;
+    password: string;
+  };
+  embedding: {
+    provider: EmbeddingProvider;
+    apiKey?: string;
+    model: string;
+    baseUrl?: string;
+  };
+  autoCapture: boolean;
+  autoRecall: boolean;
+  coreMemory: {
+    enabled: boolean;
+    maxEntries: number;
+  };
+};
+
+/**
+ * Extraction configuration resolved from environment variables.
+ * Entity extraction auto-enables when OPENROUTER_API_KEY is set.
+ */
+export type ExtractionConfig = {
+  enabled: boolean;
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+  temperature: number;
+  maxRetries: number;
+};
+
+export const MEMORY_CATEGORIES = [
+  "core",
+  "preference",
+  "fact",
+  "decision",
+  "entity",
+  "other",
+] as const;
+
+export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
+
+const EMBEDDING_DIMENSIONS: Record<string, number> = {
+  // OpenAI models
+  "text-embedding-3-small": 1536,
+  "text-embedding-3-large": 3072,
+  // Ollama models (common ones)
+  "mxbai-embed-large": 1024,
+  "mxbai-embed-large-2k:latest": 1024,
+  "nomic-embed-text": 768,
+  "all-minilm": 384,
+};
+
+// Default dimension for unknown models (Ollama models vary)
+const DEFAULT_EMBEDDING_DIMS = 1024;
+
+export function vectorDimsForModel(model: string): number {
+  // Check exact match first
+  if (EMBEDDING_DIMENSIONS[model]) {
+    return EMBEDDING_DIMENSIONS[model];
+  }
+  // Check prefix match (for versioned models like mxbai-embed-large:latest)
+  for (const [known, dims] of Object.entries(EMBEDDING_DIMENSIONS)) {
+    if (model.startsWith(known)) {
+      return dims;
+    }
+  }
+  // Return default for unknown models
+  return DEFAULT_EMBEDDING_DIMS;
+}
+
+/**
+ * Resolve ${ENV_VAR} references in string values.
+ */
+function resolveEnvVars(value: string): string {
+  return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
+    const envValue = process.env[envVar];
+    if (!envValue) {
+      throw new Error(`Environment variable ${envVar} is not set`);
+    }
+    return envValue;
+  });
+}
+
+/**
+ * Resolve extraction config from environment variables.
+ * Returns enabled: false if OPENROUTER_API_KEY is not set.
+ */
+export function resolveExtractionConfig(): ExtractionConfig {
+  const apiKey = process.env.OPENROUTER_API_KEY ?? "";
+  return {
+    enabled: apiKey.length > 0,
+    apiKey,
+    model: process.env.EXTRACTION_MODEL ?? "google/gemini-2.0-flash-001",
+    baseUrl: process.env.EXTRACTION_BASE_URL ?? "https://openrouter.ai/api/v1",
+    temperature: 0.0,
+    maxRetries: 2,
+  };
+}
+
+function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
+  const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unknown.length > 0) {
+    throw new Error(`${label} has unknown keys: ${unknown.join(", ")}`);
+  }
+}
+
+/**
+ * Config schema with parse method for runtime validation & transformation.
+ * JSON Schema validation is handled by openclaw.plugin.json; this handles
+ * env var resolution and defaults.
+ */
+export const memoryNeo4jConfigSchema = {
+  parse(value: unknown): MemoryNeo4jConfig {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("memory-neo4j config required");
+    }
+    const cfg = value as Record<string, unknown>;
+    assertAllowedKeys(
+      cfg,
+      ["embedding", "neo4j", "autoCapture", "autoRecall", "coreMemory"],
+      "memory-neo4j config",
+    );
+
+    // Parse neo4j section
+    const neo4jRaw = cfg.neo4j as Record<string, unknown> | undefined;
+    if (!neo4jRaw || typeof neo4jRaw !== "object") {
+      throw new Error("neo4j config section is required");
+    }
+    assertAllowedKeys(neo4jRaw, ["uri", "user", "username", "password"], "neo4j config");
+    if (typeof neo4jRaw.uri !== "string" || !neo4jRaw.uri) {
+      throw new Error("neo4j.uri is required");
+    }
+
+    const neo4jPassword =
+      typeof neo4jRaw.password === "string" ? resolveEnvVars(neo4jRaw.password) : "";
+    // Support both 'user' and 'username' for neo4j config
+    const neo4jUsername =
+      typeof neo4jRaw.user === "string"
+        ? neo4jRaw.user
+        : typeof neo4jRaw.username === "string"
+          ? neo4jRaw.username
+          : "neo4j";
+
+    // Parse embedding section (optional for ollama without apiKey)
+    const embeddingRaw = cfg.embedding as Record<string, unknown> | undefined;
+    assertAllowedKeys(
+      embeddingRaw ?? {},
+      ["provider", "apiKey", "model", "baseUrl"],
+      "embedding config",
+    );
+
+    const provider: EmbeddingProvider = embeddingRaw?.provider === "ollama" ? "ollama" : "openai";
+
+    // apiKey is required for openai, optional for ollama
+    let apiKey: string | undefined;
+    if (typeof embeddingRaw?.apiKey === "string" && embeddingRaw.apiKey) {
+      apiKey = resolveEnvVars(embeddingRaw.apiKey);
+    } else if (provider === "openai") {
+      throw new Error("embedding.apiKey is required for OpenAI provider");
+    }
+
+    const embeddingModel =
+      typeof embeddingRaw?.model === "string"
+        ? embeddingRaw.model
+        : provider === "ollama"
+          ? "mxbai-embed-large"
+          : "text-embedding-3-small";
+
+    const baseUrl = typeof embeddingRaw?.baseUrl === "string" ? embeddingRaw.baseUrl : undefined;
+
+    // Parse coreMemory section (optional with defaults)
+    const coreMemoryRaw = cfg.coreMemory as Record<string, unknown> | undefined;
+    const coreMemoryEnabled = coreMemoryRaw?.enabled !== false; // enabled by default
+    const coreMemoryMaxEntries =
+      typeof coreMemoryRaw?.maxEntries === "number" ? coreMemoryRaw.maxEntries : 50;
+
+    return {
+      neo4j: {
+        uri: neo4jRaw.uri,
+        username: neo4jUsername,
+        password: neo4jPassword,
+      },
+      embedding: {
+        provider,
+        apiKey,
+        model: embeddingModel,
+        baseUrl,
+      },
+      autoCapture: cfg.autoCapture !== false,
+      autoRecall: cfg.autoRecall !== false,
+      coreMemory: {
+        enabled: coreMemoryEnabled,
+        maxEntries: coreMemoryMaxEntries,
+      },
+    };
+  },
+};

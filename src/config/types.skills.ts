@@ -5,6 +5,8 @@ export type SkillConfig = {
   apiKey?: SecretInput;
   env?: Record<string, string>;
   config?: Record<string, unknown>;
+  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  model?: string;
 };
 
 export type SkillsLoadConfig = {

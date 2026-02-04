@@ -23,7 +23,7 @@ const matchLevelDirective = (
   names: string[],
 ): { start: number; end: number; rawLevel?: string } | null => {
   const namePattern = names.map(escapeRegExp).join("|");
-  const match = body.match(new RegExp(`(?:^|\\s)\\/(?:${namePattern})(?=$|\\s|:)`, "i"));
+  const match = body.match(new RegExp(`(?:^|\\s)[/.](?:${namePattern})(?=$|\\s|:)`, "i"));
   if (!match || match.index === undefined) {
     return null;
   }
@@ -79,7 +79,7 @@ const extractSimpleDirective = (
 ): { cleaned: string; hasDirective: boolean } => {
   const namePattern = names.map(escapeRegExp).join("|");
   const match = body.match(
-    new RegExp(`(?:^|\\s)\\/(?:${namePattern})(?=$|\\s|:)(?:\\s*:\\s*)?`, "i"),
+    new RegExp(`(?:^|\\s)[/.](?:${namePattern})(?=$|\\s|:)(?:\\s*:\\s*)?`, "i"),
   );
   const cleaned = match ? body.replace(match[0], " ").replace(/\s+/g, " ").trim() : body.trim();
   return {

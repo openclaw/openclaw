@@ -111,8 +111,8 @@ function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
     }
 
     for (const alias of command.textAliases) {
-      if (!alias.startsWith("/")) {
-        throw new Error(`Command alias missing leading '/': ${alias}`);
+      if (!alias.startsWith("/") && !alias.startsWith(".")) {
+        throw new Error(`Command alias missing leading '/' or '.': ${alias}`);
       }
       const aliasKey = alias.toLowerCase();
       if (textAliases.has(aliasKey)) {
@@ -744,6 +744,8 @@ function buildChatCommands(): ChatCommandDefinition[] {
   registerAlias(commands, "reasoning", "/reason");
   registerAlias(commands, "elevated", "/elev");
   registerAlias(commands, "steer", "/tell");
+  registerAlias(commands, "model", ".model");
+  registerAlias(commands, "models", ".models");
 
   assertCommandRegistry(commands);
   return commands;

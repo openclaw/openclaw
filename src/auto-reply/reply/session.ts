@@ -58,6 +58,7 @@ export type SessionInitResult = {
   sessionId: string;
   isNewSession: boolean;
   resetTriggered: boolean;
+  compactTriggered: boolean;
   systemSent: boolean;
   abortedLastRun: boolean;
   storePath: string;
@@ -230,6 +231,7 @@ export async function initSessionState(params: {
   let systemSent = false;
   let abortedLastRun = false;
   let resetTriggered = false;
+  let compactTriggered = false;
 
   let persistedThinking: string | undefined;
   let persistedVerbose: string | undefined;
@@ -311,6 +313,22 @@ export async function initSessionState(params: {
       bodyStripped = strippedForReset.slice(trigger.length).trimStart();
       resetTriggered = true;
       break;
+    }
+  }
+
+  // Check for compact triggers (e.g., ".compact", "/compact")
+  const compactTriggers = sessionCfg?.compactTriggers ?? [];
+  if (!resetTriggered && resetAuthorized) {
+    for (const trigger of compactTriggers) {
+      if (!trigger) {
+        continue;
+      }
+      const triggerLower = trigger.toLowerCase();
+      if (trimmedBodyLower === triggerLower || strippedForResetLower === triggerLower) {
+        compactTriggered = true;
+        bodyStripped = "";
+        break;
+      }
     }
   }
 
@@ -620,6 +638,7 @@ export async function initSessionState(params: {
     sessionId: sessionId ?? crypto.randomUUID(),
     isNewSession,
     resetTriggered,
+    compactTriggered,
     systemSent,
     abortedLastRun,
     storePath,
