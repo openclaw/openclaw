@@ -6,6 +6,10 @@ import {
 } from "../providers/github-copilot-token.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
+import {
+  buildCloudflareAiGatewayModelDefinition,
+  resolveCloudflareAiGatewayBaseUrl,
+} from "./cloudflare-ai-gateway.js";
 import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
 import {
   buildSyntheticModelDefinition,
@@ -451,6 +455,34 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "xiaomi", store: authStore });
   if (xiaomiKey) {
     providers.xiaomi = { ...buildXiaomiProvider(), apiKey: xiaomiKey };
+  }
+
+  const cloudflareProfiles = listProfilesForProvider(authStore, "cloudflare-ai-gateway");
+  for (const profileId of cloudflareProfiles) {
+    const cred = authStore.profiles[profileId];
+    if (cred?.type !== "api_key") {
+      continue;
+    }
+    const accountId = cred.metadata?.accountId?.trim();
+    const gatewayId = cred.metadata?.gatewayId?.trim();
+    if (!accountId || !gatewayId) {
+      continue;
+    }
+    const baseUrl = resolveCloudflareAiGatewayBaseUrl({ accountId, gatewayId });
+    if (!baseUrl) {
+      continue;
+    }
+    const apiKey = resolveEnvApiKeyVarName("cloudflare-ai-gateway") ?? cred.key?.trim() ?? "";
+    if (!apiKey) {
+      continue;
+    }
+    providers["cloudflare-ai-gateway"] = {
+      baseUrl,
+      api: "anthropic-messages",
+      apiKey,
+      models: [buildCloudflareAiGatewayModelDefinition()],
+    };
+    break;
   }
 
   // Ollama provider - only add if explicitly configured
