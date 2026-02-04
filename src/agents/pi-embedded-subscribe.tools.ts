@@ -4,7 +4,12 @@ import { truncateUtf16Safe } from "../utils.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
-const TOOL_ERROR_MAX_CHARS = 400;
+/**
+ * Maximum characters for tool error messages passed back to the model.
+ * Increased from 400 to preserve stack traces and diagnostic context
+ * that help the model understand and recover from failures.
+ */
+const TOOL_ERROR_MAX_CHARS = 2000;
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) {
