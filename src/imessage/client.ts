@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
 export type IMessageRpcError = {
   code?: number;
@@ -149,8 +150,7 @@ export class IMessageRpcClient {
       params: params ?? {},
     };
     const line = `${JSON.stringify(payload)}\n`;
-    // Default timeout matches DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS from probe.ts
-    const timeoutMs = opts?.timeoutMs ?? 10_000;
+    const timeoutMs = opts?.timeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
 
     const response = new Promise<T>((resolve, reject) => {
       const key = String(id);
