@@ -133,7 +133,7 @@ const resolveAgentOrder = (cfg: ReturnType<typeof loadConfig>) => {
     ordered.push({
       id,
       name: typeof entry.name === "string" ? entry.name : undefined,
-      explicitDefault: entry.default === true,
+      explicitDefault: id === normalizeAgentId(defaultAgentId) && entry.default === true,
     });
   }
 

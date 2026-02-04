@@ -59,6 +59,31 @@ describe("agents helpers", () => {
     expect(main?.isExplicitDefault).toBe(false);
   });
 
+  it("isExplicitDefault is true for only the resolved default when multiple agents have default: true", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "alpha", default: true }, { id: "beta", default: true }, { id: "gamma" }],
+      },
+    };
+
+    const summaries = buildAgentSummaries(cfg);
+    const alpha = summaries.find((s) => s.id === "alpha");
+    const beta = summaries.find((s) => s.id === "beta");
+    const gamma = summaries.find((s) => s.id === "gamma");
+
+    // resolveDefaultAgentId picks the first agent with default: true ("alpha")
+    expect(alpha?.isDefault).toBe(true);
+    expect(alpha?.isExplicitDefault).toBe(true);
+
+    // "beta" also has default: true in config, but it is NOT the resolved default
+    expect(beta?.isDefault).toBe(false);
+    expect(beta?.isExplicitDefault).toBe(false);
+
+    // "gamma" has no default flag at all
+    expect(gamma?.isDefault).toBe(false);
+    expect(gamma?.isExplicitDefault).toBe(false);
+  });
+
   it("applyAgentConfig merges updates", () => {
     const cfg: OpenClawConfig = {
       agents: {

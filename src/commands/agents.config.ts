@@ -116,9 +116,11 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       : configIdentity && (identityName || identityEmoji)
         ? "config"
         : undefined;
-    // Check if this agent has `default: true` explicitly set in config
+    // Only the single resolved default agent that also has `default: true` explicitly
+    // set in config gets the label; prevents multiple agents from being labeled "(default)"
+    // when more than one entry has `default: true`.
     const agentEntry = configuredAgents.find((agent) => normalizeAgentId(agent.id) === id);
-    const isExplicitDefault = agentEntry?.default === true;
+    const isExplicitDefault = id === defaultAgentId && agentEntry?.default === true;
     return {
       id,
       name: resolveAgentName(cfg, id),
