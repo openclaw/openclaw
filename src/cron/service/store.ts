@@ -127,21 +127,13 @@ async function getFileMtimeMs(path: string): Promise<number | null> {
 }
 
 export async function ensureLoaded(state: CronServiceState, opts?: { forceReload?: boolean }) {
-  // Fast path: store is already in memory.  The timer path passes
-  // forceReload=true so that cross-service writes to the same store file
-  // are always picked up.  Other callers (add, list, run, …) trust the
-  // in-memory copy to avoid a stat syscall on every operation.
+  // Fast path: store is already in memory. Other callers (add, list, run, …)
+  // trust the in-memory copy to avoid a stat syscall on every operation.
   if (state.store && !opts?.forceReload) {
     return;
   }
-
-  if (opts?.forceReload && state.store) {
-    // Only pay for the stat when we're explicitly checking for external edits.
-    const mtime = await getFileMtimeMs(state.deps.storePath);
-    if (mtime !== null && state.storeFileMtimeMs !== null && mtime === state.storeFileMtimeMs) {
-      return; // File unchanged since our last load/persist.
-    }
-  }
+  // Force reload always re-reads the file to avoid missing cross-service
+  // edits on filesystems with coarse mtime resolution.
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
