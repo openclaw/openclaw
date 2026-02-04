@@ -6,6 +6,11 @@ import { locked } from "./locked.js";
 import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+/**
+ * Maximum consecutive failures before auto-disabling a cron job.
+ * This prevents infinite retry loops from freezing the API with rate-limit errors.
+ */
+const MAX_CONSECUTIVE_FAILURES = 3;
 
 export function armTimer(state: CronServiceState) {
   if (state.timer) {
@@ -70,7 +75,7 @@ export async function runDueJobs(state: CronServiceState) {
 export async function executeJob(
   state: CronServiceState,
   job: CronJob,
-  nowMs: number,
+  _nowMs: number,
   opts: { forced: boolean },
 ) {
   const startedAt = state.deps.nowMs();
@@ -82,7 +87,7 @@ export async function executeJob(
 
   const finish = async (
     status: "ok" | "error" | "skipped",
-    err?: string,
+    err?: unknown,
     summary?: string,
     outputText?: string,
   ) => {
@@ -91,7 +96,38 @@ export async function executeJob(
     job.state.lastRunAtMs = startedAt;
     job.state.lastStatus = status;
     job.state.lastDurationMs = Math.max(0, endedAt - startedAt);
-    job.state.lastError = err;
+
+    // Safely convert error to string
+    if (err === undefined) {
+      job.state.lastError = undefined;
+    } else if (typeof err === "string") {
+      job.state.lastError = err;
+    } else if (err instanceof Error) {
+      job.state.lastError = err.message;
+    } else if (err !== null && typeof err === "object" && "message" in err) {
+      // Handle error-like objects with a message property
+      const errObj = err as { message: unknown };
+      job.state.lastError =
+        typeof errObj.message === "string" ? errObj.message : String(errObj.message);
+    } else {
+      try {
+        job.state.lastError = JSON.stringify(err);
+      } catch {
+        // Last resort: use a generic error message when we can't serialize
+        job.state.lastError = "Unknown error (could not serialize)";
+      }
+    }
+
+    // Track consecutive failures
+    if (status === "error") {
+      job.state.consecutiveFailures = (job.state.consecutiveFailures ?? 0) + 1;
+    } else if (status === "ok" || status === "skipped") {
+      // Reset failure counter on success or skipped (skipped = not applicable/no-op)
+      job.state.consecutiveFailures = 0;
+    }
+
+    // Auto-disable job after max consecutive failures to prevent infinite retry loop
+    const isMaxFailuresExceeded = (job.state.consecutiveFailures ?? 0) >= MAX_CONSECUTIVE_FAILURES;
 
     const shouldDelete =
       job.schedule.kind === "at" && status === "ok" && job.deleteAfterRun === true;
@@ -101,8 +137,32 @@ export async function executeJob(
         // One-shot job completed successfully; disable it.
         job.enabled = false;
         job.state.nextRunAtMs = undefined;
+      } else if (isMaxFailuresExceeded && status === "error") {
+        // Auto-disable ONLY after max consecutive failures on error
+        job.enabled = false;
+        job.state.nextRunAtMs = undefined;
+        const errorMsg = `Job disabled after ${job.state.consecutiveFailures} consecutive failures`;
+        state.deps.log.error(
+          { jobId: job.id, jobName: job.name, consecutiveFailures: job.state.consecutiveFailures },
+          `[cron] ${errorMsg}`,
+        );
       } else if (job.enabled) {
-        job.state.nextRunAtMs = computeJobNextRunAtMs(job, endedAt);
+        // For isolated tasks, implement exponential backoff on failure
+        if (job.sessionTarget === "isolated" && status === "error") {
+          const failureCount = job.state.consecutiveFailures ?? 1;
+          // Exponential backoff: 1s, 2s, 4s
+          const baseDelayMs = 1000 * Math.pow(2, failureCount - 1);
+          const backoffDelayMs = Math.min(baseDelayMs, 3600000); // Cap at 1 hour
+
+          // Reschedule with backoff instead of using normal nextRunAtMs calculation
+          job.state.nextRunAtMs = endedAt + backoffDelayMs;
+          state.deps.log.warn(
+            { jobId: job.id, jobName: job.name, backoffMs: backoffDelayMs, failureCount },
+            `[cron] Isolated task failed. Retrying in ${backoffDelayMs}ms (exponential backoff)`,
+          );
+        } else {
+          job.state.nextRunAtMs = computeJobNextRunAtMs(job, endedAt);
+        }
       } else {
         job.state.nextRunAtMs = undefined;
       }
@@ -112,7 +172,7 @@ export async function executeJob(
       jobId: job.id,
       action: "finished",
       status,
-      error: err,
+      error: job.state.lastError,
       summary,
       runAtMs: startedAt,
       durationMs: job.state.lastDurationMs,
@@ -129,7 +189,7 @@ export async function executeJob(
       const prefix = job.isolation?.postToMainPrefix?.trim() || "Cron";
       const mode = job.isolation?.postToMainMode ?? "summary";
 
-      let body = (summary ?? err ?? status).trim();
+      let body = (summary ?? job.state.lastError ?? status).trim();
       if (mode === "full") {
         // Prefer full agent output if available; fall back to summary.
         const maxCharsRaw = job.isolation?.postToMainMaxChars;
@@ -221,11 +281,14 @@ export async function executeJob(
       await finish("error", res.error ?? "cron job failed", res.summary, res.outputText);
     }
   } catch (err) {
-    await finish("error", String(err));
+    await finish("error", err);
   } finally {
-    job.updatedAtMs = nowMs;
-    if (!opts.forced && job.enabled && !deleted) {
+    // Use current time for updatedAtMs to reflect actual completion time
+    job.updatedAtMs = state.deps.nowMs();
+    // Sync nextRunAtMs for non-failure cases (preserving failure protection backoff timing)
+    if (!opts.forced && job.enabled && !deleted && job.state.lastStatus !== "error") {
       // Keep nextRunAtMs in sync in case the schedule advanced during a long run.
+      // Skip for error status since failure protection has already set the backoff time.
       job.state.nextRunAtMs = computeJobNextRunAtMs(job, state.deps.nowMs());
     }
   }
