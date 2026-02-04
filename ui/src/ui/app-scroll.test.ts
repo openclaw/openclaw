@@ -39,6 +39,7 @@ function createScrollHost(
     style: { setProperty: vi.fn() } as unknown as CSSStyleDeclaration,
     chatScrollFrame: null as number | null,
     chatScrollTimeout: null as number | null,
+    chatScrollPending: false,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatNewMessagesBelow: false,
