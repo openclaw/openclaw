@@ -68,11 +68,13 @@ if [ "$current_rev" != "$last_rev" ] || [ ! -d "$OPENCLAW_RUNTIME_DIR/dist" ]; t
   pnpm ui:build
   pnpm build
   
-  # Protect the runtime: make it read-only for the openclaw user
-  # The agent runs as openclaw user, so this prevents runtime self-modification
-  # Root still owns/manages this directory
-  chown -R root:openclaw "$OPENCLAW_RUNTIME_DIR/dist"
-  chmod -R 755 "$OPENCLAW_RUNTIME_DIR/dist"
+  # Protect the runtime when running as root.
+  if [ "$(id -u)" -eq 0 ]; then
+    chown -R root:openclaw "$OPENCLAW_RUNTIME_DIR/dist"
+    chmod -R 755 "$OPENCLAW_RUNTIME_DIR/dist"
+  else
+    echo "Skipping runtime ownership hardening (requires root)."
+  fi
   
   # Mark successful build
   echo "$current_rev" > "$OPENCLAW_BUILD_MARKER"
