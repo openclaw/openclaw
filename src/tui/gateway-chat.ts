@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig, resolveGatewayPort } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
+import { GATEWAY_CLIENT_CAPS } from "../gateway/protocol/client-info.js";
 import {
   type HelloOk,
   PROTOCOL_VERSION,
   type SessionsListParams,
+  type SessionsPatchResult,
   type SessionsPatchParams,
 } from "../gateway/protocol/index.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -22,6 +24,7 @@ export type ChatSendOptions = {
   thinking?: string;
   deliver?: boolean;
   timeoutMs?: number;
+  runId?: string;
 };
 
 export type GatewayEvent = {
@@ -112,10 +115,11 @@ export class GatewayChatClient {
       token: resolved.token,
       password: resolved.password,
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      clientDisplayName: "moltbot-tui",
+      clientDisplayName: "openclaw-tui",
       clientVersion: VERSION,
       platform: process.platform,
       mode: GATEWAY_CLIENT_MODES.UI,
+      caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
       instanceId: randomUUID(),
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -153,7 +157,7 @@ export class GatewayChatClient {
   }
 
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
-    const runId = randomUUID();
+    const runId = opts.runId ?? randomUUID();
     await this.client.request("chat.send", {
       sessionKey: opts.sessionKey,
       message: opts.message,
@@ -195,8 +199,8 @@ export class GatewayChatClient {
     return await this.client.request<GatewayAgentsList>("agents.list", {});
   }
 
-  async patchSession(opts: SessionsPatchParams) {
-    return await this.client.request("sessions.patch", opts);
+  async patchSession(opts: SessionsPatchParams): Promise<SessionsPatchResult> {
+    return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
   }
 
   async resetSession(key: string) {
@@ -235,7 +239,7 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
       ? typeof remote?.token === "string" && remote.token.trim().length > 0
         ? remote.token.trim()
         : undefined
-      : process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
+      : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
         (typeof authToken === "string" && authToken.trim().length > 0
           ? authToken.trim()
           : undefined));
@@ -244,7 +248,7 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
     (typeof opts.password === "string" && opts.password.trim().length > 0
       ? opts.password.trim()
       : undefined) ||
-    process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
+    process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
     (typeof remote?.password === "string" && remote.password.trim().length > 0
       ? remote.password.trim()
       : undefined);

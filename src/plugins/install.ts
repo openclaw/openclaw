@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { LEGACY_MANIFEST_KEY } from "../compat/legacy-names.js";
-import { runCommandWithTimeout } from "../process/exec.js";
-import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import {
   extractArchive,
   fileExists,
@@ -11,6 +9,8 @@ import {
   resolveArchiveKind,
   resolvePackedRootDir,
 } from "../infra/archive.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
 type PluginInstallLogger = {
   info?: (message: string) => void;
@@ -21,9 +21,7 @@ type PackageManifest = {
   name?: string;
   version?: string;
   dependencies?: Record<string, string>;
-  moltbot?: { extensions?: string[] };
-  [LEGACY_MANIFEST_KEY]?: { extensions?: string[] };
-};
+} & Partial<Record<typeof MANIFEST_KEY, { extensions?: string[] }>>;
 
 export type InstallPluginResult =
   | {
@@ -40,28 +38,45 @@ const defaultLogger: PluginInstallLogger = {};
 
 function unscopedPackageName(name: string): string {
   const trimmed = name.trim();
-  if (!trimmed) return trimmed;
+  if (!trimmed) {
+    return trimmed;
+  }
   return trimmed.includes("/") ? (trimmed.split("/").pop() ?? trimmed) : trimmed;
 }
 
 function safeDirName(input: string): string {
   const trimmed = input.trim();
-  if (!trimmed) return trimmed;
-  return trimmed.replaceAll("/", "__");
+  if (!trimmed) {
+    return trimmed;
+  }
+  return trimmed.replaceAll("/", "__").replaceAll("\\", "__");
 }
 
 function safeFileName(input: string): string {
   return safeDirName(input);
 }
 
-async function ensureMoltbotExtensions(manifest: PackageManifest) {
-  const extensions = manifest.moltbot?.extensions ?? manifest[LEGACY_MANIFEST_KEY]?.extensions;
+function validatePluginId(pluginId: string): string | null {
+  if (!pluginId) {
+    return "invalid plugin name: missing";
+  }
+  if (pluginId === "." || pluginId === "..") {
+    return "invalid plugin name: reserved path segment";
+  }
+  if (pluginId.includes("/") || pluginId.includes("\\")) {
+    return "invalid plugin name: path separators not allowed";
+  }
+  return null;
+}
+
+async function ensureOpenClawExtensions(manifest: PackageManifest) {
+  const extensions = manifest[MANIFEST_KEY]?.extensions;
   if (!Array.isArray(extensions)) {
-    throw new Error("package.json missing moltbot.extensions");
+    throw new Error("package.json missing openclaw.extensions");
   }
   const list = extensions.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean);
   if (list.length === 0) {
-    throw new Error("package.json moltbot.extensions is empty");
+    throw new Error("package.json openclaw.extensions is empty");
   }
   return list;
 }
@@ -70,7 +85,34 @@ export function resolvePluginInstallDir(pluginId: string, extensionsDir?: string
   const extensionsBase = extensionsDir
     ? resolveUserPath(extensionsDir)
     : path.join(CONFIG_DIR, "extensions");
-  return path.join(extensionsBase, safeDirName(pluginId));
+  const pluginIdError = validatePluginId(pluginId);
+  if (pluginIdError) {
+    throw new Error(pluginIdError);
+  }
+  const targetDirResult = resolveSafeInstallDir(extensionsBase, pluginId);
+  if (!targetDirResult.ok) {
+    throw new Error(targetDirResult.error);
+  }
+  return targetDirResult.path;
+}
+
+function resolveSafeInstallDir(
+  extensionsDir: string,
+  pluginId: string,
+): { ok: true; path: string } | { ok: false; error: string } {
+  const targetDir = path.join(extensionsDir, safeDirName(pluginId));
+  const resolvedBase = path.resolve(extensionsDir);
+  const resolvedTarget = path.resolve(targetDir);
+  const relative = path.relative(resolvedBase, resolvedTarget);
+  if (
+    !relative ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    return { ok: false, error: "invalid plugin name: path traversal detected" };
+  }
+  return { ok: true, path: targetDir };
 }
 
 async function installPluginFromPackageDir(params: {
@@ -101,13 +143,17 @@ async function installPluginFromPackageDir(params: {
 
   let extensions: string[];
   try {
-    extensions = await ensureMoltbotExtensions(manifest);
+    extensions = await ensureOpenClawExtensions(manifest);
   } catch (err) {
     return { ok: false, error: String(err) };
   }
 
   const pkgName = typeof manifest.name === "string" ? manifest.name : "";
   const pluginId = pkgName ? unscopedPackageName(pkgName) : "plugin";
+  const pluginIdError = validatePluginId(pluginId);
+  if (pluginIdError) {
+    return { ok: false, error: pluginIdError };
+  }
   if (params.expectedPluginId && params.expectedPluginId !== pluginId) {
     return {
       ok: false,
@@ -120,7 +166,11 @@ async function installPluginFromPackageDir(params: {
     : path.join(CONFIG_DIR, "extensions");
   await fs.mkdir(extensionsDir, { recursive: true });
 
-  const targetDir = path.join(extensionsDir, safeDirName(pluginId));
+  const targetDirResult = resolveSafeInstallDir(extensionsDir, pluginId);
+  if (!targetDirResult.ok) {
+    return { ok: false, error: targetDirResult.error };
+  }
+  const targetDir = targetDirResult.path;
 
   if (mode === "install" && (await fileExists(targetDir))) {
     return {
@@ -219,7 +269,7 @@ export async function installPluginFromArchive(params: {
     return { ok: false, error: `unsupported archive: ${archivePath}` };
   }
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-plugin-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-"));
   const extractDir = path.join(tmpDir, "extract");
   await fs.mkdir(extractDir, { recursive: true });
 
@@ -305,6 +355,10 @@ export async function installPluginFromFile(params: {
 
   const base = path.basename(filePath, path.extname(filePath));
   const pluginId = base || "plugin";
+  const pluginIdError = validatePluginId(pluginId);
+  if (pluginIdError) {
+    return { ok: false, error: pluginIdError };
+  }
   const targetFile = path.join(extensionsDir, `${safeFileName(pluginId)}${path.extname(filePath)}`);
 
   if (mode === "install" && (await fileExists(targetFile))) {
@@ -350,9 +404,11 @@ export async function installPluginFromNpmSpec(params: {
   const dryRun = params.dryRun ?? false;
   const expectedPluginId = params.expectedPluginId;
   const spec = params.spec.trim();
-  if (!spec) return { ok: false, error: "missing npm spec" };
+  if (!spec) {
+    return { ok: false, error: "missing npm spec" };
+  }
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-npm-pack-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-pack-"));
   logger.info?.(`Downloading ${spec}…`);
   const res = await runCommandWithTimeout(["npm", "pack", spec], {
     timeoutMs: Math.max(timeoutMs, 300_000),

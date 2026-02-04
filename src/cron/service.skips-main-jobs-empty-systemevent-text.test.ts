@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { CronService } from "./service.js";
 
 const noopLogger = {
@@ -14,7 +12,7 @@ const noopLogger = {
 };
 
 async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-cron-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
   return {
     storePath: path.join(dir, "cron", "jobs.json"),
     cleanup: async () => {
@@ -56,7 +54,7 @@ describe("CronService", () => {
     await cron.add({
       name: "empty systemEvent test",
       enabled: true,
-      schedule: { kind: "at", atMs },
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "   " },
@@ -95,7 +93,7 @@ describe("CronService", () => {
     await cron.add({
       name: "disabled cron job",
       enabled: true,
-      schedule: { kind: "at", atMs },
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "hello" },
@@ -135,7 +133,7 @@ describe("CronService", () => {
     await cron.add({
       name: "status next wake",
       enabled: true,
-      schedule: { kind: "at", atMs },
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "hello" },

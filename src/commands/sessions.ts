@@ -1,10 +1,10 @@
+import type { RuntimeEnv } from "../runtime.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import { info } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 type SessionRow = {
@@ -37,21 +37,33 @@ const TOKENS_PAD = 20;
 const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
 const truncateKey = (key: string) => {
-  if (key.length <= KEY_PAD) return key;
+  if (key.length <= KEY_PAD) {
+    return key;
+  }
   const head = Math.max(4, KEY_PAD - 10);
   return `${key.slice(0, head)}...${key.slice(-6)}`;
 };
 
 const colorByPct = (label: string, pct: number | null, rich: boolean) => {
-  if (!rich || pct === null) return label;
-  if (pct >= 95) return theme.error(label);
-  if (pct >= 80) return theme.warn(label);
-  if (pct >= 60) return theme.success(label);
+  if (!rich || pct === null) {
+    return label;
+  }
+  if (pct >= 95) {
+    return theme.error(label);
+  }
+  if (pct >= 80) {
+    return theme.warn(label);
+  }
+  if (pct >= 60) {
+    return theme.success(label);
+  }
   return theme.muted(label);
 };
 
 const formatTokensCell = (total: number, contextTokens: number | null, rich: boolean) => {
-  if (!total) return "-".padEnd(TOKENS_PAD);
+  if (!total) {
+    return "-".padEnd(TOKENS_PAD);
+  }
   const totalLabel = formatKTokens(total);
   const ctxLabel = contextTokens ? formatKTokens(contextTokens) : "?";
   const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
@@ -62,10 +74,18 @@ const formatTokensCell = (total: number, contextTokens: number | null, rich: boo
 
 const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
   const label = kind.padEnd(KIND_PAD);
-  if (!rich) return label;
-  if (kind === "group") return theme.accentBright(label);
-  if (kind === "global") return theme.warn(label);
-  if (kind === "direct") return theme.accent(label);
+  if (!rich) {
+    return label;
+  }
+  if (kind === "group") {
+    return theme.accentBright(label);
+  }
+  if (kind === "global") {
+    return theme.warn(label);
+  }
+  if (kind === "direct") {
+    return theme.accent(label);
+  }
   return theme.muted(label);
 };
 
@@ -97,19 +117,31 @@ const formatFlagsCell = (row: SessionRow, rich: boolean) => {
 };
 
 const formatAge = (ms: number | null | undefined) => {
-  if (!ms || ms < 0) return "unknown";
+  if (!ms || ms < 0) {
+    return "unknown";
+  }
   const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 1) {
+    return "just now";
+  }
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
   const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
+  if (hours < 48) {
+    return `${hours}h ago`;
+  }
   const days = Math.round(hours / 24);
   return `${days}d ago`;
 };
 
 function classifyKey(key: string, entry?: SessionEntry): SessionRow["kind"] {
-  if (key === "global") return "global";
-  if (key === "unknown") return "unknown";
+  if (key === "global") {
+    return "global";
+  }
+  if (key === "unknown") {
+    return "unknown";
+  }
   if (entry?.chatType === "group" || entry?.chatType === "channel") {
     return "group";
   }
@@ -144,7 +176,7 @@ function toRows(store: Record<string, SessionEntry>): SessionRow[] {
         contextTokens: entry?.contextTokens,
       } satisfies SessionRow;
     })
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
 export async function sessionsCommand(
@@ -177,8 +209,12 @@ export async function sessionsCommand(
   }
 
   const rows = toRows(store).filter((row) => {
-    if (activeMinutes === undefined) return true;
-    if (!row.updatedAt) return false;
+    if (activeMinutes === undefined) {
+      return true;
+    }
+    if (!row.updatedAt) {
+      return false;
+    }
     return Date.now() - row.updatedAt <= activeMinutes * 60_000;
   });
 

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { resolveMoltbotMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
 
 describe("resolveSkillInvocationPolicy", () => {

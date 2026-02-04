@@ -1,16 +1,15 @@
-import { RequestClient } from "@buape/carbon";
 import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
+import { RequestClient } from "@buape/carbon";
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
-
-import { loadConfig } from "../config/config.js";
 import type { RetryConfig } from "../infra/retry.js";
-import { resolveDiscordAccount } from "./accounts.js";
 import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
+import { loadConfig } from "../config/config.js";
+import { resolveDiscordAccount } from "./accounts.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(
   ([, value]) => typeof value === "bigint",
-) as Array<[string, bigint]>;
+);
 
 type DiscordClientOpts = {
   token?: string;
@@ -22,7 +21,9 @@ type DiscordClientOpts = {
 
 function resolveToken(params: { explicit?: string; accountId: string; fallbackToken?: string }) {
   const explicit = normalizeDiscordToken(params.explicit);
-  if (explicit) return explicit;
+  if (explicit) {
+    return explicit;
+  }
   const fallback = normalizeDiscordToken(params.fallbackToken);
   if (!fallback) {
     throw new Error(
@@ -48,19 +49,23 @@ function resolveDiscordRest(opts: DiscordClientOpts) {
 }
 
 function addPermissionBits(base: bigint, add?: string) {
-  if (!add) return base;
+  if (!add) {
+    return base;
+  }
   return base | BigInt(add);
 }
 
 function removePermissionBits(base: bigint, deny?: string) {
-  if (!deny) return base;
+  if (!deny) {
+    return base;
+  }
   return base & ~BigInt(deny);
 }
 
 function bitfieldToPermissions(bitfield: bigint) {
   return PERMISSION_ENTRIES.filter(([, value]) => (bitfield & value) === value)
     .map(([name]) => name)
-    .sort();
+    .toSorted();
 }
 
 export function isThreadChannelType(channelType?: number) {

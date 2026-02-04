@@ -3,7 +3,6 @@ import {
   ListFoundationModelsCommand,
   type ListFoundationModelsCommandOutput,
 } from "@aws-sdk/client-bedrock";
-
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.js";
 
 const DEFAULT_REFRESH_INTERVAL_SECONDS = 3600;
@@ -28,11 +27,13 @@ const discoveryCache = new Map<string, BedrockDiscoveryCacheEntry>();
 let hasLoggedBedrockError = false;
 
 function normalizeProviderFilter(filter?: string[]): string[] {
-  if (!filter || filter.length === 0) return [];
+  if (!filter || filter.length === 0) {
+    return [];
+  }
   const normalized = new Set(
     filter.map((entry) => entry.trim().toLowerCase()).filter((entry) => entry.length > 0),
   );
-  return Array.from(normalized).sort();
+  return Array.from(normalized).toSorted();
 }
 
 function buildCacheKey(params: {
@@ -59,10 +60,16 @@ function mapInputModalities(summary: BedrockModelSummary): Array<"text" | "image
   const mapped = new Set<"text" | "image">();
   for (const modality of inputs) {
     const lower = modality.toLowerCase();
-    if (lower === "text") mapped.add("text");
-    if (lower === "image") mapped.add("image");
+    if (lower === "text") {
+      mapped.add("text");
+    }
+    if (lower === "image") {
+      mapped.add("image");
+    }
   }
-  if (mapped.size === 0) mapped.add("text");
+  if (mapped.size === 0) {
+    mapped.add("text");
+  }
   return Array.from(mapped);
 }
 
@@ -82,21 +89,35 @@ function resolveDefaultMaxTokens(config?: BedrockDiscoveryConfig): number {
 }
 
 function matchesProviderFilter(summary: BedrockModelSummary, filter: string[]): boolean {
-  if (filter.length === 0) return true;
+  if (filter.length === 0) {
+    return true;
+  }
   const providerName =
     summary.providerName ??
     (typeof summary.modelId === "string" ? summary.modelId.split(".")[0] : undefined);
   const normalized = providerName?.trim().toLowerCase();
-  if (!normalized) return false;
+  if (!normalized) {
+    return false;
+  }
   return filter.includes(normalized);
 }
 
 function shouldIncludeSummary(summary: BedrockModelSummary, filter: string[]): boolean {
-  if (!summary.modelId?.trim()) return false;
-  if (!matchesProviderFilter(summary, filter)) return false;
-  if (summary.responseStreamingSupported !== true) return false;
-  if (!includesTextModalities(summary.outputModalities)) return false;
-  if (!isActive(summary)) return false;
+  if (!summary.modelId?.trim()) {
+    return false;
+  }
+  if (!matchesProviderFilter(summary, filter)) {
+    return false;
+  }
+  if (summary.responseStreamingSupported !== true) {
+    return false;
+  }
+  if (!includesTextModalities(summary.outputModalities)) {
+    return false;
+  }
+  if (!isActive(summary)) {
+    return false;
+  }
   return true;
 }
 
@@ -160,7 +181,9 @@ export async function discoverBedrockModels(params: {
     const response = await client.send(new ListFoundationModelsCommand({}));
     const discovered: ModelDefinitionConfig[] = [];
     for (const summary of response.modelSummaries ?? []) {
-      if (!shouldIncludeSummary(summary, providerFilter)) continue;
+      if (!shouldIncludeSummary(summary, providerFilter)) {
+        continue;
+      }
       discovered.push(
         toModelDefinition(summary, {
           contextWindow: defaultContextWindow,
@@ -168,7 +191,7 @@ export async function discoverBedrockModels(params: {
         }),
       );
     }
-    return discovered.sort((a, b) => a.name.localeCompare(b.name));
+    return discovered.toSorted((a, b) => a.name.localeCompare(b.name));
   })();
 
   if (refreshIntervalSeconds > 0) {

@@ -1,5 +1,20 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "indentWidth": 2,
-  "printWidth": 100
+  "experimentalSortImports": {
+    "newlinesBetween": false,
+  },
+  "experimentalSortPackageJson": {
+    "sortScripts": true,
+  },
+  "ignorePatterns": [
+    "apps/",
+    "assets/",
+    "dist/",
+    "docs/_layouts/",
+    "node_modules/",
+    "patches/",
+    "pnpm-lock.yaml/",
+    "Swabble/",
+    "vendor/",
+  ],
 }

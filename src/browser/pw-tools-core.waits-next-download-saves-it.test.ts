@@ -12,13 +12,17 @@ let pageState: {
 
 const sessionMocks = vi.hoisted(() => ({
   getPageForTargetId: vi.fn(async () => {
-    if (!currentPage) throw new Error("missing page");
+    if (!currentPage) {
+      throw new Error("missing page");
+    }
     return currentPage;
   }),
   ensurePageState: vi.fn(() => pageState),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   refLocator: vi.fn(() => {
-    if (!currentRefLocator) throw new Error("missing locator");
+    if (!currentRefLocator) {
+      throw new Error("missing locator");
+    }
     return currentRefLocator;
   }),
   rememberRoleRefsForTarget: vi.fn(() => {}),
@@ -40,13 +44,17 @@ describe("pw-tools-core", () => {
       armIdDialog: 0,
       armIdDownload: 0,
     };
-    for (const fn of Object.values(sessionMocks)) fn.mockClear();
+    for (const fn of Object.values(sessionMocks)) {
+      fn.mockClear();
+    }
   });
 
   it("waits for the next download and saves it", async () => {
     let downloadHandler: ((download: unknown) => void) | undefined;
     const on = vi.fn((event: string, handler: (download: unknown) => void) => {
-      if (event === "download") downloadHandler = handler;
+      if (event === "download") {
+        downloadHandler = handler;
+      }
     });
     const off = vi.fn();
 
@@ -79,7 +87,9 @@ describe("pw-tools-core", () => {
   it("clicks a ref and saves the resulting download", async () => {
     let downloadHandler: ((download: unknown) => void) | undefined;
     const on = vi.fn((event: string, handler: (download: unknown) => void) => {
-      if (event === "download") downloadHandler = handler;
+      if (event === "download") {
+        downloadHandler = handler;
+      }
     });
     const off = vi.fn();
 
@@ -118,7 +128,9 @@ describe("pw-tools-core", () => {
   it("waits for a matching response and returns its body", async () => {
     let responseHandler: ((resp: unknown) => void) | undefined;
     const on = vi.fn((event: string, handler: (resp: unknown) => void) => {
-      if (event === "response") responseHandler = handler;
+      if (event === "response") {
+        responseHandler = handler;
+      }
     });
     const off = vi.fn();
     currentPage = { on, off };

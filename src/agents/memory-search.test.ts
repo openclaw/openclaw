@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { resolveMemorySearchConfig } from "./memory-search.js";
 
 describe("memory search config", () => {
@@ -80,6 +79,29 @@ describe("memory search config", () => {
     expect(resolved?.query.minScore).toBe(0.2);
     expect(resolved?.store.vector.enabled).toBe(true);
     expect(resolved?.store.vector.extensionPath).toBe("/opt/sqlite-vec.dylib");
+  });
+
+  it("merges extra memory paths from defaults and overrides", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            extraPaths: ["/shared/notes", " docs "],
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              extraPaths: ["/shared/notes", "../team-notes"],
+            },
+          },
+        ],
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.extraPaths).toEqual(["/shared/notes", "docs", "../team-notes"]);
   });
 
   it("includes batch defaults for openai without remote overrides", () => {

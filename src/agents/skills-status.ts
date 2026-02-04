@@ -1,6 +1,5 @@
 import path from "node:path";
-
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
@@ -16,6 +15,7 @@ import {
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
+import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
 
 export type SkillStatusConfigCheck = {
   path: string;
@@ -34,6 +34,7 @@ export type SkillStatusEntry = {
   name: string;
   description: string;
   source: string;
+  bundled: boolean;
   filePath: string;
   baseDir: string;
   skillKey: string;
@@ -78,7 +79,9 @@ function selectPreferredInstallSpec(
   install: SkillInstallSpec[],
   prefs: SkillsInstallPreferences,
 ): { spec: SkillInstallSpec; index: number } | undefined {
-  if (install.length === 0) return undefined;
+  if (install.length === 0) {
+    return undefined;
+  }
   const indexed = install.map((spec, index) => ({ spec, index }));
   const findKind = (kind: SkillInstallSpec["kind"]) =>
     indexed.find((item) => item.spec.kind === kind);
@@ -88,11 +91,21 @@ function selectPreferredInstallSpec(
   const goSpec = findKind("go");
   const uvSpec = findKind("uv");
 
-  if (prefs.preferBrew && hasBinary("brew") && brewSpec) return brewSpec;
-  if (uvSpec) return uvSpec;
-  if (nodeSpec) return nodeSpec;
-  if (brewSpec) return brewSpec;
-  if (goSpec) return goSpec;
+  if (prefs.preferBrew && hasBinary("brew") && brewSpec) {
+    return brewSpec;
+  }
+  if (uvSpec) {
+    return uvSpec;
+  }
+  if (nodeSpec) {
+    return nodeSpec;
+  }
+  if (brewSpec) {
+    return brewSpec;
+  }
+  if (goSpec) {
+    return goSpec;
+  }
   return indexed[0];
 }
 
@@ -101,14 +114,18 @@ function normalizeInstallOptions(
   prefs: SkillsInstallPreferences,
 ): SkillInstallOption[] {
   const install = entry.metadata?.install ?? [];
-  if (install.length === 0) return [];
+  if (install.length === 0) {
+    return [];
+  }
 
   const platform = process.platform;
   const filtered = install.filter((spec) => {
     const osList = spec.os ?? [];
     return osList.length === 0 || osList.includes(platform);
   });
-  if (filtered.length === 0) return [];
+  if (filtered.length === 0) {
+    return [];
+  }
 
   const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
     const id = (spec.id ?? `${spec.kind}-${index}`).trim();
@@ -143,15 +160,18 @@ function normalizeInstallOptions(
   }
 
   const preferred = selectPreferredInstallSpec(filtered, prefs);
-  if (!preferred) return [];
+  if (!preferred) {
+    return [];
+  }
   return [toOption(preferred.spec, preferred.index)];
 }
 
 function buildSkillStatus(
   entry: SkillEntry,
-  config?: MoltbotConfig,
+  config?: OpenClawConfig,
   prefs?: SkillsInstallPreferences,
   eligibility?: SkillEligibilityContext,
+  bundledNames?: Set<string>,
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
@@ -169,6 +189,10 @@ function buildSkillStatus(
   const repositoryRaw =
     entry.metadata?.repository ?? entry.frontmatter.repository ?? entry.frontmatter.repo;
   const repository = repositoryRaw?.trim() ? repositoryRaw.trim() : undefined;
+  const bundled =
+    bundledNames && bundledNames.size > 0
+      ? bundledNames.has(entry.skill.name)
+      : entry.skill.source === "openclaw-bundled";
 
   const requiredBins = entry.metadata?.requires?.bins ?? [];
   const requiredAnyBins = entry.metadata?.requires?.anyBins ?? [];
@@ -177,8 +201,12 @@ function buildSkillStatus(
   const requiredOs = entry.metadata?.os ?? [];
 
   const missingBins = requiredBins.filter((bin) => {
-    if (hasBinary(bin)) return false;
-    if (eligibility?.remote?.hasBin?.(bin)) return false;
+    if (hasBinary(bin)) {
+      return false;
+    }
+    if (eligibility?.remote?.hasBin?.(bin)) {
+      return false;
+    }
     return true;
   });
   const missingAnyBins =
@@ -198,8 +226,12 @@ function buildSkillStatus(
 
   const missingEnv: string[] = [];
   for (const envName of requiredEnv) {
-    if (process.env[envName]) continue;
-    if (skillConfig?.env?.[envName]) continue;
+    if (process.env[envName]) {
+      continue;
+    }
+    if (skillConfig?.env?.[envName]) {
+      continue;
+    }
     if (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName) {
       continue;
     }
@@ -236,6 +268,7 @@ function buildSkillStatus(
     name: entry.skill.name,
     description: entry.skill.description,
     source: entry.skill.source,
+    bundled,
     filePath: entry.skill.filePath,
     baseDir: entry.skill.baseDir,
     skillKey,
@@ -263,20 +296,27 @@ function buildSkillStatus(
 export function buildWorkspaceSkillStatus(
   workspaceDir: string,
   opts?: {
-    config?: MoltbotConfig;
+    config?: OpenClawConfig;
     managedSkillsDir?: string;
     entries?: SkillEntry[];
     eligibility?: SkillEligibilityContext;
   },
 ): SkillStatusReport {
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
-  const skillEntries = opts?.entries ?? loadWorkspaceSkillEntries(workspaceDir, opts);
+  const bundledContext = resolveBundledSkillsContext();
+  const skillEntries =
+    opts?.entries ??
+    loadWorkspaceSkillEntries(workspaceDir, {
+      config: opts?.config,
+      managedSkillsDir,
+      bundledSkillsDir: bundledContext.dir,
+    });
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   return {
     workspaceDir,
     managedSkillsDir,
     skills: skillEntries.map((entry) =>
-      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility),
+      buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility, bundledContext.names),
     ),
   };
 }

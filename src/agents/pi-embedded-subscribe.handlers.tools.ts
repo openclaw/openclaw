@@ -1,9 +1,8 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import {
   extractToolErrorMessage,
   extractToolResultText,
@@ -16,13 +15,23 @@ import { normalizeToolName } from "./tool-policy.js";
 
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
   const normalized = toolName.trim().toLowerCase();
-  if (normalized !== "exec" && normalized !== "bash") return meta;
-  if (!args || typeof args !== "object") return meta;
+  if (normalized !== "exec" && normalized !== "bash") {
+    return meta;
+  }
+  if (!args || typeof args !== "object") {
+    return meta;
+  }
   const record = args as Record<string, unknown>;
   const flags: string[] = [];
-  if (record.pty === true) flags.push("pty");
-  if (record.elevated === true) flags.push("elevated");
-  if (flags.length === 0) return meta;
+  if (record.pty === true) {
+    flags.push("pty");
+  }
+  if (record.elevated === true) {
+    flags.push("elevated");
+  }
+  if (flags.length === 0) {
+    return meta;
+  }
   const suffix = flags.join(" · ");
   return meta ? `${meta} · ${suffix}` : suffix;
 }

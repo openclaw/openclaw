@@ -1,3 +1,4 @@
+import type { SandboxConfig } from "./types.js";
 import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -8,7 +9,6 @@ import {
   removeBrowserRegistryEntry,
   removeRegistryEntry,
 } from "./registry.js";
-import type { SandboxConfig } from "./types.js";
 
 let lastPruneAtMs = 0;
 
@@ -16,7 +16,9 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
   const now = Date.now();
   const idleHours = cfg.prune.idleHours;
   const maxAgeDays = cfg.prune.maxAgeDays;
-  if (idleHours === 0 && maxAgeDays === 0) return;
+  if (idleHours === 0 && maxAgeDays === 0) {
+    return;
+  }
   const registry = await readRegistry();
   for (const entry of registry.entries) {
     const idleMs = now - entry.lastUsedAtMs;
@@ -42,7 +44,9 @@ async function pruneSandboxBrowsers(cfg: SandboxConfig) {
   const now = Date.now();
   const idleHours = cfg.prune.idleHours;
   const maxAgeDays = cfg.prune.maxAgeDays;
-  if (idleHours === 0 && maxAgeDays === 0) return;
+  if (idleHours === 0 && maxAgeDays === 0) {
+    return;
+  }
   const registry = await readBrowserRegistry();
   for (const entry of registry.entries) {
     const idleMs = now - entry.lastUsedAtMs;
@@ -71,7 +75,9 @@ async function pruneSandboxBrowsers(cfg: SandboxConfig) {
 
 export async function maybePruneSandboxes(cfg: SandboxConfig) {
   const now = Date.now();
-  if (now - lastPruneAtMs < 5 * 60 * 1000) return;
+  if (now - lastPruneAtMs < 5 * 60 * 1000) {
+    return;
+  }
   lastPruneAtMs = now;
   try {
     await pruneSandboxContainers(cfg);
