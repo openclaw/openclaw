@@ -7,7 +7,7 @@ import { saveMediaBuffer } from "../../../../src/media/store.js";
 import { shouldRetryTelegramIpv4Fallback, type TelegramTransport } from "../fetch.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramMediaPlaceholder } from "./helpers.js";
-import type { StickerMetadata, TelegramContext } from "./types.js";
+import type { AnimationMetadata, StickerMetadata, TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
 const TELEGRAM_MEDIA_SSRF_POLICY = {
@@ -253,6 +253,7 @@ export async function resolveMedia(
   contentType?: string;
   placeholder: string;
   stickerMetadata?: StickerMetadata;
+  animationMetadata?: AnimationMetadata;
 } | null> {
   const msg = ctx.message;
   const stickerResolved = await resolveStickerMedia({
@@ -264,6 +265,50 @@ export async function resolveMedia(
   });
   if (stickerResolved !== undefined) {
     return stickerResolved;
+  }
+
+  // Handle animations (GIFs) separately to extract metadata
+  if (msg.animation) {
+    const anim = msg.animation;
+    if (!anim.file_id) {
+      return null;
+    }
+
+    try {
+      const file = await resolveTelegramFileWithRetry(ctx);
+      if (!file?.file_path) {
+        logVerbose("telegram: getFile returned no file_path for animation");
+        return null;
+      }
+      const fetchImpl = proxyFetch ?? globalThis.fetch;
+      if (!fetchImpl) {
+        logVerbose("telegram: fetch not available for animation download");
+        return null;
+      }
+      const saved = await downloadAndSaveTelegramFile({
+        filePath: file.file_path,
+        token,
+        fetchImpl,
+        maxBytes,
+        telegramFileName: anim.file_name ?? undefined,
+      });
+
+      return {
+        path: saved.path,
+        contentType: saved.contentType,
+        placeholder: "<media:gif>",
+        animationMetadata: {
+          fileName: anim.file_name ?? undefined,
+          fileId: anim.file_id,
+          fileUniqueId: anim.file_unique_id,
+          mimeType: anim.mime_type ?? undefined,
+          duration: anim.duration ?? undefined,
+        },
+      };
+    } catch (err) {
+      logVerbose(`telegram: failed to process animation: ${String(err)}`);
+      return null;
+    }
   }
 
   const m = resolveMediaFileRef(msg);

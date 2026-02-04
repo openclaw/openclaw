@@ -141,6 +141,10 @@ export async function resolveTelegramInboundBody(params: {
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
 
   let placeholder = resolveTelegramMediaPlaceholder(msg) ?? "";
+  // Enrich animation (GIF) placeholder with file name if available
+  if (msg.animation && allMedia[0]?.animationMetadata?.fileName) {
+    placeholder = `<media:gif "${allMedia[0].animationMetadata.fileName}">`;
+  }
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
   const stickerSupportsVision = msg.sticker
     ? await resolveStickerVisionSupport({ cfg, agentId: routeAgentId })

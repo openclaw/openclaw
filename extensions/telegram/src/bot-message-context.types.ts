@@ -7,12 +7,13 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "../../../src/config/types.js";
-import type { StickerMetadata, TelegramContext } from "./bot/types.js";
+import type { AnimationMetadata, StickerMetadata, TelegramContext } from "./bot/types.js";
 
 export type TelegramMediaRef = {
   path: string;
   contentType?: string;
   stickerMetadata?: StickerMetadata;
+  animationMetadata?: AnimationMetadata;
 };
 
 export type TelegramMessageContextOptions = {
