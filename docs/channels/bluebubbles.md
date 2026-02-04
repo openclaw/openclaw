@@ -42,6 +42,80 @@ Status: bundled plugin that talks to the BlueBubbles macOS server over HTTP. **R
 4. Point BlueBubbles webhooks to your gateway (example: `https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`).
 5. Start the gateway; it will register the webhook handler and start pairing.
 
+## Keeping Messages.app alive (VM / headless setups)
+
+Some macOS VM / always-on setups can end up with Messages.app going “idle” (incoming events stop until the app is opened/foregrounded). A simple workaround is to **poke Messages every 5 minutes** using an AppleScript + LaunchAgent.
+
+### 1) Save the AppleScript
+
+Save this as:
+
+- `~/Scripts/poke-messages.scpt`
+
+Example script (non-interactive; does not steal focus):
+
+```applescript
+try
+  tell application "Messages"
+    if not running then
+      launch
+    end if
+
+    -- Touch the scripting interface to keep the process responsive.
+    set _chatCount to (count of chats)
+  end tell
+on error
+  -- Ignore transient failures (first-run prompts, locked session, etc).
+end try
+```
+
+### 2) Install a LaunchAgent
+
+Save this as:
+
+- `~/Library/LaunchAgents/com.user.poke-messages.plist`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.user.poke-messages</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>-lc</string>
+      <string>/usr/bin/osascript &quot;$HOME/Scripts/poke-messages.scpt&quot;</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/poke-messages.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/poke-messages.err</string>
+  </dict>
+</plist>
+```
+
+Notes:
+
+- This runs **every 300 seconds** and **on login**.
+- The first run may trigger macOS **Automation** prompts (`osascript` → Messages). Approve them in the same user session that runs the LaunchAgent.
+
+Load it:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.user.poke-messages.plist 2>/dev/null || true
+launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
+```
+
 ## Onboarding
 
 BlueBubbles is available in the interactive setup wizard:

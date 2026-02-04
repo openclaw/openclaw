@@ -127,7 +127,8 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - [Google Chat](/channels/googlechat): service account JSON + webhook audience.
    - [Mattermost](/channels/mattermost) (plugin): bot token + base URL.
    - [Signal](/channels/signal): optional `signal-cli` install + account config.
-   - [iMessage](/channels/imessage): local `imsg` CLI path + DB access.
+   - [BlueBubbles](/channels/bluebubbles): **recommended for iMessage**; server URL + password + webhook.
+   - [iMessage](/channels/imessage): legacy `imsg` CLI path + DB access.
    - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
 
 6. **Daemon install**
@@ -329,5 +330,5 @@ will prompt to install it (npm or a local path) before it can be configured.
 
 - macOS app onboarding: [Onboarding](/start/onboarding)
 - Config reference: [Gateway configuration](/gateway/configuration)
-- Providers: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord), [Google Chat](/channels/googlechat), [Signal](/channels/signal), [iMessage](/channels/imessage)
+- Providers: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord), [Google Chat](/channels/googlechat), [Signal](/channels/signal), [BlueBubbles](/channels/bluebubbles) (iMessage), [iMessage](/channels/imessage) (legacy)
 - Skills: [Skills](/tools/skills), [Skills config](/tools/skills-config)
