@@ -54,7 +54,7 @@ describe("CronService", () => {
     await cron.add({
       name: "empty systemEvent test",
       enabled: true,
-      schedule: { kind: "at", atMs },
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "   " },
@@ -93,7 +93,7 @@ describe("CronService", () => {
     await cron.add({
       name: "disabled cron job",
       enabled: true,
-      schedule: { kind: "at", atMs },
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "hello" },
@@ -133,7 +133,7 @@ describe("CronService", () => {
     await cron.add({
       name: "status next wake",
       enabled: true,
-      schedule: { kind: "at", atMs },
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "hello" },

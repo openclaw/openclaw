@@ -50,6 +50,15 @@ To monitor:
 
 - Prefer literal sends: `tmux -S "$SOCKET" send-keys -t target -l -- "$cmd"`.
 - Control keys: `tmux -S "$SOCKET" send-keys -t target C-c`.
+- For interactive TUI apps like Claude Code/Codex, this guidance covers **how to send commands**.
+  Do **not** append `Enter` in the same `send-keys`. These apps may treat a fast text+Enter
+  sequence as paste/multi-line input and not submit; this is timing-dependent. Send text and
+  `Enter` as separate commands with a small delay (tune per environment; increase if needed,
+  or use `sleep 1` if sub-second sleeps aren't supported):
+
+```bash
+tmux -S "$SOCKET" send-keys -t target -l -- "$cmd" && sleep 0.1 && tmux -S "$SOCKET" send-keys -t target Enter
+```
 
 ## Watching output
 
@@ -81,6 +90,9 @@ done
 # Launch agents in different workdirs
 tmux -S "$SOCKET" send-keys -t agent-1 "cd /tmp/project1 && codex --yolo 'Fix bug X'" Enter
 tmux -S "$SOCKET" send-keys -t agent-2 "cd /tmp/project2 && codex --yolo 'Fix bug Y'" Enter
+
+# When sending prompts to Claude Code/Codex TUI, split text + Enter with a delay
+tmux -S "$SOCKET" send-keys -t agent-1 -l -- "Please make a small edit to README.md." && sleep 0.1 && tmux -S "$SOCKET" send-keys -t agent-1 Enter
 
 # Poll for completion (check if prompt returned)
 for sess in agent-1 agent-2; do

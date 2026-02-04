@@ -306,6 +306,7 @@ export {
   normalizeTelegramMessagingTarget,
 } from "../channels/plugins/normalize/telegram.js";
 export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
+export { type TelegramProbe } from "../telegram/probe.js";
 
 // Channel: Signal
 export {

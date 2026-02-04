@@ -425,7 +425,7 @@ export type SessionsPatchResult = {
 };
 
 export type CronSchedule =
-  | { kind: "at"; atMs: number }
+  | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
   | { kind: "cron"; expr: string; tz?: string };
 
@@ -439,22 +439,13 @@ export type CronPayload =
       message: string;
       thinking?: string;
       timeoutSeconds?: number;
-      deliver?: boolean;
-      provider?:
-        | "last"
-        | "whatsapp"
-        | "telegram"
-        | "discord"
-        | "slack"
-        | "signal"
-        | "imessage"
-        | "msteams";
-      to?: string;
-      bestEffortDeliver?: boolean;
     };
 
-export type CronIsolation = {
-  postToMainPrefix?: string;
+export type CronDelivery = {
+  mode: "none" | "announce";
+  channel?: string;
+  to?: string;
+  bestEffort?: boolean;
 };
 
 export type CronJobState = {
@@ -479,7 +470,7 @@ export type CronJob = {
   sessionTarget: CronSessionTarget;
   wakeMode: CronWakeMode;
   payload: CronPayload;
-  isolation?: CronIsolation;
+  delivery?: CronDelivery;
   state?: CronJobState;
 };
 

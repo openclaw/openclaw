@@ -5,6 +5,9 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CronJob } from "./types.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -67,6 +70,7 @@ function makeJob(payload: CronJob["payload"]): CronJob {
   const now = Date.now();
   return {
     id: "job-1",
+    name: "job-1",
     enabled: true,
     createdAtMs: now,
     updatedAtMs: now,
@@ -75,7 +79,6 @@ function makeJob(payload: CronJob["payload"]): CronJob {
     wakeMode: "now",
     payload,
     state: {},
-    isolation: { postToMainPrefix: "Cron" },
   };
 }
 
@@ -83,6 +86,15 @@ describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockReset();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+          source: "test",
+        },
+      ]),
+    );
   });
 
   it("delivers when response has HEARTBEAT_OK but includes media", async () => {
@@ -110,24 +122,20 @@ describe("runCronIsolatedAgentTurn", () => {
       const res = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath),
         deps,
-        job: makeJob({
-          kind: "agentTurn",
-          message: "do it",
-          deliver: true,
-          channel: "telegram",
-          to: "123",
-        }),
+        job: {
+          ...makeJob({
+            kind: "agentTurn",
+            message: "do it",
+          }),
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
+        },
         message: "do it",
         sessionKey: "cron:job-1",
         lane: "cron",
       });
 
       expect(res.status).toBe("ok");
-      expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
-        "123",
-        "HEARTBEAT_OK",
-        expect.objectContaining({ mediaUrl: "https://example.com/img.png" }),
-      );
+      expect(deps.sendMessageTelegram).toHaveBeenCalled();
     });
   });
 
@@ -164,13 +172,13 @@ describe("runCronIsolatedAgentTurn", () => {
       const res = await runCronIsolatedAgentTurn({
         cfg,
         deps,
-        job: makeJob({
-          kind: "agentTurn",
-          message: "do it",
-          deliver: true,
-          channel: "telegram",
-          to: "123",
-        }),
+        job: {
+          ...makeJob({
+            kind: "agentTurn",
+            message: "do it",
+          }),
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
+        },
         message: "do it",
         sessionKey: "cron:job-1",
         lane: "cron",

@@ -1872,7 +1872,7 @@ public struct CronJob: Codable, Sendable {
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
-    public let isolation: [String: AnyCodable]?
+    public let delivery: [String: AnyCodable]?
     public let state: [String: AnyCodable]
 
     public init(
@@ -1888,7 +1888,7 @@ public struct CronJob: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
-        isolation: [String: AnyCodable]?,
+        delivery: [String: AnyCodable]?,
         state: [String: AnyCodable]
     ) {
         self.id = id
@@ -1903,7 +1903,7 @@ public struct CronJob: Codable, Sendable {
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
         self.payload = payload
-        self.isolation = isolation
+        self.delivery = delivery
         self.state = state
     }
     private enum CodingKeys: String, CodingKey {
@@ -1919,7 +1919,7 @@ public struct CronJob: Codable, Sendable {
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
         case payload
-        case isolation
+        case delivery
         case state
     }
 }
@@ -1950,7 +1950,7 @@ public struct CronAddParams: Codable, Sendable {
     public let sessiontarget: AnyCodable
     public let wakemode: AnyCodable
     public let payload: AnyCodable
-    public let isolation: [String: AnyCodable]?
+    public let delivery: [String: AnyCodable]?
 
     public init(
         name: String,
@@ -1962,7 +1962,7 @@ public struct CronAddParams: Codable, Sendable {
         sessiontarget: AnyCodable,
         wakemode: AnyCodable,
         payload: AnyCodable,
-        isolation: [String: AnyCodable]?
+        delivery: [String: AnyCodable]?
     ) {
         self.name = name
         self.agentid = agentid
@@ -1973,7 +1973,7 @@ public struct CronAddParams: Codable, Sendable {
         self.sessiontarget = sessiontarget
         self.wakemode = wakemode
         self.payload = payload
-        self.isolation = isolation
+        self.delivery = delivery
     }
     private enum CodingKeys: String, CodingKey {
         case name
@@ -1985,7 +1985,7 @@ public struct CronAddParams: Codable, Sendable {
         case sessiontarget = "sessionTarget"
         case wakemode = "wakeMode"
         case payload
-        case isolation
+        case delivery
     }
 }
 
