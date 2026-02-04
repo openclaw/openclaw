@@ -31,6 +31,11 @@ const SKILL_TEMPLATE = [
 ].join("\n");
 
 export function registerSkillsCommands(program: Command) {
+  // avoid duplicate registration when called multiple times in same process
+  if (program.commands.some((c) => c.name() === "skills")) {
+    return;
+  }
+
   const skills = program.command("skills").description("Manage agent skills");
 
   skills
