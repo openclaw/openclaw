@@ -27,8 +27,8 @@ export type EmbeddingProvider = {
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider;
-  requestedProvider: "openai" | "local" | "gemini" | "auto";
-  fallbackFrom?: "openai" | "local" | "gemini";
+  requestedProvider: string;
+  fallbackFrom?: string;
   fallbackReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
@@ -37,14 +37,14 @@ export type EmbeddingProviderResult = {
 export type EmbeddingProviderOptions = {
   config: OpenClawConfig;
   agentDir?: string;
-  provider: "openai" | "local" | "gemini" | "auto";
+  provider: string;
   remote?: {
     baseUrl?: string;
     apiKey?: string;
     headers?: Record<string, string>;
   };
   model: string;
-  fallback: "openai" | "gemini" | "local" | "none";
+  fallback: string | "none";
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
@@ -128,21 +128,26 @@ export async function createEmbeddingProvider(
   const requestedProvider = options.provider;
   const fallback = options.fallback;
 
-  const createProvider = async (id: "openai" | "local" | "gemini") => {
-    if (id === "local") {
+  const createProvider = async (providerName: string) => {
+    const type = resolveProviderType(providerName, options.config);
+
+    if (type === "local") {
       const provider = await createLocalEmbeddingProvider(options);
       return { provider };
     }
-    if (id === "gemini") {
+    if (type === "gemini") {
       const { provider, client } = await createGeminiEmbeddingProvider(options);
       return { provider, gemini: client };
     }
+    // OpenAI (includes Azure OpenAI)
     const { provider, client } = await createOpenAiEmbeddingProvider(options);
     return { provider, openAi: client };
   };
 
-  const formatPrimaryError = (err: unknown, provider: "openai" | "local" | "gemini") =>
-    provider === "local" ? formatLocalSetupError(err) : formatError(err);
+  const formatPrimaryError = (err: unknown, provider: string) => {
+    const type = resolveProviderType(provider, options.config);
+    return type === "local" ? formatLocalSetupError(err) : formatError(err);
+  };
 
   if (requestedProvider === "auto") {
     const missingKeyErrors: string[] = [];
@@ -157,7 +162,7 @@ export async function createEmbeddingProvider(
       }
     }
 
-    for (const provider of ["openai", "gemini"] as const) {
+    for (const provider of ["openai", "azure", "gemini"] as const) {
       try {
         const result = await createProvider(provider);
         return { ...result, requestedProvider };
@@ -205,10 +210,32 @@ export async function createEmbeddingProvider(
 }
 
 function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Map provider name to concrete implementation type based on model provider config or built-in name */
+function resolveProviderType(
+  providerName: string,
+  config: OpenClawConfig,
+): "openai" | "gemini" | "local" {
+  // Check if it's a built-in type
+  if (providerName === "openai" || providerName === "gemini" || providerName === "local") {
+    return providerName;
   }
-  return String(err);
+
+  // Look up in models.providers to determine API type
+  const modelProvider = config.models?.providers?.[providerName];
+  const api = modelProvider?.api;
+
+  if (api === "openai-completions" || api === "openai-responses") {
+    return "openai";
+  }
+  if (api === "google-generative-ai") {
+    return "gemini";
+  }
+
+  // Default to openai for unknown providers (backward compat)
+  return "openai";
 }
 
 function isNodeLlamaCppMissing(err: unknown): boolean {

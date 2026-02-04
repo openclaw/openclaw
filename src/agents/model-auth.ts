@@ -230,21 +230,21 @@ export async function resolveApiKeyForProvider(params: {
   throw new Error(
     [
       `No API key found for provider "${provider}".`,
-      `Auth store: ${authSt
-  | "api-key"
-  | "oauth"
-  | "token"
-  | "mixed"
-  | "aws-sdk"
-  | "azure-cli"
- 
+      `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
       `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy auth-profiles.json from the main agentDir.`,
     ].join(" "),
   );
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
-export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
+export type ModelAuthMode =
+  | "api-key"
+  | "oauth"
+  | "token"
+  | "mixed"
+  | "aws-sdk"
+  | "azure-cli"
+  | "unknown";
 
 export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
