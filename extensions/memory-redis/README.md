@@ -11,13 +11,47 @@ Redis-backed long-term memory plugin for OpenClaw with vector similarity search.
 
 ### 1. Start Redis
 
-**Option A: Simple container (standalone)**
+Choose the option that matches your deployment:
+
+#### Docker (recommended)
+
+Works with any installation method (curl installer, npm, VPS, etc.):
 
 ```bash
-docker run -d --name redis -p 6379:6379 redis:8
+# Simple one-liner - runs Redis Stack with persistence
+docker run -d \
+  --name redis-stack \
+  -p 127.0.0.1:6379:6379 \
+  -v redis-data:/data \
+  --restart unless-stopped \
+  redis/redis-stack:latest
 ```
 
-**Option B: With Docker Compose (recommended for OpenClaw Docker deployments)**
+For Docker Compose deployments, see [Docker Compose Setup](#docker-compose-setup) below.
+
+#### Native Installation (Debian/Ubuntu)
+
+If you prefer not to use Docker:
+
+```bash
+# Add Redis repository
+curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+
+# Install Redis Stack (includes Query Engine for vector search)
+sudo apt-get update
+sudo apt-get install -y redis-stack-server
+
+# Start and enable
+sudo systemctl enable redis-stack-server
+sudo systemctl start redis-stack-server
+```
+
+> **Note:** Redis Stack is required (not plain Redis) because it includes the Query Engine (RediSearch) for vector similarity search.
+
+#### Docker Compose Setup
+
+**Option A: With OpenClaw Docker deployment**
 
 ```bash
 # From repo root - merges Redis with OpenClaw gateway
@@ -26,7 +60,7 @@ docker compose -f docker-compose.yml -f extensions/memory-redis/docker/docker-co
 
 This starts Redis alongside the gateway on a shared network. Use `redis://redis-stack:6379` as the Redis URL in your plugin config.
 
-**Option C: Standalone compose (Redis only)**
+**Option B: Standalone compose (Redis only)**
 
 ```bash
 cd extensions/memory-redis/docker && docker compose up -d
