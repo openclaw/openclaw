@@ -184,6 +184,7 @@ export async function runEmbeddedPiAgent(
       const copilotTokenState: CopilotTokenState | null =
         model.provider === "github-copilot" ? { githubToken: "", expiresAt: 0 } : null;
       let copilotRefreshCancelled = false;
+      const hasCopilotGithubToken = () => Boolean(copilotTokenState?.githubToken.trim());
 
       const clearCopilotRefreshTimer = () => {
         if (!copilotTokenState?.refreshTimer) {
@@ -211,9 +212,13 @@ export async function runEmbeddedPiAgent(
         }
         const { resolveCopilotApiToken } = await import("../../providers/github-copilot-token.js");
         copilotTokenState.refreshInFlight = (async () => {
+          const githubToken = copilotTokenState.githubToken.trim();
+          if (!githubToken) {
+            throw new Error("Copilot refresh requires a GitHub token.");
+          }
           log.debug(`Refreshing GitHub Copilot token (${reason})...`);
           const copilotToken = await resolveCopilotApiToken({
-            githubToken: copilotTokenState.githubToken,
+            githubToken,
           });
           authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
           copilotTokenState.expiresAt = copilotToken.expiresAt;
@@ -234,6 +239,10 @@ export async function runEmbeddedPiAgent(
 
       const scheduleCopilotRefresh = (): void => {
         if (!copilotTokenState || copilotRefreshCancelled) {
+          return;
+        }
+        if (!hasCopilotGithubToken()) {
+          log.warn("Skipping Copilot refresh scheduling; GitHub token missing.");
           return;
         }
         clearCopilotRefreshTimer();
@@ -414,6 +423,9 @@ export async function runEmbeddedPiAgent(
         retried: boolean,
       ): Promise<boolean> => {
         if (!copilotTokenState || retried) {
+          return false;
+        }
+        if (!hasCopilotGithubToken()) {
           return false;
         }
         if (!isFailoverErrorMessage(errorText)) {
