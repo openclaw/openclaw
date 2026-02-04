@@ -89,6 +89,28 @@ function matchesMessagingToolDeliveryTarget(
   return target.to === delivery.to;
 }
 
+function resolveCronDeliveryBestEffort(job: CronJob): boolean {
+  if (typeof job.delivery?.bestEffort === "boolean") {
+    return job.delivery.bestEffort;
+  }
+  if (job.payload.kind === "agentTurn" && typeof job.payload.bestEffortDeliver === "boolean") {
+    return job.payload.bestEffortDeliver;
+  }
+  return false;
+}
+
+function resolveCronDeliveryFailure(
+  resolved: Awaited<ReturnType<typeof resolveDeliveryTarget>>,
+): Error | undefined {
+  if (resolved.error) {
+    return resolved.error;
+  }
+  if (!resolved.to) {
+    return new Error("cron delivery target is missing");
+  }
+  return undefined;
+}
+
 export type RunCronAgentTurnResult = {
   status: "ok" | "error" | "skipped";
   summary?: string;
@@ -428,6 +450,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const firstText = payloads[0]?.text ?? "";
   const summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   const outputText = pickLastNonEmptyTextFromPayloads(payloads);
+  const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
@@ -444,6 +467,19 @@ export async function runCronIsolatedAgentTurn(params: {
     );
 
   if (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery) {
+    const deliveryFailure = resolveCronDeliveryFailure(resolvedDelivery);
+    if (deliveryFailure) {
+      if (!deliveryBestEffort) {
+        return {
+          status: "error",
+          error: deliveryFailure.message,
+          summary,
+          outputText,
+        };
+      }
+      logWarn(`[cron:${params.job.id}] ${deliveryFailure.message}`);
+      return { status: "ok", summary, outputText };
+    }
     const requesterSessionKey = resolveAgentMainSessionKey({
       cfg: cfgWithAgentDefaults,
       agentId,
@@ -459,7 +495,7 @@ export async function runCronIsolatedAgentTurn(params: {
       : undefined;
     const outcome: SubagentRunOutcome = { status: "ok" };
     const taskLabel = params.job.name?.trim() || "cron job";
-    await runSubagentAnnounceFlow({
+    const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: agentSessionKey,
       childRunId: cronSession.sessionEntry.sessionId,
       requesterSessionKey,
@@ -473,6 +509,14 @@ export async function runCronIsolatedAgentTurn(params: {
       label: `Cron: ${taskLabel}`,
       outcome,
     });
+    if (!didAnnounce && !deliveryBestEffort) {
+      return {
+        status: "error",
+        error: "cron announce delivery failed",
+        summary,
+        outputText,
+      };
+    }
   }
 
   return { status: "ok", summary, outputText };

@@ -19,8 +19,14 @@ describe("normalizeCronJobCreate", () => {
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload.channel).toBe("telegram");
+    expect(payload.channel).toBeUndefined();
+    expect(payload.deliver).toBeUndefined();
     expect("provider" in payload).toBe(false);
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.mode).toBe("announce");
+    expect(delivery.channel).toBe("telegram");
+    expect(delivery.to).toBe("7200373102");
   });
 
   it("trims agentId and drops null", () => {
@@ -72,7 +78,13 @@ describe("normalizeCronJobCreate", () => {
     }) as unknown as Record<string, unknown>;
 
     const payload = normalized.payload as Record<string, unknown>;
-    expect(payload.channel).toBe("telegram");
+    expect(payload.channel).toBeUndefined();
+    expect(payload.deliver).toBeUndefined();
+
+    const delivery = normalized.delivery as Record<string, unknown>;
+    expect(delivery.mode).toBe("announce");
+    expect(delivery.channel).toBe("telegram");
+    expect(delivery.to).toBe("7200373102");
   });
 
   it("coerces ISO schedule.at to normalized ISO (UTC)", () => {

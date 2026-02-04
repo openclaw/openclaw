@@ -158,6 +158,9 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
   }
+  if (job.sessionTarget === "main" && job.delivery) {
+    job.delivery = undefined;
+  }
   if (patch.state) {
     job.state = { ...job.state, ...patch.state };
   }
@@ -250,7 +253,7 @@ function mergeCronDelivery(
   };
 
   if (typeof patch.mode === "string") {
-    next.mode = patch.mode === "deliver" ? "announce" : patch.mode;
+    next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
   }
   if ("channel" in patch) {
     const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";

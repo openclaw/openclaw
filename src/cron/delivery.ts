@@ -48,7 +48,7 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   );
   const deliveryTo = normalizeTo((delivery as { to?: unknown } | undefined)?.to);
 
-  const channel = (deliveryChannel ?? payloadChannel ?? "last") as CronMessageChannel;
+  const channel = deliveryChannel ?? payloadChannel ?? "last";
   const to = deliveryTo ?? payloadTo;
   if (hasDelivery) {
     const resolvedMode = mode ?? "none";
