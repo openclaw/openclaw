@@ -90,8 +90,8 @@ Cron jobs run at **exact times** and can run in isolated sessions without affect
 - **Exact timing**: 5-field cron expressions with timezone support.
 - **Session isolation**: Runs in `cron:<jobId>` without polluting main history.
 - **Model overrides**: Use a cheaper or more powerful model per job.
-- **Delivery control**: Isolated jobs default to `announce` (summary); choose `deliver` (full output) or `none` as needed. Legacy jobs still post a summary to main.
-- **Immediate delivery**: Announce/deliver modes post directly without waiting for heartbeat.
+- **Delivery control**: Isolated jobs default to `announce` (summary); choose `none` as needed.
+- **Immediate delivery**: Announce mode posts directly without waiting for heartbeat.
 - **No agent context needed**: Runs even if main session is idle or compacted.
 - **One-shot support**: `--at` for precise future timestamps.
 
@@ -246,7 +246,7 @@ Use `--session isolated` when you want:
 
 - A clean slate without prior context
 - Different model or thinking settings
-- Announce summaries or deliver full output directly to a channel
+- Announce summaries directly to a channel
 - History that doesn't clutter main session
 
 ```bash

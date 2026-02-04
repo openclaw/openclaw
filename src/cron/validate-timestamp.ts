@@ -1,4 +1,5 @@
 import type { CronSchedule } from "./types.js";
+import { parseAbsoluteTimeMs } from "./parse.js";
 
 const ONE_MINUTE_MS = 60 * 1000;
 const TEN_YEARS_MS = 10 * 365.25 * 24 * 60 * 60 * 1000;
@@ -15,7 +16,7 @@ export type TimestampValidationSuccess = {
 export type TimestampValidationResult = TimestampValidationSuccess | TimestampValidationError;
 
 /**
- * Validates atMs timestamps in cron schedules.
+ * Validates at timestamps in cron schedules.
  * Rejects timestamps that are:
  * - More than 1 minute in the past
  * - More than 10 years in the future
@@ -28,12 +29,13 @@ export function validateScheduleTimestamp(
     return { ok: true };
   }
 
-  const atMs = schedule.atMs;
+  const atRaw = typeof schedule.at === "string" ? schedule.at.trim() : "";
+  const atMs = atRaw ? parseAbsoluteTimeMs(atRaw) : null;
 
-  if (typeof atMs !== "number" || !Number.isFinite(atMs)) {
+  if (atMs === null || !Number.isFinite(atMs)) {
     return {
       ok: false,
-      message: `Invalid atMs: must be a finite number (got ${String(atMs)})`,
+      message: `Invalid schedule.at: expected ISO-8601 timestamp (got ${String(schedule.at)})`,
     };
   }
 
@@ -46,7 +48,7 @@ export function validateScheduleTimestamp(
     const minutesAgo = Math.floor(-diffMs / ONE_MINUTE_MS);
     return {
       ok: false,
-      message: `atMs is in the past: ${atDate} (${minutesAgo} minutes ago). Current time: ${nowDate}`,
+      message: `schedule.at is in the past: ${atDate} (${minutesAgo} minutes ago). Current time: ${nowDate}`,
     };
   }
 
@@ -56,7 +58,7 @@ export function validateScheduleTimestamp(
     const yearsAhead = Math.floor(diffMs / (365.25 * 24 * 60 * 60 * 1000));
     return {
       ok: false,
-      message: `atMs is too far in the future: ${atDate} (${yearsAhead} years ahead). Maximum allowed: 10 years`,
+      message: `schedule.at is too far in the future: ${atDate} (${yearsAhead} years ahead). Maximum allowed: 10 years`,
     };
   }
 

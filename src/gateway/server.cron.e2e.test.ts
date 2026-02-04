@@ -89,7 +89,7 @@ describe("gateway server cron", () => {
       const routeRes = await rpcReq(ws, "cron.add", {
         name: "route test",
         enabled: true,
-        schedule: { kind: "at", atMs: routeAtMs },
+        schedule: { kind: "at", at: new Date(routeAtMs).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "cron route check" },
@@ -108,7 +108,7 @@ describe("gateway server cron", () => {
       const wrappedRes = await rpcReq(ws, "cron.add", {
         data: {
           name: "wrapped",
-          schedule: { atMs: wrappedAtMs },
+          schedule: { at: new Date(wrappedAtMs).toISOString() },
           payload: { kind: "systemEvent", text: "hello" },
         },
       });
@@ -137,7 +137,7 @@ describe("gateway server cron", () => {
       const updateRes = await rpcReq(ws, "cron.update", {
         id: patchJobId,
         patch: {
-          schedule: { atMs },
+          schedule: { at: new Date(atMs).toISOString() },
           payload: { kind: "systemEvent", text: "updated" },
         },
       });
@@ -224,7 +224,7 @@ describe("gateway server cron", () => {
       const jobIdUpdateRes = await rpcReq(ws, "cron.update", {
         jobId,
         patch: {
-          schedule: { atMs: Date.now() + 2_000 },
+          schedule: { at: new Date(Date.now() + 2_000).toISOString() },
           payload: { kind: "systemEvent", text: "updated" },
         },
       });
@@ -282,7 +282,7 @@ describe("gateway server cron", () => {
       const addRes = await rpcReq(ws, "cron.add", {
         name: "log test",
         enabled: true,
-        schedule: { kind: "at", atMs },
+        schedule: { kind: "at", at: new Date(atMs).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "hello" },
@@ -331,7 +331,7 @@ describe("gateway server cron", () => {
       const autoRes = await rpcReq(ws, "cron.add", {
         name: "auto run test",
         enabled: true,
-        schedule: { kind: "at", atMs: Date.now() - 10 },
+        schedule: { kind: "at", at: new Date(Date.now() - 10).toISOString() },
         sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "auto" },

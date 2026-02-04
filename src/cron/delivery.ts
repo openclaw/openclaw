@@ -4,10 +4,8 @@ export type CronDeliveryPlan = {
   mode: CronDeliveryMode;
   channel: CronMessageChannel;
   to?: string;
-  bestEffort: boolean;
   source: "delivery" | "payload";
   requested: boolean;
-  legacyMode?: "explicit" | "auto" | "off";
 };
 
 function normalizeChannel(value: unknown): CronMessageChannel | undefined {
@@ -35,19 +33,20 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const hasDelivery = delivery && typeof delivery === "object";
   const rawMode = hasDelivery ? (delivery as { mode?: unknown }).mode : undefined;
   const mode =
-    rawMode === "none" || rawMode === "announce" || rawMode === "deliver" ? rawMode : undefined;
+    rawMode === "announce"
+      ? "announce"
+      : rawMode === "none"
+        ? "none"
+        : rawMode === "deliver"
+          ? "announce"
+          : undefined;
 
   const payloadChannel = normalizeChannel(payload?.channel);
   const payloadTo = normalizeTo(payload?.to);
-  const payloadBestEffort = payload?.bestEffortDeliver === true;
-
   const deliveryChannel = normalizeChannel(
     (delivery as { channel?: unknown } | undefined)?.channel,
   );
   const deliveryTo = normalizeTo((delivery as { to?: unknown } | undefined)?.to);
-  const deliveryBestEffortRaw = (delivery as { bestEffort?: unknown } | undefined)?.bestEffort;
-  const deliveryBestEffort =
-    typeof deliveryBestEffortRaw === "boolean" ? deliveryBestEffortRaw : undefined;
 
   const channel = (deliveryChannel ?? payloadChannel ?? "last") as CronMessageChannel;
   const to = deliveryTo ?? payloadTo;
@@ -57,9 +56,8 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
       mode: resolvedMode,
       channel,
       to,
-      bestEffort: deliveryBestEffort ?? false,
       source: "delivery",
-      requested: resolvedMode !== "none",
+      requested: resolvedMode === "announce",
     };
   }
 
@@ -69,12 +67,10 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const requested = legacyMode === "explicit" || (legacyMode === "auto" && hasExplicitTarget);
 
   return {
-    mode: requested ? "deliver" : "none",
+    mode: requested ? "announce" : "none",
     channel,
     to,
-    bestEffort: payloadBestEffort,
     source: "payload",
     requested,
-    legacyMode,
   };
 }

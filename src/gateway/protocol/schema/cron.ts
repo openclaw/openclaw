@@ -5,7 +5,7 @@ export const CronScheduleSchema = Type.Union([
   Type.Object(
     {
       kind: Type.Literal("at"),
-      atMs: Type.Integer({ minimum: 0 }),
+      at: NonEmptyString,
     },
     { additionalProperties: false },
   ),
@@ -77,7 +77,7 @@ export const CronPayloadPatchSchema = Type.Union([
 
 export const CronDeliverySchema = Type.Object(
   {
-    mode: Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("deliver")]),
+    mode: Type.Union([Type.Literal("none"), Type.Literal("announce")]),
     channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
     to: Type.Optional(Type.String()),
     bestEffort: Type.Optional(Type.Boolean()),
@@ -87,21 +87,10 @@ export const CronDeliverySchema = Type.Object(
 
 export const CronDeliveryPatchSchema = Type.Object(
   {
-    mode: Type.Optional(
-      Type.Union([Type.Literal("none"), Type.Literal("announce"), Type.Literal("deliver")]),
-    ),
+    mode: Type.Optional(Type.Union([Type.Literal("none"), Type.Literal("announce")])),
     channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
     to: Type.Optional(Type.String()),
     bestEffort: Type.Optional(Type.Boolean()),
-  },
-  { additionalProperties: false },
-);
-
-export const CronIsolationSchema = Type.Object(
-  {
-    postToMainPrefix: Type.Optional(Type.String()),
-    postToMainMode: Type.Optional(Type.Union([Type.Literal("summary"), Type.Literal("full")])),
-    postToMainMaxChars: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );
@@ -135,7 +124,6 @@ export const CronJobSchema = Type.Object(
     wakeMode: Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]),
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
-    isolation: Type.Optional(CronIsolationSchema),
     state: CronJobStateSchema,
   },
   { additionalProperties: false },
@@ -162,7 +150,6 @@ export const CronAddParamsSchema = Type.Object(
     wakeMode: Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]),
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
-    isolation: Type.Optional(CronIsolationSchema),
   },
   { additionalProperties: false },
 );
@@ -179,7 +166,6 @@ export const CronJobPatchSchema = Type.Object(
     wakeMode: Type.Optional(Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")])),
     payload: Type.Optional(CronPayloadPatchSchema),
     delivery: Type.Optional(CronDeliveryPatchSchema),
-    isolation: Type.Optional(CronIsolationSchema),
     state: Type.Optional(Type.Partial(CronJobStateSchema)),
   },
   { additionalProperties: false },

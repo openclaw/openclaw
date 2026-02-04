@@ -55,7 +55,7 @@ describe("CronService", () => {
     await cronA.add({
       name: "shared store job",
       enabled: true,
-      schedule: { kind: "at", atMs },
+      schedule: { kind: "at", at: new Date(atMs).toISOString() },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "hello" },

@@ -174,15 +174,14 @@ JOB SCHEMA (for add action):
   "name": "string (optional)",
   "schedule": { ... },      // Required: when to run
   "payload": { ... },       // Required: what to execute
-  "delivery": { ... },      // Optional: announce/deliver output (isolated only)
+  "delivery": { ... },      // Optional: announce summary (isolated only)
   "sessionTarget": "main" | "isolated",  // Required
   "enabled": true | false   // Optional, default true
 }
 
 SCHEDULE TYPES (schedule.kind):
 - "at": One-shot at absolute time
-  { "kind": "at", "at": "<ISO-8601 timestamp>" }     // preferred
-  { "kind": "at", "atMs": <unix-ms-timestamp> }      // also accepted
+  { "kind": "at", "at": "<ISO-8601 timestamp>" }
 - "every": Recurring interval
   { "kind": "every", "everyMs": <interval-ms>, "anchorMs": <optional-start-ms> }
 - "cron": Cron expression
@@ -197,11 +196,9 @@ PAYLOAD TYPES (payload.kind):
   { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional> }
 
 DELIVERY (isolated-only, top-level):
-  { "mode": "none|announce|deliver", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
+  { "mode": "none|announce", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
   - Default for isolated agentTurn jobs (when delivery omitted): "announce"
-
-LEGACY DELIVERY (payload, only when delivery is omitted):
-  { "deliver": <optional-bool>, "channel": "<optional>", "to": "<optional>", "bestEffortDeliver": <optional-bool> }
+  - If the task needs to send to a specific chat/recipient, set delivery.channel/to here; do not call messaging tools inside the run.
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"

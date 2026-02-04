@@ -55,7 +55,7 @@ export function buildCronSchedule(form: CronFormState) {
     if (!Number.isFinite(ms)) {
       throw new Error("Invalid run time.");
     }
-    return { kind: "at" as const, atMs: ms };
+    return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
     const amount = toNumber(form.everyAmount, 0);
@@ -109,19 +109,13 @@ export async function addCronJob(state: CronState) {
     const delivery =
       state.cronForm.sessionTarget === "isolated" &&
       state.cronForm.payloadKind === "agentTurn" &&
-      state.cronForm.deliveryMode !== "legacy"
+      state.cronForm.deliveryMode
         ? {
-            mode:
-              state.cronForm.deliveryMode === "announce"
-                ? "announce"
-                : state.cronForm.deliveryMode === "deliver"
-                  ? "deliver"
-                  : "none",
+            mode: state.cronForm.deliveryMode === "announce" ? "announce" : "none",
             channel: state.cronForm.deliveryChannel.trim() || "last",
             to: state.cronForm.deliveryTo.trim() || undefined,
           }
         : undefined;
-    const legacyPrefix = state.cronForm.postToMainPrefix.trim() || "Cron";
     const agentId = state.cronForm.agentId.trim();
     const job = {
       name: state.cronForm.name.trim(),
@@ -133,10 +127,6 @@ export async function addCronJob(state: CronState) {
       wakeMode: state.cronForm.wakeMode,
       payload,
       delivery,
-      isolation:
-        state.cronForm.sessionTarget === "isolated" && state.cronForm.deliveryMode === "legacy"
-          ? { postToMainPrefix: legacyPrefix }
-          : undefined,
     };
     if (!job.name) {
       throw new Error("Name required.");

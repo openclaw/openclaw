@@ -47,7 +47,11 @@ Docs: https://docs.openclaw.ai
 - Web UI: add Agents dashboard for managing agent files, tools, skills, models, channels, and cron jobs.
 - Cron: add announce delivery mode for isolated jobs (CLI + Control UI) and delivery mode config.
 - Cron: default isolated jobs to announce delivery; accept ISO 8601 `schedule.at` in tool inputs.
+- Cron: hard-migrate isolated jobs to announce/none delivery; drop legacy post-to-main/payload delivery fields and `atMs` inputs.
 - Cron: delete one-shot jobs after success by default; add `--keep-after-run` for CLI.
+- Cron: suppress messaging tools during announce delivery so summaries post consistently.
+- Cron: avoid duplicate deliveries when isolated runs send messages directly.
+- Subagents: discourage direct messaging tool use unless a specific external recipient is requested.
 - Memory: implement the opt-in QMD backend for workspace memory. (#3160) Thanks @vignesh07.
 - Security: add healthcheck skill and bootstrap audit guidance. (#7641) Thanks @Takhoffman.
 - Config: allow setting a default subagent thinking level via `agents.defaults.subagents.thinking` (and per-agent `agents.list[].subagents.thinking`). (#7372) Thanks @tyler6204.

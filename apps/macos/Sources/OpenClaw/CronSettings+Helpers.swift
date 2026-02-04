@@ -17,9 +17,11 @@ extension CronSettings {
 
     func scheduleSummary(_ schedule: CronSchedule) -> String {
         switch schedule {
-        case let .at(atMs):
-            let date = Date(timeIntervalSince1970: TimeInterval(atMs) / 1000)
-            return "at \(date.formatted(date: .abbreviated, time: .standard))"
+        case let .at(at):
+            if let date = CronSchedule.parseAtDate(at) {
+                return "at \(date.formatted(date: .abbreviated, time: .standard))"
+            }
+            return "at \(at)"
         case let .every(everyMs, _):
             return "every \(self.formatDuration(ms: everyMs))"
         case let .cron(expr, tz):
