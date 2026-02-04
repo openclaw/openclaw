@@ -220,6 +220,9 @@ async function loadWebMediaInternal(
   // Expand tilde paths to absolute paths (e.g., ~/Downloads/photo.jpg)
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
+  } else if (mediaUrl.startsWith("./") || mediaUrl.startsWith("../")) {
+    // Resolve relative paths against current working directory (workspace)
+    mediaUrl = path.resolve(mediaUrl);
   }
 
   // Local path

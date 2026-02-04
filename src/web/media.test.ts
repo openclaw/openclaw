@@ -291,4 +291,79 @@ describe("web media loading", () => {
     expect(result.contentType).toBe("image/jpeg");
     expect(result.buffer.length).toBeLessThanOrEqual(cap);
   });
+
+  it("resolves relative paths starting with ./ to absolute paths", async () => {
+    const buffer = await sharp({
+      create: {
+        width: 100,
+        height: 100,
+        channels: 3,
+        background: "#0000ff",
+      },
+    })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+
+    // Create a subdirectory and file with relative path
+    const subDir = path.join(os.tmpdir(), `openclaw-media-test-${Date.now()}`);
+    await fs.mkdir(subDir, { recursive: true });
+    const fileName = "test-image.jpg";
+    const filePath = path.join(subDir, fileName);
+    await fs.writeFile(filePath, buffer);
+
+    // Change to the parent directory to test relative path resolution
+    const originalCwd = process.cwd();
+    process.chdir(subDir);
+
+    try {
+      // Use relative path starting with ./
+      const relativePath = `./${fileName}`;
+      const result = await loadWebMedia(relativePath, 1024 * 1024);
+
+      expect(result.kind).toBe("image");
+      expect(result.contentType).toBe("image/jpeg");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    } finally {
+      process.chdir(originalCwd);
+      await fs.rm(subDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves relative paths starting with ../ to absolute paths", async () => {
+    const buffer = await sharp({
+      create: {
+        width: 100,
+        height: 100,
+        channels: 3,
+        background: "#00ff00",
+      },
+    })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+
+    // Create nested directories
+    const baseDir = path.join(os.tmpdir(), `openclaw-media-test-${Date.now()}`);
+    const subDir = path.join(baseDir, "subdir");
+    await fs.mkdir(subDir, { recursive: true });
+    const fileName = "test-image.jpg";
+    const filePath = path.join(baseDir, fileName);
+    await fs.writeFile(filePath, buffer);
+
+    // Change to subdirectory to test ../ relative path
+    const originalCwd = process.cwd();
+    process.chdir(subDir);
+
+    try {
+      // Use relative path starting with ../
+      const relativePath = `../${fileName}`;
+      const result = await loadWebMedia(relativePath, 1024 * 1024);
+
+      expect(result.kind).toBe("image");
+      expect(result.contentType).toBe("image/jpeg");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    } finally {
+      process.chdir(originalCwd);
+      await fs.rm(baseDir, { recursive: true, force: true });
+    }
+  });
 });
