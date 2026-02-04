@@ -1,0 +1,14 @@
+{
+  "name": "subagent-spawner",
+  "version": "1.0.0",
+  "description": "Automatically spawn channel agents on gateway startup",
+  "main": "handler.js",
+  "openclaw": {
+    "hooks": [
+      {
+        "event": "gateway:startup",
+        "handler": "onGatewayStartup"
+      }
+    ]
+  }
+}
