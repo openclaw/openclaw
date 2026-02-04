@@ -3,6 +3,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { PortListener, PortListenerKind, PortUsage, PortUsageStatus } from "./ports-types.js";
 import { danger, info, shouldLogVerbose, warn } from "../globals.js";
 import { logDebug } from "../logger.js";
+import { truncateForLog } from "../logging/truncate.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { inspectPortUsage } from "./ports-inspect.js";
@@ -83,10 +84,10 @@ export async function handlePortError(
     const stdout = (err as { stdout?: string })?.stdout;
     const stderr = (err as { stderr?: string })?.stderr;
     if (stdout?.trim()) {
-      logDebug(`stdout: ${stdout.trim()}`);
+      logDebug(`stdout: ${truncateForLog(stdout.trim())}`);
     }
     if (stderr?.trim()) {
-      logDebug(`stderr: ${stderr.trim()}`);
+      logDebug(`stderr: ${truncateForLog(stderr.trim())}`);
     }
   }
   return runtime.exit(1);

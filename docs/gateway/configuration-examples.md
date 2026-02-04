@@ -157,6 +157,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
     resetByChannel: {
       discord: { mode: "idle", idleMinutes: 10080 },
+      slack: { mode: "idle", idleMinutes: 120 },
     },
     resetTriggers: ["/new", "/reset"],
     store: "~/.openclaw/agents/default/sessions/sessions.json",

@@ -6,6 +6,7 @@ import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { truncateForLog } from "../logging/truncate.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
@@ -229,18 +230,18 @@ export async function runCliAgent(params: {
       const stderr = result.stderr.trim();
       if (logOutputText) {
         if (stdout) {
-          log.info(`cli stdout:\n${stdout}`);
+          log.info(`cli stdout:\n${truncateForLog(stdout)}`);
         }
         if (stderr) {
-          log.info(`cli stderr:\n${stderr}`);
+          log.info(`cli stderr:\n${truncateForLog(stderr)}`);
         }
       }
       if (shouldLogVerbose()) {
         if (stdout) {
-          log.debug(`cli stdout:\n${stdout}`);
+          log.debug(`cli stdout:\n${truncateForLog(stdout)}`);
         }
         if (stderr) {
-          log.debug(`cli stderr:\n${stderr}`);
+          log.debug(`cli stderr:\n${truncateForLog(stderr)}`);
         }
       }
 

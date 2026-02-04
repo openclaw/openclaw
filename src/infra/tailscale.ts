@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { formatCliCommand } from "../cli/command-format.js";
 import { promptYesNo } from "../cli/prompt.js";
 import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
+import { truncateForLog } from "../logging/truncate.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
@@ -338,7 +339,7 @@ export async function ensureFunnel(
       },
     );
     if (stdout.trim()) {
-      console.log(stdout.trim());
+      console.log(truncateForLog(stdout.trim()));
     }
   } catch (err) {
     const errOutput = err as { stdout?: unknown; stderr?: unknown };
@@ -373,10 +374,10 @@ export async function ensureFunnel(
     if (shouldLogVerbose()) {
       const rich = isRich();
       if (stdout.trim()) {
-        runtime.error(colorize(rich, theme.muted, `stdout: ${stdout.trim()}`));
+        runtime.error(colorize(rich, theme.muted, `stdout: ${truncateForLog(stdout.trim())}`));
       }
       if (stderr.trim()) {
-        runtime.error(colorize(rich, theme.muted, `stderr: ${stderr.trim()}`));
+        runtime.error(colorize(rich, theme.muted, `stderr: ${truncateForLog(stderr.trim())}`));
       }
       runtime.error(err as Error);
     }

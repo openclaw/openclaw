@@ -30,6 +30,7 @@ import type {
 } from "./tool-bridge.types.js";
 import { logDebug, logError } from "../../logger.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { truncateForLog } from "../../logging/truncate.js";
 import { normalizeToolName } from "../tool-policy.js";
 
 // ---------------------------------------------------------------------------
@@ -428,7 +429,13 @@ export function wrapToolHandler(tool: AnyAgentTool, abortSignal?: AbortSignal): 
     const toolCallId = `mcp-bridge-${normalizedName}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     // Debug: log received args for troubleshooting parameter issues
-    logDebug(`[tool-bridge] ${normalizedName} received args: ${JSON.stringify(rawArgs)}`);
+    try {
+      const argsJson = JSON.stringify(rawArgs);
+      const redacted = redactSensitiveText(argsJson);
+      logDebug(`[tool-bridge] ${normalizedName} received args: ${truncateForLog(redacted)}`);
+    } catch {
+      logDebug(`[tool-bridge] ${normalizedName} received args: (unserializable)`);
+    }
 
     // Use the abort signal from extra if available, falling back to the shared one
     const effectiveSignal = extra?.signal ?? abortSignal;
@@ -481,7 +488,7 @@ export function wrapToolHandler(tool: AnyAgentTool, abortSignal?: AbortSignal): 
       const debugDetail =
         err instanceof Error ? (err as unknown as Record<string, unknown>)._debugDetail : undefined;
       if (typeof debugDetail === "string") {
-        logDebug(`[tool-bridge] ${normalizedName} debug detail:\n${debugDetail}`);
+        logDebug(`[tool-bridge] ${normalizedName} debug detail:\n${truncateForLog(debugDetail)}`);
       }
 
       if (err instanceof Error && err.stack) {

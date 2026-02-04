@@ -2739,6 +2739,9 @@ Controls session scoping, reset policy, reset triggers, and where the session st
       dm: { mode: "idle", idleMinutes: 240 },
       group: { mode: "idle", idleMinutes: 120 },
     },
+    resetByChannel: {
+      slack: { mode: "idle", idleMinutes: 120 },
+    },
     resetTriggers: ["/new", "/reset"],
     // Default is already per-agent under ~/.openclaw/agents/<agentId>/sessions/sessions.json
     // You can override with {agentId} templating:
@@ -2774,6 +2777,7 @@ Fields:
   - `idleMinutes`: sliding idle window in minutes. When daily + idle are both configured, whichever expires first wins.
 - `resetByType`: per-session overrides for `dm`, `group`, and `thread`.
   - If you only set legacy `session.idleMinutes` without any `reset`/`resetByType`, OpenClaw stays in idle-only mode for backward compatibility.
+- `resetByChannel`: per-channel overrides (applies to all session types for that channel, takes precedence over `reset`/`resetByType`). Default: Slack sessions reset after 120 minutes idle unless overridden.
 - `heartbeatIdleMinutes`: optional idle override for heartbeat checks (daily reset still applies when enabled).
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.

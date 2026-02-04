@@ -3,6 +3,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { logDebug, logError } from "../logger.js";
+import { truncateForLog } from "../logging/truncate.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 
 const execFileAsync = promisify(execFile);
@@ -47,10 +48,10 @@ export async function runExec(
     const { stdout, stderr } = await execFileAsync(resolveCommand(command), args, options);
     if (shouldLogVerbose()) {
       if (stdout.trim()) {
-        logDebug(stdout.trim());
+        logDebug(truncateForLog(stdout.trim()));
       }
       if (stderr.trim()) {
-        logError(stderr.trim());
+        logError(truncateForLog(stderr.trim()));
       }
     }
     return { stdout, stderr };
