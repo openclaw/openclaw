@@ -661,7 +661,8 @@ export function listSessionsFromStore(params: {
         responseUsage: entry?.responseUsage,
         modelProvider,
         model,
-        contextTokens: entry?.contextTokens,
+        // Prefer fresh catalog value over stale cached value (fixes #8937)
+        contextTokens: lookupContextTokens(model) ?? entry?.contextTokens,
         deliveryContext: deliveryFields.deliveryContext,
         lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
         lastTo: deliveryFields.lastTo ?? entry?.lastTo,
