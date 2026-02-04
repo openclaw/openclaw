@@ -1,13 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { routeReply } from "../auto-reply/reply/route-reply.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { loadCombinedSessionStoreForGateway } from "../gateway/session-utils.js";
 import { type ExecHost, maxAsk, minSecurity, resolveSafeBins } from "../infra/exec-approvals.js";
 import { getTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { runRubberBandCheck } from "../security/rubberband.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
-import { logInfo } from "../logger.js";
+import { logWarn, logInfo } from "../logger.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
@@ -26,6 +30,7 @@ import {
   resolveApprovalRunningNoticeMs,
   runExecProcess,
   execSchema,
+  emitExecSystemEvent,
   validateHostEnv,
 } from "./bash-tools.exec-runtime.js";
 import type {
@@ -49,6 +54,7 @@ export type {
   ExecElevatedDefaults,
   ExecToolDefaults,
   ExecToolDetails,
+  RubberBandDefaults,
 } from "./bash-tools.exec-types.js";
 
 function extractScriptTargetFromCommand(
@@ -147,6 +153,33 @@ async function validateScriptFileForShellBleed(params: {
   }
 }
 
+async function notifyUserChannel(
+  text: string,
+  opts: { sessionKey?: string; cfg: Parameters<typeof routeReply>[0]["cfg"] },
+) {
+  const sessionKey = opts.sessionKey?.trim();
+  if (!sessionKey) {
+    return;
+  }
+  try {
+    const { store } = loadCombinedSessionStoreForGateway(opts.cfg);
+    const session = store[sessionKey];
+    if (!session?.lastChannel || !session?.lastTo) {
+      return;
+    }
+    await routeReply({
+      payload: { text },
+      channel: session.lastChannel,
+      to: session.lastTo,
+      sessionKey,
+      accountId: session.lastAccountId,
+      cfg: opts.cfg,
+    });
+  } catch (err) {
+    logWarn(`rubberband: failed to notify channel: ${String(err)}`);
+  }
+}
+
 export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -169,6 +202,35 @@ export function createExecTool(
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
+  // RubberBand config from defaults (only include defined values)
+  const rbConfig: Partial<{
+    enabled: boolean;
+    mode: "block" | "alert" | "log" | "off" | "shadow";
+    thresholds: { alert: number; block: number };
+    allowedDestinations: string[];
+    notifyChannel: boolean;
+  }> = {};
+  if (defaults?.rubberband) {
+    if (defaults.rubberband.enabled !== undefined) {
+      rbConfig.enabled = defaults.rubberband.enabled;
+    }
+    if (defaults.rubberband.mode !== undefined) {
+      rbConfig.mode = defaults.rubberband.mode;
+    }
+    if (defaults.rubberband.thresholds) {
+      rbConfig.thresholds = {
+        alert: defaults.rubberband.thresholds.alert ?? 40,
+        block: defaults.rubberband.thresholds.block ?? 60,
+      };
+    }
+    if (defaults.rubberband.allowedDestinations) {
+      rbConfig.allowedDestinations = defaults.rubberband.allowedDestinations;
+    }
+    if (defaults.rubberband.notifyChannel !== undefined) {
+      rbConfig.notifyChannel = defaults.rubberband.notifyChannel;
+    }
+  }
+  const rbNotifyCfg = defaults?.cfg;
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
   const agentId =
@@ -377,6 +439,9 @@ export function createExecTool(
           warnings,
           notifySessionKey,
           trustedSafeBinDirs,
+          rbConfig,
+          rbNotifyCfg,
+          rbNotifyUserChannel: notifyUserChannel,
         });
       }
 
@@ -400,11 +465,29 @@ export function createExecTool(
           maxOutput,
           pendingMaxOutput,
           trustedSafeBinDirs,
+          rbConfig,
+          rbNotifyCfg,
+          rbNotifyUserChannel: notifyUserChannel,
         });
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;
         }
         execCommandOverride = gatewayResult.execCommandOverride;
+      }
+
+      // NOTE: RubberBand check moved earlier in the gateway and node paths to integrate with approval flow.
+      // For sandbox (and gateway with bypassApprovals), RubberBand runs here.
+      // Sandbox ALERT only warns (no approval flow) - sandbox isolation provides defense-in-depth.
+      if (host === "sandbox" || (host === "gateway" && bypassApprovals)) {
+        await runRubberBandCheck({
+          command: params.command,
+          rbConfig,
+          warnings,
+          notifySessionKey,
+          rbNotifyCfg,
+          emitExecSystemEvent,
+          notifyUserChannel,
+        });
       }
 
       const effectiveTimeout =

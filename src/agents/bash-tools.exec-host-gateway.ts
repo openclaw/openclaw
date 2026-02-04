@@ -13,6 +13,7 @@ import {
   requiresExecApproval,
   resolveExecApprovals,
 } from "../infra/exec-approvals.js";
+import { runRubberBandCheck } from "../security/rubberband.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import { requestExecApprovalDecision } from "./bash-tools.exec-approval-request.js";
 import {
@@ -23,7 +24,7 @@ import {
   normalizeNotifyOutput,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails, RubberBandDefaults } from "./bash-tools.exec-types.js";
 
 export type ProcessGatewayAllowlistParams = {
   command: string;
@@ -44,6 +45,9 @@ export type ProcessGatewayAllowlistParams = {
   maxOutput: number;
   pendingMaxOutput: number;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  rbConfig?: Partial<RubberBandDefaults>;
+  rbNotifyCfg?: Parameters<typeof runRubberBandCheck>[0]["rbNotifyCfg"];
+  rbNotifyUserChannel?: Parameters<typeof runRubberBandCheck>[0]["notifyUserChannel"];
 };
 
 export type ProcessGatewayAllowlistResult = {
@@ -64,6 +68,19 @@ export async function processGatewayAllowlist(
   if (hostSecurity === "deny") {
     throw new Error("exec denied: host=gateway security=deny");
   }
+
+  // === RUBBERBAND CHECK (before approval decision) ===
+  await runRubberBandCheck({
+    command: params.command,
+    rbConfig: params.rbConfig,
+    warnings: params.warnings,
+    notifySessionKey: params.notifySessionKey,
+    rbNotifyCfg: params.rbNotifyCfg,
+    emitExecSystemEvent,
+    notifyUserChannel: params.rbNotifyUserChannel ?? (async () => {}),
+  });
+  // === END RUBBERBAND ===
+
   const allowlistEval = evaluateShellAllowlist({
     command: params.command,
     allowlist: approvals.allowlist,
