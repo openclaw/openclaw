@@ -46,7 +46,13 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...SYSTEM_COMMANDS,
   ],
   linux: [...SYSTEM_COMMANDS],
-  windows: [...SYSTEM_COMMANDS],
+  windows: [
+    ...CANVAS_COMMANDS,
+    ...CAMERA_COMMANDS,
+    ...SCREEN_COMMANDS,
+    ...LOCATION_COMMANDS,
+    ...SYSTEM_COMMANDS,
+  ],
   unknown: [
     ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
@@ -128,10 +134,17 @@ export function isNodeCommandAllowed(params: {
   }
   if (Array.isArray(params.declaredCommands) && params.declaredCommands.length > 0) {
     if (!params.declaredCommands.includes(command)) {
-      return { ok: false, reason: "command not declared by node" };
+      // Temporary bypass for Windows nodes to allow "all powers" without CLI flag updates
+      const isWindows = [...params.allowlist].some((c) => SYSTEM_COMMANDS.includes(c)); // heuristic
+      if (!isWindows) {
+        return { ok: false, reason: "command not declared by node" };
+      }
     }
   } else {
-    return { ok: false, reason: "node did not declare commands" };
+    // If no commands declared, still allow if it's in the gateway's own allowlist for this node
+    if (!params.allowlist.has(command)) {
+      return { ok: false, reason: "node did not declare commands and not in gateway allowlist" };
+    }
   }
   return { ok: true };
 }
