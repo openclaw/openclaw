@@ -188,12 +188,15 @@ export async function executeJob(
     // Post a short summary back to the main session so the user sees
     // the cron result without opening the isolated session.
     const summaryText = res.summary?.trim();
-    if (summaryText) {
+    const deliveryMode = job.delivery?.mode ?? "announce";
+    if (summaryText && deliveryMode !== "none") {
       const prefix = "Cron";
       const label =
         res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
       state.deps.enqueueSystemEvent(label, { agentId: job.agentId });
-      state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+      if (job.wakeMode === "now") {
+        state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+      }
     }
 
     if (res.status === "ok") {
