@@ -149,6 +149,7 @@ export class IMessageRpcClient {
       params: params ?? {},
     };
     const line = `${JSON.stringify(payload)}\n`;
+    // Default timeout matches DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS from probe.ts
     const timeoutMs = opts?.timeoutMs ?? 10_000;
 
     const response = new Promise<T>((resolve, reject) => {

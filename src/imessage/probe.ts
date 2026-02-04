@@ -4,6 +4,9 @@ import { loadConfig } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { createIMessageRpcClient } from "./client.js";
 
+/** Default timeout for iMessage probe operations (10 seconds). */
+export const DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS = 10_000;
+
 export type IMessageProbe = {
   ok: boolean;
   error?: string | null;
@@ -24,13 +27,13 @@ type RpcSupportResult = {
 
 const rpcSupportCache = new Map<string, RpcSupportResult>();
 
-async function probeRpcSupport(cliPath: string): Promise<RpcSupportResult> {
+async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcSupportResult> {
   const cached = rpcSupportCache.get(cliPath);
   if (cached) {
     return cached;
   }
   try {
-    const result = await runCommandWithTimeout([cliPath, "rpc", "--help"], { timeoutMs: 2000 });
+    const result = await runCommandWithTimeout([cliPath, "rpc", "--help"], { timeoutMs });
     const combined = `${result.stdout}\n${result.stderr}`.trim();
     const normalized = combined.toLowerCase();
     if (normalized.includes("unknown command") && normalized.includes("rpc")) {
@@ -57,18 +60,24 @@ async function probeRpcSupport(cliPath: string): Promise<RpcSupportResult> {
 }
 
 export async function probeIMessage(
-  timeoutMs = 2000,
+  timeoutMs = DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS,
   opts: IMessageProbeOptions = {},
 ): Promise<IMessageProbe> {
   const cfg = opts.cliPath || opts.dbPath ? undefined : loadConfig();
   const cliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || cfg?.channels?.imessage?.dbPath?.trim();
+  // Read probeTimeoutMs from config if not explicitly provided
+  const effectiveTimeout =
+    timeoutMs !== DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS
+      ? timeoutMs
+      : cfg?.channels?.imessage?.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
+
   const detected = await detectBinary(cliPath);
   if (!detected) {
     return { ok: false, error: `imsg not found (${cliPath})` };
   }
 
-  const rpcSupport = await probeRpcSupport(cliPath);
+  const rpcSupport = await probeRpcSupport(cliPath, effectiveTimeout);
   if (!rpcSupport.supported) {
     return {
       ok: false,
@@ -83,7 +92,7 @@ export async function probeIMessage(
     runtime: opts.runtime,
   });
   try {
-    await client.request("chats.list", { limit: 1 }, { timeoutMs });
+    await client.request("chats.list", { limit: 1 }, { timeoutMs: effectiveTimeout });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: String(err) };
