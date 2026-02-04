@@ -4,6 +4,7 @@ export type HeartbeatEventPayload = {
   ts: number;
   status: "sent" | "ok-empty" | "ok-token" | "skipped" | "failed";
   to?: string;
+  accountId?: string;
   preview?: string;
   durationMs?: number;
   hasMedia?: boolean;
