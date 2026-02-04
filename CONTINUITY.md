@@ -1,53 +1,44 @@
 Goal (incl. success criteria):
 
-- Re-review updated spec + task specs for Claude Code-style hooks system in OpenClaw and deliver plan review verdict.
+- Re-review updated Claude-style hooks implementation files and deliver Carmack-level implementation review verdict for this changeset.
 
 Constraints/Assumptions:
 
 - Follow repo rules in `AGENTS.md` (docs linking, commit rules, no Carbon updates, etc.).
 - Maintain this ledger and update on state changes.
+- Must re-read listed updated files from disk; do not rely on prior review text.
 
 Key decisions:
 
-- Review outcome: SHIP — Stop hook now uses verified `activeSession.prompt()` inside runEmbeddedAttempt with max retries; epic/task alignment resolved.
+- None yet for this re-review.
 
 State:
 
-- Re-review completed; verdict ready to deliver.
+- Re-review complete; preparing report.
 
 Done:
 
 - Read continuity ledger at start of turn.
+- Re-read updated files for Claude-style hooks (config + types + tests + .flow).
+- Identified potential issues: feature-flag gating still validates claude config; hook input/output field names differ from spec.
 
 Now:
 
-- Deliver Carmack-level plan review verdict.
+- Draft implementation review findings and verdict.
 
 Next:
 
-- Deliver Carmack-level plan review verdict.
+- Deliver implementation review verdict with issues and suggestions.
 
 Open questions (UNCONFIRMED if needed):
 
-- How should `permission_mode` be sourced for hook input (no current field found in codebase)?
+- None.
 
 Working set (files/ids/commands):
 
-- `AGENTS.md`
-- `.flow/specs/fn-1-add-claude-code-style-hooks-system.md`
-- `.flow/tasks/fn-1-add-claude-code-style-hooks-system.*.md`
-- `src/plugins/hooks.ts`
-- `src/plugins/types.ts`
-- `src/hooks/internal-hooks.ts`
-- `src/config/zod-schema.hooks.ts`
+- `.flow/*` updated files
 - `src/config/types.hooks.ts`
-- `src/agents/pi-tools.before-tool-call.ts`
-- `src/agents/pi-embedded-subscribe.handlers.tools.ts`
-- `src/gateway/hooks.ts`
-- `src/agents/tools/sessions-spawn-tool.ts`
-- `src/agents/subagent-registry.ts`
-- `src/agents/pi-embedded-subscribe.ts`
-- `src/agents/pi-embedded-runner/compact.ts`
-- `src/auto-reply/reply/dispatch-from-config.ts`
-- `src/agents/pi-embedded-subscribe.handlers.lifecycle.ts`
+- `src/config/zod-schema.hooks.ts`
 - `src/config/zod-schema.ts`
+- `src/hooks/claude-style/*`
+- `CONTINUITY.md`

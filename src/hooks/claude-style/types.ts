@@ -48,7 +48,7 @@ export type ClaudeHookHandlerBase = {
 /**
  * Command handler - executes a shell command.
  * Command receives JSON via stdin, returns JSON via stdout.
- * Exit codes: 0 = continue, 2 = block/deny.
+ * Exit codes: 0 = allow, 2 = deny.
  */
 export type ClaudeHookCommandHandler = ClaudeHookHandlerBase & {
   type: "command";
@@ -118,10 +118,11 @@ export type ClaudeHookRule = {
 
 /**
  * Base input passed to all hooks via stdin (JSON).
+ * Field names match the Claude Code hook protocol.
  */
 export type ClaudeHookInputBase = {
   /** The event type that triggered this hook. */
-  event: ClaudeHookEvent;
+  hook_event_name: ClaudeHookEvent;
   /** Session identifier. */
   session_id?: string;
   /** Working directory. */
@@ -137,7 +138,7 @@ export type ClaudeHookInputBase = {
  * Input for PreToolUse hooks.
  */
 export type ClaudeHookPreToolUseInput = ClaudeHookInputBase & {
-  event: "PreToolUse";
+  hook_event_name: "PreToolUse";
   /** Name of the tool about to be called. */
   tool_name: string;
   /** Tool input parameters. */
@@ -148,7 +149,7 @@ export type ClaudeHookPreToolUseInput = ClaudeHookInputBase & {
  * Input for PostToolUse hooks.
  */
 export type ClaudeHookPostToolUseInput = ClaudeHookInputBase & {
-  event: "PostToolUse";
+  hook_event_name: "PostToolUse";
   /** Name of the tool that was called. */
   tool_name: string;
   /** Tool input parameters. */
@@ -161,20 +162,20 @@ export type ClaudeHookPostToolUseInput = ClaudeHookInputBase & {
  * Input for PostToolUseFailure hooks.
  */
 export type ClaudeHookPostToolUseFailureInput = ClaudeHookInputBase & {
-  event: "PostToolUseFailure";
+  hook_event_name: "PostToolUseFailure";
   /** Name of the tool that failed. */
   tool_name: string;
   /** Tool input parameters. */
   tool_input: Record<string, unknown>;
   /** Error message or details. */
-  error: string;
+  tool_error: string;
 };
 
 /**
  * Input for UserPromptSubmit hooks.
  */
 export type ClaudeHookUserPromptSubmitInput = ClaudeHookInputBase & {
-  event: "UserPromptSubmit";
+  hook_event_name: "UserPromptSubmit";
   /** The user's prompt text. */
   prompt: string;
   /** Channel the prompt came from. */
@@ -185,7 +186,7 @@ export type ClaudeHookUserPromptSubmitInput = ClaudeHookInputBase & {
  * Input for Stop hooks.
  */
 export type ClaudeHookStopInput = ClaudeHookInputBase & {
-  event: "Stop";
+  hook_event_name: "Stop";
   /** Reason for stopping. */
   reason?: string;
   /** Last response from the agent. */
@@ -196,7 +197,7 @@ export type ClaudeHookStopInput = ClaudeHookInputBase & {
  * Input for SubagentStart hooks.
  */
 export type ClaudeHookSubagentStartInput = ClaudeHookInputBase & {
-  event: "SubagentStart";
+  hook_event_name: "SubagentStart";
   /** Subagent identifier. */
   subagent_id: string;
   /** Type of subagent. */
@@ -207,18 +208,18 @@ export type ClaudeHookSubagentStartInput = ClaudeHookInputBase & {
  * Input for SubagentStop hooks.
  */
 export type ClaudeHookSubagentStopInput = ClaudeHookInputBase & {
-  event: "SubagentStop";
+  hook_event_name: "SubagentStop";
   /** Subagent identifier. */
   subagent_id: string;
   /** Subagent result or status. */
-  result?: unknown;
+  subagent_outcome?: unknown;
 };
 
 /**
  * Input for PreCompact hooks.
  */
 export type ClaudeHookPreCompactInput = ClaudeHookInputBase & {
-  event: "PreCompact";
+  hook_event_name: "PreCompact";
   /** Number of messages before compaction. */
   message_count: number;
   /** Estimated token count. */
@@ -244,24 +245,28 @@ export type ClaudeHookInput =
 
 /**
  * Decision output from a hook.
+ * - allow: Proceed with the action
+ * - deny: Block the action
+ * - ask: Prompt for confirmation (for interactive contexts)
  */
-export type ClaudeHookDecision = "continue" | "block" | "modify";
+export type ClaudeHookDecision = "allow" | "deny" | "ask";
 
 /**
  * Output from a hook handler (JSON via stdout).
+ * Field names match the Claude Code hook protocol.
  */
 export type ClaudeHookOutput = {
-  /** Decision: continue, block, or modify. */
+  /** Decision: allow, deny, or ask. */
   decision?: ClaudeHookDecision;
   /** Reason for the decision (for logging/debugging). */
   reason?: string;
-  /** Modified tool input (for PreToolUse with decision=modify). */
-  tool_input?: Record<string, unknown>;
-  /** Modified prompt (for UserPromptSubmit with decision=modify). */
+  /** Modified tool input (for PreToolUse with updated parameters). */
+  updatedInput?: Record<string, unknown>;
+  /** Modified prompt (for UserPromptSubmit). */
   prompt?: string;
-  /** Context to inject (for SubagentStart). */
-  context?: string;
-  /** Continuation message (for Stop with decision=continue). */
+  /** Additional context to inject (for SubagentStart). */
+  additionalContext?: string;
+  /** Continuation message (for Stop with decision=allow). */
   continuation_message?: string;
 };
 

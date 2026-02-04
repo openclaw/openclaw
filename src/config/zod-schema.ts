@@ -308,18 +308,14 @@ export const OpenClawSchema = z
         mappings: z.array(HookMappingSchema).optional(),
         gmail: HooksGmailSchema,
         internal: InternalHooksSchema,
-        claude: ClaudeHooksConfigSchema,
+        // Gate claude hooks validation behind feature flag using preprocess
+        claude: z.preprocess(
+          (val) => (isClaudeHooksEnabled() ? val : undefined),
+          ClaudeHooksConfigSchema,
+        ),
       })
       .strict()
-      .optional()
-      .transform((hooks) => {
-        // Gate claude hooks parsing behind feature flag
-        if (hooks?.claude && !isClaudeHooksEnabled()) {
-          const { claude: _, ...rest } = hooks;
-          return rest;
-        }
-        return hooks;
-      }),
+      .optional(),
     web: z
       .object({
         enabled: z.boolean().optional(),
