@@ -78,8 +78,12 @@ async function resolveChannelId(
   recipient: SlackRecipient,
 ): Promise<{ channelId: string; isDm?: boolean }> {
   if (recipient.kind === "channel") {
-    const channelId = await resolveChannelIdForUpload(client, recipient.id);
-    return { channelId };
+    // Only resolve if not already a valid channel ID
+    if (!SLACK_CHANNEL_ID_REGEX.test(recipient.id)) {
+      const channelId = await resolveChannelIdForUpload(client, recipient.id);
+      return { channelId };
+    }
+    return { channelId: recipient.id.toUpperCase() };
   }
   const response = await client.conversations.open({ users: recipient.id });
   const channelId = response.channel?.id;
