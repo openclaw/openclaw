@@ -1,9 +1,16 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
-const CLAUDE_CREDS = path.join(process.env.HOME!, ".claude", ".credentials.json");
-const OPENCLAW_PROFILES = path.join(process.env.HOME!, ".openclaw", "auth-profiles.json");
-const AGENT_PROFILES = path.join(process.env.HOME!, ".openclaw", "agents", "main", "agent", "auth-profiles.json");
+const home = os.homedir();
+if (!home) {
+  console.error("Error: Could not determine home directory");
+  process.exit(1);
+}
+
+const CLAUDE_CREDS = path.join(home, ".claude", ".credentials.json");
+const OPENCLAW_PROFILES = path.join(home, ".openclaw", "auth-profiles.json");
+const AGENT_PROFILES = path.join(home, ".openclaw", "agents", "main", "agent", "auth-profiles.json");
 
 if (!fs.existsSync(CLAUDE_CREDS)) {
   console.error(`Error: Claude Code credentials not found at ${CLAUDE_CREDS}`);
@@ -67,6 +74,6 @@ if (fs.existsSync(AGENT_PROFILES)) {
   console.log("Updated agent store (agents/main/agent/auth-profiles.json)");
 }
 
-const expiresDate = new Date(profile.expires).toISOString();
+const expiresDate = profile.expires > 0 ? new Date(profile.expires).toISOString() : "unknown";
 console.log(`Synced Claude Code OAuth to OpenClaw (anthropic:default)`);
 console.log(`  Token expires: ${expiresDate}`);

@@ -48,8 +48,14 @@ export async function refreshAnthropicTokens(params: {
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Anthropic token refresh failed (${response.status}): ${text}`);
+    let detail = `status ${response.status}`;
+    try {
+      const body = (await response.json()) as { error?: string; error_description?: string };
+      detail = body.error_description || body.error || detail;
+    } catch {
+      // response wasn't JSON; use status code only
+    }
+    throw new Error(`Anthropic token refresh failed: ${detail}`);
   }
 
   const data = (await response.json()) as {

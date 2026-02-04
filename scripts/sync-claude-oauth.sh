@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Sync Claude Code OAuth credentials into OpenClaw auth-profiles.json
 # Usage: ./scripts/sync-claude-oauth.sh
 
