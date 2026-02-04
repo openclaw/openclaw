@@ -4,8 +4,7 @@
  * Verifies that core memories are re-injected when context usage exceeds threshold.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { MemoryNeo4jConfig } from "./config.js";
+import { describe, it, expect } from "vitest";
 
 describe("mid-session core memory refresh", () => {
   // Test context threshold calculation
