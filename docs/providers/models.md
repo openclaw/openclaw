@@ -44,6 +44,7 @@ See [Venice AI](/providers/venice).
 - [Z.AI](/providers/zai)
 - [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
+- [NVIDIA (NIM + Kimi K2.5, DeepSeek, LLaMA, etc.)](/providers/nvidia)
 - [Venice (Venice AI)](/providers/venice)
 - [Amazon Bedrock](/bedrock)
 
