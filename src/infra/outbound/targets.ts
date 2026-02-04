@@ -207,8 +207,9 @@ export function resolveHeartbeatDeliveryTarget(params: {
     mode: "heartbeat",
   });
 
+  const heartbeatAccountId = heartbeat?.accountId?.trim();
   // Use explicit accountId from heartbeat config if provided, otherwise fall back to session
-  const effectiveAccountId = heartbeat?.accountId ?? resolvedTarget.accountId;
+  const effectiveAccountId = heartbeatAccountId || resolvedTarget.accountId;
 
   if (!resolvedTarget.channel || !resolvedTarget.to) {
     return {
@@ -304,11 +305,13 @@ export function resolveHeartbeatSenderContext(params: {
 }): HeartbeatSenderContext {
   const provider =
     params.delivery.channel !== "none" ? params.delivery.channel : params.delivery.lastChannel;
+  const accountId =
+    params.delivery.accountId ??
+    (provider === params.delivery.lastChannel ? params.delivery.lastAccountId : undefined);
   const allowFrom = provider
     ? (getChannelPlugin(provider)?.config.resolveAllowFrom?.({
         cfg: params.cfg,
-        accountId:
-          provider === params.delivery.lastChannel ? params.delivery.lastAccountId : undefined,
+        accountId,
       }) ?? [])
     : [];
 

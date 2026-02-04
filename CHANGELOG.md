@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Heartbeat: allow explicit accountId routing for multi-account channels. (#8702) Thanks @lsh411.
 - Shell completion: auto-detect and migrate slow dynamic patterns to cached files for faster terminal startup; add completion health checks to doctor/update/onboard.
 - Telegram: honor session model overrides in inline model selection. (#8193) Thanks @gildo.
 - Web UI: fix agent model selection saves for default/non-default agents and wrap long workspace paths. Thanks @Takhoffman.
