@@ -217,6 +217,14 @@ import {
   ProviderUsageSchema,
   type UsageTotals,
   UsageTotalsSchema,
+  type ProvidersHealthParams,
+  ProvidersHealthParamsSchema,
+  type ProvidersHealthResult,
+  ProvidersHealthResultSchema,
+  type ProviderHealthEntry,
+  ProviderHealthEntrySchema,
+  type UsageWindow as HealthUsageWindow,
+  UsageWindowSchema as HealthUsageWindowSchema,
 } from "./schema.js";
 
 const ajv = new (AjvPkg as unknown as new (opts?: object) => import("ajv").default)({
@@ -361,6 +369,9 @@ export const validateProvidersListParams =
 export const validateProvidersUsageParams = ajv.compile<ProvidersUsageParams>(
   ProvidersUsageParamsSchema,
 );
+export const validateProvidersHealthParams = ajv.compile<ProvidersHealthParams>(
+  ProvidersHealthParamsSchema,
+);
 
 export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
   if (!errors?.length) {
@@ -490,6 +501,10 @@ export {
   ProviderStatusSchema,
   ProviderUsageSchema,
   UsageTotalsSchema,
+  ProvidersHealthParamsSchema,
+  ProvidersHealthResultSchema,
+  ProviderHealthEntrySchema,
+  HealthUsageWindowSchema,
 };
 
 export type {
@@ -589,4 +604,8 @@ export type {
   ProviderStatus,
   ProviderUsage,
   UsageTotals,
+  ProvidersHealthParams,
+  ProvidersHealthResult,
+  ProviderHealthEntry,
+  HealthUsageWindow,
 };

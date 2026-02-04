@@ -14,6 +14,7 @@ import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
+import { providersHealthHandlers } from "./server-methods/providers-health.js";
 import { providersHandlers } from "./server-methods/providers.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
@@ -75,6 +76,7 @@ const READ_METHODS = new Set([
   "chat.history",
   "providers.list",
   "providers.usage",
+  "providers.health",
 ]);
 const WRITE_METHODS = new Set([
   "send",
@@ -189,6 +191,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...agentsHandlers,
   ...browserHandlers,
   ...providersHandlers,
+  ...providersHealthHandlers,
 };
 
 export async function handleGatewayRequest(

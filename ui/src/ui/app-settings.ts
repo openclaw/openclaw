@@ -19,6 +19,13 @@ import { loadExecApprovals } from "./controllers/exec-approvals.ts";
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
+import {
+  loadProvidersHealth,
+  startProvidersPolling,
+  stopProvidersPolling,
+  startProvidersCountdown,
+  stopProvidersCountdown,
+} from "./controllers/providers-health.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
 import {
@@ -151,6 +158,13 @@ export function setTab(host: SettingsHost, next: Tab) {
   } else {
     stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
   }
+  if (next === "providers") {
+    startProvidersPolling(host as unknown as Parameters<typeof startProvidersPolling>[0]);
+    startProvidersCountdown(host as unknown as Parameters<typeof startProvidersCountdown>[0]);
+  } else {
+    stopProvidersPolling();
+    stopProvidersCountdown();
+  }
   void refreshActiveTab(host);
   syncUrlWithTab(host, next, false);
 }
@@ -210,6 +224,13 @@ export async function refreshActiveTab(host: SettingsHost) {
         void loadCron(host);
       }
     }
+  }
+  if (host.tab === "providers") {
+    await Promise.all([
+      loadProvidersHealth(host as unknown as Parameters<typeof loadProvidersHealth>[0]),
+      loadPresence(host as unknown as OpenClawApp),
+      loadSessions(host as unknown as OpenClawApp),
+    ]);
   }
   if (host.tab === "nodes") {
     await loadNodes(host as unknown as OpenClawApp);
@@ -350,6 +371,13 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   } else {
     stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  }
+  if (next === "providers") {
+    startProvidersPolling(host as unknown as Parameters<typeof startProvidersPolling>[0]);
+    startProvidersCountdown(host as unknown as Parameters<typeof startProvidersCountdown>[0]);
+  } else {
+    stopProvidersPolling();
+    stopProvidersCountdown();
   }
   if (host.connected) {
     void refreshActiveTab(host);

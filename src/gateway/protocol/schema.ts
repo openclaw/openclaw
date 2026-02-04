@@ -15,3 +15,4 @@ export * from "./schema/snapshot.js";
 export * from "./schema/types.js";
 export * from "./schema/wizard.js";
 export * from "./schema/providers.js";
+export * from "./schema/providers-health.js";

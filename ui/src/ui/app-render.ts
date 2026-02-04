@@ -43,6 +43,7 @@ import {
 import { loadLogs, LogsState } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
+import { loadProvidersHealth } from "./controllers/providers-health.ts";
 import { deleteSession, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
@@ -66,6 +67,7 @@ import { renderInstances } from "./views/instances.ts";
 import { renderLogs } from "./views/logs.ts";
 import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
+import { renderProviders } from "./views/providers.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
 
@@ -138,6 +140,7 @@ export function renderApp(state: AppViewState) {
             <span>Health</span>
             <span class="mono">${state.connected ? "OK" : "Offline"}</span>
           </div>
+          ${state.clockDisplay ? html`<div class="pill"><span class="mono">${state.clockDisplay}</span></div>` : nothing}
           ${renderThemeToggle(state)}
         </div>
       </header>
@@ -329,6 +332,30 @@ export function renderApp(state: AppViewState) {
                 onRun: (job) => runCronJob(state, job),
                 onRemove: (job) => removeCronJob(state, job),
                 onLoadRuns: (jobId) => loadCronRuns(state, jobId),
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "providers"
+            ? renderProviders({
+                loading: state.providersHealthLoading,
+                error: state.providersHealthError,
+                entries: state.providersHealthEntries,
+                updatedAt: state.providersHealthUpdatedAt,
+                showAll: state.providersHealthShowAll,
+                expandedId: state.providersHealthExpanded,
+                instanceCount: state.presenceEntries.length,
+                sessionCount: state.sessionsResult?.count ?? null,
+                agentRunning: Boolean(state.chatRunId || state.chatSending),
+                onRefresh: () => loadProvidersHealth(state),
+                onToggleShowAll: () => {
+                  state.providersHealthShowAll = !state.providersHealthShowAll;
+                  void loadProvidersHealth(state);
+                },
+                onToggleExpand: (id) => {
+                  state.providersHealthExpanded = state.providersHealthExpanded === id ? null : id;
+                },
               })
             : nothing
         }

@@ -26,12 +26,48 @@ type LifecycleHost = {
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   chatStream: string;
+  clockDisplay: string;
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
 };
+
+let clockInterval: ReturnType<typeof setInterval> | null = null;
+
+function formatClock(): string {
+  const now = new Date();
+  const local = now.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const utc = now.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZone: "UTC",
+  });
+  return `${local} | ${utc} UTC`;
+}
+
+function startClock(host: LifecycleHost) {
+  host.clockDisplay = formatClock();
+  if (clockInterval != null) {
+    return;
+  }
+  clockInterval = setInterval(() => {
+    host.clockDisplay = formatClock();
+  }, 1000);
+}
+
+function stopClock() {
+  if (clockInterval != null) {
+    clearInterval(clockInterval);
+    clockInterval = null;
+  }
+}
 
 export function handleConnected(host: LifecycleHost) {
   host.basePath = inferBasePath();
@@ -40,6 +76,7 @@ export function handleConnected(host: LifecycleHost) {
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
   attachThemeListener(host as unknown as Parameters<typeof attachThemeListener>[0]);
   window.addEventListener("popstate", host.popStateHandler);
+  startClock(host);
   connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   if (host.tab === "logs") {
@@ -55,6 +92,7 @@ export function handleFirstUpdated(host: LifecycleHost) {
 }
 
 export function handleDisconnected(host: LifecycleHost) {
+  stopClock();
   window.removeEventListener("popstate", host.popStateHandler);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);

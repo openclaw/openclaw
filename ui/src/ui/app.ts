@@ -5,6 +5,7 @@ import type { AppViewState } from "./app-view-state.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { ProviderHealthEntry } from "./controllers/providers-health.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -77,6 +78,7 @@ import {
 } from "./app-tool-stream.ts";
 import { resolveInjectedAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { loadProvidersHealth as loadProvidersHealthInternal } from "./controllers/providers-health.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 
@@ -242,6 +244,14 @@ export class OpenClawApp extends LitElement {
   @state() skillEdits: Record<string, string> = {};
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
+
+  @state() providersHealthLoading = false;
+  @state() providersHealthError: string | null = null;
+  @state() providersHealthEntries: ProviderHealthEntry[] = [];
+  @state() providersHealthUpdatedAt: number | null = null;
+  @state() providersHealthShowAll = false;
+  @state() providersHealthExpanded: string | null = null;
+  @state() clockDisplay = "";
 
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
@@ -507,6 +517,10 @@ export class OpenClawApp extends LitElement {
     const newRatio = Math.max(0.4, Math.min(0.7, ratio));
     this.splitRatio = newRatio;
     this.applySettings({ ...this.settings, splitRatio: newRatio });
+  }
+
+  async handleLoadProviders() {
+    await loadProvidersHealthInternal(this);
   }
 
   render() {

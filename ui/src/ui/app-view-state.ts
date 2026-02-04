@@ -2,6 +2,7 @@ import type { EventLogEntry } from "./app-events.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { ProviderHealthEntry } from "./controllers/providers-health.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
@@ -163,6 +164,13 @@ export type AppViewState = {
   logsLevelFilters: Record<LogLevel, boolean>;
   logsAutoFollow: boolean;
   logsTruncated: boolean;
+  providersHealthLoading: boolean;
+  providersHealthError: string | null;
+  providersHealthEntries: ProviderHealthEntry[];
+  providersHealthUpdatedAt: number | null;
+  providersHealthShowAll: boolean;
+  providersHealthExpanded: string | null;
+  clockDisplay: string;
   client: GatewayBrowserClient | null;
   connect: () => void;
   setTab: (tab: Tab) => void;
@@ -223,4 +231,5 @@ export type AppViewState = {
   handleLogsLevelFilterToggle: (level: LogLevel) => void;
   handleLogsAutoFollowToggle: (next: boolean) => void;
   handleCallDebugMethod: (method: string, params: string) => Promise<void>;
+  handleLoadProviders: () => Promise<void>;
 };
