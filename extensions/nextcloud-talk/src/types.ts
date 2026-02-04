@@ -68,6 +68,8 @@ export type NextcloudTalkAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
 };
