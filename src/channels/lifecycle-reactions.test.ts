@@ -70,12 +70,15 @@ describe("getLifecycleEmoji", () => {
 });
 
 describe("isLifecycleEnabled", () => {
-  it("returns true when ackReaction fallback is set", () => {
-    expect(isLifecycleEnabled(undefined, "👀")).toBe(true);
+  it("returns false when only fallback is set (no explicit config)", () => {
+    // fallbackAckReaction is only for "received" stage fallback, not enablement
+    expect(isLifecycleEnabled(undefined, "👀")).toBe(false);
   });
 
   it("returns true when any stage is configured", () => {
     expect(isLifecycleEnabled({ complete: "✅" })).toBe(true);
+    expect(isLifecycleEnabled({ received: "👀" })).toBe(true);
+    expect(isLifecycleEnabled({ processing: "⚙️" })).toBe(true);
   });
 
   it("returns false when nothing is configured", () => {

@@ -169,11 +169,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // Handle reaction cleanup after reply
   if (prepared.lifecycleManager) {
     // Transition to "complete" stage, then clear if removeAckAfterReply is set
-    void prepared.lifecycleManager.complete().then(() => {
-      if (ctx.removeAckAfterReply) {
-        void prepared.lifecycleManager?.clear();
-      }
-    });
+    // Best-effort: catch errors to avoid unhandled rejections (rate limits, perms, etc.)
+    void prepared.lifecycleManager
+      .complete()
+      .then(() => {
+        if (ctx.removeAckAfterReply) {
+          return prepared.lifecycleManager?.clear();
+        }
+      })
+      .catch((err) => {
+        logVerbose(`slack: lifecycle reaction cleanup failed: ${err}`);
+      });
   } else {
     // Legacy removeAckReactionAfterReply when no lifecycle manager
     removeAckReactionAfterReply({

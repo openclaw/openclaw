@@ -73,15 +73,14 @@ export function getLifecycleEmoji(
 }
 
 /**
- * Check if lifecycle reactions are enabled (any stage has an emoji).
+ * Check if lifecycle reactions are enabled (config exists and at least one stage has an emoji).
+ * Note: fallbackAckReaction is only used as a fallback for the "received" stage emoji,
+ * not as a signal that lifecycle is enabled. Lifecycle requires explicit config.
  */
 export function isLifecycleEnabled(
   config: LifecycleReactionsConfig | undefined,
-  fallbackAckReaction?: string,
+  _fallbackAckReaction?: string,
 ): boolean {
-  if (fallbackAckReaction) {
-    return true;
-  }
   if (!config) {
     return false;
   }
