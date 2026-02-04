@@ -27,9 +27,11 @@ function bundledExtensionRootDir() {
     path.resolve(here, "../../assets/chrome-extension"),
   ];
   for (const candidate of candidates) {
-    if (hasManifest(candidate)) return candidate;
+    if (hasManifest(candidate)) {
+      return candidate;
+    }
   }
-  return candidates[0]!;
+  return candidates[0];
 }
 
 function installedExtensionRootDir() {
