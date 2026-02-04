@@ -464,14 +464,11 @@ const memoryNeo4jPlugin = {
         memory
           .command("sleep")
           .description(
-            "Run sleep cycle — consolidate memories (dedup → promote → decay → extract → cleanup)",
+            "Run sleep cycle — consolidate memories with Pareto-based promotion/demotion",
           )
           .option("--agent <id>", "Agent id (default: all agents)")
           .option("--dedup-threshold <n>", "Vector similarity threshold for dedup (default: 0.95)")
-          .option(
-            "--promotion-threshold <n>",
-            "Min importance for auto-promotion to core (default: 0.9)",
-          )
+          .option("--pareto <n>", "Top N% for core memory (default: 0.2 = top 20%)")
           .option("--promotion-min-age <days>", "Min age in days before promotion (default: 7)")
           .option("--decay-threshold <n>", "Decay score threshold for pruning (default: 0.1)")
           .option("--decay-half-life <days>", "Base half-life in days (default: 30)")
@@ -481,7 +478,7 @@ const memoryNeo4jPlugin = {
             async (opts: {
               agent?: string;
               dedupThreshold?: string;
-              promotionThreshold?: string;
+              pareto?: string;
               promotionMinAge?: string;
               decayThreshold?: string;
               decayHalfLife?: string;
@@ -490,12 +487,16 @@ const memoryNeo4jPlugin = {
             }) => {
               console.log("\n🌙 Memory Sleep Cycle");
               console.log("═════════════════════════════════════════════════════════════");
-              console.log("Five-phase memory consolidation (like human sleep):\n");
+              console.log("Seven-phase memory consolidation (Pareto-based):\n");
               console.log("  Phase 1: Deduplication    — Merge near-duplicate memories");
-              console.log("  Phase 2: Core Promotion   — Promote high-importance to core");
-              console.log("  Phase 3: Decay & Pruning  — Remove stale low-importance memories");
-              console.log("  Phase 4: Extraction       — Form entity relationships");
-              console.log("  Phase 5: Orphan Cleanup   — Remove disconnected nodes\n");
+              console.log(
+                "  Phase 2: Pareto Scoring   — Calculate effective scores for all memories",
+              );
+              console.log("  Phase 3: Core Promotion   — Regular memories above threshold → core");
+              console.log("  Phase 4: Core Demotion    — Core memories below threshold → regular");
+              console.log("  Phase 5: Decay & Pruning  — Remove stale low-importance memories");
+              console.log("  Phase 6: Extraction       — Form entity relationships");
+              console.log("  Phase 7: Orphan Cleanup   — Remove disconnected nodes\n");
 
               try {
                 await db.ensureInitialized();
@@ -503,9 +504,7 @@ const memoryNeo4jPlugin = {
                 const result = await runSleepCycle(db, embeddings, extractionConfig, api.logger, {
                   agentId: opts.agent,
                   dedupThreshold: opts.dedupThreshold ? parseFloat(opts.dedupThreshold) : undefined,
-                  promotionImportanceThreshold: opts.promotionThreshold
-                    ? parseFloat(opts.promotionThreshold)
-                    : undefined,
+                  paretoPercentile: opts.pareto ? parseFloat(opts.pareto) : undefined,
                   promotionMinAgeDays: opts.promotionMinAge
                     ? parseInt(opts.promotionMinAge, 10)
                     : undefined,
@@ -520,10 +519,12 @@ const memoryNeo4jPlugin = {
                   onPhaseStart: (phase) => {
                     const phaseNames = {
                       dedup: "Phase 1: Deduplication",
-                      promotion: "Phase 2: Core Promotion",
-                      decay: "Phase 3: Decay & Pruning",
-                      extraction: "Phase 4: Extraction",
-                      cleanup: "Phase 5: Orphan Cleanup",
+                      pareto: "Phase 2: Pareto Scoring",
+                      promotion: "Phase 3: Core Promotion",
+                      demotion: "Phase 4: Core Demotion",
+                      decay: "Phase 5: Decay & Pruning",
+                      extraction: "Phase 6: Extraction",
+                      cleanup: "Phase 7: Orphan Cleanup",
                     };
                     console.log(`\n▶ ${phaseNames[phase]}`);
                     console.log("─────────────────────────────────────────────────────────────");
@@ -540,7 +541,16 @@ const memoryNeo4jPlugin = {
                   `   Deduplication:  ${result.dedup.clustersFound} clusters → ${result.dedup.memoriesMerged} merged`,
                 );
                 console.log(
+                  `   Pareto:         ${result.pareto.totalMemories} total (${result.pareto.coreMemories} core, ${result.pareto.regularMemories} regular)`,
+                );
+                console.log(
+                  `                   Threshold: ${result.pareto.threshold.toFixed(4)} (top 20%)`,
+                );
+                console.log(
                   `   Promotion:      ${result.promotion.promoted}/${result.promotion.candidatesFound} promoted to core`,
+                );
+                console.log(
+                  `   Demotion:       ${result.demotion.demoted}/${result.demotion.candidatesFound} demoted from core`,
                 );
                 console.log(`   Decay/Pruning:  ${result.decay.memoriesPruned} memories pruned`);
                 console.log(

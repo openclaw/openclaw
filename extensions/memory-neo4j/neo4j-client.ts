@@ -150,6 +150,10 @@ export class Neo4jMemoryClient {
       );
       await this.runSafe(
         session,
+        "CREATE INDEX memory_retrieved_index IF NOT EXISTS FOR (m:Memory) ON (m.lastRetrievedAt)",
+      );
+      await this.runSafe(
+        session,
         "CREATE INDEX entity_type_index IF NOT EXISTS FOR (e:Entity) ON (e.type)",
       );
       await this.runSafe(
@@ -216,7 +220,8 @@ export class Neo4jMemoryClient {
           importance: $importance, category: $category,
           source: $source, extractionStatus: $extractionStatus,
           agentId: $agentId, sessionKey: $sessionKey,
-          createdAt: $createdAt, updatedAt: $updatedAt
+          createdAt: $createdAt, updatedAt: $updatedAt,
+          retrievalCount: $retrievalCount, lastRetrievedAt: $lastRetrievedAt
         })
         RETURN m.id AS id`,
         {
@@ -224,6 +229,8 @@ export class Neo4jMemoryClient {
           sessionKey: input.sessionKey ?? null,
           createdAt: now,
           updatedAt: now,
+          retrievalCount: 0,
+          lastRetrievedAt: null,
         },
       );
       return result.records[0].get("id") as string;
@@ -586,6 +593,82 @@ export class Neo4jMemoryClient {
     } finally {
       await session.close();
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // Retrieval Tracking
+  // --------------------------------------------------------------------------
+
+  /**
+   * Record retrieval events for memories. Called after search/recall.
+   * Increments retrievalCount and updates lastRetrievedAt timestamp.
+   */
+  async recordRetrievals(memoryIds: string[]): Promise<void> {
+    if (memoryIds.length === 0) {
+      return;
+    }
+
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      await session.run(
+        `UNWIND $ids AS memId
+         MATCH (m:Memory {id: memId})
+         SET m.retrievalCount = coalesce(m.retrievalCount, 0) + 1,
+             m.lastRetrievedAt = $now`,
+        { ids: memoryIds, now: new Date().toISOString() },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Calculate effective importance using retrieval-based reinforcement.
+   *
+   * Two modes:
+   * 1. With importance (regular memories): importance × freq_boost × recency
+   * 2. Without importance (core memories): freq_boost × recency
+   *
+   * Research basis:
+   * - ACT-R memory model (frequency with power-law decay)
+   * - FSRS spaced repetition (stability/retrievability)
+   * - Ebbinghaus forgetting curve (exponential decay)
+   */
+  calculateEffectiveImportance(
+    retrievalCount: number,
+    daysSinceLastRetrieval: number | null,
+    options: {
+      baseImportance?: number; // Include importance multiplier (for regular memories)
+      frequencyScale?: number; // How much retrievals boost importance (default: 0.3)
+      recencyHalfLifeDays?: number; // Half-life for recency decay (default: 14)
+    } = {},
+  ): number {
+    const { baseImportance, frequencyScale = 0.3, recencyHalfLifeDays = 14 } = options;
+
+    // Frequency boost: log(1 + n) provides diminishing returns
+    // log(1+0)=0, log(1+1)≈0.69, log(1+10)≈2.4, log(1+100)≈4.6
+    const frequencyBoost = 1 + Math.log1p(retrievalCount) * frequencyScale;
+
+    // Recency factor: exponential decay with configurable half-life
+    // If never retrieved (null), use a baseline factor
+    let recencyFactor: number;
+    if (daysSinceLastRetrieval === null) {
+      recencyFactor = 0.1; // Never retrieved - low baseline
+    } else {
+      recencyFactor = Math.pow(2, -daysSinceLastRetrieval / recencyHalfLifeDays);
+    }
+
+    // Combined effective importance
+    const usageScore = frequencyBoost * recencyFactor;
+
+    // Include importance multiplier if provided (for regular memories)
+    if (baseImportance !== undefined) {
+      return baseImportance * usageScore;
+    }
+
+    // Pure usage-based (for core memories)
+    return usageScore;
   }
 
   // --------------------------------------------------------------------------
@@ -1172,20 +1255,101 @@ export class Neo4jMemoryClient {
   // --------------------------------------------------------------------------
 
   /**
-   * Find memories that should be promoted to core status.
-   * Candidates: high importance (≥ threshold), not already core, aged at least minAgeDays.
+   * Calculate effective scores for all memories to determine Pareto threshold.
+   *
+   * Uses: importance × freq_boost × recency for ALL memories (including core).
+   * This gives core memories a slight disadvantage (they need strong retrieval
+   * patterns to stay in top 20%), creating healthy churn.
    */
-  async findPromotionCandidates(
-    options: {
-      importanceThreshold?: number; // Minimum importance to promote (default: 0.9)
-      minAgeDays?: number; // Minimum age in days (default: 7)
-      agentId?: string;
-      limit?: number;
-    } = {},
-  ): Promise<
-    Array<{ id: string; text: string; category: string; importance: number; ageDays: number }>
+  async calculateAllEffectiveScores(
+    agentId?: string,
+  ): Promise<Array<{ id: string; category: string; effectiveScore: number }>> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "WHERE m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         ${agentFilter}
+         WITH m,
+              coalesce(m.retrievalCount, 0) AS retrievalCount,
+              CASE
+                WHEN m.lastRetrievedAt IS NULL THEN null
+                ELSE duration.between(datetime(m.lastRetrievedAt), datetime()).days
+              END AS daysSinceRetrieval
+         WITH m, retrievalCount, daysSinceRetrieval,
+              // Effective score: importance × freq_boost × recency
+              // This is used for global ranking (promotion/demotion threshold)
+              m.importance * (1 + log(1 + retrievalCount) * 0.3) *
+                CASE
+                  WHEN daysSinceRetrieval IS NULL THEN 0.1
+                  ELSE 2.0 ^ (-1.0 * daysSinceRetrieval / 14.0)
+                END AS effectiveScore
+         RETURN m.id AS id, m.category AS category, effectiveScore
+         ORDER BY effectiveScore DESC`,
+        agentId ? { agentId } : {},
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        category: r.get("category") as string,
+        effectiveScore: r.get("effectiveScore") as number,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Calculate the Pareto threshold (80th percentile) for promotion/demotion.
+   * Returns the effective score that separates top 20% from bottom 80%.
+   */
+  calculateParetoThreshold(
+    scores: Array<{ effectiveScore: number }>,
+    percentile: number = 0.8,
+  ): number {
+    if (scores.length === 0) {
+      return 0;
+    }
+
+    // Scores should already be sorted descending, but ensure it
+    const sorted = scores.toSorted((a, b) => b.effectiveScore - a.effectiveScore);
+
+    // Find the index at the percentile boundary
+    // For top 20%, we want the score at index = 20% of total
+    const topPercent = 1 - percentile; // 0.2 for top 20%
+    const boundaryIndex = Math.floor(sorted.length * topPercent);
+
+    // Return the score at that boundary (or 0 if empty)
+    return sorted[boundaryIndex]?.effectiveScore ?? 0;
+  }
+
+  /**
+   * Find regular memories that should be promoted to core (above Pareto threshold).
+   *
+   * Pareto-based promotion:
+   * - Calculate effective score for all memories: importance × freq × recency
+   * - Find the 80th percentile threshold (top 20%)
+   * - Regular memories above threshold get promoted to core
+   * - Also requires minimum age (default: 7 days) to ensure stability
+   */
+  async findPromotionCandidates(options: {
+    paretoThreshold: number; // The calculated Pareto threshold
+    minAgeDays?: number; // Minimum age in days (default: 7)
+    agentId?: string;
+    limit?: number;
+  }): Promise<
+    Array<{
+      id: string;
+      text: string;
+      category: string;
+      importance: number;
+      ageDays: number;
+      retrievalCount: number;
+      effectiveScore: number;
+    }>
   > {
-    const { importanceThreshold = 0.9, minAgeDays = 7, agentId, limit = 50 } = options;
+    const { paretoThreshold, minAgeDays = 7, agentId, limit = 100 } = options;
 
     await this.ensureInitialized();
     const session = this.driver!.session();
@@ -1193,18 +1357,31 @@ export class Neo4jMemoryClient {
       const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
       const result = await session.run(
         `MATCH (m:Memory)
-         WHERE m.importance >= $threshold
-           AND m.category <> 'core'
+         WHERE m.category <> 'core'
            AND m.createdAt IS NOT NULL
            ${agentFilter}
-         WITH m, duration.between(datetime(m.createdAt), datetime()).days AS ageDays
+         WITH m,
+              duration.between(datetime(m.createdAt), datetime()).days AS ageDays,
+              coalesce(m.retrievalCount, 0) AS retrievalCount,
+              CASE
+                WHEN m.lastRetrievedAt IS NULL THEN null
+                ELSE duration.between(datetime(m.lastRetrievedAt), datetime()).days
+              END AS daysSinceRetrieval
          WHERE ageDays >= $minAgeDays
+         WITH m, ageDays, retrievalCount, daysSinceRetrieval,
+              // Effective score: importance × freq_boost × recency
+              m.importance * (1 + log(1 + retrievalCount) * 0.3) *
+                CASE
+                  WHEN daysSinceRetrieval IS NULL THEN 0.1
+                  ELSE 2.0 ^ (-1.0 * daysSinceRetrieval / 14.0)
+                END AS effectiveScore
+         WHERE effectiveScore >= $threshold
          RETURN m.id AS id, m.text AS text, m.category AS category,
-                m.importance AS importance, ageDays
-         ORDER BY m.importance DESC
+                m.importance AS importance, ageDays, retrievalCount, effectiveScore
+         ORDER BY effectiveScore DESC
          LIMIT $limit`,
         {
-          threshold: importanceThreshold,
+          threshold: paretoThreshold,
           minAgeDays,
           agentId,
           limit: neo4j.int(limit),
@@ -1217,6 +1394,76 @@ export class Neo4jMemoryClient {
         category: r.get("category") as string,
         importance: r.get("importance") as number,
         ageDays: r.get("ageDays") as number,
+        retrievalCount: r.get("retrievalCount") as number,
+        effectiveScore: r.get("effectiveScore") as number,
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Find core memories that should be demoted (fallen below Pareto threshold).
+   *
+   * Core memories use the same formula for threshold comparison:
+   * importance × freq × recency
+   *
+   * If they fall below the top 20% threshold, they get demoted back to regular.
+   */
+  async findDemotionCandidates(options: {
+    paretoThreshold: number; // The calculated Pareto threshold
+    agentId?: string;
+    limit?: number;
+  }): Promise<
+    Array<{
+      id: string;
+      text: string;
+      importance: number;
+      retrievalCount: number;
+      effectiveScore: number;
+    }>
+  > {
+    const { paretoThreshold, agentId, limit = 100 } = options;
+
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m:Memory)
+         WHERE m.category = 'core'
+           ${agentFilter}
+         WITH m,
+              coalesce(m.retrievalCount, 0) AS retrievalCount,
+              CASE
+                WHEN m.lastRetrievedAt IS NULL THEN null
+                ELSE duration.between(datetime(m.lastRetrievedAt), datetime()).days
+              END AS daysSinceRetrieval
+         WITH m, retrievalCount, daysSinceRetrieval,
+              // Effective score: importance × freq_boost × recency
+              m.importance * (1 + log(1 + retrievalCount) * 0.3) *
+                CASE
+                  WHEN daysSinceRetrieval IS NULL THEN 0.1
+                  ELSE 2.0 ^ (-1.0 * daysSinceRetrieval / 14.0)
+                END AS effectiveScore
+         WHERE effectiveScore < $threshold
+         RETURN m.id AS id, m.text AS text, m.importance AS importance,
+                retrievalCount, effectiveScore
+         ORDER BY effectiveScore ASC
+         LIMIT $limit`,
+        {
+          threshold: paretoThreshold,
+          agentId,
+          limit: neo4j.int(limit),
+        },
+      );
+
+      return result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+        importance: r.get("importance") as number,
+        retrievalCount: r.get("retrievalCount") as number,
+        effectiveScore: r.get("effectiveScore") as number,
       }));
     } finally {
       await session.close();
@@ -1237,12 +1484,39 @@ export class Neo4jMemoryClient {
       const result = await session.run(
         `UNWIND $ids AS memId
          MATCH (m:Memory {id: memId})
-         SET m.category = 'core', m.updatedAt = $now
+         SET m.category = 'core', m.promotedAt = $now, m.updatedAt = $now
          RETURN count(*) AS promoted`,
         { ids: memoryIds, now: new Date().toISOString() },
       );
 
       return (result.records[0]?.get("promoted") as number) ?? 0;
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Demote memories from core back to their original category.
+   * Uses 'fact' as default since we don't track original category.
+   */
+  async demoteFromCore(memoryIds: string[]): Promise<number> {
+    if (memoryIds.length === 0) {
+      return 0;
+    }
+
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `UNWIND $ids AS memId
+         MATCH (m:Memory {id: memId})
+         WHERE m.category = 'core'
+         SET m.category = 'fact', m.demotedAt = $now, m.updatedAt = $now
+         RETURN count(*) AS demoted`,
+        { ids: memoryIds, now: new Date().toISOString() },
+      );
+
+      return (result.records[0]?.get("demoted") as number) ?? 0;
     } finally {
       await session.close();
     }
