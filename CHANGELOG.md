@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.2.2-3
+
+### Fixes
+
+- Update: ship legacy daemon-cli shim for pre-tsdown update imports (fixes daemon restart after npm update).
+
 ## 2026.2.2-2
 
 ### Fixes
