@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "enabled": true,
+    "token": "${OPENCLAW_GATEWAY_TOKEN}"
+  },
+  "gateway": {
+    "bind": "lan",
+    "http": {
+      "endpoints": {
+        "chatCompletions": { "enabled": true },
+        "responses": { "enabled": true }
+      }
+    }
+  }
+}
