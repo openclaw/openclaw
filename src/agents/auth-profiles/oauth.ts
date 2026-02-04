@@ -35,6 +35,10 @@ async function withRetry<T>(
       if (attempt === retries) throw error;
       log.warn(`OAuth refresh attempt ${attempt}/${retries} failed, retrying in ${delayMs * attempt}ms`, {
         error: error instanceof Error ? error.message : String(error),
+        errorName: error instanceof Error ? error.name : undefined,
+        stack: error instanceof Error ? error.stack : undefined,
+        status: (error as { status?: number }).status,
+        code: (error as { code?: string }).code,
       });
       await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
     }
