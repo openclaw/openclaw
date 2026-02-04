@@ -606,14 +606,77 @@ const memoryNeo4jPlugin = {
     // memories after restarts.
     const bootstrappedSessions = new Set<string>();
 
-    // After compaction: clear bootstrap flag so core memories get re-injected
+    // Track mid-session refresh: maps sessionKey → tokens at last refresh
+    // Used to avoid refreshing too frequently (only refresh after significant context growth)
+    const midSessionRefreshAt = new Map<string, number>();
+    const MIN_TOKENS_SINCE_REFRESH = 10_000; // Only refresh if context grew by 10k+ tokens
+
+    // After compaction: clear bootstrap flag and mid-session refresh tracking
     if (cfg.coreMemory.enabled) {
       api.on("after_compaction", async (_event, ctx) => {
         if (ctx.sessionKey) {
           bootstrappedSessions.delete(ctx.sessionKey);
+          midSessionRefreshAt.delete(ctx.sessionKey);
           api.logger.info?.(
-            `memory-neo4j: cleared bootstrap flag for session ${ctx.sessionKey} after compaction`,
+            `memory-neo4j: cleared bootstrap/refresh flags for session ${ctx.sessionKey} after compaction`,
           );
+        }
+      });
+    }
+
+    // Mid-session core memory refresh: re-inject core memories when context grows past threshold
+    // This counters the "lost in the middle" phenomenon by placing core memories closer to end of context
+    const refreshThreshold = cfg.coreMemory.refreshAtContextPercent;
+    if (cfg.coreMemory.enabled && refreshThreshold) {
+      api.logger.debug?.(
+        `memory-neo4j: registering before_agent_start hook for mid-session core refresh at ${refreshThreshold}%`,
+      );
+      api.on("before_agent_start", async (event, ctx) => {
+        // Skip if context info not available
+        if (!event.contextWindowTokens || !event.estimatedUsedTokens) {
+          return;
+        }
+
+        const sessionKey = ctx.sessionKey ?? "";
+        const agentId = ctx.agentId || "default";
+        const usagePercent = (event.estimatedUsedTokens / event.contextWindowTokens) * 100;
+
+        // Only refresh if we've crossed the threshold
+        if (usagePercent < refreshThreshold) {
+          return;
+        }
+
+        // Check if we've already refreshed recently (prevent over-refreshing)
+        const lastRefreshTokens = midSessionRefreshAt.get(sessionKey) ?? 0;
+        const tokensSinceRefresh = event.estimatedUsedTokens - lastRefreshTokens;
+        if (tokensSinceRefresh < MIN_TOKENS_SINCE_REFRESH) {
+          api.logger.debug?.(
+            `memory-neo4j: skipping mid-session refresh (only ${tokensSinceRefresh} tokens since last refresh)`,
+          );
+          return;
+        }
+
+        try {
+          const maxEntries = cfg.coreMemory.maxEntries;
+          const coreMemories = await db.listByCategory("core", maxEntries, 0, agentId);
+
+          if (coreMemories.length === 0) {
+            return;
+          }
+
+          // Record this refresh
+          midSessionRefreshAt.set(sessionKey, event.estimatedUsedTokens);
+
+          const content = coreMemories.map((m) => `- ${m.text}`).join("\n");
+          api.logger.info?.(
+            `memory-neo4j: mid-session core refresh at ${usagePercent.toFixed(1)}% context (${coreMemories.length} memories)`,
+          );
+
+          return {
+            prependContext: `<core-memory-refresh>\nReminder of persistent context (you may have seen this earlier, re-stating for recency):\n${content}\n</core-memory-refresh>`,
+          };
+        } catch (err) {
+          api.logger.warn(`memory-neo4j: mid-session core refresh failed: ${String(err)}`);
         }
       });
     }

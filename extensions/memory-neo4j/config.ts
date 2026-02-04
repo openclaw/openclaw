@@ -24,6 +24,13 @@ export type MemoryNeo4jConfig = {
   coreMemory: {
     enabled: boolean;
     maxEntries: number;
+    /**
+     * Re-inject core memories when context usage reaches this percentage (0-100).
+     * Helps counter "lost in the middle" phenomenon by refreshing core memories
+     * closer to the end of context for recency bias.
+     * Set to null/undefined to disable (default).
+     */
+    refreshAtContextPercent?: number;
   };
 };
 
@@ -182,9 +189,21 @@ export const memoryNeo4jConfigSchema = {
 
     // Parse coreMemory section (optional with defaults)
     const coreMemoryRaw = cfg.coreMemory as Record<string, unknown> | undefined;
+    assertAllowedKeys(
+      coreMemoryRaw ?? {},
+      ["enabled", "maxEntries", "refreshAtContextPercent"],
+      "coreMemory config",
+    );
     const coreMemoryEnabled = coreMemoryRaw?.enabled !== false; // enabled by default
     const coreMemoryMaxEntries =
       typeof coreMemoryRaw?.maxEntries === "number" ? coreMemoryRaw.maxEntries : 50;
+    // refreshAtContextPercent: number between 0-100, or undefined to disable
+    const refreshAtContextPercent =
+      typeof coreMemoryRaw?.refreshAtContextPercent === "number" &&
+      coreMemoryRaw.refreshAtContextPercent > 0 &&
+      coreMemoryRaw.refreshAtContextPercent <= 100
+        ? coreMemoryRaw.refreshAtContextPercent
+        : undefined;
 
     return {
       neo4j: {
@@ -203,6 +222,7 @@ export const memoryNeo4jConfigSchema = {
       coreMemory: {
         enabled: coreMemoryEnabled,
         maxEntries: coreMemoryMaxEntries,
+        refreshAtContextPercent,
       },
     };
   },
