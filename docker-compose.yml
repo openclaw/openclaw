@@ -1,46 +1,97 @@
 services:
-  openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
-    environment:
-      HOME: /home/node
-      TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
-    volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-    ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
-    init: true
-    restart: unless-stopped
-    command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-      ]
+  # --- Ollama 本地模型服务 ---
+  #  ollama:
+  #    container_name: openclaw-ollama
+  #    image: ollama/ollama:latest
+  #    restart: always
+  #    environment:
+  #      - OLLAMA_NUM_CTX=4096       # 强制限制上下文窗口为 4k，匹配你现在的报错上限
+  #      - OLLAMA_MAX_LOADED_MODELS=1 # 强制只加载一个模型，节省切换开销
+  #      - OLLAMA_MAX_QUEUE=5        # 队列限制，防止堆积导致崩溃
+  #      - OLLAMA_KEEP_ALIVE=24h  # 让模型在内存中保留24小时
+  #      - OLLAMA_NUM_CTX=8192    # 内存够大，可以支撑更大的上下文（从4k提升到8k）
+  #    volumes:
+  #      - ./ollama_data:/root/.ollama
+  #    networks:
+  #      - proxy
+  #    # 针对甲骨文 4核 ARM 的优化：限制 CPU 资源，防止推理时宿主机完全卡死
+  #    deploy:
+  #      resources:
+  #        limits:
+  #          cpus: '3.5'
 
-  openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+  # --- OpenClaw 网关 ---
+  gateway:
+    build:
+      context: .
+      args:
+        # 在这里显式要求安装 ffmpeg 和必要的图片库
+        - OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg libvips-dev
+    container_name: openclaw-gateway
+    image: ${OPENCLAW_IMAGE:-openclaw-local:latest}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
+    init: true
+    depends_on:
+      # - ollama
+      - sandbox
+    command:
+      - "node"
+      - "dist/index.js"
+      - "gateway"
+      - "--bind"
+      - "lan"
+      - "--port"
+      - "${VIRTUAL_PORT:-18789}"
+    environment:
+      NODE_ENV: production
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      VIRTUAL_HOST: ${DOMAIN}
+      VIRTUAL_PORT: ${VIRTUAL_PORT}
+      LETSENCRYPT_HOST: ${DOMAIN}
+      LETSENCRYPT_EMAIL: ${EMAIL}
+      BROWSER_PROVIDER: ${BROWSER_PROVIDER}
+      BROWSER_ENDPOINT: ${BROWSER_ENDPOINT}
+      OPENCLAW_PROFILE: ${OPENCLAW_PROFILE}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      AUTH_TOKEN: ${AUTH_TOKEN}
+      WX_WEBHOOK_URL: ${WX_WEBHOOK_URL}
+      WX_WEBHOOK_TOKEN: ${WX_WEBHOOK_TOKEN}
+    volumes:
+      - openclaw-data:/home/node/.openclaw
+      - ./send_wechat.mjs:/app/scripts/send_wechat.mjs
+    networks:
+      - proxy
+
+  # --- 浏览器沙箱 (用于 WhatsApp 登录) ---
+  sandbox:
+    container_name: openclaw-sandbox
+    image: openclaw-sandbox:latest
+    restart: always
+    ports:
+      - "9222:9222" # 浏览器控制端口
+      - "6080:6080" # 网页查看窗口 (NoVNC)
+    shm_size: "4gb" # 浏览器非常吃缓存，建议加大
+    networks:
+      - proxy
+
+  cli:
+    image: ${OPENCLAW_IMAGE:-openclaw-local:latest}
     environment:
       HOME: /home/node
       TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
       BROWSER: echo
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - openclaw-data:/home/node/.openclaw
     stdin_open: true
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
+networks:
+  proxy:
+    external: true
+
+volumes:
+  openclaw-data:
