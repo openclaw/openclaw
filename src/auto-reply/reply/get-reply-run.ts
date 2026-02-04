@@ -48,7 +48,7 @@ type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
 const BARE_SESSION_RESET_PROMPT =
-  "A new session was started via /new or /reset. Greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Do not mention internal steps, files, tools, or reasoning.";
+  "New session started. Before greeting: 1) Read SOUL.md, USER.md, AGENTS.md, IDENTITY.md, MEMORY.md, TOOLS.md from workspace. 2) Read memory/YYYY-MM-DD.md for today and yesterday. 3) Create today's log if missing. 4) Then greet briefly (1-3 sentences) in your configured persona and ask what to work on. If runtime model differs from default_model, mention it. Do not narrate these steps to the user.";
 
 type RunPreparedReplyParams = {
   ctx: MsgContext;
