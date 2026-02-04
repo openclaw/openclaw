@@ -155,6 +155,8 @@ export type DiscordAccountConfig = {
   intents?: DiscordIntentsConfig;
   /** PluralKit identity resolution for proxied messages. */
   pluralkit?: DiscordPluralKitConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };
 
 export type DiscordConfig = {

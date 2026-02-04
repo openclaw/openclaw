@@ -137,6 +137,7 @@ export const TelegramAccountSchemaBase = z
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     linkPreview: z.boolean().optional(),
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -321,6 +322,7 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -391,6 +393,7 @@ export const GoogleChatAccountSchema = z
       .optional(),
     dm: GoogleChatDmSchema.optional(),
     typingIndicator: z.enum(["none", "message", "reaction"]).optional(),
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -505,6 +508,7 @@ export const SlackAccountSchema = z
     dm: SlackDmSchema.optional(),
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -588,6 +592,7 @@ export const SignalAccountSchemaBase = z
       .optional(),
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -652,6 +657,7 @@ export const IMessageAccountSchemaBase = z
       )
       .optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -731,6 +737,7 @@ export const BlueBubblesAccountSchemaBase = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -813,6 +820,7 @@ export const MSTeamsConfigSchema = z
     /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2") */
     sharePointSiteId: z.string().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    responsePrefix: z.string().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

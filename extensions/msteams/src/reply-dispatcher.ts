@@ -1,5 +1,5 @@
 import {
-  createReplyPrefixContext,
+  createReplyPrefixOptions,
   createTypingCallbacks,
   logTypingFailure,
   resolveChannelMediaMaxBytes,
@@ -26,6 +26,7 @@ import { getMSTeamsRuntime } from "./runtime.js";
 export function createMSTeamsReplyDispatcher(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  accountId?: string;
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
   adapter: MSTeamsAdapter;
@@ -55,16 +56,17 @@ export function createMSTeamsReplyDispatcher(params: {
       });
     },
   });
-  const prefixContext = createReplyPrefixContext({
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg: params.cfg,
     agentId: params.agentId,
+    channel: "msteams",
+    accountId: params.accountId,
   });
   const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "msteams");
 
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
-      responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      ...prefixOptions,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
       deliver: async (payload) => {
         const tableMode = core.channel.text.resolveMarkdownTableMode({
@@ -124,7 +126,7 @@ export function createMSTeamsReplyDispatcher(params: {
 
   return {
     dispatcher,
-    replyOptions: { ...replyOptions, onModelSelected: prefixContext.onModelSelected },
+    replyOptions: { ...replyOptions, onModelSelected },
     markDispatchIdle,
   };
 }
