@@ -253,8 +253,6 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   };
 }
 
-export type TelegramChatType = "private" | "group" | "supergroup" | "channel";
-
 export type TelegramForwardedContext = {
   from: string;
   date?: number;
@@ -264,7 +262,7 @@ export type TelegramForwardedContext = {
   fromTitle?: string;
   fromSignature?: string;
   /** Original chat type from forward_from_chat (e.g. "channel", "supergroup", "group"). */
-  fromChatType?: TelegramChatType;
+  fromChatType?: Chat["type"];
   /** Original message ID in the source chat (channel forwards). */
   fromMessageId?: number;
 };
@@ -338,7 +336,7 @@ function buildForwardedContextFromChat(params: {
   }
   const signature = params.signature?.trim() || undefined;
   const from = signature ? `${display} (${signature})` : display;
-  const chatType = (params.chat.type?.trim() || undefined) as TelegramChatType | undefined;
+  const chatType = (params.chat.type?.trim() || undefined) as Chat["type"] | undefined;
   return {
     from,
     date: params.date,
