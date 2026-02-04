@@ -480,7 +480,7 @@ export async function prepareSlackMessage(params: {
       if (!media && starter.files && starter.files.length > 0) {
         threadStarterMedia = await resolveSlackMedia({
           files: starter.files,
-          token: ctx.botToken,
+          token: ctx.userToken || ctx.botToken,
           maxBytes: ctx.mediaMaxBytes,
         });
         if (threadStarterMedia) {
