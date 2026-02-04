@@ -229,8 +229,8 @@ export function enableConsoleCapture(): void {
         : "";
       try {
         const resolvedLogger = getLoggerLazy();
-        // Truncate large payloads for file log to prevent massive entries
-        const fileLogMessage = truncateForFileLog(formatted);
+        // Strip ANSI codes and truncate large payloads for file log
+        const fileLogMessage = truncateForFileLog(trimmed);
         // Map console levels to file logger
         if (level === "trace") {
           resolvedLogger.trace(fileLogMessage);
