@@ -1,6 +1,7 @@
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { defaultRuntime } from "../../runtime.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,
@@ -56,6 +57,20 @@ export async function runGatewayLoop(params: {
           shuttingDown = false;
           restartResolver?.();
         } else {
+          // Write restart sentinel for SIGTERM to support resume after systemctl restart
+          if (signal === "SIGTERM") {
+            try {
+              await writeRestartSentinel({
+                kind: "restart",
+                status: "ok",
+                ts: Date.now(),
+                message: "Gateway stopped by SIGTERM (systemctl restart?)",
+                stats: { mode: "sigterm", reason: "external signal" },
+              });
+            } catch (err) {
+              gatewayLog.warn(`failed to write restart sentinel: ${String(err)}`);
+            }
+          }
           cleanupSignals();
           params.runtime.exit(0);
         }
