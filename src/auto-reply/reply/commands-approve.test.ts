@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { callGateway } from "../../gateway/call.js";
@@ -48,6 +48,10 @@ function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Pa
 }
 
 describe("/approve command", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("rejects invalid usage", async () => {
     const cfg = {
       commands: { text: true },
