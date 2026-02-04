@@ -19,6 +19,7 @@ type ChannelRuntimeStore = {
   aborts: Map<string, AbortController>;
   tasks: Map<string, Promise<unknown>>;
   runtimes: Map<string, ChannelAccountSnapshot>;
+  unconfiguredWarnings: Map<string, string>;
 };
 
 function createRuntimeStore(): ChannelRuntimeStore {
@@ -26,7 +27,27 @@ function createRuntimeStore(): ChannelRuntimeStore {
     aborts: new Map(),
     tasks: new Map(),
     runtimes: new Map(),
+    unconfiguredWarnings: new Map(),
   };
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) {
+    return String(value);
+  }
+  const t = typeof value;
+  if (t === "string" || t === "number" || t === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (t !== "object") {
+    return JSON.stringify(String(value));
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).toSorted();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
 }
 
 function isAccountEnabled(account: unknown): boolean {
@@ -117,6 +138,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           ? plugin.config.isEnabled(account, cfg)
           : isAccountEnabled(account);
         if (!enabled) {
+          store.unconfiguredWarnings.delete(id);
           setRuntime(channelId, id, {
             accountId: id,
             running: false,
@@ -130,13 +152,23 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           configured = await plugin.config.isConfigured(account, cfg);
         }
         if (!configured) {
+          const reason = plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured";
+          const fingerprint = stableStringify({ channelId, accountId: id, account });
+          const prior = store.unconfiguredWarnings.get(id);
+          if (prior !== fingerprint) {
+            store.unconfiguredWarnings.set(id, fingerprint);
+            channelLogs[channelId]?.warn?.(
+              `[${id}] channel enabled but ${reason}; skipping start until configuration changes`,
+            );
+          }
           setRuntime(channelId, id, {
             accountId: id,
             running: false,
-            lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
+            lastError: reason,
           });
           return;
         }
+        store.unconfiguredWarnings.delete(id);
 
         const abort = new AbortController();
         store.aborts.set(id, abort);
