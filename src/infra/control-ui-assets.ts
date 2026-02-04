@@ -43,19 +43,18 @@ export async function resolveControlUiDistIndexPath(
   opts: string | { argv1?: string; moduleUrl?: string; cwd?: string } = process.argv[1],
 ): Promise<string | null> {
   const argv1 = typeof opts === "string" ? opts : opts.argv1;
-  if (!argv1) {
-    return null;
-  }
-  const normalized = path.resolve(argv1);
+  const normalized = argv1 ? path.resolve(argv1) : null;
 
   // Case 1: entrypoint is directly inside dist/ (e.g., dist/entry.js)
-  const distDir = path.dirname(normalized);
-  if (path.basename(distDir) === "dist") {
-    return path.join(distDir, "control-ui", "index.html");
+  if (normalized) {
+    const distDir = path.dirname(normalized);
+    if (path.basename(distDir) === "dist") {
+      return path.join(distDir, "control-ui", "index.html");
+    }
   }
 
   const packageRoot = await resolveOpenClawPackageRoot({
-    argv1: normalized,
+    argv1: normalized ?? undefined,
     moduleUrl: typeof opts === "string" ? undefined : opts.moduleUrl,
     cwd: typeof opts === "string" ? undefined : opts.cwd,
   });
