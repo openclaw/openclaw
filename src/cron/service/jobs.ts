@@ -155,6 +155,17 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);
   }
+  if (!patch.delivery && patch.payload?.kind === "agentTurn") {
+    // Back-compat: legacy clients still update delivery via payload fields.
+    const legacyDeliveryPatch = buildLegacyDeliveryPatch(patch.payload);
+    if (
+      legacyDeliveryPatch &&
+      job.sessionTarget === "isolated" &&
+      job.payload.kind === "agentTurn"
+    ) {
+      job.delivery = mergeCronDelivery(job.delivery, legacyDeliveryPatch);
+    }
+  }
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
   }
@@ -214,6 +225,47 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     next.bestEffortDeliver = patch.bestEffortDeliver;
   }
   return next;
+}
+
+function buildLegacyDeliveryPatch(
+  payload: Extract<CronPayloadPatch, { kind: "agentTurn" }>,
+): CronDeliveryPatch | null {
+  const deliver = payload.deliver;
+  const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
+  const hasLegacyHints =
+    typeof deliver === "boolean" ||
+    typeof payload.bestEffortDeliver === "boolean" ||
+    Boolean(toRaw);
+  if (!hasLegacyHints) {
+    return null;
+  }
+
+  const patch: CronDeliveryPatch = {};
+  let hasPatch = false;
+
+  if (deliver === false) {
+    patch.mode = "none";
+    hasPatch = true;
+  } else if (deliver === true || toRaw) {
+    patch.mode = "announce";
+    hasPatch = true;
+  }
+
+  if (typeof payload.channel === "string") {
+    const channel = payload.channel.trim().toLowerCase();
+    patch.channel = channel ? channel : undefined;
+    hasPatch = true;
+  }
+  if (typeof payload.to === "string") {
+    patch.to = payload.to.trim();
+    hasPatch = true;
+  }
+  if (typeof payload.bestEffortDeliver === "boolean") {
+    patch.bestEffort = payload.bestEffortDeliver;
+    hasPatch = true;
+  }
+
+  return hasPatch ? patch : null;
 }
 
 function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
