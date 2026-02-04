@@ -772,6 +772,13 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
+/** Detect malformed model requests: JSON parse errors, invalid tool-call params, etc. */
+function isMalformedRequestError(raw: string): boolean {
+  return /\bis not valid JSON\b|Unexpected token .* in JSON|Unexpected end of JSON input|tool result's tool id.*not found|invalid params.*tool/i.test(
+    raw,
+  );
+}
+
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
@@ -790,6 +797,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
     return "rate_limit";
   }
   if (isCloudCodeAssistFormatError(raw)) {
+    return "format";
+  }
+  if (isMalformedRequestError(raw)) {
     return "format";
   }
   if (isBillingErrorMessage(raw)) {

@@ -9,6 +9,10 @@ type SessionManagerCacheEntry = {
 
 const SESSION_MANAGER_CACHE = new Map<string, SessionManagerCacheEntry>();
 const DEFAULT_SESSION_MANAGER_TTL_MS = 45_000; // 45 seconds
+const CLEANUP_INTERVAL_MS = 60_000; // Sweep expired entries every 60 seconds
+const MAX_CACHE_ENTRIES = 10_000; // Safety cap to prevent unbounded growth
+
+let cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
 function getSessionManagerTtl(): number {
   return resolveCacheTtlMs({
@@ -25,11 +29,19 @@ export function trackSessionManagerAccess(sessionFile: string): void {
   if (!isSessionManagerCacheEnabled()) {
     return;
   }
+  // Enforce max entries cap - evict oldest entry if at limit
+  if (SESSION_MANAGER_CACHE.size >= MAX_CACHE_ENTRIES && !SESSION_MANAGER_CACHE.has(sessionFile)) {
+    const oldest = SESSION_MANAGER_CACHE.keys().next();
+    if (!oldest.done) {
+      SESSION_MANAGER_CACHE.delete(oldest.value);
+    }
+  }
   const now = Date.now();
   SESSION_MANAGER_CACHE.set(sessionFile, {
     sessionFile,
     loadedAt: now,
   });
+  ensureCleanupTimer();
 }
 
 function isSessionManagerCached(sessionFile: string): boolean {
@@ -42,7 +54,36 @@ function isSessionManagerCached(sessionFile: string): boolean {
   }
   const now = Date.now();
   const ttl = getSessionManagerTtl();
-  return now - entry.loadedAt <= ttl;
+  if (now - entry.loadedAt > ttl) {
+    SESSION_MANAGER_CACHE.delete(sessionFile);
+    return false;
+  }
+  return true;
+}
+
+/** Sweep all expired entries from the cache. */
+function cleanupExpiredEntries(): void {
+  const now = Date.now();
+  const ttl = getSessionManagerTtl();
+  for (const [key, entry] of SESSION_MANAGER_CACHE) {
+    if (now - entry.loadedAt > ttl) {
+      SESSION_MANAGER_CACHE.delete(key);
+    }
+  }
+  // Stop the timer if cache is empty to avoid unnecessary work
+  if (SESSION_MANAGER_CACHE.size === 0 && cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+  }
+}
+
+function ensureCleanupTimer(): void {
+  if (cleanupTimer) {
+    return;
+  }
+  cleanupTimer = setInterval(cleanupExpiredEntries, CLEANUP_INTERVAL_MS);
+  // Allow process to exit even if timer is running
+  cleanupTimer.unref();
 }
 
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
