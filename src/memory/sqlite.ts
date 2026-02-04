@@ -1,3 +1,4 @@
+import type BetterSqlite3 from "better-sqlite3";
 import { createRequire } from "node:module";
 import { installProcessWarningFilter } from "../infra/warnings.js";
 
@@ -13,6 +14,9 @@ let useBetterSqlite: boolean | null = null;
 /**
  * Test if FTS5 is available in a given SQLite module by creating a temp in-memory
  * database and attempting to create an FTS5 virtual table.
+ * Only returns false for FTS5-specific errors (no such module: fts5).
+ * Other errors (e.g., can't create DB) are treated as FTS5 being available
+ * to avoid unnecessary fallback.
  */
 function testFts5Available(SqliteModule: typeof import("node:sqlite")): boolean {
   try {
@@ -22,12 +26,19 @@ function testFts5Available(SqliteModule: typeof import("node:sqlite")): boolean 
       testDb.exec("DROP TABLE test_fts5");
       testDb.close();
       return true;
-    } catch {
+    } catch (err) {
       testDb.close();
-      return false;
+      // Only treat as FTS5 unavailable if the error specifically mentions fts5
+      const message = err instanceof Error ? err.message : String(err);
+      if (/no such module:\s*fts5/i.test(message)) {
+        return false;
+      }
+      // Other errors (permissions, etc.) - assume FTS5 is available
+      return true;
     }
   } catch {
-    return false;
+    // Can't create DB at all - don't fall back, let the real usage fail naturally
+    return true;
   }
 }
 
@@ -36,11 +47,11 @@ function testFts5Available(SqliteModule: typeof import("node:sqlite")): boolean 
  * This allows seamless swapping between node:sqlite and better-sqlite3.
  */
 class BetterSqliteDatabaseSync {
-  private db: ReturnType<typeof require>;
+  private db: BetterSqlite3.Database;
 
   constructor(path: string, _options?: { allowExtension?: boolean }) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Database = require("better-sqlite3");
+    const Database = require("better-sqlite3") as typeof BetterSqlite3;
     this.db = new Database(path);
   }
 
