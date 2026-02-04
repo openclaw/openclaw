@@ -16,10 +16,13 @@ export function armTimer(state: CronServiceState) {
     return;
   }
   const nextAt = nextWakeAtMs(state);
-  if (!nextAt) {
+  // If nextAt is in the past, it means we have overdue jobs (e.g. from startup).
+  // We should arm the timer immediately (0ms delay) to process them.
+  if (typeof nextAt !== "number") {
     return;
   }
-  const delay = Math.max(nextAt - state.deps.nowMs(), 0);
+  const now = state.deps.nowMs();
+  const delay = Math.max(nextAt - now, 0);
   // Avoid TimeoutOverflowWarning when a job is far in the future.
   const clampedDelay = Math.min(delay, MAX_TIMEOUT_MS);
   state.timer = setTimeout(() => {

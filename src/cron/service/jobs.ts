@@ -43,6 +43,10 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
       return undefined;
     }
+    // If it's a one-shot job and we missed the window, run it ASAP
+    // unless it's ancient history (which we might want to flag, but for now run it).
+    // The previous logic just returned schedule.atMs, which is correct for "next run",
+    // but the scheduler needs to know it's *runnable*.
     return job.schedule.atMs;
   }
   return computeNextRunAtMs(job.schedule, nowMs);

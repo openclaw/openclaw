@@ -65,7 +65,11 @@ export async function deliverWebReply(params: {
     const totalChunks = textChunks.length;
     for (const [index, chunk] of textChunks.entries()) {
       const chunkStarted = Date.now();
-      await sendWithRetry(() => msg.reply(chunk), "text");
+      const textToSend = chunk.trimStart();
+      if (!textToSend) {
+        continue;
+      }
+      await sendWithRetry(() => msg.reply(textToSend), "text");
       if (!skipLog) {
         const durationMs = Date.now() - chunkStarted;
         whatsappOutboundLog.debug(

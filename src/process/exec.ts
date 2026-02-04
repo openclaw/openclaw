@@ -1,9 +1,9 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { logDebug, logError } from "../logger.js";
-import { resolveCommandStdio } from "./spawn-utils.js";
+import { resolveCommandStdio, spawnWithFallback, type SpawnFallback } from "./spawn-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -111,12 +111,36 @@ export async function runCommandWithTimeout(
   }
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const child = spawn(resolveCommand(argv[0]), argv.slice(1), {
-    stdio,
-    cwd,
-    env: resolvedEnv,
-    windowsVerbatimArguments,
+
+  const fallbacks: SpawnFallback[] = [];
+  // If we try to inherit stdin, be prepared to fallback to ignore if it fails (e.g. EBADF on macOS).
+  if (stdio[0] === "inherit") {
+    fallbacks.push({
+      label: "no-inherit-stdin",
+      options: { stdio: ["ignore", stdio[1], stdio[2]] },
+    });
+  }
+
+  const { child, usedFallback, fallbackLabel } = await spawnWithFallback({
+    argv: [resolveCommand(argv[0]), ...argv.slice(1)],
+    options: {
+      stdio,
+      cwd,
+      env: resolvedEnv,
+      windowsVerbatimArguments,
+    },
+    fallbacks,
+    onFallback: (err, fb) => {
+      if (shouldLogVerbose()) {
+        logDebug(`spawn error (${String(err)}), retrying with fallback: ${fb.label}`);
+      }
+    },
   });
+
+  if (usedFallback && shouldLogVerbose()) {
+    logDebug(`runCommandWithTimeout: recovered using fallback ${fallbackLabel}`);
+  }
+
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
     let stdout = "";

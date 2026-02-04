@@ -234,20 +234,24 @@ export async function deliverOutboundPayloads(params: {
     : undefined;
 
   const sendTextChunks = async (text: string) => {
+    const trimmedText = text.trimStart();
+    if (!trimmedText) {
+      return;
+    }
     throwIfAborted(abortSignal);
     if (!handler.chunker || textLimit === undefined) {
-      results.push(await handler.sendText(text));
+      results.push(await handler.sendText(trimmedText));
       return;
     }
     if (chunkMode === "newline") {
       const mode = handler.chunkerMode ?? "text";
       const blockChunks =
         mode === "markdown"
-          ? chunkMarkdownTextWithMode(text, textLimit, "newline")
-          : chunkByParagraph(text, textLimit);
+          ? chunkMarkdownTextWithMode(trimmedText, textLimit, "newline")
+          : chunkByParagraph(trimmedText, textLimit);
 
-      if (!blockChunks.length && text) {
-        blockChunks.push(text);
+      if (!blockChunks.length && trimmedText) {
+        blockChunks.push(trimmedText);
       }
       for (const blockChunk of blockChunks) {
         const chunks = handler.chunker(blockChunk, textLimit);
@@ -256,15 +260,21 @@ export async function deliverOutboundPayloads(params: {
         }
         for (const chunk of chunks) {
           throwIfAborted(abortSignal);
-          results.push(await handler.sendText(chunk));
+          const chunkToSend = chunk.trimStart();
+          if (chunkToSend) {
+            results.push(await handler.sendText(chunkToSend));
+          }
         }
       }
       return;
     }
-    const chunks = handler.chunker(text, textLimit);
+    const chunks = handler.chunker(trimmedText, textLimit);
     for (const chunk of chunks) {
       throwIfAborted(abortSignal);
-      results.push(await handler.sendText(chunk));
+      const chunkToSend = chunk.trimStart();
+      if (chunkToSend) {
+        results.push(await handler.sendText(chunkToSend));
+      }
     }
   };
 
