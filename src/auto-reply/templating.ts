@@ -101,6 +101,8 @@ export type MsgContext = {
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
+  /** Gateway client scopes when the message originates from the gateway. */
+  GatewayClientScopes?: string[];
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
   /** Telegram forum supergroup marker. */

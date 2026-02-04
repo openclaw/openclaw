@@ -35,6 +35,21 @@ Welcome to the lobster tank! 🦞
 - Keep PRs focused (one thing per PR)
 - Describe what & why
 
+## Control UI Decorators
+
+The Control UI uses Lit with **legacy** decorators (current Rollup parsing does not support
+`accessor` fields required for standard decorators). When adding reactive fields, keep the
+legacy style:
+
+```ts
+@state() foo = "bar";
+@property({ type: Number }) count = 0;
+```
+
+The root `tsconfig.json` is configured for legacy decorators (`experimentalDecorators: true`)
+with `useDefineForClassFields: false`. Avoid flipping these unless you are also updating the UI
+build tooling to support standard decorators.
+
 ## AI/Vibe-Coded PRs Welcome! 🤖
 
 Built with Codex, Claude, or other AI tools? **Awesome - just mark it!**

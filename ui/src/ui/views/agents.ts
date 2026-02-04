@@ -1683,9 +1683,12 @@ function groupSkills(skills: SkillStatusEntry[]): SkillGroup[] {
   for (const def of SKILL_SOURCE_GROUPS) {
     groups.set(def.id, { id: def.id, label: def.label, skills: [] });
   }
+  const builtInGroup = SKILL_SOURCE_GROUPS.find((group) => group.id === "built-in");
   const other: SkillGroup = { id: "other", label: "Other Skills", skills: [] };
   for (const skill of skills) {
-    const match = SKILL_SOURCE_GROUPS.find((group) => group.sources.includes(skill.source));
+    const match = skill.bundled
+      ? builtInGroup
+      : SKILL_SOURCE_GROUPS.find((group) => group.sources.includes(skill.source));
     if (match) {
       groups.get(match.id)?.skills.push(skill);
     } else {
