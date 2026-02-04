@@ -45,7 +45,7 @@ export type ChannelConfigSchema = {
 };
 
 // oxlint-disable-next-line typescript/no-explicit-any
-export type ChannelPlugin<ResolvedAccount = any> = {
+export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
   meta: ChannelMeta;
   capabilities: ChannelCapabilities;
@@ -65,7 +65,7 @@ export type ChannelPlugin<ResolvedAccount = any> = {
   groups?: ChannelGroupAdapter;
   mentions?: ChannelMentionAdapter;
   outbound?: ChannelOutboundAdapter;
-  status?: ChannelStatusAdapter<ResolvedAccount>;
+  status?: ChannelStatusAdapter<ResolvedAccount, Probe, Audit>;
   gatewayMethods?: string[];
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
   auth?: ChannelAuthAdapter;
