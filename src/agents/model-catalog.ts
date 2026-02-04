@@ -92,7 +92,17 @@ export async function loadModelCatalog(params?: {
             : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
-        models.push({ id, name, provider, contextWindow, reasoning, input });
+        const catalogEntry: ModelCatalogEntry = { id, name, provider };
+        if (contextWindow !== undefined) {
+          catalogEntry.contextWindow = contextWindow;
+        }
+        if (reasoning !== undefined) {
+          catalogEntry.reasoning = reasoning;
+        }
+        if (input !== undefined) {
+          catalogEntry.input = input;
+        }
+        models.push(catalogEntry);
       }
 
       const discoveredCount = models.length;
