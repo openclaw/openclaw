@@ -31,10 +31,6 @@ import {
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
-import {
-  runSubagentAnnounceFlow,
-  type SubagentRunOutcome,
-} from "../../agents/subagent-announce.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
@@ -44,13 +40,10 @@ import {
   normalizeVerboseLevel,
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
-import { type CliDeps } from "../../cli/outbound-send-deps.js";
-import {
-  resolveAgentMainSessionKey,
-  resolveSessionTranscriptPath,
-  updateSessionStore,
-} from "../../config/sessions.js";
+import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
+import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { logWarn } from "../../logger.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
@@ -314,7 +307,7 @@ export async function runCronIsolatedAgentTurn(params: {
   }
   if (deliveryRequested) {
     commandBody =
-      `${commandBody}\n\nReturn your summary as plain text; it will be delivered by the main agent. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
+      `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
   }
 
   const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
@@ -480,42 +473,21 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${deliveryFailure.message}`);
       return { status: "ok", summary, outputText };
     }
-    const requesterSessionKey = resolveAgentMainSessionKey({
-      cfg: cfgWithAgentDefaults,
-      agentId,
-    });
-    const useExplicitOrigin = deliveryPlan.channel !== "last" || Boolean(deliveryPlan.to?.trim());
-    const requesterOrigin = useExplicitOrigin
-      ? {
-          channel: resolvedDelivery.channel,
-          to: resolvedDelivery.to,
-          accountId: resolvedDelivery.accountId,
-          threadId: resolvedDelivery.threadId,
-        }
-      : undefined;
-    const outcome: SubagentRunOutcome = { status: "ok" };
-    const taskLabel = params.job.name?.trim() || "cron job";
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: agentSessionKey,
-      childRunId: cronSession.sessionEntry.sessionId,
-      requesterSessionKey,
-      requesterOrigin,
-      requesterDisplayKey: requesterSessionKey,
-      task: taskLabel,
-      timeoutMs: 30_000,
-      cleanup: "keep",
-      roundOneReply: outputText ?? summary,
-      waitForCompletion: false,
-      label: `Cron: ${taskLabel}`,
-      outcome,
-    });
-    if (!didAnnounce && !deliveryBestEffort) {
-      return {
-        status: "error",
-        error: "cron announce delivery failed",
-        summary,
-        outputText,
-      };
+    try {
+      await deliverOutboundPayloads({
+        cfg: cfgWithAgentDefaults,
+        channel: resolvedDelivery.channel,
+        to: resolvedDelivery.to,
+        accountId: resolvedDelivery.accountId,
+        threadId: resolvedDelivery.threadId,
+        payloads,
+        bestEffort: deliveryBestEffort,
+        deps: createOutboundSendDeps(params.deps),
+      });
+    } catch (err) {
+      if (!deliveryBestEffort) {
+        return { status: "error", summary, outputText, error: String(err) };
+      }
     }
   }
 

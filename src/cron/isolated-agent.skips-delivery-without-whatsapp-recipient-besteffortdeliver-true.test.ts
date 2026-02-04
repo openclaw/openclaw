@@ -4,16 +4,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CronJob } from "./types.js";
-import { discordPlugin } from "../../extensions/discord/src/channel.js";
-import { setDiscordRuntime } from "../../extensions/discord/src/runtime.js";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
-import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
-import { setWhatsAppRuntime } from "../../extensions/whatsapp/src/runtime.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -23,13 +17,9 @@ vi.mock("../agents/pi-embedded.js", () => ({
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
 }));
-vi.mock("../agents/subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: vi.fn(),
-}));
 
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
@@ -96,16 +86,13 @@ describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockReset();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
-    vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue(true);
-    const runtime = createPluginRuntime();
-    setDiscordRuntime(runtime);
-    setTelegramRuntime(runtime);
-    setWhatsAppRuntime(runtime);
     setActivePluginRegistry(
       createTestRegistry([
-        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
-        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-        { pluginId: "discord", plugin: discordPlugin, source: "test" },
+        {
+          pluginId: "telegram",
+          plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+          source: "test",
+        },
       ]),
     );
   });
@@ -143,9 +130,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
-      const call = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0];
-      expect(call?.label).toBe("Cron: job-1");
+      expect(deps.sendMessageTelegram).toHaveBeenCalled();
     });
   });
 
@@ -184,7 +169,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });
 
@@ -221,7 +206,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });
   });
 
@@ -230,7 +215,7 @@ describe("runCronIsolatedAgentTurn", () => {
       const storePath = await writeSessionStore(home);
       const deps: CliDeps = {
         sendMessageWhatsApp: vi.fn(),
-        sendMessageTelegram: vi.fn(),
+        sendMessageTelegram: vi.fn().mockRejectedValue(new Error("boom")),
         sendMessageDiscord: vi.fn(),
         sendMessageSignal: vi.fn(),
         sendMessageIMessage: vi.fn(),
@@ -242,8 +227,6 @@ describe("runCronIsolatedAgentTurn", () => {
           agentMeta: { sessionId: "s", provider: "p", model: "m" },
         },
       });
-      vi.mocked(runSubagentAnnounceFlow).mockResolvedValue(false);
-
       const res = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath, {
           channels: { telegram: { botToken: "t-1" } },
@@ -259,7 +242,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("error");
-      expect(res.error).toBe("cron announce delivery failed");
+      expect(res.error).toBe("Error: boom");
     });
   });
 
@@ -268,7 +251,7 @@ describe("runCronIsolatedAgentTurn", () => {
       const storePath = await writeSessionStore(home);
       const deps: CliDeps = {
         sendMessageWhatsApp: vi.fn(),
-        sendMessageTelegram: vi.fn(),
+        sendMessageTelegram: vi.fn().mockRejectedValue(new Error("boom")),
         sendMessageDiscord: vi.fn(),
         sendMessageSignal: vi.fn(),
         sendMessageIMessage: vi.fn(),
@@ -280,8 +263,6 @@ describe("runCronIsolatedAgentTurn", () => {
           agentMeta: { sessionId: "s", provider: "p", model: "m" },
         },
       });
-      vi.mocked(runSubagentAnnounceFlow).mockResolvedValue(false);
-
       const res = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath, {
           channels: { telegram: { botToken: "t-1" } },
@@ -302,7 +283,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      expect(deps.sendMessageTelegram).toHaveBeenCalled();
     });
   });
 });

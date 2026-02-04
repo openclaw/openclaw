@@ -137,10 +137,13 @@ Key behaviors:
 
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
 - Each run starts a **fresh session id** (no prior conversation carry-over).
-- Default behavior: if `delivery` is omitted, isolated jobs announce a summary immediately (`delivery.mode = "announce"`).
+- Default behavior: if `delivery` is omitted, isolated jobs announce a summary (`delivery.mode = "announce"`).
 - `delivery.mode` (isolated-only) chooses what happens:
-  - `announce`: subagent-style summary delivered immediately to a chat.
-  - `none`: internal only (no delivery).
+  - `announce`: deliver a summary to the target channel and post a brief summary to the main session.
+  - `none`: internal only (no delivery, no main-session summary).
+- `wakeMode` controls when the main-session summary posts:
+  - `now`: immediate heartbeat.
+  - `next-heartbeat`: waits for the next scheduled heartbeat.
 
 Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
 your main chat history.
@@ -166,9 +169,26 @@ Delivery config (isolated jobs only):
 - `delivery.bestEffort`: avoid failing the job if announce delivery fails.
 
 Announce delivery suppresses messaging tool sends for the run; use `delivery.channel`/`delivery.to`
-to target the chat instead.
+to target the chat instead. When `delivery.mode = "none"`, no summary is posted to the main session.
 
 If `delivery` is omitted for isolated jobs, OpenClaw defaults to `announce`.
+
+#### Announce delivery flow
+
+When `delivery.mode = "announce"`, cron delivers directly via the outbound channel adapters.
+The main agent is not spun up to craft or forward the message.
+
+Behavior details:
+
+- Content: delivery uses the isolated run's outbound payloads (text/media) with normal chunking and
+  channel formatting.
+- Heartbeat-only responses (`HEARTBEAT_OK` with no real content) are not delivered.
+- If the isolated run already sent a message to the same target via the message tool, delivery is
+  skipped to avoid duplicates.
+- Missing or invalid delivery targets fail the job unless `delivery.bestEffort = true`.
+- A short summary is posted to the main session only when `delivery.mode = "announce"`.
+- The main-session summary respects `wakeMode`: `now` triggers an immediate heartbeat and
+  `next-heartbeat` waits for the next scheduled heartbeat.
 
 ### Model and thinking overrides
 
@@ -191,7 +211,7 @@ Resolution priority:
 
 Isolated jobs can deliver output to a channel via the top-level `delivery` config:
 
-- `delivery.mode`: `announce` (subagent-style summary) or `none`.
+- `delivery.mode`: `announce` (deliver a summary) or `none`.
 - `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (plugin) / `signal` / `imessage` / `last`.
 - `delivery.to`: channel-specific recipient target.
 

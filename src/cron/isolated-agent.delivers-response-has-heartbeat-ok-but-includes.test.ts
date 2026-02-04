@@ -5,6 +5,9 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CronJob } from "./types.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+import { telegramOutbound } from "../channels/plugins/outbound/telegram.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -14,13 +17,9 @@ vi.mock("../agents/pi-embedded.js", () => ({
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
 }));
-vi.mock("../agents/subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: vi.fn(),
-}));
 
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
@@ -87,7 +86,15 @@ describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
     vi.mocked(runEmbeddedPiAgent).mockReset();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
-    vi.mocked(runSubagentAnnounceFlow).mockReset().mockResolvedValue(true);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: createOutboundTestPlugin({ id: "telegram", outbound: telegramOutbound }),
+          source: "test",
+        },
+      ]),
+    );
   });
 
   it("delivers when response has HEARTBEAT_OK but includes media", async () => {
@@ -128,7 +135,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      expect(deps.sendMessageTelegram).toHaveBeenCalled();
     });
   });
 
@@ -178,7 +185,7 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       expect(res.status).toBe("ok");
-      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+      expect(deps.sendMessageTelegram).toHaveBeenCalled();
     });
   });
 });
