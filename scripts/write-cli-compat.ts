@@ -75,7 +75,7 @@ if (!barrel || !innerChunk || !importBindings) {
 
 // Verify every required export is present in the bindings before writing.
 for (const name of requiredExports) {
-  if (!importBindings.includes(name)) {
+  if (!new RegExp(`\\b${name}\\b`).test(importBindings)) {
     throw new Error(
       `Required export "${name}" missing from barrel→inner bindings.\nBindings: ${importBindings}`,
     );
