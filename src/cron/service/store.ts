@@ -101,6 +101,11 @@ export async function ensureLoaded(state: CronServiceState) {
       mutated = true;
     }
 
+    if (typeof raw.enabled !== "boolean") {
+      raw.enabled = true;
+      mutated = true;
+    }
+
     const payload = raw.payload;
     if (payload && typeof payload === "object" && !Array.isArray(payload)) {
       if (migrateLegacyCronPayload(payload as Record<string, unknown>)) {
