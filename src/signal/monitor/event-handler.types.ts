@@ -16,6 +16,44 @@ export type SignalEnvelope = {
   reactionMessage?: SignalReactionMessage | null;
 };
 
+// 引用附件類型
+export type SignalQuotedAttachment = {
+  id?: string | null;
+  contentType?: string | null;
+  filename?: string | null;
+  size?: number | null;
+  thumbnail?: {
+    data?: string | null;
+    contentType?: string | null;
+    width?: number | null;
+    height?: number | null;
+  } | null;
+};
+
+// 引用消息類型
+export type SignalQuote = {
+  id?: number | null;
+  author?: string | null;
+  authorNumber?: string | null;
+  authorName?: string | null;
+  text?: string | null;
+  attachments?: Array<SignalQuotedAttachment>;
+};
+
+// Sticker 類型
+export type SignalSticker = {
+  packId?: string | null;
+  packKey?: string | null;
+  stickerId?: number | null;
+  emoji?: string | null;
+  contentType?: string | null;
+  attachment?: {
+    id?: string | null;
+    contentType?: string | null;
+    size?: number | null;
+  } | null;
+};
+
 export type SignalMention = {
   name?: string | null;
   number?: string | null;
@@ -33,8 +71,10 @@ export type SignalDataMessage = {
     groupId?: string | null;
     groupName?: string | null;
   } | null;
-  quote?: { text?: string | null } | null;
+  quote?: SignalQuote | null;
+  sticker?: SignalSticker | null;
   reaction?: SignalReactionMessage | null;
+  mentions?: Array<SignalMention> | null;
 };
 
 export type SignalReactionMessage = {
@@ -81,6 +121,7 @@ export type SignalEventHandlerDeps = {
   allowFrom: string[];
   groupAllowFrom: string[];
   groupPolicy: GroupPolicy;
+  requireMention: boolean;
   reactionMode: SignalReactionNotificationMode;
   reactionAllowlist: string[];
   mediaMaxBytes: number;
@@ -93,6 +134,13 @@ export type SignalEventHandlerDeps = {
     attachment: SignalAttachment;
     sender?: string;
     groupId?: string;
+    maxBytes: number;
+  }) => Promise<{ path: string; contentType?: string } | null>;
+  fetchSticker?: (params: {
+    baseUrl: string;
+    account?: string;
+    packId: string;
+    stickerId: number;
     maxBytes: number;
   }) => Promise<{ path: string; contentType?: string } | null>;
   deliverReplies: (params: {

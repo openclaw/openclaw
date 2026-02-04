@@ -4,6 +4,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
+import { logVerbose } from "../globals.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
@@ -199,6 +200,44 @@ async function fetchAttachment(params: {
   return { path: saved.path, contentType: saved.contentType };
 }
 
+// 獲取 Sticker 圖片（通過 packId + stickerId）
+async function fetchSticker(params: {
+  baseUrl: string;
+  account?: string;
+  packId: string;
+  stickerId: number;
+  maxBytes: number;
+}): Promise<{ path: string; contentType?: string } | null> {
+  const rpcParams: Record<string, unknown> = {
+    packId: params.packId,
+    stickerId: params.stickerId,
+  };
+  if (params.account) {
+    rpcParams.account = params.account;
+  }
+
+  try {
+    const result = await signalRpcRequest<{ data?: string; contentType?: string }>(
+      "getSticker",
+      rpcParams,
+      { baseUrl: params.baseUrl },
+    );
+    if (!result?.data) {
+      logVerbose(
+        `getSticker returned no data for packId=${params.packId} stickerId=${params.stickerId}`,
+      );
+      return null;
+    }
+    const buffer = Buffer.from(result.data, "base64");
+    const contentType = result.contentType ?? "image/webp";
+    const saved = await saveMediaBuffer(buffer, contentType, "inbound", params.maxBytes);
+    return { path: saved.path, contentType: saved.contentType };
+  } catch (err) {
+    logVerbose(`getSticker RPC failed: ${String(err)}`);
+    return null;
+  }
+}
+
 async function deliverReplies(params: {
   replies: ReplyPayload[];
   target: string;
@@ -274,6 +313,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   );
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
   const groupPolicy = accountInfo.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const requireMention = accountInfo.config.requireMention ?? false;
   const reactionMode = accountInfo.config.reactionNotifications ?? "own";
   const reactionAllowlist = normalizeAllowList(accountInfo.config.reactionAllowlist);
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
@@ -336,6 +376,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       allowFrom,
       groupAllowFrom,
       groupPolicy,
+      requireMention,
       reactionMode,
       reactionAllowlist,
       mediaMaxBytes,
@@ -343,6 +384,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       sendReadReceipts,
       readReceiptsViaDaemon,
       fetchAttachment,
+      fetchSticker,
       deliverReplies: (params) => deliverReplies({ ...params, chunkMode }),
       resolveSignalReactionTargets,
       isSignalReactionMessage,
