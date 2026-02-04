@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { AgentShieldApprovalManager } from "../agentshield-approval-manager.js";
 import { createAgentShieldApprovalHandlers } from "./agentshield-approval.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { listGatewayMethods } from "../server-methods-list.js";
 
 const HANDLER_KEYS = [
   "agentshield.approval.request",
@@ -58,4 +59,21 @@ describe("agentshield approval handler wiring gate", () => {
     const handlers = wireHandlers();
     expect(Object.keys(handlers)).toHaveLength(0);
   });
+
+  it("does not advertise methods when disabled (unset)", () => {
+    delete process.env.AGENTSHIELD_APPROVALS_ENABLED;
+
+    const base = listGatewayMethods();
+    const filtered = base.filter(
+      (m) =>
+        m !== "agentshield.approval.request" &&
+        m !== "agentshield.approval.resolve" &&
+        m !== "agentshield.approval.list",
+    );
+
+    expect(filtered).not.toContain("agentshield.approval.request");
+    expect(filtered).not.toContain("agentshield.approval.resolve");
+    expect(filtered).not.toContain("agentshield.approval.list");
+  });
+
 });
