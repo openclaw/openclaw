@@ -80,6 +80,16 @@ export type OpenClawConfig = {
   nodeHost?: NodeHostConfig;
   agents?: AgentsConfig;
   tools?: ToolsConfig;
+  github?: {
+    /** Default base branch for PRs (e.g., main, master). */
+    baseBranch?: string;
+    /** Default merge strategy (squash, merge, rebase). */
+    mergeStrategy?: "squash" | "merge" | "rebase";
+    /** Auto-delete branch after merge (default: true). */
+    autoDeleteBranch?: boolean;
+    /** Default repository in owner/repo format (optional). */
+    defaultRepo?: string;
+  };
   bindings?: AgentBinding[];
   broadcast?: BroadcastConfig;
   audio?: AudioConfig;

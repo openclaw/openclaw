@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents: add GitHub PR automation tools (`github_create_pr`, `github_review_pr`, `github_merge_pr`, `github_get_pr`, `github_comment_pr`) for agent-to-agent collaboration over pull requests.
+
 ### Fixes
 
 - Telegram: restore draft streaming partials. (#5543) Thanks @obviyus.

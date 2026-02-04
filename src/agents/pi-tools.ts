@@ -51,6 +51,7 @@ import {
 } from "./tool-policy.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { logWarn } from "../logger.js";
+import { createGitHubTools, type GitHubToolsConfig } from "./github-tools.js";
 
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
@@ -305,6 +306,45 @@ export function createOpenClawCodingTools(options?: {
           cwd: sandboxRoot ?? workspaceRoot,
           sandboxRoot: sandboxRoot && allowWorkspaceWrites ? sandboxRoot : undefined,
         });
+
+  // GitHub tools: wrap execTool for gh CLI operations
+  const githubExecWrapper = async (args: {
+    command: string;
+    workdir?: string;
+    env?: Record<string, string>;
+    timeout?: number;
+  }) => {
+    const result = await (execTool as unknown as { execute: Function }).execute(
+      "github-tool-exec",
+      {
+        command: args.command,
+        workdir: args.workdir,
+        env: args.env,
+        timeout: args.timeout,
+        pty: false,
+      },
+      undefined,
+      undefined,
+    );
+    const details = (result as { details?: { aggregated?: string; exitCode?: number | null } })
+      .details;
+    return {
+      stdout: details?.aggregated || "",
+      stderr: "",
+      exitCode: details?.exitCode ?? null,
+    };
+  };
+
+  const githubToolsConfig: GitHubToolsConfig = {
+    execFn: githubExecWrapper,
+    defaults: {
+      baseBranch: options?.config?.github?.baseBranch,
+      mergeStrategy: options?.config?.github?.mergeStrategy,
+      autoDeleteBranch: options?.config?.github?.autoDeleteBranch,
+      workdir: options?.workspaceDir,
+    },
+  };
+  const githubTools = createGitHubTools(githubToolsConfig);
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
@@ -315,6 +355,12 @@ export function createOpenClawCodingTools(options?: {
     ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
     execTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
+    // GitHub tools: PR operations
+    githubTools.createPR as unknown as AnyAgentTool,
+    githubTools.reviewPR as unknown as AnyAgentTool,
+    githubTools.mergePR as unknown as AnyAgentTool,
+    githubTools.getPRInfo as unknown as AnyAgentTool,
+    githubTools.commentPR as unknown as AnyAgentTool,
     // Channel docking: include channel-defined agent tools (login, etc.).
     ...listChannelAgentTools({ cfg: options?.config }),
     ...createOpenClawTools({

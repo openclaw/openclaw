@@ -108,6 +108,49 @@
 - **Review mode (PR link only):** read `gh pr view/diff`; **do not** switch branches; **do not** change code.
 - **Landing mode:** create an integration branch from `main`, bring in PR commits (**prefer rebase** for linear history; **merge allowed** when complexity/conflicts make it safer), apply fixes, add changelog (+ thanks + PR #), run full gate **locally before committing** (`pnpm lint && pnpm build && pnpm test`), commit, merge back to `main`, then `git switch main` (never stay on a topic branch after landing). Important: contributor needs to be in git graph after this!
 
+### GitHub PR Automation Tools (Agent-to-Agent Collaboration)
+
+Agents have access to GitHub PR tools for automated PR workflows:
+- **`github_create_pr`**: Create pull requests with all parameters (no interactive prompts)
+- **`github_get_pr`**: Fetch PR status, reviews, and mergeable state
+- **`github_review_pr`**: Approve, request changes, or comment on PRs
+- **`github_comment_pr`**: Add comments to PRs for feedback/status updates
+- **`github_merge_pr`**: Merge PRs with squash/merge/rebase strategies
+
+**Configuration:** Add to `~/.openclaw/config.json`:
+```json
+{
+  "github": {
+    "baseBranch": "main",
+    "mergeStrategy": "squash",
+    "autoDeleteBranch": true
+  }
+}
+```
+
+**Example workflow (Agent A creates PR, Agent B reviews):**
+```typescript
+// Agent A: Create PR
+github_create_pr({
+  title: "feat: add feature",
+  body: "## Summary\n...",
+  head: "feature-branch",
+  base: "main"
+});
+
+// Agent B: Review and approve
+github_get_pr({ prNumber: 42 });
+// Run tests in temp workspace...
+github_review_pr({
+  prNumber: 42,
+  action: "approve",
+  body: "✅ APPROVED\n\n**Checks:** All tests pass"
+});
+github_merge_pr({ prNumber: 42, strategy: "squash" });
+```
+
+**See:** `docs/github-workflows.md` for complete documentation and examples.
+
 ## Security & Configuration Tips
 
 - Web provider stores creds at `~/.openclaw/credentials/`; rerun `openclaw login` if logged out.
