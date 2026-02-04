@@ -111,6 +111,51 @@ function describeReplyContext(message: IMessagePayload): IMessageReplyContext | 
   return { body, id, sender };
 }
 
+/**
+ * Cache for recently sent messages, used for echo detection.
+ * Keys are scoped by conversation (accountId:target) so the same text in different chats is not conflated.
+ * Entries expire after 5 seconds; we do not forget on match so multiple echo deliveries are all filtered.
+ */
+class SentMessageCache {
+  private cache = new Map<string, number>();
+  private readonly ttlMs = 5000; // 5 seconds
+
+  remember(scope: string, text: string): void {
+    if (!text?.trim()) {
+      return;
+    }
+    const key = `${scope}:${text.trim()}`;
+    this.cache.set(key, Date.now());
+    this.cleanup();
+  }
+
+  has(scope: string, text: string): boolean {
+    if (!text?.trim()) {
+      return false;
+    }
+    const key = `${scope}:${text.trim()}`;
+    const timestamp = this.cache.get(key);
+    if (!timestamp) {
+      return false;
+    }
+    const age = Date.now() - timestamp;
+    if (age > this.ttlMs) {
+      this.cache.delete(key);
+      return false;
+    }
+    return true;
+  }
+
+  private cleanup(): void {
+    const now = Date.now();
+    for (const [text, timestamp] of this.cache.entries()) {
+      if (now - timestamp > this.ttlMs) {
+        this.cache.delete(text);
+      }
+    }
+  }
+}
+
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
@@ -126,6 +171,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
+  const sentMessageCache = new SentMessageCache();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
   const groupAllowFrom = normalizeAllowList(
@@ -347,6 +393,17 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
     const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
     const messageText = (message.text ?? "").trim();
+
+    // Echo detection: check if the received message matches a recently sent message (within 5 seconds).
+    // Scope by conversation so same text in different chats is not conflated.
+    const echoScope = `${accountInfo.accountId}:${isGroup ? formatIMessageChatTarget(chatId) : `imessage:${sender}`}`;
+    if (messageText && sentMessageCache.has(echoScope, messageText)) {
+      logVerbose(
+        `imessage: skipping echo message (matches recently sent text within 5s): "${truncateUtf16Safe(messageText, 50)}"`,
+      );
+      return;
+    }
+
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     // Filter to valid attachments with paths
     const validAttachments = attachments.filter((entry) => entry?.original_path && !entry?.missing);
@@ -568,6 +625,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           runtime,
           maxBytes: mediaMaxBytes,
           textLimit,
+          sentMessageCache,
         });
       },
       onError: (err, info) => {
