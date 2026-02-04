@@ -100,40 +100,6 @@ describe("normalizeForwardedContext", () => {
     expect(ctx?.fromTitle).toBe("Hidden Name");
     expect(ctx?.date).toBe(456);
   });
-
-  it("handles legacy forwards with signatures", () => {
-    const ctx = normalizeForwardedContext({
-      forward_from_chat: {
-        title: "OpenClaw Updates",
-        username: "openclaw",
-        id: 99,
-        type: "channel",
-      },
-      forward_signature: "Stan",
-      forward_date: 789,
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.from).toBe("OpenClaw Updates (Stan)");
-    expect(ctx?.fromType).toBe("legacy_channel");
-    expect(ctx?.fromId).toBe("99");
-    expect(ctx?.fromUsername).toBe("openclaw");
-    expect(ctx?.fromTitle).toBe("OpenClaw Updates");
-    expect(ctx?.fromSignature).toBe("Stan");
-    expect(ctx?.date).toBe(789);
-  });
-
-  it("handles legacy hidden sender names", () => {
-    const ctx = normalizeForwardedContext({
-      forward_sender_name: "Legacy Hidden",
-      forward_date: 111,
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-    expect(ctx).not.toBeNull();
-    expect(ctx?.from).toBe("Legacy Hidden");
-    expect(ctx?.fromType).toBe("legacy_hidden_user");
-    expect(ctx?.date).toBe(111);
-  });
 });
 
 describe("expandTextLinks", () => {

@@ -25,6 +25,7 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
   type ResolvedTelegramAccount,
+  type TelegramProbe,
 } from "openclaw/plugin-sdk";
 import { getTelegramRuntime } from "./runtime.js";
 
@@ -60,7 +61,7 @@ function parseThreadId(threadId?: string | number | null) {
   const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
-export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
+export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProbe> = {
   id: "telegram",
   meta: {
     ...meta,
@@ -327,11 +328,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
       if (!groupIds.length && unresolvedGroups === 0 && !hasWildcardUnmentionedGroups) {
         return undefined;
       }
-      const botId =
-        (probe as { ok?: boolean; bot?: { id?: number } })?.ok &&
-        (probe as { bot?: { id?: number } }).bot?.id != null
-          ? (probe as { bot: { id: number } }).bot.id
-          : null;
+      const botId = probe?.ok && probe.bot?.id != null ? probe.bot.id : null;
       if (!botId) {
         return {
           ok: unresolvedGroups === 0 && !hasWildcardUnmentionedGroups,
@@ -357,15 +354,9 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
         cfg.channels?.telegram?.accounts?.[account.accountId]?.groups ??
         cfg.channels?.telegram?.groups;
       const allowUnmentionedGroups =
-        Boolean(
-          groups?.["*"] && (groups["*"] as { requireMention?: boolean }).requireMention === false,
-        ) ||
+        groups?.["*"]?.requireMention === false ||
         Object.entries(groups ?? {}).some(
-          ([key, value]) =>
-            key !== "*" &&
-            Boolean(value) &&
-            typeof value === "object" &&
-            (value as { requireMention?: boolean }).requireMention === false,
+          ([key, value]) => key !== "*" && value?.requireMention === false,
         );
       return {
         accountId: account.accountId,
