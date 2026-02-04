@@ -7,3 +7,9 @@
 /* Enhanced UI - Premium Polish */
 @import "./styles/components-enhanced.css";
 @import "./styles/animations-enhanced.css";
+
+/* Neumorphic Design - Clean & Sleek */
+@import "./styles/neumorphic.css";
+
+/* Responsive Enhancements - Mobile & Desktop */
+@import "./styles/responsive-enhancements.css";
