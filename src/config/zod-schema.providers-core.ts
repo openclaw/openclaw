@@ -57,6 +57,17 @@ export const TelegramGroupSchema = z
   })
   .strict();
 
+export const SignalGroupSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    tools: ToolPolicySchema,
+    toolsBySender: ToolPolicyBySenderSchema,
+    enabled: z.boolean().optional(),
+    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    systemPrompt: z.string().optional(),
+  })
+  .strict();
+
 const TelegramCustomCommandSchema = z
   .object({
     command: z.string().transform(normalizeTelegramCommandName),
@@ -588,6 +599,7 @@ export const SignalAccountSchemaBase = z
       .optional(),
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    groups: z.record(z.string(), SignalGroupSchema.optional()).optional(),
   })
   .strict();
 

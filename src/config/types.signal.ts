@@ -6,9 +6,25 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
+
+export type SignalGroupConfig = {
+  /** If true, require @mention to respond in this group. */
+  requireMention?: boolean;
+  /** Optional tool policy overrides for this group. */
+  tools?: GroupToolPolicyConfig;
+  /** Per-sender tool policy overrides. */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** If false, disable the bot for this group. */
+  enabled?: boolean;
+  /** Optional allowlist for group senders (E.164 or uuid:<id>). */
+  allowFrom?: Array<string | number>;
+  /** Optional system prompt snippet for this group. */
+  systemPrompt?: string;
+};
 
 export type SignalAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
@@ -51,6 +67,8 @@ export type SignalAccountConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /** Per-group configuration keyed by Signal group ID. */
+  groups?: Record<string, SignalGroupConfig>;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */

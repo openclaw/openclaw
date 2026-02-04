@@ -22,6 +22,7 @@ import { logInboundDrop, logTypingFailure } from "../../channels/logging.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
+import { resolveChannelGroupPolicy } from "../../config/group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -462,7 +463,30 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose("Blocked signal group message (groupPolicy: disabled)");
       return;
     }
-    if (isGroup && deps.groupPolicy === "allowlist") {
+
+    // Group-level allowlist: check if this specific group is explicitly allowed via groups config.
+    // This is checked BEFORE sender-level gating so explicitly allowed groups can bypass sender checks.
+    // Configure via channels.signal.groups.<groupId> to explicitly allow specific groups.
+    const groupListPolicy =
+      isGroup && groupId
+        ? resolveChannelGroupPolicy({
+            cfg: deps.cfg,
+            channel: "signal",
+            accountId: deps.accountId,
+            groupId,
+          })
+        : { allowlistEnabled: false, allowed: true };
+
+    // If groups allowlist is configured and this group is not in it, block.
+    if (isGroup && groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
+      logVerbose(`Blocked signal group message (group ${groupId} not in groups allowlist)`);
+      return;
+    }
+
+    // If group is explicitly allowed via groups config, bypass sender-level gating.
+    // Otherwise, apply sender-level gating when groupPolicy is "allowlist".
+    const groupExplicitlyAllowed = groupListPolicy.allowlistEnabled && groupListPolicy.allowed;
+    if (isGroup && deps.groupPolicy === "allowlist" && !groupExplicitlyAllowed) {
       if (effectiveGroupAllow.length === 0) {
         logVerbose("Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)");
         return;

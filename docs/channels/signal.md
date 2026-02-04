@@ -115,7 +115,24 @@ DMs:
 Groups:
 
 - `channels.signal.groupPolicy = open | allowlist | disabled`.
-- `channels.signal.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
+- `channels.signal.groupAllowFrom` controls which **senders** (phone numbers or UUIDs) can trigger in groups when `allowlist` is set.
+- `channels.signal.groups.<groupId>` explicitly allows specific **groups** by ID. When a group is listed here, it bypasses the sender-level `groupAllowFrom` check.
+
+Example allowing a specific group:
+```json5
+{
+  channels: {
+    signal: {
+      groupPolicy: "allowlist",
+      groups: {
+        "your-signal-group-id-here": {}  // Empty object = allowed
+      }
+    }
+  }
+}
+```
+
+To find your Signal group ID, check the gateway logs when a message arrives from that group, or use `moltbot channels status --deep`.
 
 ## How it works (behavior)
 
@@ -188,7 +205,8 @@ Provider options:
 - `channels.signal.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`. Signal has no usernames; use phone/UUID ids.
 - `channels.signal.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
-- `channels.signal.groupAllowFrom`: group sender allowlist.
+- `channels.signal.groupAllowFrom`: group sender allowlist (E.164 or `uuid:<id>`).
+- `channels.signal.groups.<groupId>`: per-group config; presence in this map allows the group (bypasses `groupAllowFrom` sender check).
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
 - `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size (chars).
