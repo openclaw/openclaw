@@ -98,6 +98,10 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackModel = params.followupRun.run.model;
   let didResetAfterCompactionFailure = false;
 
+  // Circuit breaker: stop retrying after consecutive context overflow errors
+  const MAX_CONTEXT_OVERFLOW_RETRIES = 2;
+  let contextOverflowRetries = 0;
+
   while (true) {
     try {
       const allowPartialStream = !(
@@ -502,6 +506,22 @@ export async function runAgentTurnWithFallback(params: {
       const isCompactionFailure = isCompactionFailureError(message);
       const isSessionCorruption = /function call turn comes immediately after/i.test(message);
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
+
+      // Circuit breaker: after N consecutive overflow errors, stop retrying entirely
+      if (isContextOverflow || isCompactionFailure) {
+        contextOverflowRetries++;
+        if (contextOverflowRetries > MAX_CONTEXT_OVERFLOW_RETRIES) {
+          defaultRuntime.error(
+            `Context overflow circuit breaker triggered after ${contextOverflowRetries} retries. Session: ${params.sessionKey ?? "unknown"}`,
+          );
+          return {
+            kind: "final",
+            payload: {
+              text: "⚠️ Context overflow (circuit breaker). Use /new to start a fresh conversation.",
+            },
+          };
+        }
+      }
 
       if (
         isCompactionFailure &&
