@@ -1,0 +1,13 @@
+BEGIN:VCARD
+VERSION:3.0
+N:Cardoso;Nei;;;
+FN:Nei Cardoso
+TEL;TYPE=CELL:+5551999887766
+EMAIL;TYPE=INTERNET:nei@neurohive.ai
+BDAY:1990-06-15
+ORG:NeuroHIVE
+TITLE:Founder
+ADR;TYPE=HOME:;;1122 Anita Garibaldi;Porto Alegre;RS;90450-080;Brazil
+URL:https://neurohive.ai
+NOTE:AI consultancy and engineering
+END:VCARD
