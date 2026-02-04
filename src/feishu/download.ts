@@ -21,13 +21,15 @@ type FeishuMessagePayload = {
  * Download a resource from a user message using messageResource.get
  * This is the correct API for downloading resources from messages sent by users.
  *
- * @param type - Resource type: "image", "file", "audio", or "video"
+ * @param type - Resource type: "image" or "file" only (per Feishu API docs)
+ *               Audio/video must use type="file" despite being different media types.
+ * @see https://open.feishu.cn/document/server-docs/im-v1/message/get-2
  */
 export async function downloadFeishuMessageResource(
   client: Client,
   messageId: string,
   fileKey: string,
-  type: "image" | "file" | "audio" | "video",
+  type: "image" | "file",
   maxBytes: number = 30 * 1024 * 1024,
 ): Promise<FeishuMediaRef> {
   logger.debug(`Downloading Feishu ${type}: messageId=${messageId}, fileKey=${fileKey}`);
@@ -148,27 +150,41 @@ export async function resolveFeishuMedia(
       }
     } else if (msgType === "audio") {
       // Audio message: content = { file_key: "..." }
+      // Note: Feishu API only supports type="image" or type="file" for messageResource.get
+      // Audio must be downloaded using type="file" per official docs:
+      // https://open.feishu.cn/document/server-docs/im-v1/message/get-2
       const content = JSON.parse(rawContent);
       if (content.file_key) {
-        return await downloadFeishuMessageResource(
+        const result = await downloadFeishuMessageResource(
           client,
           messageId,
           content.file_key,
-          "audio",
+          "file", // Use "file" type for audio download (API limitation)
           maxBytes,
         );
+        // Override placeholder to indicate audio content
+        return {
+          ...result,
+          placeholder: "<media:audio>",
+        };
       }
     } else if (msgType === "media") {
       // Video message: content = { file_key: "...", image_key: "..." (thumbnail) }
+      // Note: Video must also be downloaded using type="file" per Feishu API docs
       const content = JSON.parse(rawContent);
       if (content.file_key) {
-        return await downloadFeishuMessageResource(
+        const result = await downloadFeishuMessageResource(
           client,
           messageId,
           content.file_key,
-          "video",
+          "file", // Use "file" type for video download (API limitation)
           maxBytes,
         );
+        // Override placeholder to indicate video content
+        return {
+          ...result,
+          placeholder: "<media:video>",
+        };
       }
     } else if (msgType === "sticker") {
       // Sticker - not supported for download via messageResource API
