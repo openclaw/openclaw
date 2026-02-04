@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -273,9 +274,25 @@ export function createSandboxedReadTool(root: string) {
   return wrapSandboxPathGuard(createOpenClawReadTool(base), root);
 }
 
+function wrapJsonValidation(tool: AnyAgentTool): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const result = await tool.execute(toolCallId, args, signal, onUpdate);
+      const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+      const filePath = record?.path ?? record?.file_path;
+      if (typeof filePath === "string" && filePath.endsWith(".json")) {
+        const content = fs.readFileSync(filePath, "utf-8");
+        JSON.parse(content); // throws if invalid
+      }
+      return result;
+    },
+  };
+}
+
 export function createSandboxedWriteTool(root: string) {
   const base = createWriteTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write), root);
+  return wrapSandboxPathGuard(wrapJsonValidation(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write)), root);
 }
 
 export function createSandboxedEditTool(root: string) {
