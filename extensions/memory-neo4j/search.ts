@@ -246,7 +246,7 @@ export async function hybridSearch(
   const maxRrf = fused.length > 0 ? fused[0].rrfScore : 1;
   const normalizer = maxRrf > 0 ? 1 / maxRrf : 1;
 
-  return fused.slice(0, limit).map((r) => ({
+  const results = fused.slice(0, limit).map((r) => ({
     id: r.id,
     text: r.text,
     category: r.category,
@@ -254,4 +254,16 @@ export async function hybridSearch(
     createdAt: r.createdAt,
     score: Math.min(1, r.rrfScore * normalizer), // Normalize to 0-1
   }));
+
+  // 6. Record retrieval events (fire-and-forget for latency)
+  // This tracks which memories are actually being used, enabling
+  // retrieval-based importance adjustment and promotion criteria.
+  if (results.length > 0) {
+    const memoryIds = results.map((r) => r.id);
+    db.recordRetrievals(memoryIds).catch(() => {
+      // Silently ignore - retrieval tracking is non-critical
+    });
+  }
+
+  return results;
 }

@@ -348,7 +348,7 @@ export async function runBackgroundExtraction(
 // ============================================================================
 
 /**
- * Sleep Cycle Result - aggregated stats from all five phases.
+ * Sleep Cycle Result - aggregated stats from all phases.
  */
 export type SleepCycleResult = {
   // Phase 1: Deduplication
@@ -356,23 +356,35 @@ export type SleepCycleResult = {
     clustersFound: number;
     memoriesMerged: number;
   };
-  // Phase 2: Core Promotion
+  // Phase 2: Pareto Scoring & Threshold
+  pareto: {
+    totalMemories: number;
+    coreMemories: number;
+    regularMemories: number;
+    threshold: number; // The 80th percentile effective score
+  };
+  // Phase 3: Core Promotion
   promotion: {
     candidatesFound: number;
     promoted: number;
   };
-  // Phase 3: Decay & Pruning
+  // Phase 4: Core Demotion
+  demotion: {
+    candidatesFound: number;
+    demoted: number;
+  };
+  // Phase 5: Decay & Pruning
   decay: {
     memoriesPruned: number;
   };
-  // Phase 4: Entity Extraction
+  // Phase 6: Entity Extraction
   extraction: {
     total: number;
     processed: number;
     succeeded: number;
     failed: number;
   };
-  // Phase 5: Orphan Cleanup
+  // Phase 7: Orphan Cleanup
   cleanup: {
     entitiesRemoved: number;
     tagsRemoved: number;
@@ -390,43 +402,60 @@ export type SleepCycleOptions = {
   // Phase 1: Deduplication
   dedupThreshold?: number; // Vector similarity threshold (default: 0.95)
 
-  // Phase 2: Core Promotion
-  promotionImportanceThreshold?: number; // Min importance to auto-promote (default: 0.9)
+  // Phase 2-4: Pareto-based Promotion/Demotion
+  paretoPercentile?: number; // Top N% for core (default: 0.2 = top 20%)
   promotionMinAgeDays?: number; // Min age before promotion (default: 7)
 
-  // Phase 3: Decay
+  // Phase 5: Decay
   decayRetentionThreshold?: number; // Below this, memory is pruned (default: 0.1)
   decayBaseHalfLifeDays?: number; // Base half-life in days (default: 30)
   decayImportanceMultiplier?: number; // How much importance extends half-life (default: 2)
 
-  // Phase 4: Extraction
+  // Phase 6: Extraction
   extractionBatchSize?: number; // Memories per batch (default: 50)
   extractionDelayMs?: number; // Delay between batches (default: 1000)
 
   // Progress callback
-  onPhaseStart?: (phase: "dedup" | "promotion" | "decay" | "extraction" | "cleanup") => void;
+  onPhaseStart?: (
+    phase: "dedup" | "pareto" | "promotion" | "demotion" | "decay" | "extraction" | "cleanup",
+  ) => void;
   onProgress?: (phase: string, message: string) => void;
 };
 
 /**
- * Run the full sleep cycle - five phases of memory consolidation.
+ * Run the full sleep cycle - seven phases of memory consolidation.
  *
- * This mimics how human memory consolidation works during sleep:
+ * This implements a Pareto-based memory ecosystem where core memory
+ * is bounded to the top 20% of memories by effective score.
+ *
+ * Phases:
  * 1. DEDUPLICATION - Merge near-duplicate memories (reduce redundancy)
- * 2. CORE PROMOTION - Promote high-importance memories to core status
- * 3. DECAY/PRUNING - Remove old, low-importance memories (forgetting curve)
- * 4. EXTRACTION - Form entity relationships (strengthen connections)
- * 5. CLEANUP - Remove orphaned entities/tags (garbage collection)
+ * 2. PARETO SCORING - Calculate effective scores for all memories
+ * 3. CORE PROMOTION - Regular memories above threshold → core
+ * 4. CORE DEMOTION - Core memories below threshold → regular
+ * 5. DECAY/PRUNING - Remove old, low-importance memories (forgetting curve)
+ * 6. EXTRACTION - Form entity relationships (strengthen connections)
+ * 7. CLEANUP - Remove orphaned entities/tags (garbage collection)
+ *
+ * Effective Score Formulas:
+ * - Regular memories: importance × freq_boost × recency
+ * - Core memories: importance × freq_boost × recency (same for threshold comparison)
+ * - Core memory retrieval ranking: freq_boost × recency (pure usage-based)
+ *
+ * Where:
+ * - freq_boost = 1 + log(1 + retrievalCount) × 0.3
+ * - recency = 2^(-days_since_last / 14)
  *
  * Benefits:
- * - Reduces latency during active conversations
- * - Prevents memory bloat and "self-degradation"
- * - Cleaner separation between capture and consolidation
+ * - Self-regulating core memory size (Pareto distribution)
+ * - Memories can be promoted AND demoted based on usage
+ * - Simulates human memory consolidation during sleep
  *
  * Research basis:
+ * - Pareto principle (20/80 rule) for memory tiering
+ * - ACT-R memory model for retrieval-based importance
  * - Ebbinghaus forgetting curve for decay
- * - FadeMem importance-weighted retention
- * - Graphiti/Zep edge deduplication patterns
+ * - MemGPT/Letta for tiered memory architecture
  */
 export async function runSleepCycle(
   db: Neo4jMemoryClient,
@@ -440,7 +469,7 @@ export async function runSleepCycle(
     agentId,
     abortSignal,
     dedupThreshold = 0.95,
-    promotionImportanceThreshold = 0.9,
+    paretoPercentile = 0.2,
     promotionMinAgeDays = 7,
     decayRetentionThreshold = 0.1,
     decayBaseHalfLifeDays = 30,
@@ -453,7 +482,9 @@ export async function runSleepCycle(
 
   const result: SleepCycleResult = {
     dedup: { clustersFound: 0, memoriesMerged: 0 },
+    pareto: { totalMemories: 0, coreMemories: 0, regularMemories: 0, threshold: 0 },
     promotion: { candidatesFound: 0, promoted: 0 },
+    demotion: { candidatesFound: 0, demoted: 0 },
     decay: { memoriesPruned: 0 },
     extraction: { total: 0, processed: 0, succeeded: 0, failed: 0 },
     cleanup: { entitiesRemoved: 0, tagsRemoved: 0 },
@@ -494,15 +525,50 @@ export async function runSleepCycle(
   }
 
   // --------------------------------------------------------------------------
-  // Phase 2: Core Promotion
+  // Phase 2: Pareto Scoring & Threshold Calculation
   // --------------------------------------------------------------------------
+  let paretoThreshold = 0;
   if (!abortSignal?.aborted) {
+    onPhaseStart?.("pareto");
+    logger.info("memory-neo4j: [sleep] Phase 2: Pareto Scoring");
+
+    try {
+      const allScores = await db.calculateAllEffectiveScores(agentId);
+      result.pareto.totalMemories = allScores.length;
+      result.pareto.coreMemories = allScores.filter((s) => s.category === "core").length;
+      result.pareto.regularMemories = allScores.filter((s) => s.category !== "core").length;
+
+      // Calculate the threshold for top N% (default: top 20%)
+      paretoThreshold = db.calculateParetoThreshold(allScores, 1 - paretoPercentile);
+      result.pareto.threshold = paretoThreshold;
+
+      onProgress?.(
+        "pareto",
+        `Scored ${allScores.length} memories (${result.pareto.coreMemories} core, ${result.pareto.regularMemories} regular)`,
+      );
+      onProgress?.(
+        "pareto",
+        `Pareto threshold (top ${paretoPercentile * 100}%): ${paretoThreshold.toFixed(4)}`,
+      );
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 2 complete — threshold=${paretoThreshold.toFixed(4)} for top ${paretoPercentile * 100}%`,
+      );
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 2 error: ${String(err)}`);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 3: Core Promotion (regular memories above threshold)
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted && paretoThreshold > 0) {
     onPhaseStart?.("promotion");
-    logger.info("memory-neo4j: [sleep] Phase 2: Core Promotion");
+    logger.info("memory-neo4j: [sleep] Phase 3: Core Promotion");
 
     try {
       const candidates = await db.findPromotionCandidates({
-        importanceThreshold: promotionImportanceThreshold,
+        paretoThreshold,
         minAgeDays: promotionMinAgeDays,
         agentId,
       });
@@ -512,24 +578,60 @@ export async function runSleepCycle(
         const ids = candidates.map((m) => m.id);
         result.promotion.promoted = await db.promoteToCore(ids);
         for (const c of candidates) {
-          onProgress?.("promotion", `Promoted "${c.text.slice(0, 50)}..." to core`);
+          onProgress?.(
+            "promotion",
+            `Promoted "${c.text.slice(0, 40)}..." (score=${c.effectiveScore.toFixed(3)}, ${c.retrievalCount} retrievals)`,
+          );
         }
       }
 
       logger.info(
-        `memory-neo4j: [sleep] Phase 2 complete — ${result.promotion.promoted} memories promoted to core`,
+        `memory-neo4j: [sleep] Phase 3 complete — ${result.promotion.promoted} memories promoted to core`,
       );
     } catch (err) {
-      logger.warn(`memory-neo4j: [sleep] Phase 2 error: ${String(err)}`);
+      logger.warn(`memory-neo4j: [sleep] Phase 3 error: ${String(err)}`);
     }
   }
 
   // --------------------------------------------------------------------------
-  // Phase 3: Decay & Pruning
+  // Phase 4: Core Demotion (core memories fallen below threshold)
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted && paretoThreshold > 0) {
+    onPhaseStart?.("demotion");
+    logger.info("memory-neo4j: [sleep] Phase 4: Core Demotion");
+
+    try {
+      const candidates = await db.findDemotionCandidates({
+        paretoThreshold,
+        agentId,
+      });
+      result.demotion.candidatesFound = candidates.length;
+
+      if (candidates.length > 0) {
+        const ids = candidates.map((m) => m.id);
+        result.demotion.demoted = await db.demoteFromCore(ids);
+        for (const c of candidates) {
+          onProgress?.(
+            "demotion",
+            `Demoted "${c.text.slice(0, 40)}..." (score=${c.effectiveScore.toFixed(3)}, ${c.retrievalCount} retrievals)`,
+          );
+        }
+      }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 4 complete — ${result.demotion.demoted} memories demoted from core`,
+      );
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 4 error: ${String(err)}`);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 5: Decay & Pruning
   // --------------------------------------------------------------------------
   if (!abortSignal?.aborted) {
     onPhaseStart?.("decay");
-    logger.info("memory-neo4j: [sleep] Phase 3: Decay & Pruning");
+    logger.info("memory-neo4j: [sleep] Phase 5: Decay & Pruning");
 
     try {
       const decayed = await db.findDecayedMemories({
@@ -546,19 +648,19 @@ export async function runSleepCycle(
       }
 
       logger.info(
-        `memory-neo4j: [sleep] Phase 3 complete — ${result.decay.memoriesPruned} memories pruned`,
+        `memory-neo4j: [sleep] Phase 5 complete — ${result.decay.memoriesPruned} memories pruned`,
       );
     } catch (err) {
-      logger.warn(`memory-neo4j: [sleep] Phase 3 error: ${String(err)}`);
+      logger.warn(`memory-neo4j: [sleep] Phase 5 error: ${String(err)}`);
     }
   }
 
   // --------------------------------------------------------------------------
-  // Phase 4: Entity Extraction
+  // Phase 6: Entity Extraction
   // --------------------------------------------------------------------------
   if (!abortSignal?.aborted && config.enabled) {
     onPhaseStart?.("extraction");
-    logger.info("memory-neo4j: [sleep] Phase 4: Entity Extraction");
+    logger.info("memory-neo4j: [sleep] Phase 6: Entity Extraction");
 
     try {
       // Get initial count
@@ -608,21 +710,21 @@ export async function runSleepCycle(
       }
 
       logger.info(
-        `memory-neo4j: [sleep] Phase 4 complete — ${result.extraction.succeeded} extracted, ${result.extraction.failed} failed`,
+        `memory-neo4j: [sleep] Phase 6 complete — ${result.extraction.succeeded} extracted, ${result.extraction.failed} failed`,
       );
     } catch (err) {
-      logger.warn(`memory-neo4j: [sleep] Phase 4 error: ${String(err)}`);
+      logger.warn(`memory-neo4j: [sleep] Phase 6 error: ${String(err)}`);
     }
   } else if (!config.enabled) {
-    logger.info("memory-neo4j: [sleep] Phase 4 skipped — extraction not enabled");
+    logger.info("memory-neo4j: [sleep] Phase 6 skipped — extraction not enabled");
   }
 
   // --------------------------------------------------------------------------
-  // Phase 5: Orphan Cleanup
+  // Phase 7: Orphan Cleanup
   // --------------------------------------------------------------------------
   if (!abortSignal?.aborted) {
     onPhaseStart?.("cleanup");
-    logger.info("memory-neo4j: [sleep] Phase 5: Orphan Cleanup");
+    logger.info("memory-neo4j: [sleep] Phase 7: Orphan Cleanup");
 
     try {
       // Clean up orphan entities
@@ -642,10 +744,10 @@ export async function runSleepCycle(
       }
 
       logger.info(
-        `memory-neo4j: [sleep] Phase 5 complete — ${result.cleanup.entitiesRemoved} entities, ${result.cleanup.tagsRemoved} tags removed`,
+        `memory-neo4j: [sleep] Phase 7 complete — ${result.cleanup.entitiesRemoved} entities, ${result.cleanup.tagsRemoved} tags removed`,
       );
     } catch (err) {
-      logger.warn(`memory-neo4j: [sleep] Phase 5 error: ${String(err)}`);
+      logger.warn(`memory-neo4j: [sleep] Phase 7 error: ${String(err)}`);
     }
   }
 
