@@ -41,22 +41,55 @@ function buildMemorySection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  /** Pre-generated progressive memory index markdown (injected when progressive memory is enabled). */
+  progressiveMemoryIndex?: string;
 }) {
   if (params.isMinimal) {
     return [];
   }
-  if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
+
+  const hasLegacy =
+    params.availableTools.has("memory_search") || params.availableTools.has("memory_get");
+  const hasProgressive =
+    params.availableTools.has("memory_recall") || params.availableTools.has("memory_store");
+
+  if (!hasLegacy && !hasProgressive) {
     return [];
   }
-  const lines = [
-    "## Memory Recall",
-    "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
-  ];
+
+  const lines: string[] = [];
+
+  // Progressive memory section (when enabled)
+  if (hasProgressive && params.progressiveMemoryIndex) {
+    lines.push("## Memory System");
+    lines.push(
+      "You have structured memory with categorized entries. A lean index is always loaded below.",
+      "For domain-specific details, use `memory_recall` with category filters and token budget.",
+      "When you learn new facts, preferences, or decisions, persist them with `memory_store`.",
+    );
+    lines.push("");
+    lines.push(params.progressiveMemoryIndex);
+    lines.push("");
+
+    // Still mention legacy fallback
+    if (hasLegacy) {
+      lines.push(
+        "Legacy memory: `memory_search` and `memory_get` still work for raw file-based search on MEMORY.md + memory/*.md.",
+      );
+    }
+  } else {
+    // Legacy-only mode
+    lines.push(
+      "## Memory Recall",
+      "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+    );
+  }
+
   if (params.citationsMode === "off") {
     lines.push(
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
     );
-  } else {
+  } else if (!hasProgressive) {
     lines.push(
       "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
     );
@@ -214,6 +247,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Pre-generated progressive memory index (injected when memory.progressive.enabled = true). */
+  progressiveMemoryIndex?: string;
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -242,6 +277,12 @@ export function buildAgentSystemPrompt(params: {
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
+    memory_store:
+      "Store a structured memory entry with category, priority, and tags. Use for persisting facts, preferences, instructions, decisions.",
+    memory_recall:
+      "Smart retrieval from structured memory. Combines semantic and full-text search with category filtering and token budget.",
+    memory_index_status: "Health and statistics for legacy and progressive memory systems.",
+    memory_audit: "Analyze token usage across memory systems and recommend optimizations.",
   };
 
   const toolOrder = [
@@ -363,6 +404,7 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     availableTools,
     citationsMode: params.memoryCitationsMode,
+    progressiveMemoryIndex: params.progressiveMemoryIndex,
   });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,

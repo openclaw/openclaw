@@ -12,6 +12,10 @@ import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { createMemoryAuditTool } from "./tools/memory-audit-tool.js";
+import { createMemoryIndexStatusTool } from "./tools/memory-index-status-tool.js";
+import { createMemoryRecallTool } from "./tools/memory-recall-tool.js";
+import { createMemoryStoreTool } from "./tools/memory-store-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createRipgrepTool } from "./tools/ripgrep-tool.js";
@@ -165,6 +169,28 @@ export function createOpenClawTools(options?: {
     }),
     createImageGenerateTool(),
   ];
+
+  // Progressive memory tools — only registered when memory.progressive.enabled = true.
+  // Each factory returns null if the feature is disabled, so we filter nulls.
+  const progressiveMemoryTools = [
+    createMemoryStoreTool({
+      config: options?.config,
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createMemoryRecallTool({
+      config: options?.config,
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createMemoryIndexStatusTool({
+      config: options?.config,
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createMemoryAuditTool({
+      config: options?.config,
+      agentSessionKey: options?.agentSessionKey,
+    }),
+  ].filter((tool): tool is AnyAgentTool => tool !== null);
+  tools.push(...progressiveMemoryTools);
 
   const pluginTools = resolvePluginTools({
     context: {
