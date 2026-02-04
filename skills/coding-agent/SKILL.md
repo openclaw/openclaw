@@ -157,13 +157,20 @@ gh pr comment <PR#> --body "<review content>"
 
 ## Claude Code
 
-```bash
-# With PTY for proper terminal output
-bash pty:true workdir:~/project command:"claude 'Your task'"
+**Important:** Use `-p` flag for non-interactive mode. Without `-p`, Claude Code enters interactive mode and won't exit after completion.
 
-# Background
-bash pty:true workdir:~/project background:true command:"claude 'Your task'"
+```bash
+# One-shot task (exits after completion)
+bash pty:true workdir:~/project command:"claude -p 'Your task' --dangerously-skip-permissions"
+
+# Background task (also use -p to auto-exit)
+bash pty:true workdir:~/project background:true command:"claude -p 'Your task' --dangerously-skip-permissions"
 ```
+
+| Flag                             | Effect                                         |
+| -------------------------------- | ---------------------------------------------- |
+| `-p "prompt"`                    | Non-interactive mode, exits after completion   |
+| `--dangerously-skip-permissions` | Auto-approve file operations (alias: `--yolo`) |
 
 ---
 
@@ -252,26 +259,19 @@ This prevents the user from seeing only "Agent failed before reply" and having n
 
 ---
 
-## Auto-Notify on Completion
+## Checking Completion Status
 
-For long-running background tasks, append a wake trigger to your prompt so OpenClaw gets notified immediately when the agent finishes (instead of waiting for the next heartbeat):
-
-```
-... your task here.
-
-When completely finished, run this command to notify me:
-openclaw gateway wake --text "Done: [brief summary of what was built]" --mode now
-```
-
-**Example:**
+For long-running background tasks, poll the process log to check completion status:
 
 ```bash
-bash pty:true workdir:~/project background:true command:"codex --yolo exec 'Build a REST API for todos.
+# Check if session is still running
+process action:poll sessionId:XXX
 
-When completely finished, run: openclaw gateway wake --text \"Done: Built todos REST API with CRUD endpoints\" --mode now'"
+# Get latest output
+process action:log sessionId:XXX
 ```
 
-This triggers an immediate wake event — Skippy gets pinged in seconds, not 10 minutes.
+**Note:** Auto-notification from background sessions is not currently supported. The parent session should poll the process log to check completion status.
 
 ---
 
