@@ -45,7 +45,8 @@ import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveIMessageAccount } from "../accounts.js";
 import { createIMessageRpcClient } from "../client.js";
-import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS, probeIMessage } from "../probe.js";
+import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
+import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import {
   formatIMessageChatTarget,
