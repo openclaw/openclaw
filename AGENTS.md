@@ -3,6 +3,7 @@
 - GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
 
 ## Project Structure & Module Organization
+- **Architecture deep-dive**: For comprehensive architecture documentation, message flows, and system diagrams, see `.cursor/plans/moltbot_developer_audit_report_02a3042e.plan.md`.
 - Source code: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, web provider in `src/provider-web.ts`, infra in `src/infra`, media pipeline in `src/media`).
 - Tests: colocated `*.test.ts`.
 - Docs: `docs/` (images, queue, Pi config). Built output lives in `dist/`.
@@ -61,8 +62,15 @@
 - beta: prerelease tags `vYYYY.M.D-beta.N`, npm dist-tag `beta` (may ship without macOS app).
 - dev: moving head on `main` (no tag; git checkout main).
 
+## Model Defaults (Local-First)
+- Default provider: `ollama` (local-first approach; see `src/agents/defaults.ts`).
+- Default model: `llama3:chat` (requires Ollama running locally).
+- Fallback: if Ollama is not running and no cloud provider is configured, gateway startup validation fails.
+- To use cloud providers (Anthropic, OpenAI, etc.) by default, configure `agents.defaults.model.primary` in config.
+- **Minimum context window**: 16,000 tokens required (`MINIMUM_CONTEXT_TOKENS` in `src/agents/defaults.ts`). Models with smaller context windows will fail startup validation with "context window too small".
+
 ## Testing Guidelines
-- Framework: Vitest with V8 coverage thresholds (70% lines/branches/functions/statements).
+- Framework: Vitest with V8 coverage thresholds (70% lines/functions/statements, 55% branches).
 - Naming: match source names with `*.test.ts`; e2e in `*.e2e.test.ts`.
 - Run `pnpm test` (or `pnpm test:coverage`) before pushing when you touch logic.
 - Do not set test workers above 16; tried already.
@@ -70,6 +78,14 @@
 - Full kit + what’s covered: `docs/testing.md`.
 - Pure test additions/fixes generally do **not** need a changelog entry unless they alter user-facing behavior or the user asks for one.
 - Mobile: before using a simulator, check for connected real devices (iOS + Android) and prefer them when available.
+- **Skip env vars** (for tests/debugging):
+  - `CLAWDBOT_SKIP_STARTUP_VALIDATION=1` - Skip model validation at gateway startup
+  - `CLAWDBOT_SKIP_LOCAL_DISCOVERY=1` - Skip auto-discovery of Ollama/LM Studio
+  - `CLAWDBOT_SKIP_CHANNELS=1` - Skip channel initialization
+  - `CLAWDBOT_SKIP_CRON=1` - Skip cron job initialization
+  - `CLAWDBOT_SKIP_CANVAS_HOST=1` - Skip canvas host server
+  - `CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER=1` - Skip browser control server
+  - `CLAWDBOT_SKIP_GMAIL_WATCHER=1` - Skip Gmail watcher
 
 ## Commit & Pull Request Guidelines
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
@@ -98,13 +114,15 @@
 
 ## Security & Configuration Tips
 - Web provider stores creds at `~/.clawdbot/credentials/`; rerun `moltbot login` if logged out.
-- Pi sessions live under `~/.clawdbot/sessions/` by default; the base directory is not configurable.
+- Pi sessions live under `~/.clawdbot/agents/{agentId}/sessions/` by default (e.g., `~/.clawdbot/agents/main/sessions/{sessionKey}.jsonl`).
 - Environment variables: see `~/.profile`.
 - Never commit or publish real phone numbers, videos, or live configuration values. Use obviously fake placeholders in docs, tests, and examples.
  - Release flow: always read `docs/reference/RELEASING.md` and `docs/platforms/mac/release.md` before any release work; do not ask routine questions once those docs answer them.
 
 ## Troubleshooting
 - Rebrand/migration issues or legacy config/service warnings: run `moltbot doctor` (see `docs/gateway/doctor.md`).
+- Gateway startup validation failure: Gateway validates the default model can resolve at startup (`src/gateway/startup-validation.ts`). Common causes: no Ollama/LM Studio running locally, missing API keys for cloud providers, model context window < 16,000 tokens. Skip validation in tests with `CLAWDBOT_SKIP_STARTUP_VALIDATION=1`.
+- Context window clamping: If you configure `maxContextTokens` < 16000, it's silently clamped to 16000. Watch for `[ollama-context] maxContextTokens clamped:` warnings in logs—this explains "why does my 8k model behave like 16k?"
 
 ## Agent-Specific Notes
 - Vocabulary: "makeup" = "mac app".
@@ -143,6 +161,7 @@
 - **Multi-agent safety:** focus reports on your edits; avoid guard-rail disclaimers unless truly blocked; when multiple agents touch the same file, continue if safe; end with a brief “other files present” note only if relevant.
 - Bug investigations: read source code of relevant npm dependencies and all related local code before concluding; aim for high-confidence root cause.
 - Code style: add brief comments for tricky logic; keep files under ~500 LOC when feasible (split/refactor as needed).
+- Local providers (Ollama, LM Studio): discovered automatically via `src/agents/local-provider-discovery.ts`. Local providers use `auth: "none"` mode (no API key required). Disable auto-discovery with `CLAWDBOT_SKIP_LOCAL_DISCOVERY=1`.
 - Tool schema guardrails (google-antigravity): avoid `Type.Union` in tool input schemas; no `anyOf`/`oneOf`/`allOf`. Use `stringEnum`/`optionalStringEnum` (Type.Unsafe enum) for string lists, and `Type.Optional(...)` instead of `... | null`. Keep top-level tool schema as `type: "object"` with `properties`.
 - Tool schema guardrails: avoid raw `format` property names in tool schemas; some validators treat `format` as a reserved keyword and reject the schema.
 - When asked to open a “session” file, open the Pi session logs under `~/.clawdbot/agents/<agentId>/sessions/*.jsonl` (use the `agent=<id>` value in the Runtime line of the system prompt; newest unless a specific ID is given), not the default `sessions.json`. If logs are needed from another machine, SSH via Tailscale and read the same path there.
