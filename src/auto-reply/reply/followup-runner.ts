@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { TypingMode } from "../../config/types.js";
 import type { OriginatingChannelType } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
 import type { TypingController } from "./typing.js";
 import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
@@ -25,6 +25,29 @@ import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { createTypingSignaler } from "./typing-mode.js";
+
+/**
+ * Creates a payload key for deduplication.
+ * Includes all fields that affect delivery semantics to avoid incorrect deduplication.
+ */
+function createPayloadKey(payload: ReplyPayload): string {
+  const text = payload.text?.trim() ?? "";
+  const mediaList = payload.mediaUrls?.length
+    ? payload.mediaUrls
+    : payload.mediaUrl
+      ? [payload.mediaUrl]
+      : [];
+  return JSON.stringify({
+    text,
+    mediaList,
+    replyToId: payload.replyToId,
+    replyToTag: payload.replyToTag,
+    replyToCurrent: payload.replyToCurrent,
+    audioAsVoice: payload.audioAsVoice,
+    isError: payload.isError,
+    channelData: payload.channelData,
+  });
+}
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -124,6 +147,71 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
+
+      // Track payloads sent via streaming to avoid double-sending at the end.
+      const streamedPayloadKeys = new Set<string>();
+
+      // Determine if we should stream block replies incrementally.
+      const { originatingChannel, originatingTo } = queued;
+      const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
+      const canStreamBlocks = shouldRouteToOriginating || Boolean(opts?.onBlockReply);
+
+      /**
+       * Handles incremental block replies during the agent run.
+       * Routes directly to the originating channel for immediate delivery.
+       */
+      const handleBlockReply = canStreamBlocks
+        ? async (payload: ReplyPayload, _context?: BlockReplyContext) => {
+            if (!payload?.text && !payload?.mediaUrl && !payload?.mediaUrls?.length) {
+              return;
+            }
+            if (
+              isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) &&
+              !payload.mediaUrl &&
+              !payload.mediaUrls?.length
+            ) {
+              return;
+            }
+
+            const payloadKey = createPayloadKey(payload);
+            let delivered = false;
+
+            await typingSignals.signalTextDelta(payload.text);
+
+            // Route to originating channel if set, otherwise fall back to dispatcher.
+            if (shouldRouteToOriginating) {
+              const result = await routeReply({
+                payload,
+                channel: originatingChannel,
+                to: originatingTo,
+                sessionKey: queued.run.sessionKey,
+                accountId: queued.originatingAccountId,
+                threadId: queued.originatingThreadId,
+                cfg: queued.run.config,
+              });
+              if (result.ok) {
+                delivered = true;
+              } else {
+                const errorMsg = result.error ?? "unknown error";
+                logVerbose(`followup queue: streaming route-reply failed: ${errorMsg}`);
+                // Fallback: try the dispatcher if routing failed.
+                if (opts?.onBlockReply) {
+                  await opts.onBlockReply(payload);
+                  delivered = true;
+                }
+              }
+            } else if (opts?.onBlockReply) {
+              await opts.onBlockReply(payload);
+              delivered = true;
+            }
+
+            // Only mark as sent after successful delivery to avoid dropping payloads.
+            if (delivered) {
+              streamedPayloadKeys.add(payloadKey);
+            }
+          }
+        : undefined;
+
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -171,6 +259,8 @@ export function createFollowupRunner(params: {
               timeoutMs: queued.run.timeoutMs,
               runId,
               blockReplyBreak: queued.run.blockReplyBreak,
+              // Enable incremental streaming for followup runs.
+              onBlockReply: handleBlockReply,
               onAgentEvent: (evt) => {
                 if (evt.stream !== "compaction") {
                   return;
@@ -255,7 +345,14 @@ export function createFollowupRunner(params: {
         originatingTo: queued.originatingTo,
         accountId: queued.run.agentAccountId,
       });
-      const finalPayloads = suppressMessagingToolReplies ? [] : dedupedPayloads;
+
+      // Filter out payloads already sent via streaming to avoid duplicates.
+      const unstreamedPayloads = dedupedPayloads.filter((payload) => {
+        const key = createPayloadKey(payload);
+        return !streamedPayloadKeys.has(key);
+      });
+
+      const finalPayloads = suppressMessagingToolReplies ? [] : unstreamedPayloads;
 
       if (finalPayloads.length === 0) {
         return;
