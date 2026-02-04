@@ -78,6 +78,9 @@ Shared options (where supported):
 - `--timeout <ms>`: timeout/budget (varies per command).
 - `--expect-final`: wait for a “final” response (agent calls).
 
+Note: when you set `--url`, the CLI does not fall back to config or environment credentials.
+Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
+
 ### `gateway health`
 
 ```bash
