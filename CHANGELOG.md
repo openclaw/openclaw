@@ -10,6 +10,10 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.2.2-2
 
+### Changes
+
+- Docs: promote BlueBubbles as the recommended iMessage integration; mark imsg channel as legacy. (#8415) Thanks @tyler6204.
+
 ### Fixes
 
 - CLI status: resolve build-info from bundled dist output (fixes "unknown" commit in npm builds).

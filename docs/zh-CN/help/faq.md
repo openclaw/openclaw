@@ -1008,7 +1008,7 @@ pnpm add -g clawhub
 
 **能否从 Linux 运行仅限 Apple/macOS 的 Skills**
 
-不能直接运行。macOS Skills 受 `metadata.openclaw.os` 和所需二进制文件限制，Skills 只有在 **Gateway 网关主机**上符合条件时才会出现在系统提示中。在 Linux 上，`darwin` 专用 Skills（如 `imsg`、`apple-notes`、`apple-reminders`）不会加载，除非你覆盖限制。
+不能直接运行。macOS Skills 受 `metadata.openclaw.os` 和所需二进制文件限制，Skills 只有在 **Gateway 网关主机**上符合条件时才会出现在系统提示中。在 Linux 上，`darwin` 专用 Skills（如 `apple-notes`、`apple-reminders`、`things-mac`）不会加载，除非你覆盖限制。
 
 你有三种支持的模式：
 
