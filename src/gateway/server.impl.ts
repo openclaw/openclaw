@@ -26,6 +26,7 @@ import {
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
+import { createAgentShieldApprovalForwarder } from "../infra/agentshield-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
@@ -49,6 +50,7 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import { AgentShieldApprovalManager } from "./agentshield-approval-manager.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
@@ -61,6 +63,7 @@ import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
+import { createAgentShieldApprovalHandlers } from "./server-methods/agentshield-approval.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
@@ -536,6 +539,13 @@ export async function startGatewayServer(
     forwarder: execApprovalForwarder,
   });
 
+  const agentShieldApprovalManager = new AgentShieldApprovalManager();
+  const agentShieldApprovalForwarder = createAgentShieldApprovalForwarder();
+  const agentShieldApprovalHandlers = createAgentShieldApprovalHandlers(
+    agentShieldApprovalManager,
+    { forwarder: agentShieldApprovalForwarder },
+  );
+
   const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
   attachGatewayWsHandlers({
@@ -555,6 +565,7 @@ export async function startGatewayServer(
     extraHandlers: {
       ...pluginRegistry.gatewayHandlers,
       ...execApprovalHandlers,
+      ...agentShieldApprovalHandlers,
     },
     broadcast,
     context: {
