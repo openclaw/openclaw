@@ -7,7 +7,7 @@ import { formatNextRun } from "../presenter.ts";
 /**
  * Validate session key format
  * Returns validation result with error message if invalid
- * Supports: agent:agentId:sessionKey, subagent:xxx, acp:xxx, and special cases
+ * Mirrors backend parsing logic in src/sessions/session-key-utils.ts
  */
 function validateSessionKeyFormat(input: string): { isValid: boolean; error?: string } {
   const trimmed = input.trim();
@@ -17,13 +17,14 @@ function validateSessionKeyFormat(input: string): { isValid: boolean; error?: st
     return { isValid: true };
   }
 
-  // Handle special single-segment cases that are always valid
-  if (trimmed === "main" || trimmed === "global" || trimmed === "unknown") {
+  // Handle special single-segment cases that are always valid (case-insensitive like backend)
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "main" || normalized === "global" || normalized === "unknown") {
     return { isValid: true };
   }
 
-  // Check for valid two-segment formats
-  const parts = trimmed.split(":");
+  // Mirror backend parsing: split and filter empty segments like parseAgentSessionKey
+  const parts = trimmed.split(":").filter(Boolean);
   if (parts.length < 2) {
     return {
       isValid: false,
@@ -34,42 +35,46 @@ function validateSessionKeyFormat(input: string): { isValid: boolean; error?: st
 
   const prefix = parts[0]?.toLowerCase();
 
-  // Check agent: format (requires 3 segments)
+  // Check agent: format (requires 3 segments after filtering, like parseAgentSessionKey)
   if (prefix === "agent") {
-    if (parts.length >= 3 && parts[1]?.trim() && parts[2]?.trim()) {
-      return { isValid: true };
+    if (parts.length >= 3) {
+      const agentId = parts[1]?.trim();
+      const rest = parts.slice(2).join(":");
+      if (agentId && rest) {
+        return { isValid: true };
+      }
     }
     return {
       isValid: false,
       error:
-        "Agent format requires 3 segments: agent:agentId:sessionName (e.g., agent:main:xiaohua)",
+        "Agent format requires 3 non-empty segments: agent:agentId:sessionName (e.g., agent:main:xiaohua)",
     };
   }
 
-  // Check subagent: format (requires at least 2 segments)
+  // Check subagent: format (case-insensitive like isSubagentSessionKey)
   if (prefix === "subagent") {
-    if (parts.length >= 2 && parts[1]?.trim()) {
+    if (parts.length >= 2 && parts[1]) {
       return { isValid: true };
     }
     return {
       isValid: false,
-      error: "Subagent format requires at least 2 segments: subagent:xxx",
+      error: "Subagent format requires at least 2 non-empty segments: subagent:xxx",
     };
   }
 
-  // Check acp: format (requires at least 2 segments)
+  // Check acp: format (case-insensitive like isAcpSessionKey)
   if (prefix === "acp") {
-    if (parts.length >= 2 && parts[1]?.trim()) {
+    if (parts.length >= 2 && parts[1]) {
       return { isValid: true };
     }
     return {
       isValid: false,
-      error: "ACP format requires at least 2 segments: acp:xxx",
+      error: "ACP format requires at least 2 non-empty segments: acp:xxx",
     };
   }
 
   // Other two-segment formats are also valid (for extensibility)
-  if (parts.length >= 2 && parts[0]?.trim() && parts[1]?.trim()) {
+  if (parts.length >= 2 && parts[0] && parts[1]) {
     return { isValid: true };
   }
 
