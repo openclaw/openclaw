@@ -22,6 +22,47 @@ export class DiscordSendError extends Error {
 export const DISCORD_MAX_EMOJI_BYTES = 256 * 1024;
 export const DISCORD_MAX_STICKER_BYTES = 512 * 1024;
 
+/**
+ * Discord button styles:
+ * 1 = Primary (blurple)
+ * 2 = Secondary (grey)
+ * 3 = Success (green)
+ * 4 = Danger (red)
+ * 5 = Link (grey, navigates to URL)
+ */
+export type DiscordButtonStyle = 1 | 2 | 3 | 4 | 5;
+
+export type DiscordButton = {
+  /** Component type - always 2 for buttons */
+  type: 2;
+  /** Button style */
+  style: DiscordButtonStyle;
+  /** Text on the button (max 80 chars) */
+  label: string;
+  /** Custom identifier for non-link buttons (max 100 chars) */
+  custom_id?: string;
+  /** URL for link buttons (style 5) */
+  url?: string;
+  /** Whether button is disabled */
+  disabled?: boolean;
+  /** Emoji to display on button */
+  emoji?: {
+    id?: string;
+    name?: string;
+    animated?: boolean;
+  };
+};
+
+export type DiscordActionRow = {
+  /** Component type - always 1 for action rows */
+  type: 1;
+  /** Up to 5 buttons per row */
+  components: DiscordButton[];
+};
+
+/** Array of action rows (up to 5 rows per message) */
+export type DiscordMessageComponents = DiscordActionRow[];
+
 export type DiscordSendResult = {
   messageId: string;
   channelId: string;

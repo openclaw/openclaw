@@ -11,6 +11,25 @@ import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
+/**
+ * Inline buttons scope for Discord.
+ * - "off": disable inline buttons
+ * - "dm": allow only in DMs
+ * - "group": allow only in guild channels
+ * - "all": allow everywhere
+ * - "allowlist": allow based on guild/channel allowlist (default)
+ */
+export type DiscordInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
+
+/**
+ * Discord capabilities config - can be a simple string array or an object with inlineButtons.
+ */
+export type DiscordCapabilitiesConfig =
+  | string[]
+  | {
+      inlineButtons?: DiscordInlineButtonsScope;
+    };
+
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
   enabled?: boolean;
@@ -100,8 +119,8 @@ export type DiscordExecApprovalConfig = {
 export type DiscordAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
-  /** Optional provider capability tags used for agent/runtime guidance. */
-  capabilities?: string[];
+  /** Optional provider capability tags or object with inlineButtons scope. */
+  capabilities?: DiscordCapabilitiesConfig;
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
   /** Override native command registration for Discord (bool or "auto"). */

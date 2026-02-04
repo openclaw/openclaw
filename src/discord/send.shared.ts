@@ -406,6 +406,68 @@ function formatReactionEmoji(emoji: { id?: string | null; name?: string | null }
   return buildReactionIdentifier(emoji);
 }
 
+/**
+ * Send a Discord message with interactive buttons (MessageComponents).
+ * Buttons are only added to the first message chunk.
+ */
+async function sendDiscordTextWithButtons(
+  rest: RequestClient,
+  channelId: string,
+  text: string,
+  components: unknown[],
+  replyTo: string | undefined,
+  request: DiscordRequest,
+  maxLinesPerMessage?: number,
+  embeds?: unknown[],
+  chunkMode?: ChunkMode,
+) {
+  const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
+  const chunks = text
+    ? chunkDiscordTextWithMode(text, {
+        maxChars: DISCORD_TEXT_LIMIT,
+        maxLines: maxLinesPerMessage,
+        chunkMode,
+      })
+    : [];
+  if (!chunks.length && text) {
+    chunks.push(text);
+  }
+  const content = chunks[0] ?? "";
+
+  // Send first message with buttons
+  const res = (await request(
+    () =>
+      rest.post(Routes.channelMessages(channelId), {
+        body: {
+          content: content || undefined,
+          message_reference: messageReference,
+          ...(embeds?.length ? { embeds } : {}),
+          ...(components?.length ? { components } : {}),
+        },
+      }) as Promise<{ id: string; channel_id: string }>,
+    "text-with-buttons",
+  )) as { id: string; channel_id: string };
+
+  // Send remaining chunks without buttons
+  for (const chunk of chunks.slice(1)) {
+    if (!chunk.trim()) {
+      continue;
+    }
+    await sendDiscordText(
+      rest,
+      channelId,
+      chunk,
+      undefined,
+      request,
+      maxLinesPerMessage,
+      undefined,
+      chunkMode,
+    );
+  }
+
+  return res;
+}
+
 export {
   buildDiscordSendError,
   buildReactionIdentifier,
@@ -420,4 +482,5 @@ export {
   resolveDiscordRest,
   sendDiscordMedia,
   sendDiscordText,
+  sendDiscordTextWithButtons,
 };

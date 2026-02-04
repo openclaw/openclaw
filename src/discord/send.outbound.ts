@@ -18,7 +18,9 @@ import {
   resolveChannelId,
   sendDiscordMedia,
   sendDiscordText,
+  sendDiscordTextWithButtons,
 } from "./send.shared.js";
+import type { DiscordMessageComponents } from "./send.types.js";
 
 type DiscordSendOpts = {
   token?: string;
@@ -148,5 +150,64 @@ export async function sendPollDiscord(
   return {
     messageId: res.id ? String(res.id) : "unknown",
     channelId: String(res.channel_id ?? channelId),
+  };
+}
+
+/**
+ * Send a Discord message with inline buttons (MessageComponents).
+ * Requires discord.capabilities.inlineButtons to be enabled.
+ */
+export async function sendMessageWithButtonsDiscord(
+  to: string,
+  text: string,
+  components: DiscordMessageComponents,
+  opts: DiscordSendOpts = {},
+): Promise<DiscordSendResult> {
+  const cfg = loadConfig();
+  const accountInfo = resolveDiscordAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const tableMode = resolveMarkdownTableMode({
+    cfg,
+    channel: "discord",
+    accountId: accountInfo.accountId,
+  });
+  const chunkMode = resolveChunkMode(cfg, "discord", accountInfo.accountId);
+  const textWithTables = convertMarkdownTables(text ?? "", tableMode);
+  const { token, rest, request } = createDiscordClient(opts, cfg);
+  const recipient = await parseAndResolveRecipient(to, opts.accountId);
+  const { channelId } = await resolveChannelId(rest, recipient, request);
+
+  let result: { id: string; channel_id: string };
+  try {
+    result = await sendDiscordTextWithButtons(
+      rest,
+      channelId,
+      textWithTables,
+      components,
+      opts.replyTo,
+      request,
+      accountInfo.config.maxLinesPerMessage,
+      opts.embeds,
+      chunkMode,
+    );
+  } catch (err) {
+    throw await buildDiscordSendError(err, {
+      channelId,
+      rest,
+      token,
+      hasMedia: false,
+    });
+  }
+
+  recordChannelActivity({
+    channel: "discord",
+    accountId: accountInfo.accountId,
+    direction: "outbound",
+  });
+  return {
+    messageId: result.id ? String(result.id) : "unknown",
+    channelId: String(result.channel_id ?? channelId),
   };
 }

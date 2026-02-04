@@ -253,10 +253,17 @@ export const DiscordGuildSchema = z
   })
   .strict();
 
+export const DiscordInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
+
+export const DiscordCapabilitiesSchema = z.union([
+  z.array(z.string()),
+  z.object({ inlineButtons: DiscordInlineButtonsScopeSchema.optional() }).strict(),
+]);
+
 export const DiscordAccountSchema = z
   .object({
     name: z.string().optional(),
-    capabilities: z.array(z.string()).optional(),
+    capabilities: DiscordCapabilitiesSchema.optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
