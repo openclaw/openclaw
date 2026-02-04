@@ -7,17 +7,18 @@ import path from "node:path";
  *
  * Uses AES-256-GCM with a machine-local key file.
  * All files written with 0o600 permissions.
- * Raw args are never exposed — only SHA-256 fingerprints.
+ * Raw args are never exposed — only SHA-256 fingerprints of canonical params JSON.
  */
 
 export type RetryEntry = {
   toolName: string;
-  params: unknown;
+  /** Canonical JSON string of tool params (never logged, only hashed). */
+  paramsJSON: string;
   ctx: Record<string, unknown>;
 };
 
-export function argsFingerprint(argsSummary: string): string {
-  return createHash("sha256").update(argsSummary).digest("hex");
+export function argsFingerprint(paramsJSON: string): string {
+  return createHash("sha256").update(paramsJSON).digest("hex");
 }
 
 function ensureDir(dir: string): void {
@@ -63,14 +64,13 @@ export class AgentShieldRetryStore {
     return key;
   }
 
-  store(id: string, toolName: string, params: unknown, ctx?: Record<string, unknown>): string {
-    const entry: RetryEntry = { toolName, params, ctx: ctx ?? {} };
+  store(id: string, toolName: string, paramsJSON: string, ctx?: Record<string, unknown>): string {
+    const entry: RetryEntry = { toolName, paramsJSON, ctx: ctx ?? {} };
     const plaintext = Buffer.from(JSON.stringify(entry), "utf8");
     const encrypted = encrypt(this.key, plaintext);
     const filePath = path.join(this.dir, `${id}.enc`);
     fs.writeFileSync(filePath, encrypted, { mode: 0o600 });
-    const summary = typeof params === "string" ? params : JSON.stringify(params);
-    return argsFingerprint(summary);
+    return argsFingerprint(paramsJSON);
   }
 
   load(id: string): RetryEntry {
