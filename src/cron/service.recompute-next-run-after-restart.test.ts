@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { start } from "./service/ops.js";
 import { createCronServiceState } from "./service/state.js";
 
@@ -6,7 +9,18 @@ import { createCronServiceState } from "./service/state.js";
 // After restart, cron should recompute nextRunAtMs based on *now*, not advance 24h from lastRunAtMs.
 
 describe("cron: recompute nextRunAtMs on start", () => {
+  let tmpDir: string | undefined;
+
+  afterEach(async () => {
+    if (!tmpDir) return;
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    tmpDir = undefined;
+  });
+
   it("does not skip intermediate cron slots after restart", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-test-"));
+    const storePath = path.join(tmpDir, "cron-store.json");
+
     // Day N: job ran at 20:00 Europe/Zurich = 19:00Z (example)
     // Day N+1 restart at 09:00Z should schedule 12:00 Europe/Zurich = 11:00Z.
     const lastRunAtMs = Date.parse("2026-02-03T19:00:00.104Z");
@@ -14,7 +28,7 @@ describe("cron: recompute nextRunAtMs on start", () => {
 
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: "/tmp/openclaw-cron-test-store.json",
+      storePath,
       nowMs: () => restartNowMs,
       log: {
         debug: () => undefined,
