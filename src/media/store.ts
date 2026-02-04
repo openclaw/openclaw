@@ -9,6 +9,24 @@ import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { resolveConfigDir } from "../utils.js";
 import { detectMime, extensionForMime } from "./mime.js";
 
+/**
+ * Metadata for indexing media by message ID.
+ * Allows lookup of previously saved media when users reply to old messages.
+ */
+export interface MediaMeta {
+  channel: string;
+  chatId: string | number;
+  messageId: string | number;
+}
+
+interface MediaIndexEntry {
+  path: string;
+  contentType?: string;
+  ts: string;
+}
+
+type MediaIndex = Record<string, MediaIndexEntry>;
+
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024; // 5MB default
 const MAX_BYTES = MEDIA_MAX_BYTES;
@@ -66,20 +84,68 @@ export async function ensureMediaDir() {
 
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
   const mediaDir = await ensureMediaDir();
-  const entries = await fs.readdir(mediaDir).catch(() => []);
+  const entries = await fs.readdir(mediaDir, { withFileTypes: true }).catch(() => []);
   const now = Date.now();
-  await Promise.all(
-    entries.map(async (file) => {
-      const full = path.join(mediaDir, file);
+
+  for (const entry of entries) {
+    const full = path.join(mediaDir, entry.name);
+    if (entry.isDirectory()) {
+      // Recurse into subdirs (e.g., inbound/)
+      await cleanSubdirMedia(full, ttlMs, now);
+    } else if (entry.isFile()) {
       const stat = await fs.stat(full).catch(() => null);
-      if (!stat) {
-        return;
-      }
-      if (now - stat.mtimeMs > ttlMs) {
+      if (stat && now - stat.mtimeMs > ttlMs) {
         await fs.rm(full).catch(() => {});
       }
-    }),
+    }
+  }
+}
+
+/**
+ * Clean old media from a subdirectory and prune stale index entries.
+ */
+async function cleanSubdirMedia(dir: string, ttlMs: number, now: number): Promise<void> {
+  const entries = await fs.readdir(dir).catch(() => []);
+  const deletedPaths = new Set<string>();
+
+  // Clean old files
+  await Promise.all(
+    entries
+      .filter((f) => f !== "index.json")
+      .map(async (file) => {
+        const full = path.join(dir, file);
+        const stat = await fs.stat(full).catch(() => null);
+        if (!stat?.isFile()) {
+          return;
+        }
+        if (now - stat.mtimeMs > ttlMs) {
+          await fs.rm(full).catch(() => {});
+          deletedPaths.add(full);
+        }
+      }),
   );
+
+  // Prune stale index entries
+  if (deletedPaths.size > 0) {
+    const subdir = path.basename(dir);
+    const indexPath = getMediaIndexPath(subdir);
+    try {
+      const raw = await fs.readFile(indexPath, "utf-8");
+      const index = JSON.parse(raw) as MediaIndex;
+      let changed = false;
+      for (const [key, entry] of Object.entries(index)) {
+        if (deletedPaths.has(entry.path)) {
+          delete index[key];
+          changed = true;
+        }
+      }
+      if (changed) {
+        await writeMediaIndex(subdir, index);
+      }
+    } catch {
+      // No index file or parse error - nothing to prune
+    }
+  }
 }
 
 function looksLikeUrl(src: string) {
@@ -214,6 +280,7 @@ export async function saveMediaBuffer(
   subdir = "inbound",
   maxBytes = MAX_BYTES,
   originalFilename?: string,
+  meta?: MediaMeta,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {
     throw new Error(`Media exceeds ${(maxBytes / (1024 * 1024)).toFixed(0)}MB limit`);
@@ -238,5 +305,91 @@ export async function saveMediaBuffer(
 
   const dest = path.join(dir, id);
   await fs.writeFile(dest, buffer, { mode: 0o600 });
+
+  // Index by message ID if metadata provided (enables reply-to media lookup)
+  if (meta?.messageId != null && meta?.chatId != null && meta?.channel) {
+    await updateMediaIndex(subdir, meta, { path: dest, contentType: mime });
+  }
+
   return { id, path: dest, size: buffer.byteLength, contentType: mime };
+}
+
+/**
+ * Build index key from media metadata.
+ */
+function buildMediaIndexKey(meta: MediaMeta): string {
+  return `${meta.channel}:${meta.chatId}:${meta.messageId}`;
+}
+
+/**
+ * Get path to media index file for a subdir.
+ */
+function getMediaIndexPath(subdir: string): string {
+  return path.join(resolveMediaDir(), subdir, "index.json");
+}
+
+/**
+ * Read media index from disk.
+ */
+async function readMediaIndex(subdir: string): Promise<MediaIndex> {
+  const indexPath = getMediaIndexPath(subdir);
+  try {
+    const raw = await fs.readFile(indexPath, "utf-8");
+    return JSON.parse(raw) as MediaIndex;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Write media index to disk atomically.
+ */
+async function writeMediaIndex(subdir: string, index: MediaIndex): Promise<void> {
+  const indexPath = getMediaIndexPath(subdir);
+  const tmpPath = `${indexPath}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(index, null, 2), { mode: 0o600 });
+  await fs.rename(tmpPath, indexPath);
+}
+
+/**
+ * Update media index with a new entry.
+ */
+async function updateMediaIndex(
+  subdir: string,
+  meta: MediaMeta,
+  entry: { path: string; contentType?: string },
+): Promise<void> {
+  const index = await readMediaIndex(subdir);
+  const key = buildMediaIndexKey(meta);
+  index[key] = {
+    path: entry.path,
+    contentType: entry.contentType,
+    ts: new Date().toISOString(),
+  };
+  await writeMediaIndex(subdir, index);
+}
+
+/**
+ * Look up media by message ID from a previous message.
+ * Returns the saved media path and content type if found.
+ */
+export async function lookupMediaByMessageId(
+  channel: string,
+  chatId: string | number,
+  messageId: string | number,
+  subdir = "inbound",
+): Promise<{ path: string; contentType?: string } | null> {
+  const index = await readMediaIndex(subdir);
+  const key = buildMediaIndexKey({ channel, chatId, messageId });
+  const entry = index[key];
+  if (!entry) {
+    return null;
+  }
+  // Verify file still exists (might have been cleaned up)
+  try {
+    await fs.access(entry.path);
+    return { path: entry.path, contentType: entry.contentType };
+  } catch {
+    return null;
+  }
 }

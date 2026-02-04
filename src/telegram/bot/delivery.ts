@@ -10,7 +10,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { isGifMedia } from "../../media/mime.js";
-import { saveMediaBuffer } from "../../media/store.js";
+import { saveMediaBuffer, type MediaMeta } from "../../media/store.js";
 import { loadWebMedia } from "../../web/media.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { splitTelegramCaption } from "../caption.js";
@@ -73,7 +73,9 @@ export async function deliverReplies(params: {
         : [markdown];
     const chunks: ReturnType<typeof markdownToTelegramChunks> = [];
     for (const chunk of markdownChunks) {
-      const nested = markdownToTelegramChunks(chunk, textLimit, { tableMode: params.tableMode });
+      const nested = markdownToTelegramChunks(chunk, textLimit, {
+        tableMode: params.tableMode,
+      });
       if (!nested.length && chunk) {
         chunks.push({
           html: markdownToTelegramHtml(chunk, { tableMode: params.tableMode }),
@@ -296,6 +298,7 @@ export async function resolveMedia(
   maxBytes: number,
   token: string,
   proxyFetch?: typeof fetch,
+  mediaMeta?: MediaMeta,
 ): Promise<{
   path: string;
   contentType?: string;
@@ -340,6 +343,7 @@ export async function resolveMedia(
         "inbound",
         maxBytes,
         originalName,
+        mediaMeta,
       );
 
       // Check sticker cache for existing description
@@ -421,6 +425,7 @@ export async function resolveMedia(
     "inbound",
     maxBytes,
     originalName,
+    mediaMeta,
   );
   let placeholder = "<media:document>";
   if (msg.photo) {

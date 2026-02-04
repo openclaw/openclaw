@@ -50,7 +50,11 @@ export const registerTelegramHandlers = ({
 
   type TextFragmentEntry = {
     key: string;
-    messages: Array<{ msg: TelegramMessage; ctx: unknown; receivedAtMs: number }>;
+    messages: Array<{
+      msg: TelegramMessage;
+      ctx: unknown;
+      receivedAtMs: number;
+    }>;
     timer: ReturnType<typeof setTimeout>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
@@ -132,7 +136,19 @@ export const registerTelegramHandlers = ({
         stickerMetadata?: { emoji?: string; setName?: string; fileId?: string };
       }> = [];
       for (const { ctx } of entry.messages) {
-        const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        const msg = ctx.message;
+        const mediaMeta = {
+          channel: "telegram",
+          chatId: msg.chat.id,
+          messageId: msg.message_id,
+        };
+        const media = await resolveMedia(
+          ctx,
+          mediaMaxBytes,
+          opts.token,
+          opts.proxyFetch,
+          mediaMeta,
+        );
         if (media) {
           allMedia.push({
             path: media.path,
@@ -319,7 +335,11 @@ export const registerTelegramHandlers = ({
         const groupAllowlist = resolveGroupPolicy(chatId);
         if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
           logger.info(
-            { chatId, title: callbackMessage.chat.title, reason: "not-allowed" },
+            {
+              chatId,
+              title: callbackMessage.chat.title,
+              reason: "not-allowed",
+            },
             "skipping group message",
           );
           return;
@@ -674,7 +694,12 @@ export const registerTelegramHandlers = ({
 
       let media: Awaited<ReturnType<typeof resolveMedia>> = null;
       try {
-        media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        const mediaMeta = {
+          channel: "telegram",
+          chatId: msg.chat.id,
+          messageId: msg.message_id,
+        };
+        media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch, mediaMeta);
       } catch (mediaErr) {
         const errMsg = String(mediaErr);
         if (errMsg.includes("exceeds") && errMsg.includes("MB limit")) {

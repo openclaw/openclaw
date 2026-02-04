@@ -181,11 +181,17 @@ export const buildTelegramMessageContext = async ({
   const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
   const threadKeys =
     dmThreadId != null
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: String(dmThreadId) })
+      ? resolveThreadSessionKeys({
+          baseSessionKey,
+          threadId: String(dmThreadId),
+        })
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  const effectiveDmAllow = normalizeAllowFromWithStore({ allowFrom, storeAllowFrom });
+  const effectiveDmAllow = normalizeAllowFromWithStore({
+    allowFrom,
+    storeAllowFrom,
+  });
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   const effectiveGroupAllow = normalizeAllowFromWithStore({
     allowFrom: groupAllowOverride ?? groupAllowFrom,
@@ -334,7 +340,12 @@ export const buildTelegramMessageContext = async ({
   });
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
-    authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
+    authorizers: [
+      {
+        configured: allowForCommands.hasEntries,
+        allowed: senderAllowedForCommands,
+      },
+    ],
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
   });
@@ -499,7 +510,7 @@ export const buildTelegramMessageContext = async ({
         )
       : null;
 
-  const replyTarget = describeReplyTarget(msg);
+  const replyTarget = await describeReplyTarget(msg, chatId);
   const forwardOrigin = normalizeForwardedContext(msg);
   const replySuffix = replyTarget
     ? replyTarget.kind === "quote"
@@ -592,6 +603,8 @@ export const buildTelegramMessageContext = async ({
     ReplyToBody: replyTarget?.body,
     ReplyToSender: replyTarget?.sender,
     ReplyToIsQuote: replyTarget?.kind === "quote" ? true : undefined,
+    ReplyToMediaPath: replyTarget?.mediaPath,
+    ReplyToMediaType: replyTarget?.mediaType,
     ForwardedFrom: forwardOrigin?.from,
     ForwardedFromType: forwardOrigin?.fromType,
     ForwardedFromId: forwardOrigin?.fromId,
