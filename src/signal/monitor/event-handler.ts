@@ -198,6 +198,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       responsePrefix: prefixContext.responsePrefix,
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
+      hookContext: {
+        channelId: "signal",
+        accountId: deps.accountId,
+        conversationId: ctxPayload.To,
+      },
+      hookTarget: ctxPayload.To,
       deliver: async (payload) => {
         await deps.deliverReplies({
           replies: [payload],

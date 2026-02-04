@@ -345,6 +345,15 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     responsePrefix: prefixContext.responsePrefix,
     responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+    hookContext: {
+      channelId: "discord",
+      accountId,
+      conversationId: deliverTarget,
+    },
+    hookTarget: deliverTarget,
+    hookMetadata: {
+      channelId: message.channelId,
+    },
     deliver: async (payload: ReplyPayload) => {
       const replyToId = replyReference.use();
       await deliverDiscordReply({

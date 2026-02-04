@@ -3,6 +3,10 @@ import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
+import type {
+  PluginHookMessageContext,
+  PluginHookMessageSendingResult,
+} from "../../plugins/types.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
@@ -21,8 +25,11 @@ import {
   appendAssistantMessageToSessionTranscript,
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
+import { formatErrorMessage } from "../errors.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
@@ -198,6 +205,14 @@ export async function deliverOutboundPayloads(params: {
   };
 }): Promise<OutboundDeliveryResult[]> {
   const { cfg, channel, to, payloads } = params;
+  const hookRunner = getGlobalHookRunner();
+  const hookContext: PluginHookMessageContext | undefined = hookRunner
+    ? {
+        channelId: channel,
+        accountId: params.accountId ?? undefined,
+        conversationId: to,
+      }
+    : undefined;
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
@@ -319,16 +334,69 @@ export async function deliverOutboundPayloads(params: {
   };
   const normalizedPayloads = normalizeReplyPayloadsForDelivery(payloads);
   for (const payload of normalizedPayloads) {
-    const payloadSummary: NormalizedOutboundPayload = {
+    let payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
       mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
       channelData: payload.channelData,
     };
+    let outboundPayload: ReplyPayload = payload;
+    let hookContent = payloadSummary.text;
+    if (hookRunner?.hasHooks("message_sending") && hookContext) {
+      const metadata = {
+        channel,
+        accountId,
+        threadId: params.threadId ?? undefined,
+        replyToId: params.replyToId ?? undefined,
+        hasMedia: payloadSummary.mediaUrls.length > 0,
+      };
+      let hookResult: PluginHookMessageSendingResult | void = undefined;
+      try {
+        hookResult = await hookRunner.runMessageSending(
+          {
+            to,
+            content: hookContent,
+            metadata,
+          },
+          hookContext,
+        );
+      } catch (err) {
+        logVerbose(`hooks: message_sending failed: ${formatErrorMessage(err)}`);
+      }
+      if (hookResult?.cancel) {
+        if (hookRunner.hasHooks("message_sent")) {
+          void hookRunner.runMessageSent(
+            {
+              to,
+              content: hookContent,
+              success: false,
+              error: "cancelled by hook",
+            },
+            hookContext,
+          );
+        }
+        continue;
+      }
+      if (typeof hookResult?.content === "string") {
+        hookContent = hookResult.content;
+        payloadSummary = { ...payloadSummary, text: hookContent };
+        outboundPayload = { ...payload, text: hookContent };
+      }
+    }
     try {
       throwIfAborted(abortSignal);
       params.onPayload?.(payloadSummary);
-      if (handler.sendPayload && payload.channelData) {
-        results.push(await handler.sendPayload(payload));
+      if (handler.sendPayload && outboundPayload.channelData) {
+        results.push(await handler.sendPayload(outboundPayload));
+        if (hookRunner?.hasHooks("message_sent") && hookContext) {
+          void hookRunner.runMessageSent(
+            {
+              to,
+              content: hookContent,
+              success: true,
+            },
+            hookContext,
+          );
+        }
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
@@ -336,6 +404,16 @@ export async function deliverOutboundPayloads(params: {
           await sendSignalTextChunks(payloadSummary.text);
         } else {
           await sendTextChunks(payloadSummary.text);
+        }
+        if (hookRunner?.hasHooks("message_sent") && hookContext) {
+          void hookRunner.runMessageSent(
+            {
+              to,
+              content: hookContent,
+              success: true,
+            },
+            hookContext,
+          );
         }
         continue;
       }
@@ -351,7 +429,28 @@ export async function deliverOutboundPayloads(params: {
           results.push(await handler.sendMedia(caption, url));
         }
       }
+      if (hookRunner?.hasHooks("message_sent") && hookContext) {
+        void hookRunner.runMessageSent(
+          {
+            to,
+            content: hookContent,
+            success: true,
+          },
+          hookContext,
+        );
+      }
     } catch (err) {
+      if (hookRunner?.hasHooks("message_sent") && hookContext) {
+        void hookRunner.runMessageSent(
+          {
+            to,
+            content: hookContent,
+            success: false,
+            error: formatErrorMessage(err),
+          },
+          hookContext,
+        );
+      }
       if (!params.bestEffort) {
         throw err;
       }

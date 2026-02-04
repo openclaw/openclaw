@@ -3,7 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SessionEntry } from "./types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { resolveDefaultSessionStorePath, resolveSessionTranscriptPath } from "./paths.js";
+import {
+  resolveDefaultSessionStorePath,
+  resolveSessionFilePath,
+  resolveSessionTranscriptPath,
+} from "./paths.js";
 import { loadSessionStore, updateSessionStore } from "./store.js";
 
 function stripQuery(value: string): string {
@@ -73,6 +77,54 @@ async function ensureSessionHeader(params: {
     cwd: process.cwd(),
   };
   await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
+}
+
+export async function countSessionMessages(params: {
+  sessionId: string;
+  entry?: SessionEntry;
+  agentId?: string;
+}): Promise<number> {
+  const sessionFile = resolveSessionFilePath(params.sessionId, params.entry, {
+    agentId: params.agentId,
+  });
+  try {
+    await fs.promises.access(sessionFile);
+  } catch {
+    return 0;
+  }
+
+  let count = 0;
+  let buffer = "";
+  const stream = fs.createReadStream(sessionFile, { encoding: "utf-8" });
+  const processLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return;
+    }
+    try {
+      const entry = JSON.parse(trimmed) as { type?: string } | undefined;
+      if (entry?.type === "message") {
+        count += 1;
+      }
+    } catch {
+      // ignore malformed lines
+    }
+  };
+
+  for await (const chunk of stream) {
+    buffer += chunk;
+    let newlineIndex = buffer.indexOf("\n");
+    while (newlineIndex >= 0) {
+      const line = buffer.slice(0, newlineIndex);
+      buffer = buffer.slice(newlineIndex + 1);
+      processLine(line);
+      newlineIndex = buffer.indexOf("\n");
+    }
+  }
+  if (buffer.trim()) {
+    processLine(buffer);
+  }
+  return count;
 }
 
 export async function appendAssistantMessageToSessionTranscript(params: {

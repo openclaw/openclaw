@@ -41,6 +41,7 @@ import {
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
@@ -234,6 +235,7 @@ export async function startGatewayServer(
     coreGatewayHandlers,
     baseMethods,
   });
+  const hookRunner = getGlobalHookRunner();
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -552,6 +554,12 @@ export async function startGatewayServer(
     logBrowser,
   }));
 
+  if (hookRunner?.hasHooks("gateway_start")) {
+    void hookRunner
+      .runGatewayStart({ port }, { port })
+      .catch((err) => logHooks.warn(`gateway_start hook failed: ${String(err)}`));
+  }
+
   const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
     deps,
     broadcast,
@@ -618,6 +626,11 @@ export async function startGatewayServer(
 
   return {
     close: async (opts) => {
+      if (hookRunner?.hasHooks("gateway_stop")) {
+        void hookRunner
+          .runGatewayStop({ reason: opts?.reason }, { port })
+          .catch((err) => logHooks.warn(`gateway_stop hook failed: ${String(err)}`));
+      }
       if (diagnosticsEnabled) {
         stopDiagnosticHeartbeat();
       }

@@ -1,7 +1,14 @@
 import type { HumanDelayConfig } from "../../config/types.js";
+import type {
+  PluginHookMessageContext,
+  PluginHookMessageSendingResult,
+} from "../../plugins/types.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
+import { logVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { sleep } from "../../utils.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 
@@ -18,6 +25,11 @@ type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
   info: { kind: ReplyDispatchKind },
 ) => Promise<void>;
+
+type ReplyDispatchHookMetadataProvider = (
+  payload: ReplyPayload,
+  info: { kind: ReplyDispatchKind },
+) => Record<string, unknown> | undefined;
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
@@ -53,6 +65,12 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Hook context for message_sending/message_sent hooks. */
+  hookContext?: PluginHookMessageContext;
+  /** Override hook "to" target. Defaults to hookContext.conversationId. */
+  hookTarget?: string;
+  /** Extra metadata for message hooks. */
+  hookMetadata?: Record<string, unknown> | ReplyDispatchHookMetadataProvider;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -97,6 +115,7 @@ function normalizeReplyPayloadInternal(
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
+  const hookRunner = getGlobalHookRunner();
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   let pending = 0;
@@ -131,6 +150,11 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 
     sendChain = sendChain
       .then(async () => {
+        let outboundPayload = normalized;
+        let hookContent = normalized.text ?? "";
+        const hookContext = options.hookContext;
+        const hookTarget = options.hookTarget ?? hookContext?.conversationId;
+
         // Add human-like delay between block replies for natural rhythm.
         if (shouldDelay) {
           const delayMs = getHumanDelay(options.humanDelay);
@@ -138,7 +162,73 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        await options.deliver(normalized, { kind });
+        if (hookRunner?.hasHooks("message_sending") && hookContext && hookTarget) {
+          const metadata = {
+            ...(typeof options.hookMetadata === "function"
+              ? options.hookMetadata(normalized, { kind })
+              : options.hookMetadata),
+            kind,
+            hasMedia: Boolean(normalized.mediaUrl) || (normalized.mediaUrls?.length ?? 0) > 0,
+          };
+          let hookResult: PluginHookMessageSendingResult | void = undefined;
+          try {
+            hookResult = await hookRunner.runMessageSending(
+              {
+                to: hookTarget,
+                content: hookContent,
+                metadata,
+              },
+              hookContext,
+            );
+          } catch (err) {
+            logVerbose(`hooks: message_sending failed: ${formatErrorMessage(err)}`);
+          }
+          if (hookResult?.cancel) {
+            if (hookRunner.hasHooks("message_sent")) {
+              void hookRunner.runMessageSent(
+                {
+                  to: hookTarget,
+                  content: hookContent,
+                  success: false,
+                  error: "cancelled by hook",
+                },
+                hookContext,
+              );
+            }
+            return;
+          }
+          if (typeof hookResult?.content === "string") {
+            hookContent = hookResult.content;
+            outboundPayload = { ...normalized, text: hookContent };
+          }
+        }
+
+        try {
+          await options.deliver(outboundPayload, { kind });
+          if (hookRunner?.hasHooks("message_sent") && hookContext && hookTarget) {
+            void hookRunner.runMessageSent(
+              {
+                to: hookTarget,
+                content: hookContent,
+                success: true,
+              },
+              hookContext,
+            );
+          }
+        } catch (err) {
+          if (hookRunner?.hasHooks("message_sent") && hookContext && hookTarget) {
+            void hookRunner.runMessageSent(
+              {
+                to: hookTarget,
+                content: hookContent,
+                success: false,
+                error: formatErrorMessage(err),
+              },
+              hookContext,
+            );
+          }
+          throw err;
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });

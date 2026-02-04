@@ -9,6 +9,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import {
   DEFAULT_RESET_TRIGGERS,
+  countSessionMessages,
   deriveSessionMetaPatch,
   evaluateSessionFreshness,
   type GroupKeyResolution,
@@ -26,6 +27,8 @@ import {
   type SessionScope,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -195,6 +198,8 @@ export async function initSessionState(params: {
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   const entry = sessionStore[sessionKey];
+  const previousSessionId = entry?.sessionId;
+  let resumedFrom: string | undefined;
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
@@ -237,6 +242,10 @@ export async function initSessionState(params: {
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
+  }
+
+  if (isNewSession && previousSessionId && previousSessionId !== sessionId) {
+    resumedFrom = previousSessionId;
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
@@ -320,6 +329,7 @@ export async function initSessionState(params: {
       sessionId = forked.sessionId;
       sessionEntry.sessionId = forked.sessionId;
       sessionEntry.sessionFile = forked.sessionFile;
+      resumedFrom = sessionStore[parentSessionKey]?.sessionId ?? resumedFrom;
     }
   }
   if (!sessionEntry.sessionFile) {
@@ -340,6 +350,58 @@ export async function initSessionState(params: {
     // Preserve per-session overrides while resetting compaction state on /new.
     store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
   });
+
+  const hookRunner = getGlobalHookRunner();
+  if (
+    hookRunner?.hasHooks("session_end") &&
+    previousSessionId &&
+    previousSessionId !== sessionEntry.sessionId
+  ) {
+    void (async () => {
+      const sessionFile = resolveSessionFilePath(previousSessionId, entry, { agentId });
+      const sessionFileBytes = sessionFile
+        ? await fs.promises
+            .stat(sessionFile)
+            .then((stat) => stat.size)
+            .catch(() => undefined)
+        : undefined;
+      const messageCount = await countSessionMessages({
+        sessionId: previousSessionId,
+        entry,
+        agentId,
+      }).catch(() => 0);
+      await hookRunner.runSessionEnd(
+        {
+          sessionId: previousSessionId,
+          messageCount,
+          sessionFile,
+          sessionFileBytes,
+        },
+        {
+          agentId,
+          sessionId: previousSessionId,
+        },
+      );
+    })().catch((err) => {
+      logVerbose(`hooks: session_end failed: ${String(err)}`);
+    });
+  }
+  if (hookRunner?.hasHooks("session_start") && isNewSession) {
+    void hookRunner
+      .runSessionStart(
+        {
+          sessionId: sessionEntry.sessionId,
+          resumedFrom,
+        },
+        {
+          agentId,
+          sessionId: sessionEntry.sessionId,
+        },
+      )
+      .catch((err) => {
+        logVerbose(`hooks: session_start failed: ${String(err)}`);
+      });
+  }
 
   const sessionCtx: TemplateContext = {
     ...ctx,

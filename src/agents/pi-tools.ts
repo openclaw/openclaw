@@ -23,7 +23,7 @@ import {
 import { listChannelAgentTools } from "./channel-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
-import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
+import { wrapToolWithHookRunner } from "./pi-tools.hooks.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicies,
@@ -431,10 +431,7 @@ export function createOpenClawCodingTools(options?: {
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   const normalized = subagentFiltered.map(normalizeToolParameters);
   const withHooks = normalized.map((tool) =>
-    wrapToolWithBeforeToolCallHook(tool, {
-      agentId,
-      sessionKey: options?.sessionKey,
-    }),
+    wrapToolWithHookRunner(tool, { agentId, sessionKey: options?.sessionKey }),
   );
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))

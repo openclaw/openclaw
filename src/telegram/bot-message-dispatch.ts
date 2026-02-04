@@ -230,6 +230,15 @@ export const dispatchTelegramMessage = async ({
     dispatcherOptions: {
       responsePrefix: prefixContext.responsePrefix,
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      hookContext: {
+        channelId: "telegram",
+        accountId: route.accountId,
+        conversationId: String(chatId),
+      },
+      hookTarget: String(chatId),
+      hookMetadata: {
+        threadId: threadSpec.id,
+      },
       deliver: async (payload, info) => {
         if (info.kind === "final") {
           await flushDraft();

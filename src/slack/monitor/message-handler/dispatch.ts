@@ -101,6 +101,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     responsePrefix: prefixContext.responsePrefix,
     responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+    hookContext: {
+      channelId: "slack",
+      accountId: account.accountId,
+      conversationId: prepared.replyTarget,
+    },
+    hookTarget: prepared.replyTarget,
+    hookMetadata: {
+      channel: message.channel,
+      threadTs: incomingThreadTs ?? messageTs,
+    },
     deliver: async (payload) => {
       const replyThreadTs = replyPlan.nextThreadTs();
       await deliverReplies({

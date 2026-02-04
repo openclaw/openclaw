@@ -12,13 +12,16 @@ import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
+  countSessionMessages,
   resolveSessionFilePath,
   resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
@@ -245,7 +248,57 @@ export async function runReplyAgent(params: {
       return false;
     }
     const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
+    const hookRunner = getGlobalHookRunner();
+    const hookAgentId = resolveAgentIdFromSessionKey(sessionKey);
+    if (hookRunner?.hasHooks("session_end")) {
+      const sessionFile = resolveSessionFilePath(prevEntry.sessionId, prevEntry, {
+        agentId: hookAgentId,
+      });
+      const sessionFileBytes = sessionFile
+        ? await fs.promises
+            .stat(sessionFile)
+            .then((stat) => stat.size)
+            .catch(() => undefined)
+        : undefined;
+      const messageCount = await countSessionMessages({
+        sessionId: prevEntry.sessionId,
+        entry: prevEntry,
+        agentId: hookAgentId,
+      }).catch(() => 0);
+      void hookRunner
+        .runSessionEnd(
+          {
+            sessionId: prevEntry.sessionId,
+            messageCount,
+            sessionFile,
+            sessionFileBytes,
+          },
+          {
+            agentId: hookAgentId,
+            sessionId: prevEntry.sessionId,
+          },
+        )
+        .catch((err) => {
+          logVerbose(`hooks: session_end failed: ${String(err)}`);
+        });
+    }
     const nextSessionId = crypto.randomUUID();
+    if (hookRunner?.hasHooks("session_start")) {
+      void hookRunner
+        .runSessionStart(
+          {
+            sessionId: nextSessionId,
+            resumedFrom: prevEntry.sessionId,
+          },
+          {
+            agentId: hookAgentId,
+            sessionId: nextSessionId,
+          },
+        )
+        .catch((err) => {
+          logVerbose(`hooks: session_start failed: ${String(err)}`);
+        });
+    }
     const nextEntry: SessionEntry = {
       ...prevEntry,
       sessionId: nextSessionId,

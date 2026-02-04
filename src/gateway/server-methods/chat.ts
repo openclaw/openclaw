@@ -484,6 +484,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       const dispatcher = createReplyDispatcher({
         responsePrefix: resolveEffectiveMessagesConfig(cfg, agentId).responsePrefix,
         responsePrefixContextProvider: () => prefixContext,
+        hookContext: {
+          channelId: INTERNAL_MESSAGE_CHANNEL,
+          conversationId: p.sessionKey,
+        },
+        hookTarget: p.sessionKey,
+        hookMetadata: {
+          runId: clientRunId,
+        },
         onError: (err) => {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },

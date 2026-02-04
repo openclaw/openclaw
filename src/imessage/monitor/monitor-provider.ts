@@ -616,6 +616,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       responsePrefix: prefixContext.responsePrefix,
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+      hookContext: {
+        channelId: "imessage",
+        accountId: accountInfo.accountId,
+        conversationId: ctxPayload.To,
+      },
+      hookTarget: ctxPayload.To,
       deliver: async (payload) => {
         await deliverReplies({
           replies: [payload],
