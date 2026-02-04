@@ -1199,19 +1199,22 @@ public struct ConfigApplyParams: Codable, Sendable {
     public let sessionkey: String?
     public let note: String?
     public let restartdelayms: Int?
+    public let force: Bool?
 
     public init(
         raw: String,
         basehash: String?,
         sessionkey: String?,
         note: String?,
-        restartdelayms: Int?
+        restartdelayms: Int?,
+        force: Bool?
     ) {
         self.raw = raw
         self.basehash = basehash
         self.sessionkey = sessionkey
         self.note = note
         self.restartdelayms = restartdelayms
+        self.force = force
     }
     private enum CodingKeys: String, CodingKey {
         case raw
@@ -1219,6 +1222,7 @@ public struct ConfigApplyParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case note
         case restartdelayms = "restartDelayMs"
+        case force
     }
 }
 
