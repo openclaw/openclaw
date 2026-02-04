@@ -156,8 +156,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // If we're not streaming block replies, ensure the final payload includes
     // the final text even when interim streaming was enabled.
     if (state.includeReasoning && text && !params.onBlockReply) {
-      traceRaw({
-        event: "embedded_finalize_assistant_texts",
+      log.trace("embedded_finalize_assistant_texts", {
         mode: "includeReasoning_noBlockReply",
         textLen: text.length,
         assistantTextsLen: assistantTexts.length,
@@ -177,8 +176,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       }
       state.suppressBlockChunks = true;
     } else if (!addedDuringMessage && !chunkerHasBuffered && text) {
-      traceRaw({
-        event: "embedded_finalize_assistant_texts",
+      log.trace("embedded_finalize_assistant_texts", {
         mode: "nonStreaming_push_final",
         textLen: text.length,
         assistantTextsLen: assistantTexts.length,
@@ -190,8 +188,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       // text when the chunker has nothing buffered to drain.
       pushAssistantText(text);
     } else {
-      traceRaw({
-        event: "embedded_finalize_assistant_texts",
+      log.trace("embedded_finalize_assistant_texts", {
         mode: "noop",
         textLen: text.length,
         assistantTextsLen: assistantTexts.length,
