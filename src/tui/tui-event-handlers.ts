@@ -18,17 +18,24 @@ export function createEventHandlers(context: EventHandlerContext) {
   const { chatLog, tui, state, setActivityStatus, refreshSessionInfo, getAgentDisplayName } =
     context;
 
-  // Helper to get current agent's display name
-  const getCurrentAgentName = () => {
+  // Helper to get agent's display name from sessionKey or current state
+  const getAgentNameFromSession = (sessionKey?: string) => {
+    // Parse agentId from sessionKey (format: agent:<id>:main)
+    let agentId = state.currentAgentId;
+    if (sessionKey) {
+      const parts = sessionKey.split(":");
+      if (parts.length >= 2 && parts[0] === "agent") {
+        agentId = parts[1];
+      }
+    }
     if (getAgentDisplayName) {
-      return getAgentDisplayName(state.currentAgentId);
+      return getAgentDisplayName(agentId);
     }
     // Fallback: capitalize first letter of agentId
-    const id = state.currentAgentId;
-    if (id === "main") {
+    if (agentId === "main") {
       return "Aria";
     }
-    return id.charAt(0).toUpperCase() + id.slice(1);
+    return agentId.charAt(0).toUpperCase() + agentId.slice(1);
   };
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
@@ -133,7 +140,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       const finalText = streamAssembler.finalize(evt.runId, evt.message, state.showThinking);
       // Filter out NO_REPLY silent responses from display
       if (!isSilentReplyText(finalText, SILENT_REPLY_TOKEN)) {
-        chatLog.finalizeAssistant(finalText, evt.runId, getCurrentAgentName());
+        chatLog.finalizeAssistant(finalText, evt.runId, getAgentNameFromSession(evt.sessionKey));
       }
       noteFinalizedRun(evt.runId);
       state.activeChatRunId = null;

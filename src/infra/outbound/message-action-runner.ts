@@ -731,9 +731,10 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       const resolvedPrefix = resolveResponsePrefixTemplate(messagesConfig.responsePrefix, {
         identityName,
       });
-      // Only prepend if message doesn't already start with the prefix
-      if (resolvedPrefix && !message.startsWith(resolvedPrefix)) {
-        message = `${resolvedPrefix} ${message}`;
+      // Only prepend if message doesn't already start with the prefix (trim to handle whitespace)
+      const trimmedPrefix = resolvedPrefix?.trim();
+      if (trimmedPrefix && !message.trim().startsWith(trimmedPrefix)) {
+        message = `${trimmedPrefix} ${message}`;
       }
     }
   }
