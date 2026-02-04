@@ -61,7 +61,7 @@ export type ProvidersHealthHost = {
   providersConfigHash: string | null;
   providersModelsSaving: boolean;
   providersModelsDirty: boolean;
-  providersModelsCostFilter: "all" | "high" | "medium" | "low";
+  providersModelsCostFilter: "all" | "high" | "medium" | "low" | "free";
 };
 
 type RawEntry = {
@@ -185,6 +185,10 @@ const COST_TIER_PATTERNS: Array<{ pattern: string; tier: ModelCostTier }> = [
 
 function resolveModelCostTier(modelId: string): ModelCostTier {
   const lower = modelId.toLowerCase();
+  // OpenRouter free-tier models have ":free" suffix
+  if (lower.endsWith(":free")) {
+    return "free";
+  }
   for (const { pattern, tier } of COST_TIER_PATTERNS) {
     if (lower.startsWith(pattern) || lower.includes(pattern)) {
       return tier;

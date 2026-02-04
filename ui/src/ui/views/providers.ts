@@ -22,7 +22,7 @@ export type ProvidersProps = {
   modelAllowlist: Set<string>;
   primaryModel: string | null;
   modelsSaving: boolean;
-  modelsCostFilter: "all" | "high" | "medium" | "low";
+  modelsCostFilter: "all" | "high" | "medium" | "low" | "free";
   authConfigProvider: string | null;
   authConfigSaving: boolean;
   authProvidersList: AuthProviderEntry[] | null;
@@ -34,7 +34,7 @@ export type ProvidersProps = {
   onToggleModel: (key: string) => void;
   onSetPrimary: (key: string) => void;
   onSaveModels: () => void;
-  onCostFilterChange: (filter: "all" | "high" | "medium" | "low") => void;
+  onCostFilterChange: (filter: "all" | "high" | "medium" | "low" | "free") => void;
   onConfigureProvider: (id: string | null) => void;
   onSaveCredential: (
     provider: string,
@@ -708,17 +708,18 @@ function formatContextWindow(n: number): string {
   return Number.isInteger(k) ? `${k}k` : `${k.toFixed(0)}k`;
 }
 
-type CostFilterOption = { value: "all" | "high" | "medium" | "low"; label: string };
+type CostFilterOption = { value: "all" | "high" | "medium" | "low" | "free"; label: string };
 const COST_FILTER_OPTIONS: CostFilterOption[] = [
   { value: "all", label: "All" },
   { value: "high", label: "High" },
   { value: "medium", label: "Medium" },
   { value: "low", label: "Low" },
+  { value: "free", label: "Free" },
 ];
 
 function matchesCostFilter(
   tier: ModelCostTier,
-  filter: "all" | "high" | "medium" | "low",
+  filter: "all" | "high" | "medium" | "low" | "free",
 ): boolean {
   if (filter === "all") {
     return true;
@@ -728,6 +729,9 @@ function matchesCostFilter(
   }
   if (filter === "medium") {
     return tier === "moderate";
+  }
+  if (filter === "free") {
+    return tier === "free";
   }
   // low = cheap + free
   return tier === "cheap" || tier === "free";

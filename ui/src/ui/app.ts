@@ -259,7 +259,7 @@ export class OpenClawApp extends LitElement {
   @state() providersConfigHash: string | null = null;
   @state() providersModelsSaving = false;
   @state() providersModelsDirty = false;
-  @state() providersModelsCostFilter: "all" | "high" | "medium" | "low" = "all";
+  @state() providersModelsCostFilter: "all" | "high" | "medium" | "low" | "free" = "all";
   @state() authConfigProvider: string | null = null;
   @state() authConfigSaving = false;
   @state() authProvidersList: AuthProviderEntry[] | null = null;
