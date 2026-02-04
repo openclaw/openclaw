@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Security: require operator.approvals for gateway /approve commands. (#1) Thanks @mitsuhiko, @yueyueL.
+- Updates: honor update.channel for update.run (Control UI) and channel-based npm tags for global installs.
 - Security: Matrix allowlists now require full MXIDs; ambiguous name resolution no longer grants access. Thanks @MegaManSec.
 - Security: enforce access-group gating for Slack slash commands when channel type lookup fails.
 - Security: require validated shared-secret auth before skipping device identity on gateway connect.
