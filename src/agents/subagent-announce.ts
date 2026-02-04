@@ -501,7 +501,7 @@ export async function runSubagentAnnounceFlow(params: {
         timeoutMs: 60_000,
       });
     } else {
-      defaultRuntime.warn?.("No requesterSessionKey provided, skipping announcement");
+      defaultRuntime.log("No requesterSessionKey provided, skipping announcement");
     }
 
     didAnnounce = true;
