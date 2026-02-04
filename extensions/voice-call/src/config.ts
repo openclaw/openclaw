@@ -357,8 +357,8 @@ export const VoiceCallConfigSchema = z
     /** Store path for call logs */
     store: z.string().optional(),
 
-    /** Model for generating voice responses (e.g., "anthropic/claude-sonnet-4", "openai/gpt-4o") */
-    responseModel: z.string().default("openai/gpt-4o-mini"),
+    /** Model for generating voice responses (e.g., "anthropic/claude-sonnet-4", "openai/gpt-5.2") */
+    responseModel: z.string().default("openai/gpt-5.2"),
 
     /** System prompt for voice responses */
     responseSystemPrompt: z.string().optional(),

@@ -1,6 +1,16 @@
 /**
  * Voice call response generator - uses the embedded Pi agent for tool support.
  * Routes voice responses through the same agent infrastructure as messaging.
+ *
+ * Session model:
+ * - Each call gets a unique session (keyed by `voice:{callId}`) so the Pi
+ *   session file tracks only the current call's conversation history.
+ * - The conversation transcript is NOT duplicated into the system prompt;
+ *   the Pi session file is the sole source of conversation history, preventing
+ *   the O(n²) context growth that occurred when every turn replayed the full
+ *   transcript via `extraSystemPrompt`.
+ * - Cross-call continuity (remembering prior calls from the same number) can
+ *   be added later via a summary injection or memory search.
  */
 
 import crypto from "node:crypto";
@@ -16,7 +26,7 @@ export type VoiceResponseParams = {
   callId: string;
   /** Caller's phone number */
   from: string;
-  /** Conversation transcript */
+  /** Conversation transcript (kept for reference but NOT injected into system prompt) */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   /** Latest user message */
   userMessage: string;
@@ -35,11 +45,16 @@ type SessionEntry = {
 /**
  * Generate a voice response using the embedded Pi agent with full tool support.
  * Uses the same agent infrastructure as messaging for consistent behavior.
+ *
+ * The Pi agent's session file handles conversation history natively — each
+ * `runEmbeddedPiAgent()` call appends the user message and assistant response
+ * to the session file, so the model sees prior turns automatically. We only
+ * need to provide a stable system prompt (no transcript replay).
  */
 export async function generateVoiceResponse(
   params: VoiceResponseParams,
 ): Promise<VoiceResponseResult> {
-  const { voiceConfig, callId, from, transcript, userMessage, coreConfig } = params;
+  const { voiceConfig, callId, from, userMessage, coreConfig } = params;
 
   if (!coreConfig) {
     return { text: null, error: "Core config unavailable for voice response" };
@@ -56,9 +71,9 @@ export async function generateVoiceResponse(
   }
   const cfg = coreConfig;
 
-  // Build voice-specific session key based on phone number
-  const normalizedPhone = from.replace(/\D/g, "");
-  const sessionKey = `voice:${normalizedPhone}`;
+  // Session key is per-call so each call gets a fresh context window.
+  // Cross-call continuity can be added later via memory/summary injection.
+  const sessionKey = `voice:call:${callId}`;
   const agentId = "main";
 
   // Resolve paths
@@ -101,18 +116,12 @@ export async function generateVoiceResponse(
   const identity = deps.resolveAgentIdentity(cfg, agentId);
   const agentName = identity?.name?.trim() || "assistant";
 
-  // Build system prompt with conversation history
-  const basePrompt =
+  // Build a stable system prompt — conversation history is tracked by the
+  // Pi session file, NOT duplicated here. This keeps the system prompt at
+  // constant size regardless of how many turns the call has had.
+  const extraSystemPrompt =
     voiceConfig.responseSystemPrompt ??
-    `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.`;
-
-  let extraSystemPrompt = basePrompt;
-  if (transcript.length > 0) {
-    const history = transcript
-      .map((entry) => `${entry.speaker === "bot" ? "You" : "Caller"}: ${entry.text}`)
-      .join("\n");
-    extraSystemPrompt = `${basePrompt}\n\nConversation so far:\n${history}`;
-  }
+    `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-3 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful. Always greet callers warmly by name if you know who they are.`;
 
   // Resolve timeout
   const timeoutMs = voiceConfig.responseTimeoutMs ?? deps.resolveAgentTimeoutMs({ cfg });
