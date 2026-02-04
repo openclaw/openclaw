@@ -468,10 +468,15 @@ export async function startGatewayServer(
 
   const agentShieldApprovalManager = new AgentShieldApprovalManager();
   const agentShieldApprovalForwarder = createAgentShieldApprovalForwarder();
-  const agentShieldApprovalHandlers = createAgentShieldApprovalHandlers(
-    agentShieldApprovalManager,
-    { forwarder: agentShieldApprovalForwarder },
-  );
+
+  const agentShieldApprovalsEnabled = AGENTSHIELD_ENABLED_EXPR;
+
+  const agentShieldApprovalHandlers = agentShieldApprovalsEnabled
+    ? createAgentShieldApprovalHandlers(agentShieldApprovalManager, {
+        forwarder: agentShieldApprovalForwarder,
+      })
+    : {};
+
 
   const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
 
