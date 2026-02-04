@@ -1,5 +1,6 @@
 FROM debian:bookworm-slim
 
+ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl git sudo \
     build-essential procps file \
@@ -15,6 +16,7 @@ ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 
 # Create non-root user with passwordless sudo (required for Homebrew installation and some formulas)
+# Using 'node' as username maintains consistency with node:22-bookworm base image
 ARG USER=node
 ARG UID=1000
 RUN useradd -m -u ${UID} -s /bin/bash ${USER} \
@@ -26,7 +28,12 @@ WORKDIR /home/${USER}
 
 # Install Homebrew (Linuxbrew)
 # Note: Installation script places brew in /home/linuxbrew/.linuxbrew
-RUN /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+# Pin to specific commit for supply-chain security (update periodically)
+ARG HOMEBREW_INSTALL_SHA=90fa3d5881cedc0d60c4a3cc5babdb867ef42e5a
+RUN curl -fsSL "https://raw.githubusercontent.com/Homebrew/install/${HOMEBREW_INSTALL_SHA}/install.sh" -o /tmp/brew-install.sh \
+ && echo "1c9db64f27d7487ecf74fe3543b96beb1f78039cc92745c3e825a9a7ccefec80  /tmp/brew-install.sh" | sha256sum -c - \
+ && /bin/bash /tmp/brew-install.sh \
+ && rm /tmp/brew-install.sh
 
 # Add brew to PATH for non-interactive shells
 ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH
