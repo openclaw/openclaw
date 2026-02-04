@@ -344,6 +344,22 @@ const AgentToolExecSchema = z
   .object({
     ...ToolExecBaseShape,
     approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
+    rubberband: z
+      .object({
+        enabled: z.boolean().optional(),
+        mode: z.enum(["block", "alert", "log", "off", "shadow"]).optional(),
+        thresholds: z
+          .object({
+            alert: z.number().int().min(0).max(100).optional(),
+            block: z.number().int().min(0).max(100).optional(),
+          })
+          .strict()
+          .optional(),
+        allowedDestinations: z.array(z.string()).optional(),
+        notifyChannel: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

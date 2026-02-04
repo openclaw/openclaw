@@ -378,6 +378,8 @@ export function createOpenClawCodingTools(options?: {
           env: sandbox.docker.env,
         }
       : undefined,
+    rubberband: options?.config?.tools?.exec?.rubberband,
+    cfg: options?.config,
   });
   const processTool = createProcessTool({
     cleanupMs: cleanupMsOverride ?? execConfig.cleanupMs,
