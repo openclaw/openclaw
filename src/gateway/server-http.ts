@@ -13,6 +13,7 @@ import { resolveAgentAvatar } from "../agents/identity-avatar.js";
 import { handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import { loadConfig } from "../config/config.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
+import { authorizeGatewayConnect } from "./auth.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -31,6 +32,8 @@ import {
   resolveHookChannel,
   resolveHookDeliver,
 } from "./hooks.js";
+import { sendUnauthorized } from "./http-common.js";
+import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
@@ -248,6 +251,7 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
       if (await handleHooksRequest(req, res)) {
         return;
       }
@@ -261,6 +265,19 @@ export function createGatewayHttpServer(opts: {
       }
       if (await handleSlackHttpRequest(req, res)) {
         return;
+      }
+      if (url.pathname.startsWith("/api/channels/nostr/")) {
+        const token = getBearerToken(req);
+        const authResult = await authorizeGatewayConnect({
+          auth: resolvedAuth,
+          connectAuth: { token, password: token },
+          req,
+          trustedProxies,
+        });
+        if (!authResult.ok) {
+          sendUnauthorized(res);
+          return;
+        }
       }
       if (handlePluginRequest && (await handlePluginRequest(req, res))) {
         return;
