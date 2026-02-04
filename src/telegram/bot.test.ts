@@ -2876,7 +2876,7 @@ describe("createTelegramBot", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("uses correct session key for forum group reactions with topic", async () => {
+  it("routes forum group reactions to the general topic (thread id not available on reactions)", async () => {
     onSpy.mockReset();
     enqueueSystemEvent.mockReset();
 
@@ -2891,12 +2891,13 @@ describe("createTelegramBot", () => {
       ctx: Record<string, unknown>,
     ) => Promise<void>;
 
+    // MessageReactionUpdated does not include message_thread_id in the Bot API,
+    // so forum reactions always route to the general topic (1).
     await handler({
       update: { update_id: 505 },
       messageReaction: {
         chat: { id: 5678, type: "supergroup", is_forum: true },
         message_id: 100,
-        message_thread_id: 42,
         user: { id: 10, first_name: "Bob", username: "bob_user" },
         date: 1736380800,
         old_reaction: [],
@@ -2908,7 +2909,7 @@ describe("createTelegramBot", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
       "Telegram reaction added: 🔥 by Bob (@bob_user) on msg 100",
       expect.objectContaining({
-        sessionKey: expect.stringContaining("telegram:group:5678:topic:42"),
+        sessionKey: expect.stringContaining("telegram:group:5678:topic:1"),
         contextKey: expect.stringContaining("telegram:reaction:add:5678:100:10"),
       }),
     );
@@ -2990,42 +2991,5 @@ describe("createTelegramBot", () => {
     // Verify session key does NOT contain :topic:
     const sessionKey = enqueueSystemEvent.mock.calls[0][1].sessionKey;
     expect(sessionKey).not.toContain(":topic:");
-  });
-  it("uses thread session key for dm reactions with topic id", async () => {
-    onSpy.mockReset();
-    enqueueSystemEvent.mockReset();
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 508 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 300,
-        message_thread_id: 42,
-        user: { id: 12, first_name: "Dana" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "🔥" }],
-      },
-    });
-
-    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "Telegram reaction added: 🔥 by Dana on msg 300",
-      expect.objectContaining({
-        sessionKey: expect.stringContaining(":thread:42"),
-        contextKey: expect.stringContaining("telegram:reaction:add:1234:300:12"),
-      }),
-    );
   });
 });
