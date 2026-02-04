@@ -20,11 +20,46 @@ If the extension installs but doesn't block anything, your OpenClaw version may 
 
 ## Installation
 
+### Pre-Release: Use Sondera Fork
+
+The OpenClaw plugin hooks are not fully wired in the current release. We've submitted [PR #8448](https://github.com/openclaw/openclaw/pull/8448) to upstream these changes. Until it's merged, install from the Sondera fork:
+
+```bash
+# Clone the Sondera fork
+git clone https://github.com/sondera-ai/openclaw.git
+cd openclaw
+git checkout sondera-pr
+
+# Install and build
+npm install -g pnpm
+pnpm install
+pnpm ui:build
+pnpm build
+pnpm openclaw onboard --install-daemon
+
+# Start the gateway
+pnpm openclaw gateway
+# Dashboard: http://localhost:18789
+
+# Dev container users (e.g. Trail of Bits devcontainer):
+# Add to .devcontainer/devcontainer.json:
+#   "forwardPorts": [18789],
+#   "appPort": [18789]
+# Then rebuild. Before pnpm install, run:
+#   pnpm config set store-dir ~/.pnpm-store
+# To start the gateway, use:
+#   pnpm openclaw gateway --bind lan
+```
+
+We recommend testing in the [Trail of Bits devcontainer](https://github.com/trailofbits/claude-code-devcontainer) for sandboxed environments.
+
+### Standard Installation (after hooks are merged)
+
 ```bash
 openclaw plugins install @openclaw/sondera
 ```
 
-That's it. The extension enables automatically with the 41-rule Base Pack.
+The extension enables automatically with the 41-rule Base Pack.
 
 ### Verify It's Working
 
