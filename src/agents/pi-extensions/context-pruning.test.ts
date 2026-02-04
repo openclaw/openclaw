@@ -588,6 +588,23 @@ describe("capToolResultMessages", () => {
     expect(toolText(findToolResult(result, "t3"))).toBe("short");
   });
 
+  it("skips tool results when isToolPrunable returns false", () => {
+    const longText = "x".repeat(10_000);
+    const messages: AgentMessage[] = [
+      makeUser("u1"),
+      makeToolResult({ toolCallId: "t1", toolName: "exec", text: longText }),
+      makeToolResult({ toolCallId: "t2", toolName: "browser", text: longText }),
+    ];
+    // Only allow pruning "exec", not "browser"
+    const isToolPrunable = (name: string) => name === "exec";
+    const result = capToolResultMessages(messages, 100, isToolPrunable);
+    expect(result).not.toBe(messages);
+    // exec should be truncated
+    expect(toolText(findToolResult(result, "t1"))).toContain("[Tool result truncated:");
+    // browser should remain unchanged
+    expect(toolText(findToolResult(result, "t2"))).toBe(longText);
+  });
+
   it("extension applies per-result cap even when TTL has not expired", () => {
     const sessionManager = {};
 

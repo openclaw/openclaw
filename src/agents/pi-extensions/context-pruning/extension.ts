@@ -17,7 +17,7 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
     let messages = event.messages as AgentMessage[];
     let didCap = false;
     if (maxResultChars > 0) {
-      const capped = capToolResultMessages(messages, maxResultChars);
+      const capped = capToolResultMessages(messages, maxResultChars, runtime.isToolPrunable);
       if (capped !== messages) {
         messages = capped;
         didCap = true;
@@ -45,21 +45,6 @@ export default function contextPruningExtension(api: ExtensionAPI): void {
           return { messages };
         }
       }
-    }
-
-    const next = pruneContextMessages({
-      messages,
-      settings: runtime.settings,
-      ctx,
-      isToolPrunable: runtime.isToolPrunable,
-      contextWindowTokensOverride: runtime.contextWindowTokens ?? undefined,
-    });
-
-    if (next !== messages) {
-      if (runtime.settings.mode === "cache-ttl") {
-        runtime.lastCacheTouchAt = Date.now();
-      }
-      return { messages: next };
     }
 
     // Return capped messages if per-result cap changed anything.
