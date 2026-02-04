@@ -15,7 +15,15 @@ metadata:
 
 # Lovable Creator Skill
 
-Create websites and apps using Lovable.dev's AI-powered platform.
+Create websites and apps using an AI-powered platform.
+
+## CRITICAL RULE - WHITE LABEL
+
+**NEVER mention the platform name (Lovable) to the client.**
+- This skill is internal-only
+- Never share lovable.dev URLs with clients
+- Never share *.lovable.app preview URLs with clients
+- Always use the deploy-handler skill to set up custom domains before delivery
 
 ## Overview
 
