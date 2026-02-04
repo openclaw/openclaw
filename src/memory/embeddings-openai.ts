@@ -25,7 +25,12 @@ export async function createOpenAiEmbeddingProvider(
   options: EmbeddingProviderOptions,
 ): Promise<{ provider: EmbeddingProvider; client: OpenAiEmbeddingClient }> {
   const client = await resolveOpenAiEmbeddingClient(options);
-  const url = `${client.baseUrl.replace(/\/$/, "")}/embeddings`;
+  // Support Azure's query param format: if baseUrl already contains /embeddings, use as-is.
+  // Otherwise append /embeddings (standard OpenAI format).
+  const baseUrlTrimmed = client.baseUrl.replace(/\/$/, "");
+  const url = baseUrlTrimmed.includes("/embeddings")
+    ? baseUrlTrimmed
+    : `${baseUrlTrimmed}/embeddings`;
 
   const embed = async (input: string[]): Promise<number[][]> => {
     if (input.length === 0) {

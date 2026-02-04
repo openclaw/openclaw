@@ -544,3 +544,10 @@ Notes:
 
 - `remote.*` takes precedence over `models.providers.openai.*`.
 - `remote.headers` merge with OpenAI headers; remote wins on key conflicts. Omit `remote.headers` to use the OpenAI defaults.
+- For **Azure OpenAI/Foundry**, include the full path with query params in `baseUrl`:
+  ```json5
+  remote: {
+    baseUrl: "https://YOUR-RESOURCE.cognitiveservices.azure.com/openai/deployments/text-embedding-3-large/embeddings?api-version=2024-08-01-preview",
+    headers: { "api-key": "YOUR_AZURE_KEY" }
+  }
+  ```
