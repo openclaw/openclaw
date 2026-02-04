@@ -209,22 +209,25 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   let threadLabel: string | undefined;
   let parentSessionKey: string | undefined;
   if (threadChannel) {
-    const starter = await resolveDiscordThreadStarter({
-      channel: threadChannel,
-      client,
-      parentId: threadParentId,
-      parentType: threadParentType,
-      resolveTimestampMs,
-    });
-    if (starter?.text) {
-      const starterEnvelope = formatThreadStarterEnvelope({
-        channel: "Discord",
-        author: starter.author,
-        timestamp: starter.timestamp,
-        body: starter.text,
-        envelope: envelopeOptions,
+    const includeThreadStarter = channelConfig?.includeThreadStarter !== false;
+    if (includeThreadStarter) {
+      const starter = await resolveDiscordThreadStarter({
+        channel: threadChannel,
+        client,
+        parentId: threadParentId,
+        parentType: threadParentType,
+        resolveTimestampMs,
       });
-      threadStarterBody = starterEnvelope;
+      if (starter?.text) {
+        const starterEnvelope = formatThreadStarterEnvelope({
+          channel: "Discord",
+          author: starter.author,
+          timestamp: starter.timestamp,
+          body: starter.text,
+          envelope: envelopeOptions,
+        });
+        threadStarterBody = starterEnvelope;
+      }
     }
     const parentName = threadParentName ?? "parent";
     threadLabel = threadName

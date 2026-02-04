@@ -234,6 +234,7 @@ export const DiscordGuildChannelSchema = z
     enabled: z.boolean().optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
   })
   .strict();
