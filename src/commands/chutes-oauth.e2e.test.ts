@@ -66,6 +66,7 @@ describe("loginChutes", () => {
         expect(state).toBeTruthy();
         // Use the actual bound port (reported via onListening) instead of
         // the placeholder port 0 from the redirect URI.
+        expect(boundPort).toBeGreaterThan(0);
         await fetch(`http://127.0.0.1:${boundPort}/oauth-callback?code=code_local&state=${state}`);
       },
       onPrompt,

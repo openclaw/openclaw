@@ -195,10 +195,7 @@ export async function loginChutes(params: {
     });
     codeAndState = parseManualOAuthInput(input, state);
   } else {
-    let resolveReady!: () => void;
-    const readyPromise = new Promise<void>((resolve) => {
-      resolveReady = resolve;
-    });
+    const { promise: readyPromise, resolve: resolveReady } = Promise.withResolvers<void>();
 
     const callback = waitForLocalCallback({
       redirectUri: params.app.redirectUri,
