@@ -261,7 +261,19 @@ export async function startGatewayServer(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
   ) as Record<ChannelId, RuntimeEnv>;
   const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
-  const gatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
+  const allGatewayMethods = Array.from(new Set([...baseGatewayMethods, ...channelMethods]));
+
+  const agentShieldApprovalsEnabled = process.env.AGENTSHIELD_APPROVALS_ENABLED === "1";
+
+  const gatewayMethods = agentShieldApprovalsEnabled
+    ? allGatewayMethods
+    : allGatewayMethods.filter(
+        (m) =>
+          m !== "agentshield.approval.request" &&
+          m !== "agentshield.approval.resolve" &&
+          m !== "agentshield.approval.list",
+      );
+
   let pluginServices: PluginServicesHandle | null = null;
   const runtimeConfig = await resolveGatewayRuntimeConfig({
     cfg: cfgAtStart,
@@ -539,9 +551,6 @@ export async function startGatewayServer(
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
   });
-
-  const agentShieldApprovalsEnabled =
-    process.env.AGENTSHIELD_APPROVALS_ENABLED === "1";
 
   const agentShieldApprovalHandlers: GatewayRequestHandlers =
     agentShieldApprovalsEnabled
