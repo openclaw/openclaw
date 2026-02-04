@@ -80,7 +80,7 @@ function resolveModelAuthLabel(
       const snippet = formatApiKeySnippet(profile.token);
       return `token ${snippet}${label ? ` (${label})` : ""}`;
     }
-    const snippet = formatApiKeySnippet(profile.key);
+    const snippet = formatApiKeySnippet(profile.key ?? "");
     return `api-key ${snippet}${label ? ` (${label})` : ""}`;
   }
 

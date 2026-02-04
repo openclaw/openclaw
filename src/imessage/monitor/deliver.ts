@@ -7,6 +7,10 @@ import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { sendMessageIMessage } from "../send.js";
 
+type SentMessageCache = {
+  remember: (scope: string, text: string) => void;
+};
+
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
   target: string;
@@ -15,8 +19,11 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
+  sentMessageCache?: SentMessageCache;
 }) {
-  const { replies, target, client, runtime, maxBytes, textLimit, accountId } = params;
+  const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
+    params;
+  const scope = `${accountId ?? ""}:${target}`;
   const cfg = loadConfig();
   const tableMode = resolveMarkdownTableMode({
     cfg,
@@ -32,12 +39,14 @@ export async function deliverReplies(params: {
       continue;
     }
     if (mediaList.length === 0) {
+      sentMessageCache?.remember(scope, text);
       for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
         await sendMessageIMessage(target, chunk, {
           maxBytes,
           client,
           accountId,
         });
+        sentMessageCache?.remember(scope, chunk);
       }
     } else {
       let first = true;
@@ -50,6 +59,9 @@ export async function deliverReplies(params: {
           client,
           accountId,
         });
+        if (caption) {
+          sentMessageCache?.remember(scope, caption);
+        }
       }
     }
     runtime.log?.(`imessage: delivered reply to ${target}`);

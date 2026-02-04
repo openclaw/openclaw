@@ -81,6 +81,12 @@ Set config under `plugins.entries.voice-call.config`:
             path: "/voice/webhook",
           },
 
+          // Webhook security (recommended for tunnels/proxies)
+          webhookSecurity: {
+            allowedHosts: ["voice.example.com"],
+            trustedProxyIPs: ["100.64.0.1"],
+          },
+
           // Public exposure (pick one)
           // publicUrl: "https://example.ngrok.app/voice/webhook",
           // tunnel: { provider: "ngrok" },
@@ -110,6 +116,38 @@ Notes:
 - If you use ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
 - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
 - Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures will fail. For production, prefer a stable domain or Tailscale funnel.
+
+## Webhook Security
+
+When a proxy or tunnel sits in front of the Gateway, the plugin reconstructs the
+public URL for signature verification. These options control which forwarded
+headers are trusted.
+
+`webhookSecurity.allowedHosts` allowlists hosts from forwarding headers.
+
+`webhookSecurity.trustForwardingHeaders` trusts forwarded headers without an allowlist.
+
+`webhookSecurity.trustedProxyIPs` only trusts forwarded headers when the request
+remote IP matches the list.
+
+Example with a stable public host:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          publicUrl: "https://voice.example.com/voice/webhook",
+          webhookSecurity: {
+            allowedHosts: ["voice.example.com"],
+          },
+        },
+      },
+    },
+  },
+}
+```
 
 ## TTS for calls
 

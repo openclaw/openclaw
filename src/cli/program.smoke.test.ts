@@ -165,6 +165,12 @@ describe("cli program (smoke)", () => {
         field: "moonshotApiKey",
       },
       {
+        authChoice: "moonshot-api-key-cn",
+        flag: "--moonshot-api-key",
+        key: "sk-moonshot-cn-test",
+        field: "moonshotApiKey",
+      },
+      {
         authChoice: "kimi-code-api-key",
         flag: "--kimi-code-api-key",
         key: "sk-kimi-code-test",

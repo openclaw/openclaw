@@ -39,6 +39,7 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
 import { loadWebMedia } from "../../web/media.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
@@ -758,14 +759,22 @@ async function dispatchDiscordCommandInteraction(params: {
     GroupSubject: isGuild ? interaction.guild?.name : undefined,
     GroupSystemPrompt: isGuild
       ? (() => {
+          const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
+            (entry): entry is string => Boolean(entry),
+          );
+          return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+        })()
+      : undefined,
+    UntrustedContext: isGuild
+      ? (() => {
           const channelTopic =
             channel && "topic" in channel ? (channel.topic ?? undefined) : undefined;
-          const channelDescription = channelTopic?.trim();
-          const systemPromptParts = [
-            channelDescription ? `Channel topic: ${channelDescription}` : null,
-            channelConfig?.systemPrompt?.trim() || null,
-          ].filter((entry): entry is string => Boolean(entry));
-          return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+          const untrustedChannelMetadata = buildUntrustedChannelMetadata({
+            source: "discord",
+            label: "Discord channel topic",
+            entries: [channelTopic],
+          });
+          return untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined;
         })()
       : undefined,
     SenderName: user.globalName ?? user.username,

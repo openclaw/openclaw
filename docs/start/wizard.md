@@ -95,6 +95,8 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - **API key**: stores the key for you.
    - **Vercel AI Gateway (multi-model proxy)**: prompts for `AI_GATEWAY_API_KEY`.
    - More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway)
+   - **Cloudflare AI Gateway**: prompts for Account ID, Gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
+   - More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
    - **MiniMax M2.1**: config is auto-written.
    - More detail: [MiniMax](/providers/minimax)
    - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
@@ -235,6 +237,19 @@ openclaw onboard --non-interactive \
   --mode local \
   --auth-choice ai-gateway-api-key \
   --ai-gateway-api-key "$AI_GATEWAY_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
+Cloudflare AI Gateway example:
+
+```bash
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice cloudflare-ai-gateway-api-key \
+  --cloudflare-ai-gateway-account-id "your-account-id" \
+  --cloudflare-ai-gateway-gateway-id "your-gateway-id" \
+  --cloudflare-ai-gateway-api-key "$CLOUDFLARE_AI_GATEWAY_API_KEY" \
   --gateway-port 18789 \
   --gateway-bind loopback
 ```

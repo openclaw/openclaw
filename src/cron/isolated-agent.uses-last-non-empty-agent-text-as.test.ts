@@ -81,7 +81,6 @@ function makeJob(payload: CronJob["payload"]): CronJob {
     wakeMode: "now",
     payload,
     state: {},
-    isolation: { postToMainPrefix: "Cron" },
   };
 }
 
@@ -539,46 +538,6 @@ describe("runCronIsolatedAgentTurn", () => {
 
       expect(res.status).toBe("ok");
       expect(String(res.summary ?? "")).toMatch(/…$/);
-    });
-  });
-
-  it("fails delivery without a WhatsApp recipient when bestEffortDeliver=false", async () => {
-    await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
-      const deps: CliDeps = {
-        sendMessageWhatsApp: vi.fn(),
-        sendMessageTelegram: vi.fn(),
-        sendMessageDiscord: vi.fn(),
-        sendMessageSignal: vi.fn(),
-        sendMessageIMessage: vi.fn(),
-      };
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [{ text: "hello" }],
-        meta: {
-          durationMs: 5,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
-
-      const res = await runCronIsolatedAgentTurn({
-        cfg: makeCfg(home, storePath),
-        deps,
-        job: makeJob({
-          kind: "agentTurn",
-          message: "do it",
-          deliver: true,
-          channel: "whatsapp",
-          bestEffortDeliver: false,
-        }),
-        message: "do it",
-        sessionKey: "cron:job-1",
-        lane: "cron",
-      });
-
-      expect(res.status).toBe("error");
-      expect(res.summary).toBe("hello");
-      expect(String(res.error ?? "")).toMatch(/requires a recipient/i);
-      expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
     });
   });
 

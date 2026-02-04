@@ -40,7 +40,7 @@ export function resolveProviderAuthOverview(params: {
       return `${profileId}=missing`;
     }
     if (profile.type === "api_key") {
-      return withUnusableSuffix(`${profileId}=${maskApiKey(profile.key)}`, profileId);
+      return withUnusableSuffix(`${profileId}=${maskApiKey(profile.key ?? "")}`, profileId);
     }
     if (profile.type === "token") {
       return withUnusableSuffix(`${profileId}=token:${maskApiKey(profile.token)}`, profileId);
