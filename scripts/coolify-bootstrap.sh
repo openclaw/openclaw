@@ -137,6 +137,37 @@ else
 fi
 
 # ----------------------------
+# Sync gateway token into config (avoid config/env drift)
+# ----------------------------
+if [ -n "$OPENCLAW_GATEWAY_TOKEN" ]; then
+  node -e "
+const fs = require('fs');
+const json5 = require('json5');
+const path = '$CONFIG_FILE';
+try {
+  const raw = fs.readFileSync(path, 'utf8');
+  const cfg = json5.parse(raw);
+  const gateway = typeof cfg.gateway === 'object' && cfg.gateway ? cfg.gateway : {};
+  const auth = typeof gateway.auth === 'object' && gateway.auth ? gateway.auth : {};
+  const next = process.env.OPENCLAW_GATEWAY_TOKEN;
+  const current = auth.token;
+  if (next && current !== next) {
+    auth.token = next;
+    if (!auth.mode) {
+      auth.mode = 'token';
+    }
+    gateway.auth = auth;
+    cfg.gateway = gateway;
+    fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\\n');
+    console.log('[openclaw] Synced gateway.auth.token from env');
+  }
+} catch (err) {
+  console.error('[openclaw] Failed to sync gateway.auth.token:', err && err.message ? err.message : String(err));
+}
+"
+fi
+
+# ----------------------------
 # Display Access Info
 # ----------------------------
 echo ""
