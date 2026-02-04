@@ -80,6 +80,13 @@ export function recomputeNextRuns(state: CronServiceState) {
       );
       job.state.runningAtMs = undefined;
     }
+    // Preserve nextRunAtMs if it's already set and still in the future
+    const existingNext = job.state.nextRunAtMs;
+    if (typeof existingNext === "number" && existingNext > now) {
+      // Keep the existing scheduled time
+      continue;
+    }
+    // Otherwise, recompute from current time
     job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   }
 }
