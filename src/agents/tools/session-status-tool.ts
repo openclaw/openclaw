@@ -1,27 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
-import { resolveAgentDir } from "../agent-scope.js";
-import {
-  ensureAuthProfileStore,
-  resolveAuthProfileDisplayLabel,
-  resolveAuthProfileOrder,
-} from "../auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../model-auth.js";
-import { loadModelCatalog } from "../model-catalog.js";
-import {
-  buildAllowedModelSet,
-  buildModelAliasIndex,
-  modelKey,
-  normalizeProviderId,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-} from "../model-selection.js";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
-import {
-  getFollowupQueueDepth,
-  resolveQueueSettings,
-} from "../../auto-reply/reply/queue.js";
+import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -42,11 +23,23 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { resolveAgentDir } from "../agent-scope.js";
 import {
-  formatUserTime,
-  resolveUserTimeFormat,
-  resolveUserTimezone,
-} from "../date-time.js";
+  ensureAuthProfileStore,
+  resolveAuthProfileDisplayLabel,
+  resolveAuthProfileOrder,
+} from "../auth-profiles.js";
+import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../model-auth.js";
+import { loadModelCatalog } from "../model-catalog.js";
+import {
+  buildAllowedModelSet,
+  buildModelAliasIndex,
+  modelKey,
+  normalizeProviderId,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+} from "../model-selection.js";
 import { readStringParam } from "./common.js";
 import {
   shouldResolveSessionIdInput,
@@ -109,13 +102,9 @@ function resolveModelAuthLabel(params: {
       return `oauth${label ? ` (${label})` : ""}`;
     }
     if (profile.type === "token") {
-      return `token ${formatApiKeySnippet(profile.token)}${
-        label ? ` (${label})` : ""
-      }`;
+      return `token ${formatApiKeySnippet(profile.token)}${label ? ` (${label})` : ""}`;
     }
-    return `api-key ${formatApiKeySnippet(profile.key)}${
-      label ? ` (${label})` : ""
-    }`;
+    return `api-key ${formatApiKeySnippet(profile.key)}${label ? ` (${label})` : ""}`;
   }
 
   const envKey = resolveEnvApiKey(providerKey);
@@ -160,7 +149,7 @@ function resolveSessionEntry(params: {
       buildAgentMainSessionKey({
         agentId: DEFAULT_AGENT_ID,
         mainKey: params.mainKey,
-      })
+      }),
     );
   }
 
@@ -222,10 +211,8 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  const currentProvider =
-    params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
-  const currentModel =
-    params.sessionEntry?.modelOverride?.trim() || configDefault.model;
+  const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
+  const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -252,8 +239,7 @@ async function resolveModelOverride(params: {
     throw new Error(`Model "${key}" is not allowed.`);
   }
   const isDefault =
-    resolved.ref.provider === configDefault.provider &&
-    resolved.ref.model === configDefault.model;
+    resolved.ref.provider === configDefault.provider && resolved.ref.model === configDefault.model;
   return {
     kind: "set",
     provider: resolved.ref.provider,
@@ -285,7 +271,7 @@ export function createSessionStatusTool(opts?: {
       }
 
       const requesterAgentId = resolveAgentIdFromSessionKey(
-        opts?.agentSessionKey ?? requestedKeyRaw
+        opts?.agentSessionKey ?? requestedKeyRaw,
       );
       const ensureAgentAccess = (targetAgentId: string) => {
         if (targetAgentId === requesterAgentId) {
@@ -294,13 +280,11 @@ export function createSessionStatusTool(opts?: {
         // Gate cross-agent access behind tools.agentToAgent settings.
         if (!a2aPolicy.enabled) {
           throw new Error(
-            "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access."
+            "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
           );
         }
         if (!a2aPolicy.isAllowed(requesterAgentId, targetAgentId)) {
-          throw new Error(
-            "Agent-to-agent session status denied by tools.agentToAgent.allow."
-          );
+          throw new Error("Agent-to-agent session status denied by tools.agentToAgent.allow.");
         }
       };
 
@@ -346,9 +330,7 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved) {
-        const kind = shouldResolveSessionIdInput(requestedKeyRaw)
-          ? "sessionId"
-          : "sessionKey";
+        const kind = shouldResolveSessionIdInput(requestedKeyRaw) ? "sessionId" : "sessionKey";
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
@@ -389,8 +371,7 @@ export function createSessionStatusTool(opts?: {
       }
 
       const agentDir = resolveAgentDir(cfg, agentId);
-      const providerForCard =
-        resolved.entry.providerOverride?.trim() || configured.provider;
+      const providerForCard = resolved.entry.providerOverride?.trim() || configured.provider;
       const usageProvider = resolveUsageProviderId(providerForCard);
       let usageLine: string | undefined;
       if (usageProvider) {
@@ -400,9 +381,7 @@ export function createSessionStatusTool(opts?: {
             providers: [usageProvider],
             agentDir,
           });
-          const snapshot = usageSummary.providers.find(
-            (entry) => entry.provider === usageProvider
-          );
+          const snapshot = usageSummary.providers.find((entry) => entry.provider === usageProvider);
           if (snapshot) {
             const formatted = formatUsageWindowSummary(snapshot, {
               now: Date.now(),
@@ -424,29 +403,22 @@ export function createSessionStatusTool(opts?: {
         resolved.key.includes(":group:") ||
         resolved.key.includes(":channel:");
       const groupActivation = isGroup
-        ? normalizeGroupActivation(resolved.entry.groupActivation) ?? "mention"
+        ? (normalizeGroupActivation(resolved.entry.groupActivation) ?? "mention")
         : undefined;
 
       const queueSettings = resolveQueueSettings({
         cfg,
-        channel:
-          resolved.entry.channel ?? resolved.entry.lastChannel ?? "unknown",
+        channel: resolved.entry.channel ?? resolved.entry.lastChannel ?? "unknown",
         sessionEntry: resolved.entry,
       });
       const queueKey = resolved.key ?? resolved.entry.sessionId;
       const queueDepth = queueKey ? getFollowupQueueDepth(queueKey) : 0;
       const queueOverrides = Boolean(
-        resolved.entry.queueDebounceMs ??
-          resolved.entry.queueCap ??
-          resolved.entry.queueDrop
+        resolved.entry.queueDebounceMs ?? resolved.entry.queueCap ?? resolved.entry.queueDrop,
       );
 
-      const userTimezone = resolveUserTimezone(
-        cfg.agents?.defaults?.userTimezone
-      );
-      const userTimeFormat = resolveUserTimeFormat(
-        cfg.agents?.defaults?.timeFormat
-      );
+      const userTimezone = resolveUserTimezone(cfg.agents?.defaults?.userTimezone);
+      const userTimeFormat = resolveUserTimeFormat(cfg.agents?.defaults?.timeFormat);
       const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
       const timeLine = userTime
         ? `🕒 Time: ${userTime} (${userTimezone})`

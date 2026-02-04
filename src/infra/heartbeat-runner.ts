@@ -34,20 +34,13 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
-import { formatErrorMessage } from "./errors.js";
-import { peekSystemEvents } from "./system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
-import {
-  normalizeAgentId,
-  toAgentStoreSessionKey,
-} from "../routing/session-key.js";
+import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import {
-  emitHeartbeatEvent,
-  resolveIndicatorType,
-} from "./heartbeat-events.js";
+import { formatErrorMessage } from "./errors.js";
+import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
   type HeartbeatRunResult,
@@ -60,6 +53,7 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { peekSystemEvents } from "./system-events.js";
 
 type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -119,10 +113,7 @@ function resolveActiveHoursTimezone(cfg: OpenClawConfig, raw?: string): string {
   }
 }
 
-function parseActiveHoursTime(
-  opts: { allow24: boolean },
-  raw?: string
-): number | null {
+function parseActiveHoursTime(opts: { allow24: boolean }, raw?: string): number | null {
   if (!raw || !ACTIVE_HOURS_TIME_PATTERN.test(raw)) {
     return null;
   }
@@ -141,10 +132,7 @@ function parseActiveHoursTime(
   return hour * 60 + minute;
 }
 
-function resolveMinutesInTimeZone(
-  nowMs: number,
-  timeZone: string
-): number | null {
+function resolveMinutesInTimeZone(nowMs: number, timeZone: string): number | null {
   try {
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone,
@@ -172,7 +160,7 @@ function resolveMinutesInTimeZone(
 function isWithinActiveHours(
   cfg: OpenClawConfig,
   heartbeat?: HeartbeatConfig,
-  nowMs?: number
+  nowMs?: number,
 ): boolean {
   const active = heartbeat?.activeHours;
   if (!active) {
@@ -218,20 +206,13 @@ function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   return list.some((entry) => Boolean(entry?.heartbeat));
 }
 
-export function isHeartbeatEnabledForAgent(
-  cfg: OpenClawConfig,
-  agentId?: string
-): boolean {
-  const resolvedAgentId = normalizeAgentId(
-    agentId ?? resolveDefaultAgentId(cfg)
-  );
+export function isHeartbeatEnabledForAgent(cfg: OpenClawConfig, agentId?: string): boolean {
+  const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const list = cfg.agents?.list ?? [];
   const hasExplicit = hasExplicitHeartbeatAgents(cfg);
   if (hasExplicit) {
     return list.some(
-      (entry) =>
-        Boolean(entry?.heartbeat) &&
-        normalizeAgentId(entry?.id) === resolvedAgentId
+      (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
     );
   }
   return resolvedAgentId === resolveDefaultAgentId(cfg);
@@ -239,7 +220,7 @@ export function isHeartbeatEnabledForAgent(
 
 function resolveHeartbeatConfig(
   cfg: OpenClawConfig,
-  agentId?: string
+  agentId?: string,
 ): HeartbeatConfig | undefined {
   const defaults = cfg.agents?.defaults?.heartbeat;
   if (!agentId) {
@@ -254,12 +235,10 @@ function resolveHeartbeatConfig(
 
 export function resolveHeartbeatSummaryForAgent(
   cfg: OpenClawConfig,
-  agentId?: string
+  agentId?: string,
 ): HeartbeatSummary {
   const defaults = cfg.agents?.defaults?.heartbeat;
-  const overrides = agentId
-    ? resolveAgentConfig(cfg, agentId)?.heartbeat
-    : undefined;
+  const overrides = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
   const enabled = isHeartbeatEnabledForAgent(cfg, agentId);
 
   if (!enabled) {
@@ -270,36 +249,25 @@ export function resolveHeartbeatSummaryForAgent(
       prompt: resolveHeartbeatPromptText(defaults?.prompt),
       target: defaults?.target ?? DEFAULT_HEARTBEAT_TARGET,
       model: defaults?.model,
-      ackMaxChars: Math.max(
-        0,
-        defaults?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS
-      ),
+      ackMaxChars: Math.max(0, defaults?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS),
     };
   }
 
-  const merged =
-    defaults || overrides ? { ...defaults, ...overrides } : undefined;
-  const every =
-    merged?.every ??
-    defaults?.every ??
-    overrides?.every ??
-    DEFAULT_HEARTBEAT_EVERY;
+  const merged = defaults || overrides ? { ...defaults, ...overrides } : undefined;
+  const every = merged?.every ?? defaults?.every ?? overrides?.every ?? DEFAULT_HEARTBEAT_EVERY;
   const everyMs = resolveHeartbeatIntervalMs(cfg, undefined, merged);
   const prompt = resolveHeartbeatPromptText(
-    merged?.prompt ?? defaults?.prompt ?? overrides?.prompt
+    merged?.prompt ?? defaults?.prompt ?? overrides?.prompt,
   );
   const target =
-    merged?.target ??
-    defaults?.target ??
-    overrides?.target ??
-    DEFAULT_HEARTBEAT_TARGET;
+    merged?.target ?? defaults?.target ?? overrides?.target ?? DEFAULT_HEARTBEAT_TARGET;
   const model = merged?.model ?? defaults?.model ?? overrides?.model;
   const ackMaxChars = Math.max(
     0,
     merged?.ackMaxChars ??
       defaults?.ackMaxChars ??
       overrides?.ackMaxChars ??
-      DEFAULT_HEARTBEAT_ACK_MAX_CHARS
+      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
 
   return {
@@ -325,15 +293,13 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
       .filter((entry) => entry.agentId);
   }
   const fallbackId = resolveDefaultAgentId(cfg);
-  return [
-    { agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) },
-  ];
+  return [{ agentId: fallbackId, heartbeat: resolveHeartbeatConfig(cfg, fallbackId) }];
 }
 
 export function resolveHeartbeatIntervalMs(
   cfg: OpenClawConfig,
   overrideEvery?: string,
-  heartbeat?: HeartbeatConfig
+  heartbeat?: HeartbeatConfig,
 ) {
   const raw =
     overrideEvery ??
@@ -359,43 +325,30 @@ export function resolveHeartbeatIntervalMs(
   return ms;
 }
 
-export function resolveHeartbeatPrompt(
-  cfg: OpenClawConfig,
-  heartbeat?: HeartbeatConfig
-) {
-  return resolveHeartbeatPromptText(
-    heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt
-  );
+export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
+  return resolveHeartbeatPromptText(heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt);
 }
 
-function resolveHeartbeatAckMaxChars(
-  cfg: OpenClawConfig,
-  heartbeat?: HeartbeatConfig
-) {
+function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
   return Math.max(
     0,
     heartbeat?.ackMaxChars ??
       cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-      DEFAULT_HEARTBEAT_ACK_MAX_CHARS
+      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
 }
 
 function resolveHeartbeatSession(
   cfg: OpenClawConfig,
   agentId?: string,
-  heartbeat?: HeartbeatConfig
+  heartbeat?: HeartbeatConfig,
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
-  const resolvedAgentId = normalizeAgentId(
-    agentId ?? resolveDefaultAgentId(cfg)
-  );
+  const resolvedAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(cfg));
   const mainSessionKey =
-    scope === "global"
-      ? "global"
-      : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
-  const storeAgentId =
-    scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
+    scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
+  const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
   });
@@ -442,7 +395,7 @@ function resolveHeartbeatSession(
 }
 
 function resolveHeartbeatReplyPayload(
-  replyResult: ReplyPayload | ReplyPayload[] | undefined
+  replyResult: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload | undefined {
   if (!replyResult) {
     return undefined;
@@ -455,11 +408,7 @@ function resolveHeartbeatReplyPayload(
     if (!payload) {
       continue;
     }
-    if (
-      payload.text ||
-      payload.mediaUrl ||
-      (payload.mediaUrls && payload.mediaUrls.length > 0)
-    ) {
+    if (payload.text || payload.mediaUrl || (payload.mediaUrls && payload.mediaUrls.length > 0)) {
       return payload;
     }
   }
@@ -467,13 +416,9 @@ function resolveHeartbeatReplyPayload(
 }
 
 function resolveHeartbeatReasoningPayloads(
-  replyResult: ReplyPayload | ReplyPayload[] | undefined
+  replyResult: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload[] {
-  const payloads = Array.isArray(replyResult)
-    ? replyResult
-    : replyResult
-    ? [replyResult]
-    : [];
+  const payloads = Array.isArray(replyResult) ? replyResult : replyResult ? [replyResult] : [];
   return payloads.filter((payload) => {
     const text = typeof payload.text === "string" ? payload.text : "";
     return text.trimStart().startsWith("Reasoning:");
@@ -514,15 +459,13 @@ async function restoreHeartbeatUpdatedAt(params: {
 function normalizeHeartbeatReply(
   payload: ReplyPayload,
   responsePrefix: string | undefined,
-  ackMaxChars: number
+  ackMaxChars: number,
 ) {
   const stripped = stripHeartbeatToken(payload.text, {
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
   });
-  const hasMedia = Boolean(
-    payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0
-  );
+  const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
   if (stripped.shouldSkip && !hasMedia) {
     return {
       shouldSkip: true,
@@ -575,10 +518,7 @@ export async function runHeartbeatOnce(opts: {
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
   try {
     const heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
-    if (
-      isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
-      !isExecEventReason
-    ) {
+    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) && !isExecEventReason) {
       emitHeartbeatEvent({
         status: "skipped",
         reason: "empty-heartbeat-file",
@@ -591,11 +531,7 @@ export async function runHeartbeatOnce(opts: {
     // The LLM prompt says "if it exists" so this is expected behavior.
   }
 
-  const { entry, sessionKey, storePath } = resolveHeartbeatSession(
-    cfg,
-    agentId,
-    heartbeat
-  );
+  const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg, agentId, heartbeat);
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const visibility =
@@ -607,23 +543,16 @@ export async function runHeartbeatOnce(opts: {
         })
       : { showOk: false, showAlerts: true, useIndicator: true };
   const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
-  const responsePrefix = resolveEffectiveMessagesConfig(
-    cfg,
-    agentId
-  ).responsePrefix;
+  const responsePrefix = resolveEffectiveMessagesConfig(cfg, agentId).responsePrefix;
 
   // Check if this is an exec event with pending exec completion system events.
   // If so, use a specialized prompt that instructs the model to relay the result
   // instead of the standard heartbeat prompt with "reply HEARTBEAT_OK".
   const isExecEvent = opts.reason === "exec-event";
   const pendingEvents = isExecEvent ? peekSystemEvents(sessionKey) : [];
-  const hasExecCompletion = pendingEvents.some((evt) =>
-    evt.includes("Exec finished")
-  );
+  const hasExecCompletion = pendingEvents.some((evt) => evt.includes("Exec finished"));
 
-  const prompt = hasExecCompletion
-    ? EXEC_EVENT_PROMPT
-    : resolveHeartbeatPrompt(cfg, heartbeat);
+  const prompt = hasExecCompletion ? EXEC_EVENT_PROMPT : resolveHeartbeatPrompt(cfg, heartbeat);
   const ctx = {
     Body: prompt,
     From: sender,
@@ -631,11 +560,7 @@ export async function runHeartbeatOnce(opts: {
     Provider: hasExecCompletion ? "exec-event" : "heartbeat",
     SessionKey: sessionKey,
   };
-  if (
-    !visibility.showAlerts &&
-    !visibility.showOk &&
-    !visibility.useIndicator
-  ) {
+  if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
     emitHeartbeatEvent({
       status: "skipped",
       reason: "alerts-disabled",
@@ -645,11 +570,9 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: "alerts-disabled" };
   }
 
-  const heartbeatOkText = responsePrefix
-    ? `${responsePrefix} ${HEARTBEAT_TOKEN}`
-    : HEARTBEAT_TOKEN;
+  const heartbeatOkText = responsePrefix ? `${responsePrefix} ${HEARTBEAT_TOKEN}` : HEARTBEAT_TOKEN;
   const canAttemptHeartbeatOk = Boolean(
-    visibility.showOk && delivery.channel !== "none" && delivery.to
+    visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
   const maybeSendHeartbeatOk = async () => {
     if (!canAttemptHeartbeatOk || delivery.channel === "none" || !delivery.to) {
@@ -678,24 +601,16 @@ export async function runHeartbeatOnce(opts: {
   };
 
   try {
-    const replyResult = await getReplyFromConfig(
-      ctx,
-      { isHeartbeat: true },
-      cfg
-    );
+    const replyResult = await getReplyFromConfig(ctx, { isHeartbeat: true }, cfg);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
-      ? resolveHeartbeatReasoningPayloads(replyResult).filter(
-          (payload) => payload !== replyPayload
-        )
+      ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
       : [];
 
     if (
       !replyPayload ||
-      (!replyPayload.text &&
-        !replyPayload.mediaUrl &&
-        !replyPayload.mediaUrls?.length)
+      (!replyPayload.text && !replyPayload.mediaUrl && !replyPayload.mediaUrls?.length)
     ) {
       await restoreHeartbeatUpdatedAt({
         storePath,
@@ -709,19 +624,13 @@ export async function runHeartbeatOnce(opts: {
         durationMs: Date.now() - startedAt,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         silent: !okSent,
-        indicatorType: visibility.useIndicator
-          ? resolveIndicatorType("ok-empty")
-          : undefined,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-empty") : undefined,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
-    const normalized = normalizeHeartbeatReply(
-      replyPayload,
-      responsePrefix,
-      ackMaxChars
-    );
+    const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
     // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
     // The model should be responding with exec results, not ack tokens.
     // Also, if normalized.text is empty due to token stripping but we have exec completion,
@@ -734,8 +643,7 @@ export async function runHeartbeatOnce(opts: {
       normalized.text = execFallbackText;
       normalized.shouldSkip = false;
     }
-    const shouldSkipMain =
-      normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
+    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
@@ -749,27 +657,20 @@ export async function runHeartbeatOnce(opts: {
         durationMs: Date.now() - startedAt,
         channel: delivery.channel !== "none" ? delivery.channel : undefined,
         silent: !okSent,
-        indicatorType: visibility.useIndicator
-          ? resolveIndicatorType("ok-token")
-          : undefined,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
     const mediaUrls =
-      replyPayload.mediaUrls ??
-      (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
+      replyPayload.mediaUrls ?? (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
 
     // Suppress duplicate heartbeats (same payload) within a short window.
     // This prevents "nagging" when nothing changed but the model repeats the same items.
     const prevHeartbeatText =
-      typeof entry?.lastHeartbeatText === "string"
-        ? entry.lastHeartbeatText
-        : "";
+      typeof entry?.lastHeartbeatText === "string" ? entry.lastHeartbeatText : "";
     const prevHeartbeatAt =
-      typeof entry?.lastHeartbeatSentAt === "number"
-        ? entry.lastHeartbeatSentAt
-        : undefined;
+      typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
     const isDuplicateMain =
       !shouldSkipMain &&
       !mediaUrls.length &&
@@ -827,9 +728,7 @@ export async function runHeartbeatOnce(opts: {
         durationMs: Date.now() - startedAt,
         channel: delivery.channel,
         hasMedia: mediaUrls.length > 0,
-        indicatorType: visibility.useIndicator
-          ? resolveIndicatorType("sent")
-          : undefined,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
@@ -899,9 +798,7 @@ export async function runHeartbeatOnce(opts: {
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
-      indicatorType: visibility.useIndicator
-        ? resolveIndicatorType("sent")
-        : undefined,
+      indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
     });
     return { status: "ran", durationMs: Date.now() - startedAt };
   } catch (err) {
@@ -911,9 +808,7 @@ export async function runHeartbeatOnce(opts: {
       reason,
       durationMs: Date.now() - startedAt,
       channel: delivery.channel !== "none" ? delivery.channel : undefined,
-      indicatorType: visibility.useIndicator
-        ? resolveIndicatorType("failed")
-        : undefined,
+      indicatorType: visibility.useIndicator ? resolveIndicatorType("failed") : undefined,
     });
     log.error(`heartbeat failed: ${reason}`, { error: reason });
     return { status: "failed", reason };
@@ -937,19 +832,11 @@ export function startHeartbeatRunner(opts: {
   };
   let initialized = false;
 
-  const resolveNextDue = (
-    now: number,
-    intervalMs: number,
-    prevState?: HeartbeatAgentState
-  ) => {
+  const resolveNextDue = (now: number, intervalMs: number, prevState?: HeartbeatAgentState) => {
     if (typeof prevState?.lastRunMs === "number") {
       return prevState.lastRunMs + intervalMs;
     }
-    if (
-      prevState &&
-      prevState.intervalMs === intervalMs &&
-      prevState.nextDueMs > now
-    ) {
+    if (prevState && prevState.intervalMs === intervalMs && prevState.nextDueMs > now) {
       return prevState.nextDueMs;
     }
     return now + intervalMs;
@@ -993,11 +880,7 @@ export function startHeartbeatRunner(opts: {
     const nextAgents = new Map<string, HeartbeatAgentState>();
     const intervals: number[] = [];
     for (const agent of resolveHeartbeatAgents(cfg)) {
-      const intervalMs = resolveHeartbeatIntervalMs(
-        cfg,
-        undefined,
-        agent.heartbeat
-      );
+      const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, agent.heartbeat);
       if (!intervalMs) {
         continue;
       }
