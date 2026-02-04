@@ -2039,6 +2039,7 @@ of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 - `tools.web.search.cacheTtlMinutes` (default 15)
 - `tools.web.fetch.enabled` (default true)
 - `tools.web.fetch.maxChars` (default 50000)
+- `tools.web.fetch.maxCharsCap` (default 50000; clamps maxChars from config/tool calls)
 - `tools.web.fetch.timeoutSeconds` (default 30)
 - `tools.web.fetch.cacheTtlMinutes` (default 15)
 - `tools.web.fetch.userAgent` (optional override)

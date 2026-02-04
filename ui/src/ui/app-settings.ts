@@ -51,6 +51,30 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
 };
 
+function isTopLevelWindow(): boolean {
+  try {
+    return window.top === window.self;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeGatewayUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return null;
+    }
+    return trimmed;
+  } catch {
+    return null;
+  }
+}
+
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
@@ -118,8 +142,8 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (gatewayUrlRaw != null) {
-    const gatewayUrl = gatewayUrlRaw.trim();
-    if (gatewayUrl && gatewayUrl !== host.settings.gatewayUrl) {
+    const gatewayUrl = normalizeGatewayUrl(gatewayUrlRaw);
+    if (gatewayUrl && gatewayUrl !== host.settings.gatewayUrl && isTopLevelWindow()) {
       host.pendingGatewayUrl = gatewayUrl;
     }
     params.delete("gatewayUrl");
