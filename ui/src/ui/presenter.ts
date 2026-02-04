@@ -53,7 +53,8 @@ export function formatCronState(job: CronJob) {
 export function formatCronSchedule(job: CronJob) {
   const s = job.schedule;
   if (s.kind === "at") {
-    return `At ${formatMs(s.atMs)}`;
+    const atMs = Date.parse(s.at);
+    return Number.isFinite(atMs) ? `At ${formatMs(atMs)}` : `At ${s.at}`;
   }
   if (s.kind === "every") {
     return `Every ${formatDurationMs(s.everyMs)}`;
@@ -74,10 +75,6 @@ export function formatCronPayload(job: CronJob) {
         ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
         : "";
     return `${base} · ${delivery.mode}${target}`;
-  }
-  if (!delivery && (p.deliver || p.to)) {
-    const target = p.channel || p.to ? ` (${p.channel ?? "last"}${p.to ? ` -> ${p.to}` : ""})` : "";
-    return `${base} · deliver${target}`;
   }
   return base;
 }

@@ -310,7 +310,7 @@ describe("cron cli", () => {
     };
 
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
-    expect(patch?.patch?.delivery?.mode).toBe("deliver");
+    expect(patch?.patch?.delivery?.mode).toBe("announce");
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("19098680");
     expect(patch?.patch?.payload?.message).toBeUndefined();
@@ -408,7 +408,7 @@ describe("cron cli", () => {
 
     // Should include everything
     expect(patch?.patch?.payload?.message).toBe("Updated message");
-    expect(patch?.patch?.delivery?.mode).toBe("deliver");
+    expect(patch?.patch?.delivery?.mode).toBe("announce");
     expect(patch?.patch?.delivery?.channel).toBe("telegram");
     expect(patch?.patch?.delivery?.to).toBe("19098680");
   });
@@ -428,11 +428,15 @@ describe("cron cli", () => {
 
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as {
-      patch?: { payload?: { message?: string; bestEffortDeliver?: boolean } };
+      patch?: {
+        payload?: { message?: string };
+        delivery?: { bestEffort?: boolean; mode?: string };
+      };
     };
 
     expect(patch?.patch?.payload?.message).toBe("Updated message");
-    expect(patch?.patch?.payload?.bestEffortDeliver).toBe(true);
+    expect(patch?.patch?.delivery?.mode).toBe("announce");
+    expect(patch?.patch?.delivery?.bestEffort).toBe(true);
   });
 
   it("includes no-best-effort delivery when provided with message", async () => {
@@ -450,10 +454,14 @@ describe("cron cli", () => {
 
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as {
-      patch?: { payload?: { message?: string; bestEffortDeliver?: boolean } };
+      patch?: {
+        payload?: { message?: string };
+        delivery?: { bestEffort?: boolean; mode?: string };
+      };
     };
 
     expect(patch?.patch?.payload?.message).toBe("Updated message");
-    expect(patch?.patch?.payload?.bestEffortDeliver).toBe(false);
+    expect(patch?.patch?.delivery?.mode).toBe("announce");
+    expect(patch?.patch?.delivery?.bestEffort).toBe(false);
   });
 });

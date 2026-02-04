@@ -211,9 +211,7 @@ export function renderCron(props: CronProps) {
                             .value as CronFormState["deliveryMode"],
                         })}
                     >
-                      <option value="legacy">Main summary (legacy)</option>
                       <option value="announce">Announce summary (default)</option>
-                      <option value="deliver">Deliver full output</option>
                       <option value="none">None (internal)</option>
                     </select>
                   </label>
@@ -228,7 +226,7 @@ export function renderCron(props: CronProps) {
                     />
                   </label>
                   ${
-                    props.form.deliveryMode === "announce" || props.form.deliveryMode === "deliver"
+                    props.form.deliveryMode === "announce"
                       ? html`
                           <label class="field">
                             <span>Channel</span>
@@ -256,22 +254,6 @@ export function renderCron(props: CronProps) {
                                   deliveryTo: (e.target as HTMLInputElement).value,
                                 })}
                               placeholder="+1555… or chat id"
-                            />
-                          </label>
-                        `
-                      : nothing
-                  }
-                  ${
-                    props.form.sessionTarget === "isolated" && props.form.deliveryMode === "legacy"
-                      ? html`
-                          <label class="field">
-                            <span>Post to main prefix</span>
-                            <input
-                              .value=${props.form.postToMainPrefix}
-                              @input=${(e: Event) =>
-                                props.onFormChange({
-                                  postToMainPrefix: (e.target as HTMLInputElement).value,
-                                })}
                             />
                           </label>
                         `

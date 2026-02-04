@@ -9,6 +9,7 @@ import type {
   CronPayloadPatch,
 } from "../types.js";
 import type { CronServiceState } from "./state.js";
+import { parseAbsoluteTimeMs } from "../parse.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import {
   normalizeOptionalAgentId,
@@ -51,7 +52,8 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
       return undefined;
     }
-    return job.schedule.atMs;
+    const atMs = parseAbsoluteTimeMs(job.schedule.at);
+    return atMs !== null ? atMs : undefined;
   }
   return computeNextRunAtMs(job.schedule, nowMs);
 }
@@ -117,7 +119,6 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     wakeMode: input.wakeMode,
     payload: input.payload,
     delivery: input.delivery,
-    isolation: input.isolation,
     state: {
       ...input.state,
     },
@@ -155,9 +156,6 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
-  }
-  if (patch.isolation) {
-    job.isolation = patch.isolation;
   }
   if (patch.state) {
     job.state = { ...job.state, ...patch.state };
@@ -251,7 +249,7 @@ function mergeCronDelivery(
   };
 
   if (typeof patch.mode === "string") {
-    next.mode = patch.mode;
+    next.mode = patch.mode === "deliver" ? "announce" : patch.mode;
   }
   if ("channel" in patch) {
     const channel = typeof patch.channel === "string" ? patch.channel.trim() : "";

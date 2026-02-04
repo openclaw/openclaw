@@ -5,7 +5,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
   getCronChannelOptions,
-  parseAtMs,
+  parseAt,
   parseDurationMs,
   warnIfCronSchedulerDisabled,
 } from "./shared.js";
@@ -47,11 +47,8 @@ export function registerCronEditCommand(cron: Command) {
       .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--announce", "Announce summary to a chat (subagent-style)")
-      .option(
-        "--deliver",
-        "Deliver full output to a chat (required when using last-route delivery without --to)",
-      )
-      .option("--no-deliver", "Disable delivery")
+      .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
+      .option("--no-deliver", "Disable announce delivery")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
       .option(
         "--to <dest>",
@@ -59,7 +56,6 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
-      .option("--post-prefix <prefix>", "Prefix for summary system event")
       .action(async (id, opts) => {
         try {
           if (opts.session === "main" && opts.message) {
@@ -72,11 +68,8 @@ export function registerCronEditCommand(cron: Command) {
               "Isolated jobs cannot use --system-event; use --message or --session main.",
             );
           }
-          if (opts.session === "main" && typeof opts.postPrefix === "string") {
-            throw new Error("--post-prefix only applies to isolated jobs.");
-          }
           if (opts.announce && typeof opts.deliver === "boolean") {
-            throw new Error("Choose --announce, --deliver, or --no-deliver (not multiple).");
+            throw new Error("Choose --announce or --no-deliver (not multiple).");
           }
 
           const patch: Record<string, unknown> = {};
@@ -125,11 +118,11 @@ export function registerCronEditCommand(cron: Command) {
             throw new Error("Choose at most one schedule change");
           }
           if (opts.at) {
-            const atMs = parseAtMs(String(opts.at));
-            if (!atMs) {
+            const atIso = parseAt(String(opts.at));
+            if (!atIso) {
               throw new Error("Invalid --at");
             }
-            patch.schedule = { kind: "at", atMs };
+            patch.schedule = { kind: "at", at: atIso };
           } else if (opts.every) {
             const everyMs = parseDurationMs(String(opts.every));
             if (!everyMs) {
@@ -164,7 +157,8 @@ export function registerCronEditCommand(cron: Command) {
             Boolean(thinking) ||
             hasTimeoutSeconds ||
             hasDeliveryModeFlag ||
-            (!hasDeliveryModeFlag && (hasDeliveryTarget || hasBestEffort));
+            hasDeliveryTarget ||
+            hasBestEffort;
           if (hasSystemEventPatch && hasAgentTurnPatch) {
             throw new Error("Choose at most one payload change");
           }
@@ -179,36 +173,16 @@ export function registerCronEditCommand(cron: Command) {
             assignIf(payload, "model", model, Boolean(model));
             assignIf(payload, "thinking", thinking, Boolean(thinking));
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
-            if (!hasDeliveryModeFlag) {
-              const channel =
-                typeof opts.channel === "string" && opts.channel.trim()
-                  ? opts.channel.trim()
-                  : undefined;
-              const to = typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined;
-              assignIf(payload, "channel", channel, Boolean(channel));
-              assignIf(payload, "to", to, Boolean(to));
-              assignIf(
-                payload,
-                "bestEffortDeliver",
-                opts.bestEffortDeliver,
-                typeof opts.bestEffortDeliver === "boolean",
-              );
-            }
             patch.payload = payload;
           }
 
-          if (typeof opts.postPrefix === "string") {
-            patch.isolation = {
-              postToMainPrefix: opts.postPrefix.trim() ? opts.postPrefix : "Cron",
-            };
-          }
-
-          if (hasDeliveryModeFlag) {
-            const deliveryMode = opts.announce
-              ? "announce"
-              : opts.deliver === true
-                ? "deliver"
-                : "none";
+          if (hasDeliveryModeFlag || hasDeliveryTarget || hasBestEffort) {
+            const deliveryMode =
+              opts.announce || opts.deliver === true
+                ? "announce"
+                : opts.deliver === false
+                  ? "none"
+                  : "announce";
             patch.delivery = {
               mode: deliveryMode,
               channel:

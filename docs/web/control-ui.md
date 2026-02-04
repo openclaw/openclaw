@@ -81,8 +81,8 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 
 Cron jobs panel notes:
 
-- For isolated jobs, delivery defaults to announce summary. You can switch to legacy main summary, deliver full output, or none.
-- Channel/target fields appear when announce or deliver is selected.
+- For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
+- Channel/target fields appear when announce is selected.
 
 ## Chat behavior
 

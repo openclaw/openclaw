@@ -8,7 +8,7 @@ import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
 import {
   getCronChannelOptions,
-  parseAtMs,
+  parseAt,
   parseDurationMs,
   printCronList,
   warnIfCronSchedulerDisabled,
@@ -82,24 +82,14 @@ export function registerCronAddCommand(cron: Command) {
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--announce", "Announce summary to a chat (subagent-style)", false)
-      .option(
-        "--deliver",
-        "Deliver full output to a chat (required when using last-route delivery without --to)",
-      )
-      .option("--no-deliver", "Disable delivery and skip main-session summary")
+      .option("--deliver", "Deprecated (use --announce). Announces a summary to a chat.")
+      .option("--no-deliver", "Disable announce delivery and skip main-session summary")
       .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`, "last")
       .option(
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
-      .option("--post-prefix <prefix>", "Prefix for main-session post", "Cron")
-      .option(
-        "--post-mode <mode>",
-        "What to post back to main for isolated jobs (summary|full)",
-        "summary",
-      )
-      .option("--post-max-chars <n>", "Max chars when --post-mode=full (default 8000)", "8000")
       .option("--json", "Output JSON", false)
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
         try {
@@ -112,11 +102,11 @@ export function registerCronAddCommand(cron: Command) {
               throw new Error("Choose exactly one schedule: --at, --every, or --cron");
             }
             if (at) {
-              const atMs = parseAtMs(at);
-              if (!atMs) {
+              const atIso = parseAt(at);
+              if (!atIso) {
                 throw new Error("Invalid --at; use ISO time or duration like 20m");
               }
-              return { kind: "at" as const, atMs };
+              return { kind: "at" as const, at: atIso };
             }
             if (every) {
               const everyMs = parseDurationMs(every);
@@ -143,12 +133,11 @@ export function registerCronAddCommand(cron: Command) {
               ? sanitizeAgentId(opts.agent.trim())
               : undefined;
 
-          const hasAnnounce = Boolean(opts.announce);
-          const hasDeliver = opts.deliver === true;
+          const hasAnnounce = Boolean(opts.announce) || opts.deliver === true;
           const hasNoDeliver = opts.deliver === false;
-          const deliveryFlagCount = [hasAnnounce, hasDeliver, hasNoDeliver].filter(Boolean).length;
+          const deliveryFlagCount = [hasAnnounce, hasNoDeliver].filter(Boolean).length;
           if (deliveryFlagCount > 1) {
-            throw new Error("Choose at most one of --announce, --deliver, or --no-deliver");
+            throw new Error("Choose at most one of --announce or --no-deliver");
           }
 
           const payload = (() => {
@@ -203,56 +192,16 @@ export function registerCronAddCommand(cron: Command) {
             (opts.announce || typeof opts.deliver === "boolean") &&
             (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
           ) {
-            throw new Error("--announce/--deliver/--no-deliver require --session isolated.");
+            throw new Error("--announce/--no-deliver require --session isolated.");
           }
-
-          const hasLegacyPostConfig =
-            optionSource("postPrefix") === "cli" ||
-            optionSource("postMode") === "cli" ||
-            optionSource("postMaxChars") === "cli";
-
-          if (
-            hasLegacyPostConfig &&
-            (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
-          ) {
-            throw new Error(
-              "--post-prefix/--post-mode/--post-max-chars require --session isolated.",
-            );
-          }
-
-          if (hasLegacyPostConfig && (hasAnnounce || hasDeliver || hasNoDeliver)) {
-            throw new Error("Choose legacy main-summary options or a delivery mode (not both).");
-          }
-
-          const isolation =
-            sessionTarget === "isolated" && hasLegacyPostConfig
-              ? {
-                  postToMainPrefix:
-                    typeof opts.postPrefix === "string" && opts.postPrefix.trim()
-                      ? opts.postPrefix.trim()
-                      : "Cron",
-                  postToMainMode:
-                    opts.postMode === "full" || opts.postMode === "summary"
-                      ? opts.postMode
-                      : undefined,
-                  postToMainMaxChars:
-                    opts.postMode === "full" &&
-                    typeof opts.postMaxChars === "string" &&
-                    /^\d+$/.test(opts.postMaxChars)
-                      ? Number.parseInt(opts.postMaxChars, 10)
-                      : undefined,
-                }
-              : undefined;
 
           const deliveryMode =
-            sessionTarget === "isolated" && payload.kind === "agentTurn" && !hasLegacyPostConfig
+            sessionTarget === "isolated" && payload.kind === "agentTurn"
               ? hasAnnounce
                 ? "announce"
-                : hasDeliver
-                  ? "deliver"
-                  : hasNoDeliver
-                    ? "none"
-                    : "announce"
+                : hasNoDeliver
+                  ? "none"
+                  : "announce"
               : undefined;
 
           const nameRaw = typeof opts.name === "string" ? opts.name : "";
@@ -284,11 +233,9 @@ export function registerCronAddCommand(cron: Command) {
                       ? opts.channel.trim()
                       : undefined,
                   to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
-                  bestEffort:
-                    deliveryMode === "deliver" && opts.bestEffortDeliver ? true : undefined,
+                  bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }
               : undefined,
-            isolation,
           };
 
           const res = await callGatewayFromCli("cron.add", opts, params);

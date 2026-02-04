@@ -80,12 +80,7 @@ export async function executeJob(
 
   let deleted = false;
 
-  const finish = async (
-    status: "ok" | "error" | "skipped",
-    err?: string,
-    summary?: string,
-    outputText?: string,
-  ) => {
+  const finish = async (status: "ok" | "error" | "skipped", err?: string, summary?: string) => {
     const endedAt = state.deps.nowMs();
     job.state.runningAtMs = undefined;
     job.state.lastRunAtMs = startedAt;
@@ -123,30 +118,6 @@ export async function executeJob(
       state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
       deleted = true;
       emit(state, { jobId: job.id, action: "removed" });
-    }
-
-    if (job.sessionTarget === "isolated" && !job.delivery) {
-      const prefix = job.isolation?.postToMainPrefix?.trim() || "Cron";
-      const mode = job.isolation?.postToMainMode ?? "summary";
-
-      let body = (summary ?? err ?? status).trim();
-      if (mode === "full") {
-        // Prefer full agent output if available; fall back to summary.
-        const maxCharsRaw = job.isolation?.postToMainMaxChars;
-        const maxChars = Number.isFinite(maxCharsRaw) ? Math.max(0, maxCharsRaw as number) : 8000;
-        const fullText = (outputText ?? "").trim();
-        if (fullText) {
-          body = fullText.length > maxChars ? `${fullText.slice(0, maxChars)}…` : fullText;
-        }
-      }
-
-      const statusPrefix = status === "ok" ? prefix : `${prefix} (${status})`;
-      state.deps.enqueueSystemEvent(`${statusPrefix}: ${body}`, {
-        agentId: job.agentId,
-      });
-      if (job.wakeMode === "now") {
-        state.deps.requestHeartbeatNow({ reason: `cron:${job.id}:post` });
-      }
     }
   };
 
@@ -214,11 +185,11 @@ export async function executeJob(
       message: job.payload.message,
     });
     if (res.status === "ok") {
-      await finish("ok", undefined, res.summary, res.outputText);
+      await finish("ok", undefined, res.summary);
     } else if (res.status === "skipped") {
-      await finish("skipped", undefined, res.summary, res.outputText);
+      await finish("skipped", undefined, res.summary);
     } else {
-      await finish("error", res.error ?? "cron job failed", res.summary, res.outputText);
+      await finish("error", res.error ?? "cron job failed", res.summary);
     }
   } catch (err) {
     await finish("error", String(err));
