@@ -446,7 +446,10 @@ Example voice-call config with ngrok:
         "enabled": true,
         "config": {
           "provider": "twilio",
-          "tunnel": { "provider": "ngrok" }
+          "tunnel": { "provider": "ngrok" },
+          "webhookSecurity": {
+            "allowedHosts": ["example.ngrok.app"]
+          }
         }
       }
     }
@@ -454,7 +457,7 @@ Example voice-call config with ngrok:
 }
 ```
 
-The ngrok tunnel runs inside the container and provides a public webhook URL without exposing the Fly app itself.
+The ngrok tunnel runs inside the container and provides a public webhook URL without exposing the Fly app itself. Set `webhookSecurity.allowedHosts` to the public tunnel hostname so forwarded host headers are accepted.
 
 ### Security benefits
 
