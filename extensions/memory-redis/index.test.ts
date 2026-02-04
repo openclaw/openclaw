@@ -316,7 +316,11 @@ describeLive("memory-redis live tests", () => {
   const testConfig = {
     redis: { url: REDIS_URL },
     embedding: {
-      provider: (process.env.EMBEDDING_PROVIDER ?? "openai") as "openai" | "gemini" | "local" | "auto",
+      provider: (process.env.EMBEDDING_PROVIDER ?? "openai") as
+        | "openai"
+        | "gemini"
+        | "local"
+        | "auto",
       apiKey: process.env.EMBEDDING_API_KEY ?? OPENAI_API_KEY,
       model: process.env.EMBEDDING_MODEL,
       baseUrl: process.env.EMBEDDING_BASE_URL,
@@ -329,9 +333,15 @@ describeLive("memory-redis live tests", () => {
   // Mock config for embedding provider
   const mockConfig = {
     get: (key: string) => {
-      if (key === "anthropic.apiKey") return process.env.ANTHROPIC_API_KEY;
-      if (key === "openai.apiKey") return process.env.OPENAI_API_KEY ?? OPENAI_API_KEY;
-      if (key === "gemini.apiKey") return process.env.GEMINI_API_KEY;
+      if (key === "anthropic.apiKey") {
+        return process.env.ANTHROPIC_API_KEY;
+      }
+      if (key === "openai.apiKey") {
+        return process.env.OPENAI_API_KEY ?? OPENAI_API_KEY;
+      }
+      if (key === "gemini.apiKey") {
+        return process.env.GEMINI_API_KEY;
+      }
       return undefined;
     },
   };
@@ -346,15 +356,12 @@ describeLive("memory-redis live tests", () => {
 
     // Initialize embeddings
     let vectorDim = 1536; // Default, will be updated
-    const embeddings = new Embeddings(
-      testConfig,
-      mockConfig,
-      logger,
-      (dim) => { vectorDim = dim; },
-    );
+    const embeddings = new Embeddings(testConfig, mockConfig, logger, (dim) => {
+      vectorDim = dim;
+    });
 
     // Initialize the first embedding to get the dimension
-    const testVector = await embeddings.embed("test initialization");
+    const _testVector = await embeddings.embed("test initialization");
     console.log(`[test] Vector dimension: ${vectorDim}`);
 
     // Create Redis DB with the detected dimension
@@ -385,7 +392,9 @@ describeLive("memory-redis live tests", () => {
 
       expect(results.length).toBeGreaterThan(0);
       expect(results[0].entry.text).toContain("blue");
-      console.log(`[test] Search result: ${results[0].entry.text} (score: ${results[0].score.toFixed(2)})`);
+      console.log(
+        `[test] Search result: ${results[0].entry.text} (score: ${results[0].score.toFixed(2)})`,
+      );
     } finally {
       await db.disconnect();
     }
@@ -395,12 +404,9 @@ describeLive("memory-redis live tests", () => {
     const { RedisMemoryDB, Embeddings } = await import("./index.js");
 
     let vectorDim = 1536;
-    const embeddings = new Embeddings(
-      testConfig,
-      mockConfig,
-      logger,
-      (dim) => { vectorDim = dim; },
-    );
+    const embeddings = new Embeddings(testConfig, mockConfig, logger, (dim) => {
+      vectorDim = dim;
+    });
 
     await embeddings.embed("init");
 
@@ -432,7 +438,7 @@ describeLive("memory-redis live tests", () => {
         text: "User's email is test@example.com",
         vector: await embeddings.embed("User's email is test@example.com"),
         importance: 0.9,
-        category: "contact",
+        category: "entity",
       });
 
       // Search for theme preference - should find dark mode
@@ -459,12 +465,9 @@ describeLive("memory-redis live tests", () => {
     const { RedisMemoryDB, Embeddings } = await import("./index.js");
 
     let vectorDim = 1536;
-    const embeddings = new Embeddings(
-      testConfig,
-      mockConfig,
-      logger,
-      (dim) => { vectorDim = dim; },
-    );
+    const embeddings = new Embeddings(testConfig, mockConfig, logger, (dim) => {
+      vectorDim = dim;
+    });
 
     await embeddings.embed("init");
 
@@ -509,12 +512,9 @@ describeLive("memory-redis live tests", () => {
     const { RedisMemoryDB, Embeddings } = await import("./index.js");
 
     let vectorDim = 1536;
-    const embeddings = new Embeddings(
-      testConfig,
-      mockConfig,
-      logger,
-      (dim) => { vectorDim = dim; },
-    );
+    const embeddings = new Embeddings(testConfig, mockConfig, logger, (dim) => {
+      vectorDim = dim;
+    });
 
     await embeddings.embed("init");
 
@@ -540,13 +540,13 @@ describeLive("memory-redis live tests", () => {
         text: "Meeting scheduled for Friday at 2pm",
         vector: await embeddings.embed("Meeting scheduled for Friday at 2pm"),
         importance: 0.7,
-        category: "event",
+        category: "fact",
       });
       await db.store({
         text: "Project deadline is next Monday",
         vector: await embeddings.embed("Project deadline is next Monday"),
         importance: 0.9,
-        category: "task",
+        category: "decision",
       });
 
       const count = await db.count();

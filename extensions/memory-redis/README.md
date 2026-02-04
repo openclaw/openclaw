@@ -180,11 +180,11 @@ ollama pull nomic-embed-text
 
 **Supported Ollama embedding models:**
 
-| Model              | Dimensions | Size   | Notes                            |
-| ------------------ | ---------- | ------ | -------------------------------- |
-| `nomic-embed-text` | 768        | ~275MB | Best balance of quality and size |
-| `mxbai-embed-large`| 1024       | ~670MB | Higher quality, larger           |
-| `all-minilm`       | 384        | ~46MB  | Fast, smaller, lower quality     |
+| Model               | Dimensions | Size   | Notes                            |
+| ------------------- | ---------- | ------ | -------------------------------- |
+| `nomic-embed-text`  | 768        | ~275MB | Best balance of quality and size |
+| `mxbai-embed-large` | 1024       | ~670MB | Higher quality, larger           |
+| `all-minilm`        | 384        | ~46MB  | Fast, smaller, lower quality     |
 
 ## Agent Tools
 

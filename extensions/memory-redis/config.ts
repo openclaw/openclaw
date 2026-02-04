@@ -97,7 +97,11 @@ export const redisMemoryConfigSchema = {
     if (!embedding) {
       throw new Error("embedding config is required");
     }
-    assertAllowedKeys(embedding, ["provider", "apiKey", "model", "baseUrl", "fallback"], "embedding config");
+    assertAllowedKeys(
+      embedding,
+      ["provider", "apiKey", "model", "baseUrl", "fallback"],
+      "embedding config",
+    );
 
     // Provider defaults to "auto" which tries local, then openai, then gemini
     const provider = (embedding.provider as EmbeddingProviderType) ?? "auto";
@@ -121,7 +125,7 @@ export const redisMemoryConfigSchema = {
 
     return {
       redis: {
-        url: resolveEnvVars(redis.url as string),
+        url: resolveEnvVars(redis.url),
         password:
           typeof redis.password === "string" ? resolveEnvVarsOptional(redis.password) : undefined,
         tls: typeof redis.tls === "boolean" ? redis.tls : undefined,
@@ -130,7 +134,10 @@ export const redisMemoryConfigSchema = {
         provider,
         apiKey,
         model: typeof embedding.model === "string" ? embedding.model : undefined,
-        baseUrl: typeof embedding.baseUrl === "string" ? resolveEnvVarsOptional(embedding.baseUrl) : undefined,
+        baseUrl:
+          typeof embedding.baseUrl === "string"
+            ? resolveEnvVarsOptional(embedding.baseUrl)
+            : undefined,
         fallback,
       },
       indexName: typeof cfg.indexName === "string" ? cfg.indexName : DEFAULT_INDEX_NAME,

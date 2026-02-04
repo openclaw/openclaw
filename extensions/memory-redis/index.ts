@@ -12,6 +12,8 @@ import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
 import { stringEnum } from "openclaw/plugin-sdk";
 import { createClient, type RedisClientType } from "redis";
+// Import core embedding provider (available in-process via jiti)
+import { createEmbeddingProvider, type EmbeddingProvider } from "../../src/memory/embeddings.js";
 import {
   MEMORY_CATEGORIES,
   type MemoryCategory,
@@ -19,9 +21,6 @@ import {
   getDefaultVectorDim,
   redisMemoryConfigSchema,
 } from "./config.js";
-
-// Import core embedding provider (available in-process via jiti)
-import { createEmbeddingProvider, type EmbeddingProvider } from "../../src/memory/embeddings.js";
 
 // ============================================================================
 // Types
@@ -131,11 +130,13 @@ class RedisMemoryDB {
           },
           {
             ON: "JSON",
-            PREFIX: this.keyPrefix,
+            PREFIX: [this.keyPrefix],
           },
         );
         this.indexCreated = true;
-        this.logger?.info?.(`memory-redis: created index ${this.indexName} (dim: ${this.vectorDim})`);
+        this.logger?.info?.(
+          `memory-redis: created index ${this.indexName} (dim: ${this.vectorDim})`,
+        );
       } catch (createErr) {
         this.logger?.warn(`memory-redis: failed to create index: ${String(createErr)}`);
         throw createErr;
@@ -184,18 +185,40 @@ class RedisMemoryDB {
       const data = doc.value as Record<string, unknown>;
       // Redis returns cosine distance (0 = identical, 2 = opposite)
       // Convert to similarity score (1 = identical, 0 = opposite)
-      const distance = parseFloat(String(data.score ?? "0"));
+      const scoreVal =
+        typeof data.score === "number"
+          ? data.score
+          : typeof data.score === "string"
+            ? parseFloat(data.score)
+            : 0;
+      const distance = scoreVal;
       const score = 1 - distance / 2;
 
       if (score >= minScore) {
+        const idVal = typeof data.id === "string" ? data.id : "";
+        const textVal = typeof data.text === "string" ? data.text : "";
+        const importanceVal =
+          typeof data.importance === "number"
+            ? data.importance
+            : typeof data.importance === "string"
+              ? parseFloat(data.importance)
+              : 0;
+        const categoryVal = typeof data.category === "string" ? data.category : "other";
+        const createdAtVal =
+          typeof data.createdAt === "number"
+            ? data.createdAt
+            : typeof data.createdAt === "string"
+              ? parseInt(data.createdAt, 10)
+              : 0;
+
         mapped.push({
           entry: {
-            id: String(data.id ?? ""),
-            text: String(data.text ?? ""),
+            id: idVal,
+            text: textVal,
             vector: [], // Don't return vector in search results
-            importance: parseFloat(String(data.importance ?? "0")),
-            category: String(data.category ?? "other") as MemoryCategory,
-            createdAt: parseInt(String(data.createdAt ?? "0"), 10),
+            importance: importanceVal,
+            category: categoryVal as MemoryCategory,
+            createdAt: createdAtVal,
           },
           score,
         });
@@ -372,7 +395,8 @@ function detectCategory(text: string): MemoryCategory {
 const memoryRedisPlugin = {
   id: "memory-redis",
   name: "Memory (Redis)",
-  description: "Redis-backed long-term memory with vector search (supports local/openai/gemini embeddings)",
+  description:
+    "Redis-backed long-term memory with vector search (supports local/openai/gemini embeddings)",
   kind: "memory" as const,
   configSchema: redisMemoryConfigSchema,
 
@@ -459,7 +483,9 @@ const memoryRedisPlugin = {
           "Save important information in Redis long-term memory. Use for preferences, facts, decisions.",
         parameters: Type.Object({
           text: Type.String({ description: "Information to remember" }),
-          importance: Type.Optional(Type.Number({ description: "Importance 0-1 (default: 0.7)" })),
+          importance: Type.Optional(
+            Type.Number({ description: "Importance 0-1 (default: 0.7)", minimum: 0, maximum: 1 }),
+          ),
           category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
         }),
         async execute(_toolCallId, params) {
