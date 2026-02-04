@@ -86,6 +86,10 @@
       "destination": "/providers/opencode"
     },
     {
+      "source": "/qianfan",
+      "destination": "/providers/qianfan"
+    },
+    {
       "source": "/mattermost",
       "destination": "/channels/mattermost"
     },
@@ -934,7 +938,8 @@
                   "providers/opencode",
                   "providers/glm",
                   "providers/zai",
-                  "providers/synthetic"
+                  "providers/synthetic",
+                  "providers/qianfan"
                 ]
               }
             ]
