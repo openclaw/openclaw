@@ -16,6 +16,7 @@ export type ResolvedFeishuConfig = {
   blockStreaming: boolean;
   streaming: boolean;
   mediaMaxMb: number;
+  dmSessionIsolation: boolean;
   groups: Record<string, FeishuGroupConfig>;
 };
 
@@ -48,6 +49,8 @@ export function resolveFeishuConfig(params: {
     blockStreaming: firstDefined(accountCfg?.blockStreaming, feishuCfg?.blockStreaming) ?? true,
     streaming: firstDefined(accountCfg?.streaming, feishuCfg?.streaming) ?? true,
     mediaMaxMb: firstDefined(accountCfg?.mediaMaxMb, feishuCfg?.mediaMaxMb) ?? 30,
+    dmSessionIsolation:
+      firstDefined(accountCfg?.dmSessionIsolation, feishuCfg?.dmSessionIsolation) ?? false,
     groups: { ...feishuCfg?.groups, ...accountCfg?.groups },
   };
 }

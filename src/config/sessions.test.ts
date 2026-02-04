@@ -93,6 +93,40 @@ describe("sessions", () => {
     );
   });
 
+  it("uses explicit SessionKey when provided (for dm isolation)", () => {
+    expect(
+      resolveSessionKey(
+        "per-sender",
+        { From: "ou_abc123", SessionKey: "agent:main:feishu:default:dm:ou_abc123" },
+        "main",
+      ),
+    ).toBe("agent:main:feishu:default:dm:ou_abc123");
+  });
+
+  it("different explicit SessionKeys result in different sessions", () => {
+    const aliceKey = resolveSessionKey(
+      "per-sender",
+      { From: "ou_alice", SessionKey: "agent:main:feishu:myapp:dm:ou_alice" },
+      "main",
+    );
+    const bobKey = resolveSessionKey(
+      "per-sender",
+      { From: "ou_bob", SessionKey: "agent:main:feishu:myapp:dm:ou_bob" },
+      "main",
+    );
+    expect(aliceKey).not.toBe(bobKey);
+    expect(aliceKey).toBe("agent:main:feishu:myapp:dm:ou_alice");
+    expect(bobKey).toBe("agent:main:feishu:myapp:dm:ou_bob");
+  });
+
+  it("dm collapses to main when dmSessionIsolation is disabled (no explicit SessionKey)", () => {
+    // When dmSessionIsolation is false (default), Feishu does not set ctx.SessionKey,
+    // so DMs collapse to the shared main session regardless of ChatType/Provider
+    expect(
+      resolveSessionKey("per-sender", { From: "ou_abc123", ChatType: "dm", Provider: "feishu" }),
+    ).toBe("agent:main:main");
+  });
+
   it("updateLastRoute persists channel and target", async () => {
     const mainSessionKey = "agent:main:main";
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
