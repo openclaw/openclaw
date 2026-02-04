@@ -355,9 +355,7 @@ export function handleControlUiHttpRequest(
   // API routes should never fall through to the SPA fallback – return a proper
   // JSON 404 so callers don't receive HTML when they expect JSON.
   if (uiPath === "/api" || uiPath.startsWith("/api/")) {
-    res.statusCode = 404;
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.end(JSON.stringify({ error: "Not found" }));
+    sendJson(res, 404, { error: "Not found" });
     return true;
   }
 
