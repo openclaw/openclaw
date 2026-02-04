@@ -83,16 +83,22 @@ export type GitHubToolsConfig = {
 };
 
 export function createGitHubTools(config: GitHubToolsConfig): {
-  createPR: AgentTool<unknown, GitHubPRDetails>;
-  reviewPR: AgentTool<unknown, GitHubReviewDetails>;
-  mergePR: AgentTool<unknown, GitHubMergeDetails>;
-  getPRInfo: AgentTool<unknown, GitHubPRInfoDetails>;
-  commentPR: AgentTool<unknown, { status: "commented"; prNumber: number }>;
+  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  createPR: AgentTool<any, GitHubPRDetails>;
+  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  reviewPR: AgentTool<any, GitHubReviewDetails>;
+  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  mergePR: AgentTool<any, GitHubMergeDetails>;
+  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  getPRInfo: AgentTool<any, GitHubPRInfoDetails>;
+  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  commentPR: AgentTool<any, { status: "commented"; prNumber: number }>;
 } {
   const { execFn, defaults } = config;
 
   // Tool: Create Pull Request
-  const createPR: AgentTool<unknown, GitHubPRDetails> = {
+  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  const createPR: AgentTool<any, GitHubPRDetails> = {
     name: "github_create_pr",
     label: "github_create_pr",
     description:
@@ -185,7 +191,8 @@ export function createGitHubTools(config: GitHubToolsConfig): {
   };
 
   // Tool: Review Pull Request
-  const reviewPR: AgentTool<unknown, GitHubReviewDetails> = {
+  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  const reviewPR: AgentTool<any, GitHubReviewDetails> = {
     name: "github_review_pr",
     label: "github_review_pr",
     description:
@@ -272,7 +279,8 @@ export function createGitHubTools(config: GitHubToolsConfig): {
   };
 
   // Tool: Merge Pull Request
-  const mergePR: AgentTool<unknown, GitHubMergeDetails> = {
+  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  const mergePR: AgentTool<any, GitHubMergeDetails> = {
     name: "github_merge_pr",
     label: "github_merge_pr",
     description:
@@ -391,7 +399,8 @@ export function createGitHubTools(config: GitHubToolsConfig): {
   };
 
   // Tool: Get PR Info
-  const getPRInfo: AgentTool<unknown, GitHubPRInfoDetails> = {
+  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  const getPRInfo: AgentTool<any, GitHubPRInfoDetails> = {
     name: "github_get_pr",
     label: "github_get_pr",
     description:
@@ -473,7 +482,8 @@ export function createGitHubTools(config: GitHubToolsConfig): {
   };
 
   // Tool: Comment on PR
-  const commentPR: AgentTool<unknown, { status: "commented"; prNumber: number }> = {
+  // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
+  const commentPR: AgentTool<any, { status: "commented"; prNumber: number }> = {
     name: "github_comment_pr",
     label: "github_comment_pr",
     description: "Add a comment to a pull request. Use for feedback, questions, or status updates.",
