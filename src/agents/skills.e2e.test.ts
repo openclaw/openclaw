@@ -129,6 +129,54 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     const cmd = commands.find((entry) => entry.skillName === "tool-dispatch");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
   });
+
+  it("includes thinking and model from skill config", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "browser"),
+      name: "browser",
+      description: "Browser automation",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "replicate-image"),
+      name: "replicate-image",
+      description: "Image generation",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "no-config"),
+      name: "no-config",
+      description: "No special config",
+    });
+
+    const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
+      config: {
+        skills: {
+          entries: {
+            browser: {
+              thinking: "xhigh",
+              model: "anthropic/claude-opus-4-5",
+            },
+            "replicate-image": {
+              thinking: "low",
+            },
+          },
+        },
+      },
+    });
+
+    const browserCmd = commands.find((entry) => entry.skillName === "browser");
+    const replicateCmd = commands.find((entry) => entry.skillName === "replicate-image");
+    const noConfigCmd = commands.find((entry) => entry.skillName === "no-config");
+
+    expect(browserCmd?.thinking).toBe("xhigh");
+    expect(browserCmd?.model).toBe("anthropic/claude-opus-4-5");
+
+    expect(replicateCmd?.thinking).toBe("low");
+    expect(replicateCmd?.model).toBeUndefined();
+
+    expect(noConfigCmd?.thinking).toBeUndefined();
+    expect(noConfigCmd?.model).toBeUndefined();
+  });
 });
 
 describe("buildWorkspaceSkillsPrompt", () => {

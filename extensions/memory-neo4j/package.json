@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/memory-neo4j",
+  "version": "2026.2.2",
+  "description": "OpenClaw Neo4j-backed long-term memory plugin with three-signal hybrid search, entity extraction, and knowledge graph",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48",
+    "neo4j-driver": "^5.27.0",
+    "openai": "^6.17.0"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -1,0 +1,942 @@
+/**
+ * OpenClaw Memory (Neo4j) Plugin
+ *
+ * Drop-in replacement for memory-lancedb with three-signal hybrid search,
+ * entity extraction, and knowledge graph capabilities.
+ *
+ * Provides:
+ * - memory_recall: Hybrid search (vector + BM25 + graph traversal)
+ * - memory_store: Store memories with background entity extraction
+ * - memory_forget: Delete memories with cascade cleanup
+ *
+ * Architecture decisions: see docs/memory-neo4j/ARCHITECTURE.md
+ */
+
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { Type } from "@sinclair/typebox";
+import { randomUUID } from "node:crypto";
+import { stringEnum } from "openclaw/plugin-sdk";
+import type { MemoryCategory, MemorySource } from "./schema.js";
+import {
+  MEMORY_CATEGORIES,
+  memoryNeo4jConfigSchema,
+  resolveExtractionConfig,
+  vectorDimsForModel,
+} from "./config.js";
+import { Embeddings } from "./embeddings.js";
+import { evaluateAutoCapture, extractUserMessages, runSleepCycle } from "./extractor.js";
+import { Neo4jMemoryClient } from "./neo4j-client.js";
+import { hybridSearch } from "./search.js";
+
+// ============================================================================
+// Plugin Definition
+// ============================================================================
+
+const memoryNeo4jPlugin = {
+  id: "memory-neo4j",
+  name: "Memory (Neo4j)",
+  description:
+    "Neo4j-backed long-term memory with three-signal hybrid search, entity extraction, and knowledge graph",
+  kind: "memory" as const,
+  configSchema: memoryNeo4jConfigSchema,
+
+  register(api: OpenClawPluginApi) {
+    // Parse configuration
+    const cfg = memoryNeo4jConfigSchema.parse(api.pluginConfig);
+    const extractionConfig = resolveExtractionConfig();
+    const vectorDim = vectorDimsForModel(cfg.embedding.model);
+
+    // Create shared resources
+    const db = new Neo4jMemoryClient(
+      cfg.neo4j.uri,
+      cfg.neo4j.username,
+      cfg.neo4j.password,
+      vectorDim,
+      api.logger,
+    );
+    const embeddings = new Embeddings(
+      cfg.embedding.apiKey,
+      cfg.embedding.model,
+      cfg.embedding.provider,
+      cfg.embedding.baseUrl,
+    );
+
+    api.logger.debug?.(
+      `memory-neo4j: registered (uri: ${cfg.neo4j.uri}, provider: ${cfg.embedding.provider}, model: ${cfg.embedding.model}, ` +
+        `extraction: ${extractionConfig.enabled ? extractionConfig.model : "disabled"})`,
+    );
+
+    // ========================================================================
+    // Tools (using factory pattern for agentId)
+    // ========================================================================
+
+    // memory_recall — Three-signal hybrid search
+    api.registerTool(
+      (ctx) => {
+        const agentId = ctx.agentId || "default";
+        return {
+          name: "memory_recall",
+          label: "Memory Recall",
+          description:
+            "Search through long-term memories. Use when you need context about user preferences, past decisions, or previously discussed topics.",
+          parameters: Type.Object({
+            query: Type.String({ description: "Search query" }),
+            limit: Type.Optional(Type.Number({ description: "Max results (default: 5)" })),
+          }),
+          async execute(_toolCallId: string, params: unknown) {
+            const { query, limit = 5 } = params as {
+              query: string;
+              limit?: number;
+            };
+
+            const results = await hybridSearch(
+              db,
+              embeddings,
+              query,
+              limit,
+              agentId,
+              extractionConfig.enabled,
+            );
+
+            if (results.length === 0) {
+              return {
+                content: [{ type: "text", text: "No relevant memories found." }],
+                details: { count: 0 },
+              };
+            }
+
+            const text = results
+              .map((r, i) => `${i + 1}. [${r.category}] ${r.text} (${(r.score * 100).toFixed(0)}%)`)
+              .join("\n");
+
+            const sanitizedResults = results.map((r) => ({
+              id: r.id,
+              text: r.text,
+              category: r.category,
+              importance: r.importance,
+              score: r.score,
+            }));
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Found ${results.length} memories:\n\n${text}`,
+                },
+              ],
+              details: { count: results.length, memories: sanitizedResults },
+            };
+          },
+        };
+      },
+      { name: "memory_recall" },
+    );
+
+    // memory_store — Store with background entity extraction
+    api.registerTool(
+      (ctx) => {
+        const agentId = ctx.agentId || "default";
+        const sessionKey = ctx.sessionKey;
+        return {
+          name: "memory_store",
+          label: "Memory Store",
+          description:
+            "Save important information in long-term memory. Use for preferences, facts, decisions.",
+          parameters: Type.Object({
+            text: Type.String({ description: "Information to remember" }),
+            importance: Type.Optional(
+              Type.Number({
+                description: "Importance 0-1 (default: 0.7)",
+              }),
+            ),
+            category: Type.Optional(stringEnum(MEMORY_CATEGORIES)),
+          }),
+          async execute(_toolCallId: string, params: unknown) {
+            const {
+              text,
+              importance = 0.7,
+              category = "other",
+            } = params as {
+              text: string;
+              importance?: number;
+              category?: MemoryCategory;
+            };
+
+            // 1. Generate embedding
+            const vector = await embeddings.embed(text);
+
+            // 2. Check for duplicates (vector similarity > 0.95)
+            const existing = await db.findSimilar(vector, 0.95, 1);
+            if (existing.length > 0) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Similar memory already exists: "${existing[0].text}"`,
+                  },
+                ],
+                details: {
+                  action: "duplicate",
+                  existingId: existing[0].id,
+                  existingText: existing[0].text,
+                },
+              };
+            }
+
+            // 3. Store memory immediately (fast path)
+            const memoryId = randomUUID();
+            await db.storeMemory({
+              id: memoryId,
+              text,
+              embedding: vector,
+              importance: Math.min(1, Math.max(0, importance)),
+              category,
+              source: "user" as MemorySource,
+              extractionStatus: extractionConfig.enabled ? "pending" : "skipped",
+              agentId,
+              sessionKey,
+            });
+
+            // 4. Extraction is deferred to sleep cycle (like human memory consolidation)
+            // See: runSleepCycleExtraction() and `openclaw memory sleep` command
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Stored: "${text.slice(0, 100)}${text.length > 100 ? "..." : ""}"`,
+                },
+              ],
+              details: { action: "created", id: memoryId },
+            };
+          },
+        };
+      },
+      { name: "memory_store" },
+    );
+
+    // memory_forget — Delete with cascade
+    api.registerTool(
+      (_ctx) => {
+        return {
+          name: "memory_forget",
+          label: "Memory Forget",
+          description: "Delete specific memories. GDPR-compliant.",
+          parameters: Type.Object({
+            query: Type.Optional(Type.String({ description: "Search to find memory" })),
+            memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
+          }),
+          async execute(_toolCallId: string, params: unknown) {
+            const { query, memoryId } = params as {
+              query?: string;
+              memoryId?: string;
+            };
+
+            // Direct delete by ID
+            if (memoryId) {
+              const deleted = await db.deleteMemory(memoryId);
+              if (!deleted) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Memory ${memoryId} not found.`,
+                    },
+                  ],
+                  details: { action: "not_found", id: memoryId },
+                };
+              }
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Memory ${memoryId} forgotten.`,
+                  },
+                ],
+                details: { action: "deleted", id: memoryId },
+              };
+            }
+
+            // Search-based delete
+            if (query) {
+              const vector = await embeddings.embed(query);
+              const results = await db.vectorSearch(vector, 5, 0.7);
+
+              if (results.length === 0) {
+                return {
+                  content: [{ type: "text", text: "No matching memories found." }],
+                  details: { found: 0 },
+                };
+              }
+
+              // Auto-delete if single high-confidence match
+              if (results.length === 1 && results[0].score > 0.9) {
+                await db.deleteMemory(results[0].id);
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Forgotten: "${results[0].text}"`,
+                    },
+                  ],
+                  details: { action: "deleted", id: results[0].id },
+                };
+              }
+
+              // Multiple candidates — ask user to specify
+              const list = results.map((r) => `- [${r.id}] ${r.text.slice(0, 60)}...`).join("\n");
+
+              const sanitizedCandidates = results.map((r) => ({
+                id: r.id,
+                text: r.text,
+                category: r.category,
+                score: r.score,
+              }));
+
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Found ${results.length} candidates. Specify memoryId:\n${list}`,
+                  },
+                ],
+                details: {
+                  action: "candidates",
+                  candidates: sanitizedCandidates,
+                },
+              };
+            }
+
+            return {
+              content: [{ type: "text", text: "Provide query or memoryId." }],
+              details: { error: "missing_param" },
+            };
+          },
+        };
+      },
+      { name: "memory_forget" },
+    );
+
+    // ========================================================================
+    // CLI Commands
+    // ========================================================================
+
+    api.registerCli(
+      ({ program }) => {
+        // Find existing memory command or create fallback
+        let memoryCmd = program.commands.find((cmd) => cmd.name() === "memory");
+        if (!memoryCmd) {
+          // Fallback if core memory CLI not registered yet
+          memoryCmd = program.command("memory").description("Memory commands");
+        }
+
+        // Add neo4j memory subcommand group
+        const memory = memoryCmd.command("neo4j").description("Neo4j graph memory commands");
+
+        memory
+          .command("list")
+          .description("List memory counts by agent and category")
+          .option("--json", "Output as JSON")
+          .action(async (opts: { json?: boolean }) => {
+            try {
+              await db.ensureInitialized();
+              const stats = await db.getMemoryStats();
+
+              if (opts.json) {
+                console.log(JSON.stringify(stats, null, 2));
+                return;
+              }
+
+              if (stats.length === 0) {
+                console.log("No memories stored.");
+                return;
+              }
+
+              // Group by agentId
+              const byAgent = new Map<
+                string,
+                Array<{ category: string; count: number; avgImportance: number }>
+              >();
+              for (const row of stats) {
+                const list = byAgent.get(row.agentId) || [];
+                list.push({
+                  category: row.category,
+                  count: row.count,
+                  avgImportance: row.avgImportance,
+                });
+                byAgent.set(row.agentId, list);
+              }
+
+              // Print table for each agent
+              for (const [agentId, categories] of byAgent) {
+                const total = categories.reduce((sum, c) => sum + c.count, 0);
+                console.log(`\n┌─ ${agentId} (${total} total)`);
+                console.log("│");
+                console.log("│  Category      Count   Avg Importance");
+                console.log("│  ─────────────────────────────────────");
+                for (const { category, count, avgImportance } of categories) {
+                  const cat = category.padEnd(12);
+                  const cnt = String(count).padStart(5);
+                  const imp = (avgImportance * 100).toFixed(0).padStart(3) + "%";
+                  console.log(`│  ${cat} ${cnt}   ${imp}`);
+                }
+                console.log("└");
+              }
+              console.log("");
+            } catch (err) {
+              console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+              process.exitCode = 1;
+            }
+          });
+
+        memory
+          .command("search")
+          .description("Search memories")
+          .argument("<query>", "Search query")
+          .option("--limit <n>", "Max results", "5")
+          .action(async (query: string, opts: { limit: string }) => {
+            try {
+              const results = await hybridSearch(
+                db,
+                embeddings,
+                query,
+                parseInt(opts.limit, 10),
+                "default",
+                extractionConfig.enabled,
+              );
+              const output = results.map((r) => ({
+                id: r.id,
+                text: r.text,
+                category: r.category,
+                importance: r.importance,
+                score: r.score,
+              }));
+              console.log(JSON.stringify(output, null, 2));
+            } catch (err) {
+              console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+              process.exitCode = 1;
+            }
+          });
+
+        memory
+          .command("stats")
+          .description("Show memory statistics and configuration")
+          .action(async () => {
+            try {
+              await db.ensureInitialized();
+              const stats = await db.getMemoryStats();
+              const total = stats.reduce((sum, s) => sum + s.count, 0);
+
+              console.log("\nMemory (Neo4j) Statistics");
+              console.log("─────────────────────────");
+              console.log(`Total memories: ${total}`);
+              console.log(`Neo4j URI:      ${cfg.neo4j.uri}`);
+              console.log(`Embedding:      ${cfg.embedding.provider}/${cfg.embedding.model}`);
+              console.log(
+                `Extraction:     ${extractionConfig.enabled ? extractionConfig.model : "disabled"}`,
+              );
+              console.log(`Auto-capture:   ${cfg.autoCapture ? "enabled" : "disabled"}`);
+              console.log(`Auto-recall:    ${cfg.autoRecall ? "enabled" : "disabled"}`);
+              console.log(`Core memory:    ${cfg.coreMemory.enabled ? "enabled" : "disabled"}`);
+
+              if (stats.length > 0) {
+                // Group by category across all agents
+                const byCategory = new Map<string, number>();
+                for (const row of stats) {
+                  byCategory.set(row.category, (byCategory.get(row.category) ?? 0) + row.count);
+                }
+                console.log("\nBy Category:");
+                for (const [category, count] of byCategory) {
+                  console.log(`  ${category.padEnd(12)} ${count}`);
+                }
+
+                // Show agent count
+                const agents = new Set(stats.map((s) => s.agentId));
+                console.log(`\nAgents: ${agents.size} (${[...agents].join(", ")})`);
+              }
+              console.log("");
+            } catch (err) {
+              console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+              process.exitCode = 1;
+            }
+          });
+
+        memory
+          .command("sleep")
+          .description(
+            "Run sleep cycle — consolidate memories (dedup → promote → decay → extract → cleanup)",
+          )
+          .option("--agent <id>", "Agent id (default: all agents)")
+          .option("--dedup-threshold <n>", "Vector similarity threshold for dedup (default: 0.95)")
+          .option(
+            "--promotion-threshold <n>",
+            "Min importance for auto-promotion to core (default: 0.9)",
+          )
+          .option("--promotion-min-age <days>", "Min age in days before promotion (default: 7)")
+          .option("--decay-threshold <n>", "Decay score threshold for pruning (default: 0.1)")
+          .option("--decay-half-life <days>", "Base half-life in days (default: 30)")
+          .option("--batch-size <n>", "Extraction batch size (default: 50)")
+          .option("--delay <ms>", "Delay between extraction batches in ms (default: 1000)")
+          .action(
+            async (opts: {
+              agent?: string;
+              dedupThreshold?: string;
+              promotionThreshold?: string;
+              promotionMinAge?: string;
+              decayThreshold?: string;
+              decayHalfLife?: string;
+              batchSize?: string;
+              delay?: string;
+            }) => {
+              console.log("\n🌙 Memory Sleep Cycle");
+              console.log("═════════════════════════════════════════════════════════════");
+              console.log("Five-phase memory consolidation (like human sleep):\n");
+              console.log("  Phase 1: Deduplication    — Merge near-duplicate memories");
+              console.log("  Phase 2: Core Promotion   — Promote high-importance to core");
+              console.log("  Phase 3: Decay & Pruning  — Remove stale low-importance memories");
+              console.log("  Phase 4: Extraction       — Form entity relationships");
+              console.log("  Phase 5: Orphan Cleanup   — Remove disconnected nodes\n");
+
+              try {
+                await db.ensureInitialized();
+
+                const result = await runSleepCycle(db, embeddings, extractionConfig, api.logger, {
+                  agentId: opts.agent,
+                  dedupThreshold: opts.dedupThreshold ? parseFloat(opts.dedupThreshold) : undefined,
+                  promotionImportanceThreshold: opts.promotionThreshold
+                    ? parseFloat(opts.promotionThreshold)
+                    : undefined,
+                  promotionMinAgeDays: opts.promotionMinAge
+                    ? parseInt(opts.promotionMinAge, 10)
+                    : undefined,
+                  decayRetentionThreshold: opts.decayThreshold
+                    ? parseFloat(opts.decayThreshold)
+                    : undefined,
+                  decayBaseHalfLifeDays: opts.decayHalfLife
+                    ? parseInt(opts.decayHalfLife, 10)
+                    : undefined,
+                  extractionBatchSize: opts.batchSize ? parseInt(opts.batchSize, 10) : undefined,
+                  extractionDelayMs: opts.delay ? parseInt(opts.delay, 10) : undefined,
+                  onPhaseStart: (phase) => {
+                    const phaseNames = {
+                      dedup: "Phase 1: Deduplication",
+                      promotion: "Phase 2: Core Promotion",
+                      decay: "Phase 3: Decay & Pruning",
+                      extraction: "Phase 4: Extraction",
+                      cleanup: "Phase 5: Orphan Cleanup",
+                    };
+                    console.log(`\n▶ ${phaseNames[phase]}`);
+                    console.log("─────────────────────────────────────────────────────────────");
+                  },
+                  onProgress: (_phase, message) => {
+                    console.log(`   ${message}`);
+                  },
+                });
+
+                console.log("\n═════════════════════════════════════════════════════════════");
+                console.log(`✅ Sleep cycle complete in ${(result.durationMs / 1000).toFixed(1)}s`);
+                console.log("─────────────────────────────────────────────────────────────");
+                console.log(
+                  `   Deduplication:  ${result.dedup.clustersFound} clusters → ${result.dedup.memoriesMerged} merged`,
+                );
+                console.log(
+                  `   Promotion:      ${result.promotion.promoted}/${result.promotion.candidatesFound} promoted to core`,
+                );
+                console.log(`   Decay/Pruning:  ${result.decay.memoriesPruned} memories pruned`);
+                console.log(
+                  `   Extraction:     ${result.extraction.succeeded}/${result.extraction.total} extracted` +
+                    (result.extraction.failed > 0 ? ` (${result.extraction.failed} failed)` : ""),
+                );
+                console.log(
+                  `   Cleanup:        ${result.cleanup.entitiesRemoved} entities, ${result.cleanup.tagsRemoved} tags removed`,
+                );
+                if (result.aborted) {
+                  console.log("\n⚠️  Sleep cycle was aborted before completion.");
+                }
+                console.log("");
+              } catch (err) {
+                console.error(
+                  `\n❌ Sleep cycle failed: ${err instanceof Error ? err.message : String(err)}`,
+                );
+                process.exitCode = 1;
+              }
+            },
+          );
+
+        memory
+          .command("promote")
+          .description("Manually promote a memory to core status")
+          .argument("<id>", "Memory ID to promote")
+          .action(async (id: string) => {
+            try {
+              await db.ensureInitialized();
+              const promoted = await db.promoteToCore([id]);
+              if (promoted > 0) {
+                console.log(`✅ Memory ${id} promoted to core.`);
+              } else {
+                console.log(`❌ Memory ${id} not found.`);
+                process.exitCode = 1;
+              }
+            } catch (err) {
+              console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+              process.exitCode = 1;
+            }
+          });
+      },
+      { commands: [] }, // Adds subcommands to existing "memory" command, no conflict
+    );
+
+    // ========================================================================
+    // Lifecycle Hooks
+    // ========================================================================
+
+    // Track sessions where core memories have already been loaded (skip on subsequent turns).
+    // NOTE: This is in-memory and will be cleared on gateway restart. The agent_bootstrap
+    // hook below also checks for existing conversation history to avoid re-injecting core
+    // memories after restarts.
+    const bootstrappedSessions = new Set<string>();
+
+    // After compaction: clear bootstrap flag so core memories get re-injected
+    if (cfg.coreMemory.enabled) {
+      api.on("after_compaction", async (_event, ctx) => {
+        if (ctx.sessionKey) {
+          bootstrappedSessions.delete(ctx.sessionKey);
+          api.logger.info?.(
+            `memory-neo4j: cleared bootstrap flag for session ${ctx.sessionKey} after compaction`,
+          );
+        }
+      });
+    }
+
+    // Auto-recall: inject relevant memories before agent starts
+    api.logger.debug?.(`memory-neo4j: autoRecall=${cfg.autoRecall}`);
+    if (cfg.autoRecall) {
+      api.logger.debug?.("memory-neo4j: registering before_agent_start hook for auto-recall");
+      api.on("before_agent_start", async (event, ctx) => {
+        if (!event.prompt || event.prompt.length < 5) {
+          return;
+        }
+
+        const agentId = ctx.agentId || "default";
+
+        // Truncate prompt to avoid exceeding embedding model context length
+        // ~6000 chars is safe for most embedding models (leaves headroom for 2k tokens)
+        const MAX_QUERY_CHARS = 6000;
+        const query =
+          event.prompt.length > MAX_QUERY_CHARS
+            ? event.prompt.slice(0, MAX_QUERY_CHARS)
+            : event.prompt;
+
+        try {
+          const results = await hybridSearch(
+            db,
+            embeddings,
+            query,
+            3,
+            agentId,
+            extractionConfig.enabled,
+          );
+
+          if (results.length === 0) {
+            return;
+          }
+
+          const memoryContext = results.map((r) => `- [${r.category}] ${r.text}`).join("\n");
+
+          api.logger.info?.(`memory-neo4j: injecting ${results.length} memories into context`);
+          api.logger.debug?.(
+            `memory-neo4j: auto-recall memories: ${JSON.stringify(results.map((r) => ({ id: r.id, text: r.text.slice(0, 80), category: r.category, score: r.score })))}`,
+          );
+
+          return {
+            prependContext: `<relevant-memories>\nThe following memories may be relevant to this conversation:\n${memoryContext}\n</relevant-memories>`,
+          };
+        } catch (err) {
+          api.logger.warn(`memory-neo4j: auto-recall failed: ${String(err)}`);
+        }
+      });
+    }
+
+    // Core memories: inject as virtual MEMORY.md at bootstrap time (scoped by agentId).
+    // Only runs on new sessions and after compaction (not every turn).
+    api.logger.debug?.(`memory-neo4j: coreMemory.enabled=${cfg.coreMemory.enabled}`);
+    if (cfg.coreMemory.enabled) {
+      api.logger.debug?.("memory-neo4j: registering agent_bootstrap hook for core memories");
+      api.on("agent_bootstrap", async (event, ctx) => {
+        const sessionKey = ctx.sessionKey;
+
+        // Skip if this session was already bootstrapped (avoid re-loading every turn).
+        // The after_compaction hook clears the flag so we re-inject after compaction.
+        if (sessionKey && bootstrappedSessions.has(sessionKey)) {
+          api.logger.debug?.(
+            `memory-neo4j: skipping core memory injection for already-bootstrapped session=${sessionKey}`,
+          );
+          return;
+        }
+
+        // Log when we're about to inject core memories for a session that wasn't tracked
+        // This helps diagnose cases where context might be lost after gateway restarts
+        if (sessionKey) {
+          api.logger.debug?.(
+            `memory-neo4j: session=${sessionKey} not in bootstrappedSessions (size=${bootstrappedSessions.size}), will check for core memories`,
+          );
+        }
+
+        try {
+          const agentId = ctx.agentId || "default";
+          const maxEntries = cfg.coreMemory.maxEntries;
+
+          api.logger.debug?.(
+            `memory-neo4j: loading core memories for agent=${agentId} session=${sessionKey ?? "unknown"}`,
+          );
+          // Core memories are always included (no importance filter) - if marked as core, it's important
+          // Results are ordered by importance desc, so most important come first up to maxEntries
+          const coreMemories = await db.listByCategory("core", maxEntries, 0, agentId);
+
+          if (coreMemories.length === 0) {
+            if (sessionKey) {
+              bootstrappedSessions.add(sessionKey);
+            }
+            api.logger.debug?.(
+              `memory-neo4j: no core memories found for agent=${agentId}, marking session as bootstrapped`,
+            );
+            return;
+          }
+
+          // Format core memories into a MEMORY.md-style document
+          let content = "# Core Memory\n\n";
+          content += "*Persistent context loaded from long-term memory*\n\n";
+          for (const mem of coreMemories) {
+            content += `- ${mem.text}\n`;
+          }
+
+          // Find and replace MEMORY.md in the files list, or add it
+          const files = [...event.files];
+          const memoryIndex = files.findIndex(
+            (f) => f.name === "MEMORY.md" || f.name === "memory.md",
+          );
+
+          const virtualFile = {
+            name: "MEMORY.md" as const,
+            path: "memory://neo4j/core-memory",
+            content,
+            missing: false,
+          };
+
+          const action = memoryIndex >= 0 ? "replaced" : "added";
+          if (memoryIndex >= 0) {
+            files[memoryIndex] = virtualFile;
+          } else {
+            files.push(virtualFile);
+          }
+
+          if (sessionKey) {
+            bootstrappedSessions.add(sessionKey);
+          }
+          // Log at info level when actually injecting, debug for skips
+          api.logger.info?.(
+            `memory-neo4j: ${action} MEMORY.md with ${coreMemories.length} core memories for agent=${agentId} session=${sessionKey ?? "unknown"}`,
+          );
+
+          return { files };
+        } catch (err) {
+          api.logger.warn(`memory-neo4j: core memory injection failed: ${String(err)}`);
+        }
+      });
+    }
+
+    // Auto-capture: LLM-based decision on what to store from conversations
+    api.logger.debug?.(
+      `memory-neo4j: autoCapture=${cfg.autoCapture}, extraction.enabled=${extractionConfig.enabled}`,
+    );
+    if (cfg.autoCapture) {
+      api.logger.debug?.("memory-neo4j: registering agent_end hook for auto-capture");
+      api.on("agent_end", async (event, ctx) => {
+        api.logger.debug?.(
+          `memory-neo4j: agent_end fired (success=${event.success}, messages=${event.messages?.length ?? 0})`,
+        );
+        if (!event.success || !event.messages || event.messages.length === 0) {
+          api.logger.debug?.("memory-neo4j: skipping - no success or empty messages");
+          return;
+        }
+
+        const agentId = ctx.agentId || "default";
+        const sessionKey = ctx.sessionKey;
+
+        try {
+          if (extractionConfig.enabled) {
+            // LLM-based auto-capture (Decision Q8)
+            const userMessages = extractUserMessages(event.messages);
+            if (userMessages.length === 0) {
+              return;
+            }
+
+            const items = await evaluateAutoCapture(userMessages, extractionConfig);
+            if (items.length === 0) {
+              return;
+            }
+
+            let stored = 0;
+            for (const item of items) {
+              try {
+                const vector = await embeddings.embed(item.text);
+
+                // Check for duplicates
+                const existing = await db.findSimilar(vector, 0.95, 1);
+                if (existing.length > 0) {
+                  continue;
+                }
+
+                const memoryId = randomUUID();
+                await db.storeMemory({
+                  id: memoryId,
+                  text: item.text,
+                  embedding: vector,
+                  importance: item.importance,
+                  category: item.category,
+                  source: "auto-capture",
+                  extractionStatus: "pending",
+                  agentId,
+                  sessionKey,
+                });
+
+                // Extraction deferred to sleep cycle (like human memory consolidation)
+                stored++;
+              } catch (err) {
+                api.logger.debug?.(`memory-neo4j: auto-capture item failed: ${String(err)}`);
+              }
+            }
+
+            if (stored > 0) {
+              api.logger.info(`memory-neo4j: auto-captured ${stored} memories (LLM-based)`);
+            }
+          } else {
+            // Fallback: rule-based capture (no extraction API key)
+            const userMessages = extractUserMessages(event.messages);
+            if (userMessages.length === 0) {
+              return;
+            }
+
+            const toCapture = userMessages.filter(
+              (text) => text.length >= 10 && text.length <= 500 && shouldCaptureRuleBased(text),
+            );
+            if (toCapture.length === 0) {
+              return;
+            }
+
+            let stored = 0;
+            for (const text of toCapture.slice(0, 3)) {
+              const category = detectCategory(text);
+              const vector = await embeddings.embed(text);
+
+              const existing = await db.findSimilar(vector, 0.95, 1);
+              if (existing.length > 0) {
+                continue;
+              }
+
+              await db.storeMemory({
+                id: randomUUID(),
+                text,
+                embedding: vector,
+                importance: 0.7,
+                category,
+                source: "auto-capture",
+                extractionStatus: "skipped",
+                agentId,
+                sessionKey,
+              });
+              stored++;
+            }
+
+            if (stored > 0) {
+              api.logger.info(`memory-neo4j: auto-captured ${stored} memories (rule-based)`);
+            }
+          }
+        } catch (err) {
+          api.logger.warn(`memory-neo4j: auto-capture failed: ${String(err)}`);
+        }
+      });
+    }
+
+    // ========================================================================
+    // Service
+    // ========================================================================
+
+    api.registerService({
+      id: "memory-neo4j",
+      start: async () => {
+        try {
+          await db.ensureInitialized();
+          api.logger.info(
+            `memory-neo4j: service started (uri: ${cfg.neo4j.uri}, model: ${cfg.embedding.model})`,
+          );
+        } catch (err) {
+          api.logger.error(
+            `memory-neo4j: failed to start — ${String(err)}. Memory tools will attempt lazy initialization.`,
+          );
+          // Don't throw — allow graceful degradation.
+          // Tools will retry initialization on first use.
+        }
+      },
+      stop: async () => {
+        await db.close();
+        api.logger.info("memory-neo4j: service stopped");
+      },
+    });
+  },
+};
+
+// ============================================================================
+// Rule-based capture filter (fallback when no extraction API key)
+// ============================================================================
+
+const MEMORY_TRIGGERS = [
+  /remember|zapamatuj|pamatuj/i,
+  /prefer|radši|nechci|preferuji/i,
+  /decided|rozhodli|budeme používat/i,
+  /\+\d{10,}/,
+  /[\w.-]+@[\w.-]+\.\w+/,
+  /my\s+\w+\s+is|is\s+my/i,
+  /i (like|prefer|hate|love|want|need)/i,
+  /always|never|important/i,
+];
+
+function shouldCaptureRuleBased(text: string): boolean {
+  if (text.includes("<relevant-memories>")) {
+    return false;
+  }
+  if (text.startsWith("<") && text.includes("</")) {
+    return false;
+  }
+  if (text.includes("**") && text.includes("\n-")) {
+    return false;
+  }
+  const emojiCount = (text.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
+  if (emojiCount > 3) {
+    return false;
+  }
+  return MEMORY_TRIGGERS.some((r) => r.test(text));
+}
+
+function detectCategory(text: string): MemoryCategory {
+  const lower = text.toLowerCase();
+  if (/prefer|radši|like|love|hate|want/i.test(lower)) {
+    return "preference";
+  }
+  if (/decided|rozhodli|will use|budeme/i.test(lower)) {
+    return "decision";
+  }
+  if (/\+\d{10,}|@[\w.-]+\.\w+|is called|jmenuje se/i.test(lower)) {
+    return "entity";
+  }
+  if (/is|are|has|have|je|má|jsou/i.test(lower)) {
+    return "fact";
+  }
+  return "other";
+}
+
+// ============================================================================
+// Export
+// ============================================================================
+
+export default memoryNeo4jPlugin;

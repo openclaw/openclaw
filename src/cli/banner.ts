@@ -1,4 +1,4 @@
-import { resolveCommitHash } from "../infra/git-commit.js";
+import { resolveCommitHash, resolveUpstreamCommitHash } from "../infra/git-commit.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { pickTagline, type TaglineOptions } from "./tagline.js";
@@ -6,6 +6,7 @@ import { pickTagline, type TaglineOptions } from "./tagline.js";
 type BannerOptions = TaglineOptions & {
   argv?: string[];
   commit?: string | null;
+  upstreamCommit?: string | null;
   columns?: number;
   richTty?: boolean;
 };
@@ -36,30 +37,33 @@ const hasVersionFlag = (argv: string[]) =>
 
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
   const commit = options.commit ?? resolveCommitHash({ env: options.env });
+  const upstreamCommit = options.upstreamCommit ?? resolveUpstreamCommitHash();
   const commitLabel = commit ?? "unknown";
+  // Show upstream if different from current (indicates local commits ahead)
+  const showUpstream = upstreamCommit && upstreamCommit !== commit;
+  const commitDisplay = showUpstream ? `${commitLabel} ← ${upstreamCommit}` : commitLabel;
   const tagline = pickTagline(options);
   const rich = options.richTty ?? isRich();
   const title = "🦞 OpenClaw";
   const prefix = "🦞 ";
   const columns = options.columns ?? process.stdout.columns ?? 120;
-  const plainFullLine = `${title} ${version} (${commitLabel}) — ${tagline}`;
+  const plainFullLine = `${title} ${version} (${commitDisplay}) — ${tagline}`;
   const fitsOnOneLine = visibleWidth(plainFullLine) <= columns;
   if (rich) {
+    const commitPart = showUpstream
+      ? `${theme.muted("(")}${commitLabel}${theme.muted(" ← ")}${theme.muted(upstreamCommit)}${theme.muted(")")}`
+      : theme.muted(`(${commitLabel})`);
     if (fitsOnOneLine) {
-      return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
-        `(${commitLabel})`,
-      )} ${theme.muted("—")} ${theme.accentDim(tagline)}`;
+      return `${theme.heading(title)} ${theme.info(version)} ${commitPart} ${theme.muted("—")} ${theme.accentDim(tagline)}`;
     }
-    const line1 = `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
-      `(${commitLabel})`,
-    )}`;
+    const line1 = `${theme.heading(title)} ${theme.info(version)} ${commitPart}`;
     const line2 = `${" ".repeat(prefix.length)}${theme.accentDim(tagline)}`;
     return `${line1}\n${line2}`;
   }
   if (fitsOnOneLine) {
     return plainFullLine;
   }
-  const line1 = `${title} ${version} (${commitLabel})`;
+  const line1 = `${title} ${version} (${commitDisplay})`;
   const line2 = `${" ".repeat(prefix.length)}${tagline}`;
   return `${line1}\n${line2}`;
 }

@@ -310,9 +310,10 @@ export async function statusCommand(
     }
     if (!memory) {
       const slot = memoryPlugin.slot ? `plugin ${memoryPlugin.slot}` : "plugin";
-      // Custom (non-built-in) memory plugins can't be probed — show enabled, not unavailable
+      // External plugins (non memory-core) don't have detailed status available,
+      // but that doesn't mean they're unavailable - just that we can't query them here
       if (memoryPlugin.slot && memoryPlugin.slot !== "memory-core") {
-        return `enabled (${slot})`;
+        return muted(`enabled (${slot})`);
       }
       return muted(`enabled (${slot}) · unavailable`);
     }

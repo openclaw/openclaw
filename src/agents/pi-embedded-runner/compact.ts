@@ -85,6 +85,17 @@ import type { EmbeddedPiCompactResult } from "./types.js";
 import { describeUnknownError, mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 
+export const DEFAULT_COMPACTION_INSTRUCTIONS = [
+  "When summarizing this conversation, prioritize the following:",
+  "1. Any active or in-progress tasks: include task name, current step, what has been done, what remains, and any pending user decisions.",
+  "2. Key decisions made and their rationale.",
+  "3. Exact values that would be needed to resume work: names, URLs, file paths, configuration values, row numbers, IDs.",
+  "4. What the user was last working on and their most recent request.",
+  "5. Tool state: any browser sessions, file operations, or API calls in progress.",
+  "6. If TASKS.md was updated during this conversation, note which tasks changed and their current status.",
+  "De-prioritize: casual conversation, greetings, completed tasks with no follow-up needed, resolved errors.",
+].join("\n");
+
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
   runId?: string;
@@ -594,6 +605,48 @@ export async function compactEmbeddedPiSessionDirect(
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);
         }
+
+        // Pre-check: detect "already compacted but context is high" scenario
+        // The SDK rejects compaction if the last entry is a compaction, but this is
+        // too aggressive when context has grown back to threshold levels.
+        const branchEntries = sessionManager.getBranch();
+        const lastEntry = branchEntries.length > 0 ? branchEntries[branchEntries.length - 1] : null;
+        const isLastEntryCompaction = lastEntry?.type === "compaction";
+
+        if (isLastEntryCompaction) {
+          // Check if there's actually new content since the compaction
+          const compactionIndex = branchEntries.findIndex((e) => e.id === lastEntry.id);
+          const hasNewContent = branchEntries
+            .slice(compactionIndex + 1)
+            .some((e) => e.type === "message" || e.type === "custom_message");
+
+          if (!hasNewContent) {
+            // No new content since last compaction - estimate current context
+            let currentTokens = 0;
+            for (const message of session.messages) {
+              currentTokens += estimateTokens(message);
+            }
+            const contextWindow = model.contextWindow ?? 200000;
+            const contextPercent = (currentTokens / contextWindow) * 100;
+
+            // If context is still high (>70%) but no new content, provide clear error
+            if (contextPercent > 70) {
+              return {
+                ok: false,
+                compacted: false,
+                reason: `Already compacted • Context ${Math.round(currentTokens / 1000)}k/${Math.round(contextWindow / 1000)}k (${Math.round(contextPercent)}%) — the compaction summary itself is large. Consider starting a new session with /new`,
+              };
+            }
+            // Context is fine, just skip compaction gracefully
+            return {
+              ok: true,
+              compacted: false,
+              reason: "Already compacted",
+            };
+          }
+          // Has new content - fall through to let SDK handle it (it should work now)
+        }
+
         // Run before_compaction hooks (fire-and-forget).
         // The session JSONL already contains all messages on disk, so plugins
         // can read sessionFile asynchronously and process in parallel with

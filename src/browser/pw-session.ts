@@ -100,8 +100,9 @@ const MAX_CONSOLE_MESSAGES = 500;
 const MAX_PAGE_ERRORS = 200;
 const MAX_NETWORK_REQUESTS = 500;
 
-let cached: ConnectedBrowser | null = null;
-let connecting: Promise<ConnectedBrowser> | null = null;
+// Per-profile caching to allow parallel connections to different Chrome instances
+const cachedByUrl = new Map<string, ConnectedBrowser>();
+const connectingByUrl = new Map<string, Promise<ConnectedBrowser>>();
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
@@ -315,11 +316,17 @@ function observeBrowser(browser: Browser) {
 
 async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
   const normalized = normalizeCdpUrl(cdpUrl);
-  if (cached?.cdpUrl === normalized) {
+
+  // Check if we already have a cached connection for this specific URL
+  const cached = cachedByUrl.get(normalized);
+  if (cached) {
     return cached;
   }
-  if (connecting) {
-    return await connecting;
+
+  // Check if there's already a connection in progress for this specific URL
+  const existingConnecting = connectingByUrl.get(normalized);
+  if (existingConnecting) {
+    return await existingConnecting;
   }
 
   const connectWithRetry = async (): Promise<ConnectedBrowser> => {
@@ -332,12 +339,12 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         const headers = getHeadersWithAuth(endpoint);
         const browser = await chromium.connectOverCDP(endpoint, { timeout, headers });
         const onDisconnected = () => {
-          if (cached?.browser === browser) {
-            cached = null;
+          if (cachedByUrl.get(normalized)?.browser === browser) {
+            cachedByUrl.delete(normalized);
           }
         };
         const connected: ConnectedBrowser = { browser, cdpUrl: normalized, onDisconnected };
-        cached = connected;
+        cachedByUrl.set(normalized, connected);
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
         return connected;
@@ -354,11 +361,12 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
     throw new Error(message);
   };
 
-  connecting = connectWithRetry().finally(() => {
-    connecting = null;
+  const connectingPromise = connectWithRetry().finally(() => {
+    connectingByUrl.delete(normalized);
   });
+  connectingByUrl.set(normalized, connectingPromise);
 
-  return await connecting;
+  return await connectingPromise;
 }
 
 async function getAllPages(browser: Browser): Promise<Page[]> {
@@ -512,16 +520,16 @@ export function refLocator(page: Page, ref: string) {
 }
 
 export async function closePlaywrightBrowserConnection(): Promise<void> {
-  const cur = cached;
-  cached = null;
-  connecting = null;
-  if (!cur) {
-    return;
+  // Close all cached browser connections
+  const connections = Array.from(cachedByUrl.values());
+  cachedByUrl.clear();
+  connectingByUrl.clear();
+  for (const c of connections) {
+    if (c.onDisconnected && typeof c.browser.off === "function") {
+      c.browser.off("disconnected", c.onDisconnected);
+    }
   }
-  if (cur.onDisconnected && typeof cur.browser.off === "function") {
-    cur.browser.off("disconnected", cur.onDisconnected);
-  }
-  await cur.browser.close().catch(() => {});
+  await Promise.all(connections.map((c) => c.browser.close().catch(() => {})));
 }
 
 function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
@@ -649,31 +657,30 @@ export async function forceDisconnectPlaywrightForTarget(opts: {
   reason?: string;
 }): Promise<void> {
   const normalized = normalizeCdpUrl(opts.cdpUrl);
-  if (cached?.cdpUrl !== normalized) {
+  const cur = cachedByUrl.get(normalized);
+  if (!cur) {
     return;
   }
-  const cur = cached;
-  cached = null;
-  // Also clear `connecting` so the next call does a fresh connectOverCDP
+  cachedByUrl.delete(normalized);
+  // Also clear the connecting promise so the next call does a fresh connectOverCDP
   // rather than awaiting a stale promise.
-  connecting = null;
-  if (cur) {
-    // Remove the "disconnected" listener to prevent the old browser's teardown
-    // from racing with a fresh connection and nulling the new `cached`.
-    if (cur.onDisconnected && typeof cur.browser.off === "function") {
-      cur.browser.off("disconnected", cur.onDisconnected);
-    }
+  connectingByUrl.delete(normalized);
 
-    // Best-effort: kill any stuck JS to unblock the target's execution context before we
-    // disconnect Playwright's CDP connection.
-    const targetId = opts.targetId?.trim() || "";
-    if (targetId) {
-      await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(() => {});
-    }
-
-    // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
-    cur.browser.close().catch(() => {});
+  // Remove the "disconnected" listener to prevent the old browser's teardown
+  // from racing with a fresh connection and clearing the new cached entry.
+  if (cur.onDisconnected && typeof cur.browser.off === "function") {
+    cur.browser.off("disconnected", cur.onDisconnected);
   }
+
+  // Best-effort: kill any stuck JS to unblock the target's execution context before we
+  // disconnect Playwright's CDP connection.
+  const targetId = opts.targetId?.trim() || "";
+  if (targetId) {
+    await tryTerminateExecutionViaCdp({ cdpUrl: normalized, targetId }).catch(() => {});
+  }
+
+  // Fire-and-forget: don't await because browser.close() may hang on the stuck CDP pipe.
+  cur.browser.close().catch(() => {});
 }
 
 /**

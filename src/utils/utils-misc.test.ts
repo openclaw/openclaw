@@ -94,4 +94,47 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(`echo "oops`)).toBeNull();
     expect(splitShellArgs(`echo 'oops`)).toBeNull();
   });
+
+  it("returns null for trailing escape", () => {
+    expect(splitShellArgs("foo bar\\")).toBeNull();
+  });
+
+  it("handles multiple and leading/trailing spaces", () => {
+    expect(splitShellArgs("foo   bar    baz")).toEqual(["foo", "bar", "baz"]);
+    expect(splitShellArgs("  foo bar  ")).toEqual(["foo", "bar"]);
+  });
+
+  it("handles escaped spaces outside quotes", () => {
+    expect(splitShellArgs("foo bar\\ baz qux")).toEqual(["foo", "bar baz", "qux"]);
+  });
+
+  it("handles adjacent quoted and unquoted parts", () => {
+    expect(splitShellArgs('pre"quoted"post')).toEqual(["prequotedpost"]);
+  });
+
+  it("handles empty and whitespace-only input", () => {
+    expect(splitShellArgs("")).toEqual([]);
+    expect(splitShellArgs("   ")).toEqual([]);
+  });
+
+  it("handles quotes inside quotes (different type)", () => {
+    expect(splitShellArgs(`foo "it's working" bar`)).toEqual(["foo", "it's working", "bar"]);
+    expect(splitShellArgs(`foo 'he said "hello"' bar`)).toEqual(["foo", 'he said "hello"', "bar"]);
+  });
+
+  it("handles paths with spaces in quotes", () => {
+    expect(splitShellArgs('cmd "/path/with spaces/file.txt"')).toEqual([
+      "cmd",
+      "/path/with spaces/file.txt",
+    ]);
+  });
+
+  it("handles unicode characters", () => {
+    expect(splitShellArgs("echo 'héllo wörld' 日本語")).toEqual(["echo", "héllo wörld", "日本語"]);
+  });
+
+  it("handles tabs and newlines as whitespace", () => {
+    expect(splitShellArgs("foo\tbar\tbaz")).toEqual(["foo", "bar", "baz"]);
+    expect(splitShellArgs("foo\nbar")).toEqual(["foo", "bar"]);
+  });
 });

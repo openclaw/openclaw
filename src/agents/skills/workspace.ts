@@ -11,12 +11,13 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
-import { shouldIncludeSkill } from "./config.js";
+import { resolveSkillConfig, shouldIncludeSkill } from "./config.js";
 import { normalizeSkillFilter } from "./filter.js";
 import {
   parseFrontmatter,
   resolveOpenClawMetadata,
   resolveSkillInvocationPolicy,
+  resolveSkillKey,
 } from "./frontmatter.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
@@ -745,11 +746,18 @@ export function buildWorkspaceSkillCommandSpecs(
       return { kind: "tool", toolName, argMode: "raw" } as const;
     })();
 
+    const skillKey = resolveSkillKey(entry.skill, entry);
+    const skillConfig = resolveSkillConfig(opts?.config, skillKey);
+    const thinking = skillConfig?.thinking;
+    const model = skillConfig?.model;
+
     specs.push({
       name: unique,
       skillName: rawName,
       description,
       ...(dispatch ? { dispatch } : {}),
+      ...(thinking ? { thinking } : {}),
+      ...(model ? { model } : {}),
     });
   }
   return specs;

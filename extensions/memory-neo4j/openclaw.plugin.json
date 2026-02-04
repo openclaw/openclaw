@@ -1,0 +1,99 @@
+{
+  "id": "memory-neo4j",
+  "kind": "memory",
+  "uiHints": {
+    "embedding.provider": {
+      "label": "Embedding Provider",
+      "placeholder": "openai",
+      "help": "Provider for embeddings: 'openai' or 'ollama'"
+    },
+    "embedding.apiKey": {
+      "label": "API Key",
+      "sensitive": true,
+      "placeholder": "sk-proj-...",
+      "help": "API key for OpenAI embeddings (not needed for Ollama)"
+    },
+    "embedding.model": {
+      "label": "Embedding Model",
+      "placeholder": "text-embedding-3-small",
+      "help": "Embedding model to use (e.g., text-embedding-3-small for OpenAI, mxbai-embed-large for Ollama)"
+    },
+    "embedding.baseUrl": {
+      "label": "Base URL",
+      "placeholder": "http://localhost:11434",
+      "help": "Base URL for Ollama API (optional)"
+    },
+    "neo4j.uri": {
+      "label": "Neo4j URI",
+      "placeholder": "bolt://localhost:7687",
+      "help": "Bolt connection URI for your Neo4j instance"
+    },
+    "neo4j.user": {
+      "label": "Neo4j Username",
+      "placeholder": "neo4j"
+    },
+    "neo4j.password": {
+      "label": "Neo4j Password",
+      "sensitive": true
+    },
+    "autoCapture": {
+      "label": "Auto-Capture",
+      "help": "Automatically capture important information from conversations"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant memories into context"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "embedding": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": ["openai", "ollama"]
+          },
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
+      },
+      "neo4j": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "uri": {
+            "type": "string"
+          },
+          "user": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": ["uri"]
+      },
+      "autoCapture": {
+        "type": "boolean"
+      },
+      "autoRecall": {
+        "type": "boolean"
+      }
+    },
+    "required": ["neo4j"]
+  }
+}

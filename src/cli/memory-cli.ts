@@ -281,11 +281,14 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     scan?: MemorySourceScan;
   }> = [];
 
+  const disabledAgentIds: string[] = [];
   for (const agentId of agentIds) {
     const managerPurpose = opts.index ? "default" : "status";
     await withManager<MemoryManager>({
       getManager: () => getMemorySearchManager({ cfg, agentId, purpose: managerPurpose }),
-      onMissing: (error) => defaultRuntime.log(error ?? "Memory search disabled."),
+      onMissing: () => {
+        disabledAgentIds.push(agentId);
+      },
       onCloseError: (err) =>
         defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
       close: async (manager) => {
@@ -375,11 +378,22 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const accent = (text: string) => colorize(rich, theme.accent, text);
   const label = (text: string) => muted(`${text}:`);
 
+  const emptyAgentIds: string[] = [];
   for (const result of allResults) {
     const { agentId, status, embeddingProbe, indexError, scan } = result;
     const filesIndexed = status.files ?? 0;
     const chunksIndexed = status.chunks ?? 0;
     const totalFiles = scan?.totalFiles ?? null;
+
+    // Skip agents with no indexed content (0 files, 0 chunks, no source files, no errors).
+    // These agents aren't using the core memory search system — no need to show them.
+    const isEmpty =
+      status.files === 0 && status.chunks === 0 && (totalFiles ?? 0) === 0 && !indexError;
+    if (isEmpty) {
+      emptyAgentIds.push(agentId);
+      continue;
+    }
+
     const indexedLabel =
       totalFiles === null
         ? `${filesIndexed}/? files · ${chunksIndexed} chunks`
@@ -509,6 +523,28 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       }
     }
     defaultRuntime.log(lines.join("\n"));
+    defaultRuntime.log("");
+  }
+
+  // Show compact summary for agents with no indexed memory-search content
+  if (emptyAgentIds.length > 0) {
+    const agentList = emptyAgentIds.join(", ");
+    defaultRuntime.log(
+      muted(
+        `Memory Search: ${emptyAgentIds.length} agent${emptyAgentIds.length > 1 ? "s" : ""} with no indexed files (${agentList})`,
+      ),
+    );
+    defaultRuntime.log("");
+  }
+
+  // Show compact summary for agents with memory search disabled
+  if (disabledAgentIds.length > 0 && emptyAgentIds.length === 0) {
+    const agentList = disabledAgentIds.join(", ");
+    defaultRuntime.log(
+      muted(
+        `Memory Search: disabled for ${disabledAgentIds.length} agent${disabledAgentIds.length > 1 ? "s" : ""} (${agentList})`,
+      ),
+    );
     defaultRuntime.log("");
   }
 }

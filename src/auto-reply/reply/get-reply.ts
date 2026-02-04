@@ -5,6 +5,7 @@ import {
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import { compactEmbeddedPiSession } from "../../agents/pi-embedded-runner.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
@@ -154,6 +155,7 @@ export async function getReplyFromConfig(
     sessionId,
     isNewSession,
     resetTriggered,
+    compactTriggered,
     systemSent,
     abortedLastRun,
     storePath,
@@ -292,6 +294,35 @@ export async function getReplyFromConfig(
     sessionKey,
     workspaceDir,
   });
+
+  // Handle compact trigger - force compaction without resetting session
+  if (compactTriggered && sessionEntry.sessionFile) {
+    try {
+      const compactResult = await compactEmbeddedPiSession({
+        sessionId: sessionEntry.sessionId,
+        sessionFile: sessionEntry.sessionFile,
+        config: cfg,
+        workspaceDir,
+        provider,
+        model,
+      });
+      if (compactResult.compacted && compactResult.result) {
+        const tokensBefore = compactResult.result.tokensBefore;
+        const tokensAfter = compactResult.result.tokensAfter ?? 0;
+        return {
+          text: `✅ Context compacted successfully.\n\n**Before:** ${tokensBefore.toLocaleString()} tokens\n**After:** ${tokensAfter.toLocaleString()} tokens\n**Saved:** ${(tokensBefore - tokensAfter).toLocaleString()} tokens`,
+        };
+      } else {
+        return {
+          text: `ℹ️ Nothing to compact. ${compactResult.reason ?? "Session is already compact."}`,
+        };
+      }
+    } catch (err) {
+      return {
+        text: `❌ Compaction failed: ${String(err)}`,
+      };
+    }
+  }
 
   return runPreparedReply({
     ctx,

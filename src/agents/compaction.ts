@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { estimateTokens, generateSummary } from "@mariozechner/pi-coding-agent";
+import { completeSimple } from "@mariozechner/pi-ai";
+import { convertToLlm, estimateTokens, serializeConversation } from "@mariozechner/pi-coding-agent";
 import { retryAsync } from "../infra/retry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
@@ -13,6 +14,163 @@ const DEFAULT_PARTS = 2;
 const MERGE_SUMMARIES_INSTRUCTIONS =
   "Merge these partial summaries into a single cohesive summary. Preserve decisions," +
   " TODOs, open questions, and any constraints.";
+
+// ---------------------------------------------------------------------------
+// Enhanced summarization prompts with "Immediate Context" section
+// ---------------------------------------------------------------------------
+// These replace the upstream pi-coding-agent prompts to add recency awareness.
+// The key addition is "## Immediate Context" which captures what was being
+// actively discussed/worked on in the most recent messages, solving the problem
+// of losing the "last thing we were doing" after compaction.
+
+const ENHANCED_SUMMARIZATION_SYSTEM_PROMPT =
+  "You are a context summarization assistant. Your task is to read a conversation " +
+  "between a user and an AI assistant, then produce a structured summary following " +
+  "the exact format specified.\n\n" +
+  "Do NOT continue the conversation. Do NOT respond to any questions in the " +
+  "conversation. ONLY output the structured summary.";
+
+const ENHANCED_SUMMARIZATION_PROMPT =
+  "The messages above are a conversation to summarize. Create a structured context " +
+  "checkpoint summary that another LLM will use to continue the work.\n\n" +
+  "Use this EXACT format:\n\n" +
+  "## Immediate Context\n" +
+  "[What was the user MOST RECENTLY asking about or working on? Describe the active " +
+  "conversation topic from the last few exchanges in detail. Include any pending " +
+  "questions, partial results, or the exact state of the task right before this " +
+  "summary. This section should read like a handoff note: 'You were just working " +
+  "on X, the user asked Y, and you were in the middle of Z.']\n\n" +
+  "## Goal\n" +
+  "[What is the user trying to accomplish? Can be multiple items if the session " +
+  "covers different tasks.]\n\n" +
+  "## Constraints & Preferences\n" +
+  "- [Any constraints, preferences, or requirements mentioned by user]\n" +
+  '- [Or "(none)" if none were mentioned]\n\n' +
+  "## Progress\n" +
+  "### Done\n" +
+  "- [x] [Completed tasks/changes]\n\n" +
+  "### In Progress\n" +
+  "- [ ] [Current work]\n\n" +
+  "### Blocked\n" +
+  "- [Issues preventing progress, if any]\n\n" +
+  "## Key Decisions\n" +
+  "- **[Decision]**: [Brief rationale]\n\n" +
+  "## Next Steps\n" +
+  "1. [Ordered list of what should happen next]\n\n" +
+  "## Critical Context\n" +
+  "- [Any data, examples, or references needed to continue]\n" +
+  '- [Or "(none)" if not applicable]\n\n' +
+  "Keep each section concise. Preserve exact file paths, function names, and error messages.";
+
+const ENHANCED_UPDATE_SUMMARIZATION_PROMPT =
+  "The messages above are NEW conversation messages to incorporate into the existing " +
+  "summary provided in <previous-summary> tags.\n\n" +
+  "Update the existing structured summary with new information. RULES:\n" +
+  "- REPLACE the Immediate Context section entirely with what the NEWEST messages " +
+  "are about — this must always reflect the most recent conversation topic\n" +
+  "- PRESERVE all existing information from the previous summary in other sections\n" +
+  "- ADD new progress, decisions, and context from the new messages\n" +
+  '- UPDATE the Progress section: move items from "In Progress" to "Done" when completed\n' +
+  '- UPDATE "Next Steps" based on what was accomplished\n' +
+  "- PRESERVE exact file paths, function names, and error messages\n" +
+  "- If something is no longer relevant, you may remove it\n\n" +
+  "Use this EXACT format:\n\n" +
+  "## Immediate Context\n" +
+  "[What is the conversation CURRENTLY about based on these newest messages? " +
+  "Describe the active topic, any pending questions, and the exact state of work. " +
+  "This REPLACES any previous immediate context — always reflect the latest exchanges.]\n\n" +
+  "## Goal\n" +
+  "[Preserve existing goals, add new ones if the task expanded]\n\n" +
+  "## Constraints & Preferences\n" +
+  "- [Preserve existing, add new ones discovered]\n\n" +
+  "## Progress\n" +
+  "### Done\n" +
+  "- [x] [Include previously done items AND newly completed items]\n\n" +
+  "### In Progress\n" +
+  "- [ ] [Current work - update based on progress]\n\n" +
+  "### Blocked\n" +
+  "- [Current blockers - remove if resolved]\n\n" +
+  "## Key Decisions\n" +
+  "- **[Decision]**: [Brief rationale] (preserve all previous, add new)\n\n" +
+  "## Next Steps\n" +
+  "1. [Update based on current state]\n\n" +
+  "## Critical Context\n" +
+  "- [Preserve important context, add new if needed]\n\n" +
+  "Keep each section concise. Preserve exact file paths, function names, and error messages.";
+
+/**
+ * Enhanced version of generateSummary that includes an "Immediate Context" section
+ * in the compaction summary. This ensures that the most recent conversation topic
+ * is prominently captured, solving the "can't remember what we were just doing"
+ * problem after compaction.
+ */
+async function generateSummary(
+  currentMessages: AgentMessage[],
+  model: NonNullable<ExtensionContext["model"]>,
+  reserveTokens: number,
+  apiKey: string,
+  signal: AbortSignal,
+  customInstructions?: string,
+  previousSummary?: string,
+): Promise<string> {
+  const maxTokens = Math.floor(0.8 * reserveTokens);
+
+  // Use update prompt if we have a previous summary, otherwise initial prompt
+  let basePrompt = previousSummary
+    ? ENHANCED_UPDATE_SUMMARIZATION_PROMPT
+    : ENHANCED_SUMMARIZATION_PROMPT;
+  if (customInstructions) {
+    basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
+  }
+
+  // Serialize conversation to text so model doesn't try to continue it
+  // Use type assertion since convertToLlm accepts AgentMessage[] at runtime
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const llmMessages = convertToLlm(currentMessages as any);
+  const conversationText = serializeConversation(llmMessages);
+
+  // Build the prompt with conversation wrapped in tags
+  let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
+  if (previousSummary) {
+    promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
+  }
+  promptText += basePrompt;
+
+  // Build user message for summarization request
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const summarizationMessages: any[] = [
+    {
+      role: "user",
+      content: [{ type: "text", text: promptText }],
+      timestamp: Date.now(),
+    },
+  ];
+
+  const response = await completeSimple(
+    model,
+    {
+      systemPrompt: ENHANCED_SUMMARIZATION_SYSTEM_PROMPT,
+      messages: summarizationMessages,
+    },
+    { maxTokens, signal, apiKey, reasoning: "high" },
+  );
+
+  if (response.stopReason === "error") {
+    throw new Error(
+      `Summarization failed: ${
+        (response as { errorMessage?: string }).errorMessage || "Unknown error"
+      }`,
+    );
+  }
+
+  // Extract text content from response
+  const textContent = (response.content as Array<{ type: string; text?: string }>)
+    .filter((c) => c.type === "text" && c.text)
+    .map((c) => c.text!)
+    .join("\n");
+
+  return textContent;
+}
 
 export function estimateMessagesTokens(messages: AgentMessage[]): number {
   // SECURITY: toolResult.details can contain untrusted/verbose payloads; never include in LLM-facing compaction.

@@ -172,7 +172,7 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
       invalidNode: false,
     };
   }
-  const re = /(?:^|\s)\/exec(?=$|\s|:)/i;
+  const re = /(?:^|\s)[/.]exec(?=$|\s|:)/i;
   const match = re.exec(body);
   if (!match) {
     return {
@@ -185,8 +185,10 @@ export function extractExecDirective(body?: string): ExecDirectiveParse {
       invalidNode: false,
     };
   }
-  const start = match.index + match[0].indexOf("/exec");
-  const argsStart = start + "/exec".length;
+  // Find the directive start (handle both /exec and .exec)
+  const execMatch = match[0].match(/[/.]exec/i);
+  const start = match.index + (execMatch ? match[0].indexOf(execMatch[0]) : 0);
+  const argsStart = start + 5; // "/exec" or ".exec" is always 5 chars
   const parsed = parseExecDirectiveArgs(body.slice(argsStart));
   const cleanedRaw = `${body.slice(0, start)} ${body.slice(argsStart + parsed.consumed)}`;
   const cleaned = cleanedRaw.replace(/\s+/g, " ").trim();

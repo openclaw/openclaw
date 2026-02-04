@@ -36,6 +36,15 @@ export function applyModelOverrideToSessionEntry(params: {
     }
   }
 
+  // Clear cached contextTokens when model changes so it gets re-looked up
+  // from the model catalog with the new model's context window.
+  // Always clear if contextTokens exists, even if no other fields changed
+  // (e.g., when resetting to default while already on default).
+  if (entry.contextTokens !== undefined) {
+    delete entry.contextTokens;
+    updated = true;
+  }
+
   if (profileOverride) {
     if (entry.authProfileOverride !== profileOverride) {
       entry.authProfileOverride = profileOverride;

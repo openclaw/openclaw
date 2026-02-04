@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import type { HookHandler } from "../../hooks.js";
@@ -449,5 +449,264 @@ describe("session-memory hook", () => {
     // Both messages should be included
     expect(memoryContent).toContain("user: Only message 1");
     expect(memoryContent).toContain("assistant: Only message 2");
+  });
+
+  describe("LanceDB target", () => {
+    let originalFetch: typeof global.fetch;
+    let fetchCalls: Array<{ url: string; options: RequestInit }>;
+
+    beforeEach(() => {
+      // Mock fetch
+      fetchCalls = [];
+      originalFetch = global.fetch;
+      global.fetch = async (url: string | URL, options?: RequestInit) => {
+        fetchCalls.push({ url: url.toString(), options: options || {} });
+        return new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+    });
+
+    afterEach(() => {
+      global.fetch = originalFetch;
+    });
+
+    it("calls Gateway API with memory_store when target is lancedb", async () => {
+      const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+      const sessionsDir = path.join(tempDir, "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
+
+      const sessionContent = createMockSessionContent([
+        { role: "user", content: "Test question" },
+        { role: "assistant", content: "Test answer" },
+      ]);
+      const sessionFile = await writeWorkspaceFile({
+        dir: sessionsDir,
+        name: "test-session.jsonl",
+        content: sessionContent,
+      });
+
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { workspace: tempDir } },
+        gateway: {
+          port: 18789,
+          auth: { token: "test-token-123" },
+        },
+        hooks: {
+          internal: {
+            entries: {
+              "session-memory": { enabled: true, target: "lancedb" },
+            },
+          },
+        },
+      };
+
+      const event = createHookEvent("command", "new", "agent:main:main", {
+        cfg,
+        previousSessionEntry: {
+          sessionId: "test-123",
+          sessionFile,
+        },
+      });
+
+      await handler(event);
+
+      // Verify fetch was called
+      expect(fetchCalls.length).toBe(1);
+      expect(fetchCalls[0].url).toBe("http://localhost:18789/tools/invoke");
+
+      // Verify headers
+      const headers = fetchCalls[0].options.headers as Record<string, string>;
+      expect(headers.Authorization).toBe("Bearer test-token-123");
+      expect(headers["Content-Type"]).toBe("application/json");
+
+      // Verify body
+      const body = JSON.parse(fetchCalls[0].options.body as string);
+      expect(body.tool).toBe("memory_store");
+      expect(body.args.category).toBe("fact");
+      expect(body.args.importance).toBe(0.7);
+      expect(body.args.text).toContain("user: Test question");
+      expect(body.args.text).toContain("assistant: Test answer");
+    });
+
+    it("truncates content to 2000 chars for lancedb", async () => {
+      const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+      const sessionsDir = path.join(tempDir, "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
+
+      // Create a long message
+      const longContent = "A".repeat(2500);
+      const sessionContent = createMockSessionContent([{ role: "user", content: longContent }]);
+      const sessionFile = await writeWorkspaceFile({
+        dir: sessionsDir,
+        name: "test-session.jsonl",
+        content: sessionContent,
+      });
+
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { workspace: tempDir } },
+        gateway: {
+          port: 18789,
+          auth: { token: "test-token" },
+        },
+        hooks: {
+          internal: {
+            entries: {
+              "session-memory": { enabled: true, target: "lancedb" },
+            },
+          },
+        },
+      };
+
+      const event = createHookEvent("command", "new", "agent:main:main", {
+        cfg,
+        previousSessionEntry: {
+          sessionId: "test-123",
+          sessionFile,
+        },
+      });
+
+      await handler(event);
+
+      // Verify content was truncated
+      const body = JSON.parse(fetchCalls[0].options.body as string);
+      expect(body.args.text).toContain("[...truncated to 2000 chars]");
+      // Full content would be > 2000, but text should be <= 2000 + metadata + truncation notice
+      const contentLines = body.args.text.split("\n");
+      const conversationStart = contentLines.findIndex((line: string) => line.includes("user:"));
+      const conversationText = contentLines.slice(conversationStart).join("\n");
+      // The conversation part should be truncated at 2000 chars
+      expect(conversationText.length).toBeLessThan(2100); // 2000 + some overhead for truncation message
+    });
+
+    it("does not create memory file when target is lancedb", async () => {
+      const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+      const sessionsDir = path.join(tempDir, "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
+
+      const sessionContent = createMockSessionContent([{ role: "user", content: "Test" }]);
+      const sessionFile = await writeWorkspaceFile({
+        dir: sessionsDir,
+        name: "test-session.jsonl",
+        content: sessionContent,
+      });
+
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { workspace: tempDir } },
+        gateway: {
+          port: 18789,
+          auth: { token: "test-token" },
+        },
+        hooks: {
+          internal: {
+            entries: {
+              "session-memory": { enabled: true, target: "lancedb" },
+            },
+          },
+        },
+      };
+
+      const event = createHookEvent("command", "new", "agent:main:main", {
+        cfg,
+        previousSessionEntry: {
+          sessionId: "test-123",
+          sessionFile,
+        },
+      });
+
+      await handler(event);
+
+      // Memory directory should not be created
+      const memoryDir = path.join(tempDir, "memory");
+      await expect(fs.access(memoryDir)).rejects.toThrow();
+    });
+
+    it("handles Gateway API errors gracefully", async () => {
+      const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+      const sessionsDir = path.join(tempDir, "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
+
+      const sessionContent = createMockSessionContent([{ role: "user", content: "Test" }]);
+      const sessionFile = await writeWorkspaceFile({
+        dir: sessionsDir,
+        name: "test-session.jsonl",
+        content: sessionContent,
+      });
+
+      // Mock fetch to return error
+      global.fetch = async () => {
+        return new Response("Gateway error", { status: 500 });
+      };
+
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { workspace: tempDir } },
+        gateway: {
+          port: 18789,
+          auth: { token: "test-token" },
+        },
+        hooks: {
+          internal: {
+            entries: {
+              "session-memory": { enabled: true, target: "lancedb" },
+            },
+          },
+        },
+      };
+
+      const event = createHookEvent("command", "new", "agent:main:main", {
+        cfg,
+        previousSessionEntry: {
+          sessionId: "test-123",
+          sessionFile,
+        },
+      });
+
+      // Should not throw - errors are logged and caught
+      await expect(handler(event)).resolves.toBeUndefined();
+    });
+
+    it("defaults to file target when target config is invalid", async () => {
+      const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+      const sessionsDir = path.join(tempDir, "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
+
+      const sessionContent = createMockSessionContent([{ role: "user", content: "Test" }]);
+      const sessionFile = await writeWorkspaceFile({
+        dir: sessionsDir,
+        name: "test-session.jsonl",
+        content: sessionContent,
+      });
+
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { workspace: tempDir } },
+        hooks: {
+          internal: {
+            entries: {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              "session-memory": { enabled: true, target: "invalid" as any },
+            },
+          },
+        },
+      };
+
+      const event = createHookEvent("command", "new", "agent:main:main", {
+        cfg,
+        previousSessionEntry: {
+          sessionId: "test-123",
+          sessionFile,
+        },
+      });
+
+      await handler(event);
+
+      // Should fall back to file target
+      const memoryDir = path.join(tempDir, "memory");
+      const files = await fs.readdir(memoryDir);
+      expect(files.length).toBe(1);
+
+      // Fetch should not have been called
+      expect(fetchCalls.length).toBe(0);
+    });
   });
 });

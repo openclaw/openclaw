@@ -202,11 +202,21 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       return { ok: true, ran: false, reason: "already-running" as const };
     }
     const now = state.deps.nowMs();
-    const due = isJobDue(job, now, { forced: mode === "force" });
+    const forced = mode === "force";
+    const due = isJobDue(job, now, { forced });
     if (!due) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
-    await executeJob(state, job, now, { forced: mode === "force" });
+    if (forced) {
+      // Fire-and-forget: don't block the caller waiting for job completion
+      void executeJob(state, job, now, { forced }).then(() => {
+        recomputeNextRuns(state);
+        persist(state).catch(() => {});
+        armTimer(state);
+      });
+      return { ok: true, ran: true } as const;
+    }
+    await executeJob(state, job, now, { forced });
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);

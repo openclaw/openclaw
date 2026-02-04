@@ -347,6 +347,13 @@ export function resolveMemorySearchConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedMemorySearchConfig | null {
+  // Only one memory system can be active at a time.
+  // When a memory plugin owns the slot, core memory-search is unconditionally disabled.
+  const memoryPluginSlot = cfg.plugins?.slots?.memory;
+  if (memoryPluginSlot && memoryPluginSlot !== "none") {
+    return null;
+  }
+
   const defaults = cfg.agents?.defaults?.memorySearch;
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
   const resolved = mergeConfig(defaults, overrides, agentId);
