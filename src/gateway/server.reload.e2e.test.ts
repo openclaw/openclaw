@@ -34,6 +34,13 @@ const hoisted = vi.hoisted(() => {
     updateConfig: heartbeatUpdateConfig,
   }));
 
+  const idleTriggerStop = vi.fn();
+  const idleTriggerUpdateConfig = vi.fn();
+  const startIdleTriggerRunner = vi.fn(() => ({
+    stop: idleTriggerStop,
+    updateConfig: idleTriggerUpdateConfig,
+  }));
+
   const startGmailWatcher = vi.fn(async () => ({ started: true }));
   const stopGmailWatcher = vi.fn(async () => {});
 
@@ -129,6 +136,9 @@ const hoisted = vi.hoisted(() => {
     heartbeatStop,
     heartbeatUpdateConfig,
     startHeartbeatRunner,
+    idleTriggerStop,
+    idleTriggerUpdateConfig,
+    startIdleTriggerRunner,
     startGmailWatcher,
     stopGmailWatcher,
     providerManager,
@@ -150,6 +160,10 @@ vi.mock("./server-browser.js", () => ({
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
   startHeartbeatRunner: hoisted.startHeartbeatRunner,
+}));
+
+vi.mock("../infra/idle-trigger-runner.js", () => ({
+  startIdleTriggerRunner: hoisted.startIdleTriggerRunner,
 }));
 
 vi.mock("../hooks/gmail-watcher.js", () => ({
