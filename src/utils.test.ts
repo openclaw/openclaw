@@ -121,6 +121,23 @@ describe("jidToE164", () => {
     fs.rmSync(first, { recursive: true, force: true });
     fs.rmSync(second, { recursive: true, force: true });
   });
+
+  it("caches successful lookups to avoid disk I/O", () => {
+    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-cache-"));
+    const mappingPath = path.join(authDir, "lid-mapping-112233_reverse.json");
+    fs.writeFileSync(mappingPath, JSON.stringify("999888"));
+
+    // First call: reads from disk and caches
+    expect(jidToE164("112233@lid", { authDir })).toBe("+999888");
+
+    // Delete file to prove cache is working
+    fs.rmSync(mappingPath);
+
+    // Second call: should still return value from cache
+    expect(jidToE164("112233@lid", { authDir })).toBe("+999888");
+
+    fs.rmSync(authDir, { recursive: true, force: true });
+  });
 });
 
 describe("resolveConfigDir", () => {

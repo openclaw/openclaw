@@ -176,3 +176,23 @@
 - Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).
 - Verify without local npmrc side effects: `npm view <pkg> version --userconfig "$(mktemp)"`.
 - Kill the tmux session after publish.
+
+## Strategic Vision & Advanced Modules
+
+### NeuroLedger (src/neuroledger)
+The NeuroLedger module implements the concepts for a decentralized, privacy-preserving AI blockchain.
+- **Architecture**: Agent-to-Agent (A2A), n:m networking using `libp2p`.
+- **Privacy**: Trusted Execution Environments (TEEs) for "Blind Inference".
+- **Search**: Federated Encrypted DiskANN for private vector retrieval.
+- **Consensus**: Proof of Inference (PoI) verifying correct TEE execution.
+
+### Lego AI Generation (src/lego)
+Implements the pipeline for generating 3D Lego models from AI prompts.
+- **Pipeline**: Image -> Voxel -> Brick CSP -> LDraw -> Instructions.
+- **Format**: Strictly follows LDraw standards.
+
+### Specialized Agent Personas
+
+- **Palette 🎨 (UX)**: Focus on micro-UX improvements. Accessibility (ARIA), feedback states (spinners, success/fail), and clean visuals.
+- **Sentinel 🛡️ (Security)**: Focus on input validation (E164, paths), sanitization, and strict boundary checks.
+- **Bolt ⚡ (Performance)**: Focus on caching, loop optimization, and async I/O to prevent event loop blocking.

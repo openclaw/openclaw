@@ -25,6 +25,8 @@ export type ProgressReporter = {
   setPercent: (percent: number) => void;
   tick: (delta?: number) => void;
   done: () => void;
+  succeed: (text?: string) => void;
+  fail: (text?: string) => void;
 };
 
 export type ProgressTotalsUpdate = {
@@ -38,6 +40,8 @@ const noopReporter: ProgressReporter = {
   setPercent: () => {},
   tick: () => {},
   done: () => {},
+  succeed: () => {},
+  fail: () => {},
 };
 
 export function createCliProgress(options: ProgressOptions): ProgressReporter {
@@ -196,7 +200,65 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     activeProgress = Math.max(0, activeProgress - 1);
   };
 
-  return { setLabel, setPercent, tick, done };
+  const succeed = (text?: string) => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    timer = null;
+    if (!started) {
+      activeProgress = Math.max(0, activeProgress - 1);
+      return;
+    }
+    if (controller) {
+      controller.clear();
+    }
+
+    const msg = theme.success(text ?? label);
+    if (spin) {
+      spin.stop(msg);
+    } else if (isTty) {
+      clearActiveProgressLine();
+      stream.write(`${msg}\n`);
+    } else {
+      clearActiveProgressLine();
+    }
+
+    if (isTty) {
+      unregisterActiveProgressLine(stream);
+    }
+    activeProgress = Math.max(0, activeProgress - 1);
+  };
+
+  const fail = (text?: string) => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    timer = null;
+    if (!started) {
+      activeProgress = Math.max(0, activeProgress - 1);
+      return;
+    }
+    if (controller) {
+      controller.clear();
+    }
+
+    const msg = theme.error(text ?? label);
+    if (spin) {
+      spin.stop(msg);
+    } else if (isTty) {
+      clearActiveProgressLine();
+      stream.write(`${msg}\n`);
+    } else {
+      clearActiveProgressLine();
+    }
+
+    if (isTty) {
+      unregisterActiveProgressLine(stream);
+    }
+    activeProgress = Math.max(0, activeProgress - 1);
+  };
+
+  return { setLabel, setPercent, tick, done, succeed, fail };
 }
 
 export async function withProgress<T>(
