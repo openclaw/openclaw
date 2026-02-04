@@ -361,7 +361,16 @@ export const buildTelegramMessageContext = async ({
     ? await resolveStickerVisionSupport({ cfg, agentId: route.agentId })
     : false;
   const stickerCacheHit = Boolean(cachedStickerDescription) && !stickerSupportsVision;
-  if (stickerCacheHit) {
+
+  // For animated/video stickers (metadata-only, no media file), format with emoji/setName context
+  const isMetadataOnlySticker = msg.sticker && allMedia[0]?.stickerMetadata && !allMedia[0]?.path;
+  if (isMetadataOnlySticker) {
+    const emoji = allMedia[0]?.stickerMetadata?.emoji;
+    const setName = allMedia[0]?.stickerMetadata?.setName;
+    const stickerContext = [emoji, setName ? `from "${setName}"` : null].filter(Boolean).join(" ");
+    const desc = cachedStickerDescription ? ` ${cachedStickerDescription}` : "";
+    placeholder = `[Sticker${stickerContext ? ` ${stickerContext}` : ""}${desc}]`;
+  } else if (stickerCacheHit) {
     // Format cached description with sticker context
     const emoji = allMedia[0]?.stickerMetadata?.emoji;
     const setName = allMedia[0]?.stickerMetadata?.setName;

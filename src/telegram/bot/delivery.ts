@@ -305,13 +305,26 @@ export async function resolveMedia(
 } | null> {
   const msg = ctx.message;
 
-  // Handle stickers separately - only static stickers (WEBP) are supported
+  // Handle stickers - static (WEBP) get full media, animated/video get metadata-only
   if (msg.sticker) {
     const sticker = msg.sticker;
-    // Skip animated (TGS) and video (WEBM) stickers - only static WEBP supported
+    // For animated (TGS) and video (WEBM) stickers, return metadata-only (no image download)
+    // so the agent still receives emoji/setName context instead of silently dropping the message.
     if (sticker.is_animated || sticker.is_video) {
-      logVerbose("telegram: skipping animated/video sticker (only static stickers supported)");
-      return null;
+      logVerbose("telegram: animated/video sticker - returning metadata-only (no media download)");
+      const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+      return {
+        path: "",
+        contentType: undefined,
+        placeholder: "<media:sticker>",
+        stickerMetadata: {
+          emoji: sticker.emoji ?? cached?.emoji ?? undefined,
+          setName: sticker.set_name ?? cached?.setName ?? undefined,
+          fileId: sticker.file_id ?? cached?.fileId ?? undefined,
+          fileUniqueId: sticker.file_unique_id,
+          cachedDescription: cached?.description,
+        },
+      };
     }
     if (!sticker.file_id) {
       return null;
