@@ -8,6 +8,12 @@ Docs: https://docs.openclaw.ai
 
 - Onboarding: add Moonshot (.cn) auth choice and keep the China base URL when preserving defaults. (#7180) Thanks @waynelwz.
 - Docs: clarify tmux send-keys for TUI by splitting text and Enter. (#7737) Thanks @Wangnov.
+- Cron: add announce delivery mode for isolated jobs (CLI + Control UI) and delivery mode config.
+- Cron: default isolated jobs to announce delivery; accept ISO 8601 `schedule.at` in tool inputs.
+- Cron: hard-migrate isolated jobs to announce/none delivery; drop legacy post-to-main/payload delivery fields and `atMs` inputs.
+- Cron: delete one-shot jobs after success by default; add `--keep-after-run` for CLI.
+- Cron: suppress messaging tools during announce delivery so summaries post consistently.
+- Cron: avoid duplicate deliveries when isolated runs send messages directly.
 
 ### Fixes
 
@@ -16,6 +22,9 @@ Docs: https://docs.openclaw.ai
 - Web UI: apply button styling to the new-messages indicator.
 - Security: keep untrusted channel metadata out of system prompts (Slack/Discord). Thanks @KonstantinMirin.
 - Voice call: harden webhook verification with host allowlists/proxy trust and keep ngrok loopback bypass.
+- Cron: accept epoch timestamps and 0ms durations in CLI `--at` parsing.
+- Cron: reload store data when the store file is recreated or mtime changes.
+- Cron: deliver announce runs directly, honor delivery mode, and respect wakeMode for summaries. (#8540) Thanks @tyler6204.
 
 ## 2026.2.2-3
 
@@ -45,12 +54,6 @@ Docs: https://docs.openclaw.ai
 
 - Feishu: add Feishu/Lark plugin support + docs. (#7313) Thanks @jiulingyun (openclaw-cn).
 - Web UI: add Agents dashboard for managing agent files, tools, skills, models, channels, and cron jobs.
-- Cron: add announce delivery mode for isolated jobs (CLI + Control UI) and delivery mode config.
-- Cron: default isolated jobs to announce delivery; accept ISO 8601 `schedule.at` in tool inputs.
-- Cron: hard-migrate isolated jobs to announce/none delivery; drop legacy post-to-main/payload delivery fields and `atMs` inputs.
-- Cron: delete one-shot jobs after success by default; add `--keep-after-run` for CLI.
-- Cron: suppress messaging tools during announce delivery so summaries post consistently.
-- Cron: avoid duplicate deliveries when isolated runs send messages directly.
 - Subagents: discourage direct messaging tool use unless a specific external recipient is requested.
 - Memory: implement the opt-in QMD backend for workspace memory. (#3160) Thanks @vignesh07.
 - Security: add healthcheck skill and bootstrap audit guidance. (#7641) Thanks @Takhoffman.
