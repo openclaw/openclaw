@@ -261,4 +261,20 @@ export type AgentCompactionMemoryFlushConfig = {
   prompt?: string;
   /** System prompt appended for the memory flush turn. */
   systemPrompt?: string;
+
+  /** Optional checkpoints to trigger additional memory flush turns at % context usage. */
+  checkpoints?: Array<{
+    percent: number;
+    prompt?: string;
+    systemPrompt?: string;
+  }>;
+
+  /** Run an additional flush right before clearing the session context (default: true). */
+  beforeClear?: boolean;
+  /** Only run the before-clear flush when total tokens are at least this value (default: 1000). */
+  minTokensForFlush?: number;
+  /** Prompt used for the before-clear flush turn. */
+  beforeClearPrompt?: string;
+  /** System prompt appended for the before-clear flush turn. */
+  beforeClearSystemPrompt?: string;
 };

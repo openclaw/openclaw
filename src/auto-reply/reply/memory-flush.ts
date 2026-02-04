@@ -75,17 +75,25 @@ export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSet
     DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
 
   // Parse and sort checkpoints by percent ascending
-  const rawCheckpoints = (defaults as any)?.checkpoints;
+  const rawCheckpoints: unknown = defaults?.checkpoints;
   let checkpoints: MemoryFlushCheckpoint[] | undefined;
   if (Array.isArray(rawCheckpoints) && rawCheckpoints.length > 0) {
     checkpoints = rawCheckpoints
-      .filter((cp: any) => cp !== null && typeof cp === "object" && typeof cp.percent === "number")
-      .map((cp: any) => ({
+      .filter(
+        (cp: unknown): cp is { percent: number; prompt?: unknown; systemPrompt?: unknown } => {
+          if (!cp || typeof cp !== "object") {
+            return false;
+          }
+          return typeof (cp as { percent?: unknown }).percent === "number";
+        },
+      )
+      .map((cp) => ({
         percent: cp.percent,
         prompt: typeof cp.prompt === "string" ? cp.prompt.trim() : undefined,
         systemPrompt: typeof cp.systemPrompt === "string" ? cp.systemPrompt.trim() : undefined,
       }))
-      .sort((a, b) => a.percent - b.percent);
+      .toSorted((a, b) => a.percent - b.percent);
+
     if (checkpoints.length === 0) {
       checkpoints = undefined;
     }
@@ -178,7 +186,6 @@ export function shouldRunMemoryFlushCheckpoint(params: {
   const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
   const currentPercent = (totalTokens / contextWindow) * 100;
 
-  const compactionCount = params.entry?.compactionCount ?? 0;
   const firedCheckpoints = params.entry?.memoryFlushCheckpointsFired ?? [];
 
   // Find the highest checkpoint percent that currentPercent exceeds

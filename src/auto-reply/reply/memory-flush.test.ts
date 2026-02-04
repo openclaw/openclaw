@@ -175,8 +175,8 @@ describe("checkpoint memory flush", () => {
               memoryFlush: {
                 checkpoints: [
                   { percent: 50 },
-                  { percent: "invalid" as any },
-                  null as any,
+                  { percent: "invalid" as unknown as number },
+                  null as unknown as { percent: number },
                   { percent: 75 },
                 ],
               },
