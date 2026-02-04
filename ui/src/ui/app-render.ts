@@ -402,6 +402,9 @@ export function renderApp(state: AppViewState) {
                 skillsFilter: state.skillsFilter,
                 modelCatalog: state.modelCatalog,
                 modelsLoading: state.modelsLoading,
+                disabledModels:
+                  (configValue?.models as { disabledModels?: string[] } | undefined)
+                    ?.disabledModels ?? [],
                 onRefresh: async () => {
                   await loadAgents(state);
                   void loadModelCatalog(state);

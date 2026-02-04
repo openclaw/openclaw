@@ -49,6 +49,8 @@ export type AgentsProps = {
   /** Available models from gateway catalog */
   modelCatalog: GatewayModelChoice[];
   modelsLoading: boolean;
+  /** Model IDs that are disabled (format: "provider/model-id") */
+  disabledModels: string[];
   channelsLoading: boolean;
   channelsError: string | null;
   channelsSnapshot: ChannelsStatusSnapshot | null;
@@ -504,11 +506,16 @@ function buildModelOptions(
   configForm: Record<string, unknown> | null,
   catalog: GatewayModelChoice[],
   current?: string | null,
+  disabledModels?: string[],
 ) {
+  // Filter out disabled models from catalog
+  const disabledSet = new Set(disabledModels ?? []);
+  const enabledCatalog = catalog.filter((m) => !disabledSet.has(`${m.provider}/${m.id}`));
+
   // Use catalog if available, fall back to config-based models
   const options =
-    catalog.length > 0
-      ? buildModelOptionsFromCatalog(catalog, current)
+    enabledCatalog.length > 0
+      ? buildModelOptionsFromCatalog(enabledCatalog, current)
       : (() => {
           const configOptions = resolveConfiguredModels(configForm);
           const hasCurrent = current
@@ -527,7 +534,7 @@ function buildModelOptions(
   }
 
   // Group by provider for optgroup rendering
-  if (catalog.length > 0) {
+  if (enabledCatalog.length > 0) {
     const byProvider = new Map<string, ConfiguredModelOption[]>();
     for (const option of options) {
       const provider = option.provider || "other";
@@ -568,18 +575,27 @@ function buildModelOptions(
   return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
 }
 
-function buildFallbackOptions(catalog: GatewayModelChoice[], selected: string[]) {
+/** Chip-based fallback model selector */
+function renderFallbackChips(params: {
+  selected: string[];
+  catalog: GatewayModelChoice[];
+  disabledModels: string[];
+  disabled: boolean;
+  onChange: (fallbacks: string[]) => void;
+}) {
+  const { selected, catalog, disabledModels, disabled, onChange } = params;
+  const disabledSet = new Set(disabledModels);
   const selectedSet = new Set(selected);
 
-  if (catalog.length === 0) {
-    return html`
-      <option value="" disabled>No models available</option>
-    `;
-  }
+  // Filter enabled models and exclude already selected ones
+  const availableModels = catalog.filter((m) => {
+    const fullId = `${m.provider}/${m.id}`;
+    return !disabledSet.has(fullId) && !selectedSet.has(fullId);
+  });
 
-  // Group by provider
+  // Group available models by provider
   const byProvider = new Map<string, GatewayModelChoice[]>();
-  for (const model of catalog) {
+  for (const model of availableModels) {
     const provider = model.provider || "other";
     const existing = byProvider.get(provider) || [];
     existing.push(model);
@@ -602,20 +618,94 @@ function buildFallbackOptions(catalog: GatewayModelChoice[], selected: string[])
     return a.localeCompare(b);
   });
 
-  return sortedProviders.map((provider) => {
-    const models = byProvider.get(provider) || [];
-    const providerLabel = provider.charAt(0).toUpperCase() + provider.slice(1);
-    return html`
-      <optgroup label=${providerLabel}>
-        ${models.map((model) => {
-          const modelId = `${provider}/${model.id}`;
-          const label = model.name || model.id;
-          const isSelected = selectedSet.has(modelId);
-          return html`<option value=${modelId} ?selected=${isSelected}>${label}</option>`;
-        })}
-      </optgroup>
-    `;
-  });
+  const addFallback = (modelId: string) => {
+    if (!selected.includes(modelId)) {
+      onChange([...selected, modelId]);
+    }
+  };
+
+  const removeFallback = (modelId: string) => {
+    onChange(selected.filter((id) => id !== modelId));
+  };
+
+  const getModelLabel = (modelId: string): string => {
+    const model = catalog.find((m) => `${m.provider}/${m.id}` === modelId);
+    if (model) {
+      return model.name || model.id.split("/").pop() || model.id;
+    }
+    // Fallback for models not in catalog
+    return modelId.split("/").pop() || modelId;
+  };
+
+  const getProviderFromId = (modelId: string): string => {
+    return modelId.split("/")[0] || "other";
+  };
+
+  return html`
+    <div class="fallback-selector ${disabled ? "fallback-selector--disabled" : ""}">
+      ${
+        selected.length > 0
+          ? html`
+            <div class="fallback-chips">
+              ${selected.map(
+                (modelId, index) => html`
+                  <div class="fallback-chip" title=${modelId}>
+                    <span class="fallback-chip__order">${index + 1}</span>
+                    <span class="fallback-chip__label">${getModelLabel(modelId)}</span>
+                    <span class="fallback-chip__provider">${getProviderFromId(modelId)}</span>
+                    <button
+                      class="fallback-chip__remove"
+                      @click=${() => removeFallback(modelId)}
+                      ?disabled=${disabled}
+                      title="Remove fallback"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                      </svg>
+                    </button>
+                  </div>
+                `,
+              )}
+            </div>
+          `
+          : html`
+              <div class="fallback-empty">No fallback models configured</div>
+            `
+      }
+      <div class="fallback-add">
+        <select
+          class="fallback-add__select"
+          ?disabled=${disabled || availableModels.length === 0}
+          @change=${(e: Event) => {
+            const select = e.target as HTMLSelectElement;
+            if (select.value) {
+              addFallback(select.value);
+              select.value = "";
+            }
+          }}
+        >
+          <option value="">+ Add fallback model</option>
+          ${sortedProviders.map((provider) => {
+            const models = byProvider.get(provider) || [];
+            const providerLabel = provider.charAt(0).toUpperCase() + provider.slice(1);
+            return html`
+              <optgroup label=${providerLabel}>
+                ${models.map((model) => {
+                  const fullId = `${provider}/${model.id}`;
+                  const label = model.name || model.id;
+                  return html`<option value=${fullId}>${label}</option>`;
+                })}
+              </optgroup>
+            `;
+          })}
+        </select>
+      </div>
+      <span class="fallback-hint">
+        ${selected.length > 0 ? `${selected.length} fallback${selected.length > 1 ? "s" : ""} (priority order)` : "Add models to use as fallbacks if primary fails"}
+      </span>
+    </div>
+  `;
 }
 
 type CompiledPattern =
@@ -785,6 +875,7 @@ export function renderAgents(props: AgentsProps) {
                       configSaving: props.configSaving,
                       configDirty: props.configDirty,
                       modelCatalog: props.modelCatalog,
+                      disabledModels: props.disabledModels,
                       onConfigReload: props.onConfigReload,
                       onConfigSave: props.onConfigSave,
                       onModelChange: props.onModelChange,
@@ -954,6 +1045,7 @@ function renderAgentOverview(params: {
   configSaving: boolean;
   configDirty: boolean;
   modelCatalog: GatewayModelChoice[];
+  disabledModels: string[];
   onConfigReload: () => void;
   onConfigSave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
@@ -970,6 +1062,7 @@ function renderAgentOverview(params: {
     configSaving,
     configDirty,
     modelCatalog,
+    disabledModels,
     onConfigReload,
     onConfigSave,
     onModelChange,
@@ -1054,27 +1147,19 @@ function renderAgentOverview(params: {
               <option value="">
                 ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
               </option>
-              ${buildModelOptions(configForm, modelCatalog, effectivePrimary ?? undefined)}
+              ${buildModelOptions(configForm, modelCatalog, effectivePrimary ?? undefined, disabledModels)}
             </select>
           </label>
-          <label class="field" style="min-width: 260px; flex: 1;">
+          <div class="field" style="min-width: 260px; flex: 1;">
             <span>Fallback models</span>
-            <select
-              multiple
-              style="min-height: 80px;"
-              ?disabled=${!configForm || configLoading || configSaving}
-              @change=${(e: Event) => {
-                const select = e.target as HTMLSelectElement;
-                const selected = Array.from(select.selectedOptions).map((opt) => opt.value);
-                onModelFallbacksChange(agent.id, selected);
-              }}
-            >
-              ${buildFallbackOptions(modelCatalog, modelFallbacks ?? [])}
-            </select>
-            <span class="field-hint" style="font-size: 11px; color: var(--muted);">
-              Hold Cmd/Ctrl to select multiple
-            </span>
-          </label>
+            ${renderFallbackChips({
+              selected: modelFallbacks ?? [],
+              catalog: modelCatalog,
+              disabledModels,
+              disabled: !configForm || configLoading || configSaving,
+              onChange: (fallbacks) => onModelFallbacksChange(agent.id, fallbacks),
+            })}
+          </div>
         </div>
         <div class="row" style="justify-content: flex-end; gap: 8px;">
           <button

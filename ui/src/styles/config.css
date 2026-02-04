@@ -2149,6 +2149,12 @@
   letter-spacing: 0.04em;
 }
 
+.models-list__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .models-refresh-btn {
   width: 28px;
   height: 28px;
@@ -2425,22 +2431,46 @@
 
 .models-catalog-item {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-accent);
   transition:
     border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
+    background var(--duration-fast) ease,
+    opacity var(--duration-fast) ease;
 }
 
 .models-catalog-item:hover {
   border-color: var(--border-strong);
 }
 
+.models-catalog-item--disabled {
+  opacity: 0.5;
+  background: transparent;
+}
+
+.models-catalog-item--disabled:hover {
+  opacity: 0.7;
+}
+
+.models-catalog-item__toggle {
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
 .models-catalog-item__main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.models-catalog-item__main > div:first-child {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2514,4 +2544,64 @@
 .models-empty__hint {
   font-size: 12px;
   margin-top: 4px;
+}
+
+/* Toggle Switch (compact) */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 32px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-switch__slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.toggle-switch__slider::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: var(--muted);
+  border-radius: 50%;
+  transition:
+    transform var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.toggle-switch input:checked + .toggle-switch__slider {
+  background: var(--ok-subtle);
+  border-color: var(--ok);
+}
+
+.toggle-switch input:checked + .toggle-switch__slider::before {
+  transform: translateX(14px);
+  background: var(--ok);
+}
+
+.toggle-switch input:focus + .toggle-switch__slider {
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.toggle-switch input:disabled + .toggle-switch__slider {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

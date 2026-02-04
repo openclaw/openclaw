@@ -412,6 +412,22 @@
   font-size: 12px;
 }
 
+.btn--xs {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.btn--ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 .btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -1891,4 +1907,156 @@
   .agent-tools-list {
     grid-template-columns: 1fr;
   }
+}
+
+/* ===========================================
+   Fallback Model Selector
+   =========================================== */
+
+.fallback-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fallback-selector--disabled {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.fallback-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fallback-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-accent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.fallback-chip:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.fallback-chip__order {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.fallback-chip__label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fallback-chip__provider {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 2px 6px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.fallback-chip__remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+  flex-shrink: 0;
+}
+
+.fallback-chip__remove:hover {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.fallback-chip__remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fallback-empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  background: var(--bg-accent);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+}
+
+.fallback-add {
+  margin-top: 4px;
+}
+
+.fallback-add__select {
+  width: 100%;
+  padding: 8px 36px 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.fallback-add__select:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.fallback-add__select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.fallback-add__select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fallback-hint {
+  font-size: 11px;
+  color: var(--muted);
 }

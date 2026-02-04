@@ -77,6 +77,8 @@ export type ModelsConfigValue = {
     enabled?: boolean;
     region?: string;
   };
+  /** Model IDs that are disabled (format: "provider/model-id") */
+  disabledModels?: string[];
 };
 
 export type ProviderConfigValue = {
@@ -737,6 +739,10 @@ function renderCatalogModelsTable(
   props: ModelsSettingsProps,
 ): TemplateResult {
   const modelCount = catalogModels.length;
+  const disabledSet = new Set(props.value?.disabledModels ?? []);
+  const enabledCount = catalogModels.filter(
+    (m) => !disabledSet.has(`${providerId}/${m.id}`),
+  ).length;
 
   if (modelCount === 0) {
     return html`
@@ -770,32 +776,92 @@ function renderCatalogModelsTable(
     `;
   }
 
+  const toggleModel = (modelId: string, enable: boolean) => {
+    const fullId = `${providerId}/${modelId}`;
+    const current = props.value?.disabledModels ?? [];
+    let updated: string[];
+    if (enable) {
+      // Remove from disabled list
+      updated = current.filter((id) => id !== fullId);
+    } else {
+      // Add to disabled list
+      updated = current.includes(fullId) ? current : [...current, fullId];
+    }
+    props.onPatch(["disabledModels"], updated);
+  };
+
+  const toggleAll = (enable: boolean) => {
+    const current = props.value?.disabledModels ?? [];
+    const providerModelIds = catalogModels.map((m) => `${providerId}/${m.id}`);
+    let updated: string[];
+    if (enable) {
+      // Remove all this provider's models from disabled list
+      updated = current.filter((id) => !providerModelIds.includes(id));
+    } else {
+      // Add all this provider's models to disabled list
+      const toAdd = providerModelIds.filter((id) => !current.includes(id));
+      updated = [...current, ...toAdd];
+    }
+    props.onPatch(["disabledModels"], updated);
+  };
+
   return html`
     <div class="models-list">
       <div class="models-list__header">
-        <span class="models-list__title">Available Models (${modelCount})</span>
-        ${
-          props.onRefreshModels
-            ? html`
-              <button
-                class="models-refresh-btn"
-                @click=${() => props.onRefreshModels?.()}
-                title="Refresh model catalog"
-              >
-                ${icons.refresh}
-              </button>
-            `
-            : nothing
-        }
+        <span class="models-list__title">Models (${enabledCount}/${modelCount} enabled)</span>
+        <div class="models-list__actions">
+          <button
+            class="btn btn--xs btn--ghost"
+            @click=${() => toggleAll(true)}
+            title="Enable all models"
+            ?disabled=${enabledCount === modelCount}
+          >
+            Enable All
+          </button>
+          <button
+            class="btn btn--xs btn--ghost"
+            @click=${() => toggleAll(false)}
+            title="Disable all models"
+            ?disabled=${enabledCount === 0}
+          >
+            Disable All
+          </button>
+          ${
+            props.onRefreshModels
+              ? html`
+                <button
+                  class="models-refresh-btn"
+                  @click=${() => props.onRefreshModels?.()}
+                  title="Refresh model catalog"
+                >
+                  ${icons.refresh}
+                </button>
+              `
+              : nothing
+          }
+        </div>
       </div>
       <div class="models-catalog-grid">
         ${catalogModels.map((model) => {
+          const fullId = `${providerId}/${model.id}`;
+          const isEnabled = !disabledSet.has(fullId);
           const hasVision = model.input?.includes("image");
           const hasReasoning = model.reasoning;
           const displayName = model.name || model.id.split("/").pop() || model.id;
 
           return html`
-            <div class="models-catalog-item">
+            <div class="models-catalog-item ${isEnabled ? "" : "models-catalog-item--disabled"}">
+              <div class="models-catalog-item__toggle">
+                <label class="toggle-switch">
+                  <input
+                    type="checkbox"
+                    .checked=${isEnabled}
+                    @change=${(e: Event) => toggleModel(model.id, (e.target as HTMLInputElement).checked)}
+                    ?disabled=${props.disabled}
+                  />
+                  <span class="toggle-switch__slider"></span>
+                </label>
+              </div>
               <div class="models-catalog-item__main">
                 <div class="models-catalog-item__name" title=${model.id}>${displayName}</div>
                 <div class="models-catalog-item__badges">
