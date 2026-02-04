@@ -1,5 +1,5 @@
-import type { GatewayBrowserClient } from "../gateway";
-import type { AgentsListResult } from "../types";
+import type { GatewayBrowserClient } from "../gateway.ts";
+import type { AgentsListResult } from "../types.ts";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;
@@ -20,7 +20,7 @@ export async function loadAgents(state: AgentsState) {
   state.agentsLoading = true;
   state.agentsError = null;
   try {
-    const res = await state.client.request("agents.list", {});
+    const res = await state.client.request<AgentsListResult>("agents.list", {});
     if (res) {
       state.agentsList = res;
       const selected = state.agentsSelectedId;
