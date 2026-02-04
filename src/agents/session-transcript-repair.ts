@@ -221,13 +221,20 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
       const content = assistant.content;
       if (Array.isArray(content)) {
         const stripped = content.filter((block) => {
-          if (!block || typeof block !== "object") return true;
+          if (!block || typeof block !== "object") {
+            return true;
+          }
           const rec = block as { type?: unknown };
           return rec.type !== "toolCall" && rec.type !== "toolUse" && rec.type !== "functionCall";
         });
         if (stripped.length === 0) {
-          // Nothing left — drop the entire message
+          // Nothing left after stripping tool calls — keep the turn with minimal content
+          // to preserve metadata (errorMessage, stopReason) for debugging
           changed = true;
+          out.push({
+            ...assistant,
+            content: [{ type: "text", text: "[error turn - tool calls stripped]" }],
+          } as typeof assistant);
           continue;
         }
         if (stripped.length !== content.length) {

@@ -678,6 +678,9 @@ export async function runEmbeddedPiAgent(
               agentDir: params.agentDir,
             });
           }
+          // Reset terminated retries on successful completion so future
+          // terminated errors get their own retry budget
+          terminatedRetries = 0;
           return {
             payloads: payloads.length ? payloads : undefined,
             meta: {

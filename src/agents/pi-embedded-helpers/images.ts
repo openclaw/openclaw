@@ -96,12 +96,20 @@ export async function sanitizeSessionMessagesImages(
           // executed, and keeping partial tool_use blocks without real results causes
           // Anthropic API rejections (unexpected tool_use_id in tool_result blocks).
           const strippedToolCalls = (content as unknown as ContentBlock[]).filter((block) => {
-            if (!block || typeof block !== "object") return true;
+            if (!block || typeof block !== "object") {
+              return true;
+            }
             const rec = block as { type?: unknown };
             return rec.type !== "toolCall" && rec.type !== "toolUse" && rec.type !== "functionCall";
           });
           if (strippedToolCalls.length === 0) {
-            // Nothing left after stripping — drop the entire message
+            // Nothing left after stripping — keep turn with minimal content to preserve metadata
+            out.push({
+              ...assistantMsg,
+              content: [
+                { type: "text", text: "[error turn - tool calls stripped]" },
+              ] as unknown as typeof assistantMsg.content,
+            });
             continue;
           }
           const nextContent = (await sanitizeContentBlocksImages(
