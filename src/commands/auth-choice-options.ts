@@ -21,7 +21,8 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
-  | "qwen";
+  | "qwen"
+  | "bedrock-mantle";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -47,6 +48,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Anthropic",
     hint: "setup-token + API key",
     choices: ["token", "apiKey"],
+  },
+  {
+    value: "bedrock-mantle",
+    label: "AWS Bedrock (OpenAI Compatible API)",
+    hint: "API Key",
+    choices: ["bedrock-api-key"],
   },
   {
     value: "minimax",
@@ -198,6 +205,11 @@ export function buildAuthChoiceOptions(params: {
     value: "minimax-api-lightning",
     label: "MiniMax M2.1 Lightning",
     hint: "Faster, higher output cost",
+  });
+  options.push({
+    value: "bedrock-api-key",
+    label: "AWS Bedrock Long Term API Key",
+    hint: "OpenAI-compatible API with Bedrock models",
   });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });

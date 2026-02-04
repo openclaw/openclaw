@@ -30,6 +30,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "opencode-zen": "opencode",
   "qwen-portal": "qwen-portal",
   "minimax-portal": "minimax-portal",
+  "bedrock-api-key": "bedrock-mantle",
 };
 
 export function resolvePreferredProviderForAuthChoice(choice: AuthChoice): string | undefined {

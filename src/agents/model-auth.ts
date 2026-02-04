@@ -300,6 +300,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     venice: "VENICE_API_KEY",
     mistral: "MISTRAL_API_KEY",
     opencode: "OPENCODE_API_KEY",
+    "bedrock-mantle": "AWS_BEDROCK_LONG_TERM_API_KEY",
   };
   const envVar = envMap[normalized];
   if (!envVar) {

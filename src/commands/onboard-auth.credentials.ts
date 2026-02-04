@@ -178,3 +178,17 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
+
+export const BEDROCK_MANTLE_DEFAULT_MODEL_REF = "bedrock-mantle/openai.gpt-oss-120b";
+
+export async function setBedrockMantleApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "bedrock-mantle:default",
+    credential: {
+      type: "api_key",
+      provider: "bedrock-mantle",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}

@@ -76,6 +76,74 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+// AWS Bedrock OpenAI-compatible endpoint
+export const BEDROCK_MANTLE_BASE_URL = "https://bedrock-mantle.us-east-1.api.aws/v1";
+const BEDROCK_MANTLE_DEFAULT_CONTEXT_WINDOW = 200000;
+const BEDROCK_MANTLE_DEFAULT_MAX_TOKENS = 8192;
+const BEDROCK_MANTLE_DEFAULT_COST = {
+  input: 3,
+  output: 15,
+  cacheRead: 0.3,
+  cacheWrite: 3.75,
+};
+
+interface BedrockMantleModel {
+  id: string;
+  object: string;
+  created?: number;
+  owned_by?: string;
+}
+
+interface BedrockMantleModelsResponse {
+  object: string;
+  data: BedrockMantleModel[];
+}
+
+// Cache for Bedrock OpenAI model discovery (1 hour TTL), keyed by API key
+const bedrockMantleCache = new Map<
+  string,
+  { models: ModelDefinitionConfig[]; expiresAt: number }
+>();
+const BEDROCK_MANTLE_CACHE_TTL_MS = 3600000;
+
+async function discoverBedrockMantleModels(apiKey: string): Promise<ModelDefinitionConfig[]> {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return [];
+  }
+  // Return cached if valid
+  const cached = bedrockMantleCache.get(apiKey);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.models;
+  }
+  try {
+    const url = `${BEDROCK_MANTLE_BASE_URL}/models`;
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      return cached?.models ?? [];
+    }
+    const data = (await response.json()) as BedrockMantleModelsResponse;
+    if (!Array.isArray(data.data)) {
+      return cached?.models ?? [];
+    }
+    const models = data.data.map((m) => ({
+      id: m.id,
+      name: m.id,
+      reasoning: m.id.toLowerCase().includes("thinking"),
+      input: ["text", "image"] as Array<"text" | "image">,
+      cost: BEDROCK_MANTLE_DEFAULT_COST,
+      contextWindow: BEDROCK_MANTLE_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: BEDROCK_MANTLE_DEFAULT_MAX_TOKENS,
+    }));
+    bedrockMantleCache.set(apiKey, { models, expiresAt: Date.now() + BEDROCK_MANTLE_CACHE_TTL_MS });
+    return models;
+  } catch {
+    return cached?.models ?? [];
+  }
+}
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -394,6 +462,28 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+export async function buildBedrockMantleProvider(apiKey?: string): Promise<ProviderConfig> {
+  const models = apiKey ? await discoverBedrockMantleModels(apiKey) : [];
+  return {
+    baseUrl: BEDROCK_MANTLE_BASE_URL,
+    api: "openai-completions",
+    models:
+      models.length > 0
+        ? models
+        : [
+            {
+              id: "openai.gpt-oss-120b",
+              name: "GPT OSS 120B (Bedrock)",
+              reasoning: false,
+              input: ["text", "image"],
+              cost: BEDROCK_MANTLE_DEFAULT_COST,
+              contextWindow: BEDROCK_MANTLE_DEFAULT_CONTEXT_WINDOW,
+              maxTokens: BEDROCK_MANTLE_DEFAULT_MAX_TOKENS,
+            },
+          ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -459,6 +549,18 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+  }
+
+  // Bedrock OpenAI-compatible provider
+  const bedrockMantleEnvKey = resolveEnvApiKey("bedrock-mantle");
+  const bedrockMantleKey =
+    bedrockMantleEnvKey?.apiKey ??
+    resolveApiKeyFromProfiles({ provider: "bedrock-mantle", store: authStore });
+  if (bedrockMantleKey) {
+    providers["bedrock-mantle"] = {
+      ...(await buildBedrockMantleProvider(bedrockMantleKey)),
+      apiKey: bedrockMantleKey,
+    };
   }
 
   return providers;
