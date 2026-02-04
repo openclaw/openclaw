@@ -82,6 +82,7 @@ def save_image(data: str, output_path: Path) -> None:
     output_path.write_bytes(image_data)
     full_path = output_path.resolve()
     print(f"\nImage saved: {full_path}")
+    print(f"MEDIA: {full_path}")
 
 
 def make_request(
