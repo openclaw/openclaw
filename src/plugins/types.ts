@@ -372,6 +372,10 @@ export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
   /** Optional because legacy hook can run in pre-session phase. */
   messages?: unknown[];
+  /** Model's total context window in tokens. */
+  contextWindowTokens?: number;
+  /** Estimated tokens currently used in context. */
+  estimatedUsedTokens?: number;
 };
 
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
