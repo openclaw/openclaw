@@ -477,7 +477,7 @@ export async function runCronIsolatedAgentTurn(params: {
       await deliverOutboundPayloads({
         cfg: cfgWithAgentDefaults,
         channel: resolvedDelivery.channel,
-        to: resolvedDelivery.to,
+        to: resolvedDelivery.to!,
         accountId: resolvedDelivery.accountId,
         threadId: resolvedDelivery.threadId,
         payloads,
