@@ -77,6 +77,44 @@ export function resolveDefaultAgentBoundAccountId(
   return null;
 }
 
+/**
+ * Resolve the bound accountId for a specific agent on a given channel.
+ * Returns the first matching accountId from the agent's bindings, or null if none found.
+ */
+export function resolveAgentBoundAccountId(
+  cfg: OpenClawConfig,
+  agentId: string,
+  channelId: string,
+): string | null {
+  const normalizedChannel = normalizeBindingChannelId(channelId);
+  if (!normalizedChannel) {
+    return null;
+  }
+  const normalizedAgentId = normalizeAgentId(agentId);
+  for (const binding of listBindings(cfg)) {
+    if (!binding || typeof binding !== "object") {
+      continue;
+    }
+    if (normalizeAgentId(binding.agentId) !== normalizedAgentId) {
+      continue;
+    }
+    const match = binding.match;
+    if (!match || typeof match !== "object") {
+      continue;
+    }
+    const channel = normalizeBindingChannelId(match.channel);
+    if (!channel || channel !== normalizedChannel) {
+      continue;
+    }
+    const accountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
+    if (!accountId || accountId === "*") {
+      continue;
+    }
+    return normalizeAccountId(accountId);
+  }
+  return null;
+}
+
 export function buildChannelAccountBindings(cfg: OpenClawConfig) {
   const map = new Map<string, Map<string, string[]>>();
   for (const binding of listBindings(cfg)) {

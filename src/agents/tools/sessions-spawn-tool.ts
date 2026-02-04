@@ -5,6 +5,7 @@ import type { AnyAgentTool } from "./common.js";
 import { formatThinkingLevels, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { resolveAgentBoundAccountId } from "../../routing/bindings.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -222,6 +223,13 @@ export function createSessionsSpawnTool(opts?: {
         task,
       });
 
+      // Resolve the target agent's bound accountId for the channel.
+      // This ensures sub-agents use their own messaging identity (e.g., their own Telegram bot)
+      // rather than the requester's or system default.
+      const targetAccountId = requesterOrigin?.channel
+        ? resolveAgentBoundAccountId(cfg, targetAgentId, requesterOrigin.channel)
+        : null;
+
       const childIdem = crypto.randomUUID();
       let childRunId: string = childIdem;
       try {
@@ -232,7 +240,9 @@ export function createSessionsSpawnTool(opts?: {
             sessionKey: childSessionKey,
             channel: requesterOrigin?.channel,
             to: requesterOrigin?.to ?? undefined,
-            accountId: requesterOrigin?.accountId ?? undefined,
+            // Prefer target agent's bound accountId (for multi-agent setups with separate bots),
+            // fall back to requester's accountId (for parent context inheritance).
+            accountId: targetAccountId ?? requesterOrigin?.accountId ?? undefined,
             threadId:
               requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
             idempotencyKey: childIdem,
