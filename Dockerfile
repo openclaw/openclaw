@@ -125,6 +125,47 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
   org.opencontainers.image.title="OpenClaw" \
   org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image"
 
+# Keep the Fly runtime image provisioned with the extra operator toolchain
+# used by the deployment entrypoint and live workspace.
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+RUN corepack enable
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    autoconf bison build-essential libssl-dev libyaml-dev libreadline-dev \
+    zlib1g-dev libncurses5-dev libffi-dev libgdbm-dev libgdbm-compat-dev \
+    rustc gawk && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates gnupg && \
+    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    postgresql-16 postgresql-16-pgvector postgresql-client-16 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV PGDATA=/data/postgres
+ENV PATH="/usr/lib/postgresql/16/bin:${PATH}"
+
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gh && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @openai/codex
+RUN curl -fsSL https://tailscale.com/install.sh | sh
+
+ENV RUBY_VERSION=3.3.8
+RUN git clone https://github.com/rbenv/ruby-build.git /tmp/ruby-build && \
+    /tmp/ruby-build/bin/ruby-build $RUBY_VERSION /usr/local && \
+    rm -rf /tmp/ruby-build
+
+RUN gem install bundler
 WORKDIR /app
 
 # Install system utilities present in bookworm but missing in bookworm-slim.

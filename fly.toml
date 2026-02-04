@@ -1,8 +1,8 @@
 # OpenClaw Fly.io deployment configuration
 # See https://fly.io/docs/reference/configuration/
 
-app = "openclaw"
-primary_region = "iad" # change to your closest region
+app = "clawdbot-felix"
+primary_region = "lhr"
 
 [build]
 dockerfile = "Dockerfile"
@@ -30,5 +30,5 @@ size = "shared-cpu-2x"
 memory = "2048mb"
 
 [mounts]
-source = "openclaw_data"
+source = "clawdbot_data"
 destination = "/data"
