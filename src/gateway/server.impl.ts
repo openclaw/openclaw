@@ -64,6 +64,7 @@ import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { createAgentShieldApprovalHandlers } from "./server-methods/agentshield-approval.js";
+import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
@@ -539,16 +540,16 @@ export async function startGatewayServer(
     forwarder: execApprovalForwarder,
   });
 
-  const agentShieldApprovalManager = new AgentShieldApprovalManager();
-  const agentShieldApprovalForwarder = createAgentShieldApprovalForwarder();
+  const agentShieldApprovalsEnabled =
+    process.env.AGENTSHIELD_APPROVALS_ENABLED === "1";
 
-  const agentShieldApprovalsEnabled = AGENTSHIELD_ENABLED_EXPR;
-
-  const agentShieldApprovalHandlers = agentShieldApprovalsEnabled
-    ? createAgentShieldApprovalHandlers(agentShieldApprovalManager, {
-        forwarder: agentShieldApprovalForwarder,
-      })
-    : {};
+  const agentShieldApprovalHandlers: GatewayRequestHandlers =
+    agentShieldApprovalsEnabled
+      ? createAgentShieldApprovalHandlers(
+          new AgentShieldApprovalManager(),
+          { forwarder: createAgentShieldApprovalForwarder() },
+        )
+      : {};
 
 
   const canvasHostServerPort = (canvasHostServer as CanvasHostServer | null)?.port;
