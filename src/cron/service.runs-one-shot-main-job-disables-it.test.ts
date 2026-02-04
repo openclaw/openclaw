@@ -270,9 +270,12 @@ describe("CronService", () => {
     await cron.start();
     const jobs = await cron.list({ includeDisabled: true });
     const job = jobs.find((j) => j.id === rawJob.id);
+    // Legacy delivery fields are migrated to the top-level delivery object
+    const delivery = job?.delivery as unknown as Record<string, unknown>;
+    expect(delivery?.channel).toBe("telegram");
     const payload = job?.payload as unknown as Record<string, unknown>;
-    expect(payload.channel).toBe("telegram");
     expect("provider" in payload).toBe(false);
+    expect("channel" in payload).toBe(false);
 
     cron.stop();
     await store.cleanup();
@@ -321,8 +324,9 @@ describe("CronService", () => {
     await cron.start();
     const jobs = await cron.list({ includeDisabled: true });
     const job = jobs.find((j) => j.id === rawJob.id);
-    const payload = job?.payload as unknown as Record<string, unknown>;
-    expect(payload.channel).toBe("telegram");
+    // Legacy delivery fields are migrated to the top-level delivery object
+    const delivery = job?.delivery as unknown as Record<string, unknown>;
+    expect(delivery?.channel).toBe("telegram");
 
     cron.stop();
     await store.cleanup();

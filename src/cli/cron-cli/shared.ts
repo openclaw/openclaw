@@ -66,11 +66,11 @@ export function parseAt(input: string): string | null {
     return null;
   }
   const absolute = parseAbsoluteTimeMs(raw);
-  if (absolute) {
+  if (absolute !== null) {
     return new Date(absolute).toISOString();
   }
   const dur = parseDurationMs(raw);
-  if (dur) {
+  if (dur !== null) {
     return new Date(Date.now() + dur).toISOString();
   }
   return null;
