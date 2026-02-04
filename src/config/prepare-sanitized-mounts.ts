@@ -158,10 +158,10 @@ export async function prepareSanitizedMounts(): Promise<SanitizedMounts> {
       await fs.promises.mkdir(conversationsDir, { recursive: true });
       binds.push(`${conversationsDir}:/home/node/.openclaw/agents/${agentId}/agent/conversations:rw`);
       
-      // REAL sessions directory (read-write, no secrets here)
-      const sessionsDir = path.join(agentAgentDir, "sessions");
-      await fs.promises.mkdir(sessionsDir, { recursive: true });
-      binds.push(`${sessionsDir}:/home/node/.openclaw/agents/${agentId}/agent/sessions:rw`);
+      // NOTE: Sessions directory is NOT mounted because sessions.json contains
+      // absolute paths with the host's home directory (skill paths, session file paths).
+      // The container will create fresh sessions. This is a trade-off for security.
+      // TODO: In future, sanitize sessions.json paths before mounting.
       
       // REAL memory directory (read-write, no secrets here)  
       const memoryDir = path.join(agentAgentDir, "memory");

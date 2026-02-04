@@ -96,8 +96,19 @@ export function sanitizeConfigSecrets(cfg: OpenClawConfig): OpenClawConfig {
 
   // Sanitize agent workspace paths (rewrite host home dir to container path)
   if (sanitized.agents) {
+    // Handle agents.defaults.workspace
+    const defaults = (sanitized.agents as any).defaults;
+    if (defaults?.workspace && typeof defaults.workspace === "string") {
+      defaults.workspace = defaults.workspace.replace(
+        /^\/home\/[^/]+\//,
+        "/home/node/"
+      );
+    }
+    
+    // Handle per-agent workspaces (agents[agentId].workspace)
     const agents = sanitized.agents as Record<string, { workspace?: string } | undefined>;
     for (const agentId of Object.keys(agents)) {
+      if (agentId === "defaults") continue; // Already handled above
       const agent = agents[agentId];
       if (agent?.workspace && typeof agent.workspace === "string") {
         // Replace any home directory path with container path

@@ -84,6 +84,8 @@ const SECRET_EXACT_MATCHES = new Set([
   "NVM_DIR",
   "NVM_BIN",
   "NVM_INC",
+  // Shell internals (contain host paths)
+  "_",  // Last executed command path
 ]);
 
 /**
