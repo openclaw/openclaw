@@ -330,7 +330,7 @@ describe("applyAuthChoice", () => {
       provider: "openrouter",
       mode: "api_key",
     });
-    expect(result.config.agents?.defaults?.model?.primary).toBe("openrouter/auto");
+    expect(result.config.agents?.defaults?.model?.primary).toBe("openrouter/openrouter/auto");
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
     const raw = await fs.readFile(authProfilePath, "utf8");
