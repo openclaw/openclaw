@@ -15,7 +15,6 @@ import {
   type ObaKeyFile,
 } from "../security/oba/keys.js";
 import { loginOba, saveObaToken } from "../security/oba/login.js";
-import { loginOba, saveObaToken } from "../security/oba/login.js";
 import { validateOwnerUrl } from "../security/oba/owner-url.js";
 import { registerKey } from "../security/oba/register.js";
 import {
