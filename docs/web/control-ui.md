@@ -79,6 +79,11 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 - Logs: live tail of gateway file logs with filter/export (`logs.tail`)
 - Update: run a package/git update + restart (`update.run`) with a restart report
 
+Cron jobs panel notes:
+
+- For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
+- Channel/target fields appear when announce is selected.
+
 ## Chat behavior
 
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
@@ -197,5 +202,20 @@ Notes:
 - `gatewayUrl` is stored in localStorage after load and removed from the URL.
 - `token` is stored in localStorage; `password` is kept in memory only.
 - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
+- `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
+- For cross-origin dev setups (e.g. `pnpm ui:dev` to a remote Gateway), add the UI
+  origin to `gateway.controlUi.allowedOrigins`.
+
+Example:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      allowedOrigins: ["http://localhost:5173"],
+    },
+  },
+}
+```
 
 Remote access setup details: [Remote access](/gateway/remote).

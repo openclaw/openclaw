@@ -30,11 +30,11 @@ OpenClaw 从 `~/.openclaw/openclaw.json` 读取可选的 **JSON5** 配置（支�
 ## 严格配置验证
 
 OpenClaw 只接受完全匹配 schema 的配置。
-未知键、类型错误或无效值会导致 Gateway网关 **拒绝启动**以确保安全。
+未知键、类型错误或无效值会导致 Gateway 网关 **拒绝启动**以确保安全。
 
 验证失败时：
 
-- Gateway网关不会启动。
+- Gateway 网关不会启动。
 - 只允许诊断命令（例如：`openclaw doctor`、`openclaw logs`、`openclaw health`、`openclaw status`、`openclaw service`、`openclaw help`）。
 - 运行 `openclaw doctor` 查看具体问题。
 - 运行 `openclaw doctor --fix`（或 `--yes`）应用迁移/修复。
@@ -43,7 +43,7 @@ Doctor 不会写入任何更改，除非你明确选择了 `--fix`/`--yes`。
 
 ## Schema + UI 提示
 
-Gateway网关通过 `config.schema` 暴露配置的 JSON Schema 表示，供 UI 编辑器使用。
+Gateway 网关通过 `config.schema` 暴露配置的 JSON Schema 表示，供 UI 编辑器使用。
 控制台 UI 根据此 schema 渲染表单，并提供 **Raw JSON** 编辑器作为应急手段。
 
 渠道插件和扩展可以为其配置注册 schema + UI 提示，因此渠道设置
@@ -53,8 +53,8 @@ Gateway网关通过 `config.schema` 暴露配置的 JSON Schema 表示，供 UI 
 
 ## 应用 + 重启（RPC）
 
-使用 `config.apply` 在一步中验证 + 写入完整配置并重启 Gateway网关。
-它会写入重启哨兵文件，并在 Gateway网关恢复后 ping 最后活跃的会话。
+使用 `config.apply` 在一步中验证 + 写入完整配置并重启 Gateway 网关。
+它会写入重启哨兵文件，并在 Gateway 网关恢复后 ping 最后活跃的会话。
 
 警告：`config.apply` 会替换**整个配置**。如果你只想更改部分键，
 请使用 `config.patch` 或 `openclaw config set`。请备份 `~/.openclaw/openclaw.json`。
@@ -88,7 +88,7 @@ openclaw gateway call config.apply --params '{
 - `null` 删除键
 - 数组替换
   与 `config.apply` 类似，它会验证、写入配置、存储重启哨兵，并调度
-  Gateway网关重启（当提供 `sessionKey` 时可选择唤醒）。
+  Gateway 网关重启（当提供 `sessionKey` 时可选择唤醒）。
 
 参数：
 
@@ -294,7 +294,7 @@ OpenClaw 从父进程（shell、launchd/systemd、CI 等）读取环境变量。
 }
 ```
 
-参见 [/environment](/environment) 了解全部优先级和来源。
+参见 [/environment](/environment) 了解优先级和来源详情。
 
 ### `env.shellEnv`（可选）
 
@@ -536,7 +536,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 ### `channels.whatsapp.accounts`（多账号）
 
-在一个 Gateway网关中运行多个 WhatsApp 账号：
+在一个 Gateway 网关中运行多个 WhatsApp 账号：
 
 ```json5
 {
@@ -734,7 +734,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 ### 多智能体路由（`agents.list` + `bindings`）
 
-在一个 Gateway网关中运行多个隔离的智能体（独立的工作区、`agentDir`、会话）。
+在一个 Gateway 网关中运行多个隔离的智能体（独立的工作区、`agentDir`、会话）。
 入站消息通过绑定路由到智能体。
 
 - `agents.list[]`：每智能体覆盖。
@@ -749,21 +749,21 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
     - 对象形式：`{ primary, fallbacks }`（fallbacks 覆盖 `agents.defaults.model.fallbacks`；`[]` 为该智能体禁用全局回退）
   - `identity`：每智能体的名称/主题/表情（用于提及模式 + 确认反应）。
   - `groupChat`：每智能体的提及门控（`mentionPatterns`）。
-  - `sandbox`：每智能体的沙盒配置（覆盖 `agents.defaults.sandbox`）。
+  - `sandbox`：每智能体的沙箱配置（覆盖 `agents.defaults.sandbox`）。
     - `mode`：`"off"` | `"non-main"` | `"all"`
     - `workspaceAccess`：`"none"` | `"ro"` | `"rw"`
     - `scope`：`"session"` | `"agent"` | `"shared"`
-    - `workspaceRoot`：自定义沙盒工作区根目录
+    - `workspaceRoot`：自定义沙箱工作区根目录
     - `docker`：每智能体 docker 覆盖（例如 `image`、`network`、`env`、`setupCommand`、限制；`scope: "shared"` 时忽略）
-    - `browser`：每智能体沙盒浏览器覆盖（`scope: "shared"` 时忽略）
-    - `prune`：每智能体沙盒清理覆盖（`scope: "shared"` 时忽略）
+    - `browser`：每智能体沙箱浏览器覆盖（`scope: "shared"` 时忽略）
+    - `prune`：每智能体沙箱清理覆盖（`scope: "shared"` 时忽略）
   - `subagents`：每智能体子智能体默认值。
     - `allowAgents`：允许从此智能体执行 `sessions_spawn` 的智能体 id 白名单（`["*"]` = 允许任何；默认：仅同一智能体）
-  - `tools`：每智能体工具限制（在沙盒工具策略之前应用）。
+  - `tools`：每智能体工具限制（在沙箱工具策略之前应用）。
     - `profile`：基础工具配置文件（在 allow/deny 之前应用）
     - `allow`：允许的工具名称数组
     - `deny`：拒绝的工具名称数组（deny 优先）
-- `agents.defaults`：共享的智能体默认值（模型、工作区、沙盒等）。
+- `agents.defaults`：共享的智能体默认值（模型、工作区、沙箱等）。
 - `bindings[]`：将入站消息路由到 `agentId`。
   - `match.channel`（必需）
   - `match.accountId`（可选；`*` = 任何账号；省略 = 默认账号）
@@ -783,15 +783,15 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 #### 每智能体访问配置（多智能体）
 
-每个智能体可以携带自己的沙盒 + 工具策略。用于在一个 Gateway网关中混合访问级别：
+每个智能体可以携带自己的沙箱 + 工具策略。用于在一个 Gateway 网关中混合访问级别：
 
 - **完全访问**（个人智能体）
 - **只读**工具 + 工作区
 - **无文件系统访问**（仅消息/会话工具）
 
-参见[多智能体沙盒与工具](/multi-agent-sandbox-tools)了解优先级和更多示例。
+参见[多智能体沙箱与工具](/multi-agent-sandbox-tools)了解优先级和更多示例。
 
-完全访问（无沙盒）：
+完全访问（无沙箱）：
 
 ```json5
 {
@@ -1011,7 +1011,7 @@ OpenClaw 在以下位置存储**每个智能体的**认证配置文件（OAuth +
 
 ### `web`（WhatsApp Web 渠道运行时）
 
-WhatsApp 通过 Gateway网关的 Web 渠道（Baileys Web）运行。当存在已链接的会话时自动启动。
+WhatsApp 通过 Gateway 网关的 Web 渠道（Baileys Web）运行。当存在已链接的会话时自动启动。
 设置 `web.enabled: false` 使其默认关闭。
 
 ```json5
@@ -1066,7 +1066,7 @@ OpenClaw 仅在存在 `channels.telegram` 配置段时启动 Telegram。机器�
       historyLimit: 50, // 包含最近 N 条群消息作为上下文（0 禁用）
       replyToMode: "first", // off | first | all
       linkPreview: true, // 切换出站链接预览
-      streamMode: "partial", // off | partial | block（草稿流式传输；与块流式传输分开）
+      streamMode: "partial", // off | partial | block（草稿流式传输；与分块流式传输分开）
       draftChunk: {
         // 可选；仅用于 streamMode=block
         minChars: 200,
@@ -1505,7 +1505,7 @@ exec ssh -T gateway-host imsg "$@"
 }
 ```
 
-`responsePrefix` 应用于跨渠道的**所有出站回复**（工具摘要、块流式传输、最终回复），除非已存在。
+`responsePrefix` 应用于跨渠道的**所有出站回复**（工具摘要、分块流式传输、最终回复），除非已存在。
 
 如果未设置 `messages.responsePrefix`，默认不应用前缀。WhatsApp 自聊天回复是例外：它们在设置时默认为 `[{identity.name}]`，否则为 `[openclaw]`，以保持同一手机上的对话可读性。
 设为 `"auto"` 可为路由的智能体推导 `[{identity.name}]`（当设置时）。
@@ -1611,7 +1611,7 @@ WhatsApp 入站前缀通过 `channels.whatsapp.messagePrefix` 配置（已弃用
 ### `talk`
 
 Talk 模式（macOS/iOS/Android）的默认值。语音 ID 在未设置时回退到 `ELEVENLABS_VOICE_ID` 或 `SAG_VOICE_ID`。
-`apiKey` 在未设置时回退到 `ELEVENLABS_API_KEY`（或 Gateway网关的 shell 配置文件）。
+`apiKey` 在未设置时回退到 `ELEVENLABS_API_KEY`（或 Gateway 网关的 shell 配置文件）。
 `voiceAliases` 允许 Talk 指令使用友好名称（例如 `"voice":"Clawd"`）。
 
 ```json5
@@ -1918,10 +1918,10 @@ MiniMax 认证：设置 `MINIMAX_API_KEY`（环境变量）或配置 `models.pro
 }
 ```
 
-块流式传输：
+分块流式传输：
 
 - `agents.defaults.blockStreamingDefault`：`"on"`/`"off"`（默认 off）。
-- 渠道覆盖：`*.blockStreaming`（及每账号变体）强制块流式传输开/关。
+- 渠道覆盖：`*.blockStreaming`（及每账号变体）强制分块流式传输开/关。
   非 Telegram 渠道需要显式设置 `*.blockStreaming: true` 来启用块回复。
 - `agents.defaults.blockStreamingBreak`：`"text_end"` 或 `"message_end"`（默认：text_end）。
 - `agents.defaults.blockStreamingChunk`：流式块的软分块。默认 800–1200 字符，优先段落分隔（`\n\n`），然后换行，然后句子。
@@ -2147,7 +2147,7 @@ Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环�
 
 `tools.allow` / `tools.deny` 配置全局工具允许/拒绝策略（deny 优先）。
 匹配不区分大小写并支持 `*` 通配符（`"*"` 表示所有工具）。
-即使 Docker 沙盒**关闭**，此策略也会应用。
+即使 Docker 沙箱**关闭**，此策略也会应用。
 
 示例（全局禁用 browser/canvas）：
 
@@ -2218,30 +2218,30 @@ Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环�
 
 - `tools.elevated` 是全局基线。`agents.list[].tools.elevated` 只能进一步限制（两者都必须允许）。
 - `/elevated on|off|ask|full` 按会话键存储状态；内联指令仅应用于单条消息。
-- 提升的 `exec` 在主机上运行并绕过沙盒。
+- 提升的 `exec` 在主机上运行并绕过沙箱。
 - 工具策略仍然适用；如果 `exec` 被拒绝，则无法使用提升。
 
 `agents.defaults.maxConcurrent` 设置跨会话可并行执行的内置智能体运行的最大数量。每个会话仍然是串行的（每个会话键同时只有一个运行）。默认：1。
 
 ### `agents.defaults.sandbox`
 
-为内置智能体提供可选的 **Docker 沙盒**。适用于非主会话，使其无法访问你的主机系统。
+为内置智能体提供可选的 **Docker 沙箱**。适用于非主会话，使其无法访问你的主机系统。
 
-详情：[沙盒](/gateway/sandboxing)
+详情：[沙箱](/gateway/sandboxing)
 
 默认值（如果启用）：
 
 - scope：`"agent"`（每个智能体一个容器 + 工作区）
 - 基于 Debian bookworm-slim 的镜像
 - 智能体工作区访问：`workspaceAccess: "none"`（默认）
-  - `"none"`：在 `~/.openclaw/sandboxes` 下使用每范围的沙盒工作区
-- `"ro"`：将沙盒工作区保持在 `/workspace`，智能体工作区以只读方式挂载到 `/agent`（禁用 `write`/`edit`/`apply_patch`）
+  - `"none"`：在 `~/.openclaw/sandboxes` 下使用每范围的沙箱工作区
+- `"ro"`：将沙箱工作区保持在 `/workspace`，智能体工作区以只读方式挂载到 `/agent`（禁用 `write`/`edit`/`apply_patch`）
   - `"rw"`：将智能体工作区以读写方式挂载到 `/workspace`
 - 自动清理：空闲超过 24h 或存在超过 7d
 - 工具策略：仅允许 `exec`、`process`、`read`、`write`、`edit`、`apply_patch`、`sessions_list`、`sessions_history`、`sessions_send`、`sessions_spawn`、`session_status`（deny 优先）
   - 通过 `tools.sandbox.tools` 配置，通过 `agents.list[].tools.sandbox.tools` 进行每智能体覆盖
-  - 沙盒策略中支持工具组简写：`group:runtime`、`group:fs`、`group:sessions`、`group:memory`（参见[沙盒 vs 工具策略 vs 提升](/gateway/sandbox-vs-tool-policy-vs-elevated#tool-groups-shorthands)）
-- 可选的沙盒浏览器（Chromium + CDP，noVNC 观察器）
+  - 沙箱策略中支持工具组简写：`group:runtime`、`group:fs`、`group:sessions`、`group:memory`（参见[沙箱 vs 工具策略 vs 提升](/gateway/sandbox-vs-tool-policy-vs-elevated#tool-groups-shorthands)）
+- 可选的沙箱浏览器（Chromium + CDP，noVNC 观察器）
 - 加固旋钮：`network`、`user`、`pidsLimit`、`memory`、`cpus`、`ulimits`、`seccompProfile`、`apparmorProfile`
 
 警告：`scope: "shared"` 意味着共享容器和共享工作区。无跨会话隔离。使用 `scope: "session"` 获得每会话隔离。
@@ -2332,13 +2332,13 @@ Z.AI 模型可通过 `zai/<model>` 使用（例如 `zai/glm-4.7`），需要环�
 }
 ```
 
-首次构建默认沙盒镜像：
+首次构建默认沙箱镜像：
 
 ```bash
 scripts/sandbox-setup.sh
 ```
 
-注意：沙盒容器默认为 `network: "none"`；如果智能体需要出站访问，请将 `agents.defaults.sandbox.docker.network` 设为 `"bridge"`（或你的自定义网络）。
+注意：沙箱容器默认为 `network: "none"`；如果智能体需要出站访问，请将 `agents.defaults.sandbox.docker.network` 设为 `"bridge"`（或你的自定义网络）。
 
 注意：入站附件会暂存到活跃工作区的 `media/inbound/*` 中。使用 `workspaceAccess: "rw"` 时，文件会写入智能体工作区。
 
@@ -2350,14 +2350,14 @@ scripts/sandbox-setup.sh
 scripts/sandbox-browser-setup.sh
 ```
 
-当 `agents.defaults.sandbox.browser.enabled=true` 时，浏览器工具使用沙盒化的
+当 `agents.defaults.sandbox.browser.enabled=true` 时，浏览器工具使用沙箱化的
 Chromium 实例（CDP）。如果启用了 noVNC（headless=false 时默认启用），
 noVNC URL 会注入系统提示中，以便智能体可以引用它。
-这不需要主配置中的 `browser.enabled`；沙盒控制 URL 按会话注入。
+这不需要主配置中的 `browser.enabled`；沙箱控制 URL 按会话注入。
 
 `agents.defaults.sandbox.browser.allowHostControl`（默认：false）允许
-沙盒会话通过浏览器工具显式访问**主机**浏览器控制服务器
-（`target: "host"`）。如果你需要严格的沙盒隔离，请保持关闭。
+沙箱会话通过浏览器工具显式访问**主机**浏览器控制服务器
+（`target: "host"`）。如果你需要严格的沙箱隔离，请保持关闭。
 
 远程控制白名单：
 
@@ -2713,7 +2713,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 字段：
 
 - `mainKey`：私聊桶键（默认：`"main"`）。当你想"重命名"主私聊线程而不更改 `agentId` 时有用。
-  - 沙盒说明：`agents.defaults.sandbox.mode: "non-main"` 使用此键检测主会话。任何不匹配 `mainKey` 的会话键（群组/频道）都会被沙盒化。
+  - 沙箱说明：`agents.defaults.sandbox.mode: "non-main"` 使用此键检测主会话。任何不匹配 `mainKey` 的会话键（群组/频道）都会被沙箱化。
 - `dmScope`：私聊会话如何分组（默认：`"main"`）。
   - `main`：所有私聊共享主会话以保持连续性。
   - `per-peer`：按发送者 id 跨渠道隔离私聊。
@@ -2721,7 +2721,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
   - `per-account-channel-peer`：按账号 + 渠道 + 发送者隔离私聊（推荐用于多账号收件箱）。
 - `identityLinks`：将规范 id 映射到提供商前缀的对等方，以便在使用 `per-peer`、`per-channel-peer` 或 `per-account-channel-peer` 时同一人跨渠道共享私聊会话。
   - 示例：`alice: ["telegram:123456789", "discord:987654321012345678"]`。
-- `reset`：主重置策略。默认为 Gateway网关主机上本地时间凌晨 4:00 每日重置。
+- `reset`：主重置策略。默认为 Gateway 网关主机上本地时间凌晨 4:00 每日重置。
   - `mode`：`daily` 或 `idle`（当存在 `reset` 时默认：`daily`）。
   - `atHour`：本地小时（0-23）作为每日重置边界。
   - `idleMinutes`：滑动空闲窗口（分钟）。当 daily + idle 都配置时，先到期的获胜。
@@ -2732,7 +2732,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 - `sendPolicy.default`：无规则匹配时的 `allow` 或 `deny` 回退。
 - `sendPolicy.rules[]`：按 `channel`、`chatType`（`direct|group|room`）或 `keyPrefix`（例如 `cron:`）匹配。第一个 deny 获胜；否则 allow。
 
-### `skills`（Skills配置）
+### `skills`（Skills 配置）
 
 控制内置白名单、安装偏好、额外 Skills 文件夹和每 Skills 覆盖。适用于**内置**Skills 和 `~/.openclaw/skills`（工作区 Skills 在名称冲突时仍然优先）。
 
@@ -2742,7 +2742,7 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 - `load.extraDirs`：额外要扫描的 Skills 目录（最低优先级）。
 - `install.preferBrew`：可用时优先使用 brew 安装程序（默认：true）。
 - `install.nodeManager`：node 安装偏好（`npm` | `pnpm` | `yarn`，默认：npm）。
-- `entries.<skillKey>`：每 Skills配置覆盖。
+- `entries.<skillKey>`：每 Skills 配置覆盖。
 
 每 Skills 字段：
 
@@ -2779,8 +2779,8 @@ Z.AI 模型通过内置的 `zai` 提供商提供。在环境中设置 `ZAI_API_K
 
 ### `plugins`（扩展）
 
-控制插件发现、允许/拒绝和每插件配置。插件从 `~/.openclaw/extensions`、`<workspace>/.openclaw/extensions` 以及任何 `plugins.load.paths` 条目加载。**配置更改需要重启 Gateway网关。**
-参见 [/plugin](/plugin) 了解全部用法。
+控制插件发现、允许/拒绝和每插件配置。插件从 `~/.openclaw/extensions`、`<workspace>/.openclaw/extensions` 以及任何 `plugins.load.paths` 条目加载。**配置更改需要重启 Gateway 网关。**
+参见 [/plugin](/plugin) 了解详情。
 
 字段：
 
@@ -2828,7 +2828,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 - 控制服务：仅 local loopback（端口从 `gateway.port` 派生，默认 `18791`）
 - CDP URL：`http://127.0.0.1:18792`（控制服务 + 1，旧版单配置文件）
 - 配置文件颜色：`#FF4500`（龙虾橙）
-- 注意：控制服务器由运行中的 Gateway网关（OpenClaw.app 菜单栏或 `openclaw gateway`）启动。
+- 注意：控制服务器由运行中的 Gateway 网关（OpenClaw.app 菜单栏或 `openclaw gateway`）启动。
 - 自动检测顺序：如果为 Chromium 内核则使用默认浏览器；否则 Chrome → Brave → Edge → Chromium → Chrome Canary。
 
 ```json5
@@ -2873,9 +2873,9 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 }
 ```
 
-### `gateway`（Gateway网关服务器模式 + 绑定）
+### `gateway`（Gateway 网关服务器模式 + 绑定）
 
-使用 `gateway.mode` 明确声明此机器是否应运行 Gateway网关。
+使用 `gateway.mode` 明确声明此机器是否应运行 Gateway 网关。
 
 默认值：
 
@@ -2901,6 +2901,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 - `gateway.controlUi.basePath` 设置控制台 UI 提供服务的 URL 前缀。
 - 示例：`"/ui"`、`"/openclaw"`、`"/apps/openclaw"`。
 - 默认：根路径（`/`）（不变）。
+- `gateway.controlUi.root` 设置控制台 UI 资产的文件系统根目录（默认：`dist/control-ui`）。
 - `gateway.controlUi.allowInsecureAuth` 允许在省略设备身份时对控制台 UI 进行仅 token 认证（通常通过 HTTP）。默认：`false`。建议使用 HTTPS（Tailscale Serve）或 `127.0.0.1`。
 - `gateway.controlUi.dangerouslyDisableDeviceAuth` 禁用控制台 UI 的设备身份检查（仅 token/密码）。默认：`false`。仅用于紧急情况。
 
@@ -2913,7 +2914,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 
 信任的代理：
 
-- `gateway.trustedProxies`：在 Gateway网关前面终止 TLS 的反向代理 IP 列表。
+- `gateway.trustedProxies`：在 Gateway 网关前面终止 TLS 的反向代理 IP 列表。
 - 当连接来自这些 IP 之一时，OpenClaw 使用 `x-forwarded-for`（或 `x-real-ip`）来确定客户端 IP，用于本地配对检查和 HTTP 认证/本地检查。
 - 仅列出你完全控制的代理，并确保它们**覆盖**传入的 `x-forwarded-for`。
 
@@ -2923,7 +2924,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 - `gateway.port` 控制用于 WebSocket + HTTP（控制台 UI、hooks、A2UI）的单一多路复用端口。
 - OpenAI Chat Completions 端点：**默认禁用**；通过 `gateway.http.endpoints.chatCompletions.enabled: true` 启用。
 - 优先级：`--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > 默认 `18789`。
-- 默认需要 Gateway网关认证（token/密码或 Tailscale Serve 身份）。非 local loopback 绑定需要共享 token/密码。
+- 默认需要 Gateway 网关认证（token/密码或 Tailscale Serve 身份）。非 local loopback 绑定需要共享 token/密码。
 - 新手引导向导默认生成 gateway token（即使在 local loopback 上）。
 - `gateway.remote.token` **仅**用于远程 CLI 调用；它不启用本地 gateway 认证。`gateway.token` 被忽略。
 
@@ -2945,7 +2946,7 @@ OpenClaw 可以为 OpenClaw 启动一个**专用、隔离的** Chrome/Brave/Edge
 
 远程客户端默认值（CLI）：
 
-- `gateway.remote.url` 设置 `gateway.mode = "remote"` 时 CLI 调用的默认 Gateway网关 WebSocket URL。
+- `gateway.remote.url` 设置 `gateway.mode = "remote"` 时 CLI 调用的默认 Gateway 网关 WebSocket URL。
 - `gateway.remote.transport` 选择 macOS 远程传输（`ssh` 默认，`direct` 用于 ws/wss）。使用 `direct` 时，`gateway.remote.url` 必须为 `ws://` 或 `wss://`。`ws://host` 默认端口 `18789`。
 - `gateway.remote.token` 提供远程调用的 token（不需要认证时留空）。
 - `gateway.remote.password` 提供远程调用的密码（不需要认证时留空）。
@@ -2986,13 +2987,13 @@ macOS 应用行为：
 
 ### `gateway.reload`（配置热重载）
 
-Gateway网关监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）并自动应用更改。
+Gateway 网关监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）并自动应用更改。
 
 模式：
 
-- `hybrid`（默认）：安全更改热应用；关键更改重启 Gateway网关。
+- `hybrid`（默认）：安全更改热应用；关键更改重启 Gateway 网关。
 - `hot`：仅应用热安全更改；需要重启时记录日志。
-- `restart`：任何配置更改都重启 Gateway网关。
+- `restart`：任何配置更改都重启 Gateway 网关。
 - `off`：禁用热重载。
 
 ```json5
@@ -3012,7 +3013,7 @@ Gateway网关监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）�
 
 - `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）
 
-热应用（无需完全重启 Gateway网关）：
+热应用（无需完全重启 Gateway 网关）：
 
 - `hooks`（webhook 认证/路径/映射）+ `hooks.gmail`（Gmail 监视器重启）
 - `browser`（浏览器控制服务器重启）
@@ -3022,7 +3023,7 @@ Gateway网关监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）�
 - `telegram`、`discord`、`signal`、`imessage`（渠道重启）
 - `agent`、`models`、`routing`、`messages`、`session`、`whatsapp`、`logging`、`skills`、`ui`、`talk`、`identity`、`wizard`（动态读取）
 
-需要完全重启 Gateway网关：
+需要完全重启 Gateway 网关：
 
 - `gateway`（端口/绑定/认证/控制台 UI/tailscale）
 - `bridge`（旧版）
@@ -3033,7 +3034,7 @@ Gateway网关监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）�
 
 ### 多实例隔离
 
-要在一台主机上运行多个 Gateway网关（用于冗余或救援机器人），请隔离每个实例的状态 + 配置并使用唯一端口：
+要在一台主机上运行多个 Gateway 网关（用于冗余或救援机器人），请隔离每个实例的状态 + 配置并使用唯一端口：
 
 - `OPENCLAW_CONFIG_PATH`（每实例配置）
 - `OPENCLAW_STATE_DIR`（会话/凭据）
@@ -3045,8 +3046,8 @@ Gateway网关监视 `~/.openclaw/openclaw.json`（或 `OPENCLAW_CONFIG_PATH`）�
 - `openclaw --dev …` → 使用 `~/.openclaw-dev` + 端口从基础 `19001` 偏移
 - `openclaw --profile <name> …` → 使用 `~/.openclaw-<name>`（端口通过配置/环境变量/标志）
 
-参见 [Gateway网关运维手册](/gateway) 了解派生的端口映射（gateway/browser/canvas）。
-参见[多 Gateway网关](/gateway/multiple-gateways) 了解浏览器/CDP 端口隔离细节。
+参见 [Gateway 网关运维手册](/gateway) 了解派生的端口映射（gateway/browser/canvas）。
+参见[多 Gateway 网关](/gateway/multiple-gateways) 了解浏览器/CDP 端口隔离细节。
 
 示例：
 
@@ -3056,9 +3057,9 @@ OPENCLAW_STATE_DIR=~/.openclaw-a \
 openclaw gateway --port 19001
 ```
 
-### `hooks`（Gateway网关 webhook）
+### `hooks`（Gateway 网关 webhook）
 
-在 Gateway网关 HTTP 服务器上启用简单的 HTTP webhook 端点。
+在 Gateway 网关 HTTP 服务器上启用简单的 HTTP webhook 端点。
 
 默认值：
 
@@ -3151,12 +3152,12 @@ Gmail hook 的模型覆盖：
 - 启动时，如果配置的模型不在模型目录或白名单中，会发出警告。
 - `hooks.gmail.thinking` 设置 Gmail hook 的默认思考级别，被每 hook 的 `thinking` 覆盖。
 
-Gateway网关自动启动：
+Gateway 网关自动启动：
 
-- 如果 `hooks.enabled=true` 且 `hooks.gmail.account` 已设置，Gateway网关在启动时
+- 如果 `hooks.enabled=true` 且 `hooks.gmail.account` 已设置，Gateway 网关在启动时
   启动 `gog gmail watch serve` 并自动续期监视。
 - 设置 `OPENCLAW_SKIP_GMAIL_WATCHER=1` 禁用自动启动（用于手动运行）。
-- 避免在 Gateway网关旁边单独运行 `gog gmail watch serve`；它会
+- 避免在 Gateway 网关旁边单独运行 `gog gmail watch serve`；它会
   因 `listen tcp 127.0.0.1:8788: bind: address already in use` 而失败。
 
 注意：当 `tailscale.mode` 开启时，OpenClaw 将 `serve.path` 默认为 `/`，以便
@@ -3166,11 +3167,11 @@ Tailscale 可以正确代理 `/gmail-pubsub`（它会去除设置的路径前缀
 
 ### `canvasHost`（LAN/tailnet Canvas 文件服务器 + 实时重载）
 
-Gateway网关通过 HTTP 提供 HTML/CSS/JS 目录服务，以便 iOS/Android 节点可以简单地 `canvas.navigate` 到它。
+Gateway 网关通过 HTTP 提供 HTML/CSS/JS 目录服务，以便 iOS/Android 节点可以简单地 `canvas.navigate` 到它。
 
 默认根目录：`~/.openclaw/workspace/canvas`
 默认端口：`18793`（选择此端口以避免 OpenClaw 浏览器 CDP 端口 `18792`）
-服务器监听 **Gateway网关绑定主机**（LAN 或 Tailnet），以便节点可以访问。
+服务器监听 **Gateway 网关绑定主机**（LAN 或 Tailnet），以便节点可以访问。
 
 服务器：
 
@@ -3195,7 +3196,7 @@ Gateway网关通过 HTTP 提供 HTML/CSS/JS 目录服务，以便 iOS/Android �
 }
 ```
 
-`canvasHost.*` 的更改需要重启 Gateway网关（配置重载会触发重启）。
+`canvasHost.*` 的更改需要重启 Gateway 网关（配置重载会触发重启）。
 
 禁用方式：
 
@@ -3205,11 +3206,11 @@ Gateway网关通过 HTTP 提供 HTML/CSS/JS 目录服务，以便 iOS/Android �
 ### `bridge`（旧版 TCP 桥接，已移除）
 
 当前版本不再包含 TCP 桥接监听器；`bridge.*` 配置键会被忽略。
-节点通过 Gateway网关 WebSocket 连接。此部分仅保留供历史参考。
+节点通过 Gateway 网关 WebSocket 连接。此部分仅保留供历史参考。
 
 旧版行为：
 
-- Gateway网关可以为节点（iOS/Android）暴露简单的 TCP 桥接，通常在端口 `18790`。
+- Gateway 网关可以为节点（iOS/Android）暴露简单的 TCP 桥接，通常在端口 `18790`。
 
 默认值：
 
@@ -3231,7 +3232,7 @@ TLS：
 - `bridge.tls.certPath` / `bridge.tls.keyPath`：桥接证书 + 私钥的 PEM 路径。
 - `bridge.tls.caPath`：可选的 PEM CA 捆绑包（自定义根证书或未来的 mTLS）。
 
-启用 TLS 后，Gateway网关在发现 TXT 记录中通告 `bridgeTls=1` 和 `bridgeTlsSha256`，以便节点可以固定证书。如果尚未存储指纹，手动连接使用首次信任。
+启用 TLS 后，Gateway 网关在发现 TXT 记录中通告 `bridgeTls=1` 和 `bridgeTlsSha256`，以便节点可以固定证书。如果尚未存储指纹，手动连接使用首次信任。
 自动生成的证书需要 PATH 中有 `openssl`；如果生成失败，桥接不会启动。
 
 ```json5
@@ -3267,14 +3268,14 @@ TLS：
 
 ### `discovery.wideArea`（广域 Bonjour / 单播 DNS‑SD）
 
-启用后，Gateway网关在 `~/.openclaw/dns/` 下使用配置的发现域（示例：`openclaw.internal.`）为 `_openclaw-gw._tcp` 写入单播 DNS-SD 区域。
+启用后，Gateway 网关在 `~/.openclaw/dns/` 下使用配置的发现域（示例：`openclaw.internal.`）为 `_openclaw-gw._tcp` 写入单播 DNS-SD 区域。
 
 要使 iOS/Android 跨网络发现（跨地域访问），请配合以下使用：
 
-- 在 Gateway网关主机上运行 DNS 服务器，为你选择的域名提供服务（推荐 CoreDNS）
-- Tailscale **split DNS**，使客户端通过 Gateway网关 DNS 服务器解析该域名
+- 在 Gateway 网关主机上运行 DNS 服务器，为你选择的域名提供服务（推荐 CoreDNS）
+- Tailscale **split DNS**，使客户端通过 Gateway 网关 DNS 服务器解析该域名
 
-一次性设置助手（Gateway网关主机）：
+一次性设置助手（Gateway 网关主机）：
 
 ```bash
 openclaw dns setup --apply
@@ -3313,9 +3314,9 @@ openclaw dns setup --apply
 | `{{SenderE164}}`   | 发送者电话号码（尽力而为）                            |
 | `{{Provider}}`     | 提供商提示（whatsapp                                  | telegram | discord | googlechat | slack | signal | imessage | msteams | webchat | …） |
 
-## Cron（Gateway网关调度器）
+## Cron（Gateway 网关调度器）
 
-Cron 是 Gateway网关自有的唤醒和定时任务调度器。参见 [Cron 任务](/automation/cron-jobs) 了解功能概述和 CLI 示例。
+Cron 是 Gateway 网关自有的唤醒和定时任务调度器。参见 [Cron 任务](/automation/cron-jobs) 了解功能概述和 CLI 示例。
 
 ```json5
 {

@@ -1,0 +1,33 @@
+{
+  "name": "@openclaw/feishu",
+  "version": "2026.2.2",
+  "description": "OpenClaw Feishu channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "feishu",
+      "label": "Feishu",
+      "selectionLabel": "Feishu (Lark Open Platform)",
+      "detailLabel": "Feishu Bot",
+      "docsPath": "/channels/feishu",
+      "docsLabel": "feishu",
+      "blurb": "Feishu/Lark bot via WebSocket.",
+      "aliases": [
+        "lark"
+      ],
+      "order": 35,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/feishu",
+      "localPath": "extensions/feishu",
+      "defaultChoice": "npm"
+    }
+  }
+}

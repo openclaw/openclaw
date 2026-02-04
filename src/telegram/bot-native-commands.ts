@@ -9,6 +9,7 @@ import type {
   TelegramTopicConfig,
 } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramContext } from "./bot/types.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import {
@@ -86,7 +87,7 @@ export type RegisterTelegramHandlerParams = {
   ) => { groupConfig?: TelegramGroupConfig; topicConfig?: TelegramTopicConfig };
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
   processMessage: (
-    ctx: unknown,
+    ctx: TelegramContext,
     allMedia: Array<{ path: string; contentType?: string }>,
     storeAllowFrom: string[],
     options?: {

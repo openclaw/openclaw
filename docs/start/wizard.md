@@ -95,6 +95,8 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - **API key**: stores the key for you.
    - **Vercel AI Gateway (multi-model proxy)**: prompts for `AI_GATEWAY_API_KEY`.
    - More detail: [Vercel AI Gateway](/providers/vercel-ai-gateway)
+   - **Cloudflare AI Gateway**: prompts for Account ID, Gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
+   - More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
    - **MiniMax M2.1**: config is auto-written.
    - More detail: [MiniMax](/providers/minimax)
    - **Synthetic (Anthropic-compatible)**: prompts for `SYNTHETIC_API_KEY`.
@@ -127,7 +129,8 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - [Google Chat](/channels/googlechat): service account JSON + webhook audience.
    - [Mattermost](/channels/mattermost) (plugin): bot token + base URL.
    - [Signal](/channels/signal): optional `signal-cli` install + account config.
-   - [iMessage](/channels/imessage): local `imsg` CLI path + DB access.
+   - [BlueBubbles](/channels/bluebubbles): **recommended for iMessage**; server URL + password + webhook.
+   - [iMessage](/channels/imessage): legacy `imsg` CLI path + DB access.
    - DM security: default is pairing. First DM sends a code; approve via `openclaw pairing approve <channel> <code>` or use allowlists.
 
 6. **Daemon install**
@@ -238,6 +241,19 @@ openclaw onboard --non-interactive \
   --gateway-bind loopback
 ```
 
+Cloudflare AI Gateway example:
+
+```bash
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice cloudflare-ai-gateway-api-key \
+  --cloudflare-ai-gateway-account-id "your-account-id" \
+  --cloudflare-ai-gateway-gateway-id "your-gateway-id" \
+  --cloudflare-ai-gateway-api-key "$CLOUDFLARE_AI_GATEWAY_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
 Moonshot example:
 
 ```bash
@@ -329,5 +345,5 @@ will prompt to install it (npm or a local path) before it can be configured.
 
 - macOS app onboarding: [Onboarding](/start/onboarding)
 - Config reference: [Gateway configuration](/gateway/configuration)
-- Providers: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord), [Google Chat](/channels/googlechat), [Signal](/channels/signal), [iMessage](/channels/imessage)
+- Providers: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord), [Google Chat](/channels/googlechat), [Signal](/channels/signal), [BlueBubbles](/channels/bluebubbles) (iMessage), [iMessage](/channels/imessage) (legacy)
 - Skills: [Skills](/tools/skills), [Skills config](/tools/skills-config)
