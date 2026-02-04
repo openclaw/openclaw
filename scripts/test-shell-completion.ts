@@ -24,25 +24,19 @@
  */
 
 import { confirm, isCancel } from "@clack/prompts";
-import { spawnSync } from "node:child_process";
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { installCompletion } from "../src/cli/completion-cli.js";
 import {
-  installCompletion,
-  isCompletionInstalled,
-  resolveShellFromEnv,
-} from "../src/cli/completion-cli.js";
-import { resolveStateDir } from "../src/config/paths.js";
+  checkShellCompletionStatus,
+  ensureCompletionCacheExists,
+} from "../src/commands/doctor-completion.js";
 import { stylePromptMessage } from "../src/terminal/prompt-style.js";
 import { theme } from "../src/terminal/theme.js";
 
 const CLI_NAME = "openclaw";
-const SUPPORTED_SHELLS = ["zsh", "bash", "fish", "powershell"] as const;
-type SupportedShell = (typeof SUPPORTED_SHELLS)[number];
 
 interface Options {
-  shell?: string;
   checkOnly: boolean;
   force: boolean;
   help: boolean;
@@ -55,12 +49,8 @@ function parseArgs(args: string[]): Options {
     help: false,
   };
 
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--shell" && args[i + 1]) {
-      options.shell = args[i + 1];
-      i++;
-    } else if (arg === "--check-only") {
+  for (const arg of args) {
+    if (arg === "--check-only") {
       options.checkOnly = true;
     } else if (arg === "--force") {
       options.force = true;
@@ -76,9 +66,8 @@ function printHelp(): void {
   console.log(`
 ${theme.heading("Shell Completion Test Script")}
 
-This script simulates the shell completion prompt that appears during
-\`openclaw update\`. Use it to verify the completion installation flow
-without running a full update.
+This script simulates the shell completion checks that run during
+\`openclaw update\`, \`openclaw doctor\`, and \`openclaw onboard\`.
 
 ${theme.heading("Usage (run from repo root):")}
   node --import tsx scripts/test-shell-completion.ts [options]
@@ -86,110 +75,35 @@ ${theme.heading("Usage (run from repo root):")}
   bun scripts/test-shell-completion.ts [options]
 
 ${theme.heading("Options:")}
-  --shell <shell>   Override shell detection (zsh, bash, fish, powershell)
   --check-only      Only check status, don't prompt to install
   --force           Skip the "already installed" check and prompt anyway
   --help, -h        Show this help message
 
+${theme.heading("Behavior:")}
+  - If profile has completion but no cache: auto-regenerates cache
+  - If no completion at all: prompts to install
+  - If both profile and cache exist: nothing to do
+
 ${theme.heading("Examples:")}
   node --import tsx scripts/test-shell-completion.ts
   node --import tsx scripts/test-shell-completion.ts --check-only
-  node --import tsx scripts/test-shell-completion.ts --shell bash
   node --import tsx scripts/test-shell-completion.ts --force
 `);
 }
 
-function isSupportedShell(shell: string): shell is SupportedShell {
-  return SUPPORTED_SHELLS.includes(shell as SupportedShell);
-}
-
-async function pathExists(targetPath: string): Promise<boolean> {
-  try {
-    await fs.access(targetPath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function resolveCompletionCacheExtension(shell: SupportedShell): string {
-  switch (shell) {
-    case "powershell":
-      return "ps1";
-    case "fish":
-      return "fish";
-    case "bash":
-      return "bash";
-    default:
-      return "zsh";
-  }
-}
-
-async function ensureCompletionCache(shell: SupportedShell): Promise<boolean> {
-  const stateDir = resolveStateDir(process.env, os.homedir);
-  const cacheDir = path.join(stateDir, "completions");
-  const ext = resolveCompletionCacheExtension(shell);
-  const cachePath = path.join(cacheDir, `${CLI_NAME}.${ext}`);
-
-  if (await pathExists(cachePath)) {
-    console.log(`  Completion cache: ${theme.success("exists")} ${theme.muted(`(${cachePath})`)}`);
-    return true;
-  }
-
-  console.log(`  Completion cache: ${theme.warn("missing")}`);
-  console.log(theme.muted("  Generating completion cache..."));
-
-  // Use the CLI to generate the cache (same approach as tryWriteCompletionCache in update-cli.ts)
-  const binPath = path.join(process.cwd(), "openclaw.mjs");
-  if (!(await pathExists(binPath))) {
-    console.log(theme.error(`  Cannot find ${binPath}. Run from the repo root.`));
-    return false;
-  }
-
-  // Use the same runtime as the CLI
-  const runtime = process.execPath;
-  const result = spawnSync(runtime, [binPath, "completion", "--write-state"], {
-    cwd: process.cwd(),
-    env: process.env,
-    encoding: "utf-8",
-    // Windows needs shell: true for proper execution in some cases
-    shell: process.platform === "win32",
-  });
-
-  if (result.error) {
-    console.log(theme.error(`  Failed to generate cache: ${String(result.error)}`));
-    return false;
-  }
-
-  if (result.status !== 0) {
-    const stderr = result.stderr?.trim();
-    console.log(
-      theme.error(
-        `  Failed to generate cache (exit ${result.status})${stderr ? `: ${stderr}` : ""}`,
-      ),
-    );
-    return false;
-  }
-
-  console.log(theme.success("  Completion cache generated."));
-  return true;
-}
-
-function getShellProfilePath(shell: SupportedShell): string {
+function getShellProfilePath(shell: string): string {
   const home = process.env.HOME || os.homedir();
 
   switch (shell) {
     case "zsh":
       return path.join(home, ".zshrc");
     case "bash":
-      // Linux typically uses .bashrc, macOS uses .bash_profile
       return process.platform === "darwin"
         ? path.join(home, ".bash_profile")
         : path.join(home, ".bashrc");
     case "fish":
       return path.join(home, ".config", "fish", "config.fish");
     case "powershell":
-      // PowerShell profile location varies by platform
       if (process.platform === "win32") {
         return path.join(
           process.env.USERPROFILE || home,
@@ -199,6 +113,8 @@ function getShellProfilePath(shell: SupportedShell): string {
         );
       }
       return path.join(home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
+    default:
+      return path.join(home, ".zshrc");
   }
 }
 
@@ -214,35 +130,21 @@ async function main() {
   console.log(theme.heading("Shell Completion Test"));
   console.log("");
 
-  // Determine shell
-  let shell: SupportedShell;
-  if (options.shell) {
-    if (!isSupportedShell(options.shell)) {
-      console.log(theme.error(`Unsupported shell: ${options.shell}`));
-      console.log(theme.muted(`Supported shells: ${SUPPORTED_SHELLS.join(", ")}`));
-      process.exit(1);
-    }
-    shell = options.shell;
-    console.log(`  Shell: ${theme.accent(shell)} ${theme.muted("(override)")}`);
-  } else {
-    shell = resolveShellFromEnv() as SupportedShell;
-    console.log(`  Shell: ${theme.accent(shell)} ${theme.muted("(detected from $SHELL)")}`);
-  }
+  // Get completion status using the same function used by doctor/update/onboard
+  const status = await checkShellCompletionStatus(CLI_NAME);
 
-  // Show platform info
+  console.log(`  Shell: ${theme.accent(status.shell)} ${theme.muted("(detected from $SHELL)")}`);
   console.log(`  Platform: ${theme.muted(process.platform)} ${theme.muted(`(${os.release()})`)}`);
-  console.log(`  Profile: ${theme.muted(getShellProfilePath(shell))}`);
+  console.log(`  Profile: ${theme.muted(getShellProfilePath(status.shell))}`);
+  console.log(`  Cache path: ${theme.muted(status.cachePath)}`);
   console.log("");
-
-  // Ensure completion cache exists
-  const cacheOk = await ensureCompletionCache(shell);
-  if (!cacheOk) {
-    console.log(theme.warn("  Continuing without cache (will use dynamic completion)..."));
-  }
-
-  // Check if completion is installed in shell profile
-  const installed = await isCompletionInstalled(shell, CLI_NAME);
-  console.log(`  Profile configured: ${installed ? theme.success("yes") : theme.warn("no")}`);
+  console.log(
+    `  Profile configured: ${status.profileInstalled ? theme.success("yes") : theme.warn("no")}`,
+  );
+  console.log(`  Cache exists: ${status.cacheExists ? theme.success("yes") : theme.warn("no")}`);
+  console.log(
+    `  Uses slow pattern: ${status.usesSlowPattern ? theme.error("yes (needs upgrade)") : theme.success("no")}`,
+  );
   console.log("");
 
   if (options.checkOnly) {
@@ -250,8 +152,34 @@ async function main() {
     return;
   }
 
-  if (installed && !options.force) {
-    console.log(theme.muted("Shell completion is already installed. To test the prompt:"));
+  // Profile uses slow dynamic pattern - upgrade to cached version
+  if (status.usesSlowPattern) {
+    console.log(theme.warn("Profile uses slow dynamic completion. Upgrading to cached version..."));
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
+    if (cacheGenerated) {
+      await installCompletion(status.shell, false, CLI_NAME);
+      console.log(theme.success("Upgraded to cached completion."));
+    } else {
+      console.log(theme.error("Failed to generate cache."));
+    }
+    return;
+  }
+
+  // Profile has completion but no cache - auto-fix
+  if (status.profileInstalled && !status.cacheExists) {
+    console.log(theme.warn("Profile has completion but cache is missing. Regenerating..."));
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
+    if (cacheGenerated) {
+      console.log(theme.success("Cache regenerated successfully."));
+    } else {
+      console.log(theme.error("Failed to regenerate cache."));
+    }
+    return;
+  }
+
+  // Both profile and cache exist - nothing to do
+  if (status.profileInstalled && status.cacheExists && !options.force) {
+    console.log(theme.muted("Shell completion is fully configured. To test the prompt:"));
     console.log(
       theme.muted("  1. Remove the '# OpenClaw Completion' block from your shell profile"),
     );
@@ -261,11 +189,11 @@ async function main() {
     return;
   }
 
-  // Simulate the prompt from update-cli.ts
+  // No profile configured - prompt to install
   console.log(theme.heading("Shell completion"));
 
   const shouldInstall = await confirm({
-    message: stylePromptMessage(`Enable ${shell} shell completion for ${CLI_NAME}?`),
+    message: stylePromptMessage(`Enable ${status.shell} shell completion for ${CLI_NAME}?`),
     initialValue: true,
   });
 
@@ -274,8 +202,19 @@ async function main() {
     return;
   }
 
-  // Install completion
-  await installCompletion(shell, false, CLI_NAME);
+  // Generate cache first (required for fast shell startup)
+  if (!status.cacheExists) {
+    console.log(theme.muted("Generating completion cache..."));
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
+    if (!cacheGenerated) {
+      console.log(theme.error("Failed to generate completion cache."));
+      return;
+    }
+    console.log(theme.success("Cache generated."));
+  }
+
+  // Install to shell profile
+  await installCompletion(status.shell, false, CLI_NAME);
 }
 
 main().catch((err) => {
