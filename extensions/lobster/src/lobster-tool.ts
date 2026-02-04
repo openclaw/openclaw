@@ -32,10 +32,13 @@ function resolveExecutablePath(lobsterPathRaw: string | undefined) {
       throw new Error("lobsterPath must be an absolute path (or omit to use PATH)");
     }
     const base = path.basename(lobsterPath).toLowerCase();
-    const allowed =
-      process.platform === "win32" ? ["lobster.exe", "lobster.cmd", "lobster.bat"] : ["lobster"];
+    const allowed = process.platform === "win32" ? ["lobster.exe"] : ["lobster"];
     if (!allowed.includes(base)) {
-      throw new Error("lobsterPath must point to the lobster executable");
+      throw new Error(
+        process.platform === "win32"
+          ? "lobsterPath must point to lobster.exe"
+          : "lobsterPath must point to the lobster executable",
+      );
     }
     let stat: fs.Stats;
     try {
@@ -92,20 +95,18 @@ function isWindowsSpawnErrorThatCanUseShell(err: unknown) {
 
   // On Windows, spawning scripts discovered on PATH (e.g. lobster.cmd) can fail
   // with EINVAL, and PATH discovery itself can fail with ENOENT when the binary
-  // is only available via PATHEXT/script wrappers.
+  // is only available via PATHEXT/script wrappers. Use this to surface a
+  // configuration error instead of falling back to shell execution.
   return code === "EINVAL" || code === "ENOENT";
 }
 
-async function runLobsterSubprocessOnce(
-  params: {
-    execPath: string;
-    argv: string[];
-    cwd: string;
-    timeoutMs: number;
-    maxStdoutBytes: number;
-  },
-  useShell: boolean,
-) {
+async function runLobsterSubprocessOnce(params: {
+  execPath: string;
+  argv: string[];
+  cwd: string;
+  timeoutMs: number;
+  maxStdoutBytes: number;
+}) {
   const { execPath, argv, cwd } = params;
   const timeoutMs = Math.max(200, params.timeoutMs);
   const maxStdoutBytes = Math.max(1024, params.maxStdoutBytes);
@@ -121,8 +122,8 @@ async function runLobsterSubprocessOnce(
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env,
-      shell: useShell,
-      windowsHide: useShell ? true : undefined,
+      shell: false,
+      windowsHide: true,
     });
 
     let stdout = "";
@@ -182,10 +183,12 @@ async function runLobsterSubprocess(params: {
   maxStdoutBytes: number;
 }) {
   try {
-    return await runLobsterSubprocessOnce(params, false);
+    return await runLobsterSubprocessOnce(params);
   } catch (err) {
     if (process.platform === "win32" && isWindowsSpawnErrorThatCanUseShell(err)) {
-      return await runLobsterSubprocessOnce(params, true);
+      throw new Error(
+        "lobster executable not found. On Windows, set plugin config lobsterPath to an absolute path to lobster.exe",
+      );
     }
     throw err;
   }
