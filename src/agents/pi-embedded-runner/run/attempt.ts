@@ -545,6 +545,7 @@ export async function runEmbeddedAttempt(
           sessionManager,
           sessionId: params.sessionId,
           policy: transcriptPolicy,
+          maxBytes: params.config?.tools?.media?.image?.maxBytes,
         });
         cacheTrace?.recordStage("session:sanitized", { messages: prior });
         const validatedGemini = transcriptPolicy.validateGeminiTurns
@@ -769,7 +770,7 @@ export async function runEmbeddedAttempt(
             model: params.model,
             existingImages: params.images,
             historyMessages: activeSession.messages,
-            maxBytes: MAX_IMAGE_BYTES,
+            maxBytes: params.config?.tools?.media?.image?.maxBytes ?? MAX_IMAGE_BYTES,
             // Enforce sandbox path restrictions when sandbox is enabled
             sandboxRoot: sandbox?.enabled ? sandbox.workspaceDir : undefined,
           });
