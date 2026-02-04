@@ -2,28 +2,41 @@
   "$schema": "https://mintlify.com/docs.json",
   "name": "OpenClaw",
   "theme": "mint",
+  "icons": {
+    "library": "lucide"
+  },
   "logo": {
     "light": "/assets/pixel-lobster.svg",
     "dark": "/assets/pixel-lobster.svg"
   },
+  "fonts": {
+    "body": {
+      "family": "Fragment Mono"
+    },
+    "heading": {
+      "family": "DM Sans"
+    }
+  },
   "favicon": "/assets/pixel-lobster.svg",
   "colors": {
-    "primary": "#FF5A36"
+    "primary": "#FF5A36",
+    "dark": "#FF5A36",
+    "light": "#FF8A6B"
   },
-  "topbarLinks": [
-    {
-      "name": "中文",
-      "url": "/zh-CN"
-    },
-    {
-      "name": "GitHub",
-      "url": "https://github.com/openclaw/openclaw"
-    },
-    {
-      "name": "Releases",
-      "url": "https://github.com/openclaw/openclaw/releases"
-    }
-  ],
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/openclaw/openclaw",
+        "icon": "github"
+      },
+      {
+        "label": "Releases",
+        "href": "https://github.com/openclaw/openclaw/releases",
+        "icon": "package"
+      }
+    ]
+  },
   "redirects": [
     {
       "source": "/cron",
@@ -716,7 +729,7 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["index", "start/showcase", "start/lore"]
+                "pages": ["index", "concepts/features", "start/showcase", "start/lore"]
               },
               {
                 "group": "Installation",
@@ -736,12 +749,14 @@
                 "group": "Setup",
                 "pages": [
                   "start/getting-started",
+                  "start/quickstart",
                   "start/wizard",
                   "start/setup",
                   "start/onboarding",
                   "start/pairing",
                   "start/openclaw",
-                  "start/hubs"
+                  "start/hubs",
+                  "start/docs-directory"
                 ]
               },
               {
@@ -983,7 +998,12 @@
                   },
                   {
                     "group": "Networking and discovery",
-                    "pages": ["gateway/pairing", "gateway/discovery", "gateway/bonjour"]
+                    "pages": [
+                      "gateway/network-model",
+                      "gateway/pairing",
+                      "gateway/discovery",
+                      "gateway/bonjour"
+                    ]
                   }
                 ]
               },
@@ -1108,6 +1128,10 @@
                   "concepts/timezone",
                   "token-use"
                 ]
+              },
+              {
+                "group": "Project",
+                "pages": ["reference/credits"]
               },
               {
                 "group": "Release notes",
