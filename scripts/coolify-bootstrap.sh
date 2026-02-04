@@ -106,7 +106,7 @@ const config = {
     mode: 'local',
     port: parseInt(process.env.OPENCLAW_GATEWAY_PORT) || 3000,
     bind: 'lan',
-    controlUi: { enabled: true, allowInsecureAuth: false },
+    controlUi: { enabled: true, allowInsecureAuth: false, dangerouslyDisableDeviceAuth: true },
     trustedProxies: ['*'],
     auth: { mode: 'token', token: process.env.OPENCLAW_GATEWAY_TOKEN }
   },
