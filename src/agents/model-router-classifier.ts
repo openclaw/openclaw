@@ -54,7 +54,7 @@ export async function callTaskClassifier(
   let modelObj = getModel(provider as any, model);
   if (!modelObj) {
     // Fallback: If pi-ai doesn't know the provider (e.g. custom-openai), construct it manually
-    // This supports custom models defined in verso.json that aren't in pi-ai's static registry
+    // This supports custom models defined in openclaw.json that aren't in pi-ai's static registry
     if (provider === "custom-openai" || (auth.baseUrl && auth.mode === "api-key")) {
       const providerApi = cfg?.models?.providers?.[provider]?.api || "openai-completions";
       modelObj = {
