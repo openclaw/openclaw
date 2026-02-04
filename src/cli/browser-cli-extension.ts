@@ -14,7 +14,11 @@ import { formatCliCommand } from "./command-format.js";
 
 function bundledExtensionRootDir() {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(here, "../../assets/chrome-extension");
+
+  // `dist/` lives at `<packageRoot>/dist` in npm installs.
+  // The bundled extension lives at `<packageRoot>/assets/chrome-extension`.
+  // So we need to go up ONE level from `dist`.
+  return path.resolve(here, "../assets/chrome-extension");
 }
 
 function installedExtensionRootDir() {
