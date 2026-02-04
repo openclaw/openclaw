@@ -56,9 +56,10 @@ export function buildGatewayCronService(params: {
     },
     requestHeartbeatNow,
     runHeartbeatOnce: async (opts) => {
-      const runtimeConfig = loadConfig();
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
+        agentId,
         reason: opts?.reason,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
