@@ -50,6 +50,10 @@ const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 
+const DEFAULT_KOKORO_BASE_URL = "http://localhost:8102";
+const DEFAULT_KOKORO_VOICE = "af_bella";
+const DEFAULT_KOKORO_SPEED = 1.0;
+
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarityBoost: 0.75,
@@ -121,6 +125,13 @@ export type ResolvedTtsConfig = {
     saveSubtitles: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  kokoro: {
+    enabled: boolean;
+    baseUrl: string;
+    apiKey?: string;
+    voice: string;
+    speed: number;
   };
   prefsPath?: string;
   maxTextLength: number;
@@ -295,6 +306,13 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       saveSubtitles: raw.edge?.saveSubtitles ?? false,
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
+    },
+    kokoro: {
+      enabled: raw.kokoro?.enabled ?? false,
+      baseUrl: raw.kokoro?.baseUrl?.trim() || DEFAULT_KOKORO_BASE_URL,
+      apiKey: raw.kokoro?.apiKey?.trim() || undefined,
+      voice: raw.kokoro?.voice?.trim() || DEFAULT_KOKORO_VOICE,
+      speed: raw.kokoro?.speed ?? DEFAULT_KOKORO_SPEED,
     },
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
@@ -501,7 +519,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "kokoro"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -510,6 +528,9 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
+  }
+  if (provider === "kokoro") {
+    return config.kokoro.enabled;
   }
   return Boolean(resolveTtsApiKey(config, provider));
 }
@@ -1158,6 +1179,57 @@ async function edgeTTS(params: {
   await tts.ttsPromise(text, outputPath);
 }
 
+async function kokoroTTS(params: {
+  text: string;
+  config: ResolvedTtsConfig["kokoro"];
+  responseFormat: "mp3" | "opus" | "wav";
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const { text, config, responseFormat, timeoutMs } = params;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const baseUrl = config.baseUrl.replace(/\/+$/, "");
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (config.apiKey) {
+    headers["Authorization"] = `Bearer ${config.apiKey}`;
+  }
+
+  // Build request body - Kokoro uses OpenAI-compatible format
+  const body: Record<string, unknown> = {
+    model: "kokoro",
+    input: text,
+    voice: config.voice,
+    response_format: responseFormat,
+  };
+
+  // Add Kokoro-specific parameters if provided
+  if (config.speed !== undefined && config.speed !== 1.0) {
+    body.speed = config.speed;
+  }
+
+  try {
+    const response = await fetch(`${baseUrl}/v1/audio/speech`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(`Kokoro TTS API error (${response.status}): ${errorText}`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -1251,6 +1323,40 @@ export async function textToSpeech(params: {
           latencyMs: Date.now() - providerStart,
           provider,
           outputFormat: edgeResult.outputFormat,
+          voiceCompatible,
+        };
+      }
+
+      if (provider === "kokoro") {
+        if (!config.kokoro.enabled) {
+          lastError = "kokoro: disabled";
+          continue;
+        }
+
+        const responseFormat = channelId === "telegram" ? "opus" : "mp3";
+        const audioBuffer = await kokoroTTS({
+          text: params.text,
+          config: config.kokoro,
+          responseFormat: responseFormat as "mp3" | "opus" | "wav",
+          timeoutMs: config.timeoutMs,
+        });
+
+        const latencyMs = Date.now() - providerStart;
+        const extension = responseFormat === "opus" ? ".opus" : ".mp3";
+
+        const tempDir = mkdtempSync(path.join(tmpdir(), "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}${extension}`);
+        writeFileSync(audioPath, audioBuffer);
+        scheduleCleanup(tempDir);
+
+        const voiceCompatible = responseFormat === "opus";
+
+        return {
+          success: true,
+          audioPath,
+          latencyMs,
+          provider,
+          outputFormat: responseFormat,
           voiceCompatible,
         };
       }
