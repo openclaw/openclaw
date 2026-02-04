@@ -107,7 +107,11 @@ extension CronJobEditor {
             delivery["channel"] = trimmed.isEmpty ? "last" : trimmed
             let to = self.to.trimmingCharacters(in: .whitespacesAndNewlines)
             if !to.isEmpty { delivery["to"] = to }
-            if self.bestEffortDeliver { delivery["bestEffort"] = true }
+            if self.bestEffortDeliver {
+                delivery["bestEffort"] = true
+            } else if self.job?.delivery?.bestEffort == true {
+                delivery["bestEffort"] = false
+            }
         }
         return delivery
     }

@@ -183,16 +183,19 @@ export function registerCronEditCommand(cron: Command) {
                 : opts.deliver === false
                   ? "none"
                   : "announce";
-            patch.delivery = {
-              mode: deliveryMode,
-              channel:
-                typeof opts.channel === "string" && opts.channel.trim()
-                  ? opts.channel.trim()
-                  : undefined,
-              to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
-              bestEffort:
-                typeof opts.bestEffortDeliver === "boolean" ? opts.bestEffortDeliver : undefined,
-            };
+            const delivery: Record<string, unknown> = { mode: deliveryMode };
+            if (typeof opts.channel === "string") {
+              const channel = opts.channel.trim();
+              delivery.channel = channel ? channel : undefined;
+            }
+            if (typeof opts.to === "string") {
+              const to = opts.to.trim();
+              delivery.to = to ? to : undefined;
+            }
+            if (typeof opts.bestEffortDeliver === "boolean") {
+              delivery.bestEffort = opts.bestEffortDeliver;
+            }
+            patch.delivery = delivery;
           }
 
           const res = await callGatewayFromCli("cron.update", opts, {
