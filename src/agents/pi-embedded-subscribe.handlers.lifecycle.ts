@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 
@@ -32,6 +33,24 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
     stream: "compaction",
     data: { phase: "start" },
   });
+
+  const hookSessionKey = ctx.params.sessionKey ?? ctx.params.sessionId ?? ctx.params.runId;
+  if (hookSessionKey) {
+    const hookEvent = createInternalHookEvent("agent", "precompact", hookSessionKey, {
+      cfg: ctx.params.cfg,
+      runId: ctx.params.runId,
+      sessionId: ctx.params.sessionId,
+      sessionKey: ctx.params.sessionKey,
+      assistantTextCount: ctx.state.assistantTexts.length,
+      assistantTextsTail: ctx.state.assistantTexts.slice(-5),
+      toolMetaCount: ctx.state.toolMetas.length,
+      toolMetasTail: ctx.state.toolMetas.slice(-10),
+      lastToolError: ctx.state.lastToolError,
+    });
+    void Promise.resolve(triggerInternalHook(hookEvent)).catch((err) => {
+      ctx.log.debug(`precompact hook failed: ${String(err)}`);
+    });
+  }
 }
 
 export function handleAutoCompactionEnd(
@@ -56,6 +75,20 @@ export function handleAutoCompactionEnd(
     stream: "compaction",
     data: { phase: "end", willRetry },
   });
+
+  const hookSessionKey = ctx.params.sessionKey ?? ctx.params.sessionId ?? ctx.params.runId;
+  if (hookSessionKey) {
+    const hookEvent = createInternalHookEvent("agent", "compaction:end", hookSessionKey, {
+      cfg: ctx.params.cfg,
+      runId: ctx.params.runId,
+      sessionId: ctx.params.sessionId,
+      sessionKey: ctx.params.sessionKey,
+      willRetry,
+    });
+    void Promise.resolve(triggerInternalHook(hookEvent)).catch((err) => {
+      ctx.log.debug(`compaction:end hook failed: ${String(err)}`);
+    });
+  }
 }
 
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {

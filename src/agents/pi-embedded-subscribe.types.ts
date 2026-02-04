@@ -1,5 +1,6 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 
 export type ToolResultFormat = "markdown" | "plain";
@@ -9,6 +10,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   runId: string;
   sessionId?: string;
   sessionKey?: string;
+  cfg?: OpenClawConfig;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
   /**

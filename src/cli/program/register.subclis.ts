@@ -161,6 +161,14 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "meridia",
+    description: "Meridia (existence continuity) tooling",
+    register: async (program) => {
+      const mod = await import("../meridia-cli.js");
+      mod.registerMeridiaCli(program);
+    },
+  },
+  {
     name: "webhooks",
     description: "Webhook helpers",
     register: async (program) => {

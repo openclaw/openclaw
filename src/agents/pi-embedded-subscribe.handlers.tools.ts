@@ -1,5 +1,6 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
@@ -50,6 +51,8 @@ export async function handleToolExecutionStart(
   const toolName = normalizeToolName(rawToolName);
   const toolCallId = String(evt.toolCallId);
   const args = evt.args;
+
+  ctx.state.toolArgsById.set(toolCallId, args);
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -176,6 +179,9 @@ export function handleToolExecutionEnd(
   const result = evt.result;
   const isToolError = isError || isToolResultError(result);
   const sanitizedResult = sanitizeToolResult(result);
+  const rawArgs = ctx.state.toolArgsById.get(toolCallId);
+  const sanitizedArgs = sanitizeToolResult(rawArgs);
+  ctx.state.toolArgsById.delete(toolCallId);
   const meta = ctx.state.toolMetaById.get(toolCallId);
   ctx.state.toolMetas.push({ toolName, meta });
   ctx.state.toolMetaById.delete(toolCallId);
@@ -243,6 +249,25 @@ export function handleToolExecutionEnd(
   ctx.log.debug(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
+
+  const hookSessionKey = ctx.params.sessionKey ?? ctx.params.sessionId ?? ctx.params.runId;
+  if (hookSessionKey) {
+    const hookEvent = createInternalHookEvent("agent", "tool:result", hookSessionKey, {
+      cfg: ctx.params.cfg,
+      runId: ctx.params.runId,
+      sessionId: ctx.params.sessionId,
+      sessionKey: ctx.params.sessionKey,
+      toolName,
+      toolCallId,
+      meta,
+      isError: isToolError,
+      args: sanitizedArgs,
+      result: sanitizedResult,
+    });
+    void Promise.resolve(triggerInternalHook(hookEvent)).catch((err) => {
+      ctx.log.debug(`tool:result hook failed: ${String(err)}`);
+    });
+  }
 
   if (ctx.params.onToolResult && ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);

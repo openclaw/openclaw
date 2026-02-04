@@ -331,6 +331,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     "stop",
     abortTarget.key ?? params.sessionKey ?? "",
     {
+      cfg: params.cfg,
       sessionEntry: abortTarget.entry ?? params.sessionEntry,
       sessionId: abortTarget.sessionId,
       commandSource: params.command.surface,
