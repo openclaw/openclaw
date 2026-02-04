@@ -1100,32 +1100,58 @@ export async function applyAuthChoiceApiProviders(
         const apiKey = process.env.AZURE_FOUNDRY_API_KEY ?? null;
         const rawDeployments = await listAzureFoundryDeployments(endpointStr, apiKey);
 
-        deployments = rawDeployments
-          .filter((d) => {
-            const state = d.properties?.provisioningState?.toLowerCase();
-            return !state || state === "succeeded";
-          })
-          .map((d) => {
-            const modelName = d.model.name.toLowerCase();
-            const isEmbedding = modelName.includes("embed");
-            return {
-              name: d.name,
-              model: d.model.name,
-              api: d.api,
-              publisher: d.model.publisher,
-              isEmbedding,
-            };
-          });
+        if (rawDeployments.length === 0) {
+          progress.stop("No deployments found");
+          await params.prompter.note(
+            [
+              "No model deployments found via API.",
+              "",
+              "This can happen if:",
+              "- Models are deployed but not in the expected format",
+              "- The endpoint requires a different API version",
+              "- The resource uses a deployment-specific path",
+              "",
+              "You can manually specify the deployment details.",
+            ].join("\n"),
+            "Manual Configuration",
+          );
+        } else {
+          deployments = rawDeployments
+            .filter((d) => {
+              const state = d.properties?.provisioningState?.toLowerCase();
+              return !state || state === "succeeded";
+            })
+            .map((d) => {
+              const modelName = d.model.name.toLowerCase();
+              const isEmbedding = modelName.includes("embed");
+              return {
+                name: d.name,
+                model: d.model.name,
+                api: d.api,
+                publisher: d.model.publisher,
+                isEmbedding,
+              };
+            });
 
-        const chatCount = deployments.filter((d) => !d.isEmbedding).length;
-        const embedCount = deployments.filter((d) => d.isEmbedding).length;
-        progress.stop(
-          `Found ${deployments.length} model${deployments.length === 1 ? "" : "s"} (${chatCount} chat, ${embedCount} embeddings)`,
-        );
+          const chatCount = deployments.filter((d) => !d.isEmbedding).length;
+          const embedCount = deployments.filter((d) => d.isEmbedding).length;
+          progress.stop(
+            `Found ${deployments.length} model${deployments.length === 1 ? "" : "s"} (${chatCount} chat, ${embedCount} embeddings)`,
+          );
+        }
       } catch (error) {
         progress.stop("Could not discover deployments");
         await params.prompter.note(
-          `Discovery failed: ${error instanceof Error ? error.message : String(error)}\nTry manual setup or check endpoint/permissions.`,
+          [
+            `Discovery failed: ${error instanceof Error ? error.message : String(error)}`,
+            "",
+            "Common causes:",
+            "- Wrong API endpoint format",
+            "- Missing permissions",
+            "- Resource not fully provisioned",
+            "",
+            "You can configure manually below.",
+          ].join("\n"),
           "Warning",
         );
       }
