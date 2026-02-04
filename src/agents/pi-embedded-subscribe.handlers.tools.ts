@@ -4,6 +4,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
+import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractToolErrorMessage,
   extractToolResultText,
@@ -119,6 +120,18 @@ export async function handleToolExecutionStart(
       if (text && typeof text === "string") {
         ctx.state.pendingMessagingTexts.set(toolCallId, text);
         ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
+        appendRawStream({
+          ts: Date.now(),
+          event: "messaging_tool_pending",
+          runId: ctx.params.runId,
+          sessionId: (ctx.params.session as { id?: string }).id,
+          sessionKey: ctx.params.sessionKey,
+          toolName,
+          toolCallId,
+          target: sendTarget ?? undefined,
+          textLen: text.length,
+          startsWithReasoning: text.trimStart().startsWith("Reasoning:"),
+        });
       }
     }
   }
@@ -206,6 +219,19 @@ export function handleToolExecutionEnd(
       ctx.log.debug(`Committed messaging text: tool=${toolName} len=${pendingText.length}`);
       ctx.trimMessagingToolSent();
     }
+    appendRawStream({
+      ts: Date.now(),
+      event: "messaging_tool_commit",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      sessionKey: ctx.params.sessionKey,
+      toolName,
+      toolCallId,
+      isError: isToolError,
+      target: pendingTarget ?? undefined,
+      textLen: pendingText.length,
+      startsWithReasoning: pendingText.trimStart().startsWith("Reasoning:"),
+    });
   }
   if (pendingTarget) {
     ctx.state.pendingMessagingTargets.delete(toolCallId);

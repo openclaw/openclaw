@@ -42,6 +42,21 @@ function formatHttpError(operation: string, res: Response): string {
   return `${operation}: ${status}${suffix}`;
 }
 
+function formatTextPreview(text?: string, maxLength = 100): string | undefined {
+  if (!text) {
+    return undefined;
+  }
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  if (cleaned.length <= maxLength) {
+    return cleaned;
+  }
+  const trimmed = Math.max(0, maxLength - 3);
+  return `${cleaned.slice(0, trimmed)}...`;
+}
+
 function getOpenAiBaseUrl(openAi: OpenAiEmbeddingClient): string {
   return openAi.baseUrl?.replace(/\/$/, "") ?? "";
 }
@@ -332,6 +347,13 @@ export async function runOpenAiEmbeddingBatches(params: {
   const byCustomId = new Map<string, number[]>();
 
   const tasks = groups.map((group, groupIndex) => async () => {
+    const requestPreviewById = new Map<string, string>();
+    for (const request of group) {
+      const preview = formatTextPreview(request.body.input);
+      if (preview) {
+        requestPreviewById.set(request.custom_id, preview);
+      }
+    }
     const batchInfo = await submitOpenAiBatch({
       openAi: params.openAi,
       requests: group,
@@ -388,8 +410,10 @@ export async function runOpenAiEmbeddingBatches(params: {
         continue;
       }
       remaining.delete(customId);
+      const preview = requestPreviewById.get(customId);
+      const previewSuffix = preview ? ` (text="${preview}")` : "";
       if (line.error?.message) {
-        errors.push(`${customId}: ${line.error.message}`);
+        errors.push(`${customId}: ${line.error.message}${previewSuffix}`);
         continue;
       }
       const response = line.response;
@@ -399,13 +423,13 @@ export async function runOpenAiEmbeddingBatches(params: {
           response?.body?.error?.message ??
           (typeof response?.body === "string" ? response.body : undefined) ??
           "unknown error";
-        errors.push(`${customId}: ${message}`);
+        errors.push(`${customId}: ${message}${previewSuffix}`);
         continue;
       }
       const data = response?.body?.data ?? [];
       const embedding = data[0]?.embedding ?? [];
       if (embedding.length === 0) {
-        errors.push(`${customId}: empty embedding`);
+        errors.push(`${customId}: empty embedding${previewSuffix}`);
         continue;
       }
       byCustomId.set(customId, embedding);

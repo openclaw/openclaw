@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/crypto-token" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/crypto-token/lib/forge-std" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/crypto-token/lib/openzeppelin-contracts" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/crypto-token/lib/openzeppelin-contracts/lib/erc4626-tests" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/crypto-token/lib/openzeppelin-contracts/lib/forge-std" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/crypto-token/lib/openzeppelin-contracts/lib/halmos-cheatcodes" vcs="Git" />
+  </component>
+</project>

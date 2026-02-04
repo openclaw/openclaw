@@ -45,6 +45,22 @@ export function handleMessageStart(
   // may deliver late text_end updates after message_end, which would otherwise
   // re-trigger block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
+  appendRawStream({
+    ts: Date.now(),
+    event: "assistant_message_start",
+    runId: ctx.params.runId,
+    sessionId: (ctx.params.session as { id?: string }).id,
+    sessionKey: ctx.params.sessionKey,
+    assistantMessageIndex: ctx.state.assistantMessageIndex,
+    assistantTextsLen: ctx.state.assistantTexts.length,
+    assistantTextBaseline: ctx.state.assistantTextBaseline,
+    reasoningMode: ctx.state.reasoningMode,
+    includeReasoning: ctx.state.includeReasoning,
+    streamReasoning: ctx.state.streamReasoning,
+    emitReasoningInBlockReply: ctx.state.emitReasoningInBlockReply,
+    blockReplyBreak: ctx.state.blockReplyBreak,
+    enforceFinalTag: Boolean(ctx.params.enforceFinalTag),
+  });
   // Use assistant message_start as the earliest "writing" signal for typing.
   void ctx.params.onAssistantMessageStart?.();
 }
@@ -83,36 +99,94 @@ export function handleMessageUpdate(
   });
 
   let chunk = "";
+  let chunkSource: string = evtType;
   if (evtType === "text_delta") {
     chunk = delta;
+    chunkSource = "delta";
   } else if (evtType === "text_start" || evtType === "text_end") {
     if (delta) {
       chunk = delta;
+      chunkSource = "delta";
     } else if (content) {
       // KNOWN: Some providers resend full content on `text_end`.
       // We only append a suffix (or nothing) to keep output monotonic.
       if (content.startsWith(ctx.state.deltaBuffer)) {
         chunk = content.slice(ctx.state.deltaBuffer.length);
+        chunkSource = "content_suffix";
       } else if (ctx.state.deltaBuffer.startsWith(content)) {
         chunk = "";
+        chunkSource = "content_prefix";
       } else if (!ctx.state.deltaBuffer.includes(content)) {
         chunk = content;
+        chunkSource = "content_replace";
+      } else {
+        chunkSource = "content_noop";
       }
     }
   }
 
   if (chunk) {
+    const prevDeltaLen = ctx.state.deltaBuffer.length;
+    const prevBlockLen = ctx.state.blockBuffer.length;
+    const hadChunker = Boolean(ctx.blockChunker);
+    const prevChunkerBuffered = ctx.blockChunker?.hasBuffered() ?? false;
     ctx.state.deltaBuffer += chunk;
     if (ctx.blockChunker) {
       ctx.blockChunker.append(chunk);
     } else {
       ctx.state.blockBuffer += chunk;
     }
+    appendRawStream({
+      ts: Date.now(),
+      event: "assistant_text_buffer_append",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      sessionKey: ctx.params.sessionKey,
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+      evtType,
+      chunkSource,
+      chunkLen: chunk.length,
+      prevDeltaLen,
+      nextDeltaLen: ctx.state.deltaBuffer.length,
+      prevBlockLen,
+      nextBlockLen: ctx.state.blockBuffer.length,
+      hasChunker: hadChunker,
+      prevChunkerBuffered,
+      nextChunkerBuffered: ctx.blockChunker?.hasBuffered() ?? false,
+      blockReplyBreak: ctx.state.blockReplyBreak,
+      enforceFinalTag: Boolean(ctx.params.enforceFinalTag),
+    });
+  } else if (content || delta) {
+    // Even when no chunk is produced (monotonic guard), record why.
+    appendRawStream({
+      ts: Date.now(),
+      event: "assistant_text_buffer_noop",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      sessionKey: ctx.params.sessionKey,
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+      evtType,
+      chunkSource,
+      deltaLen: delta.length,
+      contentLen: content.length,
+      deltaBufferLen: ctx.state.deltaBuffer.length,
+    });
   }
 
   if (ctx.state.streamReasoning) {
     // Handle partial <think> tags: stream whatever reasoning is visible so far.
-    ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
+    const visibleThinking = extractThinkingFromTaggedStream(ctx.state.deltaBuffer);
+    appendRawStream({
+      ts: Date.now(),
+      event: "assistant_reasoning_extract_partial",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      sessionKey: ctx.params.sessionKey,
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+      deltaBufferLen: ctx.state.deltaBuffer.length,
+      extractedLen: visibleThinking.length,
+    });
+    ctx.emitReasoningStream(visibleThinking);
   }
 
   const next = ctx
@@ -145,6 +219,24 @@ export function handleMessageUpdate(
 
     ctx.state.lastStreamedAssistant = next;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
+
+    appendRawStream({
+      ts: Date.now(),
+      event: "assistant_text_visible_delta",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      sessionKey: ctx.params.sessionKey,
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+      evtType,
+      chunkSource,
+      rawNextLen: next.length,
+      cleanedTextLen: cleanedText.length,
+      previousCleanedLen: previousCleaned.length,
+      computedDeltaLen: deltaText.length,
+      shouldEmit,
+      hasMedia,
+      hasAudio,
+    });
 
     if (shouldEmit) {
       emitAgentEvent({
@@ -219,6 +311,26 @@ export function handleMessageEnd(
       : "";
   const formattedReasoning = rawThinking ? formatReasoningMessage(rawThinking) : "";
 
+  appendRawStream({
+    ts: Date.now(),
+    event: "assistant_message_end_normalized",
+    runId: ctx.params.runId,
+    sessionId: (ctx.params.session as { id?: string }).id,
+    sessionKey: ctx.params.sessionKey,
+    assistantMessageIndex: ctx.state.assistantMessageIndex,
+    rawTextLen: rawText.length,
+    normalizedTextLen: text.length,
+    rawThinkingLen: rawThinking.length,
+    formattedReasoningLen: formattedReasoning.length,
+    includeReasoning: ctx.state.includeReasoning,
+    streamReasoning: ctx.state.streamReasoning,
+    emitReasoningInBlockReply: ctx.state.emitReasoningInBlockReply,
+    hasReasoningStreamCallback: typeof ctx.params.onReasoningStream === "function",
+    hasOnBlockReply: typeof ctx.params.onBlockReply === "function",
+    blockReplyBreak: ctx.state.blockReplyBreak,
+    enforceFinalTag: Boolean(ctx.params.enforceFinalTag),
+  });
+
   const addedDuringMessage = ctx.state.assistantTexts.length > ctx.state.assistantTextBaseline;
   const chunkerHasBuffered = ctx.blockChunker?.hasBuffered() ?? false;
   ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
@@ -248,8 +360,35 @@ export function handleMessageEnd(
     !addedDuringMessage;
   const maybeEmitReasoningViaBlockReply = () => {
     if (!shouldEmitReasoningViaBlockReply || !formattedReasoning) {
+      appendRawStream({
+        ts: Date.now(),
+        event: "assistant_reasoning_block_decision",
+        runId: ctx.params.runId,
+        sessionId: (ctx.params.session as { id?: string }).id,
+        sessionKey: ctx.params.sessionKey,
+        assistantMessageIndex: ctx.state.assistantMessageIndex,
+        willEmit: false,
+        includeReasoning: ctx.state.includeReasoning,
+        emitReasoningInBlockReply: ctx.state.emitReasoningInBlockReply,
+        hasReasoningStreamCallback,
+        formattedReasoningLen: formattedReasoning.length,
+        alreadySent: formattedReasoning === ctx.state.lastReasoningSent,
+        blockReplyBreak: ctx.state.blockReplyBreak,
+      });
       return;
     }
+    appendRawStream({
+      ts: Date.now(),
+      event: "assistant_reasoning_block_decision",
+      runId: ctx.params.runId,
+      sessionId: (ctx.params.session as { id?: string }).id,
+      sessionKey: ctx.params.sessionKey,
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+      willEmit: true,
+      when: shouldEmitReasoningBeforeAnswer ? "before_answer" : "after_answer",
+      formattedReasoningLen: formattedReasoning.length,
+      blockReplyBreak: ctx.state.blockReplyBreak,
+    });
     ctx.state.lastReasoningSent = formattedReasoning;
     void onBlockReply?.({ text: formattedReasoning });
   };
@@ -279,6 +418,17 @@ export function handleMessageEnd(
         ctx.log.debug(
           `Skipping message_end block reply - already sent via messaging tool: ${text.slice(0, 50)}...`,
         );
+        appendRawStream({
+          ts: Date.now(),
+          event: "assistant_message_end_block_skip",
+          runId: ctx.params.runId,
+          sessionId: (ctx.params.session as { id?: string }).id,
+          sessionKey: ctx.params.sessionKey,
+          assistantMessageIndex: ctx.state.assistantMessageIndex,
+          reason: "duplicate_messaging_tool",
+          textLen: text.length,
+          blockReplyBreak: ctx.state.blockReplyBreak,
+        });
       } else {
         ctx.state.lastBlockReplyText = text;
         const splitResult = ctx.consumeReplyDirectives(text, { final: true });
@@ -293,6 +443,21 @@ export function handleMessageEnd(
           } = splitResult;
           // Emit if there's content OR audioAsVoice flag (to propagate the flag).
           if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
+            appendRawStream({
+              ts: Date.now(),
+              event: "assistant_message_end_block_emit",
+              runId: ctx.params.runId,
+              sessionId: (ctx.params.session as { id?: string }).id,
+              sessionKey: ctx.params.sessionKey,
+              assistantMessageIndex: ctx.state.assistantMessageIndex,
+              textLen: text.length,
+              cleanedLen: cleanedText?.length ?? 0,
+              mediaCount: mediaUrls?.length ?? 0,
+              audioAsVoice: Boolean(audioAsVoice),
+              replyToId: replyToId ?? undefined,
+              startsWithReasoning: cleanedText ? cleanedText.startsWith("Reasoning:") : false,
+              blockReplyBreak: ctx.state.blockReplyBreak,
+            });
             void onBlockReply({
               text: cleanedText,
               mediaUrls: mediaUrls?.length ? mediaUrls : undefined,

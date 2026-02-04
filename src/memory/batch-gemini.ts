@@ -44,6 +44,21 @@ function formatHttpError(operation: string, res: Response): string {
   return `${operation}: ${status}${suffix}`;
 }
 
+function formatTextPreview(text?: string, maxLength = 100): string | undefined {
+  if (!text) {
+    return undefined;
+  }
+  const cleaned = text.replace(/\s+/g, " ").trim();
+  if (!cleaned) {
+    return undefined;
+  }
+  if (cleaned.length <= maxLength) {
+    return cleaned;
+  }
+  const trimmed = Math.max(0, maxLength - 3);
+  return `${cleaned.slice(0, trimmed)}...`;
+}
+
 const debugLog = (message: string, meta?: Record<string, unknown>) => {
   if (!debugEmbeddings) {
     return;
@@ -364,6 +379,14 @@ export async function runGeminiEmbeddingBatches(params: {
   const byCustomId = new Map<string, number[]>();
 
   const tasks = groups.map((group, groupIndex) => async () => {
+    const requestPreviewById = new Map<string, string>();
+    for (const request of group) {
+      const combinedText = request.content.parts.map((part) => part.text).join(" ");
+      const preview = formatTextPreview(combinedText);
+      if (preview) {
+        requestPreviewById.set(request.custom_id, preview);
+      }
+    }
     const batchInfo = await submitGeminiBatch({
       gemini: params.gemini,
       requests: group,
@@ -428,17 +451,19 @@ export async function runGeminiEmbeddingBatches(params: {
         continue;
       }
       remaining.delete(customId);
+      const preview = requestPreviewById.get(customId);
+      const previewSuffix = preview ? ` (text="${preview}")` : "";
       if (line.error?.message) {
-        errors.push(`${customId}: ${line.error.message}`);
+        errors.push(`${customId}: ${line.error.message}${previewSuffix}`);
         continue;
       }
       if (line.response?.error?.message) {
-        errors.push(`${customId}: ${line.response.error.message}`);
+        errors.push(`${customId}: ${line.response.error.message}${previewSuffix}`);
         continue;
       }
       const embedding = line.embedding?.values ?? line.response?.embedding?.values ?? [];
       if (embedding.length === 0) {
-        errors.push(`${customId}: empty embedding`);
+        errors.push(`${customId}: empty embedding${previewSuffix}`);
         continue;
       }
       byCustomId.set(customId, embedding);
