@@ -218,16 +218,14 @@ export async function startWebLoginWithQr(
   };
 }
 
-export async function startWebLoginWithPairingCode(
-  opts: {
-    phoneNumber: string;
-    verbose?: boolean;
-    timeoutMs?: number;
-    force?: boolean;
-    accountId?: string;
-    runtime?: RuntimeEnv;
-  },
-): Promise<{ pairingCode?: string; message: string }> {
+export async function startWebLoginWithPairingCode(opts: {
+  phoneNumber: string;
+  verbose?: boolean;
+  timeoutMs?: number;
+  force?: boolean;
+  accountId?: string;
+  runtime?: RuntimeEnv;
+}): Promise<{ pairingCode?: string; message: string }> {
   const runtime = opts.runtime ?? defaultRuntime;
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
@@ -289,7 +287,10 @@ export async function startWebLoginWithPairingCode(
     const pairingCodePromise = sock.requestPairingCode(phoneNumber);
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutId = setTimeout(() => reject(new Error("Timed out waiting for pairing code")), timeoutMs);
+      timeoutId = setTimeout(
+        () => reject(new Error("Timed out waiting for pairing code")),
+        timeoutMs,
+      );
     });
 
     const pairingCode = await Promise.race([pairingCodePromise, timeoutPromise]).finally(() => {

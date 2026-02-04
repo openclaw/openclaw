@@ -10,11 +10,7 @@ import {
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 
-const WEB_LOGIN_METHODS = new Set([
-  "web.login.start",
-  "web.login.pairing.start",
-  "web.login.wait",
-]);
+const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.pairing.start", "web.login.wait"]);
 
 const resolveWebLoginProvider = () =>
   listChannelPlugins().find((plugin) =>

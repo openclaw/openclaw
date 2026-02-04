@@ -35,9 +35,8 @@ vi.mock("./qr-image.js", () => ({
   renderQrPngBase64: vi.fn(async () => "base64"),
 }));
 
-const { startWebLoginWithQr, startWebLoginWithPairingCode, waitForWebLogin } = await import(
-  "./login-qr.js"
-);
+const { startWebLoginWithQr, startWebLoginWithPairingCode, waitForWebLogin } =
+  await import("./login-qr.js");
 const { createWaSocket, waitForWaConnection, logoutWeb } = await import("./session.js");
 
 describe("login-qr", () => {
