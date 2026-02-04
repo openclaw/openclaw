@@ -18,6 +18,7 @@ import {
   applyMoonshotConfig,
   applyMoonshotConfigCn,
   applyMoonshotProviderConfig,
+  applyMoonshotProviderConfigCn,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
@@ -314,7 +315,7 @@ export async function applyAuthChoiceApiProviders(
         setDefaultModel: params.setDefaultModel,
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyDefaultConfig: applyMoonshotConfigCn,
-        applyProviderConfig: (cfg) => applyMoonshotProviderConfigCnShim(cfg),
+        applyProviderConfig: applyMoonshotProviderConfigCn,
         noteAgentModel,
         prompter: params.prompter,
       });
@@ -322,14 +323,6 @@ export async function applyAuthChoiceApiProviders(
       agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
     }
     return { config: nextConfig, agentModelOverride };
-  }
-
-  function applyMoonshotProviderConfigCnShim(
-    cfg: Parameters<typeof applyMoonshotProviderConfig>[0],
-  ) {
-    // For now, provider-level CN behavior is fully handled inside applyMoonshotConfigCn.
-    // Keep a thin shim to satisfy the applyDefaultModelChoice signature.
-    return applyMoonshotProviderConfig(cfg);
   }
 
   if (authChoice === "kimi-code-api-key") {
