@@ -1,6 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage: docker-setup.sh [--build-only]
+
+Options:
+  --build-only   Build the Docker image and exit (skip onboarding + starting gateway).
+EOF
+}
+
+build_only=false
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    --build-only)
+      build_only=true
+      ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
@@ -189,6 +216,12 @@ docker build \
   -t "$IMAGE_NAME" \
   -f "$ROOT_DIR/Dockerfile" \
   "$ROOT_DIR"
+
+if [[ "$build_only" == true ]]; then
+  echo ""
+  echo "==> Build-only mode: skipping onboarding and gateway start."
+  exit 0
+fi
 
 echo ""
 echo "==> Onboarding (interactive)"
