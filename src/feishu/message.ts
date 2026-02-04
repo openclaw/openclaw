@@ -255,7 +255,12 @@ export async function processFeishuMessage(
   const hasControlCommandInMessage = hasControlCommand(text, cfg);
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
-    authorizers: [{ configured: allowForCommands.hasEntries, allowed: senderAllowedForCommands }],
+    authorizers: [
+      {
+        configured: allowForCommands.hasEntries || allowForCommands.hasWildcard,
+        allowed: senderAllowedForCommands,
+      },
+    ],
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
   });
