@@ -171,7 +171,7 @@ out to QMD for retrieval. Key points:
 - `update`: controls refresh cadence (`interval`, `debounceMs`, `onBoot`, `embedInterval`).
 - `limits`: clamp recall payload (`maxResults`, `maxSnippetChars`,
   `maxInjectedChars`, `timeoutMs`).
-- `scope`: same schema as [`session.sendPolicy`](/reference/configuration#session-sendpolicy).
+- `scope`: same schema as [`session.sendPolicy`](/gateway/configuration#session).
   Default is DM-only (`deny` all, `allow` direct chats); loosen it to surface QMD
   hits in groups/channels.
 - Snippets sourced outside the workspace show up as

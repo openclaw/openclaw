@@ -7,7 +7,13 @@ import { join, resolve } from "node:path";
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[] };
 
-const requiredPaths = ["dist/discord/send.js", "dist/hooks/gmail.js", "dist/whatsapp/normalize.js"];
+const requiredPaths = [
+  "dist/index.js",
+  "dist/entry.js",
+  "dist/plugin-sdk/index.js",
+  "dist/plugin-sdk/index.d.ts",
+  "dist/build-info.json",
+];
 const forbiddenPrefixes = ["dist/OpenClaw.app/"];
 
 type PackageJson = {
