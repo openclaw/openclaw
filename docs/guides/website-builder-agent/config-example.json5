@@ -1,0 +1,102 @@
+// OpenClaw Configuration for Website Builder Agent
+// Copy this to ~/.openclaw/openclaw.json and customize
+
+{
+  // Agent Configuration
+  agents: {
+    defaults: {
+      model: "anthropic/claude-sonnet-4-20250514",
+      workspace: "~/.openclaw/workspaces/website-builder",
+    },
+    list: [
+      {
+        id: "website-builder",
+        name: "Site Builder",
+        workspace: "~/.openclaw/workspaces/website-builder",
+        agentDir: "~/.openclaw/agents/website-builder",
+        model: "anthropic/claude-sonnet-4-20250514",
+        identity: {
+          name: "Site Builder",
+          emoji: "🌐",
+          theme: "Professional website creation specialist",
+        },
+        // Restrict tools to only what's needed
+        tools: {
+          allow: ["read", "browser", "message"],
+          deny: ["exec", "write", "edit", "apply_patch"],
+        },
+        // Enable sandbox for safety
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+        },
+      },
+    ],
+  },
+
+  // Channel Routing - Route WhatsApp business account to this agent
+  bindings: [
+    {
+      agentId: "website-builder",
+      match: {
+        channel: "whatsapp",
+        accountId: "business", // Your WhatsApp business account ID
+      },
+    },
+  ],
+
+  // WhatsApp Configuration
+  channels: {
+    whatsapp: {
+      // DM Policy: 'pairing' requires approval code, 'allowlist' only allows specific numbers
+      dmPolicy: "pairing",
+
+      // Allow specific numbers (uncomment and add your client numbers)
+      // allowFrom: ["+5511999999999"],
+
+      // Send read receipts when processing
+      sendReadReceipts: true,
+
+      // Acknowledge message receipt with reaction
+      ackReaction: {
+        emoji: "👀",
+        direct: true,
+        group: "never", // This is a DM-only bot
+      },
+
+      // Per-account configuration
+      accounts: {
+        business: {
+          dmPolicy: "pairing",
+          sendReadReceipts: true,
+        },
+      },
+    },
+  },
+
+  // Browser Configuration (for design references)
+  browser: {
+    enabled: true,
+    headless: true,
+    viewport: {
+      width: 1440,
+      height: 900,
+    },
+  },
+
+  // Skills Configuration
+  skills: {
+    // Enable our custom skills
+    enabled: [
+      "website-builder",
+      "lovable-creator",
+      "stripe-payments",
+      "design-references",
+    ],
+  },
+
+  // Environment Variables (set these in your shell or .env)
+  // LOVABLE_API_KEY=your-lovable-api-key
+  // STRIPE_SECRET_KEY=sk_live_your-stripe-key
+  // STRIPE_WEBHOOK_SECRET=whsec_your-webhook-secret
+}
