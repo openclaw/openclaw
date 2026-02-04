@@ -47,9 +47,29 @@ def _extract_scope(args: dict) -> str | None:
 
 
 def _build_args_summary(tool_name: str, args: dict) -> str:
-    safe_keys = sorted(args.keys())
-    parts = [f"{k}={args[k]}" for k in safe_keys]
+    # Never persist raw values. Summarize keys + coarse types only.
+    args = args or {}
+    safe_keys = sorted([str(k) for k in args.keys()])
+
+    parts: list[str] = []
+    for k in safe_keys:
+        v = args.get(k)
+
+        if isinstance(v, (bool, int, float)):
+            parts.append(f"{k}={v}")
+        elif v is None:
+            parts.append(f"{k}=null")
+        elif isinstance(v, str):
+            parts.append(f"{k}=<str:{len(v)}>")
+        elif isinstance(v, (list, tuple)):
+            parts.append(f"{k}=<list:{len(v)}>")
+        elif isinstance(v, dict):
+            parts.append(f"{k}=<dict:{len(v)}>")
+        else:
+            parts.append(f"{k}=<{type(v).__name__}>")
+
     return f"{tool_name}({', '.join(parts)})"
+
 
 
 def evaluate(

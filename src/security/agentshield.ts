@@ -114,7 +114,7 @@ function buildArgsSummary(toolName: string, params: Record<string, unknown>): st
  * Shells out to the Python middleware.  Returns the verdict or null if
  * AgentShield is not enabled / keys are missing / middleware fails.
  */
-export function evaluateToolCall(
+export async function evaluateToolCall(
   toolName: string,
   params: Record<string, unknown>,
   cfg?: AgentShieldConfig,

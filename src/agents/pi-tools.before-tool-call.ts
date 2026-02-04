@@ -81,7 +81,7 @@ export function wrapToolWithBeforeToolCallHook(
       const shieldCfg = loadAgentShieldConfig();
       if (shieldCfg.enabled) {
         const normalizedParams = isPlainObject(params) ? params : {};
-        const shieldResult = evaluateToolCall(toolName, normalizedParams, {
+        const shieldResult = await evaluateToolCall(toolName, normalizedParams, {
           ...shieldCfg,
           agentId: ctx?.agentId || shieldCfg.agentId,
         });
