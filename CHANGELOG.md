@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Telegram: honor session model overrides in inline model selection. (#8193) Thanks @gildo.
+- Web UI: apply button styling to the new-messages indicator.
 
 ## 2026.2.2-3
 
