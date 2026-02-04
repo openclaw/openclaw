@@ -36,6 +36,7 @@ import { buildPairingReply } from "../../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
+import { buildUntrustedChannelMetadata } from "../../../security/channel-metadata.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
@@ -440,15 +441,16 @@ export async function prepareSlackMessage(params: {
 
   const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
 
-  const channelDescription = [channelInfo?.topic, channelInfo?.purpose]
-    .map((entry) => entry?.trim())
-    .filter((entry): entry is string => Boolean(entry))
-    .filter((entry, index, list) => list.indexOf(entry) === index)
-    .join("\n");
-  const systemPromptParts = [
-    channelDescription ? `Channel description: ${channelDescription}` : null,
-    channelConfig?.systemPrompt?.trim() || null,
-  ].filter((entry): entry is string => Boolean(entry));
+  const untrustedChannelMetadata = isRoomish
+    ? buildUntrustedChannelMetadata({
+        source: "slack",
+        label: "Slack channel description",
+        entries: [channelInfo?.topic, channelInfo?.purpose],
+      })
+    : undefined;
+  const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
+    (entry): entry is string => Boolean(entry),
+  );
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
 
@@ -507,6 +509,7 @@ export async function prepareSlackMessage(params: {
     ConversationLabel: envelopeFrom,
     GroupSubject: isRoomish ? roomLabel : undefined,
     GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
+    UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
     SenderName: senderName,
     SenderId: senderId,
     Provider: "slack" as const,

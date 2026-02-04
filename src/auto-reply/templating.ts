@@ -87,6 +87,8 @@ export type MsgContext = {
   GroupSpace?: string;
   GroupMembers?: string;
   GroupSystemPrompt?: string;
+  /** Untrusted metadata that must not be treated as system instructions. */
+  UntrustedContext?: string[];
   SenderName?: string;
   SenderId?: string;
   SenderUsername?: string;
