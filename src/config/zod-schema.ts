@@ -103,7 +103,6 @@ export const OpenClawSchema = z
             enabled: z.boolean().optional(),
             timeoutMs: z.number().int().nonnegative().optional(),
           })
-          .strict()
           .optional(),
         vars: z.record(z.string(), z.string()).optional(),
       })
