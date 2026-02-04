@@ -1,0 +1,67 @@
+{
+  "name": "Production Dev Agent",
+  "task": "Software development assistant with GitHub PR automation and Slack notifications",
+  "github": {
+    "token": "ghp_abc123def456ghi789jkl012mno345pqr678",
+    "memoryRepo": "mycompany/agent-memory",
+    "policy": {
+      "allowWrites": true,
+      "allowPullRequests": true,
+      "allowMerge": false,
+      "allowedRepos": [
+        "mycompany/backend-api",
+        "mycompany/frontend-app",
+        "mycompany/infrastructure"
+      ],
+      "blockedPatterns": [
+        "*.key",
+        "*.pem",
+        "*.crt",
+        ".env",
+        ".env.*",
+        "secrets/*",
+        "config/secrets.json",
+        "*.pfx"
+      ]
+    }
+  },
+  "slack": {
+    "botToken": "xoxb-1234567890-1234567890123-abcdefghijklmnopqrstuvw",
+    "appToken": "xapp-1-A01234BCDEF-1234567890123-abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnop",
+    "policy": {
+      "allowedChannels": [
+        "#dev-bot",
+        "#engineering",
+        "#ops"
+      ],
+      "allowedUsers": [],
+      "allowDMs": true,
+      "allowPublicChannels": false,
+      "maxMessageLength": 4000,
+      "ignoredCommands": [
+        "help",
+        "ping",
+        "status"
+      ]
+    }
+  },
+  "agent": {
+    "model": {
+      "provider": "anthropic",
+      "name": "claude-sonnet-4-5"
+    },
+    "workspace": "~/.openclaw/workspace",
+    "remoteExecution": {
+      "enabled": true,
+      "apiKey": "e2b_ptaABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "bind": "loopback",
+    "auth": {
+      "mode": "token",
+      "token": "secure-random-token-abc123def456ghi789"
+    }
+  }
+}
