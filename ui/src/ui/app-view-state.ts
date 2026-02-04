@@ -13,6 +13,7 @@ import type {
   AgentsFilesListResult,
   AgentIdentityResult,
   ChannelsStatusSnapshot,
+  ConfigUiHints,
   ConfigSnapshot,
   CronJob,
   CronRunLogEntry,
@@ -88,7 +89,7 @@ export type AppViewState = {
   configSchema: unknown | null;
   configSchemaVersion: string | null;
   configSchemaLoading: boolean;
-  configUiHints: Record<string, unknown>;
+  configUiHints: ConfigUiHints;
   configForm: Record<string, unknown> | null;
   configFormOriginal: Record<string, unknown> | null;
   configFormDirty: boolean;
