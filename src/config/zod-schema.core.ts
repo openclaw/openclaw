@@ -155,7 +155,7 @@ export const MarkdownConfigSchema = z
   .strict()
   .optional();
 
-export const TtsProviderSchema = z.enum(["elevenlabs", "openai", "edge"]);
+export const TtsProviderSchema = z.enum(["elevenlabs", "openai", "edge", "chatterbox", "piper"]);
 export const TtsModeSchema = z.enum(["final", "all"]);
 export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
 export const TtsConfigSchema = z
@@ -220,6 +220,34 @@ export const TtsConfigSchema = z
         saveSubtitles: z.boolean().optional(),
         proxy: z.string().optional(),
         timeoutMs: z.number().int().min(1000).max(120000).optional(),
+      })
+      .strict()
+      .optional(),
+    chatterbox: z
+      .object({
+        enabled: z.boolean().optional(),
+        baseUrl: z.string().optional(),
+        voice: z.string().optional(),
+        model: z.string().optional(),
+        exaggeration: z.number().min(0).max(1).optional(),
+        cfgWeight: z.number().min(0).max(1).optional(),
+        speed: z.number().min(0.5).max(2).optional(),
+        apiKey: z.string().optional(),
+        timeoutMs: z.number().int().min(1000).max(120000).optional(),
+      })
+      .strict()
+      .optional(),
+    piper: z
+      .object({
+        enabled: z.boolean().optional(),
+        baseUrl: z.string().optional(),
+        apiKey: z.string().optional(),
+        voice: z.string().optional(),
+        speakerId: z.number().int().min(0).optional(),
+        lengthScale: z.number().min(0.5).max(2).optional(),
+        noiseScale: z.number().min(0).max(1).optional(),
+        noiseW: z.number().min(0).max(1).optional(),
+        sentenceSilence: z.number().min(0).max(2).optional(),
       })
       .strict()
       .optional(),
