@@ -193,6 +193,8 @@ export function buildAgentSystemPrompt(params: {
     channel?: string;
     capabilities?: string[];
     repoRoot?: string;
+    identityName?: string;
+    identityHandle?: string;
   };
   messageToolHints?: string[];
   sandboxInfo?: {
@@ -377,7 +379,9 @@ export function buildAgentSystemPrompt(params: {
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    params.runtimeInfo?.identityName
+      ? `You are ${params.runtimeInfo.identityName}${params.runtimeInfo.identityHandle ? ` (${params.runtimeInfo.identityHandle})` : ""}, a personal assistant running inside OpenClaw.`
+      : "You are a personal assistant running inside OpenClaw.",
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",
@@ -599,12 +603,28 @@ export function buildAgentSystemPrompt(params: {
   }
 
   lines.push(
+    ...buildMentionGuidance(params.runtimeInfo),
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),
     `Reasoning: ${reasoningLevel} (hidden unless on/stream). Toggle /reasoning; /status shows Reasoning when enabled.`,
   );
 
   return lines.filter(Boolean).join("\n");
+}
+
+function buildMentionGuidance(runtimeInfo?: { identityHandle?: string }) {
+  const handle = runtimeInfo?.identityHandle;
+  if (!handle) {
+    return [];
+  }
+  return [
+    "## Mentions & Self-Awareness",
+    `- Your handle on this channel is: \`${handle}\``,
+    "- When users mention you, it will look like that handle.",
+    "- **CRITICAL: NEVER mention yourself using this handle in your replies.**",
+    "- If you see your handle in the chat history, it's either the user addressing you or a record of your presence; do not echo it in your response.",
+    "",
+  ];
 }
 
 export function buildRuntimeLine(
@@ -617,6 +637,8 @@ export function buildRuntimeLine(
     model?: string;
     defaultModel?: string;
     repoRoot?: string;
+    identityName?: string;
+    identityHandle?: string;
   },
   runtimeChannel?: string,
   runtimeCapabilities: string[] = [],
@@ -639,6 +661,8 @@ export function buildRuntimeLine(
       ? `capabilities=${runtimeCapabilities.length > 0 ? runtimeCapabilities.join(",") : "none"}`
       : "",
     `thinking=${defaultThinkLevel ?? "off"}`,
+    runtimeInfo?.identityName ? `name=${runtimeInfo.identityName}` : "",
+    runtimeInfo?.identityHandle ? `handle=${runtimeInfo.identityHandle}` : "",
   ]
     .filter(Boolean)
     .join(" | ")}`;

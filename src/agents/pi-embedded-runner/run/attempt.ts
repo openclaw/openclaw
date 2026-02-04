@@ -330,6 +330,8 @@ export async function runEmbeddedAttempt(
         channel: runtimeChannel,
         capabilities: runtimeCapabilities,
         channelActions,
+        identityName: params.identityName,
+        identityHandle: params.identityHandle,
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;

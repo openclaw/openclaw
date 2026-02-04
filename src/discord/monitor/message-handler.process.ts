@@ -1,7 +1,11 @@
 import { ChannelType } from "@buape/carbon";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
-import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
+import {
+  resolveAckReaction,
+  resolveHumanDelayConfig,
+  resolveIdentityName,
+} from "../../agents/identity.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
@@ -49,6 +53,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     accountId,
     token,
     runtime,
+    botUserId,
     guildHistories,
     historyLimit,
     mediaMaxBytes,
@@ -285,6 +290,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     GroupSpace: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
     Provider: "discord" as const,
     Surface: "discord" as const,
+    SelfName: resolveIdentityName(cfg, route.agentId),
+    SelfHandle: botUserId ? `<@${botUserId}>` : undefined,
     WasMentioned: effectiveWasMentioned,
     MessageSid: message.id,
     ParentSessionKey: autoThreadContext?.ParentSessionKey ?? threadKeys.parentSessionKey,

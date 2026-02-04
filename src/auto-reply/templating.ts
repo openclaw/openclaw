@@ -121,6 +121,10 @@ export type MsgContext = {
    * Used for hook confirmation messages like "Session context saved to memory".
    */
   HookMessages?: string[];
+  /** The bot's own configured name (used for self-awareness). */
+  SelfName?: string;
+  /** The bot's own handle or ID on the current provider (used for self-awareness). */
+  SelfHandle?: string;
 };
 
 export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
