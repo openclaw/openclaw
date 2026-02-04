@@ -7,7 +7,7 @@ export type CompactionSafeguardRuntimeValue = {
    * Fallback model for compaction summarization.
    * Used when ctx.model is undefined (ExtensionRunner not initialized).
    */
-  // biome-ignore lint/suspicious/noExplicitAny: Model API type varies by provider
+  // oxlint-disable-next-line typescript/no-explicit-any -- Model API type varies by provider
   model?: Model<any>;
 };
 
