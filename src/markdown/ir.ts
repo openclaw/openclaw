@@ -587,6 +587,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "bullet_list_close":
         state.env.listStack.pop();
+        // Add blank line after top-level lists
+        if (state.env.listStack.length === 0) {
+          appendParagraphSeparator(state);
+        }
         break;
       case "ordered_list_open": {
         const start = Number(getAttr(token, "start") ?? "1");
@@ -595,6 +599,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       }
       case "ordered_list_close":
         state.env.listStack.pop();
+        // Add blank line after top-level lists
+        if (state.env.listStack.length === 0) {
+          appendParagraphSeparator(state);
+        }
         break;
       case "list_item_open":
         appendListPrefix(state);
