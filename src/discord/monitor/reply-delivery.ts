@@ -19,6 +19,8 @@ export async function deliverDiscordReply(params: {
   replyToId?: string;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
+  /** Root directory for resolving relative media paths (e.g., sandbox workspace). */
+  sandboxRoot?: string;
 }) {
   const chunkLimit = Math.min(params.textLimit, 2000);
   for (const payload of params.replies) {
@@ -68,6 +70,7 @@ export async function deliverDiscordReply(params: {
       mediaUrl: firstMedia,
       accountId: params.accountId,
       replyTo,
+      sandboxRoot: params.sandboxRoot,
     });
     for (const extra of mediaList.slice(1)) {
       await sendMessageDiscord(params.target, "", {
@@ -75,6 +78,7 @@ export async function deliverDiscordReply(params: {
         rest: params.rest,
         mediaUrl: extra,
         accountId: params.accountId,
+        sandboxRoot: params.sandboxRoot,
       });
     }
   }

@@ -25,6 +25,12 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  /**
+   * Root directory for resolving relative paths (e.g., sandbox workspace).
+   * When set, relative paths like "./image.png" are resolved against this directory
+   * instead of the process working directory.
+   */
+  sandboxRoot?: string;
 };
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
@@ -124,7 +130,7 @@ async function loadWebMediaInternal(
   mediaUrl: string,
   options: WebMediaOptions = {},
 ): Promise<WebMediaResult> {
-  const { maxBytes, optimizeImages = true, ssrfPolicy } = options;
+  const { maxBytes, optimizeImages = true, ssrfPolicy, sandboxRoot } = options;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {
@@ -222,6 +228,11 @@ async function loadWebMediaInternal(
     mediaUrl = resolveUserPath(mediaUrl);
   }
 
+  // Resolve relative paths against sandboxRoot when provided (e.g., ./image.png from sandbox)
+  if (sandboxRoot && !path.isAbsolute(mediaUrl)) {
+    mediaUrl = path.resolve(sandboxRoot, mediaUrl);
+  }
+
   // Local path
   const data = await fs.readFile(mediaUrl);
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
@@ -244,24 +255,26 @@ async function loadWebMediaInternal(
 export async function loadWebMedia(
   mediaUrl: string,
   maxBytes?: number,
-  options?: { ssrfPolicy?: SsrFPolicy },
+  options?: { ssrfPolicy?: SsrFPolicy; sandboxRoot?: string },
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(mediaUrl, {
     maxBytes,
     optimizeImages: true,
     ssrfPolicy: options?.ssrfPolicy,
+    sandboxRoot: options?.sandboxRoot,
   });
 }
 
 export async function loadWebMediaRaw(
   mediaUrl: string,
   maxBytes?: number,
-  options?: { ssrfPolicy?: SsrFPolicy },
+  options?: { ssrfPolicy?: SsrFPolicy; sandboxRoot?: string },
 ): Promise<WebMediaResult> {
   return await loadWebMediaInternal(mediaUrl, {
     maxBytes,
     optimizeImages: false,
     ssrfPolicy: options?.ssrfPolicy,
+    sandboxRoot: options?.sandboxRoot,
   });
 }
 

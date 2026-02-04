@@ -29,6 +29,8 @@ type DiscordSendOpts = {
   replyTo?: string;
   retry?: RetryConfig;
   embeds?: unknown[];
+  /** Root directory for resolving relative media paths (e.g., sandbox workspace). */
+  sandboxRoot?: string;
 };
 
 export async function sendMessageDiscord(
@@ -64,6 +66,7 @@ export async function sendMessageDiscord(
         accountInfo.config.maxLinesPerMessage,
         opts.embeds,
         chunkMode,
+        opts.sandboxRoot,
       );
     } else {
       result = await sendDiscordText(

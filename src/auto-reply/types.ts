@@ -54,4 +54,10 @@ export type ReplyPayload = {
   isError?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
+  /**
+   * Root directory for resolving relative media paths (e.g., sandbox workspace).
+   * When set, relative paths like "./image.png" in mediaUrl/mediaUrls are resolved
+   * against this directory instead of the process working directory.
+   */
+  sandboxRoot?: string;
 };

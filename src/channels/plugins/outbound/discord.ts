@@ -15,13 +15,14 @@ export const discordOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "discord", ...result };
   },
-  sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId }) => {
+  sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, sandboxRoot }) => {
     const send = deps?.sendDiscord ?? sendMessageDiscord;
     const result = await send(to, text, {
       verbose: false,
       mediaUrl,
       replyTo: replyToId ?? undefined,
       accountId: accountId ?? undefined,
+      sandboxRoot: sandboxRoot ?? undefined,
     });
     return { channel: "discord", ...result };
   },
