@@ -637,6 +637,8 @@ export const buildTelegramMessageContext = async ({
           channel: "telegram",
           to: String(chatId),
           accountId: route.accountId,
+          // Preserve DM topic threadId for replies (fixes #8891)
+          threadId: dmThreadId != null ? String(dmThreadId) : undefined,
         }
       : undefined,
     onRecordError: (err) => {
