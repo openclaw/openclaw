@@ -4,11 +4,11 @@ set -e
 # OpenClaw Coolify Bootstrap Script
 # Handles token management, config creation, and startup
 #
-# Environment Variables (from docker-compose.yml):
+# Environment Variables (from docker-compose.yaml):
 #   - OPENCLAW_GATEWAY_TOKEN: Auth token (from SERVICE_PASSWORD_GATEWAY)
 #   - OPENCLAW_GATEWAY_PORT: Internal port (default: 3000)
 #   - ZAI_API_KEY: Model API key
-#   - SERVICE_FQDN_OPENCLAW: Coolify-assigned domain
+#   - OPENCLAW_DOMAIN: Your custom domain (e.g., openclaw.coolify.example.com)
 
 OPENCLAW_STATE="/root/.openclaw"
 CONFIG_FILE="$OPENCLAW_STATE/openclaw.json"
@@ -147,8 +147,8 @@ echo ""
 echo "Token: $OPENCLAW_GATEWAY_TOKEN"
 echo "Port:  $OPENCLAW_GATEWAY_PORT"
 echo ""
-if [ -n "$SERVICE_FQDN_OPENCLAW" ]; then
-  echo "URL: https://${SERVICE_FQDN_OPENCLAW}?token=$OPENCLAW_GATEWAY_TOKEN"
+if [ -n "$OPENCLAW_DOMAIN" ]; then
+  echo "URL: https://${OPENCLAW_DOMAIN}?token=$OPENCLAW_GATEWAY_TOKEN"
 else
   echo "URL: http://localhost:${OPENCLAW_GATEWAY_PORT}?token=$OPENCLAW_GATEWAY_TOKEN"
 fi
