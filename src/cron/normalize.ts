@@ -206,6 +206,9 @@ export function normalizeCronJobInput(
     if (!next.wakeMode) {
       next.wakeMode = "next-heartbeat";
     }
+    if (typeof next.enabled !== "boolean") {
+      next.enabled = true;
+    }
     if (!next.sessionTarget && isRecord(next.payload)) {
       const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
       if (kind === "systemEvent") {

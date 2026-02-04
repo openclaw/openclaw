@@ -105,12 +105,13 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
       : input.schedule.kind === "at"
         ? true
         : undefined;
+  const enabled = typeof input.enabled === "boolean" ? input.enabled : true;
   const job: CronJob = {
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
     name: normalizeRequiredName(input.name),
     description: normalizeOptionalText(input.description),
-    enabled: input.enabled,
+    enabled,
     deleteAfterRun,
     createdAtMs: now,
     updatedAtMs: now,
