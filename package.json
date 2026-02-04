@@ -155,6 +155,7 @@
     "@grammyjs/types": "^3.23.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
+    "@types/better-sqlite3": "^7.6.0",
     "@types/express": "^5.0.6",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^25.2.0",
@@ -176,7 +177,19 @@
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
+    "better-sqlite3": "^11.0.0",
     "node-llama-cpp": "3.15.1"
+  },
+  "peerDependenciesMeta": {
+    "@napi-rs/canvas": {
+      "optional": true
+    },
+    "better-sqlite3": {
+      "optional": true
+    },
+    "node-llama-cpp": {
+      "optional": true
+    }
   },
   "overrides": {
     "tar": "7.5.7"
@@ -203,6 +216,7 @@
       "@napi-rs/canvas",
       "@whiskeysockets/baileys",
       "authenticate-pam",
+      "better-sqlite3",
       "esbuild",
       "node-llama-cpp",
       "protobufjs",
