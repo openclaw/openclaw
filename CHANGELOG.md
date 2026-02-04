@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.2.2-2
+
+### Fixes
+
+- CLI status: resolve build-info from bundled dist output (fixes "unknown" commit in npm builds).
+
 ## 2026.2.2-1
 
 ### Fixes

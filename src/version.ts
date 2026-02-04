@@ -15,8 +15,18 @@ function readVersionFromPackageJson(): string | null {
 function readVersionFromBuildInfo(): string | null {
   try {
     const require = createRequire(import.meta.url);
-    const info = require("../build-info.json") as { version?: string };
-    return info.version ?? null;
+    const candidates = ["../build-info.json", "./build-info.json"];
+    for (const candidate of candidates) {
+      try {
+        const info = require(candidate) as { version?: string };
+        if (info.version) {
+          return info.version;
+        }
+      } catch {
+        // ignore missing candidate
+      }
+    }
+    return null;
   } catch {
     return null;
   }
