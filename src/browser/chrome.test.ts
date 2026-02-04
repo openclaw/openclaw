@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
+  cleanStaleSingletonFiles,
   decorateOpenClawProfile,
   ensureProfileCleanExit,
   findChromeExecutableMac,
@@ -128,6 +129,45 @@ describe("browser chrome profile decoration", () => {
     const prefs = await readJson(path.join(userDataDir, "Default", "Preferences"));
     const profile = prefs.profile as Record<string, unknown>;
     expect(profile.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
+  });
+});
+
+describe("cleanStaleSingletonFiles", () => {
+  it("removes SingletonLock, SingletonSocket, and SingletonCookie", async () => {
+    const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-test-"));
+    try {
+      for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+        await fsp.writeFile(path.join(userDataDir, name), "stale", "utf-8");
+      }
+      cleanStaleSingletonFiles(userDataDir);
+      for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+        expect(fs.existsSync(path.join(userDataDir, name))).toBe(false);
+      }
+    } finally {
+      await fsp.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not throw when singleton files do not exist", async () => {
+    const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-test-"));
+    try {
+      expect(() => cleanStaleSingletonFiles(userDataDir)).not.toThrow();
+    } finally {
+      await fsp.rm(userDataDir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves other files untouched", async () => {
+    const userDataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-test-"));
+    try {
+      await fsp.writeFile(path.join(userDataDir, "SingletonLock"), "stale", "utf-8");
+      await fsp.writeFile(path.join(userDataDir, "Local State"), "{}", "utf-8");
+      cleanStaleSingletonFiles(userDataDir);
+      expect(fs.existsSync(path.join(userDataDir, "SingletonLock"))).toBe(false);
+      expect(fs.existsSync(path.join(userDataDir, "Local State"))).toBe(true);
+    } finally {
+      await fsp.rm(userDataDir, { recursive: true, force: true });
+    }
   });
 });
 

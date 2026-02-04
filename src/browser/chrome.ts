@@ -46,6 +46,17 @@ function exists(filePath: string) {
   }
 }
 
+export function cleanStaleSingletonFiles(userDataDir: string) {
+  for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    const filePath = path.join(userDataDir, name);
+    try {
+      fs.unlinkSync(filePath);
+    } catch {
+      // File doesn't exist or can't be removed — fine either way.
+    }
+  }
+}
+
 export type RunningChrome = {
   pid: number;
   exe: BrowserExecutable;
@@ -178,6 +189,7 @@ export async function launchOpenClawChrome(
 
   const userDataDir = resolveOpenClawUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
+  cleanStaleSingletonFiles(userDataDir);
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,
