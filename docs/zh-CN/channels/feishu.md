@@ -83,7 +83,7 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 2. 填写应用名称和描述
 3. 选择应用图标
 
-![创建企业自建应用](../images/feishu-step2-create-app.png)
+![创建企业自建应用](/images/feishu-step2-create-app.png)
 
 ### 3. 获取应用凭证
 
@@ -94,7 +94,7 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 
 ❗ **重要**：请妥善保管 App Secret，不要分享给他人。
 
-![获取应用凭证](../images/feishu-step3-credentials.png)
+![获取应用凭证](/images/feishu-step3-credentials.png)
 
 ### 4. 配置应用权限
 
@@ -126,7 +126,7 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 }
 ```
 
-![配置应用权限](../images/feishu-step4-permissions.png)
+![配置应用权限](/images/feishu-step4-permissions.png)
 
 ### 5. 启用机器人能力
 
@@ -135,7 +135,7 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 1. 开启机器人能力
 2. 配置机器人名称
 
-![启用机器人能力](../images/feishu-step5-bot-capability.png)
+![启用机器人能力](/images/feishu-step5-bot-capability.png)
 
 ### 6. 配置事件订阅
 
@@ -151,7 +151,7 @@ Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设
 
 ⚠️ **注意**：如果网关未启动或渠道未添加，长连接设置将保存失败。
 
-![配置事件订阅](../images/feishu-step6-event-subscription.png)
+![配置事件订阅](/images/feishu-step6-event-subscription.png)
 
 ### 7. 发布应用
 
