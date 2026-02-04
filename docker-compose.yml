@@ -70,12 +70,24 @@ services:
     container_name: openclaw-sandbox
     image: openclaw-sandbox:latest
     restart: always
+    tmpfs:
+      - /tmp
     ports:
       - "9222:9222" # 浏览器控制端口
       - "6080:6080" # 网页查看窗口 (NoVNC)
     shm_size: "4gb" # 浏览器非常吃缓存，建议加大
     networks:
       - proxy
+    deploy:
+      resources:
+        limits:
+          # 限制使用 2 个核心（甲骨文 4 核 ARM 留 2 核给系统和 Gateway 比较稳妥）
+          cpus: "2.0"
+          # 限制内存使用，防止浏览器内存泄漏撑爆宿主机
+          memory: 4G
+        reservations:
+          # 预留最少 1G 内存
+          memory: 1G
 
   cli:
     image: ${OPENCLAW_IMAGE:-openclaw-local:latest}
