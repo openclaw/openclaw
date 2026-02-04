@@ -90,7 +90,7 @@ function AgentStatusDashboardPage() {
   const handleHealthFilterChange = (value: HealthFilter) => {
     setHealthFilter(value);
     navigate({
-      search: (prev: Record<string, unknown>) => (value === "all" ? {} : { ...prev, health: value }),
+      search: (prev) => ({ ...prev, health: value === "all" ? undefined : value }),
       replace: true,
     });
   };
@@ -327,7 +327,7 @@ function AgentStatusDashboardPage() {
             transition={{ duration: 0.3, delay: 0.2 }}
             className="space-y-2"
           >
-            {filteredAgents.map((agent, index) => (
+            {filteredAgents.map((agent) => (
               <AgentStatusRow
                 key={agent.id}
                 agent={agent}

@@ -41,6 +41,31 @@
       "label": "Twilio Auth Token",
       "sensitive": true
     },
+    "twilio.incomingPhoneNumberSid": {
+      "label": "Twilio Incoming Phone SID",
+      "help": "IncomingPhoneNumbers SID to update for inbound webhook auto-sync (recommended).",
+      "advanced": true
+    },
+    "twilio.incomingPhoneNumber": {
+      "label": "Twilio Incoming Phone Number",
+      "help": "E.164 number to look up for inbound webhook auto-sync (less precise than SID).",
+      "advanced": true
+    },
+    "twilio.webhookSync.enabled": {
+      "label": "Auto-sync Twilio Voice Webhook",
+      "help": "Updates the Twilio inbound Voice webhook URL on every gateway start.",
+      "advanced": true
+    },
+    "twilio.webhookSync.required": {
+      "label": "Require Webhook Sync",
+      "help": "Fail startup if Twilio webhook auto-sync fails.",
+      "advanced": true
+    },
+    "twilio.webhookSync.allowMultipleMatches": {
+      "label": "Allow Multiple Matches",
+      "help": "If multiple incoming numbers match the configured phone, allow picking the first.",
+      "advanced": true
+    },
     "outbound.defaultMode": {
       "label": "Default Call Mode"
     },
@@ -194,6 +219,28 @@
           },
           "authToken": {
             "type": "string"
+          },
+          "incomingPhoneNumberSid": {
+            "type": "string"
+          },
+          "incomingPhoneNumber": {
+            "type": "string",
+            "pattern": "^\\+[1-9]\\d{1,14}$"
+          },
+          "webhookSync": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "allowMultipleMatches": {
+                "type": "boolean"
+              }
+            }
           }
         }
       },

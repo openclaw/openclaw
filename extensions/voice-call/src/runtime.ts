@@ -23,7 +23,17 @@ export type VoiceCallRuntime = {
   webhookServer: VoiceCallWebhookServer;
   webhookUrl: string;
   publicUrl: string | null;
+  webhookSync: VoiceCallWebhookSyncStatus | null;
   stop: () => Promise<void>;
+};
+
+export type VoiceCallWebhookSyncStatus = {
+  attempted: boolean;
+  ok: boolean;
+  at: number;
+  targetSid?: string;
+  error?: string;
+  webhookOrigin?: string;
 };
 
 type Logger = {
@@ -32,6 +42,22 @@ type Logger = {
   error: (message: string) => void;
   debug: (message: string) => void;
 };
+
+function tryGetOrigin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+function maskSid(sid: string): string {
+  const trimmed = sid.trim();
+  if (trimmed.length <= 6) {
+    return trimmed;
+  }
+  return `…${trimmed.slice(-6)}`;
+}
 
 function isLoopbackBind(bind: string | undefined): boolean {
   if (!bind) {
@@ -150,9 +176,94 @@ export async function createVoiceCallRuntime(params: {
   }
 
   const webhookUrl = publicUrl ?? localUrl;
+  let webhookSync: VoiceCallWebhookSyncStatus | null = null;
 
   if (publicUrl && provider.name === "twilio") {
     (provider as TwilioProvider).setPublicUrl(publicUrl);
+  }
+
+  if (provider.name === "twilio") {
+    const origin = tryGetOrigin(webhookUrl);
+    const syncEnabled = config.twilio?.webhookSync?.enabled !== false;
+    const syncRequired = config.twilio?.webhookSync?.required === true;
+    const allowMultipleMatches = config.twilio?.webhookSync?.allowMultipleMatches === true;
+
+    const isPublic = Boolean(publicUrl) && webhookUrl.startsWith("https://");
+    const isTailscaleServe =
+      config.tunnel?.provider === "tailscale-serve" || config.tailscale?.mode === "serve";
+
+    if (!syncEnabled) {
+      webhookSync = {
+        attempted: false,
+        ok: false,
+        at: Date.now(),
+        webhookOrigin: origin ?? undefined,
+        error: "disabled",
+      };
+    } else if (!isPublic) {
+      webhookSync = {
+        attempted: false,
+        ok: false,
+        at: Date.now(),
+        webhookOrigin: origin ?? undefined,
+        error: "skipped: webhook is not publicly reachable (no https public URL)",
+      };
+    } else if (isTailscaleServe) {
+      webhookSync = {
+        attempted: false,
+        ok: false,
+        at: Date.now(),
+        webhookOrigin: origin ?? undefined,
+        error: "skipped: tailscale-serve is private to your tailnet (Twilio cannot reach it)",
+      };
+      log.warn(
+        "[voice-call] Twilio webhook auto-sync skipped: tailscale-serve is not publicly reachable",
+      );
+    } else {
+      const twilioProvider = provider as TwilioProvider;
+      const result = await twilioProvider.syncIncomingNumberVoiceWebhook({
+        webhookUrl,
+        incomingPhoneNumberSid: config.twilio?.incomingPhoneNumberSid,
+        incomingPhoneNumber: config.twilio?.incomingPhoneNumber,
+        allowMultipleMatches,
+      });
+
+      if (result.ok) {
+        webhookSync = {
+          attempted: true,
+          ok: true,
+          at: Date.now(),
+          targetSid: result.targetSid,
+          webhookOrigin: origin ?? undefined,
+        };
+        log.info(
+          `[voice-call] Twilio inbound Voice webhook synced (IncomingPhoneNumbers ${maskSid(
+            result.targetSid,
+          )}) → ${origin ?? "(unknown origin)"}`,
+        );
+      } else {
+        webhookSync = {
+          attempted: true,
+          ok: false,
+          at: Date.now(),
+          webhookOrigin: origin ?? undefined,
+          error: result.reason,
+        };
+
+        const message =
+          `[voice-call] Twilio webhook auto-sync failed: ${result.reason} ` +
+          `(set plugins.entries.voice-call.config.twilio.incomingPhoneNumberSid or incomingPhoneNumber)`;
+        if (syncRequired) {
+          if (tunnelResult) {
+            await tunnelResult.stop();
+          }
+          await cleanupTailscaleExposure(config);
+          await webhookServer.stop();
+          throw new Error(message);
+        }
+        log.warn(message);
+      }
+    }
   }
 
   if (provider.name === "twilio" && config.streaming?.enabled) {
@@ -207,6 +318,7 @@ export async function createVoiceCallRuntime(params: {
     webhookServer,
     webhookUrl,
     publicUrl,
+    webhookSync,
     stop,
   };
 }

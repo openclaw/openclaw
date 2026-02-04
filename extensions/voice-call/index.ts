@@ -45,6 +45,31 @@ const voiceCallConfigSchema = {
     "telnyx.publicKey": { label: "Telnyx Public Key", sensitive: true },
     "twilio.accountSid": { label: "Twilio Account SID" },
     "twilio.authToken": { label: "Twilio Auth Token", sensitive: true },
+    "twilio.incomingPhoneNumberSid": {
+      label: "Twilio Incoming Phone SID",
+      help: "IncomingPhoneNumbers SID to update for inbound webhook auto-sync (recommended).",
+      advanced: true,
+    },
+    "twilio.incomingPhoneNumber": {
+      label: "Twilio Incoming Phone Number",
+      help: "E.164 number to look up for inbound webhook auto-sync (less precise than SID).",
+      advanced: true,
+    },
+    "twilio.webhookSync.enabled": {
+      label: "Auto-sync Twilio Voice Webhook",
+      help: "Updates the Twilio inbound Voice webhook URL on every gateway start.",
+      advanced: true,
+    },
+    "twilio.webhookSync.required": {
+      label: "Require Webhook Sync",
+      help: "Fail startup if Twilio webhook auto-sync fails.",
+      advanced: true,
+    },
+    "twilio.webhookSync.allowMultipleMatches": {
+      label: "Allow Multiple Matches",
+      help: "If multiple incoming numbers match the configured phone, allow picking the first.",
+      advanced: true,
+    },
     "outbound.defaultMode": { label: "Default Call Mode" },
     "outbound.notifyHangupDelaySec": {
       label: "Notify Hangup Delay (sec)",
@@ -294,10 +319,10 @@ const voiceCallPlugin = {
         const rt = await ensureRuntime();
         const call = rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
         if (!call) {
-          respond(true, { found: false });
+          respond(true, { found: false, webhookSync: rt.webhookSync });
           return;
         }
-        respond(true, { found: true, call });
+        respond(true, { found: true, call, webhookSync: rt.webhookSync });
       } catch (err) {
         sendError(respond, err);
       }
@@ -407,7 +432,11 @@ const voiceCallPlugin = {
                 }
                 const call =
                   rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
-                return json(call ? { found: true, call } : { found: false });
+                return json(
+                  call
+                    ? { found: true, call, webhookSync: rt.webhookSync }
+                    : { found: false, webhookSync: rt.webhookSync },
+                );
               }
             }
           }
@@ -419,7 +448,11 @@ const voiceCallPlugin = {
               throw new Error("sid required for status");
             }
             const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
-            return json(call ? { found: true, call } : { found: false });
+            return json(
+              call
+                ? { found: true, call, webhookSync: rt.webhookSync }
+                : { found: false, webhookSync: rt.webhookSync },
+            );
           }
 
           const to =

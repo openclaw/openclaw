@@ -7,7 +7,7 @@
  */
 
 import { getGatewayClient } from "./gateway-client";
-import { listSessions, filterSessionsByAgent, type GatewaySessionRow } from "./sessions";
+import { listSessions, type GatewaySessionRow } from "./sessions";
 
 // ── Types ──────────────────────────────────────────────────────────
 

@@ -12,7 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Target, Calendar, CheckCircle2, ArrowRight, GitBranch, MoreHorizontal, Pencil } from "lucide-react";
+import { Target, Calendar, ArrowRight, MoreHorizontal, Pencil } from "lucide-react";
 
 export type GoalStatus = "active" | "completed" | "archived";
 

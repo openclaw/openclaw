@@ -4,7 +4,6 @@
  * Shows health indicator, name, current task, resource usage, and timestamps.
  */
 
-import * as React from "react";
 import { motion } from "framer-motion";
 import {
   Activity,
@@ -15,10 +14,8 @@ import {
   Pause,
   Zap,
   XCircle,
-  Tag,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Tooltip,
   TooltipContent,
@@ -101,7 +98,6 @@ export interface AgentStatusRowProps {
 
 export function AgentStatusRow({ agent, onDrillDown, className }: AgentStatusRowProps) {
   const config = HEALTH_CONFIG[agent.health];
-  const Icon = config.icon;
 
   return (
     <motion.div

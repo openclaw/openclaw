@@ -173,7 +173,7 @@ export class TwilioProvider implements VoiceCallProvider {
   private async apiRequest<T = unknown>(
     endpoint: string,
     params: Record<string, string | string[]>,
-    options?: { allowNotFound?: boolean },
+    options?: { allowNotFound?: boolean; method?: "GET" | "POST" },
   ): Promise<T> {
     return await twilioApiRequest<T>({
       baseUrl: this.baseUrl,
@@ -182,7 +182,78 @@ export class TwilioProvider implements VoiceCallProvider {
       endpoint,
       body: params,
       allowNotFound: options?.allowNotFound,
+      method: options?.method,
     });
+  }
+
+  async syncIncomingNumberVoiceWebhook(input: {
+    webhookUrl: string;
+    incomingPhoneNumberSid?: string;
+    incomingPhoneNumber?: string;
+    allowMultipleMatches?: boolean;
+  }): Promise<{ ok: true; targetSid: string } | { ok: false; reason: string }> {
+    const sid = input.incomingPhoneNumberSid?.trim() || undefined;
+    const phone = input.incomingPhoneNumber?.trim() || undefined;
+
+    let targetSid = sid;
+
+    if (!targetSid && phone) {
+      try {
+        const list = await this.apiRequest<TwilioIncomingPhoneNumberListResponse>(
+          "/IncomingPhoneNumbers.json",
+          { PhoneNumber: phone, PageSize: "20" },
+          { method: "GET" },
+        );
+
+        const matches = (list?.incoming_phone_numbers ?? []).filter(
+          (entry) => typeof entry?.sid === "string" && entry.sid.trim(),
+        );
+
+        if (matches.length === 0) {
+          return {
+            ok: false,
+            reason: `No incoming phone number found for ${phone}. Set twilio.incomingPhoneNumberSid instead.`,
+          };
+        }
+
+        if (matches.length > 1 && !input.allowMultipleMatches) {
+          return {
+            ok: false,
+            reason:
+              `Multiple incoming phone numbers matched ${phone}. ` +
+              `Set twilio.incomingPhoneNumberSid, or set twilio.webhookSync.allowMultipleMatches=true.`,
+          };
+        }
+
+        targetSid = matches[0]?.sid;
+      } catch (err) {
+        return {
+          ok: false,
+          reason: `Twilio lookup failed: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+
+    if (!targetSid) {
+      return {
+        ok: false,
+        reason:
+          "Missing Twilio incoming phone number identifier. Set twilio.incomingPhoneNumberSid or twilio.incomingPhoneNumber.",
+      };
+    }
+
+    try {
+      await this.apiRequest(`/IncomingPhoneNumbers/${targetSid}.json`, {
+        VoiceUrl: input.webhookUrl,
+        VoiceMethod: "POST",
+      });
+      return { ok: true, targetSid };
+    } catch (err) {
+      return {
+        ok: false,
+        reason: `Twilio update failed: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
 
   /**
@@ -623,4 +694,11 @@ interface TwilioCallResponse {
   from: string;
   to: string;
   uri: string;
+}
+
+interface TwilioIncomingPhoneNumberListResponse {
+  incoming_phone_numbers?: Array<{
+    sid: string;
+    phone_number?: string;
+  }>;
 }

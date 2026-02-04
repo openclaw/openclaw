@@ -3,13 +3,16 @@ export async function twilioApiRequest<T = unknown>(params: {
   accountSid: string;
   authToken: string;
   endpoint: string;
-  body: URLSearchParams | Record<string, string | string[]>;
+  body?: URLSearchParams | Record<string, string | string[]>;
   allowNotFound?: boolean;
+  method?: "GET" | "POST";
 }): Promise<T> {
+  const method = params.method ?? "POST";
+
   const bodyParams =
     params.body instanceof URLSearchParams
       ? params.body
-      : Object.entries(params.body).reduce<URLSearchParams>((acc, [key, value]) => {
+      : Object.entries(params.body ?? {}).reduce<URLSearchParams>((acc, [key, value]) => {
           if (Array.isArray(value)) {
             for (const entry of value) {
               acc.append(key, entry);
@@ -20,13 +23,18 @@ export async function twilioApiRequest<T = unknown>(params: {
           return acc;
         }, new URLSearchParams());
 
-  const response = await fetch(`${params.baseUrl}${params.endpoint}`, {
-    method: "POST",
+  const url =
+    method === "GET" && bodyParams.toString()
+      ? `${params.baseUrl}${params.endpoint}?${bodyParams.toString()}`
+      : `${params.baseUrl}${params.endpoint}`;
+
+  const response = await fetch(url, {
+    method,
     headers: {
       Authorization: `Basic ${Buffer.from(`${params.accountSid}:${params.authToken}`).toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded",
+      ...(method === "POST" ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
     },
-    body: bodyParams,
+    ...(method === "POST" ? { body: bodyParams } : {}),
   });
 
   if (!response.ok) {
