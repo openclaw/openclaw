@@ -77,7 +77,6 @@
     "setup-completion": "node scripts/setup-completion.js",
     "start": "node scripts/run-node.mjs",
     "test": "node scripts/test-parallel.mjs",
-    "test:with-logs": "CLAWDBRAIN_TEST_LOGS=1 node scripts/test-parallel.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:coverage": "vitest run --coverage",
     "test:docker:all": "pnpm test:docker:live-models && pnpm test:docker:live-gateway && pnpm test:docker:onboard && pnpm test:docker:gateway-network && pnpm test:docker:qr && pnpm test:docker:doctor-switch && pnpm test:docker:plugins && pnpm test:docker:cleanup",
@@ -99,6 +98,7 @@
     "test:ui": "pnpm --dir ui test",
     "test:view-logs": "bash scripts/view-test-logs.sh",
     "test:watch": "vitest",
+    "test:with-logs": "CLAWDBRAIN_TEST_LOGS=1 node scripts/test-parallel.mjs",
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "OPENCLAW_PROFILE=dev CLAWDBOT_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
@@ -217,6 +217,7 @@
     "overrides": {
       "fast-xml-parser": "5.3.4",
       "form-data": "2.5.4",
+      "@isaacs/brace-expansion": "5.0.1",
       "@hono/node-server>hono": "4.11.7",
       "hono": "4.11.7",
       "qs": "6.14.1",
