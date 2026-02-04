@@ -26,8 +26,8 @@
     }
   },
   "slack": {
-    "botToken": "xoxb-1234567890-1234567890123-abcdefghijklmnopqrstuvw",
-    "appToken": "xapp-1-A01234BCDEF-1234567890123-abcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnop",
+    "botToken": "xoxb-example",
+    "appToken": "xapp-1-example",
     "policy": {
       "allowedChannels": [
         "#dev-bot",
