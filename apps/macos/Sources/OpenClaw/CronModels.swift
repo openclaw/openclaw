@@ -14,12 +14,26 @@ enum CronWakeMode: String, CaseIterable, Identifiable, Codable {
     var id: String { self.rawValue }
 }
 
+enum CronDeliveryMode: String, CaseIterable, Identifiable, Codable {
+    case none
+    case announce
+
+    var id: String { self.rawValue }
+}
+
+struct CronDelivery: Codable, Equatable {
+    var mode: CronDeliveryMode
+    var channel: String?
+    var to: String?
+    var bestEffort: Bool?
+}
+
 enum CronSchedule: Codable, Equatable {
-    case at(atMs: Int)
+    case at(at: String)
     case every(everyMs: Int, anchorMs: Int?)
     case cron(expr: String, tz: String?)
 
-    enum CodingKeys: String, CodingKey { case kind, atMs, everyMs, anchorMs, expr, tz }
+    enum CodingKeys: String, CodingKey { case kind, at, atMs, everyMs, anchorMs, expr, tz }
 
     var kind: String {
         switch self {
@@ -34,7 +48,21 @@ enum CronSchedule: Codable, Equatable {
         let kind = try container.decode(String.self, forKey: .kind)
         switch kind {
         case "at":
-            self = try .at(atMs: container.decode(Int.self, forKey: .atMs))
+            if let at = try container.decodeIfPresent(String.self, forKey: .at),
+               !at.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                self = .at(at: at)
+                return
+            }
+            if let atMs = try container.decodeIfPresent(Int.self, forKey: .atMs) {
+                let date = Date(timeIntervalSince1970: TimeInterval(atMs) / 1000)
+                self = .at(at: Self.formatIsoDate(date))
+                return
+            }
+            throw DecodingError.dataCorruptedError(
+                forKey: .at,
+                in: container,
+                debugDescription: "Missing schedule.at")
         case "every":
             self = try .every(
                 everyMs: container.decode(Int.self, forKey: .everyMs),
@@ -55,8 +83,8 @@ enum CronSchedule: Codable, Equatable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.kind, forKey: .kind)
         switch self {
-        case let .at(atMs):
-            try container.encode(atMs, forKey: .atMs)
+        case let .at(at):
+            try container.encode(at, forKey: .at)
         case let .every(everyMs, anchorMs):
             try container.encode(everyMs, forKey: .everyMs)
             try container.encodeIfPresent(anchorMs, forKey: .anchorMs)
@@ -65,6 +93,29 @@ enum CronSchedule: Codable, Equatable {
             try container.encodeIfPresent(tz, forKey: .tz)
         }
     }
+
+    static func parseAtDate(_ value: String) -> Date? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        if let date = isoFormatterWithFractional.date(from: trimmed) { return date }
+        return isoFormatter.date(from: trimmed)
+    }
+
+    static func formatIsoDate(_ date: Date) -> String {
+        isoFormatter.string(from: date)
+    }
+
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    private static let isoFormatterWithFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
 }
 
 enum CronPayload: Codable, Equatable {
@@ -131,10 +182,6 @@ enum CronPayload: Codable, Equatable {
     }
 }
 
-struct CronIsolation: Codable, Equatable {
-    var postToMainPrefix: String?
-}
-
 struct CronJobState: Codable, Equatable {
     var nextRunAtMs: Int?
     var runningAtMs: Int?
@@ -157,7 +204,7 @@ struct CronJob: Identifiable, Codable, Equatable {
     let sessionTarget: CronSessionTarget
     let wakeMode: CronWakeMode
     let payload: CronPayload
-    let isolation: CronIsolation?
+    let delivery: CronDelivery?
     let state: CronJobState
 
     var displayName: String {

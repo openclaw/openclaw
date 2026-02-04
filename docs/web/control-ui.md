@@ -79,6 +79,11 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 - Logs: live tail of gateway file logs with filter/export (`logs.tail`)
 - Update: run a package/git update + restart (`update.run`) with a restart report
 
+Cron jobs panel notes:
+
+- For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
+- Channel/target fields appear when announce is selected.
+
 ## Chat behavior
 
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.

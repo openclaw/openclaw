@@ -47,6 +47,10 @@ export type RunEmbeddedPiAgentParams = {
   replyToMode?: "off" | "first" | "all";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /** Require explicit message tool targets (no implicit last-route sends). */
+  requireExplicitMessageTarget?: boolean;
+  /** If true, omit the message tool from the tool list. */
+  disableMessageTool?: boolean;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
