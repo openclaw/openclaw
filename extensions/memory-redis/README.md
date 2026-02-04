@@ -5,7 +5,8 @@ Redis-backed long-term memory plugin for OpenClaw with vector similarity search.
 ## Requirements
 
 - **Redis 8+** (includes Query Engine with vector search built-in)
-- Embedding provider (OpenAI, Google Gemini, or local node-llama-cpp)
+- **Docker** (required for curl/npm installs - native packages only have Redis 7.x)
+- Embedding provider (OpenAI, Google Gemini, Ollama, or local node-llama-cpp)
 
 ## Quick Start
 
@@ -13,25 +14,28 @@ Redis-backed long-term memory plugin for OpenClaw with vector similarity search.
 
 Choose the option that matches your deployment:
 
-#### Docker (recommended)
+#### Docker (required for curl/npm installs)
 
-Works with any installation method (curl installer, npm, VPS, etc.):
+Redis 8 with built-in vector search is only available via Docker. Native packages (apt/yum) are still on Redis 7.x.
 
 ```bash
-# Simple one-liner - runs Redis Stack with persistence
+# Redis 8 with persistence and vector search
 docker run -d \
-  --name redis-stack \
+  --name openclaw-redis \
   -p 127.0.0.1:6379:6379 \
-  -v redis-data:/data \
+  -v openclaw-redis-data:/data \
   --restart unless-stopped \
-  redis/redis-stack:latest
+  redis:8 \
+  --appendonly yes --maxmemory 512mb --maxmemory-policy noeviction
 ```
 
 For Docker Compose deployments, see [Docker Compose Setup](#docker-compose-setup) below.
 
-#### Native Installation (Debian/Ubuntu)
+#### Native Installation (not recommended)
 
-If you prefer not to use Docker:
+> **Warning:** Native Redis Stack packages are stuck at version 7.x and may not be available for newer distros (e.g., Ubuntu 24.04). Use Docker instead.
+
+If you must use native packages:
 
 ```bash
 # Add Redis repository
@@ -47,8 +51,6 @@ sudo systemctl enable redis-stack-server
 sudo systemctl start redis-stack-server
 ```
 
-> **Note:** Redis Stack is required (not plain Redis) because it includes the Query Engine (RediSearch) for vector similarity search.
-
 #### Docker Compose Setup
 
 **Option A: With OpenClaw Docker deployment**
@@ -58,7 +60,7 @@ sudo systemctl start redis-stack-server
 docker compose -f docker-compose.yml -f extensions/memory-redis/docker/docker-compose.yml up -d
 ```
 
-This starts Redis alongside the gateway on a shared network. Use `redis://redis-stack:6379` as the Redis URL in your plugin config.
+This starts Redis 8 alongside the gateway on a shared network. Use `redis://openclaw-redis:6379` as the Redis URL in your plugin config.
 
 **Option B: Standalone compose (Redis only)**
 
