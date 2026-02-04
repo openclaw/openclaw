@@ -57,7 +57,8 @@ export async function applyAuthChoiceAnthropic(
     });
 
     // Also save token to config file as fallback for gateway
-    const existingAnthropic = nextConfig.models?.providers?.anthropic ?? {};
+    // Type cast is safe because normalizeProviders will fill in required fields
+    const existingAnthropic = nextConfig.models?.providers?.anthropic ?? ({} as any);
     nextConfig = {
       ...nextConfig,
       models: {
@@ -119,7 +120,8 @@ export async function applyAuthChoiceAnthropic(
 
     // Also save API key to config file as fallback for gateway
     if (apiKey) {
-      const existingAnthropic = nextConfig.models?.providers?.anthropic ?? {};
+      // Type cast is safe because normalizeProviders will fill in required fields
+      const existingAnthropic = nextConfig.models?.providers?.anthropic ?? ({} as any);
       nextConfig = {
         ...nextConfig,
         models: {
