@@ -178,3 +178,15 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
+
+export function setQianfanApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "qianfan:default",
+    credential: {
+      type: "api_key",
+      provider: "qianfan",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}

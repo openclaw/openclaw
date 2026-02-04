@@ -15,6 +15,18 @@ export const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
 export const KIMI_CODING_MODEL_ID = "k2p5";
 export const KIMI_CODING_MODEL_REF = `kimi-coding/${KIMI_CODING_MODEL_ID}`;
 
+export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
+export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
+export const QIANFAN_DEFAULT_MODEL_REF = `ernie/${QIANFAN_DEFAULT_MODEL_ID}`;
+export const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
+export const QIANFAN_DEFAULT_MAX_TOKENS = 32768;
+export const QIANFAN_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
 export const MINIMAX_API_COST = {
   input: 15,
@@ -89,5 +101,17 @@ export function buildMoonshotModelDefinition(): ModelDefinitionConfig {
     cost: MOONSHOT_DEFAULT_COST,
     contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+  };
+}
+
+export function buildQianfanModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: QIANFAN_DEFAULT_MODEL_ID,
+    name: "ERNIE 5.0",
+    reasoning: true,
+    input: ["text"],
+    cost: QIANFAN_DEFAULT_COST,
+    contextWindow: QIANFAN_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: QIANFAN_DEFAULT_MAX_TOKENS,
   };
 }
