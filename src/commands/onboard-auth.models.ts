@@ -17,7 +17,7 @@ export const KIMI_CODING_MODEL_REF = `kimi-coding/${KIMI_CODING_MODEL_ID}`;
 
 export const QIANFAN_BASE_URL = "https://qianfan.baidubce.com/v2";
 export const QIANFAN_DEFAULT_MODEL_ID = "deepseek-v3.2";
-export const QIANFAN_DEFAULT_MODEL_REF = `ernie/${QIANFAN_DEFAULT_MODEL_ID}`;
+export const QIANFAN_DEFAULT_MODEL_REF = `qianfan/${QIANFAN_DEFAULT_MODEL_ID}`;
 export const QIANFAN_DEFAULT_CONTEXT_WINDOW = 98304;
 export const QIANFAN_DEFAULT_MAX_TOKENS = 32768;
 export const QIANFAN_DEFAULT_COST = {
