@@ -29,8 +29,7 @@ export function normalizeNextcloudTalkAllowlist(
 export function resolveNextcloudTalkAllowlistMatch(params: {
   allowFrom: Array<string | number> | undefined;
   senderId: string;
-  senderName?: string | null;
-}): AllowlistMatch<"wildcard" | "id" | "name"> {
+}): AllowlistMatch<"wildcard" | "id"> {
   const allowFrom = normalizeNextcloudTalkAllowlist(params.allowFrom);
   if (allowFrom.length === 0) {
     return { allowed: false };
@@ -41,10 +40,6 @@ export function resolveNextcloudTalkAllowlistMatch(params: {
   const senderId = normalizeAllowEntry(params.senderId);
   if (allowFrom.includes(senderId)) {
     return { allowed: true, matchKey: senderId, matchSource: "id" };
-  }
-  const senderName = params.senderName ? normalizeAllowEntry(params.senderName) : "";
-  if (senderName && allowFrom.includes(senderName)) {
-    return { allowed: true, matchKey: senderName, matchSource: "name" };
   }
   return { allowed: false };
 }
@@ -132,7 +127,6 @@ export function resolveNextcloudTalkGroupAllow(params: {
   outerAllowFrom: Array<string | number> | undefined;
   innerAllowFrom: Array<string | number> | undefined;
   senderId: string;
-  senderName?: string | null;
 }): { allowed: boolean; outerMatch: AllowlistMatch; innerMatch: AllowlistMatch } {
   if (params.groupPolicy === "disabled") {
     return { allowed: false, outerMatch: { allowed: false }, innerMatch: { allowed: false } };
@@ -150,12 +144,10 @@ export function resolveNextcloudTalkGroupAllow(params: {
   const outerMatch = resolveNextcloudTalkAllowlistMatch({
     allowFrom: params.outerAllowFrom,
     senderId: params.senderId,
-    senderName: params.senderName,
   });
   const innerMatch = resolveNextcloudTalkAllowlistMatch({
     allowFrom: params.innerAllowFrom,
     senderId: params.senderId,
-    senderName: params.senderName,
   });
   const allowed = resolveNestedAllowlistDecision({
     outerConfigured: outerAllow.length > 0 || innerAllow.length > 0,
