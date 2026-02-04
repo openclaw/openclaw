@@ -13,15 +13,16 @@ export const AgentShieldApprovalRequestParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const AgentShieldDecisionSchema = Type.Union([
+  Type.Literal("allow-once"),
+  Type.Literal("allow-always"),
+  Type.Literal("deny"),
+]);
+
 export const AgentShieldApprovalResolveParamsSchema = Type.Object(
   {
     id: NonEmptyString,
-    decision: NonEmptyString,
+    decision: AgentShieldDecisionSchema,
   },
-  { additionalProperties: false },
-);
-
-export const AgentShieldApprovalListParamsSchema = Type.Object(
-  {},
   { additionalProperties: false },
 );
