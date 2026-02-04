@@ -15,6 +15,11 @@ const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
 
+// Upload configuration
+const SIMPLE_UPLOAD_LIMIT = 4 * 1024 * 1024; // 4MB
+const CHUNK_SIZE = 1024 * 1024; // 1MB chunks for resumable upload
+const MAX_RETRIES = 3;
+
 export interface OneDriveUploadResult {
   id: string;
   webUrl: string;
@@ -23,8 +28,7 @@ export interface OneDriveUploadResult {
 
 /**
  * Upload a file to the user's OneDrive root folder.
- * For larger files, this uses the simple upload endpoint (up to 4MB).
- * TODO: For files >4MB, implement resumable upload session.
+ * For files ≤4MB, uses simple upload. For larger files, uses resumable upload with chunking.
  */
 export async function uploadToOneDrive(params: {
   buffer: Buffer;
@@ -33,6 +37,12 @@ export async function uploadToOneDrive(params: {
   tokenProvider: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
 }): Promise<OneDriveUploadResult> {
+  // Use resumable upload for files larger than 4MB
+  if (params.buffer.length > SIMPLE_UPLOAD_LIMIT) {
+    return uploadToOneDriveResumable(params);
+  }
+
+  // Simple upload for small files
   const fetchFn = params.fetchFn ?? fetch;
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
@@ -68,6 +78,122 @@ export async function uploadToOneDrive(params: {
     webUrl: data.webUrl,
     name: data.name,
   };
+}
+
+/**
+ * Upload a file to OneDrive using resumable upload session (for files >4MB).
+ * Splits file into 1MB chunks and retries each chunk up to 3 times on failure.
+ */
+async function uploadToOneDriveResumable(params: {
+  buffer: Buffer;
+  filename: string;
+  contentType?: string;
+  tokenProvider: MSTeamsAccessTokenProvider;
+  fetchFn?: typeof fetch;
+}): Promise<OneDriveUploadResult> {
+  const fetchFn = params.fetchFn ?? fetch;
+  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
+  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+
+  // Create upload session
+  const sessionRes = await fetchFn(
+    `${GRAPH_ROOT}/me/drive/root:${uploadPath}:/createUploadSession`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        item: {
+          "@microsoft.graph.conflictBehavior": "replace",
+          name: params.filename,
+        },
+      }),
+    },
+  );
+
+  if (!sessionRes.ok) {
+    const body = await sessionRes.text().catch(() => "");
+    throw new Error(
+      `Create upload session failed: ${sessionRes.status} ${sessionRes.statusText} - ${body}`,
+    );
+  }
+
+  const sessionData = (await sessionRes.json()) as {
+    uploadUrl?: string;
+  };
+
+  if (!sessionData.uploadUrl) {
+    throw new Error("Upload session response missing uploadUrl");
+  }
+
+  const uploadUrl = sessionData.uploadUrl;
+  const fileSize = params.buffer.length;
+
+  // Upload file in chunks with retry logic
+  for (let start = 0; start < fileSize; start += CHUNK_SIZE) {
+    const end = Math.min(start + CHUNK_SIZE, fileSize);
+    const chunk = params.buffer.subarray(start, end);
+
+    // Retry chunk upload up to MAX_RETRIES times
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const chunkRes = await fetchFn(uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Length": String(chunk.length),
+            "Content-Range": `bytes ${start}-${end - 1}/${fileSize}`,
+          },
+          body: new Uint8Array(chunk),
+        });
+
+        if (!chunkRes.ok) {
+          const body = await chunkRes.text().catch(() => "");
+          throw new Error(
+            `Chunk upload failed: ${chunkRes.status} ${chunkRes.statusText} - ${body}`,
+          );
+        }
+
+        // Last chunk returns the driveItem, intermediate chunks return upload status
+        if (end === fileSize) {
+          const data = (await chunkRes.json()) as {
+            id?: string;
+            webUrl?: string;
+            name?: string;
+          };
+
+          if (!data.id || !data.webUrl || !data.name) {
+            throw new Error("Final chunk response missing required fields");
+          }
+
+          return {
+            id: data.id,
+            webUrl: data.webUrl,
+            name: data.name,
+          };
+        }
+
+        // Chunk succeeded, break retry loop
+        break;
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+
+        // If this was the last retry, rethrow with context
+        if (attempt === MAX_RETRIES - 1) {
+          throw new Error(
+            `Chunk upload failed after ${MAX_RETRIES} attempts (bytes ${start}-${end - 1}): ${error.message}`,
+            { cause: err },
+          );
+        }
+
+        // Wait before retry (exponential backoff: 1s, 2s, 4s)
+        await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt));
+      }
+    }
+  }
+
+  throw new Error("Upload completed but no driveItem returned");
 }
 
 export interface OneDriveSharingLink {
@@ -165,6 +291,7 @@ export async function uploadAndShareOneDrive(params: {
 /**
  * Upload a file to a SharePoint site.
  * This is used for group chats and channels where /me/drive doesn't work for bots.
+ * For files ≤4MB, uses simple upload. For larger files, uses resumable upload with chunking.
  *
  * @param params.siteId - SharePoint site ID (e.g., "contoso.sharepoint.com,guid1,guid2")
  */
@@ -176,6 +303,12 @@ export async function uploadToSharePoint(params: {
   siteId: string;
   fetchFn?: typeof fetch;
 }): Promise<OneDriveUploadResult> {
+  // Use resumable upload for files larger than 4MB
+  if (params.buffer.length > SIMPLE_UPLOAD_LIMIT) {
+    return uploadToSharePointResumable(params);
+  }
+
+  // Simple upload for small files
   const fetchFn = params.fetchFn ?? fetch;
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
@@ -214,6 +347,123 @@ export async function uploadToSharePoint(params: {
     webUrl: data.webUrl,
     name: data.name,
   };
+}
+
+/**
+ * Upload a file to SharePoint using resumable upload session (for files >4MB).
+ * Splits file into 1MB chunks and retries each chunk up to 3 times on failure.
+ */
+async function uploadToSharePointResumable(params: {
+  buffer: Buffer;
+  filename: string;
+  contentType?: string;
+  tokenProvider: MSTeamsAccessTokenProvider;
+  siteId: string;
+  fetchFn?: typeof fetch;
+}): Promise<OneDriveUploadResult> {
+  const fetchFn = params.fetchFn ?? fetch;
+  const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
+  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+
+  // Create upload session
+  const sessionRes = await fetchFn(
+    `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/createUploadSession`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        item: {
+          "@microsoft.graph.conflictBehavior": "replace",
+          name: params.filename,
+        },
+      }),
+    },
+  );
+
+  if (!sessionRes.ok) {
+    const body = await sessionRes.text().catch(() => "");
+    throw new Error(
+      `Create upload session failed: ${sessionRes.status} ${sessionRes.statusText} - ${body}`,
+    );
+  }
+
+  const sessionData = (await sessionRes.json()) as {
+    uploadUrl?: string;
+  };
+
+  if (!sessionData.uploadUrl) {
+    throw new Error("Upload session response missing uploadUrl");
+  }
+
+  const uploadUrl = sessionData.uploadUrl;
+  const fileSize = params.buffer.length;
+
+  // Upload file in chunks with retry logic
+  for (let start = 0; start < fileSize; start += CHUNK_SIZE) {
+    const end = Math.min(start + CHUNK_SIZE, fileSize);
+    const chunk = params.buffer.subarray(start, end);
+
+    // Retry chunk upload up to MAX_RETRIES times
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const chunkRes = await fetchFn(uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Length": String(chunk.length),
+            "Content-Range": `bytes ${start}-${end - 1}/${fileSize}`,
+          },
+          body: new Uint8Array(chunk),
+        });
+
+        if (!chunkRes.ok) {
+          const body = await chunkRes.text().catch(() => "");
+          throw new Error(
+            `Chunk upload failed: ${chunkRes.status} ${chunkRes.statusText} - ${body}`,
+          );
+        }
+
+        // Last chunk returns the driveItem, intermediate chunks return upload status
+        if (end === fileSize) {
+          const data = (await chunkRes.json()) as {
+            id?: string;
+            webUrl?: string;
+            name?: string;
+          };
+
+          if (!data.id || !data.webUrl || !data.name) {
+            throw new Error("Final chunk response missing required fields");
+          }
+
+          return {
+            id: data.id,
+            webUrl: data.webUrl,
+            name: data.name,
+          };
+        }
+
+        // Chunk succeeded, break retry loop
+        break;
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+
+        // If this was the last retry, rethrow with context
+        if (attempt === MAX_RETRIES - 1) {
+          throw new Error(
+            `Chunk upload failed after ${MAX_RETRIES} attempts (bytes ${start}-${end - 1}): ${error.message}`,
+            { cause: err },
+          );
+        }
+
+        // Wait before retry (exponential backoff: 1s, 2s, 4s)
+        await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt));
+      }
+    }
+  }
+
+  throw new Error("Upload completed but no driveItem returned");
 }
 
 export interface ChatMember {
