@@ -49,6 +49,7 @@ import {
   parseEmbedding,
 } from "./internal.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
+import { memLog } from "./memory-log.js";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 import { requireNodeSqlite } from "./sqlite.js";
@@ -266,6 +267,7 @@ export class MemoryIndexManager implements MemorySearchManager {
       sessionKey?: string;
     },
   ): Promise<MemorySearchResult[]> {
+    const searchStart = Date.now();
     void this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
       void this.sync({ reason: "search" }).catch((err) => {
@@ -274,6 +276,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     }
     const cleaned = query.trim();
     if (!cleaned) {
+      memLog.trace("search: empty query; returning []");
       return [];
     }
     const minScore = opts?.minScore ?? this.settings.query.minScore;
@@ -283,6 +286,20 @@ export class MemoryIndexManager implements MemorySearchManager {
       200,
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
+
+    memLog.trace("search: starting", {
+      query: cleaned.slice(0, 120),
+      strategy: hybrid.enabled ? "hybrid" : "vector-only",
+      maxResults,
+      minScore,
+      candidates,
+      vectorWeight: hybrid.vectorWeight,
+      textWeight: hybrid.textWeight,
+      provider: this.provider.id,
+      model: this.provider.model,
+      dirty: this.dirty,
+      sessionsDirty: this.sessionsDirty,
+    });
 
     const keywordResults = hybrid.enabled
       ? await this.searchKeyword(cleaned, candidates).catch(() => [])
@@ -294,24 +311,53 @@ export class MemoryIndexManager implements MemorySearchManager {
       ? await this.searchVector(queryVec, candidates).catch(() => [])
       : [];
 
-    if (!hybrid.enabled) {
-      return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
-    }
-
-    const merged = this.mergeHybridResults({
-      vector: vectorResults,
-      keyword: keywordResults,
-      vectorWeight: hybrid.vectorWeight,
-      textWeight: hybrid.textWeight,
+    memLog.trace("search: raw results", {
+      vectorResults: vectorResults.length,
+      keywordResults: keywordResults.length,
+      hasVector,
+      vectorTopScore: vectorResults[0]?.score,
+      keywordTopScore: keywordResults[0]?.score,
     });
 
-    return merged.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+    let finalResults: MemorySearchResult[];
+    if (!hybrid.enabled) {
+      finalResults = vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+    } else {
+      const merged = this.mergeHybridResults({
+        vector: vectorResults,
+        keyword: keywordResults,
+        vectorWeight: hybrid.vectorWeight,
+        textWeight: hybrid.textWeight,
+      });
+      finalResults = merged.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+    }
+
+    const elapsedMs = Date.now() - searchStart;
+    memLog.trace("search: completed", {
+      query: cleaned.slice(0, 80),
+      results: finalResults.length,
+      elapsedMs,
+      topScore: finalResults[0]?.score,
+      bottomScore: finalResults.at(-1)?.score,
+      paths: finalResults.map((r) => r.path),
+      filteredByMinScore:
+        (hybrid.enabled ? vectorResults.length + keywordResults.length : vectorResults.length) -
+        finalResults.length,
+    });
+    memLog.summary(`search completed: ${finalResults.length} results in ${elapsedMs}ms`, {
+      query: cleaned.slice(0, 60),
+      results: finalResults.length,
+      elapsedMs,
+    });
+
+    return finalResults;
   }
 
   private async searchVector(
     queryVec: number[],
     limit: number,
   ): Promise<Array<MemorySearchResult & { id: string }>> {
+    const start = Date.now();
     const results = await searchVector({
       db: this.db,
       vectorTable: VECTOR_TABLE,
@@ -322,6 +368,13 @@ export class MemoryIndexManager implements MemorySearchManager {
       ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
       sourceFilterVec: this.buildSourceFilter("c"),
       sourceFilterChunks: this.buildSourceFilter(),
+    });
+    memLog.trace("searchVector: completed", {
+      results: results.length,
+      limit,
+      vectorDims: queryVec.length,
+      vectorAvailable: this.vector.available,
+      elapsedMs: Date.now() - start,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string });
   }
@@ -335,8 +388,13 @@ export class MemoryIndexManager implements MemorySearchManager {
     limit: number,
   ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
     if (!this.fts.enabled || !this.fts.available) {
+      memLog.trace("searchKeyword: skipped (fts disabled or unavailable)", {
+        ftsEnabled: this.fts.enabled,
+        ftsAvailable: this.fts.available,
+      });
       return [];
     }
+    const start = Date.now();
     const sourceFilter = this.buildSourceFilter();
     const results = await searchKeyword({
       db: this.db,
@@ -348,6 +406,11 @@ export class MemoryIndexManager implements MemorySearchManager {
       sourceFilter,
       buildFtsQuery: (raw) => this.buildFtsQuery(raw),
       bm25RankToScore,
+    });
+    memLog.trace("searchKeyword: completed", {
+      results: results.length,
+      limit,
+      elapsedMs: Date.now() - start,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
   }
@@ -380,6 +443,13 @@ export class MemoryIndexManager implements MemorySearchManager {
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,
     });
+    memLog.trace("mergeHybridResults", {
+      vectorIn: params.vector.length,
+      keywordIn: params.keyword.length,
+      mergedOut: merged.length,
+      vectorWeight: params.vectorWeight,
+      textWeight: params.textWeight,
+    });
     return merged.map((entry) => entry as MemorySearchResult);
   }
 
@@ -389,8 +459,10 @@ export class MemoryIndexManager implements MemorySearchManager {
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     if (this.syncing) {
+      memLog.trace("sync: already running, coalescing", { reason: params?.reason });
       return this.syncing;
     }
+    memLog.trace("sync: starting", { reason: params?.reason, force: params?.force });
     this.syncing = this.runSync(params).finally(() => {
       this.syncing = null;
     });
@@ -889,6 +961,15 @@ export class MemoryIndexManager implements MemorySearchManager {
         messagesThreshold <= 0
           ? delta.pendingMessages > 0
           : delta.pendingMessages >= messagesThreshold;
+      memLog.trace("processSessionDeltaBatch: file delta", {
+        sessionFile: path.basename(sessionFile),
+        pendingBytes: delta.pendingBytes,
+        pendingMessages: delta.pendingMessages,
+        bytesThreshold,
+        messagesThreshold,
+        bytesHit,
+        messagesHit,
+      });
       if (!bytesHit && !messagesHit) {
         continue;
       }
@@ -901,6 +982,9 @@ export class MemoryIndexManager implements MemorySearchManager {
       shouldSync = true;
     }
     if (shouldSync) {
+      memLog.trace("processSessionDeltaBatch: triggering sync", {
+        dirtyFiles: this.sessionsDirtyFiles.size,
+      });
       void this.sync({ reason: "session-delta" }).catch((err) => {
         log.warn(`memory sync failed (session-delta): ${String(err)}`);
       });
@@ -1086,11 +1170,15 @@ export class MemoryIndexManager implements MemorySearchManager {
       });
     }
 
+    let skippedCount = 0;
+    let indexedCount = 0;
     const tasks = fileEntries.map((entry) => async () => {
       const record = this.db
         .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
         .get(entry.path, "memory") as { hash: string } | undefined;
       if (!params.needsFullReindex && record?.hash === entry.hash) {
+        memLog.trace("syncMemoryFiles: skip (unchanged)", { path: entry.path });
+        skippedCount += 1;
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -1100,7 +1188,13 @@ export class MemoryIndexManager implements MemorySearchManager {
         }
         return;
       }
+      memLog.trace("syncMemoryFiles: indexing", {
+        path: entry.path,
+        reason: !record ? "new" : "hash-changed",
+        size: entry.size,
+      });
       await this.indexFile(entry, { source: "memory" });
+      indexedCount += 1;
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -1114,10 +1208,12 @@ export class MemoryIndexManager implements MemorySearchManager {
     const staleRows = this.db
       .prepare(`SELECT path FROM files WHERE source = ?`)
       .all("memory") as Array<{ path: string }>;
+    let removedCount = 0;
     for (const stale of staleRows) {
       if (activePaths.has(stale.path)) {
         continue;
       }
+      memLog.trace("syncMemoryFiles: removing stale", { path: stale.path });
       this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(stale.path, "memory");
       try {
         this.db
@@ -1134,7 +1230,14 @@ export class MemoryIndexManager implements MemorySearchManager {
             .run(stale.path, "memory", this.provider.model);
         } catch {}
       }
+      removedCount += 1;
     }
+    memLog.trace("syncMemoryFiles: done", {
+      indexed: indexedCount,
+      skipped: skippedCount,
+      removed: removedCount,
+      total: fileEntries.length,
+    });
   }
 
   private async syncSessionFiles(params: {
@@ -1268,6 +1371,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
+    const syncStart = Date.now();
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
     if (progress) {
       progress.report({
@@ -1287,12 +1391,34 @@ export class MemoryIndexManager implements MemorySearchManager {
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
       (vectorReady && !meta?.vectorDims);
+
+    memLog.trace("runSync: decision", {
+      reason: params?.reason,
+      force: params?.force,
+      needsFullReindex,
+      vectorReady,
+      dirty: this.dirty,
+      sessionsDirty: this.sessionsDirty,
+      sessionsDirtyFiles: this.sessionsDirtyFiles.size,
+      metaModel: meta?.model,
+      currentModel: this.provider.model,
+      metaProvider: meta?.provider,
+      currentProvider: this.provider.id,
+    });
+
     try {
       if (needsFullReindex) {
+        memLog.summary("sync: full reindex required", {
+          reason: params?.reason,
+          force: params?.force,
+        });
         await this.runSafeReindex({
           reason: params?.reason,
           force: params?.force,
           progress: progress ?? undefined,
+        });
+        memLog.summary(`sync: full reindex completed in ${Date.now() - syncStart}ms`, {
+          elapsedMs: Date.now() - syncStart,
         });
         return;
       }
@@ -1300,6 +1426,8 @@ export class MemoryIndexManager implements MemorySearchManager {
       const shouldSyncMemory =
         this.sources.has("memory") && (params?.force || needsFullReindex || this.dirty);
       const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
+
+      memLog.trace("runSync: sync targets", { shouldSyncMemory, shouldSyncSessions });
 
       if (shouldSyncMemory) {
         await this.syncMemoryFiles({ needsFullReindex, progress: progress ?? undefined });
@@ -1315,8 +1443,17 @@ export class MemoryIndexManager implements MemorySearchManager {
       } else {
         this.sessionsDirty = false;
       }
+
+      const elapsedMs = Date.now() - syncStart;
+      memLog.summary(`sync completed in ${elapsedMs}ms`, {
+        reason: params?.reason,
+        syncedMemory: shouldSyncMemory,
+        syncedSessions: shouldSyncSessions,
+        elapsedMs,
+      });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
+      memLog.warn("runSync: error, checking fallback", { error: reason });
       const activated =
         this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
       if (activated) {
@@ -1795,6 +1932,12 @@ export class MemoryIndexManager implements MemorySearchManager {
       }
     }
 
+    memLog.trace("embedChunksInBatches: cache check", {
+      total: chunks.length,
+      cacheHits: chunks.length - missing.length,
+      cacheMisses: missing.length,
+    });
+
     if (missing.length === 0) {
       return embeddings;
     }
@@ -2258,10 +2401,19 @@ export class MemoryIndexManager implements MemorySearchManager {
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ) {
+    const indexStart = Date.now();
     const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
     const chunks = chunkMarkdown(content, this.settings.chunking).filter(
       (chunk) => chunk.text.trim().length > 0,
     );
+    memLog.trace("indexFile: chunking", {
+      path: entry.path,
+      source: options.source,
+      contentLength: content.length,
+      chunks: chunks.length,
+      chunkTokens: this.settings.chunking.tokens,
+      chunkOverlap: this.settings.chunking.overlap,
+    });
     const embeddings = this.batch.enabled
       ? await this.embedChunksWithBatch(chunks, entry, options.source)
       : await this.embedChunksInBatches(chunks);
@@ -2351,5 +2503,13 @@ export class MemoryIndexManager implements MemorySearchManager {
            size=excluded.size`,
       )
       .run(entry.path, options.source, entry.hash, entry.mtimeMs, entry.size);
+    memLog.trace("indexFile: completed", {
+      path: entry.path,
+      source: options.source,
+      chunks: chunks.length,
+      vectorReady,
+      ftsAvailable: this.fts.available,
+      elapsedMs: Date.now() - indexStart,
+    });
   }
 }

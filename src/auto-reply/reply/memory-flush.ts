@@ -3,6 +3,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
+import { memLog } from "../../memory/memory-log.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
@@ -82,22 +83,34 @@ export function shouldRunMemoryFlush(params: {
 }): boolean {
   const totalTokens = params.entry?.totalTokens;
   if (!totalTokens || totalTokens <= 0) {
+    memLog.trace("shouldRunMemoryFlush: no tokens, skip");
     return false;
   }
   const contextWindow = Math.max(1, Math.floor(params.contextWindowTokens));
   const reserveTokens = Math.max(0, Math.floor(params.reserveTokensFloor));
   const softThreshold = Math.max(0, Math.floor(params.softThresholdTokens));
   const threshold = Math.max(0, contextWindow - reserveTokens - softThreshold);
-  if (threshold <= 0) {
-    return false;
-  }
-  if (totalTokens < threshold) {
-    return false;
-  }
 
   const compactionCount = params.entry?.compactionCount ?? 0;
   const lastFlushAt = params.entry?.memoryFlushCompactionCount;
-  if (typeof lastFlushAt === "number" && lastFlushAt === compactionCount) {
+  const alreadyFlushed = typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
+
+  const shouldFlush = threshold > 0 && totalTokens >= threshold && !alreadyFlushed;
+
+  memLog.trace("shouldRunMemoryFlush: decision", {
+    shouldFlush,
+    totalTokens,
+    contextWindow,
+    reserveTokens,
+    softThreshold,
+    threshold,
+    compactionCount,
+    lastFlushAt,
+    alreadyFlushed,
+    tokensOverThreshold: totalTokens - threshold,
+  });
+
+  if (threshold <= 0 || totalTokens < threshold || alreadyFlushed) {
     return false;
   }
 

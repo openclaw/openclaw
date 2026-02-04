@@ -16,6 +16,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { memLog } from "../../memory/memory-log.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import {
   resolveMemoryFlushContextWindowTokens,
@@ -75,10 +76,24 @@ export async function runMemoryFlushIfNeeded(params: {
       softThresholdTokens: memoryFlushSettings.softThresholdTokens,
     });
 
+  memLog.trace("runMemoryFlushIfNeeded: decision", {
+    shouldFlush: shouldFlushMemory,
+    writable: memoryFlushWritable,
+    isHeartbeat: params.isHeartbeat,
+    sessionKey: params.sessionKey,
+    totalTokens: params.sessionEntry?.totalTokens,
+    compactionCount: params.sessionEntry?.compactionCount,
+  });
+
   if (!shouldFlushMemory) {
     return params.sessionEntry;
   }
 
+  memLog.summary("memory flush: starting", {
+    sessionKey: params.sessionKey,
+    totalTokens: params.sessionEntry?.totalTokens,
+  });
+  const flushStart = Date.now();
   let activeSessionEntry = params.sessionEntry;
   const activeSessionStore = params.sessionStore;
   const flushRunId = crypto.randomUUID();
@@ -89,6 +104,20 @@ export async function runMemoryFlushIfNeeded(params: {
     });
   }
   let memoryCompactionCompleted = false;
+  // Track tool calls during the flush for metrics
+  const toolCounts = new Map<string, number>();
+  const toolErrors = new Map<string, number>();
+  const writtenPaths: string[] = [];
+  let flushMetrics: {
+    memoriesWritten: number;
+    memoryPaths: string[];
+    totalToolCalls: number;
+    totalToolErrors: number;
+    agentDurationMs?: number;
+    stopReason?: string;
+    tokenUsage?: Record<string, unknown>;
+    payloadCount: number;
+  } | null = null;
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
     memoryFlushSettings.systemPrompt,
@@ -96,7 +125,7 @@ export async function runMemoryFlushIfNeeded(params: {
     .filter(Boolean)
     .join("\n\n");
   try {
-    await runWithModelFallback({
+    const flushResult = await runWithModelFallback({
       cfg: params.followupRun.run.config,
       provider: params.followupRun.run.provider,
       model: params.followupRun.run.model,
@@ -157,10 +186,69 @@ export async function runMemoryFlushIfNeeded(params: {
                 memoryCompactionCompleted = true;
               }
             }
+            if (evt.stream === "tool" && evt.data) {
+              const toolName = String(evt.data.name ?? "unknown");
+              const phase = String(evt.data.phase ?? "");
+              if (phase === "start") {
+                toolCounts.set(toolName, (toolCounts.get(toolName) ?? 0) + 1);
+                // Track file paths written to (memory file captures)
+                if (toolName === "write") {
+                  const args = evt.data.args as Record<string, unknown> | undefined;
+                  const filePath = typeof args?.path === "string" ? args.path : undefined;
+                  if (filePath) {
+                    writtenPaths.push(filePath);
+                  }
+                }
+              }
+              if (phase === "result" && evt.data.isError) {
+                toolErrors.set(toolName, (toolErrors.get(toolName) ?? 0) + 1);
+              }
+            }
           },
         });
       },
     });
+    // Extract metrics from the flush agent run
+    const flushMeta = flushResult.result.meta;
+    const flushPayloads = flushResult.result.payloads ?? [];
+    const memoryFilesWritten = writtenPaths.filter(
+      (p) => p.includes("/memory/") || p.includes("/memory\\") || p.endsWith(".md"),
+    );
+    const totalToolCalls = Array.from(toolCounts.values()).reduce((a, b) => a + b, 0);
+    const totalToolErrors = Array.from(toolErrors.values()).reduce((a, b) => a + b, 0);
+
+    memLog.trace("memory flush: agent run completed", {
+      sessionKey: params.sessionKey,
+      durationMs: flushMeta.durationMs,
+      stopReason: flushMeta.stopReason,
+      aborted: flushMeta.aborted,
+      payloadCount: flushPayloads.length,
+      errorPayloads: flushPayloads.filter((p) => p.isError).length,
+      totalToolCalls,
+      totalToolErrors,
+      toolCallBreakdown: Object.fromEntries(toolCounts),
+      toolErrorBreakdown: totalToolErrors > 0 ? Object.fromEntries(toolErrors) : undefined,
+      memoriesWritten: memoryFilesWritten.length,
+      memoryPaths: memoryFilesWritten,
+      allWrittenPaths: writtenPaths,
+      usage: flushMeta.agentMeta?.usage,
+      pendingToolCalls: flushMeta.pendingToolCalls?.map((tc) => tc.name),
+      provider: flushResult.provider,
+      model: flushResult.model,
+      fallbackAttempts: flushResult.attempts?.length ?? 0,
+    });
+
+    flushMetrics = {
+      memoriesWritten: memoryFilesWritten.length,
+      memoryPaths: memoryFilesWritten,
+      totalToolCalls,
+      totalToolErrors,
+      agentDurationMs: flushMeta.durationMs,
+      stopReason: flushMeta.stopReason,
+      tokenUsage: flushMeta.agentMeta?.usage ? { ...flushMeta.agentMeta.usage } : undefined,
+      payloadCount: flushPayloads.length,
+    };
+
     let memoryFlushCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
@@ -194,8 +282,34 @@ export async function runMemoryFlushIfNeeded(params: {
       }
     }
   } catch (err) {
-    logVerbose(`memory flush run failed: ${String(err)}`);
+    const msg = String(err);
+    logVerbose(`memory flush run failed: ${msg}`);
+    memLog.error("memory flush: failed", {
+      error: msg,
+      sessionKey: params.sessionKey,
+      elapsedMs: Date.now() - flushStart,
+    });
   }
+
+  const elapsedMs = Date.now() - flushStart;
+  const memoriesWritten = flushMetrics?.memoriesWritten ?? 0;
+  const summaryParts = [
+    `memory flush: completed in ${elapsedMs}ms`,
+    `memories_written=${memoriesWritten}`,
+    `tool_calls=${flushMetrics?.totalToolCalls ?? 0}`,
+  ];
+  if (flushMetrics?.totalToolErrors) {
+    summaryParts.push(`tool_errors=${flushMetrics.totalToolErrors}`);
+  }
+  if (memoryCompactionCompleted) {
+    summaryParts.push("compaction=yes");
+  }
+  memLog.summary(summaryParts.join(" | "), {
+    sessionKey: params.sessionKey,
+    compactionCompleted: memoryCompactionCompleted,
+    elapsedMs,
+    ...(flushMetrics ?? {}),
+  });
 
   return activeSessionEntry;
 }

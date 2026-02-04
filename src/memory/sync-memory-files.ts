@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildFileEntry, listMemoryFiles, type MemoryFileEntry } from "./internal.js";
+import { memLog } from "./memory-log.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -54,6 +55,7 @@ export async function syncMemoryFiles(params: {
       .prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`)
       .get(entry.path, "memory") as { hash: string } | undefined;
     if (!params.needsFullReindex && record?.hash === entry.hash) {
+      memLog.trace("syncMemoryFiles (standalone): skip (unchanged)", { path: entry.path });
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -63,6 +65,10 @@ export async function syncMemoryFiles(params: {
       }
       return;
     }
+    memLog.trace("syncMemoryFiles (standalone): indexing", {
+      path: entry.path,
+      reason: !record ? "new" : "hash-changed",
+    });
     await params.indexFile(entry);
     if (params.progress) {
       params.progress.completed += 1;

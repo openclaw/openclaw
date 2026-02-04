@@ -7,6 +7,7 @@ import type {
 } from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
+import { memLog } from "./memory-log.js";
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
@@ -21,10 +22,16 @@ export async function getMemorySearchManager(params: {
   agentId: string;
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
+  memLog.trace("getMemorySearchManager: resolving", {
+    agentId: params.agentId,
+    backend: resolved.backend,
+    hasQmd: Boolean(resolved.qmd),
+  });
   if (resolved.backend === "qmd" && resolved.qmd) {
     const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
     const cached = QMD_MANAGER_CACHE.get(cacheKey);
     if (cached) {
+      memLog.trace("getMemorySearchManager: qmd cache hit", { agentId: params.agentId });
       return { manager: cached };
     }
     try {
@@ -46,20 +53,33 @@ export async function getMemorySearchManager(params: {
           () => QMD_MANAGER_CACHE.delete(cacheKey),
         );
         QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+        memLog.trace("getMemorySearchManager: qmd primary created", { agentId: params.agentId });
         return { manager: wrapper };
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+      memLog.warn("getMemorySearchManager: qmd failed, falling back to builtin", {
+        agentId: params.agentId,
+        error: message,
+      });
     }
   }
 
   try {
     const { MemoryIndexManager } = await import("./manager.js");
     const manager = await MemoryIndexManager.get(params);
+    memLog.trace("getMemorySearchManager: builtin index resolved", {
+      agentId: params.agentId,
+      available: Boolean(manager),
+    });
     return { manager };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    memLog.error("getMemorySearchManager: builtin index failed", {
+      agentId: params.agentId,
+      error: message,
+    });
     return { manager: null, error: message };
   }
 }
@@ -88,9 +108,16 @@ class FallbackMemoryManager implements MemorySearchManager {
         this.primaryFailed = true;
         this.lastError = err instanceof Error ? err.message : String(err);
         log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
+        memLog.warn("FallbackMemoryManager: primary search failed, switching to builtin", {
+          error: this.lastError,
+          query: query.slice(0, 80),
+        });
         await this.deps.primary.close?.().catch(() => {});
       }
     }
+    memLog.trace("FallbackMemoryManager: using fallback for search", {
+      query: query.slice(0, 80),
+    });
     const fallback = await this.ensureFallback();
     if (fallback) {
       return await fallback.search(query, opts);
