@@ -636,3 +636,49 @@ export function applyAuthProfileConfig(
     },
   };
 }
+
+export function applyAzureOpenAiProviderConfig(
+  cfg: OpenClawConfig,
+  endpoint: string,
+): OpenClawConfig {
+  return {
+    ...cfg,
+    models: {
+      ...cfg.models,
+      azureDiscovery: {
+        ...cfg.models?.azureDiscovery,
+        enabled: true,
+        endpoint,
+      },
+    },
+  };
+}
+
+export function applyAzureOpenAiConfig(
+  cfg: OpenClawConfig,
+  endpoint: string,
+  defaultModel?: string,
+): OpenClawConfig {
+  const next = applyAzureOpenAiProviderConfig(cfg, endpoint);
+  if (!defaultModel) {
+    return next;
+  }
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel && "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: defaultModel,
+        },
+      },
+    },
+  };
+}

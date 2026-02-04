@@ -13,6 +13,8 @@ import {
 } from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyAzureOpenAiConfig,
+  applyAzureOpenAiProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyKimiCodeConfig,
@@ -794,6 +796,60 @@ export async function applyAuthChoiceApiProviders(
       nextConfig = applied.config;
       agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
     }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "azure-openai") {
+    const endpoint = await params.prompter.text({
+      message: "Enter Azure OpenAI endpoint (e.g., https://YOUR-RESOURCE.openai.azure.com)",
+      validate: (input) => {
+        const value = String(input).trim();
+        if (!value) {
+          return "Azure endpoint is required";
+        }
+        if (!value.startsWith("https://")) {
+          return "Endpoint must start with https://";
+        }
+        if (!value.includes("azure.com")) {
+          return "Must be an Azure endpoint (*.azure.com)";
+        }
+        return undefined;
+      },
+    });
+
+    const endpointStr = String(endpoint).trim();
+
+    await params.prompter.note(
+      [
+        "Azure discovery will automatically list all deployed models.",
+        "Authentication options (in priority order):",
+        "  1. Azure CLI: run `az login` (recommended)",
+        "  2. API key: set AZURE_OPENAI_API_KEY environment variable",
+        "",
+        "To verify discovery: openclaw models list",
+      ].join("\n"),
+      "Azure OpenAI Setup",
+    );
+
+    nextConfig = applyAzureOpenAiProviderConfig(nextConfig, endpointStr);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "azure-openai:default",
+      provider: "azure-openai",
+      mode: "api_key",
+    });
+
+    const firstModel = "azure-openai/gpt-4";
+    if (params.setDefaultModel) {
+      await params.prompter.note(
+        `Set default model to ${firstModel} (update after discovery completes)`,
+        "Model configured",
+      );
+      nextConfig = applyAzureOpenAiConfig(nextConfig, endpointStr, firstModel);
+    } else if (params.agentId) {
+      await noteAgentModel(firstModel);
+      agentModelOverride = firstModel;
+    }
+
     return { config: nextConfig, agentModelOverride };
   }
 

@@ -22,7 +22,8 @@ export type AuthChoiceGroupId =
   | "minimax"
   | "synthetic"
   | "venice"
-  | "qwen";
+  | "qwen"
+  | "azure";
 
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
@@ -127,6 +128,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     hint: "Account ID + Gateway ID + API key",
     choices: ["cloudflare-ai-gateway-api-key"],
   },
+  {
+    value: "azure",
+    label: "Azure OpenAI & Foundry",
+    hint: "Endpoint + Azure CLI or API key",
+    choices: ["azure-openai"],
+  },
 ];
 
 export function buildAuthChoiceOptions(params: {
@@ -193,6 +200,11 @@ export function buildAuthChoiceOptions(params: {
   options.push({
     value: "xiaomi-api-key",
     label: "Xiaomi API key",
+  });
+  options.push({
+    value: "azure-openai",
+    label: "Azure OpenAI / Foundry",
+    hint: "Automatic deployment discovery via Azure CLI",
   });
   options.push({
     value: "minimax-portal",
