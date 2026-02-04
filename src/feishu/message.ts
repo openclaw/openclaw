@@ -94,9 +94,14 @@ export async function processFeishuMessage(
   }
   const isGroup = message.chat_type === "group";
   const msgType = message.message_type;
-  const senderId = sender?.sender_id?.open_id || sender?.sender_id?.user_id || "unknown";
+  const senderId = sender?.sender_id?.open_id || sender?.sender_id?.user_id;
   const senderUnionId = sender?.sender_id?.union_id;
   const maxMediaBytes = feishuCfg.mediaMaxMb * 1024 * 1024;
+
+  if (!senderId) {
+    logger.warn("Received message without sender id");
+    return;
+  }
 
   // Check if this is a supported message type
   if (!msgType || !SUPPORTED_MSG_TYPES.has(msgType)) {
@@ -270,7 +275,7 @@ export async function processFeishuMessage(
     return;
   }
 
-  const senderName = sender?.sender_id?.user_id || "unknown";
+  const senderName = sender?.sender_id?.user_id || senderId || "unknown";
 
   // Streaming mode support
   const streamingEnabled = (feishuCfg.streaming ?? true) && Boolean(options.credentials);
