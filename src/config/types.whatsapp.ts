@@ -30,6 +30,14 @@ export type WhatsAppConfig = {
    * Default: `[{agents.list[].identity.name}]` (or `[openclaw]`) when allowFrom is empty, else `""`.
    */
   messagePrefix?: string;
+  /**
+   * Per-channel outbound response prefix override.
+   *
+   * When set, this takes precedence over the global `messages.responsePrefix`.
+   * Use `""` to explicitly disable a global prefix for this channel.
+   * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
+   */
+  responsePrefix?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
   /**
@@ -109,6 +117,8 @@ export type WhatsAppAccountConfig = {
   sendReadReceipts?: boolean;
   /** Inbound message prefix override for this account (WhatsApp only). */
   messagePrefix?: string;
+  /** Per-account outbound response prefix override (takes precedence over channel and global). */
+  responsePrefix?: string;
   /** Override auth directory (Baileys multi-file auth state). */
   authDir?: string;
   /** Direct message access policy (default: pairing). */
