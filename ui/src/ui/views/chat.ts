@@ -347,7 +347,7 @@ export function renderChat(props: ChatProps) {
         props.showNewMessages
           ? html`
             <button
-              class="chat-new-messages"
+              class="btn chat-new-messages"
               type="button"
               @click=${props.onScrollToBottom}
             >
