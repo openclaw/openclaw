@@ -11,7 +11,6 @@ title: "Qianfan"
 Qianfan is Baidu's MaaS platform, provides a **unified API** that routes requests to many models behind a single
 endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switching the base URL.
 
-
 ## Prerequisites
 
 1. A Baidu Cloud account with Qianfan API access
@@ -165,7 +164,7 @@ openclaw channels status --probe
 ## Model Details
 
 | Property          | Value                   |
-| ----------------- |-------------------------|
+| ----------------- | ----------------------- |
 | Provider          | `qianfan`               |
 | Model ID          | `deepseek-v3.2`         |
 | Model Reference   | `qianfan/deepseek-v3.2` |
@@ -184,22 +183,22 @@ The default model is `deepseek-v3.2`. You can configure additional models in you
     "providers": {
       "qianfan": {
         "models": [
-           {
-              "id": "deepseek-v3",
-              "name": "DeepSeek-V3",
-              "reasoning": false,
-              "input": ["text"],
-              "contextWindow": 131072,
-              "maxTokens": 16384
-           },
-           {
-              "id": "ernie-x1.1",
-              "name": "ERNIE-X1.1",
-              "reasoning": true,
-              "input": ["text"],
-              "contextWindow": 65536,
-              "maxTokens": 65536
-           }
+          {
+            "id": "deepseek-v3",
+            "name": "DeepSeek-V3",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 16384
+          },
+          {
+            "id": "ernie-x1.1",
+            "name": "ERNIE-X1.1",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 65536,
+            "maxTokens": 65536
+          }
         ]
       }
     }
