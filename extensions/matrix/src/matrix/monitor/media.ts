@@ -22,7 +22,7 @@ async function fetchMatrixMediaBuffer(params: {
   maxBytes: number;
 }): Promise<{ buffer: Buffer; headerType?: string } | null> {
   // @vector-im/matrix-bot-sdk provides mxcToHttp helper
-  const url = params.client.mxcToHttp(params.mxcUrl);
+  const url = await params.client.mxcToHttp(params.mxcUrl);
   if (!url) {
     return null;
   }
