@@ -7,31 +7,7 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
   const { skills, config } = params;
   const updates: Array<{ key: string; prev: string | undefined }> = [];
 
-  for (const entry of skills) {
-    const skillKey = resolveSkillKey(entry.skill, entry);
-    const skillConfig = resolveSkillConfig(config, skillKey);
-    if (!skillConfig) {
-      continue;
-    }
-
-    if (skillConfig.env) {
-      for (const [envKey, envValue] of Object.entries(skillConfig.env)) {
-        if (!envValue || process.env[envKey]) {
-          continue;
-        }
-        updates.push({ key: envKey, prev: process.env[envKey] });
-        process.env[envKey] = envValue;
-      }
-    }
-
-    const primaryEnv = entry.metadata?.primaryEnv;
-    if (primaryEnv && skillConfig.apiKey && !process.env[primaryEnv]) {
-      updates.push({ key: primaryEnv, prev: process.env[primaryEnv] });
-      process.env[primaryEnv] = skillConfig.apiKey;
-    }
-  }
-
-  return () => {
+  const restore = () => {
     for (const update of updates) {
       if (update.prev === undefined) {
         delete process.env[update.key];
@@ -40,6 +16,37 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
       }
     }
   };
+
+  try {
+    for (const entry of skills) {
+      const skillKey = resolveSkillKey(entry.skill, entry);
+      const skillConfig = resolveSkillConfig(config, skillKey);
+      if (!skillConfig) {
+        continue;
+      }
+
+      if (skillConfig.env) {
+        for (const [envKey, envValue] of Object.entries(skillConfig.env)) {
+          if (!envValue || process.env[envKey]) {
+            continue;
+          }
+          updates.push({ key: envKey, prev: process.env[envKey] });
+          process.env[envKey] = envValue;
+        }
+      }
+
+      const primaryEnv = entry.metadata?.primaryEnv;
+      if (primaryEnv && skillConfig.apiKey && !process.env[primaryEnv]) {
+        updates.push({ key: primaryEnv, prev: process.env[primaryEnv] });
+        process.env[primaryEnv] = skillConfig.apiKey;
+      }
+    }
+  } catch (err) {
+    restore();
+    throw err;
+  }
+
+  return restore;
 }
 
 export function applySkillEnvOverridesFromSnapshot(params: {
@@ -52,32 +59,7 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   }
   const updates: Array<{ key: string; prev: string | undefined }> = [];
 
-  for (const skill of snapshot.skills) {
-    const skillConfig = resolveSkillConfig(config, skill.name);
-    if (!skillConfig) {
-      continue;
-    }
-
-    if (skillConfig.env) {
-      for (const [envKey, envValue] of Object.entries(skillConfig.env)) {
-        if (!envValue || process.env[envKey]) {
-          continue;
-        }
-        updates.push({ key: envKey, prev: process.env[envKey] });
-        process.env[envKey] = envValue;
-      }
-    }
-
-    if (skill.primaryEnv && skillConfig.apiKey && !process.env[skill.primaryEnv]) {
-      updates.push({
-        key: skill.primaryEnv,
-        prev: process.env[skill.primaryEnv],
-      });
-      process.env[skill.primaryEnv] = skillConfig.apiKey;
-    }
-  }
-
-  return () => {
+  const restore = () => {
     for (const update of updates) {
       if (update.prev === undefined) {
         delete process.env[update.key];
@@ -86,4 +68,36 @@ export function applySkillEnvOverridesFromSnapshot(params: {
       }
     }
   };
+
+  try {
+    for (const skill of snapshot.skills) {
+      const skillConfig = resolveSkillConfig(config, skill.name);
+      if (!skillConfig) {
+        continue;
+      }
+
+      if (skillConfig.env) {
+        for (const [envKey, envValue] of Object.entries(skillConfig.env)) {
+          if (!envValue || process.env[envKey]) {
+            continue;
+          }
+          updates.push({ key: envKey, prev: process.env[envKey] });
+          process.env[envKey] = envValue;
+        }
+      }
+
+      if (skill.primaryEnv && skillConfig.apiKey && !process.env[skill.primaryEnv]) {
+        updates.push({
+          key: skill.primaryEnv,
+          prev: process.env[skill.primaryEnv],
+        });
+        process.env[skill.primaryEnv] = skillConfig.apiKey;
+      }
+    }
+  } catch (err) {
+    restore();
+    throw err;
+  }
+
+  return restore;
 }
