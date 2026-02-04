@@ -12,7 +12,12 @@ import {
   resolveFeishuGroupEnabled,
   type ResolvedFeishuConfig,
 } from "./config.js";
-import { resolveFeishuMedia, type FeishuMediaRef } from "./download.js";
+import {
+  downloadPostImages,
+  extractPostImageKeys,
+  resolveFeishuMedia,
+  type FeishuMediaRef,
+} from "./download.js";
 import { readFeishuAllowFromStore, upsertFeishuPairingRequest } from "./pairing-store.js";
 import { sendMessageFeishu } from "./send.js";
 import { FeishuStreamingSession } from "./streaming-card.js";
@@ -52,7 +57,7 @@ type FeishuEventPayload = {
 };
 
 // Supported message types for processing
-const SUPPORTED_MSG_TYPES = new Set(["text", "image", "file", "audio", "media", "sticker"]);
+const SUPPORTED_MSG_TYPES = new Set(["text", "post", "image", "file", "audio", "media", "sticker"]);
 
 export type ProcessFeishuMessageOptions = {
   cfg?: OpenClawConfig;
@@ -237,6 +242,56 @@ export async function processFeishuMessage(
     } catch (err) {
       logger.error(`Failed to parse text message content: ${formatErrorMessage(err)}`);
     }
+  } else if (msgType === "post") {
+    // Post (rich text) message parsing
+    // Feishu post content can have two formats:
+    // Format 1: { post: { zh_cn: { title, content } } } (locale-wrapped)
+    // Format 2: { title, content } (direct)
+    try {
+      const content = JSON.parse(message.content ?? "{}");
+      const parts: string[] = [];
+
+      // Try to find the actual post content
+      let postData = content;
+      if (content.post && typeof content.post === "object") {
+        // Find the first locale key (zh_cn, en_us, etc.)
+        const localeKey = Object.keys(content.post).find(
+          (key) => content.post[key]?.content || content.post[key]?.title,
+        );
+        if (localeKey) {
+          postData = content.post[localeKey];
+        }
+      }
+
+      // Include title if present
+      if (postData.title) {
+        parts.push(postData.title);
+      }
+
+      // Extract text from content elements
+      if (Array.isArray(postData.content)) {
+        for (const line of postData.content) {
+          if (!Array.isArray(line)) continue;
+          const lineParts: string[] = [];
+          for (const element of line) {
+            if (element.tag === "text" && element.text) {
+              lineParts.push(element.text);
+            } else if (element.tag === "a" && element.text) {
+              lineParts.push(element.text);
+            } else if (element.tag === "at" && element.user_name) {
+              lineParts.push(`@${element.user_name}`);
+            }
+          }
+          if (lineParts.length > 0) {
+            parts.push(lineParts.join(""));
+          }
+        }
+      }
+
+      text = parts.join("\n");
+    } catch (err) {
+      logger.error(`Failed to parse post message content: ${formatErrorMessage(err)}`);
+    }
   }
 
   // Remove @mention placeholders from text
@@ -248,7 +303,29 @@ export async function processFeishuMessage(
 
   // Resolve media if present
   let media: FeishuMediaRef | null = null;
-  if (msgType !== "text") {
+  let postImages: FeishuMediaRef[] = [];
+
+  if (msgType === "post") {
+    // Extract and download embedded images from post message
+    try {
+      const content = JSON.parse(message.content ?? "{}");
+      const imageKeys = extractPostImageKeys(content);
+      if (imageKeys.length > 0 && message.message_id) {
+        postImages = await downloadPostImages(
+          client,
+          message.message_id,
+          imageKeys,
+          maxMediaBytes,
+          5, // max 5 images per post
+        );
+        logger.debug(
+          `Downloaded ${postImages.length}/${imageKeys.length} images from post message`,
+        );
+      }
+    } catch (err) {
+      logger.error(`Failed to download post images: ${formatErrorMessage(err)}`);
+    }
+  } else if (msgType !== "text") {
     try {
       media = await resolveFeishuMedia(client, message, maxMediaBytes);
     } catch (err) {
@@ -263,7 +340,7 @@ export async function processFeishuMessage(
   }
 
   // Skip if no content
-  if (!bodyText && !media) {
+  if (!bodyText && !media && postImages.length === 0) {
     logger.debug(`Empty message after processing, skipping`);
     return;
   }
@@ -279,10 +356,14 @@ export async function processFeishuMessage(
   let streamingStarted = false;
   let lastPartialText = "";
 
+  // Use first post image as primary media if no other media
+  const primaryMedia = media ?? (postImages.length > 0 ? postImages[0] : null);
+  const additionalMediaPaths = postImages.length > 1 ? postImages.slice(1).map((m) => m.path) : [];
+
   // Context construction
   const ctx = {
     Body: bodyText,
-    RawBody: text || media?.placeholder || "",
+    RawBody: text || primaryMedia?.placeholder || "",
     From: senderId,
     To: chatId,
     SenderId: senderId,
@@ -296,9 +377,11 @@ export async function processFeishuMessage(
     OriginatingChannel: "feishu",
     OriginatingTo: chatId,
     // Media fields (similar to Telegram)
-    MediaPath: media?.path,
-    MediaType: media?.contentType,
-    MediaUrl: media?.path,
+    MediaPath: primaryMedia?.path,
+    MediaType: primaryMedia?.contentType,
+    MediaUrl: primaryMedia?.path,
+    // Additional images from post messages
+    MediaUrls: additionalMediaPaths.length > 0 ? additionalMediaPaths : undefined,
     WasMentioned: isGroup ? wasMentioned : undefined,
   };
 

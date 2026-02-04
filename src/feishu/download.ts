@@ -197,3 +197,79 @@ export async function resolveFeishuMedia(
 
   return null;
 }
+
+/**
+ * Extract image keys from post (rich text) message content
+ * Post content structure: { post: { locale: { content: [[{ tag: "img", image_key: "..." }]] } } }
+ */
+export function extractPostImageKeys(content: unknown): string[] {
+  const imageKeys: string[] = [];
+
+  if (!content || typeof content !== "object") {
+    return imageKeys;
+  }
+
+  const obj = content as Record<string, unknown>;
+
+  // Handle locale-wrapped format: { post: { zh_cn: { content: [...] } } }
+  let postData = obj;
+  if (obj.post && typeof obj.post === "object") {
+    const post = obj.post as Record<string, unknown>;
+    const localeKey = Object.keys(post).find((key) => post[key] && typeof post[key] === "object");
+    if (localeKey) {
+      postData = post[localeKey] as Record<string, unknown>;
+    }
+  }
+
+  // Extract image_key from content elements
+  const contentArray = postData.content;
+  if (!Array.isArray(contentArray)) {
+    return imageKeys;
+  }
+
+  for (const line of contentArray) {
+    if (!Array.isArray(line)) continue;
+    for (const element of line) {
+      if (
+        element &&
+        typeof element === "object" &&
+        (element as Record<string, unknown>).tag === "img" &&
+        typeof (element as Record<string, unknown>).image_key === "string"
+      ) {
+        imageKeys.push((element as Record<string, unknown>).image_key as string);
+      }
+    }
+  }
+
+  return imageKeys;
+}
+
+/**
+ * Download embedded images from a post (rich text) message
+ */
+export async function downloadPostImages(
+  client: Client,
+  messageId: string,
+  imageKeys: string[],
+  maxBytes: number = 30 * 1024 * 1024,
+  maxImages: number = 5,
+): Promise<FeishuMediaRef[]> {
+  const results: FeishuMediaRef[] = [];
+
+  for (const imageKey of imageKeys.slice(0, maxImages)) {
+    try {
+      const media = await downloadFeishuMessageResource(
+        client,
+        messageId,
+        imageKey,
+        "image",
+        maxBytes,
+      );
+      results.push(media);
+    } catch (err) {
+      logger.warn(`Failed to download post image ${imageKey}: ${formatErrorMessage(err)}`);
+    }
+  }
+
+  return results;
+}
