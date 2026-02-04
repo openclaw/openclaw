@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { loadSecureJsonFile } from "../infra/crypto-store.js";
 
 const oauthFixture = {
   access: "access-token",
@@ -61,11 +62,8 @@ describe("getApiKeyForModel", () => {
       });
       expect(apiKey.apiKey).toBe(oauthFixture.access);
 
-      const authProfiles = await fs.readFile(
-        path.join(tempDir, "agent", "auth-profiles.json"),
-        "utf8",
-      );
-      const authData = JSON.parse(authProfiles) as Record<string, unknown>;
+      const authProfilePath = path.join(tempDir, "agent", "auth-profiles.json");
+      const authData = loadSecureJsonFile(authProfilePath) as Record<string, unknown>;
       expect(authData.profiles).toMatchObject({
         "openai-codex:default": {
           type: "oauth",

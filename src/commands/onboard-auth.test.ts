@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { loadSecureJsonFile } from "../infra/crypto-store.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxApiConfig,
@@ -75,8 +76,7 @@ describe("writeOAuthCredentials", () => {
     await writeOAuthCredentials("openai-codex", creds);
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = loadSecureJsonFile(authProfilePath) as {
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     };
     expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
@@ -128,8 +128,7 @@ describe("setMinimaxApiKey", () => {
     await setMinimaxApiKey("sk-minimax-test");
 
     const customAuthPath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(customAuthPath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = loadSecureJsonFile(customAuthPath) as {
       profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
     };
     expect(parsed.profiles?.["minimax:default"]).toMatchObject({
