@@ -4,9 +4,9 @@ export const TAB_GROUPS = [
   { label: "Chat", tabs: ["chat"] },
   {
     label: "Control",
-    tabs: ["overview", "channels", "instances", "sessions", "cron"],
+    tabs: ["overview", "channels", "instances", "sessions", "cron", "task-queue"],
   },
-  { label: "Agent", tabs: ["agents", "skills", "nodes"] },
+  { label: "Agent", tabs: ["agents", "swarm", "skills", "nodes"] },
   { label: "Settings", tabs: ["config", "debug", "logs"] },
 ] as const;
 
@@ -18,8 +18,10 @@ export type Tab =
   | "sessions"
   | "cron"
   | "skills"
+  | "swarm"
   | "nodes"
   | "chat"
+  | "task-queue"
   | "config"
   | "debug"
   | "logs";
@@ -31,6 +33,8 @@ const TAB_PATHS: Record<Tab, string> = {
   instances: "/instances",
   sessions: "/sessions",
   cron: "/cron",
+  "task-queue": "/task-queue",
+  swarm: "/swarm",
   skills: "/skills",
   nodes: "/nodes",
   chat: "/chat",
@@ -136,6 +140,10 @@ export function iconForTab(tab: Tab): IconName {
       return "fileText";
     case "cron":
       return "loader";
+    case "task-queue":
+      return "fileText";
+    case "swarm":
+      return "radio";
     case "skills":
       return "zap";
     case "nodes":
@@ -165,6 +173,10 @@ export function titleForTab(tab: Tab) {
       return "Sessions";
     case "cron":
       return "Cron Jobs";
+    case "task-queue":
+      return "Task Queue";
+    case "swarm":
+      return "Swarm";
     case "skills":
       return "Skills";
     case "nodes":
@@ -196,6 +208,10 @@ export function subtitleForTab(tab: Tab) {
       return "Inspect active sessions and adjust per-session defaults.";
     case "cron":
       return "Schedule wakeups and recurring agent runs.";
+    case "task-queue":
+      return "Manage Trello-backed approvals and work queue.";
+    case "swarm":
+      return "Live agent hierarchy, worker status, and delegation tree.";
     case "skills":
       return "Manage skill availability and API key injection.";
     case "nodes":

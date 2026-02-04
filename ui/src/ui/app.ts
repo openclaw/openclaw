@@ -27,6 +27,7 @@ import type {
   SkillStatusReport,
   StatusSummary,
   NostrProfile,
+  TaskQueueSnapshot,
 } from "./types";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form";
 import {
@@ -77,6 +78,8 @@ import {
 } from "./app-tool-stream";
 import { resolveInjectedAssistantIdentity } from "./assistant-identity";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity";
+import { loadSwarmData as loadSwarmInternal } from "./controllers/swarm";
+import { loadTaskQueue as loadTaskQueueInternal } from "./controllers/task-queue";
 import { loadSettings, type UiSettings } from "./storage";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types";
 
@@ -263,6 +266,13 @@ export class OpenClawApp extends LitElement {
   };
   @state() logsAutoFollow = true;
   @state() logsTruncated = false;
+  @state() taskQueueLoading = false;
+  @state() taskQueueSnapshot: TaskQueueSnapshot | null = null;
+  @state() taskQueueError: string | null = null;
+  @state() swarmLoading = false;
+  @state() swarmSnapshot: import("./controllers/swarm").SwarmSnapshot | null = null;
+  @state() swarmHierarchy: import("./controllers/swarm").SwarmHierarchy | null = null;
+  @state() swarmError: string | null = null;
   @state() logsCursor: number | null = null;
   @state() logsLastFetchAt: number | null = null;
   @state() logsLimit = 500;
@@ -371,6 +381,14 @@ export class OpenClawApp extends LitElement {
 
   async loadCron() {
     await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
+  }
+
+  async handleLoadTaskQueue() {
+    await loadTaskQueueInternal(this as unknown as Parameters<typeof loadTaskQueueInternal>[0]);
+  }
+
+  async handleLoadSwarm() {
+    await loadSwarmInternal(this as unknown as Parameters<typeof loadSwarmInternal>[0]);
   }
 
   async handleAbortChat() {

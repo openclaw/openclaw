@@ -65,6 +65,8 @@ import { renderNodes } from "./views/nodes";
 import { renderOverview } from "./views/overview";
 import { renderSessions } from "./views/sessions";
 import { renderSkills } from "./views/skills";
+import { renderSwarm } from "./views/swarm";
+import { renderTaskQueue } from "./views/task-queue";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
@@ -328,6 +330,25 @@ export function renderApp(state: AppViewState) {
               })
             : nothing
         }
+
+        ${state.tab === "task-queue"
+          ? renderTaskQueue({
+              loading: state.taskQueueLoading,
+              snapshot: state.taskQueueSnapshot,
+              error: state.taskQueueError,
+              onRefresh: state.handleLoadTaskQueue,
+            })
+          : nothing}
+
+        ${state.tab === "swarm"
+          ? renderSwarm({
+              loading: state.swarmLoading,
+              snapshot: state.swarmSnapshot,
+              hierarchy: state.swarmHierarchy,
+              error: state.swarmError,
+              onRefresh: state.handleLoadSwarm,
+            })
+          : nothing}
 
         ${
           state.tab === "agents"

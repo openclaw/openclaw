@@ -21,6 +21,7 @@ import { loadNodes } from "./controllers/nodes";
 import { loadPresence } from "./controllers/presence";
 import { loadSessions } from "./controllers/sessions";
 import { loadSkills } from "./controllers/skills";
+import { loadTaskQueue } from "./controllers/task-queue";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -184,6 +185,12 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "cron") {
     await loadCron(host);
+  }
+  if (host.tab === "task-queue") {
+    await loadTaskQueue(host as unknown as Parameters<typeof loadTaskQueue>[0]);
+  }
+  if (host.tab === "swarm") {
+    await (host as unknown as { handleLoadSwarm: () => Promise<void> }).handleLoadSwarm();
   }
   if (host.tab === "skills") {
     await loadSkills(host as unknown as OpenClawApp);
