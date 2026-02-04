@@ -12,4 +12,7 @@ export type ChannelsState = {
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginConnected: boolean | null;
   whatsappBusy: boolean;
+  convosMessage: string | null;
+  convosInviteUrl: string | null;
+  convosBusy: boolean;
 };

@@ -199,9 +199,13 @@ export class ConvosSDKClient {
   async createConversation(name?: string): Promise<CreateConversationResult> {
     const result = await this.convos.createConversation(name);
 
+    // The SDK returns the full invite URL
+    const inviteUrl = result.inviteUrl ?? `https://popup.convos.org/v2?i=${result.inviteSlug}`;
+
     return {
       conversationId: result.conversationId,
       inviteSlug: result.inviteSlug,
+      inviteUrl,
     };
   }
 

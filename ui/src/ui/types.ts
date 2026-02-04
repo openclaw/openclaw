@@ -265,6 +265,22 @@ export type MSTeamsStatus = {
   lastProbeAt?: number | null;
 };
 
+export type ConvosProbe = {
+  ok: boolean;
+  error?: string | null;
+};
+
+export type ConvosStatus = {
+  configured: boolean;
+  env?: string | null;
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  probe?: ConvosProbe | null;
+  lastProbeAt?: number | null;
+};
+
 export type ConfigSnapshotIssue = {
   path: string;
   message: string;

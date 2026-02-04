@@ -26,6 +26,13 @@ export interface MessageInfo {
 export interface CreateConversationResult {
   conversationId: string;
   inviteSlug: string;
+  inviteUrl: string;
+}
+
+export interface ConvosSetupResult {
+  inviteUrl: string;
+  conversationId: string;
+  privateKey: string;
 }
 
 export interface JoinConversationResult {

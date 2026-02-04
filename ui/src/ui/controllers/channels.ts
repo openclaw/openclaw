@@ -92,3 +92,29 @@ export async function logoutWhatsApp(state: ChannelsState) {
     state.whatsappBusy = false;
   }
 }
+
+export async function setupConvos(state: ChannelsState) {
+  if (!state.client || !state.connected || state.convosBusy) {
+    return;
+  }
+  state.convosBusy = true;
+  state.convosMessage = "Setting up Convos...";
+  state.convosInviteUrl = null;
+  try {
+    const res = await state.client.request<{ inviteUrl?: string; conversationId?: string }>(
+      "convos.setup",
+      {
+        timeoutMs: 60000,
+      },
+    );
+    state.convosInviteUrl = res.inviteUrl ?? null;
+    state.convosMessage = res.inviteUrl
+      ? "Scan the QR code with the Convos iOS app to connect."
+      : "Setup completed.";
+  } catch (err) {
+    state.convosMessage = `Setup failed: ${String(err)}`;
+    state.convosInviteUrl = null;
+  } finally {
+    state.convosBusy = false;
+  }
+}
