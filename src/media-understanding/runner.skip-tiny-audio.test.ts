@@ -65,8 +65,10 @@ describe("runCapability skips tiny audio files", () => {
       // The result should indicate the attachment was skipped
       expect(result.outputs).toHaveLength(0);
       expect(result.decision.outcome).toBe("skipped");
-      expect(result.decision.attachments[0]?.attempts[0]?.outcome).toBe("skipped");
-      expect(result.decision.attachments[0]?.attempts[0]?.reason).toContain("tooSmall");
+      expect(result.decision.attachments).toHaveLength(1);
+      expect(result.decision.attachments[0].attempts).toHaveLength(1);
+      expect(result.decision.attachments[0].attempts[0].outcome).toBe("skipped");
+      expect(result.decision.attachments[0].attempts[0].reason).toContain("tooSmall");
     } finally {
       process.env.PATH = originalPath;
       await cache.cleanup();
