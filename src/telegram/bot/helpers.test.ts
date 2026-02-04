@@ -169,6 +169,22 @@ describe("normalizeForwardedContext", () => {
     expect(ctx?.from).toBe("My Channel (New Sig)");
   });
 
+  it("returns undefined signature when author_signature is blank", () => {
+    const ctx = normalizeForwardedContext({
+      forward_origin: {
+        type: "channel",
+        chat: { title: "Updates", id: -100333, type: "channel" },
+        date: 860,
+        author_signature: "   ",
+        message_id: 1,
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.fromSignature).toBeUndefined();
+    expect(ctx?.from).toBe("Updates");
+  });
+
   it("handles forward_origin channel without author_signature", () => {
     const ctx = normalizeForwardedContext({
       forward_origin: {
