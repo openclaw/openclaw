@@ -66,6 +66,12 @@ type ControlUiAvatarMeta = {
   avatarUrl: string | null;
 };
 
+function applyControlUiSecurityHeaders(res: ServerResponse) {
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -99,6 +105,8 @@ export function handleControlUiAvatarRequest(
   if (!pathname.startsWith(pathWithBase)) {
     return false;
   }
+
+  applyControlUiSecurityHeaders(res);
 
   const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
   const agentId = agentIdParts[0] ?? "";
@@ -250,6 +258,7 @@ export function handleControlUiHttpRequest(
 
   if (!basePath) {
     if (pathname === "/ui" || pathname.startsWith("/ui/")) {
+      applyControlUiSecurityHeaders(res);
       respondNotFound(res);
       return true;
     }
@@ -257,6 +266,7 @@ export function handleControlUiHttpRequest(
 
   if (basePath) {
     if (pathname === basePath) {
+      applyControlUiSecurityHeaders(res);
       res.statusCode = 302;
       res.setHeader("Location", `${basePath}/${url.search}`);
       res.end();
@@ -266,6 +276,8 @@ export function handleControlUiHttpRequest(
       return false;
     }
   }
+
+  applyControlUiSecurityHeaders(res);
 
   const rootState = opts?.root;
   if (rootState?.kind === "invalid") {
