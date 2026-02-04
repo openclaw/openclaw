@@ -118,24 +118,24 @@ function utcParts(date: Date) {
 
 const onMonthDay =
   (month: number, day: number): HolidayRule =>
-    (date) => {
-      const parts = utcParts(date);
-      return parts.month === month && parts.day === day;
-    };
+  (date) => {
+    const parts = utcParts(date);
+    return parts.month === month && parts.day === day;
+  };
 
 const onSpecificDates =
   (dates: Array<[number, number, number]>, durationDays = 1): HolidayRule =>
-    (date) => {
-      const parts = utcParts(date);
-      return dates.some(([year, month, day]) => {
-        if (parts.year !== year) {
-          return false;
-        }
-        const start = Date.UTC(year, month, day);
-        const current = Date.UTC(parts.year, parts.month, parts.day);
-        return current >= start && current < start + durationDays * DAY_MS;
-      });
-    };
+  (date) => {
+    const parts = utcParts(date);
+    return dates.some(([year, month, day]) => {
+      if (parts.year !== year) {
+        return false;
+      }
+      const start = Date.UTC(year, month, day);
+      const current = Date.UTC(parts.year, parts.month, parts.day);
+      return current >= start && current < start + durationDays * DAY_MS;
+    });
+  };
 
 const inYearWindow =
   (
@@ -146,16 +146,16 @@ const inYearWindow =
       duration: number;
     }>,
   ): HolidayRule =>
-    (date) => {
-      const parts = utcParts(date);
-      const window = windows.find((entry) => entry.year === parts.year);
-      if (!window) {
-        return false;
-      }
-      const start = Date.UTC(window.year, window.month, window.day);
-      const current = Date.UTC(parts.year, parts.month, parts.day);
-      return current >= start && current < start + window.duration * DAY_MS;
-    };
+  (date) => {
+    const parts = utcParts(date);
+    const window = windows.find((entry) => entry.year === parts.year);
+    if (!window) {
+      return false;
+    }
+    const start = Date.UTC(window.year, window.month, window.day);
+    const current = Date.UTC(parts.year, parts.month, parts.day);
+    return current >= start && current < start + window.duration * DAY_MS;
+  };
 
 const isFourthThursdayOfNovember: HolidayRule = (date) => {
   const parts = utcParts(date);
