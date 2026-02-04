@@ -13,6 +13,7 @@ export type AuthChoice =
   | "openai-api-key"
   | "openrouter-api-key"
   | "ai-gateway-api-key"
+  | "cloudflare-ai-gateway-api-key"
   | "moonshot-api-key"
   | "moonshot-api-key-cn"
   | "kimi-code-api-key"
@@ -66,6 +67,9 @@ export type OnboardOptions = {
   openaiApiKey?: string;
   openrouterApiKey?: string;
   aiGatewayApiKey?: string;
+  cloudflareAiGatewayAccountId?: string;
+  cloudflareAiGatewayGatewayId?: string;
+  cloudflareAiGatewayApiKey?: string;
   moonshotApiKey?: string;
   kimiCodeApiKey?: string;
   geminiApiKey?: string;
