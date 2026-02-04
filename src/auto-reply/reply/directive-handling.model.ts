@@ -9,6 +9,10 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+<<<<<<< HEAD
+=======
+import { buildBrowseProvidersButton } from "../../telegram/model-buttons.js";
+>>>>>>> upstream/main
 import { shortenHomePath } from "../../utils.js";
 import { resolveModelsCommandReply } from "./commands-models.js";
 import {
@@ -177,6 +181,10 @@ export async function maybeHandleModelDirectiveInfo(params: {
   aliasIndex: ModelAliasIndex;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   resetModelOverride: boolean;
+<<<<<<< HEAD
+=======
+  surface?: string;
+>>>>>>> upstream/main
 }): Promise<ReplyPayload | undefined> {
   if (!params.directives.hasModelDirective) {
     return undefined;
@@ -213,6 +221,25 @@ export async function maybeHandleModelDirectiveInfo(params: {
 
   if (wantsSummary) {
     const current = `${params.provider}/${params.model}`;
+<<<<<<< HEAD
+=======
+    const isTelegram = params.surface === "telegram";
+
+    if (isTelegram) {
+      const buttons = buildBrowseProvidersButton();
+      return {
+        text: [
+          `Current: ${current}`,
+          "",
+          "Tap below to browse models, or use:",
+          "/model <provider/model> to switch",
+          "/model status for details",
+        ].join("\n"),
+        channelData: { telegram: { buttons } },
+      };
+    }
+
+>>>>>>> upstream/main
     return {
       text: [
         `Current: ${current}`,

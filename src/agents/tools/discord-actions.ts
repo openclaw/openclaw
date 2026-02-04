@@ -4,6 +4,10 @@ import { createActionGate, readStringParam } from "./common.js";
 import { handleDiscordGuildAction } from "./discord-actions-guild.js";
 import { handleDiscordMessagingAction } from "./discord-actions-messaging.js";
 import { handleDiscordModerationAction } from "./discord-actions-moderation.js";
+<<<<<<< HEAD
+=======
+import { handleDiscordPresenceAction } from "./discord-actions-presence.js";
+>>>>>>> upstream/main
 
 const messagingActions = new Set([
   "react",
@@ -51,6 +55,11 @@ const guildActions = new Set([
 
 const moderationActions = new Set(["timeout", "kick", "ban"]);
 
+<<<<<<< HEAD
+=======
+const presenceActions = new Set(["setPresence"]);
+
+>>>>>>> upstream/main
 export async function handleDiscordAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
@@ -67,5 +76,11 @@ export async function handleDiscordAction(
   if (moderationActions.has(action)) {
     return await handleDiscordModerationAction(action, params, isActionEnabled);
   }
+<<<<<<< HEAD
+=======
+  if (presenceActions.has(action)) {
+    return await handleDiscordPresenceAction(action, params, isActionEnabled);
+  }
+>>>>>>> upstream/main
   throw new Error(`Unknown action: ${action}`);
 }

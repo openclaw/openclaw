@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
+<<<<<<< HEAD
+=======
+import { redactSensitiveText } from "../logging/redact.js";
+>>>>>>> upstream/main
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hashText } from "./internal.js";
 
@@ -104,8 +108,14 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       if (!text) {
         continue;
       }
+<<<<<<< HEAD
       const label = message.role === "user" ? "User" : "Assistant";
       collected.push(`${label}: ${text}`);
+=======
+      const safe = redactSensitiveText(text, { mode: "tools" });
+      const label = message.role === "user" ? "User" : "Assistant";
+      collected.push(`${label}: ${safe}`);
+>>>>>>> upstream/main
     }
     const content = collected.join("\n");
     return {

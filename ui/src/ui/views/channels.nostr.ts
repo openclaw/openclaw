@@ -1,20 +1,40 @@
 import { html, nothing } from "lit";
+<<<<<<< HEAD
 import type { ChannelAccountSnapshot, NostrStatus } from "../types";
 import type { ChannelsProps } from "./channels.types";
 import { formatAgo } from "../format";
 import { renderChannelConfigSection } from "./channels.config";
+=======
+import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
+import type { ChannelsProps } from "./channels.types.ts";
+import { formatAgo } from "../format.ts";
+import { renderChannelConfigSection } from "./channels.config.ts";
+>>>>>>> upstream/main
 import {
   renderNostrProfileForm,
   type NostrProfileFormState,
   type NostrProfileFormCallbacks,
+<<<<<<< HEAD
 } from "./channels.nostr-profile-form";
+=======
+} from "./channels.nostr-profile-form.ts";
+>>>>>>> upstream/main
 
 /**
  * Truncate a pubkey for display (shows first and last 8 chars)
  */
 function truncatePubkey(pubkey: string | null | undefined): string {
+<<<<<<< HEAD
   if (!pubkey) return "n/a";
   if (pubkey.length <= 20) return pubkey;
+=======
+  if (!pubkey) {
+    return "n/a";
+  }
+  if (pubkey.length <= 20) {
+    return pubkey;
+  }
+>>>>>>> upstream/main
   return `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
 }
 

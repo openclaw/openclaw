@@ -17,8 +17,14 @@
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
+<<<<<<< HEAD
 	<string>2026.1.30</string>
 	<key>CFBundleVersion</key>
 	<string>20260129</string>
+=======
+	<string>2026.2.3</string>
+	<key>CFBundleVersion</key>
+	<string>20260202</string>
+>>>>>>> upstream/main
 </dict>
 </plist>

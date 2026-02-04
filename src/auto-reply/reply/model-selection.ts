@@ -93,7 +93,11 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
   return dist;
 }
 
+<<<<<<< HEAD
 type StoredModelOverride = {
+=======
+export type StoredModelOverride = {
+>>>>>>> upstream/main
   provider?: string;
   model: string;
   source: "session" | "parent";
@@ -126,7 +130,11 @@ function resolveParentSessionKeyCandidate(params: {
   return null;
 }
 
+<<<<<<< HEAD
 function resolveStoredModelOverride(params: {
+=======
+export function resolveStoredModelOverride(params: {
+>>>>>>> upstream/main
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;

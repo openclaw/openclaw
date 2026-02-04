@@ -369,5 +369,25 @@ export {
 } from "../line/markdown-to-line.js";
 export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
+<<<<<<< HEAD
+=======
+// Channel: Feishu
+export {
+  listFeishuAccountIds,
+  resolveDefaultFeishuAccountId,
+  resolveFeishuAccount,
+  type ResolvedFeishuAccount,
+} from "../feishu/accounts.js";
+export {
+  resolveFeishuConfig,
+  resolveFeishuGroupEnabled,
+  resolveFeishuGroupRequireMention,
+} from "../feishu/config.js";
+export { feishuOutbound } from "../channels/plugins/outbound/feishu.js";
+export { normalizeFeishuTarget } from "../channels/plugins/normalize/feishu.js";
+export { probeFeishu, type FeishuProbe } from "../feishu/probe.js";
+export { monitorFeishuProvider } from "../feishu/monitor.js";
+
+>>>>>>> upstream/main
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";

@@ -18,10 +18,23 @@ declare global {
 }
 
 function coerceIdentityValue(value: string | undefined, maxLength: number): string | undefined {
+<<<<<<< HEAD
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   if (trimmed.length <= maxLength) return trimmed;
+=======
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+>>>>>>> upstream/main
   return trimmed.slice(0, maxLength);
 }
 

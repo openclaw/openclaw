@@ -403,6 +403,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       maxBytes: mediaMaxBytes,
       tokenProvider,
       allowHosts: msteamsCfg?.mediaAllowHosts,
+<<<<<<< HEAD
+=======
+      authAllowHosts: msteamsCfg?.mediaAuthAllowHosts,
+>>>>>>> upstream/main
       conversationType,
       conversationId,
       conversationMessageId: conversationMessageId ?? undefined,

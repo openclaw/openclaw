@@ -15,7 +15,11 @@ export async function fetchGroupChanges(
       return changes;
     }
     return null;
+<<<<<<< HEAD
   } catch (error: any) {
+=======
+  } catch (error) {
+>>>>>>> upstream/main
     runtime.log?.(
       `[tlon] Failed to fetch changes (falling back to full init): ${error?.message ?? String(error)}`,
     );
@@ -31,6 +35,10 @@ export async function fetchAllChannels(
     runtime.log?.("[tlon] Attempting auto-discovery of group channels...");
     const changes = await fetchGroupChanges(api, runtime, 5);
 
+<<<<<<< HEAD
+=======
+    // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
     let initData: any;
     if (changes) {
       runtime.log?.("[tlon] Changes data received, using full init for channel extraction");
@@ -41,6 +49,10 @@ export async function fetchAllChannels(
 
     const channels: string[] = [];
     if (initData && initData.groups) {
+<<<<<<< HEAD
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       for (const groupData of Object.values(initData.groups as Record<string, any>)) {
         if (groupData && typeof groupData === "object" && groupData.channels) {
           for (const channelNest of Object.keys(groupData.channels)) {
@@ -63,7 +75,11 @@ export async function fetchAllChannels(
     }
 
     return channels;
+<<<<<<< HEAD
   } catch (error: any) {
+=======
+  } catch (error) {
+>>>>>>> upstream/main
     runtime.log?.(`[tlon] Auto-discovery failed: ${error?.message ?? String(error)}`);
     runtime.log?.(
       "[tlon] To monitor group channels, add them to config: channels.tlon.groupChannels",

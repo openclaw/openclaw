@@ -210,7 +210,12 @@ Example:
   - [Telegram](/channels/telegram)
   - [Discord](/channels/discord)
   - [Mattermost (plugin)](/channels/mattermost)
+<<<<<<< HEAD
   - [iMessage](/channels/imessage)
+=======
+  - [BlueBubbles (iMessage)](/channels/bluebubbles)
+  - [iMessage (legacy)](/channels/imessage)
+>>>>>>> upstream/main
   - [Groups](/concepts/groups)
   - [WhatsApp group messages](/concepts/group-messages)
   - [Media: images](/nodes/images)

@@ -1,8 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+<<<<<<< HEAD
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
+=======
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
+>>>>>>> upstream/main
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
 import {
   buildControlUiAvatarUrl,
@@ -17,6 +22,7 @@ export type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
   agentId?: string;
+<<<<<<< HEAD
 };
 
 function resolveControlUiRoot(): string | null {
@@ -45,6 +51,15 @@ function resolveControlUiRoot(): string | null {
   }
   return null;
 }
+=======
+  root?: ControlUiRootState;
+};
+
+export type ControlUiRootState =
+  | { kind: "resolved"; path: string }
+  | { kind: "invalid"; path: string }
+  | { kind: "missing" };
+>>>>>>> upstream/main
 
 function contentTypeForExt(ext: string): string {
   switch (ext) {
@@ -87,6 +102,15 @@ type ControlUiAvatarMeta = {
   avatarUrl: string | null;
 };
 
+<<<<<<< HEAD
+=======
+function applyControlUiSecurityHeaders(res: ServerResponse) {
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+}
+
+>>>>>>> upstream/main
 function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -121,6 +145,11 @@ export function handleControlUiAvatarRequest(
     return false;
   }
 
+<<<<<<< HEAD
+=======
+  applyControlUiSecurityHeaders(res);
+
+>>>>>>> upstream/main
   const agentIdParts = pathname.slice(pathWithBase.length).split("/").filter(Boolean);
   const agentId = agentIdParts[0] ?? "";
   if (agentIdParts.length !== 1 || !agentId || !isValidAgentId(agentId)) {
@@ -271,6 +300,10 @@ export function handleControlUiHttpRequest(
 
   if (!basePath) {
     if (pathname === "/ui" || pathname.startsWith("/ui/")) {
+<<<<<<< HEAD
+=======
+      applyControlUiSecurityHeaders(res);
+>>>>>>> upstream/main
       respondNotFound(res);
       return true;
     }
@@ -278,6 +311,10 @@ export function handleControlUiHttpRequest(
 
   if (basePath) {
     if (pathname === basePath) {
+<<<<<<< HEAD
+=======
+      applyControlUiSecurityHeaders(res);
+>>>>>>> upstream/main
       res.statusCode = 302;
       res.setHeader("Location", `${basePath}/${url.search}`);
       res.end();
@@ -288,7 +325,38 @@ export function handleControlUiHttpRequest(
     }
   }
 
+<<<<<<< HEAD
   const root = resolveControlUiRoot();
+=======
+  applyControlUiSecurityHeaders(res);
+
+  const rootState = opts?.root;
+  if (rootState?.kind === "invalid") {
+    res.statusCode = 503;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end(
+      `Control UI assets not found at ${rootState.path}. Build them with \`pnpm ui:build\` (auto-installs UI deps), or update gateway.controlUi.root.`,
+    );
+    return true;
+  }
+  if (rootState?.kind === "missing") {
+    res.statusCode = 503;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end(
+      "Control UI assets not found. Build them with `pnpm ui:build` (auto-installs UI deps), or run `pnpm ui:dev` during development.",
+    );
+    return true;
+  }
+
+  const root =
+    rootState?.kind === "resolved"
+      ? rootState.path
+      : resolveControlUiRootSync({
+          moduleUrl: import.meta.url,
+          argv1: process.argv[1],
+          cwd: process.cwd(),
+        });
+>>>>>>> upstream/main
   if (!root) {
     res.statusCode = 503;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");

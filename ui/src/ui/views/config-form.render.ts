@@ -1,8 +1,15 @@
 import { html, nothing } from "lit";
+<<<<<<< HEAD
 import type { ConfigUiHints } from "../types";
 import { icons } from "../icons";
 import { renderNode } from "./config-form.node";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared";
+=======
+import type { ConfigUiHints } from "../types.ts";
+import { icons } from "../icons.ts";
+import { renderNode } from "./config-form.node.ts";
+import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
+>>>>>>> upstream/main
 
 export type ConfigFormProps = {
   schema: JsonSchema | null;
@@ -279,23 +286,45 @@ function getSectionIcon(key: string) {
 }
 
 function matchesSearch(key: string, schema: JsonSchema, query: string): boolean {
+<<<<<<< HEAD
   if (!query) return true;
+=======
+  if (!query) {
+    return true;
+  }
+>>>>>>> upstream/main
   const q = query.toLowerCase();
   const meta = SECTION_META[key];
 
   // Check key name
+<<<<<<< HEAD
   if (key.toLowerCase().includes(q)) return true;
 
   // Check label and description
   if (meta) {
     if (meta.label.toLowerCase().includes(q)) return true;
     if (meta.description.toLowerCase().includes(q)) return true;
+=======
+  if (key.toLowerCase().includes(q)) {
+    return true;
+  }
+
+  // Check label and description
+  if (meta) {
+    if (meta.label.toLowerCase().includes(q)) {
+      return true;
+    }
+    if (meta.description.toLowerCase().includes(q)) {
+      return true;
+    }
+>>>>>>> upstream/main
   }
 
   return schemaMatches(schema, q);
 }
 
 function schemaMatches(schema: JsonSchema, query: string): boolean {
+<<<<<<< HEAD
   if (schema.title?.toLowerCase().includes(query)) return true;
   if (schema.description?.toLowerCase().includes(query)) return true;
   if (schema.enum?.some((value) => String(value).toLowerCase().includes(query))) return true;
@@ -304,24 +333,62 @@ function schemaMatches(schema: JsonSchema, query: string): boolean {
     for (const [propKey, propSchema] of Object.entries(schema.properties)) {
       if (propKey.toLowerCase().includes(query)) return true;
       if (schemaMatches(propSchema, query)) return true;
+=======
+  if (schema.title?.toLowerCase().includes(query)) {
+    return true;
+  }
+  if (schema.description?.toLowerCase().includes(query)) {
+    return true;
+  }
+  if (schema.enum?.some((value) => String(value).toLowerCase().includes(query))) {
+    return true;
+  }
+
+  if (schema.properties) {
+    for (const [propKey, propSchema] of Object.entries(schema.properties)) {
+      if (propKey.toLowerCase().includes(query)) {
+        return true;
+      }
+      if (schemaMatches(propSchema, query)) {
+        return true;
+      }
+>>>>>>> upstream/main
     }
   }
 
   if (schema.items) {
     const items = Array.isArray(schema.items) ? schema.items : [schema.items];
     for (const item of items) {
+<<<<<<< HEAD
       if (item && schemaMatches(item, query)) return true;
+=======
+      if (item && schemaMatches(item, query)) {
+        return true;
+      }
+>>>>>>> upstream/main
     }
   }
 
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+<<<<<<< HEAD
     if (schemaMatches(schema.additionalProperties, query)) return true;
+=======
+    if (schemaMatches(schema.additionalProperties, query)) {
+      return true;
+    }
+>>>>>>> upstream/main
   }
 
   const unions = schema.anyOf ?? schema.oneOf ?? schema.allOf;
   if (unions) {
     for (const entry of unions) {
+<<<<<<< HEAD
       if (entry && schemaMatches(entry, query)) return true;
+=======
+      if (entry && schemaMatches(entry, query)) {
+        return true;
+      }
+>>>>>>> upstream/main
     }
   }
 
@@ -347,16 +414,34 @@ export function renderConfigForm(props: ConfigFormProps) {
   const activeSection = props.activeSection;
   const activeSubsection = props.activeSubsection ?? null;
 
+<<<<<<< HEAD
   const entries = Object.entries(properties).sort((a, b) => {
     const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 50;
     const orderB = hintForPath([b[0]], props.uiHints)?.order ?? 50;
     if (orderA !== orderB) return orderA - orderB;
+=======
+  const entries = Object.entries(properties).toSorted((a, b) => {
+    const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 50;
+    const orderB = hintForPath([b[0]], props.uiHints)?.order ?? 50;
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
+>>>>>>> upstream/main
     return a[0].localeCompare(b[0]);
   });
 
   const filteredEntries = entries.filter(([key, node]) => {
+<<<<<<< HEAD
     if (activeSection && key !== activeSection) return false;
     if (searchQuery && !matchesSearch(key, node, searchQuery)) return false;
+=======
+    if (activeSection && key !== activeSection) {
+      return false;
+    }
+    if (searchQuery && !matchesSearch(key, node, searchQuery)) {
+      return false;
+    }
+>>>>>>> upstream/main
     return true;
   });
 
@@ -398,7 +483,11 @@ export function renderConfigForm(props: ConfigFormProps) {
               const hint = hintForPath([sectionKey, subsectionKey], props.uiHints);
               const label = hint?.label ?? node.title ?? humanize(subsectionKey);
               const description = hint?.help ?? node.description ?? "";
+<<<<<<< HEAD
               const sectionValue = (value as Record<string, unknown>)[sectionKey];
+=======
+              const sectionValue = value[sectionKey];
+>>>>>>> upstream/main
               const scopedValue =
                 sectionValue && typeof sectionValue === "object"
                   ? (sectionValue as Record<string, unknown>)[subsectionKey]
@@ -454,7 +543,11 @@ export function renderConfigForm(props: ConfigFormProps) {
                 <div class="config-section-card__content">
                   ${renderNode({
                     schema: node,
+<<<<<<< HEAD
                     value: (value as Record<string, unknown>)[key],
+=======
+                    value: value[key],
+>>>>>>> upstream/main
                     path: [key],
                     hints: props.uiHints,
                     unsupported,

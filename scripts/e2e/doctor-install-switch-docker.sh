@@ -81,8 +81,14 @@ LOGINCTL
   npm install -g --prefix /tmp/npm-prefix "/app/$pkg_tgz"
 
   npm_bin="/tmp/npm-prefix/bin/openclaw"
+<<<<<<< HEAD
   npm_entry="/tmp/npm-prefix/lib/node_modules/openclaw/openclaw.mjs"
   git_entry="/app/openclaw.mjs"
+=======
+  npm_entry="/tmp/npm-prefix/lib/node_modules/openclaw/dist/index.js"
+  git_entry="/app/dist/index.js"
+  git_cli="/app/openclaw.mjs"
+>>>>>>> upstream/main
 
   assert_entrypoint() {
     local unit_path="$1"
@@ -135,12 +141,20 @@ LOGINCTL
     "npm-to-git" \
     "$npm_bin daemon install --force" \
     "$npm_entry" \
+<<<<<<< HEAD
     "node $git_entry doctor --repair --force" \
+=======
+    "node $git_cli doctor --repair --force" \
+>>>>>>> upstream/main
     "$git_entry"
 
   run_flow \
     "git-to-npm" \
+<<<<<<< HEAD
     "node $git_entry daemon install --force" \
+=======
+    "node $git_cli daemon install --force" \
+>>>>>>> upstream/main
     "$git_entry" \
     "$npm_bin doctor --repair --force" \
     "$npm_entry"

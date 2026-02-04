@@ -15,6 +15,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+<<<<<<< HEAD
+=======
+    cooldown:
+      default-days: 7
+>>>>>>> upstream/main
     groups:
       production:
         dependency-type: production
@@ -35,6 +40,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+<<<<<<< HEAD
+=======
+    cooldown:
+      default-days: 7
+>>>>>>> upstream/main
     groups:
       actions:
         patterns:
@@ -49,6 +59,11 @@ updates:
     directory: /apps/macos
     schedule:
       interval: weekly
+<<<<<<< HEAD
+=======
+    cooldown:
+      default-days: 7
+>>>>>>> upstream/main
     groups:
       swift-deps:
         patterns:
@@ -63,6 +78,11 @@ updates:
     directory: /apps/shared/MoltbotKit
     schedule:
       interval: weekly
+<<<<<<< HEAD
+=======
+    cooldown:
+      default-days: 7
+>>>>>>> upstream/main
     groups:
       swift-deps:
         patterns:
@@ -77,6 +97,11 @@ updates:
     directory: /Swabble
     schedule:
       interval: weekly
+<<<<<<< HEAD
+=======
+    cooldown:
+      default-days: 7
+>>>>>>> upstream/main
     groups:
       swift-deps:
         patterns:
@@ -91,6 +116,11 @@ updates:
     directory: /apps/android
     schedule:
       interval: weekly
+<<<<<<< HEAD
+=======
+    cooldown:
+      default-days: 7
+>>>>>>> upstream/main
     groups:
       android-deps:
         patterns:

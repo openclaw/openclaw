@@ -49,6 +49,10 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   opts,
   resolveBotTopicsEnabled,
+<<<<<<< HEAD
+=======
+  // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
 }: any) => {
   const {
     ctxPayload,

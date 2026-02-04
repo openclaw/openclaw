@@ -18,6 +18,7 @@ function normalizeRole(role: string): string {
 }
 
 function normalizeScopes(scopes: string[] | undefined): string[] {
+<<<<<<< HEAD
   if (!Array.isArray(scopes)) return [];
   const out = new Set<string>();
   for (const scope of scopes) {
@@ -25,16 +26,45 @@ function normalizeScopes(scopes: string[] | undefined): string[] {
     if (trimmed) out.add(trimmed);
   }
   return [...out].sort();
+=======
+  if (!Array.isArray(scopes)) {
+    return [];
+  }
+  const out = new Set<string>();
+  for (const scope of scopes) {
+    const trimmed = scope.trim();
+    if (trimmed) {
+      out.add(trimmed);
+    }
+  }
+  return [...out].toSorted();
+>>>>>>> upstream/main
 }
 
 function readStore(): DeviceAuthStore | null {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
+<<<<<<< HEAD
     if (!raw) return null;
     const parsed = JSON.parse(raw) as DeviceAuthStore;
     if (!parsed || parsed.version !== 1) return null;
     if (!parsed.deviceId || typeof parsed.deviceId !== "string") return null;
     if (!parsed.tokens || typeof parsed.tokens !== "object") return null;
+=======
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as DeviceAuthStore;
+    if (!parsed || parsed.version !== 1) {
+      return null;
+    }
+    if (!parsed.deviceId || typeof parsed.deviceId !== "string") {
+      return null;
+    }
+    if (!parsed.tokens || typeof parsed.tokens !== "object") {
+      return null;
+    }
+>>>>>>> upstream/main
     return parsed;
   } catch {
     return null;
@@ -54,10 +84,21 @@ export function loadDeviceAuthToken(params: {
   role: string;
 }): DeviceAuthEntry | null {
   const store = readStore();
+<<<<<<< HEAD
   if (!store || store.deviceId !== params.deviceId) return null;
   const role = normalizeRole(params.role);
   const entry = store.tokens[role];
   if (!entry || typeof entry.token !== "string") return null;
+=======
+  if (!store || store.deviceId !== params.deviceId) {
+    return null;
+  }
+  const role = normalizeRole(params.role);
+  const entry = store.tokens[role];
+  if (!entry || typeof entry.token !== "string") {
+    return null;
+  }
+>>>>>>> upstream/main
   return entry;
 }
 
@@ -90,9 +131,19 @@ export function storeDeviceAuthToken(params: {
 
 export function clearDeviceAuthToken(params: { deviceId: string; role: string }) {
   const store = readStore();
+<<<<<<< HEAD
   if (!store || store.deviceId !== params.deviceId) return;
   const role = normalizeRole(params.role);
   if (!store.tokens[role]) return;
+=======
+  if (!store || store.deviceId !== params.deviceId) {
+    return;
+  }
+  const role = normalizeRole(params.role);
+  if (!store.tokens[role]) {
+    return;
+  }
+>>>>>>> upstream/main
   const next = { ...store, tokens: { ...store.tokens } };
   delete next.tokens[role];
   writeStore(next);

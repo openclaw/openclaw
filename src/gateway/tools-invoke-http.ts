@@ -230,12 +230,20 @@ export async function handleToolsInvokeHttpRequest(
 
   const coreToolNames = new Set(
     allTools
+<<<<<<< HEAD
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       .filter((tool) => !getPluginToolMeta(tool as any))
       .map((tool) => normalizeToolName(tool.name))
       .filter(Boolean),
   );
   const pluginGroups = buildPluginToolGroups({
     tools: allTools,
+<<<<<<< HEAD
+=======
+    // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
     toolMeta: (tool) => getPluginToolMeta(tool as any),
   });
   const resolvePolicy = (policy: typeof profilePolicy, label: string) => {
@@ -306,10 +314,18 @@ export async function handleToolsInvokeHttpRequest(
 
   try {
     const toolArgs = mergeActionIntoArgsIfSupported({
+<<<<<<< HEAD
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       toolSchema: (tool as any).parameters,
       action,
       args,
     });
+<<<<<<< HEAD
+=======
+    // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
     const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
     sendJson(res, 200, { ok: true, result });
   } catch (err) {

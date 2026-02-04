@@ -34,13 +34,20 @@ import {
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions.js";
+<<<<<<< HEAD
 import { formatErrorMessage } from "../infra/errors.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+=======
+>>>>>>> upstream/main
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+<<<<<<< HEAD
+=======
+import { formatErrorMessage } from "./errors.js";
+>>>>>>> upstream/main
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -54,6 +61,10 @@ import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+<<<<<<< HEAD
+=======
+import { peekSystemEvents } from "./system-events.js";
+>>>>>>> upstream/main
 
 type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
@@ -349,7 +360,13 @@ function resolveHeartbeatSession(
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
+<<<<<<< HEAD
   const storePath = resolveStorePath(sessionCfg?.store, { agentId: storeAgentId });
+=======
+  const storePath = resolveStorePath(sessionCfg?.store, {
+    agentId: storeAgentId,
+  });
+>>>>>>> upstream/main
   const store = loadSessionStore(storePath);
   const mainEntry = store[mainSessionKey];
 
@@ -380,7 +397,16 @@ function resolveHeartbeatSession(
   if (canonical !== "global") {
     const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
     if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+<<<<<<< HEAD
       return { sessionKey: canonical, storePath, store, entry: store[canonical] };
+=======
+      return {
+        sessionKey: canonical,
+        storePath,
+        store,
+        entry: store[canonical],
+      };
+>>>>>>> upstream/main
     }
   }
 
@@ -709,7 +735,15 @@ export async function runHeartbeatOnce(opts: {
     }
 
     if (!visibility.showAlerts) {
+<<<<<<< HEAD
       await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
+=======
+      await restoreHeartbeatUpdatedAt({
+        storePath,
+        sessionKey,
+        updatedAt: previousUpdatedAt,
+      });
+>>>>>>> upstream/main
       emitHeartbeatEvent({
         status: "skipped",
         reason: "alerts-disabled",
@@ -908,10 +942,23 @@ export function startHeartbeatRunner(opts: {
 
   const run: HeartbeatWakeHandler = async (params) => {
     if (!heartbeatsEnabled) {
+<<<<<<< HEAD
       return { status: "skipped", reason: "disabled" } satisfies HeartbeatRunResult;
     }
     if (state.agents.size === 0) {
       return { status: "skipped", reason: "disabled" } satisfies HeartbeatRunResult;
+=======
+      return {
+        status: "skipped",
+        reason: "disabled",
+      } satisfies HeartbeatRunResult;
+    }
+    if (state.agents.size === 0) {
+      return {
+        status: "skipped",
+        reason: "disabled",
+      } satisfies HeartbeatRunResult;
+>>>>>>> upstream/main
     }
 
     const reason = params?.reason;

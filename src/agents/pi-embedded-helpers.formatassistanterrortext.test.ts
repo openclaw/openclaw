@@ -35,6 +35,15 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+<<<<<<< HEAD
+=======
+  it("returns a recovery hint when tool call input is missing", () => {
+    const msg = makeAssistantError("tool_use.input: Field required");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Session history looks corrupted");
+    expect(result).toContain("/new");
+  });
+>>>>>>> upstream/main
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
     const result = formatAssistantErrorText(msg);

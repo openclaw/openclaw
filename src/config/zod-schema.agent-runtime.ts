@@ -191,6 +191,10 @@ export const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
     maxChars: z.number().int().positive().optional(),
+<<<<<<< HEAD
+=======
+    maxCharsCap: z.number().int().positive().optional(),
+>>>>>>> upstream/main
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
@@ -427,6 +431,10 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+<<<<<<< HEAD
+=======
+    skills: z.array(z.string()).optional(),
+>>>>>>> upstream/main
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
@@ -446,6 +454,10 @@ export const AgentEntrySchema = z
               .strict(),
           ])
           .optional(),
+<<<<<<< HEAD
+=======
+        thinking: z.string().optional(),
+>>>>>>> upstream/main
       })
       .strict()
       .optional(),

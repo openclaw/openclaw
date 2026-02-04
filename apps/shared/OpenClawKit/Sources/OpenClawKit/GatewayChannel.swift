@@ -416,7 +416,13 @@ public actor GatewayChannelActor {
             guard let self else { return }
             await self.watchTicks()
         }
+<<<<<<< HEAD
         await self.pushHandler?(.snapshot(ok))
+=======
+        if let pushHandler = self.pushHandler {
+            Task { await pushHandler(.snapshot(ok)) }
+        }
+>>>>>>> upstream/main
     }
 
     private func listen() {

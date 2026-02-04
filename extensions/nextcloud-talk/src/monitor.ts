@@ -54,7 +54,11 @@ function payloadToInboundMessage(
     roomToken: payload.target.id,
     roomName: payload.target.name,
     senderId: payload.actor.id,
+<<<<<<< HEAD
     senderName: payload.actor.name,
+=======
+    senderName: payload.actor.name ?? "",
+>>>>>>> upstream/main
     text: payload.object.content || payload.object.name || "",
     mediaType: payload.object.mediaType || "text/plain",
     timestamp: Date.now(),

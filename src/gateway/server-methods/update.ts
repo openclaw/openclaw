@@ -1,4 +1,8 @@
 import type { GatewayRequestHandlers } from "./types.js";
+<<<<<<< HEAD
+=======
+import { loadConfig } from "../../config/config.js";
+>>>>>>> upstream/main
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import {
   formatDoctorNonInteractiveHint,
@@ -6,6 +10,10 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+<<<<<<< HEAD
+=======
+import { normalizeUpdateChannel } from "../../infra/update-channels.js";
+>>>>>>> upstream/main
 import { runGatewayUpdate } from "../../infra/update-runner.js";
 import {
   ErrorCodes,
@@ -48,6 +56,11 @@ export const updateHandlers: GatewayRequestHandlers = {
 
     let result: Awaited<ReturnType<typeof runGatewayUpdate>>;
     try {
+<<<<<<< HEAD
+=======
+      const config = loadConfig();
+      const configChannel = normalizeUpdateChannel(config.update?.channel);
+>>>>>>> upstream/main
       const root =
         (await resolveOpenClawPackageRoot({
           moduleUrl: import.meta.url,
@@ -58,6 +71,10 @@ export const updateHandlers: GatewayRequestHandlers = {
         timeoutMs,
         cwd: root,
         argv1: process.argv[1],
+<<<<<<< HEAD
+=======
+        channel: configChannel ?? undefined,
+>>>>>>> upstream/main
       });
     } catch (err) {
       result = {

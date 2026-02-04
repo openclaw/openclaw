@@ -76,6 +76,10 @@ type RunPreparedReplyParams = {
     minChars: number;
     maxChars: number;
     breakPreference: "paragraph" | "newline" | "sentence";
+<<<<<<< HEAD
+=======
+    flushOnParagraph?: boolean;
+>>>>>>> upstream/main
   };
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   modelState: Awaited<ReturnType<typeof createModelSelectionState>>;
@@ -285,6 +289,10 @@ export async function runPreparedReply(
     }
   }
   if (resetTriggered && command.isAuthorizedSender) {
+<<<<<<< HEAD
+=======
+    // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
     const channel = ctx.OriginatingChannel || (command.channel as any);
     const to = ctx.OriginatingTo || command.from || command.to;
     if (channel && to) {

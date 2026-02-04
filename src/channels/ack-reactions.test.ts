@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
+=======
+import { sleep } from "../utils.ts";
+>>>>>>> upstream/main
 import {
   removeAckReactionAfterReply,
   shouldAckReaction,
@@ -237,7 +241,11 @@ describe("removeAckReactionAfterReply", () => {
       remove,
       onError,
     });
+<<<<<<< HEAD
     await new Promise((resolve) => setTimeout(resolve, 0));
+=======
+    await sleep(0);
+>>>>>>> upstream/main
     expect(remove).toHaveBeenCalledTimes(1);
     expect(onError).not.toHaveBeenCalled();
   });
@@ -250,7 +258,11 @@ describe("removeAckReactionAfterReply", () => {
       ackReactionValue: "👀",
       remove,
     });
+<<<<<<< HEAD
     await new Promise((resolve) => setTimeout(resolve, 0));
+=======
+    await sleep(0);
+>>>>>>> upstream/main
     expect(remove).not.toHaveBeenCalled();
   });
 
@@ -262,7 +274,11 @@ describe("removeAckReactionAfterReply", () => {
       ackReactionValue: "👀",
       remove,
     });
+<<<<<<< HEAD
     await new Promise((resolve) => setTimeout(resolve, 0));
+=======
+    await sleep(0);
+>>>>>>> upstream/main
     expect(remove).not.toHaveBeenCalled();
   });
 });

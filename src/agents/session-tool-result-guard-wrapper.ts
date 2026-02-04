@@ -25,7 +25,12 @@ export function guardSessionManager(
 
   const hookRunner = getGlobalHookRunner();
   const transform = hookRunner?.hasHooks("tool_result_persist")
+<<<<<<< HEAD
     ? (message: any, meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean }) => {
+=======
+    ? // oxlint-disable-next-line typescript/no-explicit-any
+      (message: any, meta: { toolCallId?: string; toolName?: string; isSynthetic?: boolean }) => {
+>>>>>>> upstream/main
         const out = hookRunner.runToolResultPersist(
           {
             toolName: meta.toolName,

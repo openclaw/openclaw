@@ -22,7 +22,10 @@ export function resolveMatrixRoomConfig(params: {
     params.roomId,
     `room:${params.roomId}`,
     ...params.aliases,
+<<<<<<< HEAD
     params.name ?? "",
+=======
+>>>>>>> upstream/main
   );
   const {
     entry: matched,

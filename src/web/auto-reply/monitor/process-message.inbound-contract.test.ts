@@ -17,6 +17,10 @@ describe("web processMessage inbound contract", () => {
     capturedCtx = undefined;
 
     await processMessage({
+<<<<<<< HEAD
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       cfg: { messages: {} } as any,
       msg: {
         id: "msg1",
@@ -29,11 +33,19 @@ describe("web processMessage inbound contract", () => {
         senderE164: "+15550002222",
         groupSubject: "Test Group",
         groupParticipants: [],
+<<<<<<< HEAD
+=======
+        // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       } as any,
       route: {
         agentId: "main",
         accountId: "default",
         sessionKey: "agent:main:whatsapp:group:123",
+<<<<<<< HEAD
+=======
+        // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       } as any,
       groupHistoryKey: "123@g.us",
       groupHistories: new Map(),
@@ -41,7 +53,13 @@ describe("web processMessage inbound contract", () => {
       connectionId: "conn",
       verbose: false,
       maxMediaBytes: 1,
+<<<<<<< HEAD
       replyResolver: (async () => undefined) as any,
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+      replyResolver: (async () => undefined) as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       replyLogger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as any,
       backgroundTasks: new Set(),
       rememberSentText: (_text: string | undefined, _opts: unknown) => {},
@@ -49,9 +67,17 @@ describe("web processMessage inbound contract", () => {
       echoForget: () => {},
       buildCombinedEchoKey: () => "echo",
       groupHistory: [],
+<<<<<<< HEAD
     } as any);
 
     expect(capturedCtx).toBeTruthy();
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+
+    expect(capturedCtx).toBeTruthy();
+    // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
     expectInboundContextContract(capturedCtx as any);
   });
 });

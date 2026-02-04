@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import { truncateText } from "./format";
+=======
+import { truncateText } from "./format.ts";
+>>>>>>> upstream/main
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -35,6 +39,7 @@ type ToolStreamHost = {
 };
 
 function extractToolOutputText(value: unknown): string | null {
+<<<<<<< HEAD
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   if (typeof record.text === "string") return record.text;
@@ -49,11 +54,45 @@ function extractToolOutputText(value: unknown): string | null {
     })
     .filter((part): part is string => Boolean(part));
   if (parts.length === 0) return null;
+=======
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string") {
+    return record.text;
+  }
+  const content = record.content;
+  if (!Array.isArray(content)) {
+    return null;
+  }
+  const parts = content
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const entry = item as Record<string, unknown>;
+      if (entry.type === "text" && typeof entry.text === "string") {
+        return entry.text;
+      }
+      return null;
+    })
+    .filter((part): part is string => Boolean(part));
+  if (parts.length === 0) {
+    return null;
+  }
+>>>>>>> upstream/main
   return parts.join("\n");
 }
 
 function formatToolOutput(value: unknown): string | null {
+<<<<<<< HEAD
   if (value === null || value === undefined) return null;
+=======
+  if (value === null || value === undefined) {
+    return null;
+  }
+>>>>>>> upstream/main
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
@@ -67,11 +106,21 @@ function formatToolOutput(value: unknown): string | null {
     try {
       text = JSON.stringify(value, null, 2);
     } catch {
+<<<<<<< HEAD
+=======
+      // oxlint-disable typescript/no-base-to-string
+>>>>>>> upstream/main
       text = String(value);
     }
   }
   const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);
+<<<<<<< HEAD
   if (!truncated.truncated) return truncated.text;
+=======
+  if (!truncated.truncated) {
+    return truncated.text;
+  }
+>>>>>>> upstream/main
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
 }
 
@@ -99,10 +148,21 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
 }
 
 function trimToolStream(host: ToolStreamHost) {
+<<<<<<< HEAD
   if (host.toolStreamOrder.length <= TOOL_STREAM_LIMIT) return;
   const overflow = host.toolStreamOrder.length - TOOL_STREAM_LIMIT;
   const removed = host.toolStreamOrder.splice(0, overflow);
   for (const id of removed) host.toolStreamById.delete(id);
+=======
+  if (host.toolStreamOrder.length <= TOOL_STREAM_LIMIT) {
+    return;
+  }
+  const overflow = host.toolStreamOrder.length - TOOL_STREAM_LIMIT;
+  const removed = host.toolStreamOrder.splice(0, overflow);
+  for (const id of removed) {
+    host.toolStreamById.delete(id);
+  }
+>>>>>>> upstream/main
 }
 
 function syncToolStreamMessages(host: ToolStreamHost) {
@@ -124,7 +184,13 @@ export function scheduleToolStreamSync(host: ToolStreamHost, force = false) {
     flushToolStreamSync(host);
     return;
   }
+<<<<<<< HEAD
   if (host.toolStreamSyncTimer != null) return;
+=======
+  if (host.toolStreamSyncTimer != null) {
+    return;
+  }
+>>>>>>> upstream/main
   host.toolStreamSyncTimer = window.setTimeout(
     () => flushToolStreamSync(host),
     TOOL_STREAM_THROTTLE_MS,
@@ -182,7 +248,13 @@ export function handleCompactionEvent(host: CompactionHost, payload: AgentEventP
 }
 
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
+<<<<<<< HEAD
   if (!payload) return;
+=======
+  if (!payload) {
+    return;
+  }
+>>>>>>> upstream/main
 
   // Handle compaction events
   if (payload.stream === "compaction") {
@@ -190,6 +262,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+<<<<<<< HEAD
   if (payload.stream !== "tool") return;
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
   if (sessionKey && sessionKey !== host.sessionKey) return;
@@ -201,6 +274,31 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   const data = payload.data ?? {};
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
   if (!toolCallId) return;
+=======
+  if (payload.stream !== "tool") {
+    return;
+  }
+  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+  if (sessionKey && sessionKey !== host.sessionKey) {
+    return;
+  }
+  // Fallback: only accept session-less events for the active run.
+  if (!sessionKey && host.chatRunId && payload.runId !== host.chatRunId) {
+    return;
+  }
+  if (host.chatRunId && payload.runId !== host.chatRunId) {
+    return;
+  }
+  if (!host.chatRunId) {
+    return;
+  }
+
+  const data = payload.data ?? {};
+  const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
+  if (!toolCallId) {
+    return;
+  }
+>>>>>>> upstream/main
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
   const args = phase === "start" ? data.args : undefined;
@@ -220,7 +318,11 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       sessionKey,
       name,
       args,
+<<<<<<< HEAD
       output,
+=======
+      output: output || undefined,
+>>>>>>> upstream/main
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       updatedAt: now,
       message: {},
@@ -229,8 +331,17 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     host.toolStreamOrder.push(toolCallId);
   } else {
     entry.name = name;
+<<<<<<< HEAD
     if (args !== undefined) entry.args = args;
     if (output !== undefined) entry.output = output;
+=======
+    if (args !== undefined) {
+      entry.args = args;
+    }
+    if (output !== undefined) {
+      entry.output = output || undefined;
+    }
+>>>>>>> upstream/main
     entry.updatedAt = now;
   }
 

@@ -1,6 +1,14 @@
+<<<<<<< HEAD
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { RuntimeEnv } from "../runtime.js";
+=======
+import path from "node:path";
+import type { CanvasHostServer } from "../canvas-host/server.js";
+import type { PluginServicesHandle } from "../plugins/services.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { ControlUiRootState } from "./control-ui.js";
+>>>>>>> upstream/main
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { registerSkillsChangeListener } from "../agents/skills/refresh.js";
@@ -18,6 +26,14 @@ import {
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+<<<<<<< HEAD
+=======
+import {
+  ensureControlUiAssetsBuilt,
+  resolveControlUiRootOverrideSync,
+  resolveControlUiRootSync,
+} from "../infra/control-ui-assets.js";
+>>>>>>> upstream/main
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
@@ -87,6 +103,10 @@ const logReload = log.child("reload");
 const logHooks = log.child("hooks");
 const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
+<<<<<<< HEAD
+=======
+const gatewayRuntime = runtimeForLogger(log);
+>>>>>>> upstream/main
 const canvasRuntime = runtimeForLogger(logCanvas);
 
 export type GatewayServer = {
@@ -253,6 +273,10 @@ export async function startGatewayServer(
     openResponsesEnabled,
     openResponsesConfig,
     controlUiBasePath,
+<<<<<<< HEAD
+=======
+    controlUiRoot: controlUiRootOverride,
+>>>>>>> upstream/main
     resolvedAuth,
     tailscaleConfig,
     tailscaleMode,
@@ -260,6 +284,41 @@ export async function startGatewayServer(
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
+<<<<<<< HEAD
+=======
+  let controlUiRootState: ControlUiRootState | undefined;
+  if (controlUiRootOverride) {
+    const resolvedOverride = resolveControlUiRootOverrideSync(controlUiRootOverride);
+    const resolvedOverridePath = path.resolve(controlUiRootOverride);
+    controlUiRootState = resolvedOverride
+      ? { kind: "resolved", path: resolvedOverride }
+      : { kind: "invalid", path: resolvedOverridePath };
+    if (!resolvedOverride) {
+      log.warn(`gateway: controlUi.root not found at ${resolvedOverridePath}`);
+    }
+  } else if (controlUiEnabled) {
+    let resolvedRoot = resolveControlUiRootSync({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    });
+    if (!resolvedRoot) {
+      const ensureResult = await ensureControlUiAssetsBuilt(gatewayRuntime);
+      if (!ensureResult.ok && ensureResult.message) {
+        log.warn(`gateway: ${ensureResult.message}`);
+      }
+      resolvedRoot = resolveControlUiRootSync({
+        moduleUrl: import.meta.url,
+        argv1: process.argv[1],
+        cwd: process.cwd(),
+      });
+    }
+    controlUiRootState = resolvedRoot
+      ? { kind: "resolved", path: resolvedRoot }
+      : { kind: "missing" };
+  }
+
+>>>>>>> upstream/main
   const wizardRunner = opts.wizardRunner ?? runOnboardingWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
 
@@ -291,6 +350,10 @@ export async function startGatewayServer(
     port,
     controlUiEnabled,
     controlUiBasePath,
+<<<<<<< HEAD
+=======
+    controlUiRoot: controlUiRootState,
+>>>>>>> upstream/main
     openAiChatCompletionsEnabled,
     openResponsesEnabled,
     openResponsesConfig,

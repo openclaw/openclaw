@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { LitElement, html, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import type { EventLogEntry } from "./app-events";
@@ -9,6 +10,23 @@ import type { Tab } from "./navigation";
 import type { ResolvedTheme, ThemeMode } from "./theme";
 import type {
   AgentsListResult,
+=======
+import { LitElement } from "lit";
+import { customElement, state } from "lit/decorators.js";
+import type { EventLogEntry } from "./app-events.ts";
+import type { AppViewState } from "./app-view-state.ts";
+import type { DevicePairingList } from "./controllers/devices.ts";
+import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillMessage } from "./controllers/skills.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
+import type { Tab } from "./navigation.ts";
+import type { ResolvedTheme, ThemeMode } from "./theme.ts";
+import type {
+  AgentsListResult,
+  AgentsFilesListResult,
+  AgentIdentityResult,
+>>>>>>> upstream/main
   ConfigSnapshot,
   ConfigUiHints,
   CronJob,
@@ -23,8 +41,13 @@ import type {
   SkillStatusReport,
   StatusSummary,
   NostrProfile,
+<<<<<<< HEAD
 } from "./types";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form";
+=======
+} from "./types.ts";
+import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+>>>>>>> upstream/main
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -37,27 +60,47 @@ import {
   handleWhatsAppLogout as handleWhatsAppLogoutInternal,
   handleWhatsAppStart as handleWhatsAppStartInternal,
   handleWhatsAppWait as handleWhatsAppWaitInternal,
+<<<<<<< HEAD
 } from "./app-channels";
+=======
+} from "./app-channels.ts";
+>>>>>>> upstream/main
 import {
   handleAbortChat as handleAbortChatInternal,
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
+<<<<<<< HEAD
 } from "./app-chat";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults";
 import { connectGateway as connectGatewayInternal } from "./app-gateway";
+=======
+} from "./app-chat.ts";
+import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
+import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
+>>>>>>> upstream/main
 import {
   handleConnected,
   handleDisconnected,
   handleFirstUpdated,
   handleUpdated,
+<<<<<<< HEAD
 } from "./app-lifecycle";
 import { renderApp } from "./app-render";
+=======
+} from "./app-lifecycle.ts";
+import { renderApp } from "./app-render.ts";
+>>>>>>> upstream/main
 import {
   exportLogs as exportLogsInternal,
   handleChatScroll as handleChatScrollInternal,
   handleLogsScroll as handleLogsScrollInternal,
   resetChatScroll as resetChatScrollInternal,
+<<<<<<< HEAD
 } from "./app-scroll";
+=======
+  scheduleChatScroll as scheduleChatScrollInternal,
+} from "./app-scroll.ts";
+>>>>>>> upstream/main
 import {
   applySettings as applySettingsInternal,
   loadCron as loadCronInternal,
@@ -65,6 +108,7 @@ import {
   setTab as setTabInternal,
   setTheme as setThemeInternal,
   onPopState as onPopStateInternal,
+<<<<<<< HEAD
 } from "./app-settings";
 import {
   resetToolStream as resetToolStreamInternal,
@@ -74,6 +118,17 @@ import { resolveInjectedAssistantIdentity } from "./assistant-identity";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity";
 import { loadSettings, type UiSettings } from "./storage";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types";
+=======
+} from "./app-settings.ts";
+import {
+  resetToolStream as resetToolStreamInternal,
+  type ToolStreamEntry,
+} from "./app-tool-stream.ts";
+import { resolveInjectedAssistantIdentity } from "./assistant-identity.ts";
+import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { loadSettings, type UiSettings } from "./storage.ts";
+import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
+>>>>>>> upstream/main
 
 declare global {
   interface Window {
@@ -84,10 +139,21 @@ declare global {
 const injectedAssistantIdentity = resolveInjectedAssistantIdentity();
 
 function resolveOnboardingMode(): boolean {
+<<<<<<< HEAD
   if (!window.location.search) return false;
   const params = new URLSearchParams(window.location.search);
   const raw = params.get("onboarding");
   if (!raw) return false;
+=======
+  if (!window.location.search) {
+    return false;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get("onboarding");
+  if (!raw) {
+    return false;
+  }
+>>>>>>> upstream/main
   const normalized = raw.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
@@ -121,7 +187,11 @@ export class OpenClawApp extends LitElement {
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
+<<<<<<< HEAD
   @state() compactionStatus: import("./app-tool-stream").CompactionStatus | null = null;
+=======
+  @state() compactionStatus: import("./app-tool-stream.ts").CompactionStatus | null = null;
+>>>>>>> upstream/main
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
@@ -160,7 +230,11 @@ export class OpenClawApp extends LitElement {
   @state() updateRunning = false;
   @state() applySessionKey = this.settings.lastActiveSessionKey;
   @state() configSnapshot: ConfigSnapshot | null = null;
+<<<<<<< HEAD
   @state() configSchema: unknown | null = null;
+=======
+  @state() configSchema: unknown = null;
+>>>>>>> upstream/main
   @state() configSchemaVersion: string | null = null;
   @state() configSchemaLoading = false;
   @state() configUiHints: ConfigUiHints = {};
@@ -191,6 +265,26 @@ export class OpenClawApp extends LitElement {
   @state() agentsLoading = false;
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsError: string | null = null;
+<<<<<<< HEAD
+=======
+  @state() agentsSelectedId: string | null = null;
+  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" =
+    "overview";
+  @state() agentFilesLoading = false;
+  @state() agentFilesError: string | null = null;
+  @state() agentFilesList: AgentsFilesListResult | null = null;
+  @state() agentFileContents: Record<string, string> = {};
+  @state() agentFileDrafts: Record<string, string> = {};
+  @state() agentFileActive: string | null = null;
+  @state() agentFileSaving = false;
+  @state() agentIdentityLoading = false;
+  @state() agentIdentityError: string | null = null;
+  @state() agentIdentityById: Record<string, AgentIdentityResult> = {};
+  @state() agentSkillsLoading = false;
+  @state() agentSkillsError: string | null = null;
+  @state() agentSkillsReport: SkillStatusReport | null = null;
+  @state() agentSkillsAgentId: string | null = null;
+>>>>>>> upstream/main
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
@@ -221,7 +315,11 @@ export class OpenClawApp extends LitElement {
   @state() debugStatus: StatusSummary | null = null;
   @state() debugHealth: HealthSnapshot | null = null;
   @state() debugModels: unknown[] = [];
+<<<<<<< HEAD
   @state() debugHeartbeat: unknown | null = null;
+=======
+  @state() debugHeartbeat: unknown = null;
+>>>>>>> upstream/main
   @state() debugCallMethod = "";
   @state() debugCallParams = "{}";
   @state() debugCallResult: string | null = null;
@@ -248,6 +346,10 @@ export class OpenClawApp extends LitElement {
   private chatScrollTimeout: number | null = null;
   private chatHasAutoScrolled = false;
   private chatUserNearBottom = true;
+<<<<<<< HEAD
+=======
+  @state() chatNewMessagesBelow = false;
+>>>>>>> upstream/main
   private nodesPollInterval: number | null = null;
   private logsPollInterval: number | null = null;
   private debugPollInterval: number | null = null;
@@ -314,6 +416,17 @@ export class OpenClawApp extends LitElement {
     resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
   }
 
+<<<<<<< HEAD
+=======
+  scrollToBottom() {
+    resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
+    scheduleChatScrollInternal(
+      this as unknown as Parameters<typeof scheduleChatScrollInternal>[0],
+      true,
+    );
+  }
+
+>>>>>>> upstream/main
   async loadAssistantIdentity() {
     await loadAssistantIdentityInternal(this);
   }
@@ -406,7 +519,13 @@ export class OpenClawApp extends LitElement {
 
   async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
     const active = this.execApprovalQueue[0];
+<<<<<<< HEAD
     if (!active || !this.client || this.execApprovalBusy) return;
+=======
+    if (!active || !this.client || this.execApprovalBusy) {
+      return;
+    }
+>>>>>>> upstream/main
     this.execApprovalBusy = true;
     this.execApprovalError = null;
     try {
@@ -424,7 +543,13 @@ export class OpenClawApp extends LitElement {
 
   handleGatewayUrlConfirm() {
     const nextGatewayUrl = this.pendingGatewayUrl;
+<<<<<<< HEAD
     if (!nextGatewayUrl) return;
+=======
+    if (!nextGatewayUrl) {
+      return;
+    }
+>>>>>>> upstream/main
     this.pendingGatewayUrl = null;
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
       ...this.settings,
@@ -455,7 +580,13 @@ export class OpenClawApp extends LitElement {
       window.clearTimeout(this.sidebarCloseTimer);
     }
     this.sidebarCloseTimer = window.setTimeout(() => {
+<<<<<<< HEAD
       if (this.sidebarOpen) return;
+=======
+      if (this.sidebarOpen) {
+        return;
+      }
+>>>>>>> upstream/main
       this.sidebarContent = null;
       this.sidebarError = null;
       this.sidebarCloseTimer = null;
@@ -469,6 +600,10 @@ export class OpenClawApp extends LitElement {
   }
 
   render() {
+<<<<<<< HEAD
     return renderApp(this);
+=======
+    return renderApp(this as unknown as AppViewState);
+>>>>>>> upstream/main
   }
 }

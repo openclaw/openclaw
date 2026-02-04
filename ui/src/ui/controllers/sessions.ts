@@ -1,6 +1,12 @@
+<<<<<<< HEAD
 import type { GatewayBrowserClient } from "../gateway";
 import type { SessionsListResult } from "../types";
 import { toNumber } from "../format";
+=======
+import type { GatewayBrowserClient } from "../gateway.ts";
+import type { SessionsListResult } from "../types.ts";
+import { toNumber } from "../format.ts";
+>>>>>>> upstream/main
 
 export type SessionsState = {
   client: GatewayBrowserClient | null;
@@ -23,8 +29,17 @@ export async function loadSessions(
     includeUnknown?: boolean;
   },
 ) {
+<<<<<<< HEAD
   if (!state.client || !state.connected) return;
   if (state.sessionsLoading) return;
+=======
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (state.sessionsLoading) {
+    return;
+  }
+>>>>>>> upstream/main
   state.sessionsLoading = true;
   state.sessionsError = null;
   try {
@@ -36,12 +51,25 @@ export async function loadSessions(
       includeGlobal,
       includeUnknown,
     };
+<<<<<<< HEAD
     if (activeMinutes > 0) params.activeMinutes = activeMinutes;
     if (limit > 0) params.limit = limit;
     const res = (await state.client.request("sessions.list", params)) as
       | SessionsListResult
       | undefined;
     if (res) state.sessionsResult = res;
+=======
+    if (activeMinutes > 0) {
+      params.activeMinutes = activeMinutes;
+    }
+    if (limit > 0) {
+      params.limit = limit;
+    }
+    const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
+    if (res) {
+      state.sessionsResult = res;
+    }
+>>>>>>> upstream/main
   } catch (err) {
     state.sessionsError = String(err);
   } finally {
@@ -59,12 +87,31 @@ export async function patchSession(
     reasoningLevel?: string | null;
   },
 ) {
+<<<<<<< HEAD
   if (!state.client || !state.connected) return;
   const params: Record<string, unknown> = { key };
   if ("label" in patch) params.label = patch.label;
   if ("thinkingLevel" in patch) params.thinkingLevel = patch.thinkingLevel;
   if ("verboseLevel" in patch) params.verboseLevel = patch.verboseLevel;
   if ("reasoningLevel" in patch) params.reasoningLevel = patch.reasoningLevel;
+=======
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const params: Record<string, unknown> = { key };
+  if ("label" in patch) {
+    params.label = patch.label;
+  }
+  if ("thinkingLevel" in patch) {
+    params.thinkingLevel = patch.thinkingLevel;
+  }
+  if ("verboseLevel" in patch) {
+    params.verboseLevel = patch.verboseLevel;
+  }
+  if ("reasoningLevel" in patch) {
+    params.reasoningLevel = patch.reasoningLevel;
+  }
+>>>>>>> upstream/main
   try {
     await state.client.request("sessions.patch", params);
     await loadSessions(state);
@@ -74,12 +121,27 @@ export async function patchSession(
 }
 
 export async function deleteSession(state: SessionsState, key: string) {
+<<<<<<< HEAD
   if (!state.client || !state.connected) return;
   if (state.sessionsLoading) return;
   const confirmed = window.confirm(
     `Delete session "${key}"?\n\nDeletes the session entry and archives its transcript.`,
   );
   if (!confirmed) return;
+=======
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (state.sessionsLoading) {
+    return;
+  }
+  const confirmed = window.confirm(
+    `Delete session "${key}"?\n\nDeletes the session entry and archives its transcript.`,
+  );
+  if (!confirmed) {
+    return;
+  }
+>>>>>>> upstream/main
   state.sessionsLoading = true;
   state.sessionsError = null;
   try {

@@ -1,3 +1,7 @@
+<<<<<<< HEAD
+=======
+import fsSync from "node:fs";
+>>>>>>> upstream/main
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +18,19 @@ async function readPackageName(dir: string): Promise<string | null> {
   }
 }
 
+<<<<<<< HEAD
+=======
+function readPackageNameSync(dir: string): string | null {
+  try {
+    const raw = fsSync.readFileSync(path.join(dir, "package.json"), "utf-8");
+    const parsed = JSON.parse(raw) as { name?: unknown };
+    return typeof parsed.name === "string" ? parsed.name : null;
+  } catch {
+    return null;
+  }
+}
+
+>>>>>>> upstream/main
 async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
   let current = path.resolve(startDir);
   for (let i = 0; i < maxDepth; i += 1) {
@@ -30,6 +47,25 @@ async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string 
   return null;
 }
 
+<<<<<<< HEAD
+=======
+function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
+  let current = path.resolve(startDir);
+  for (let i = 0; i < maxDepth; i += 1) {
+    const name = readPackageNameSync(current);
+    if (name && CORE_PACKAGE_NAMES.has(name)) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return null;
+}
+
+>>>>>>> upstream/main
 function candidateDirsFromArgv1(argv1: string): string[] {
   const normalized = path.resolve(argv1);
   const candidates = [path.dirname(normalized)];
@@ -69,3 +105,33 @@ export async function resolveOpenClawPackageRoot(opts: {
 
   return null;
 }
+<<<<<<< HEAD
+=======
+
+export function resolveOpenClawPackageRootSync(opts: {
+  cwd?: string;
+  argv1?: string;
+  moduleUrl?: string;
+}): string | null {
+  const candidates: string[] = [];
+
+  if (opts.moduleUrl) {
+    candidates.push(path.dirname(fileURLToPath(opts.moduleUrl)));
+  }
+  if (opts.argv1) {
+    candidates.push(...candidateDirsFromArgv1(opts.argv1));
+  }
+  if (opts.cwd) {
+    candidates.push(opts.cwd);
+  }
+
+  for (const candidate of candidates) {
+    const found = findPackageRootSync(candidate);
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+}
+>>>>>>> upstream/main

@@ -1,5 +1,9 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
+<<<<<<< HEAD
+=======
+import type { MemoryCitationsMode } from "../../config/types.memory.js";
+>>>>>>> upstream/main
 import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
@@ -46,6 +50,10 @@ export function buildEmbeddedSystemPrompt(params: {
   userTime?: string;
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
+<<<<<<< HEAD
+=======
+  memoryCitationsMode?: MemoryCitationsMode;
+>>>>>>> upstream/main
 }): string {
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -71,21 +79,36 @@ export function buildEmbeddedSystemPrompt(params: {
     userTime: params.userTime,
     userTimeFormat: params.userTimeFormat,
     contextFiles: params.contextFiles,
+<<<<<<< HEAD
+=======
+    memoryCitationsMode: params.memoryCitationsMode,
+>>>>>>> upstream/main
   });
 }
 
 export function createSystemPromptOverride(
   systemPrompt: string,
 ): (defaultPrompt?: string) => string {
+<<<<<<< HEAD
   const trimmed = systemPrompt.trim();
   return () => trimmed;
+=======
+  const override = systemPrompt.trim();
+  return (_defaultPrompt?: string) => override;
+>>>>>>> upstream/main
 }
 
 export function applySystemPromptOverrideToSession(
   session: AgentSession,
+<<<<<<< HEAD
   override: (defaultPrompt?: string) => string,
 ) {
   const prompt = override().trim();
+=======
+  override: string | ((defaultPrompt?: string) => string),
+) {
+  const prompt = typeof override === "function" ? override() : override.trim();
+>>>>>>> upstream/main
   session.agent.setSystemPrompt(prompt);
   const mutableSession = session as unknown as {
     _baseSystemPrompt?: string;

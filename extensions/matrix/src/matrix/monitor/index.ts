@@ -10,6 +10,10 @@ import {
   resolveSharedMatrixClient,
   stopSharedClient,
 } from "../client.js";
+<<<<<<< HEAD
+=======
+import { normalizeMatrixUserId } from "./allowlist.js";
+>>>>>>> upstream/main
 import { registerMatrixAutoJoin } from "./auto-join.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
@@ -68,6 +72,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       .replace(/^(room|channel):/i, "")
       .trim();
   const isMatrixUserId = (value: string) => value.startsWith("@") && value.includes(":");
+<<<<<<< HEAD
 
   const allowlistOnly = cfg.channels?.matrix?.allowlistOnly === true;
   let allowFrom = cfg.channels?.matrix?.dm?.allowFrom ?? [];
@@ -117,11 +122,87 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     const nextRooms = { ...roomsConfig };
     const pending: Array<{ input: string; query: string }> = [];
     for (const entry of entries) {
+=======
+  const resolveUserAllowlist = async (
+    label: string,
+    list?: Array<string | number>,
+  ): Promise<string[]> => {
+    let allowList = list ?? [];
+    if (allowList.length === 0) {
+      return allowList;
+    }
+    const entries = allowList
+      .map((entry) => normalizeUserEntry(String(entry)))
+      .filter((entry) => entry && entry !== "*");
+    if (entries.length === 0) {
+      return allowList;
+    }
+    const mapping: string[] = [];
+    const unresolved: string[] = [];
+    const additions: string[] = [];
+    const pending: string[] = [];
+    for (const entry of entries) {
+      if (isMatrixUserId(entry)) {
+        additions.push(normalizeMatrixUserId(entry));
+        continue;
+      }
+      pending.push(entry);
+    }
+    if (pending.length > 0) {
+      const resolved = await resolveMatrixTargets({
+        cfg,
+        inputs: pending,
+        kind: "user",
+        runtime,
+      });
+      for (const entry of resolved) {
+        if (entry.resolved && entry.id) {
+          const normalizedId = normalizeMatrixUserId(entry.id);
+          additions.push(normalizedId);
+          mapping.push(`${entry.input}→${normalizedId}`);
+        } else {
+          unresolved.push(entry.input);
+        }
+      }
+    }
+    allowList = mergeAllowlist({ existing: allowList, additions });
+    summarizeMapping(label, mapping, unresolved, runtime);
+    if (unresolved.length > 0) {
+      runtime.log?.(
+        `${label} entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored.`,
+      );
+    }
+    return allowList;
+  };
+
+  const allowlistOnly = cfg.channels?.matrix?.allowlistOnly === true;
+  let allowFrom = cfg.channels?.matrix?.dm?.allowFrom ?? [];
+  let groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
+  let roomsConfig = cfg.channels?.matrix?.groups ?? cfg.channels?.matrix?.rooms;
+
+  allowFrom = await resolveUserAllowlist("matrix dm allowlist", allowFrom);
+  groupAllowFrom = await resolveUserAllowlist("matrix group allowlist", groupAllowFrom);
+
+  if (roomsConfig && Object.keys(roomsConfig).length > 0) {
+    const mapping: string[] = [];
+    const unresolved: string[] = [];
+    const nextRooms: Record<string, (typeof roomsConfig)[string]> = {};
+    if (roomsConfig["*"]) {
+      nextRooms["*"] = roomsConfig["*"];
+    }
+    const pending: Array<{ input: string; query: string; config: (typeof roomsConfig)[string] }> =
+      [];
+    for (const [entry, roomConfig] of Object.entries(roomsConfig)) {
+      if (entry === "*") {
+        continue;
+      }
+>>>>>>> upstream/main
       const trimmed = entry.trim();
       if (!trimmed) {
         continue;
       }
       const cleaned = normalizeRoomEntry(trimmed);
+<<<<<<< HEAD
       if (cleaned.startsWith("!") && cleaned.includes(":")) {
         if (!nextRooms[cleaned]) {
           nextRooms[cleaned] = roomsConfig[entry];
@@ -130,6 +211,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         continue;
       }
       pending.push({ input: entry, query: trimmed });
+=======
+      if ((cleaned.startsWith("!") || cleaned.startsWith("#")) && cleaned.includes(":")) {
+        if (!nextRooms[cleaned]) {
+          nextRooms[cleaned] = roomConfig;
+        }
+        if (cleaned !== entry) {
+          mapping.push(`${entry}→${cleaned}`);
+        }
+        continue;
+      }
+      pending.push({ input: entry, query: trimmed, config: roomConfig });
+>>>>>>> upstream/main
     }
     if (pending.length > 0) {
       const resolved = await resolveMatrixTargets({
@@ -145,7 +238,11 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         }
         if (entry.resolved && entry.id) {
           if (!nextRooms[entry.id]) {
+<<<<<<< HEAD
             nextRooms[entry.id] = roomsConfig[source.input];
+=======
+            nextRooms[entry.id] = source.config;
+>>>>>>> upstream/main
           }
           mapping.push(`${source.input}→${entry.id}`);
         } else {
@@ -155,6 +252,28 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     }
     roomsConfig = nextRooms;
     summarizeMapping("matrix rooms", mapping, unresolved, runtime);
+<<<<<<< HEAD
+=======
+    if (unresolved.length > 0) {
+      runtime.log?.(
+        "matrix rooms must be room IDs or aliases (example: !room:server or #alias:server). Unresolved entries are ignored.",
+      );
+    }
+  }
+  if (roomsConfig && Object.keys(roomsConfig).length > 0) {
+    const nextRooms = { ...roomsConfig };
+    for (const [roomKey, roomConfig] of Object.entries(roomsConfig)) {
+      const users = roomConfig?.users ?? [];
+      if (users.length === 0) {
+        continue;
+      }
+      const resolvedUsers = await resolveUserAllowlist(`matrix room users (${roomKey})`, users);
+      if (resolvedUsers !== users) {
+        nextRooms[roomKey] = { ...roomConfig, users: resolvedUsers };
+      }
+    }
+    roomsConfig = nextRooms;
+>>>>>>> upstream/main
   }
 
   cfg = {
@@ -167,6 +286,10 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           ...cfg.channels?.matrix?.dm,
           allowFrom,
         },
+<<<<<<< HEAD
+=======
+        ...(groupAllowFrom.length > 0 ? { groupAllowFrom } : {}),
+>>>>>>> upstream/main
         ...(roomsConfig ? { groups: roomsConfig } : {}),
       },
     },

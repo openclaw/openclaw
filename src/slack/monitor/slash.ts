@@ -34,6 +34,10 @@ import {
 } from "./allow-list.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
 import { buildSlackSlashCommandMatcher, resolveSlackSlashCommandConfig } from "./commands.js";
+<<<<<<< HEAD
+=======
+import { normalizeSlackChannelType } from "./context.js";
+>>>>>>> upstream/main
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 import { deliverSlackSlashReplies } from "./replies.js";
 
@@ -176,8 +180,14 @@ export function registerSlackMonitorSlashCommands(params: {
       }
 
       const channelInfo = await ctx.resolveChannelName(command.channel_id);
+<<<<<<< HEAD
       const channelType =
         channelInfo?.type ?? (command.channel_name === "directmessage" ? "im" : undefined);
+=======
+      const rawChannelType =
+        channelInfo?.type ?? (command.channel_name === "directmessage" ? "im" : undefined);
+      const channelType = normalizeSlackChannelType(rawChannelType, command.channel_id);
+>>>>>>> upstream/main
       const isDirectMessage = channelType === "im";
       const isGroupDm = channelType === "mpim";
       const isRoom = channelType === "channel" || channelType === "group";

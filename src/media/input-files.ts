@@ -1,9 +1,13 @@
+<<<<<<< HEAD
 import type { Dispatcher } from "undici";
 import {
   closeDispatcher,
   createPinnedDispatcher,
   resolvePinnedHostname,
 } from "../infra/net/ssrf.js";
+=======
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+>>>>>>> upstream/main
 import { logWarn } from "../logger.js";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
@@ -112,10 +116,13 @@ export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
 export const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
 export const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
 
+<<<<<<< HEAD
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
+=======
+>>>>>>> upstream/main
 export function normalizeMimeType(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -151,6 +158,7 @@ export async function fetchWithGuard(params: {
   timeoutMs: number;
   maxRedirects: number;
 }): Promise<InputFetchResult> {
+<<<<<<< HEAD
   let currentUrl = params.url;
   let redirectCount = 0;
 
@@ -217,6 +225,41 @@ export async function fetchWithGuard(params: {
     }
   } finally {
     clearTimeout(timeoutId);
+=======
+  const { response, release } = await fetchWithSsrFGuard({
+    url: params.url,
+    maxRedirects: params.maxRedirects,
+    timeoutMs: params.timeoutMs,
+    init: { headers: { "User-Agent": "OpenClaw-Gateway/1.0" } },
+  });
+
+  try {
+    if (!response.ok) {
+      throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
+    }
+
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      const size = parseInt(contentLength, 10);
+      if (size > params.maxBytes) {
+        throw new Error(`Content too large: ${size} bytes (limit: ${params.maxBytes} bytes)`);
+      }
+    }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength > params.maxBytes) {
+      throw new Error(
+        `Content too large: ${buffer.byteLength} bytes (limit: ${params.maxBytes} bytes)`,
+      );
+    }
+
+    const contentType = response.headers.get("content-type") || undefined;
+    const parsed = parseContentType(contentType);
+    const mimeType = parsed.mimeType ?? "application/octet-stream";
+    return { buffer, mimeType, contentType };
+  } finally {
+    await release();
+>>>>>>> upstream/main
   }
 }
 

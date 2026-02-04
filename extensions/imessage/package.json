@@ -1,6 +1,10 @@
 {
   "name": "@openclaw/imessage",
+<<<<<<< HEAD
   "version": "2026.1.30",
+=======
+  "version": "2026.2.2",
+>>>>>>> upstream/main
   "description": "OpenClaw iMessage channel plugin",
   "type": "module",
   "devDependencies": {

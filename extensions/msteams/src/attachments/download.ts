@@ -11,6 +11,10 @@ import {
   isRecord,
   isUrlAllowed,
   normalizeContentType,
+<<<<<<< HEAD
+=======
+  resolveAuthAllowedHosts,
+>>>>>>> upstream/main
   resolveAllowedHosts,
 } from "./shared.js";
 
@@ -85,6 +89,11 @@ async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
+<<<<<<< HEAD
+=======
+  allowHosts: string[];
+  authAllowHosts: string[];
+>>>>>>> upstream/main
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;
   const firstAttempt = await fetchFn(params.url);
@@ -97,6 +106,12 @@ async function fetchWithAuthFallback(params: {
   if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
     return firstAttempt;
   }
+<<<<<<< HEAD
+=======
+  if (!isUrlAllowed(params.url, params.authAllowHosts)) {
+    return firstAttempt;
+  }
+>>>>>>> upstream/main
 
   const scopes = scopeCandidatesForUrl(params.url);
   for (const scope of scopes) {
@@ -104,10 +119,36 @@ async function fetchWithAuthFallback(params: {
       const token = await params.tokenProvider.getAccessToken(scope);
       const res = await fetchFn(params.url, {
         headers: { Authorization: `Bearer ${token}` },
+<<<<<<< HEAD
+=======
+        redirect: "manual",
+>>>>>>> upstream/main
       });
       if (res.ok) {
         return res;
       }
+<<<<<<< HEAD
+=======
+      const redirectUrl = readRedirectUrl(params.url, res);
+      if (redirectUrl && isUrlAllowed(redirectUrl, params.allowHosts)) {
+        const redirectRes = await fetchFn(redirectUrl);
+        if (redirectRes.ok) {
+          return redirectRes;
+        }
+        if (
+          (redirectRes.status === 401 || redirectRes.status === 403) &&
+          isUrlAllowed(redirectUrl, params.authAllowHosts)
+        ) {
+          const redirectAuthRes = await fetchFn(redirectUrl, {
+            headers: { Authorization: `Bearer ${token}` },
+            redirect: "manual",
+          });
+          if (redirectAuthRes.ok) {
+            return redirectAuthRes;
+          }
+        }
+      }
+>>>>>>> upstream/main
     } catch {
       // Try the next scope.
     }
@@ -116,6 +157,24 @@ async function fetchWithAuthFallback(params: {
   return firstAttempt;
 }
 
+<<<<<<< HEAD
+=======
+function readRedirectUrl(baseUrl: string, res: Response): string | null {
+  if (![301, 302, 303, 307, 308].includes(res.status)) {
+    return null;
+  }
+  const location = res.headers.get("location");
+  if (!location) {
+    return null;
+  }
+  try {
+    return new URL(location, baseUrl).toString();
+  } catch {
+    return null;
+  }
+}
+
+>>>>>>> upstream/main
 /**
  * Download all file attachments from a Teams message (images, documents, etc.).
  * Renamed from downloadMSTeamsImageAttachments to support all file types.
@@ -125,6 +184,10 @@ export async function downloadMSTeamsAttachments(params: {
   maxBytes: number;
   tokenProvider?: MSTeamsAccessTokenProvider;
   allowHosts?: string[];
+<<<<<<< HEAD
+=======
+  authAllowHosts?: string[];
+>>>>>>> upstream/main
   fetchFn?: typeof fetch;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
@@ -134,6 +197,10 @@ export async function downloadMSTeamsAttachments(params: {
     return [];
   }
   const allowHosts = resolveAllowedHosts(params.allowHosts);
+<<<<<<< HEAD
+=======
+  const authAllowHosts = resolveAuthAllowedHosts(params.authAllowHosts);
+>>>>>>> upstream/main
 
   // Download ANY downloadable attachment (not just images)
   const downloadable = list.filter(isDownloadableAttachment);
@@ -199,6 +266,11 @@ export async function downloadMSTeamsAttachments(params: {
         url: candidate.url,
         tokenProvider: params.tokenProvider,
         fetchFn: params.fetchFn,
+<<<<<<< HEAD
+=======
+        allowHosts,
+        authAllowHosts,
+>>>>>>> upstream/main
       });
       if (!res.ok) {
         continue;

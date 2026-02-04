@@ -327,7 +327,11 @@ export async function uninstallScheduledTask({
 }
 
 function isTaskNotRunning(res: { stdout: string; stderr: string; code: number }): boolean {
+<<<<<<< HEAD
   const detail = `${res.stderr || res.stdout}`.toLowerCase();
+=======
+  const detail = (res.stderr || res.stdout).toLowerCase();
+>>>>>>> upstream/main
   return detail.includes("not running");
 }
 

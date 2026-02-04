@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { toSanitizedMarkdownHtml } from "./markdown";
+=======
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
+>>>>>>> upstream/main
 
 describe("toSanitizedMarkdownHtml", () => {
   it("renders basic markdown", () => {

@@ -37,6 +37,10 @@ const NODES_TOOL_ACTIONS = [
   "screen_record",
   "location_get",
   "run",
+<<<<<<< HEAD
+=======
+  "invoke",
+>>>>>>> upstream/main
 ] as const;
 
 const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
@@ -84,6 +88,12 @@ const NodesToolSchema = Type.Object({
   commandTimeoutMs: Type.Optional(Type.Number()),
   invokeTimeoutMs: Type.Optional(Type.Number()),
   needsScreenRecording: Type.Optional(Type.Boolean()),
+<<<<<<< HEAD
+=======
+  // invoke
+  invokeCommand: Type.Optional(Type.String()),
+  invokeParamsJson: Type.Optional(Type.String()),
+>>>>>>> upstream/main
 });
 
 export function createNodesTool(options?: {
@@ -99,7 +109,11 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
+<<<<<<< HEAD
       "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location/run).",
+=======
+      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location/run/invoke).",
+>>>>>>> upstream/main
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -438,6 +452,36 @@ export function createNodesTool(options?: {
             });
             return jsonResult(raw?.payload ?? {});
           }
+<<<<<<< HEAD
+=======
+          case "invoke": {
+            const node = readStringParam(params, "node", { required: true });
+            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const invokeCommand = readStringParam(params, "invokeCommand", { required: true });
+            const invokeParamsJson =
+              typeof params.invokeParamsJson === "string" ? params.invokeParamsJson.trim() : "";
+            let invokeParams: unknown = {};
+            if (invokeParamsJson) {
+              try {
+                invokeParams = JSON.parse(invokeParamsJson);
+              } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                throw new Error(`invokeParamsJson must be valid JSON: ${message}`, {
+                  cause: err,
+                });
+              }
+            }
+            const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
+            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
+              nodeId,
+              command: invokeCommand,
+              params: invokeParams,
+              timeoutMs: invokeTimeoutMs,
+              idempotencyKey: crypto.randomUUID(),
+            });
+            return jsonResult(raw ?? {});
+          }
+>>>>>>> upstream/main
           default:
             throw new Error(`Unknown action: ${action}`);
         }

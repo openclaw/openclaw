@@ -1,16 +1,29 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+<<<<<<< HEAD
 import type { AssistantIdentity } from "../assistant-identity";
 import type { MessageGroup } from "../types/chat-types";
 import { toSanitizedMarkdownHtml } from "../markdown";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown";
+=======
+import type { AssistantIdentity } from "../assistant-identity.ts";
+import type { MessageGroup } from "../types/chat-types.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
+>>>>>>> upstream/main
 import {
   extractTextCached,
   extractThinkingCached,
   formatReasoningMarkdown,
+<<<<<<< HEAD
 } from "./message-extract";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer";
 import { extractToolCards, renderToolCardSidebar } from "./tool-cards";
+=======
+} from "./message-extract.ts";
+import { isToolResultMessage, normalizeRoleForGrouping } from "./message-normalizer.ts";
+import { extractToolCards, renderToolCardSidebar } from "./tool-cards.ts";
+>>>>>>> upstream/main
 
 type ImageBlock = {
   url: string;
@@ -24,14 +37,24 @@ function extractImages(message: unknown): ImageBlock[] {
 
   if (Array.isArray(content)) {
     for (const block of content) {
+<<<<<<< HEAD
       if (typeof block !== "object" || block === null) continue;
+=======
+      if (typeof block !== "object" || block === null) {
+        continue;
+      }
+>>>>>>> upstream/main
       const b = block as Record<string, unknown>;
 
       if (b.type === "image") {
         // Handle source object format (from sendChatMessage)
         const source = b.source as Record<string, unknown> | undefined;
         if (source?.type === "base64" && typeof source.data === "string") {
+<<<<<<< HEAD
           const data = source.data as string;
+=======
+          const data = source.data;
+>>>>>>> upstream/main
           const mediaType = (source.media_type as string) || "image/png";
           // If data is already a data URL, use it directly
           const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
@@ -188,12 +211,22 @@ function renderAvatar(role: string, assistant?: Pick<AssistantIdentity, "name" |
 
 function isAvatarUrl(value: string): boolean {
   return (
+<<<<<<< HEAD
     /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || /^\//.test(value) // Relative paths from avatar endpoint
+=======
+    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/") // Relative paths from avatar endpoint
+>>>>>>> upstream/main
   );
 }
 
 function renderMessageImages(images: ImageBlock[]) {
+<<<<<<< HEAD
   if (images.length === 0) return nothing;
+=======
+  if (images.length === 0) {
+    return nothing;
+  }
+>>>>>>> upstream/main
 
   return html`
     <div class="chat-message-images">
@@ -251,7 +284,13 @@ function renderGroupedMessage(
     return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
+<<<<<<< HEAD
   if (!markdown && !hasToolCards && !hasImages) return nothing;
+=======
+  if (!markdown && !hasToolCards && !hasImages) {
+    return nothing;
+  }
+>>>>>>> upstream/main
 
   return html`
     <div class="${bubbleClasses}">

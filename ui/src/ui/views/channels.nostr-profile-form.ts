@@ -5,7 +5,11 @@
  */
 
 import { html, nothing, type TemplateResult } from "lit";
+<<<<<<< HEAD
 import type { NostrProfile as NostrProfileType } from "../types";
+=======
+import type { NostrProfile as NostrProfileType } from "../types.ts";
+>>>>>>> upstream/main
 
 // ============================================================================
 // Types
@@ -140,7 +144,13 @@ export function renderNostrProfileForm(params: {
 
   const renderPicturePreview = () => {
     const picture = state.values.picture;
+<<<<<<< HEAD
     if (!picture) return nothing;
+=======
+    if (!picture) {
+      return nothing;
+    }
+>>>>>>> upstream/main
 
     return html`
       <div style="margin-bottom: 12px;">

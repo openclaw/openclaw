@@ -5,6 +5,10 @@ const theme = {
   dim: (s: string) => `<d>${s}</d>`,
   bold: (s: string) => `<b>${s}</b>`,
   accentSoft: (s: string) => `<a>${s}</a>`,
+<<<<<<< HEAD
+=======
+  // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
 } as any;
 
 describe("tui-waiting", () => {

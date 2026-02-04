@@ -191,12 +191,21 @@ docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --no-install-d
 echo ""
 echo "==> Provider setup (optional)"
 echo "WhatsApp (QR):"
+<<<<<<< HEAD
 echo "  ${COMPOSE_HINT} run --rm openclaw-cli providers login"
 echo "Telegram (bot token):"
 echo "  ${COMPOSE_HINT} run --rm openclaw-cli providers add --provider telegram --token <token>"
 echo "Discord (bot token):"
 echo "  ${COMPOSE_HINT} run --rm openclaw-cli providers add --provider discord --token <token>"
 echo "Docs: https://docs.openclaw.ai/providers"
+=======
+echo "  ${COMPOSE_HINT} run --rm openclaw-cli channels login"
+echo "Telegram (bot token):"
+echo "  ${COMPOSE_HINT} run --rm openclaw-cli channels add --channel telegram --token <token>"
+echo "Discord (bot token):"
+echo "  ${COMPOSE_HINT} run --rm openclaw-cli channels add --channel discord --token <token>"
+echo "Docs: https://docs.openclaw.ai/channels"
+>>>>>>> upstream/main
 
 echo ""
 echo "==> Starting gateway"

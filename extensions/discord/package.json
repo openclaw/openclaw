@@ -1,6 +1,10 @@
 {
   "name": "@openclaw/discord",
+<<<<<<< HEAD
   "version": "2026.1.30",
+=======
+  "version": "2026.2.2",
+>>>>>>> upstream/main
   "description": "OpenClaw Discord channel plugin",
   "type": "module",
   "devDependencies": {

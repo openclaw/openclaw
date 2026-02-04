@@ -8,9 +8,15 @@ import {
 } from "openclaw/plugin-sdk";
 import type { CoreConfig, DmPolicy } from "./types.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
+<<<<<<< HEAD
 import { listMatrixDirectoryPeersLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
+=======
+import { resolveMatrixAccount } from "./matrix/accounts.js";
+import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
+import { resolveMatrixTargets } from "./resolve-targets.js";
+>>>>>>> upstream/main
 
 const channel = "matrix" as const;
 
@@ -65,14 +71,24 @@ async function promptMatrixAllowFrom(params: {
 
   while (true) {
     const entry = await prompter.text({
+<<<<<<< HEAD
       message: "Matrix allowFrom (username or user id)",
+=======
+      message: "Matrix allowFrom (full @user:server; display name only if unique)",
+>>>>>>> upstream/main
       placeholder: "@user:server",
       initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
     });
     const parts = parseInput(String(entry));
     const resolvedIds: string[] = [];
+<<<<<<< HEAD
     let unresolved: string[] = [];
+=======
+    const pending: string[] = [];
+    const unresolved: string[] = [];
+    const unresolvedNotes: string[] = [];
+>>>>>>> upstream/main
 
     for (const part of parts) {
       if (isFullUserId(part)) {
@@ -83,6 +99,7 @@ async function promptMatrixAllowFrom(params: {
         unresolved.push(part);
         continue;
       }
+<<<<<<< HEAD
       const results = await listMatrixDirectoryPeersLive({
         cfg,
         query: part,
@@ -99,12 +116,40 @@ async function promptMatrixAllowFrom(params: {
         }
       } else {
         unresolved.push(part);
+=======
+      pending.push(part);
+    }
+
+    if (pending.length > 0) {
+      const results = await resolveMatrixTargets({
+        cfg,
+        inputs: pending,
+        kind: "user",
+      }).catch(() => []);
+      for (const result of results) {
+        if (result?.resolved && result.id) {
+          resolvedIds.push(result.id);
+          continue;
+        }
+        if (result?.input) {
+          unresolved.push(result.input);
+          if (result.note) {
+            unresolvedNotes.push(`${result.input}: ${result.note}`);
+          }
+        }
+>>>>>>> upstream/main
       }
     }
 
     if (unresolved.length > 0) {
+<<<<<<< HEAD
       await prompter.note(
         `Could not resolve: ${unresolved.join(", ")}. Use full @user:server IDs.`,
+=======
+      const details = unresolvedNotes.length > 0 ? unresolvedNotes : unresolved;
+      await prompter.note(
+        `Could not resolve:\n${details.join("\n")}\nUse full @user:server IDs.`,
+>>>>>>> upstream/main
         "Matrix allowlist",
       );
       continue;

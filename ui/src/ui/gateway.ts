@@ -5,9 +5,15 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../../src/gateway/protocol/client-info.js";
+<<<<<<< HEAD
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity";
 import { generateUUID } from "./uuid";
+=======
+import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
+import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
+import { generateUUID } from "./uuid.ts";
+>>>>>>> upstream/main
 
 export type GatewayEventFrame = {
   type: "event";
@@ -91,16 +97,27 @@ export class GatewayBrowserClient {
   }
 
   private connect() {
+<<<<<<< HEAD
     if (this.closed) return;
     this.ws = new WebSocket(this.opts.url);
     this.ws.onopen = () => this.queueConnect();
     this.ws.onmessage = (ev) => this.handleMessage(String(ev.data ?? ""));
     this.ws.onclose = (ev) => {
+=======
+    if (this.closed) {
+      return;
+    }
+    this.ws = new WebSocket(this.opts.url);
+    this.ws.addEventListener("open", () => this.queueConnect());
+    this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
+    this.ws.addEventListener("close", (ev) => {
+>>>>>>> upstream/main
       const reason = String(ev.reason ?? "");
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason });
       this.scheduleReconnect();
+<<<<<<< HEAD
     };
     this.ws.onerror = () => {
       // ignored; close handler will fire
@@ -109,18 +126,42 @@ export class GatewayBrowserClient {
 
   private scheduleReconnect() {
     if (this.closed) return;
+=======
+    });
+    this.ws.addEventListener("error", () => {
+      // ignored; close handler will fire
+    });
+  }
+
+  private scheduleReconnect() {
+    if (this.closed) {
+      return;
+    }
+>>>>>>> upstream/main
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
     window.setTimeout(() => this.connect(), delay);
   }
 
   private flushPending(err: Error) {
+<<<<<<< HEAD
     for (const [, p] of this.pending) p.reject(err);
+=======
+    for (const [, p] of this.pending) {
+      p.reject(err);
+    }
+>>>>>>> upstream/main
     this.pending.clear();
   }
 
   private async sendConnect() {
+<<<<<<< HEAD
     if (this.connectSent) return;
+=======
+    if (this.connectSent) {
+      return;
+    }
+>>>>>>> upstream/main
     this.connectSent = true;
     if (this.connectTimer !== null) {
       window.clearTimeout(this.connectTimer);
@@ -265,10 +306,22 @@ export class GatewayBrowserClient {
     if (frame.type === "res") {
       const res = parsed as GatewayResponseFrame;
       const pending = this.pending.get(res.id);
+<<<<<<< HEAD
       if (!pending) return;
       this.pending.delete(res.id);
       if (res.ok) pending.resolve(res.payload);
       else pending.reject(new Error(res.error?.message ?? "request failed"));
+=======
+      if (!pending) {
+        return;
+      }
+      this.pending.delete(res.id);
+      if (res.ok) {
+        pending.resolve(res.payload);
+      } else {
+        pending.reject(new Error(res.error?.message ?? "request failed"));
+      }
+>>>>>>> upstream/main
       return;
     }
   }
@@ -289,7 +342,13 @@ export class GatewayBrowserClient {
   private queueConnect() {
     this.connectNonce = null;
     this.connectSent = false;
+<<<<<<< HEAD
     if (this.connectTimer !== null) window.clearTimeout(this.connectTimer);
+=======
+    if (this.connectTimer !== null) {
+      window.clearTimeout(this.connectTimer);
+    }
+>>>>>>> upstream/main
     this.connectTimer = window.setTimeout(() => {
       void this.sendConnect();
     }, 750);

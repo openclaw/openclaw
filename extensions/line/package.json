@@ -1,6 +1,10 @@
 {
   "name": "@openclaw/line",
+<<<<<<< HEAD
   "version": "2026.1.30",
+=======
+  "version": "2026.2.2",
+>>>>>>> upstream/main
   "description": "OpenClaw LINE channel plugin",
   "type": "module",
   "devDependencies": {

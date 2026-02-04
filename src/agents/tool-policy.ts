@@ -215,6 +215,13 @@ export function stripPluginOnlyAllowlist(
   const unknownAllowlist: string[] = [];
   let hasCoreEntry = false;
   for (const entry of normalized) {
+<<<<<<< HEAD
+=======
+    if (entry === "*") {
+      hasCoreEntry = true;
+      continue;
+    }
+>>>>>>> upstream/main
     const isPluginEntry =
       entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
     const expanded = expandToolGroups([entry]);

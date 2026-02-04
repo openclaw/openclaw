@@ -49,7 +49,13 @@ describe("parseExecApprovalData", () => {
   });
 
   it("rejects null/undefined input", () => {
+<<<<<<< HEAD
     expect(parseExecApprovalData(null as any)).toBeNull();
+=======
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect(parseExecApprovalData(null as any)).toBeNull();
+    // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
     expect(parseExecApprovalData(undefined as any)).toBeNull();
   });
 

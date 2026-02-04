@@ -1,5 +1,10 @@
+<<<<<<< HEAD
 import type { IconName } from "./icons";
 import rawConfig from "./tool-display.json";
+=======
+import type { IconName } from "./icons.ts";
+import rawConfig from "./tool-display.json" with { type: "json" };
+>>>>>>> upstream/main
 
 type ToolDisplayActionSpec = {
   label?: string;
@@ -39,7 +44,13 @@ function normalizeToolName(name?: string): string {
 
 function defaultTitle(name: string): string {
   const cleaned = name.replace(/_/g, " ").trim();
+<<<<<<< HEAD
   if (!cleaned) return "Tool";
+=======
+  if (!cleaned) {
+    return "Tool";
+  }
+>>>>>>> upstream/main
   return cleaned
     .split(/\s+/)
     .map((part) =>
@@ -52,17 +63,38 @@ function defaultTitle(name: string): string {
 
 function normalizeVerb(value?: string): string | undefined {
   const trimmed = value?.trim();
+<<<<<<< HEAD
   if (!trimmed) return undefined;
+=======
+  if (!trimmed) {
+    return undefined;
+  }
+>>>>>>> upstream/main
   return trimmed.replace(/_/g, " ");
 }
 
 function coerceDisplayValue(value: unknown): string | undefined {
+<<<<<<< HEAD
   if (value === null || value === undefined) return undefined;
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) return undefined;
     const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
     if (!firstLine) return undefined;
+=======
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
+    if (!firstLine) {
+      return undefined;
+    }
+>>>>>>> upstream/main
     return firstLine.length > 160 ? `${firstLine.slice(0, 157)}…` : firstLine;
   }
   if (typeof value === "number" || typeof value === "boolean") {
@@ -72,7 +104,13 @@ function coerceDisplayValue(value: unknown): string | undefined {
     const values = value
       .map((item) => coerceDisplayValue(item))
       .filter((item): item is string => Boolean(item));
+<<<<<<< HEAD
     if (values.length === 0) return undefined;
+=======
+    if (values.length === 0) {
+      return undefined;
+    }
+>>>>>>> upstream/main
     const preview = values.slice(0, 3).join(", ");
     return values.length > 3 ? `${preview}…` : preview;
   }
@@ -80,11 +118,25 @@ function coerceDisplayValue(value: unknown): string | undefined {
 }
 
 function lookupValueByPath(args: unknown, path: string): unknown {
+<<<<<<< HEAD
   if (!args || typeof args !== "object") return undefined;
   let current: unknown = args;
   for (const segment of path.split(".")) {
     if (!segment) return undefined;
     if (!current || typeof current !== "object") return undefined;
+=======
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+  let current: unknown = args;
+  for (const segment of path.split(".")) {
+    if (!segment) {
+      return undefined;
+    }
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+>>>>>>> upstream/main
     const record = current as Record<string, unknown>;
     current = record[segment];
   }
@@ -95,16 +147,33 @@ function resolveDetailFromKeys(args: unknown, keys: string[]): string | undefine
   for (const key of keys) {
     const value = lookupValueByPath(args, key);
     const display = coerceDisplayValue(value);
+<<<<<<< HEAD
     if (display) return display;
+=======
+    if (display) {
+      return display;
+    }
+>>>>>>> upstream/main
   }
   return undefined;
 }
 
 function resolveReadDetail(args: unknown): string | undefined {
+<<<<<<< HEAD
   if (!args || typeof args !== "object") return undefined;
   const record = args as Record<string, unknown>;
   const path = typeof record.path === "string" ? record.path : undefined;
   if (!path) return undefined;
+=======
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+  const record = args as Record<string, unknown>;
+  const path = typeof record.path === "string" ? record.path : undefined;
+  if (!path) {
+    return undefined;
+  }
+>>>>>>> upstream/main
   const offset = typeof record.offset === "number" ? record.offset : undefined;
   const limit = typeof record.limit === "number" ? record.limit : undefined;
   if (offset !== undefined && limit !== undefined) {
@@ -114,7 +183,13 @@ function resolveReadDetail(args: unknown): string | undefined {
 }
 
 function resolveWriteDetail(args: unknown): string | undefined {
+<<<<<<< HEAD
   if (!args || typeof args !== "object") return undefined;
+=======
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+>>>>>>> upstream/main
   const record = args as Record<string, unknown>;
   const path = typeof record.path === "string" ? record.path : undefined;
   return path;
@@ -124,7 +199,13 @@ function resolveActionSpec(
   spec: ToolDisplaySpec | undefined,
   action: string | undefined,
 ): ToolDisplayActionSpec | undefined {
+<<<<<<< HEAD
   if (!spec || !action) return undefined;
+=======
+  if (!spec || !action) {
+    return undefined;
+  }
+>>>>>>> upstream/main
   return spec.actions?.[action] ?? undefined;
 }
 
@@ -148,7 +229,13 @@ export function resolveToolDisplay(params: {
   const verb = normalizeVerb(actionSpec?.label ?? action);
 
   let detail: string | undefined;
+<<<<<<< HEAD
   if (key === "read") detail = resolveReadDetail(params.args);
+=======
+  if (key === "read") {
+    detail = resolveReadDetail(params.args);
+  }
+>>>>>>> upstream/main
   if (!detail && (key === "write" || key === "edit" || key === "attach")) {
     detail = resolveWriteDetail(params.args);
   }
@@ -178,9 +265,21 @@ export function resolveToolDisplay(params: {
 
 export function formatToolDetail(display: ToolDisplay): string | undefined {
   const parts: string[] = [];
+<<<<<<< HEAD
   if (display.verb) parts.push(display.verb);
   if (display.detail) parts.push(display.detail);
   if (parts.length === 0) return undefined;
+=======
+  if (display.verb) {
+    parts.push(display.verb);
+  }
+  if (display.detail) {
+    parts.push(display.detail);
+  }
+  if (parts.length === 0) {
+    return undefined;
+  }
+>>>>>>> upstream/main
   return parts.join(" · ");
 }
 
@@ -190,6 +289,12 @@ export function formatToolSummary(display: ToolDisplay): string {
 }
 
 function shortenHomeInString(input: string): string {
+<<<<<<< HEAD
   if (!input) return input;
+=======
+  if (!input) {
+    return input;
+  }
+>>>>>>> upstream/main
   return input.replace(/\/Users\/[^/]+/g, "~").replace(/\/home\/[^/]+/g, "~");
 }

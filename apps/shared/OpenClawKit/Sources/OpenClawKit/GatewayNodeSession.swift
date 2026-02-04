@@ -11,10 +11,18 @@ private struct NodeInvokeRequestPayload: Codable, Sendable {
     var idempotencyKey: String?
 }
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> upstream/main
 public actor GatewayNodeSession {
     private let logger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
+<<<<<<< HEAD
+=======
+    private static let defaultInvokeTimeoutMs = 30_000
+>>>>>>> upstream/main
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
     private var activeToken: String?
@@ -23,27 +31,89 @@ public actor GatewayNodeSession {
     private var onConnected: (@Sendable () async -> Void)?
     private var onDisconnected: (@Sendable (String) async -> Void)?
     private var onInvoke: (@Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse)?
+<<<<<<< HEAD
+=======
+    private var hasNotifiedConnected = false
+    private var snapshotReceived = false
+    private var snapshotWaiters: [CheckedContinuation<Bool, Never>] = []
+>>>>>>> upstream/main
 
     static func invokeWithTimeout(
         request: BridgeInvokeRequest,
         timeoutMs: Int?,
         onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse
     ) async -> BridgeInvokeResponse {
+<<<<<<< HEAD
         let timeout = max(0, timeoutMs ?? 0)
+=======
+        let timeoutLogger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
+        let timeout: Int = {
+            if let timeoutMs { return max(0, timeoutMs) }
+            return Self.defaultInvokeTimeoutMs
+        }()
+>>>>>>> upstream/main
         guard timeout > 0 else {
             return await onInvoke(request)
         }
 
+<<<<<<< HEAD
         return await withTaskGroup(of: BridgeInvokeResponse.self) { group in
             group.addTask { await onInvoke(request) }
             group.addTask {
                 try? await Task.sleep(nanoseconds: UInt64(timeout) * 1_000_000)
                 return BridgeInvokeResponse(
+=======
+        // Use an explicit latch so timeouts win even if onInvoke blocks (e.g., permission prompts).
+        final class InvokeLatch: @unchecked Sendable {
+            private let lock = NSLock()
+            private var continuation: CheckedContinuation<BridgeInvokeResponse, Never>?
+            private var resumed = false
+
+            func setContinuation(_ continuation: CheckedContinuation<BridgeInvokeResponse, Never>) {
+                self.lock.lock()
+                defer { self.lock.unlock() }
+                self.continuation = continuation
+            }
+
+            func resume(_ response: BridgeInvokeResponse) {
+                let cont: CheckedContinuation<BridgeInvokeResponse, Never>?
+                self.lock.lock()
+                if self.resumed {
+                    self.lock.unlock()
+                    return
+                }
+                self.resumed = true
+                cont = self.continuation
+                self.continuation = nil
+                self.lock.unlock()
+                cont?.resume(returning: response)
+            }
+        }
+
+        let latch = InvokeLatch()
+        var onInvokeTask: Task<Void, Never>?
+        var timeoutTask: Task<Void, Never>?
+        defer {
+            onInvokeTask?.cancel()
+            timeoutTask?.cancel()
+        }
+        let response = await withCheckedContinuation { (cont: CheckedContinuation<BridgeInvokeResponse, Never>) in
+            latch.setContinuation(cont)
+            onInvokeTask = Task.detached {
+                let result = await onInvoke(request)
+                latch.resume(result)
+            }
+            timeoutTask = Task.detached {
+                try? await Task.sleep(nanoseconds: UInt64(timeout) * 1_000_000)
+                timeoutLogger.info("node invoke timeout fired id=\(request.id, privacy: .public)")
+                latch.resume(BridgeInvokeResponse(
+>>>>>>> upstream/main
                     id: request.id,
                     ok: false,
                     error: OpenClawNodeError(
                         code: .unavailable,
                         message: "node invoke timed out")
+<<<<<<< HEAD
                 )
             }
 
@@ -51,6 +121,13 @@ public actor GatewayNodeSession {
             group.cancelAll()
             return first
         }
+=======
+                ))
+            }
+        }
+        timeoutLogger.info("node invoke race resolved id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
+        return response
+>>>>>>> upstream/main
     }
     private var serverEventSubscribers: [UUID: AsyncStream<EventFrame>.Continuation] = [:]
     private var canvasHostUrl: String?
@@ -78,6 +155,10 @@ public actor GatewayNodeSession {
         self.onInvoke = onInvoke
 
         if shouldReconnect {
+<<<<<<< HEAD
+=======
+            self.resetConnectionState()
+>>>>>>> upstream/main
             if let existing = self.channel {
                 await existing.shutdown()
             }
@@ -107,7 +188,12 @@ public actor GatewayNodeSession {
 
         do {
             try await channel.connect()
+<<<<<<< HEAD
             await onConnected()
+=======
+            _ = await self.waitForSnapshot(timeoutMs: 500)
+            await self.notifyConnectedIfNeeded()
+>>>>>>> upstream/main
         } catch {
             await onDisconnected(error.localizedDescription)
             throw error
@@ -120,6 +206,10 @@ public actor GatewayNodeSession {
         self.activeURL = nil
         self.activeToken = nil
         self.activePassword = nil
+<<<<<<< HEAD
+=======
+        self.resetConnectionState()
+>>>>>>> upstream/main
     }
 
     public func currentCanvasHostUrl() -> String? {
@@ -179,7 +269,12 @@ public actor GatewayNodeSession {
         case let .snapshot(ok):
             let raw = ok.canvashosturl?.trimmingCharacters(in: .whitespacesAndNewlines)
             self.canvasHostUrl = (raw?.isEmpty == false) ? raw : nil
+<<<<<<< HEAD
             await self.onConnected?()
+=======
+            self.markSnapshotReceived()
+            await self.notifyConnectedIfNeeded()
+>>>>>>> upstream/main
         case let .event(evt):
             await self.handleEvent(evt)
         default:
@@ -187,6 +282,7 @@ public actor GatewayNodeSession {
         }
     }
 
+<<<<<<< HEAD
     private func handleEvent(_ evt: EventFrame) async {
         self.broadcastServerEvent(evt)
         guard evt.event == "node.invoke.request" else { return }
@@ -196,19 +292,108 @@ public actor GatewayNodeSession {
             let request = try self.decoder.decode(NodeInvokeRequestPayload.self, from: data)
             guard let onInvoke else { return }
             let req = BridgeInvokeRequest(id: request.id, command: request.command, paramsJSON: request.paramsJSON)
+=======
+    private func resetConnectionState() {
+        self.hasNotifiedConnected = false
+        self.snapshotReceived = false
+        if !self.snapshotWaiters.isEmpty {
+            let waiters = self.snapshotWaiters
+            self.snapshotWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume(returning: false)
+            }
+        }
+    }
+
+    private func markSnapshotReceived() {
+        self.snapshotReceived = true
+        if !self.snapshotWaiters.isEmpty {
+            let waiters = self.snapshotWaiters
+            self.snapshotWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume(returning: true)
+            }
+        }
+    }
+
+    private func waitForSnapshot(timeoutMs: Int) async -> Bool {
+        if self.snapshotReceived { return true }
+        let clamped = max(0, timeoutMs)
+        return await withCheckedContinuation { cont in
+            self.snapshotWaiters.append(cont)
+            Task { [weak self] in
+                guard let self else { return }
+                try? await Task.sleep(nanoseconds: UInt64(clamped) * 1_000_000)
+                await self.timeoutSnapshotWaiters()
+            }
+        }
+    }
+
+    private func timeoutSnapshotWaiters() {
+        guard !self.snapshotReceived else { return }
+        if !self.snapshotWaiters.isEmpty {
+            let waiters = self.snapshotWaiters
+            self.snapshotWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume(returning: false)
+            }
+        }
+    }
+
+    private func notifyConnectedIfNeeded() async {
+        guard !self.hasNotifiedConnected else { return }
+        self.hasNotifiedConnected = true
+        await self.onConnected?()
+    }
+
+    private func handleEvent(_ evt: EventFrame) async {
+        self.broadcastServerEvent(evt)
+        guard evt.event == "node.invoke.request" else { return }
+        self.logger.info("node invoke request received")
+        guard let payload = evt.payload else { return }
+        do {
+            let request = try self.decodeInvokeRequest(from: payload)
+            let timeoutLabel = request.timeoutMs.map(String.init) ?? "none"
+            self.logger.info("node invoke request decoded id=\(request.id, privacy: .public) command=\(request.command, privacy: .public) timeoutMs=\(timeoutLabel, privacy: .public)")
+            guard let onInvoke else { return }
+            let req = BridgeInvokeRequest(id: request.id, command: request.command, paramsJSON: request.paramsJSON)
+            self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
+>>>>>>> upstream/main
             let response = await Self.invokeWithTimeout(
                 request: req,
                 timeoutMs: request.timeoutMs,
                 onInvoke: onInvoke
             )
+<<<<<<< HEAD
+=======
+            self.logger.info("node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
+>>>>>>> upstream/main
             await self.sendInvokeResult(request: request, response: response)
         } catch {
             self.logger.error("node invoke decode failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
+<<<<<<< HEAD
     private func sendInvokeResult(request: NodeInvokeRequestPayload, response: BridgeInvokeResponse) async {
         guard let channel = self.channel else { return }
+=======
+    private func decodeInvokeRequest(from payload: OpenClawProtocol.AnyCodable) throws -> NodeInvokeRequestPayload {
+        do {
+            let data = try self.encoder.encode(payload)
+            return try self.decoder.decode(NodeInvokeRequestPayload.self, from: data)
+        } catch {
+            if let raw = payload.value as? String, let data = raw.data(using: .utf8) {
+                return try self.decoder.decode(NodeInvokeRequestPayload.self, from: data)
+            }
+            throw error
+        }
+    }
+
+    private func sendInvokeResult(request: NodeInvokeRequestPayload, response: BridgeInvokeResponse) async {
+        guard let channel = self.channel else { return }
+        self.logger.info("node invoke result sending id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
+>>>>>>> upstream/main
         var params: [String: AnyCodable] = [
             "id": AnyCodable(request.id),
             "nodeId": AnyCodable(request.nodeId),
@@ -226,7 +411,11 @@ public actor GatewayNodeSession {
         do {
             try await channel.send(method: "node.invoke.result", params: params)
         } catch {
+<<<<<<< HEAD
             self.logger.error("node invoke result failed: \(error.localizedDescription, privacy: .public)")
+=======
+            self.logger.error("node invoke result failed id=\(request.id, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+>>>>>>> upstream/main
         }
     }
 

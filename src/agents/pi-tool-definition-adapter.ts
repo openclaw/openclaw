@@ -10,13 +10,51 @@ import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult } from "./tools/common.js";
 
+<<<<<<< HEAD
 // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
 type AnyAgentTool = AgentTool<any, unknown>;
 
+=======
+// oxlint-disable-next-line typescript/no-explicit-any
+type AnyAgentTool = AgentTool<any, unknown>;
+
+type ToolExecuteArgsCurrent = [
+  string,
+  unknown,
+  AgentToolUpdateCallback<unknown> | undefined,
+  unknown,
+  AbortSignal | undefined,
+];
+type ToolExecuteArgsLegacy = [
+  string,
+  unknown,
+  AbortSignal | undefined,
+  AgentToolUpdateCallback<unknown> | undefined,
+  unknown,
+];
+type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => unknown
+  ? P
+  : ToolExecuteArgsCurrent;
+type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
+
+>>>>>>> upstream/main
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+<<<<<<< HEAD
+=======
+function isAbortSignal(value: unknown): value is AbortSignal {
+  return typeof value === "object" && value !== null && "aborted" in value;
+}
+
+function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteArgsLegacy {
+  const third = args[2];
+  const fourth = args[3];
+  return isAbortSignal(third) || typeof fourth === "function";
+}
+
+>>>>>>> upstream/main
 function describeToolExecutionError(err: unknown): {
   message: string;
   stack?: string;
@@ -28,6 +66,33 @@ function describeToolExecutionError(err: unknown): {
   return { message: String(err) };
 }
 
+<<<<<<< HEAD
+=======
+function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
+  toolCallId: string;
+  params: unknown;
+  onUpdate: AgentToolUpdateCallback<unknown> | undefined;
+  signal: AbortSignal | undefined;
+} {
+  if (isLegacyToolExecuteArgs(args)) {
+    const [toolCallId, params, signal, onUpdate] = args;
+    return {
+      toolCallId,
+      params,
+      onUpdate,
+      signal,
+    };
+  }
+  const [toolCallId, params, onUpdate, _ctx, signal] = args;
+  return {
+    toolCallId,
+    params,
+    onUpdate,
+    signal,
+  };
+}
+
+>>>>>>> upstream/main
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   return tools.map((tool) => {
     const name = tool.name || "tool";
@@ -36,6 +101,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       name,
       label: tool.label ?? name,
       description: tool.description ?? "",
+<<<<<<< HEAD
       // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema from pi-agent-core uses a different module instance.
       parameters: tool.parameters,
       execute: async (
@@ -45,6 +111,11 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
         onUpdate: AgentToolUpdateCallback<unknown> | undefined,
         _ctx,
       ): Promise<AgentToolResult<unknown>> => {
+=======
+      parameters: tool.parameters,
+      execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
+        const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+>>>>>>> upstream/main
         try {
           return await tool.execute(toolCallId, params, signal, onUpdate);
         } catch (err) {
@@ -87,6 +158,7 @@ export function toClientToolDefinitions(
       name: func.name,
       label: func.name,
       description: func.description ?? "",
+<<<<<<< HEAD
       parameters: func.parameters as any,
       execute: async (
         toolCallId,
@@ -95,6 +167,12 @@ export function toClientToolDefinitions(
         _onUpdate: AgentToolUpdateCallback<unknown> | undefined,
         _ctx,
       ): Promise<AgentToolResult<unknown>> => {
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+      parameters: func.parameters as any,
+      execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
+        const { toolCallId, params } = splitToolExecuteArgs(args);
+>>>>>>> upstream/main
         const outcome = await runBeforeToolCallHook({
           toolName: func.name,
           params,

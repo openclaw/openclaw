@@ -21,8 +21,13 @@ android {
     applicationId = "ai.openclaw.android"
     minSdk = 31
     targetSdk = 36
+<<<<<<< HEAD
     versionCode = 202601290
     versionName = "2026.1.30"
+=======
+    versionCode = 202602030
+    versionName = "2026.2.3"
+>>>>>>> upstream/main
   }
 
   buildTypes {

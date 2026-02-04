@@ -1,13 +1,23 @@
 import { html, nothing } from "lit";
+<<<<<<< HEAD
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types";
 import type { CronFormState } from "../ui-types";
 import { formatMs } from "../format";
+=======
+import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
+import type { CronFormState } from "../ui-types.ts";
+import { formatMs } from "../format.ts";
+>>>>>>> upstream/main
 import {
   formatCronPayload,
   formatCronSchedule,
   formatCronState,
   formatNextRun,
+<<<<<<< HEAD
 } from "../presenter";
+=======
+} from "../presenter.ts";
+>>>>>>> upstream/main
 
 export type CronProps = {
   loading: boolean;
@@ -38,16 +48,32 @@ function buildChannelOptions(props: CronProps): string[] {
   }
   const seen = new Set<string>();
   return options.filter((value) => {
+<<<<<<< HEAD
     if (seen.has(value)) return false;
+=======
+    if (seen.has(value)) {
+      return false;
+    }
+>>>>>>> upstream/main
     seen.add(value);
     return true;
   });
 }
 
 function resolveChannelLabel(props: CronProps, channel: string): string {
+<<<<<<< HEAD
   if (channel === "last") return "last";
   const meta = props.channelMeta?.find((entry) => entry.id === channel);
   if (meta?.label) return meta.label;
+=======
+  if (channel === "last") {
+    return "last";
+  }
+  const meta = props.channelMeta?.find((entry) => entry.id === channel);
+  if (meta?.label) {
+    return meta.label;
+  }
+>>>>>>> upstream/main
   return props.channelLabels?.[channel] ?? channel;
 }
 
@@ -212,8 +238,12 @@ export function renderCron(props: CronProps) {
 	                    .value=${props.form.channel || "last"}
 	                    @change=${(e: Event) =>
                         props.onFormChange({
+<<<<<<< HEAD
                           channel: (e.target as HTMLSelectElement)
                             .value as CronFormState["channel"],
+=======
+                          channel: (e.target as HTMLSelectElement).value,
+>>>>>>> upstream/main
                         })}
 	                  >
 	                    ${channelOptions.map(

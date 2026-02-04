@@ -5,13 +5,124 @@
   },
   {
     "source": "Gateway",
+<<<<<<< HEAD
     "target": "Gateway"
+=======
+    "target": "Gateway 网关"
+>>>>>>> upstream/main
   },
   {
     "source": "Pi",
     "target": "Pi"
   },
   {
+<<<<<<< HEAD
+=======
+    "source": "Skills",
+    "target": "Skills"
+  },
+  {
+    "source": "Skills config",
+    "target": "Skills 配置"
+  },
+  {
+    "source": "Skills Config",
+    "target": "Skills 配置"
+  },
+  {
+    "source": "local loopback",
+    "target": "local loopback"
+  },
+  {
+    "source": "Tailscale",
+    "target": "Tailscale"
+  },
+  {
+    "source": "Getting Started",
+    "target": "入门指南"
+  },
+  {
+    "source": "Getting started",
+    "target": "入门指南"
+  },
+  {
+    "source": "DMs",
+    "target": "私信"
+  },
+  {
+    "source": "DM",
+    "target": "私信"
+  },
+  {
+    "source": "sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "Sandbox",
+    "target": "沙箱"
+  },
+  {
+    "source": "sandboxing",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxed",
+    "target": "沙箱隔离"
+  },
+  {
+    "source": "Sandboxing note",
+    "target": "沙箱注意事项"
+  },
+  {
+    "source": "Companion apps",
+    "target": "配套应用"
+  },
+  {
+    "source": "expected keys",
+    "target": "预期键名"
+  },
+  {
+    "source": "block streaming",
+    "target": "分块流式传输"
+  },
+  {
+    "source": "Block streaming",
+    "target": "分块流式传输"
+  },
+  {
+    "source": "Discovery + transports",
+    "target": "设备发现 + 传输协议"
+  },
+  {
+    "source": "Discovery",
+    "target": "设备发现"
+  },
+  {
+    "source": "Network model",
+    "target": "网络模型"
+  },
+  {
+    "source": "for full details",
+    "target": "了解详情"
+  },
+  {
+    "source": "First 60 seconds",
+    "target": "最初的六十秒"
+  },
+  {
+    "source": "Auth: where it lives (important)",
+    "target": "凭证：存储位置（重要）"
+  },
+  {
+>>>>>>> upstream/main
     "source": "agent",
     "target": "智能体"
   },
@@ -45,7 +156,11 @@
   },
   {
     "source": "get unstuck",
+<<<<<<< HEAD
     "target": "快速排障"
+=======
+    "target": "解决问题"
+>>>>>>> upstream/main
   },
   {
     "source": "troubleshooting",
@@ -57,7 +172,15 @@
   },
   {
     "source": "onboarding",
+<<<<<<< HEAD
     "target": "上手引导"
+=======
+    "target": "新手引导"
+  },
+  {
+    "source": "Onboarding",
+    "target": "新手引导"
+>>>>>>> upstream/main
   },
   {
     "source": "wizard",

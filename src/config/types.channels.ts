@@ -1,5 +1,9 @@
 import type { GroupPolicy } from "./types.base.js";
 import type { DiscordConfig } from "./types.discord.js";
+<<<<<<< HEAD
+=======
+import type { FeishuConfig } from "./types.feishu.js";
+>>>>>>> upstream/main
 import type { GoogleChatConfig } from "./types.googlechat.js";
 import type { IMessageConfig } from "./types.imessage.js";
 import type { MSTeamsConfig } from "./types.msteams.js";
@@ -28,6 +32,10 @@ export type ChannelsConfig = {
   whatsapp?: WhatsAppConfig;
   telegram?: TelegramConfig;
   discord?: DiscordConfig;
+<<<<<<< HEAD
+=======
+  feishu?: FeishuConfig;
+>>>>>>> upstream/main
   googlechat?: GoogleChatConfig;
   slack?: SlackConfig;
   signal?: SignalConfig;

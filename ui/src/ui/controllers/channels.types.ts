@@ -1,5 +1,10 @@
+<<<<<<< HEAD
 import type { GatewayBrowserClient } from "../gateway";
 import type { ChannelsStatusSnapshot } from "../types";
+=======
+import type { GatewayBrowserClient } from "../gateway.ts";
+import type { ChannelsStatusSnapshot } from "../types.ts";
+>>>>>>> upstream/main
 
 export type ChannelsState = {
   client: GatewayBrowserClient | null;

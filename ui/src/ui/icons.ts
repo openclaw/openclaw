@@ -106,6 +106,15 @@ export const icons = {
   check: html`
     <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg>
   `,
+<<<<<<< HEAD
+=======
+  arrowDown: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M12 5v14" />
+      <path d="m19 12-7 7-7-7" />
+    </svg>
+  `,
+>>>>>>> upstream/main
   copy: html`
     <svg viewBox="0 0 24 24">
       <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
@@ -243,6 +252,12 @@ export function renderEmojiIcon(
 }
 
 export function setEmojiIcon(target: HTMLElement | null, icon: string): void {
+<<<<<<< HEAD
   if (!target) return;
+=======
+  if (!target) {
+    return;
+  }
+>>>>>>> upstream/main
   target.textContent = icon;
 }

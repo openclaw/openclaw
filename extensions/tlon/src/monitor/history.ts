@@ -35,11 +35,19 @@ export async function fetchChannelHistory(
     const scryPath = `/channels/v4/${channelNest}/posts/newest/${count}/outline.json`;
     runtime?.log?.(`[tlon] Fetching history: ${scryPath}`);
 
+<<<<<<< HEAD
+=======
+    // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
     const data: any = await api.scry(scryPath);
     if (!data) {
       return [];
     }
 
+<<<<<<< HEAD
+=======
+    // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
     let posts: any[] = [];
     if (Array.isArray(data)) {
       posts = data;
@@ -65,7 +73,11 @@ export async function fetchChannelHistory(
 
     runtime?.log?.(`[tlon] Extracted ${messages.length} messages from history`);
     return messages;
+<<<<<<< HEAD
   } catch (error: any) {
+=======
+  } catch (error) {
+>>>>>>> upstream/main
     runtime?.log?.(`[tlon] Error fetching channel history: ${error?.message ?? String(error)}`);
     return [];
   }

@@ -36,6 +36,11 @@ const RECOVERABLE_MESSAGE_SNIPPETS = [
   "client network socket disconnected",
   "socket hang up",
   "getaddrinfo",
+<<<<<<< HEAD
+=======
+  "timeout", // catch timeout messages not covered by error codes/names
+  "timed out", // grammY getUpdates returns "timed out after X seconds" (not matched by "timeout")
+>>>>>>> upstream/main
 ];
 
 function normalizeCode(code?: string): string {
@@ -97,6 +102,17 @@ function collectErrorCandidates(err: unknown): unknown[] {
           }
         }
       }
+<<<<<<< HEAD
+=======
+      // Grammy's HttpError wraps the underlying error in .error (not .cause)
+      // Only follow .error for HttpError to avoid widening the search graph
+      if (getErrorName(current) === "HttpError") {
+        const wrappedError = (current as { error?: unknown }).error;
+        if (wrappedError && !seen.has(wrappedError)) {
+          queue.push(wrappedError);
+        }
+      }
+>>>>>>> upstream/main
     }
   }
 

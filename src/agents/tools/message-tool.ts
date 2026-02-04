@@ -193,6 +193,39 @@ function buildGatewaySchema() {
   };
 }
 
+<<<<<<< HEAD
+=======
+function buildPresenceSchema() {
+  return {
+    activityType: Type.Optional(
+      Type.String({
+        description: "Activity type: playing, streaming, listening, watching, competing, custom.",
+      }),
+    ),
+    activityName: Type.Optional(
+      Type.String({
+        description: "Activity name shown in sidebar (e.g. 'with fire'). Ignored for custom type.",
+      }),
+    ),
+    activityUrl: Type.Optional(
+      Type.String({
+        description:
+          "Streaming URL (Twitch or YouTube). Only used with streaming type; may not render for bots.",
+      }),
+    ),
+    activityState: Type.Optional(
+      Type.String({
+        description:
+          "State text. For custom type this is the status text; for others it shows in the flyout.",
+      }),
+    ),
+    status: Type.Optional(
+      Type.String({ description: "Bot status: online, dnd, idle, invisible." }),
+    ),
+  };
+}
+
+>>>>>>> upstream/main
 function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
@@ -225,6 +258,10 @@ function buildMessageToolSchemaProps(options: { includeButtons: boolean; include
     ...buildModerationSchema(),
     ...buildGatewaySchema(),
     ...buildChannelManagementSchema(),
+<<<<<<< HEAD
+=======
+    ...buildPresenceSchema(),
+>>>>>>> upstream/main
   };
 }
 

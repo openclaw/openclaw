@@ -46,6 +46,10 @@ export type ReplyDirectiveContinuation = {
     minChars: number;
     maxChars: number;
     breakPreference: "paragraph" | "newline" | "sentence";
+<<<<<<< HEAD
+=======
+    flushOnParagraph?: boolean;
+>>>>>>> upstream/main
   };
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   provider: string;

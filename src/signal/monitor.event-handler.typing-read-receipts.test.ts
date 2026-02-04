@@ -41,10 +41,18 @@ describe("signal event handler typing + read receipts", () => {
     vi.resetModules();
     const { createSignalEventHandler } = await import("./monitor/event-handler.js");
     const handler = createSignalEventHandler({
+<<<<<<< HEAD
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       runtime: { log: () => {}, error: () => {} } as any,
       cfg: {
         messages: { inbound: { debounceMs: 0 } },
         channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+<<<<<<< HEAD
+=======
+        // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       } as any,
       baseUrl: "http://localhost",
       account: "+15550009999",
@@ -66,6 +74,10 @@ describe("signal event handler typing + read receipts", () => {
       fetchAttachment: async () => null,
       deliverReplies: async () => {},
       resolveSignalReactionTargets: () => [],
+<<<<<<< HEAD
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       isSignalReactionMessage: () => false as any,
       shouldEmitSignalReactionNotification: () => false,
       buildSignalReactionSystemEventText: () => "reaction",

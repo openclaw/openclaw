@@ -37,6 +37,10 @@ describe("registerPluginCliCommands", () => {
     const program = new Command();
     program.command("memory");
 
+<<<<<<< HEAD
+=======
+    // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
     registerPluginCliCommands(program, {} as any);
 
     expect(mocks.memoryRegister).not.toHaveBeenCalled();

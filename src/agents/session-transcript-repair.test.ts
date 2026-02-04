@@ -1,6 +1,13 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
+=======
+import {
+  sanitizeToolCallInputs,
+  sanitizeToolUseResultPairing,
+} from "./session-transcript-repair.js";
+>>>>>>> upstream/main
 
 describe("sanitizeToolUseResultPairing", () => {
   it("moves tool results directly after tool calls and inserts missing results", () => {
@@ -110,3 +117,41 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 });
+<<<<<<< HEAD
+=======
+
+describe("sanitizeToolCallInputs", () => {
+  it("drops tool calls missing input or arguments", () => {
+    const input: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read" }],
+      },
+      { role: "user", content: "hello" },
+    ];
+
+    const out = sanitizeToolCallInputs(input);
+    expect(out.map((m) => m.role)).toEqual(["user"]);
+  });
+
+  it("keeps valid tool calls and preserves text blocks", () => {
+    const input: AgentMessage[] = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "before" },
+          { type: "toolUse", id: "call_ok", name: "read", input: { path: "a" } },
+          { type: "toolCall", id: "call_drop", name: "read" },
+        ],
+      },
+    ];
+
+    const out = sanitizeToolCallInputs(input);
+    const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const types = Array.isArray(assistant.content)
+      ? assistant.content.map((block) => (block as { type?: unknown }).type)
+      : [];
+    expect(types).toEqual(["text", "toolUse"]);
+  });
+});
+>>>>>>> upstream/main

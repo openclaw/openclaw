@@ -1,4 +1,8 @@
 import { afterEach, expect, test } from "vitest";
+<<<<<<< HEAD
+=======
+import { sleep } from "../utils.ts";
+>>>>>>> upstream/main
 import {
   getFinishedSession,
   getSession,
@@ -7,8 +11,11 @@ import {
 import { createExecTool } from "./bash-tools.exec";
 import { killProcessTree } from "./shell-utils";
 
+<<<<<<< HEAD
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+=======
+>>>>>>> upstream/main
 afterEach(() => {
   resetProcessRegistryForTests();
 });

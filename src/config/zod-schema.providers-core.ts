@@ -290,6 +290,10 @@ export const DiscordAccountSchema = z
         events: z.boolean().optional(),
         moderation: z.boolean().optional(),
         channels: z.boolean().optional(),
+<<<<<<< HEAD
+=======
+        presence: z.boolean().optional(),
+>>>>>>> upstream/main
       })
       .strict()
       .optional(),
@@ -800,6 +804,10 @@ export const MSTeamsConfigSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
+<<<<<<< HEAD
+=======
+    mediaAuthAllowHosts: z.array(z.string()).optional(),
+>>>>>>> upstream/main
     requireMention: z.boolean().optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),

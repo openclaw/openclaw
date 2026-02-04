@@ -1,3 +1,8 @@
+<<<<<<< HEAD
+=======
+import { sleep } from "../utils.js";
+
+>>>>>>> upstream/main
 export type RetryConfig = {
   attempts?: number;
   minDelayMs?: number;
@@ -27,8 +32,11 @@ const DEFAULT_RETRY_CONFIG = {
   jitter: 0,
 };
 
+<<<<<<< HEAD
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+=======
+>>>>>>> upstream/main
 const asFiniteNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
 

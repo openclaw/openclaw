@@ -12,7 +12,14 @@ import {
   sanitizeSessionMessagesImages,
 } from "../pi-embedded-helpers.js";
 import { cleanToolSchemaForGemini } from "../pi-tools.schema.js";
+<<<<<<< HEAD
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+=======
+import {
+  sanitizeToolCallInputs,
+  sanitizeToolUseResultPairing,
+} from "../session-transcript-repair.js";
+>>>>>>> upstream/main
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
 import { describeUnknownError } from "./utils.js";
@@ -346,9 +353,16 @@ export async function sanitizeSessionHistory(params: {
   const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
     ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
     : sanitizedImages;
+<<<<<<< HEAD
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedThinking)
     : sanitizedThinking;
+=======
+  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
+  const repairedTools = policy.repairToolUseResultPairing
+    ? sanitizeToolUseResultPairing(sanitizedToolCalls)
+    : sanitizedToolCalls;
+>>>>>>> upstream/main
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";

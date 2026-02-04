@@ -48,6 +48,10 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "timeout",
   "kick",
   "ban",
+<<<<<<< HEAD
+=======
+  "set-presence",
+>>>>>>> upstream/main
 ] as const;
 
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];

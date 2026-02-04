@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import type { OpenClawApp } from "./app";
 import type { GatewayHelloOk } from "./gateway";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types";
@@ -11,6 +12,21 @@ import { normalizeBasePath } from "./navigation";
 import { generateUUID } from "./uuid";
 
 type ChatHost = {
+=======
+import type { OpenClawApp } from "./app.ts";
+import type { GatewayHelloOk } from "./gateway.ts";
+import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
+import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
+import { scheduleChatScroll } from "./app-scroll.ts";
+import { setLastActiveSessionKey } from "./app-settings.ts";
+import { resetToolStream } from "./app-tool-stream.ts";
+import { abortChatRun, loadChatHistory, sendChatMessage } from "./controllers/chat.ts";
+import { loadSessions } from "./controllers/sessions.ts";
+import { normalizeBasePath } from "./navigation.ts";
+import { generateUUID } from "./uuid.ts";
+
+export type ChatHost = {
+>>>>>>> upstream/main
   connected: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
@@ -32,9 +48,19 @@ export function isChatBusy(host: ChatHost) {
 
 export function isChatStopCommand(text: string) {
   const trimmed = text.trim();
+<<<<<<< HEAD
   if (!trimmed) return false;
   const normalized = trimmed.toLowerCase();
   if (normalized === "/stop") return true;
+=======
+  if (!trimmed) {
+    return false;
+  }
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "/stop") {
+    return true;
+  }
+>>>>>>> upstream/main
   return (
     normalized === "stop" ||
     normalized === "esc" ||
@@ -46,14 +72,30 @@ export function isChatStopCommand(text: string) {
 
 function isChatResetCommand(text: string) {
   const trimmed = text.trim();
+<<<<<<< HEAD
   if (!trimmed) return false;
   const normalized = trimmed.toLowerCase();
   if (normalized === "/new" || normalized === "/reset") return true;
+=======
+  if (!trimmed) {
+    return false;
+  }
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "/new" || normalized === "/reset") {
+    return true;
+  }
+>>>>>>> upstream/main
   return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
 }
 
 export async function handleAbortChat(host: ChatHost) {
+<<<<<<< HEAD
   if (!host.connected) return;
+=======
+  if (!host.connected) {
+    return;
+  }
+>>>>>>> upstream/main
   host.chatMessage = "";
   await abortChatRun(host as unknown as OpenClawApp);
 }
@@ -66,7 +108,13 @@ function enqueueChatMessage(
 ) {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
+<<<<<<< HEAD
   if (!trimmed && !hasAttachments) return;
+=======
+  if (!trimmed && !hasAttachments) {
+    return;
+  }
+>>>>>>> upstream/main
   host.chatQueue = [
     ...host.chatQueue,
     {
@@ -123,9 +171,19 @@ async function sendChatMessageNow(
 }
 
 async function flushChatQueue(host: ChatHost) {
+<<<<<<< HEAD
   if (!host.connected || isChatBusy(host)) return;
   const [next, ...rest] = host.chatQueue;
   if (!next) return;
+=======
+  if (!host.connected || isChatBusy(host)) {
+    return;
+  }
+  const [next, ...rest] = host.chatQueue;
+  if (!next) {
+    return;
+  }
+>>>>>>> upstream/main
   host.chatQueue = rest;
   const ok = await sendChatMessageNow(host, next.text, {
     attachments: next.attachments,
@@ -145,7 +203,13 @@ export async function handleSendChat(
   messageOverride?: string,
   opts?: { restoreDraft?: boolean },
 ) {
+<<<<<<< HEAD
   if (!host.connected) return;
+=======
+  if (!host.connected) {
+    return;
+  }
+>>>>>>> upstream/main
   const previousDraft = host.chatMessage;
   const message = (messageOverride ?? host.chatMessage).trim();
   const attachments = host.chatAttachments ?? [];
@@ -153,7 +217,13 @@ export async function handleSendChat(
   const hasAttachments = attachmentsToSend.length > 0;
 
   // Allow sending with just attachments (no message text required)
+<<<<<<< HEAD
   if (!message && !hasAttachments) return;
+=======
+  if (!message && !hasAttachments) {
+    return;
+  }
+>>>>>>> upstream/main
 
   if (isChatStopCommand(message)) {
     await handleAbortChat(host);
@@ -190,7 +260,11 @@ export async function refreshChat(host: ChatHost) {
     }),
     refreshChatAvatar(host),
   ]);
+<<<<<<< HEAD
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
+=======
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+>>>>>>> upstream/main
 }
 
 export const flushChatQueueForEvent = flushChatQueue;
@@ -201,7 +275,13 @@ type SessionDefaultsSnapshot = {
 
 function resolveAgentIdForSession(host: ChatHost): string | null {
   const parsed = parseAgentSessionKey(host.sessionKey);
+<<<<<<< HEAD
   if (parsed?.agentId) return parsed.agentId;
+=======
+  if (parsed?.agentId) {
+    return parsed.agentId;
+  }
+>>>>>>> upstream/main
   const snapshot = host.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
     | undefined;

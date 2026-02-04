@@ -1,8 +1,15 @@
 import { html, nothing } from "lit";
+<<<<<<< HEAD
 import type { GatewaySessionRow, SessionsListResult } from "../types";
 import { formatAgo } from "../format";
 import { pathForTab } from "../navigation";
 import { formatSessionTokens } from "../presenter";
+=======
+import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
+import { formatAgo } from "../format.ts";
+import { pathForTab } from "../navigation.ts";
+import { formatSessionTokens } from "../presenter.ts";
+>>>>>>> upstream/main
 
 export type SessionsProps = {
   loading: boolean;
@@ -42,9 +49,19 @@ const VERBOSE_LEVELS = [
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 
 function normalizeProviderId(provider?: string | null): string {
+<<<<<<< HEAD
   if (!provider) return "";
   const normalized = provider.trim().toLowerCase();
   if (normalized === "z.ai" || normalized === "z-ai") return "zai";
+=======
+  if (!provider) {
+    return "";
+  }
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === "z.ai" || normalized === "z-ai") {
+    return "zai";
+  }
+>>>>>>> upstream/main
   return normalized;
 }
 
@@ -57,15 +74,36 @@ function resolveThinkLevelOptions(provider?: string | null): readonly string[] {
 }
 
 function resolveThinkLevelDisplay(value: string, isBinary: boolean): string {
+<<<<<<< HEAD
   if (!isBinary) return value;
   if (!value || value === "off") return value;
+=======
+  if (!isBinary) {
+    return value;
+  }
+  if (!value || value === "off") {
+    return value;
+  }
+>>>>>>> upstream/main
   return "on";
 }
 
 function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string | null {
+<<<<<<< HEAD
   if (!value) return null;
   if (!isBinary) return value;
   if (value === "on") return "low";
+=======
+  if (!value) {
+    return null;
+  }
+  if (!isBinary) {
+    return value;
+  }
+  if (value === "on") {
+    return "low";
+  }
+>>>>>>> upstream/main
   return value;
 }
 

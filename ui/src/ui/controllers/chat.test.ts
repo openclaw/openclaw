@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { handleChatEvent, type ChatEventPayload, type ChatState } from "./chat";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
@@ -15,6 +16,25 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatStream: null,
     chatStreamStartedAt: null,
     lastError: null,
+=======
+import { handleChatEvent, type ChatEventPayload, type ChatState } from "./chat.ts";
+
+function createState(overrides: Partial<ChatState> = {}): ChatState {
+  return {
+    chatAttachments: [],
+    chatLoading: false,
+    chatMessage: "",
+    chatMessages: [],
+    chatRunId: null,
+    chatSending: false,
+    chatStream: null,
+    chatStreamStartedAt: null,
+    chatThinkingLevel: null,
+    client: null,
+    connected: true,
+    lastError: null,
+    sessionKey: "main",
+>>>>>>> upstream/main
     ...overrides,
   };
 }

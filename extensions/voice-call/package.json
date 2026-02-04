@@ -1,6 +1,10 @@
 {
   "name": "@openclaw/voice-call",
+<<<<<<< HEAD
   "version": "2026.1.30",
+=======
+  "version": "2026.2.2",
+>>>>>>> upstream/main
   "description": "OpenClaw voice-call plugin",
   "type": "module",
   "dependencies": {

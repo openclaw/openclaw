@@ -150,6 +150,10 @@ export const AgentDefaultsSchema = z
               .strict(),
           ])
           .optional(),
+<<<<<<< HEAD
+=======
+        thinking: z.string().optional(),
+>>>>>>> upstream/main
       })
       .strict()
       .optional(),

@@ -11,6 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+<<<<<<< HEAD
 func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) error {
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
@@ -25,33 +26,59 @@ func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationM
 	}
 	if filepath.IsAbs(relPath) || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("file %s not under docs root %s", absPath, docsRoot)
+=======
+func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationMemory, docsRoot, filePath, srcLang, tgtLang string) (bool, error) {
+	absPath, relPath, err := resolveDocsPath(docsRoot, filePath)
+	if err != nil {
+		return false, err
+>>>>>>> upstream/main
 	}
 
 	content, err := os.ReadFile(absPath)
 	if err != nil {
+<<<<<<< HEAD
 		return err
+=======
+		return false, err
+>>>>>>> upstream/main
 	}
 
 	frontMatter, body := splitFrontMatter(string(content))
 	frontData := map[string]any{}
 	if frontMatter != "" {
 		if err := yaml.Unmarshal([]byte(frontMatter), &frontData); err != nil {
+<<<<<<< HEAD
 			return fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
+=======
+			return false, fmt.Errorf("frontmatter parse failed for %s: %w", relPath, err)
+>>>>>>> upstream/main
 		}
 	}
 
 	if err := translateFrontMatter(ctx, translator, tm, frontData, relPath, srcLang, tgtLang); err != nil {
+<<<<<<< HEAD
 		return err
+=======
+		return false, err
+>>>>>>> upstream/main
 	}
 
 	body, err = translateHTMLBlocks(ctx, translator, body, srcLang, tgtLang)
 	if err != nil {
+<<<<<<< HEAD
 		return err
+=======
+		return false, err
+>>>>>>> upstream/main
 	}
 
 	segments, err := extractSegments(body, relPath)
 	if err != nil {
+<<<<<<< HEAD
 		return err
+=======
+		return false, err
+>>>>>>> upstream/main
 	}
 
 	namespace := cacheNamespace()
@@ -64,7 +91,11 @@ func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationM
 		}
 		translated, err := translator.Translate(ctx, seg.Text, srcLang, tgtLang)
 		if err != nil {
+<<<<<<< HEAD
 			return fmt.Errorf("translate failed (%s): %w", relPath, err)
+=======
+			return false, fmt.Errorf("translate failed (%s): %w", relPath, err)
+>>>>>>> upstream/main
 		}
 		seg.Translated = translated
 		entry := TMEntry{
@@ -86,16 +117,28 @@ func processFile(ctx context.Context, translator *PiTranslator, tm *TranslationM
 	translatedBody := applyTranslations(body, segments)
 	updatedFront, err := encodeFrontMatter(frontData, relPath, content)
 	if err != nil {
+<<<<<<< HEAD
 		return err
+=======
+		return false, err
+>>>>>>> upstream/main
 	}
 
 	outputPath := filepath.Join(docsRoot, tgtLang, relPath)
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0o755); err != nil {
+<<<<<<< HEAD
 		return err
 	}
 
 	output := updatedFront + translatedBody
 	return os.WriteFile(outputPath, []byte(output), 0o644)
+=======
+		return false, err
+	}
+
+	output := updatedFront + translatedBody
+	return false, os.WriteFile(outputPath, []byte(output), 0o644)
+>>>>>>> upstream/main
 }
 
 func splitFrontMatter(content string) (string, string) {
@@ -125,8 +168,13 @@ func splitFrontMatter(content string) (string, string) {
 }
 
 func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) (string, error) {
+<<<<<<< HEAD
 	if len(frontData) == 0 {
 		return "", nil
+=======
+	if frontData == nil {
+		frontData = map[string]any{}
+>>>>>>> upstream/main
 	}
 	frontData["x-i18n"] = map[string]any{
 		"source_path":  relPath,
@@ -154,6 +202,16 @@ func translateFrontMatter(ctx context.Context, translator *PiTranslator, tm *Tra
 		}
 		data["summary"] = translated
 	}
+<<<<<<< HEAD
+=======
+	if title, ok := data["title"].(string); ok {
+		translated, err := translateSnippet(ctx, translator, tm, relPath+":frontmatter:title", title, srcLang, tgtLang)
+		if err != nil {
+			return err
+		}
+		data["title"] = translated
+	}
+>>>>>>> upstream/main
 	if readWhen, ok := data["read_when"].([]any); ok {
 		translated := make([]any, 0, len(readWhen))
 		for idx, item := range readWhen {

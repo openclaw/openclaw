@@ -71,7 +71,12 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Discord](/channels/discord)
 - [Mattermost](/channels/mattermost) (plugin)
 - [Signal](/channels/signal)
+<<<<<<< HEAD
 - [iMessage](/channels/imessage)
+=======
+- [BlueBubbles (iMessage)](/channels/bluebubbles)
+- [iMessage (legacy)](/channels/imessage)
+>>>>>>> upstream/main
 - [Location parsing](/channels/location)
 - [WebChat](/web/webchat)
 - [Webhooks](/automation/webhook)

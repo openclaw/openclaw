@@ -15,7 +15,13 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   // Source checkout (tests/dev)
   try {
     const mod = await import("../../../src/agents/pi-embedded-runner.js");
+<<<<<<< HEAD
     if (typeof (mod as any).runEmbeddedPiAgent === "function") {
+=======
+    // oxlint-disable-next-line typescript/no-explicit-any
+    if (typeof (mod as any).runEmbeddedPiAgent === "function") {
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       return (mod as any).runEmbeddedPiAgent;
     }
   } catch {
@@ -111,7 +117,13 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         undefined;
 
       const authProfileId =
+<<<<<<< HEAD
         (typeof (params as any).authProfileId === "string" &&
+=======
+        // oxlint-disable-next-line typescript/no-explicit-any
+        (typeof (params as any).authProfileId === "string" &&
+          // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
           (params as any).authProfileId.trim()) ||
         (typeof pluginCfg.defaultAuthProfileId === "string" &&
           pluginCfg.defaultAuthProfileId.trim()) ||
@@ -150,6 +162,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
               : undefined,
       };
 
+<<<<<<< HEAD
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       const input = (params as any).input as unknown;
       let inputJson: string;
       try {
@@ -192,6 +208,10 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           disableTools: true,
         });
 
+<<<<<<< HEAD
+=======
+        // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
         const text = collectText((result as any).payloads);
         if (!text) {
           throw new Error("LLM returned empty output");
@@ -205,9 +225,17 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
           throw new Error("LLM returned invalid JSON");
         }
 
+<<<<<<< HEAD
         const schema = (params as any).schema as unknown;
         if (schema && typeof schema === "object" && !Array.isArray(schema)) {
           const ajv = new Ajv({ allErrors: true, strict: false });
+=======
+        // oxlint-disable-next-line typescript/no-explicit-any
+        const schema = (params as any).schema as unknown;
+        if (schema && typeof schema === "object" && !Array.isArray(schema)) {
+          const ajv = new Ajv({ allErrors: true, strict: false });
+          // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
           const validate = ajv.compile(schema as any);
           const ok = validate(parsed);
           if (!ok) {

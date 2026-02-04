@@ -49,6 +49,23 @@ function firecrawlError(): MockResponse {
   };
 }
 
+<<<<<<< HEAD
+=======
+function textResponse(
+  text: string,
+  url = "https://example.com/",
+  contentType = "text/plain; charset=utf-8",
+): MockResponse {
+  return {
+    ok: true,
+    status: 200,
+    url,
+    headers: makeHeaders({ "content-type": contentType }),
+    text: async () => text,
+  };
+}
+
+>>>>>>> upstream/main
 function errorHtmlResponse(
   html: string,
   status = 404,
@@ -322,6 +339,40 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.extractor).toBe("firecrawl");
     expect(details.text).toContain("firecrawl fallback");
   });
+<<<<<<< HEAD
+=======
+
+  it("wraps external content and clamps oversized maxChars", async () => {
+    const large = "a".repeat(80_000);
+    const mockFetch = vi.fn(
+      (input: RequestInfo) =>
+        Promise.resolve(textResponse(large, requestUrl(input))) as Promise<Response>,
+    );
+    // @ts-expect-error mock fetch
+    global.fetch = mockFetch;
+
+    const tool = createWebFetchTool({
+      config: {
+        tools: {
+          web: {
+            fetch: { cacheTtlMinutes: 0, firecrawl: { enabled: false }, maxCharsCap: 10_000 },
+          },
+        },
+      },
+      sandboxed: false,
+    });
+
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/large",
+      maxChars: 200_000,
+    });
+    const details = result?.details as { text?: string; length?: number; truncated?: boolean };
+    expect(details.text).toContain("<<<EXTERNAL_UNTRUSTED_CONTENT>>>");
+    expect(details.text).toContain("Source: Web Fetch");
+    expect(details.length).toBeLessThanOrEqual(10_000);
+    expect(details.truncated).toBe(true);
+  });
+>>>>>>> upstream/main
   it("strips and truncates HTML from error responses", async () => {
     const long = "x".repeat(12_000);
     const html =

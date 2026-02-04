@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+<<<<<<< HEAD
 import { OpenClawApp } from "./app";
 import "../styles.css";
 
+=======
+import { OpenClawApp } from "./app.ts";
+import "../styles.css";
+
+// oxlint-disable-next-line typescript/unbound-method
+>>>>>>> upstream/main
 const originalConnect = OpenClawApp.prototype.connect;
 
 function mountApp(pathname: string) {
@@ -89,13 +96,21 @@ describe("control UI routing", () => {
 
     expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
 
+<<<<<<< HEAD
     const split = app.querySelector(".chat-split-container") as HTMLElement | null;
+=======
+    const split = app.querySelector(".chat-split-container");
+>>>>>>> upstream/main
     expect(split).not.toBeNull();
     if (split) {
       expect(getComputedStyle(split).position).not.toBe("fixed");
     }
 
+<<<<<<< HEAD
     const chatMain = app.querySelector(".chat-main") as HTMLElement | null;
+=======
+    const chatMain = app.querySelector(".chat-main");
+>>>>>>> upstream/main
     expect(chatMain).not.toBeNull();
     if (chatMain) {
       expect(getComputedStyle(chatMain).display).not.toBe("none");
@@ -115,9 +130,17 @@ describe("control UI routing", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
+<<<<<<< HEAD
     const initialContainer = app.querySelector(".chat-thread") as HTMLElement | null;
     expect(initialContainer).not.toBeNull();
     if (!initialContainer) return;
+=======
+    const initialContainer: HTMLElement | null = app.querySelector(".chat-thread");
+    expect(initialContainer).not.toBeNull();
+    if (!initialContainer) {
+      return;
+    }
+>>>>>>> upstream/main
     initialContainer.style.maxHeight = "180px";
     initialContainer.style.overflow = "auto";
 
@@ -132,6 +155,7 @@ describe("control UI routing", () => {
       await nextFrame();
     }
 
+<<<<<<< HEAD
     const container = app.querySelector(".chat-thread") as HTMLElement | null;
     expect(container).not.toBeNull();
     if (!container) return;
@@ -139,6 +163,19 @@ describe("control UI routing", () => {
     expect(maxScroll).toBeGreaterThan(0);
     for (let i = 0; i < 10; i++) {
       if (container.scrollTop === maxScroll) break;
+=======
+    const container = app.querySelector(".chat-thread");
+    expect(container).not.toBeNull();
+    if (!container) {
+      return;
+    }
+    const maxScroll = container.scrollHeight - container.clientHeight;
+    expect(maxScroll).toBeGreaterThan(0);
+    for (let i = 0; i < 10; i++) {
+      if (container.scrollTop === maxScroll) {
+        break;
+      }
+>>>>>>> upstream/main
       await nextFrame();
     }
     expect(container.scrollTop).toBe(maxScroll);

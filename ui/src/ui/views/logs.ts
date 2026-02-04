@@ -1,5 +1,9 @@
 import { html, nothing } from "lit";
+<<<<<<< HEAD
 import type { LogEntry, LogLevel } from "../types";
+=======
+import type { LogEntry, LogLevel } from "../types.ts";
+>>>>>>> upstream/main
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
 
@@ -21,14 +25,30 @@ export type LogsProps = {
 };
 
 function formatTime(value?: string | null) {
+<<<<<<< HEAD
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
+=======
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+>>>>>>> upstream/main
   return date.toLocaleTimeString();
 }
 
 function matchesFilter(entry: LogEntry, needle: string) {
+<<<<<<< HEAD
   if (!needle) return true;
+=======
+  if (!needle) {
+    return true;
+  }
+>>>>>>> upstream/main
   const haystack = [entry.message, entry.subsystem, entry.raw]
     .filter(Boolean)
     .join(" ")
@@ -40,7 +60,13 @@ export function renderLogs(props: LogsProps) {
   const needle = props.filterText.trim().toLowerCase();
   const levelFiltered = LEVELS.some((level) => !props.levelFilters[level]);
   const filtered = props.entries.filter((entry) => {
+<<<<<<< HEAD
     if (entry.level && !props.levelFilters[entry.level]) return false;
+=======
+    if (entry.level && !props.levelFilters[entry.level]) {
+      return false;
+    }
+>>>>>>> upstream/main
     return matchesFilter(entry, needle);
   });
   const exportLabel = needle || levelFiltered ? "filtered" : "visible";

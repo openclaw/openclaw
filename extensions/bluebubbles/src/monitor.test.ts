@@ -1216,7 +1216,13 @@ describe("BlueBubbles webhook monitor", () => {
         const core = createMockRuntime();
 
         // Use a timing-aware debouncer test double that respects debounceMs/buildKey/shouldDebounce.
+<<<<<<< HEAD
         core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
+=======
+        // oxlint-disable-next-line typescript/no-explicit-any
+        core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
+          // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
           type Item = any;
           const buckets = new Map<
             string,

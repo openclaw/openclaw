@@ -48,6 +48,18 @@ export const DEFAULT_MEDIA_HOST_ALLOWLIST = [
   "microsoft.com",
 ] as const;
 
+<<<<<<< HEAD
+=======
+export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
+  "api.botframework.com",
+  "botframework.com",
+  "graph.microsoft.com",
+  "graph.microsoft.us",
+  "graph.microsoft.de",
+  "graph.microsoft.cn",
+] as const;
+
+>>>>>>> upstream/main
 export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -250,6 +262,20 @@ export function resolveAllowedHosts(input?: string[]): string[] {
   return normalized;
 }
 
+<<<<<<< HEAD
+=======
+export function resolveAuthAllowedHosts(input?: string[]): string[] {
+  if (!Array.isArray(input) || input.length === 0) {
+    return DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST.slice();
+  }
+  const normalized = input.map(normalizeAllowHost).filter(Boolean);
+  if (normalized.includes("*")) {
+    return ["*"];
+  }
+  return normalized;
+}
+
+>>>>>>> upstream/main
 function isHostAllowed(host: string, allowlist: string[]): boolean {
   if (allowlist.includes("*")) {
     return true;

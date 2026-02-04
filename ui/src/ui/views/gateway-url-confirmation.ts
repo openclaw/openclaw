@@ -1,9 +1,19 @@
 import { html, nothing } from "lit";
+<<<<<<< HEAD
 import type { AppViewState } from "../app-view-state";
 
 export function renderGatewayUrlConfirmation(state: AppViewState) {
   const { pendingGatewayUrl } = state;
   if (!pendingGatewayUrl) return nothing;
+=======
+import type { AppViewState } from "../app-view-state.ts";
+
+export function renderGatewayUrlConfirmation(state: AppViewState) {
+  const { pendingGatewayUrl } = state;
+  if (!pendingGatewayUrl) {
+    return nothing;
+  }
+>>>>>>> upstream/main
 
   return html`
     <div class="exec-approval-overlay" role="dialog" aria-modal="true" aria-live="polite">

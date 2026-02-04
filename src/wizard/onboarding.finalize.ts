@@ -21,7 +21,10 @@ import {
   detectBrowserOpenSupport,
   formatControlUiSshHint,
   openUrl,
+<<<<<<< HEAD
   openUrlInBackground,
+=======
+>>>>>>> upstream/main
   probeGatewayReachable,
   waitForGatewayReachable,
   resolveControlUiLinks,
@@ -29,6 +32,10 @@ import {
 import { resolveGatewayService } from "../daemon/service.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+<<<<<<< HEAD
+=======
+import { restoreTerminalState } from "../terminal/restore.js";
+>>>>>>> upstream/main
 import { runTui } from "../tui/tui.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -43,7 +50,13 @@ type FinalizeOnboardingOptions = {
   runtime: RuntimeEnv;
 };
 
+<<<<<<< HEAD
 export async function finalizeOnboardingWizard(options: FinalizeOnboardingOptions) {
+=======
+export async function finalizeOnboardingWizard(
+  options: FinalizeOnboardingOptions,
+): Promise<{ launchedTui: boolean }> {
+>>>>>>> upstream/main
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
 
   const withWizardProgress = async <T>(
@@ -286,6 +299,10 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
   let controlUiOpenHint: string | undefined;
   let seededInBackground = false;
   let hatchChoice: "tui" | "web" | "later" | null = null;
+<<<<<<< HEAD
+=======
+  let launchedTui = false;
+>>>>>>> upstream/main
 
   if (!opts.skipUi && gatewayProbe.ok) {
     if (hasBootstrap) {
@@ -321,6 +338,10 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
     });
 
     if (hatchChoice === "tui") {
+<<<<<<< HEAD
+=======
+      restoreTerminalState("pre-onboarding tui");
+>>>>>>> upstream/main
       await runTui({
         url: links.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
@@ -329,6 +350,7 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
         deliver: false,
         message: hasBootstrap ? "Wake up, my friend!" : undefined,
       });
+<<<<<<< HEAD
       if (settings.authMode === "token" && settings.gatewayToken) {
         seededInBackground = await openUrlInBackground(authedUrl);
       }
@@ -340,6 +362,9 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
           "Web UI",
         );
       }
+=======
+      launchedTui = true;
+>>>>>>> upstream/main
     } else if (hatchChoice === "web") {
       const browserSupport = await detectBrowserOpenSupport();
       if (browserSupport.ok) {
@@ -471,4 +496,9 @@ export async function finalizeOnboardingWizard(options: FinalizeOnboardingOption
         ? "Onboarding complete. Web UI seeded in the background; open it anytime with the tokenized link above."
         : "Onboarding complete. Use the tokenized dashboard link above to control OpenClaw.",
   );
+<<<<<<< HEAD
+=======
+
+  return { launchedTui };
+>>>>>>> upstream/main
 }

@@ -6,6 +6,10 @@ import { normalizeAgentId } from "../routing/session-key.js";
 
 const MAX_ASSISTANT_NAME = 50;
 const MAX_ASSISTANT_AVATAR = 200;
+<<<<<<< HEAD
+=======
+const MAX_ASSISTANT_EMOJI = 16;
+>>>>>>> upstream/main
 
 export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
   agentId: "main",
@@ -17,6 +21,10 @@ export type AssistantIdentity = {
   agentId: string;
   name: string;
   avatar: string;
+<<<<<<< HEAD
+=======
+  emoji?: string;
+>>>>>>> upstream/main
 };
 
 function coerceIdentityValue(value: string | undefined, maxLength: number): string | undefined {
@@ -64,6 +72,36 @@ function normalizeAvatarValue(value: string | undefined): string | undefined {
   return undefined;
 }
 
+<<<<<<< HEAD
+=======
+function normalizeEmojiValue(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed.length > MAX_ASSISTANT_EMOJI) {
+    return undefined;
+  }
+  let hasNonAscii = false;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    if (trimmed.charCodeAt(i) > 127) {
+      hasNonAscii = true;
+      break;
+    }
+  }
+  if (!hasNonAscii) {
+    return undefined;
+  }
+  if (isAvatarUrl(trimmed) || looksLikeAvatarPath(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+>>>>>>> upstream/main
 export function resolveAssistantIdentity(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
@@ -92,5 +130,17 @@ export function resolveAssistantIdentity(params: {
     avatarCandidates.map((candidate) => normalizeAvatarValue(candidate)).find(Boolean) ??
     DEFAULT_ASSISTANT_IDENTITY.avatar;
 
+<<<<<<< HEAD
   return { agentId, name, avatar };
+=======
+  const emojiCandidates = [
+    coerceIdentityValue(agentIdentity?.emoji, MAX_ASSISTANT_EMOJI),
+    coerceIdentityValue(fileIdentity?.emoji, MAX_ASSISTANT_EMOJI),
+    coerceIdentityValue(agentIdentity?.avatar, MAX_ASSISTANT_EMOJI),
+    coerceIdentityValue(fileIdentity?.avatar, MAX_ASSISTANT_EMOJI),
+  ];
+  const emoji = emojiCandidates.map((candidate) => normalizeEmojiValue(candidate)).find(Boolean);
+
+  return { agentId, name, avatar, emoji };
+>>>>>>> upstream/main
 }

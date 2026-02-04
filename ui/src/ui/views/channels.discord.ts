@@ -1,8 +1,15 @@
 import { html, nothing } from "lit";
+<<<<<<< HEAD
 import type { DiscordStatus } from "../types";
 import type { ChannelsProps } from "./channels.types";
 import { formatAgo } from "../format";
 import { renderChannelConfigSection } from "./channels.config";
+=======
+import type { DiscordStatus } from "../types.ts";
+import type { ChannelsProps } from "./channels.types.ts";
+import { formatAgo } from "../format.ts";
+import { renderChannelConfigSection } from "./channels.config.ts";
+>>>>>>> upstream/main
 
 export function renderDiscordCard(params: {
   props: ChannelsProps;

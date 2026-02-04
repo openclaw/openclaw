@@ -46,6 +46,10 @@ import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
+<<<<<<< HEAD
+=======
+import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
+>>>>>>> upstream/main
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import {
@@ -366,6 +370,10 @@ export async function runEmbeddedAttempt(
       userTime,
       userTimeFormat,
       contextFiles,
+<<<<<<< HEAD
+=======
+      memoryCitationsMode: params.config?.memory?.citations,
+>>>>>>> upstream/main
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
@@ -399,6 +407,13 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     try {
+<<<<<<< HEAD
+=======
+      await repairSessionFileIfNeeded({
+        sessionFile: params.sessionFile,
+        warn: (message) => log.warn(message),
+      });
+>>>>>>> upstream/main
       const hadSessionFile = await fs
         .stat(params.sessionFile)
         .then(() => true)
@@ -475,7 +490,11 @@ export async function runEmbeddedAttempt(
         sessionManager,
         settingsManager,
       }));
+<<<<<<< HEAD
       applySystemPromptOverrideToSession(session, systemPromptOverride);
+=======
+      applySystemPromptOverrideToSession(session, systemPromptText);
+>>>>>>> upstream/main
       if (!session) {
         throw new Error("Embedded agent session missing");
       }

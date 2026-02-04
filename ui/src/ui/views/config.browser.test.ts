@@ -1,6 +1,10 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import { renderConfig } from "./config";
+=======
+import { renderConfig } from "./config.ts";
+>>>>>>> upstream/main
 
 describe("config view", () => {
   const baseProps = () => ({
@@ -60,7 +64,11 @@ describe("config view", () => {
 
     const saveButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Save",
+<<<<<<< HEAD
     ) as HTMLButtonElement | undefined;
+=======
+    );
+>>>>>>> upstream/main
     expect(saveButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(false);
   });
@@ -80,7 +88,11 @@ describe("config view", () => {
 
     const saveButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Save",
+<<<<<<< HEAD
     ) as HTMLButtonElement | undefined;
+=======
+    );
+>>>>>>> upstream/main
     expect(saveButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(true);
   });
@@ -99,10 +111,17 @@ describe("config view", () => {
 
     const saveButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Save",
+<<<<<<< HEAD
     ) as HTMLButtonElement | undefined;
     const applyButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Apply",
     ) as HTMLButtonElement | undefined;
+=======
+    );
+    const applyButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Apply",
+    );
+>>>>>>> upstream/main
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(true);
@@ -123,10 +142,17 @@ describe("config view", () => {
 
     const saveButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Save",
+<<<<<<< HEAD
     ) as HTMLButtonElement | undefined;
     const applyButton = Array.from(container.querySelectorAll("button")).find(
       (btn) => btn.textContent?.trim() === "Apply",
     ) as HTMLButtonElement | undefined;
+=======
+    );
+    const applyButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Apply",
+    );
+>>>>>>> upstream/main
     expect(saveButton).not.toBeUndefined();
     expect(applyButton).not.toBeUndefined();
     expect(saveButton?.disabled).toBe(false);
@@ -146,7 +172,11 @@ describe("config view", () => {
 
     const btn = Array.from(container.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "Raw",
+<<<<<<< HEAD
     ) as HTMLButtonElement | undefined;
+=======
+    );
+>>>>>>> upstream/main
     expect(btn).toBeTruthy();
     btn?.click();
     expect(onFormModeChange).toHaveBeenCalledWith("raw");
@@ -172,7 +202,11 @@ describe("config view", () => {
 
     const btn = Array.from(container.querySelectorAll("button")).find(
       (b) => b.textContent?.trim() === "Gateway",
+<<<<<<< HEAD
     ) as HTMLButtonElement | undefined;
+=======
+    );
+>>>>>>> upstream/main
     expect(btn).toBeTruthy();
     btn?.click();
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
@@ -189,10 +223,19 @@ describe("config view", () => {
       container,
     );
 
+<<<<<<< HEAD
     const input = container.querySelector(".config-search__input") as HTMLInputElement | null;
     expect(input).not.toBeNull();
     if (!input) return;
     input.value = "gateway";
+=======
+    const input = container.querySelector(".config-search__input");
+    expect(input).not.toBeNull();
+    if (!input) {
+      return;
+    }
+    (input as HTMLInputElement).value = "gateway";
+>>>>>>> upstream/main
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
   });

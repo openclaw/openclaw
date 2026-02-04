@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 import { describe, expect, it, vi } from "vitest";
+=======
+import { beforeEach, describe, expect, it, vi } from "vitest";
+>>>>>>> upstream/main
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { callGateway } from "../../gateway/call.js";
@@ -48,6 +52,13 @@ function buildParams(commandBody: string, cfg: OpenClawConfig, ctxOverrides?: Pa
 }
 
 describe("/approve command", () => {
+<<<<<<< HEAD
+=======
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+>>>>>>> upstream/main
   it("rejects invalid usage", async () => {
     const cfg = {
       commands: { text: true },
@@ -79,4 +90,74 @@ describe("/approve command", () => {
       }),
     );
   });
+<<<<<<< HEAD
+=======
+
+  it("rejects gateway clients without approvals scope", async () => {
+    const cfg = {
+      commands: { text: true },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, {
+      Provider: "webchat",
+      Surface: "webchat",
+      GatewayClientScopes: ["operator.write"],
+    });
+
+    const mockCallGateway = vi.mocked(callGateway);
+    mockCallGateway.mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("requires operator.approvals");
+    expect(mockCallGateway).not.toHaveBeenCalled();
+  });
+
+  it("allows gateway clients with approvals scope", async () => {
+    const cfg = {
+      commands: { text: true },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, {
+      Provider: "webchat",
+      Surface: "webchat",
+      GatewayClientScopes: ["operator.approvals"],
+    });
+
+    const mockCallGateway = vi.mocked(callGateway);
+    mockCallGateway.mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Exec approval allow-once submitted");
+    expect(mockCallGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("allows gateway clients with admin scope", async () => {
+    const cfg = {
+      commands: { text: true },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, {
+      Provider: "webchat",
+      Surface: "webchat",
+      GatewayClientScopes: ["operator.admin"],
+    });
+
+    const mockCallGateway = vi.mocked(callGateway);
+    mockCallGateway.mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Exec approval allow-once submitted");
+    expect(mockCallGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc", decision: "allow-once" },
+      }),
+    );
+  });
+>>>>>>> upstream/main
 });

@@ -302,6 +302,7 @@ export type ConfigSchemaResponse = {
 };
 
 export type PresenceEntry = {
+<<<<<<< HEAD
   instanceId?: string | null;
   host?: string | null;
   ip?: string | null;
@@ -314,6 +315,22 @@ export type PresenceEntry = {
   reason?: string | null;
   text?: string | null;
   ts?: number | null;
+=======
+  deviceFamily?: string | null;
+  host?: string | null;
+  instanceId?: string | null;
+  ip?: string | null;
+  lastInputSeconds?: number | null;
+  mode?: string | null;
+  modelIdentifier?: string | null;
+  platform?: string | null;
+  reason?: string | null;
+  roles?: Array<string | null> | null;
+  scopes?: Array<string | null> | null;
+  text?: string | null;
+  ts?: number | null;
+  version?: string | null;
+>>>>>>> upstream/main
 };
 
 export type GatewaySessionsDefaults = {
@@ -340,6 +357,44 @@ export type AgentsListResult = {
   agents: GatewayAgentRow[];
 };
 
+<<<<<<< HEAD
+=======
+export type AgentIdentityResult = {
+  agentId: string;
+  name: string;
+  avatar: string;
+  emoji?: string;
+};
+
+export type AgentFileEntry = {
+  name: string;
+  path: string;
+  missing: boolean;
+  size?: number;
+  updatedAtMs?: number;
+  content?: string;
+};
+
+export type AgentsFilesListResult = {
+  agentId: string;
+  workspace: string;
+  files: AgentFileEntry[];
+};
+
+export type AgentsFilesGetResult = {
+  agentId: string;
+  workspace: string;
+  file: AgentFileEntry;
+};
+
+export type AgentsFilesSetResult = {
+  ok: true;
+  agentId: string;
+  workspace: string;
+  file: AgentFileEntry;
+};
+
+>>>>>>> upstream/main
 export type GatewaySessionRow = {
   key: string;
   kind: "direct" | "group" | "global" | "unknown";
@@ -478,6 +533,10 @@ export type SkillStatusEntry = {
   name: string;
   description: string;
   source: string;
+<<<<<<< HEAD
+=======
+  bundled?: boolean;
+>>>>>>> upstream/main
   filePath: string;
   baseDir: string;
   skillKey: string;

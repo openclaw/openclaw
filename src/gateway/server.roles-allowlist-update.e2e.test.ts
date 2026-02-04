@@ -16,6 +16,12 @@ vi.mock("../infra/update-runner.js", () => ({
   })),
 }));
 
+<<<<<<< HEAD
+=======
+import { writeConfigFile } from "../config/config.js";
+import { runGatewayUpdate } from "../infra/update-runner.js";
+import { sleep } from "../utils.js";
+>>>>>>> upstream/main
 import {
   connectOk,
   installGatewayTestHooks,
@@ -43,8 +49,11 @@ afterAll(async () => {
   await server.close();
 });
 
+<<<<<<< HEAD
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+=======
+>>>>>>> upstream/main
 const connectNodeClient = async (params: {
   port: number;
   commands: string[];
@@ -194,6 +203,40 @@ describe("gateway update.run", () => {
       process.off("SIGUSR1", sigusr1);
     }
   });
+<<<<<<< HEAD
+=======
+
+  test("uses configured update channel", async () => {
+    const sigusr1 = vi.fn();
+    process.on("SIGUSR1", sigusr1);
+
+    try {
+      await writeConfigFile({ update: { channel: "beta" } });
+      const updateMock = vi.mocked(runGatewayUpdate);
+      updateMock.mockClear();
+
+      const id = "req-update-channel";
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id,
+          method: "update.run",
+          params: {
+            restartDelayMs: 0,
+          },
+        }),
+      );
+      const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
+        ws,
+        (o) => o.type === "res" && o.id === id,
+      );
+      expect(res.ok).toBe(true);
+      expect(updateMock.mock.calls[0]?.[0]?.channel).toBe("beta");
+    } finally {
+      process.off("SIGUSR1", sigusr1);
+    }
+  });
+>>>>>>> upstream/main
 });
 
 describe("gateway node command allowlist", () => {

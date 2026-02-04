@@ -5,6 +5,10 @@ describe("createTelegramDraftStream", () => {
   it("passes message_thread_id when provided", () => {
     const api = { sendMessageDraft: vi.fn().mockResolvedValue(true) };
     const stream = createTelegramDraftStream({
+<<<<<<< HEAD
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       api: api as any,
       chatId: 123,
       draftId: 42,
@@ -21,6 +25,10 @@ describe("createTelegramDraftStream", () => {
   it("omits message_thread_id for general topic id", () => {
     const api = { sendMessageDraft: vi.fn().mockResolvedValue(true) };
     const stream = createTelegramDraftStream({
+<<<<<<< HEAD
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       api: api as any,
       chatId: 123,
       draftId: 42,
@@ -35,6 +43,10 @@ describe("createTelegramDraftStream", () => {
   it("keeps message_thread_id for dm threads", () => {
     const api = { sendMessageDraft: vi.fn().mockResolvedValue(true) };
     const stream = createTelegramDraftStream({
+<<<<<<< HEAD
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       api: api as any,
       chatId: 123,
       draftId: 42,

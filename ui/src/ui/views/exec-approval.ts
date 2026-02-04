@@ -1,24 +1,50 @@
 import { html, nothing } from "lit";
+<<<<<<< HEAD
 import type { AppViewState } from "../app-view-state";
+=======
+import type { AppViewState } from "../app-view-state.ts";
+>>>>>>> upstream/main
 
 function formatRemaining(ms: number): string {
   const remaining = Math.max(0, ms);
   const totalSeconds = Math.floor(remaining / 1000);
+<<<<<<< HEAD
   if (totalSeconds < 60) return `${totalSeconds}s`;
   const minutes = Math.floor(totalSeconds / 60);
   if (minutes < 60) return `${minutes}m`;
+=======
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+>>>>>>> upstream/main
   const hours = Math.floor(minutes / 60);
   return `${hours}h`;
 }
 
 function renderMetaRow(label: string, value?: string | null) {
+<<<<<<< HEAD
   if (!value) return nothing;
+=======
+  if (!value) {
+    return nothing;
+  }
+>>>>>>> upstream/main
   return html`<div class="exec-approval-meta-row"><span>${label}</span><span>${value}</span></div>`;
 }
 
 export function renderExecApprovalPrompt(state: AppViewState) {
   const active = state.execApprovalQueue[0];
+<<<<<<< HEAD
   if (!active) return nothing;
+=======
+  if (!active) {
+    return nothing;
+  }
+>>>>>>> upstream/main
   const request = active.request;
   const remainingMs = active.expiresAtMs - Date.now();
   const remaining = remainingMs > 0 ? `expires in ${formatRemaining(remainingMs)}` : "expired";

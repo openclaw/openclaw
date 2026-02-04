@@ -9,6 +9,15 @@
           - "src/discord/**"
           - "extensions/discord/**"
           - "docs/channels/discord.md"
+<<<<<<< HEAD
+=======
+"channel: feishu":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/feishu/**"
+          - "extensions/feishu/**"
+          - "docs/channels/feishu.md"
+>>>>>>> upstream/main
 "channel: googlechat":
   - changed-files:
       - any-glob-to-any-file:

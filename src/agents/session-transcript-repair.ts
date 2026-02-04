@@ -5,6 +5,19 @@ type ToolCallLike = {
   name?: string;
 };
 
+<<<<<<< HEAD
+=======
+const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+
+type ToolCallBlock = {
+  type?: unknown;
+  id?: unknown;
+  name?: unknown;
+  input?: unknown;
+  arguments?: unknown;
+};
+
+>>>>>>> upstream/main
 function extractToolCallsFromAssistant(
   msg: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
@@ -33,6 +46,24 @@ function extractToolCallsFromAssistant(
   return toolCalls;
 }
 
+<<<<<<< HEAD
+=======
+function isToolCallBlock(block: unknown): block is ToolCallBlock {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return typeof type === "string" && TOOL_CALL_TYPES.has(type);
+}
+
+function hasToolCallInput(block: ToolCallBlock): boolean {
+  const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
+  const hasArguments =
+    "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
+  return hasInput || hasArguments;
+}
+
+>>>>>>> upstream/main
 function extractToolResultId(msg: Extract<AgentMessage, { role: "toolResult" }>): string | null {
   const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
   if (typeof toolCallId === "string" && toolCallId) {
@@ -66,6 +97,69 @@ function makeMissingToolResult(params: {
 
 export { makeMissingToolResult };
 
+<<<<<<< HEAD
+=======
+export type ToolCallInputRepairReport = {
+  messages: AgentMessage[];
+  droppedToolCalls: number;
+  droppedAssistantMessages: number;
+};
+
+export function repairToolCallInputs(messages: AgentMessage[]): ToolCallInputRepairReport {
+  let droppedToolCalls = 0;
+  let droppedAssistantMessages = 0;
+  let changed = false;
+  const out: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    const nextContent = [];
+    let droppedInMessage = 0;
+
+    for (const block of msg.content) {
+      if (isToolCallBlock(block) && !hasToolCallInput(block)) {
+        droppedToolCalls += 1;
+        droppedInMessage += 1;
+        changed = true;
+        continue;
+      }
+      nextContent.push(block);
+    }
+
+    if (droppedInMessage > 0) {
+      if (nextContent.length === 0) {
+        droppedAssistantMessages += 1;
+        changed = true;
+        continue;
+      }
+      out.push({ ...msg, content: nextContent });
+      continue;
+    }
+
+    out.push(msg);
+  }
+
+  return {
+    messages: changed ? out : messages,
+    droppedToolCalls,
+    droppedAssistantMessages,
+  };
+}
+
+export function sanitizeToolCallInputs(messages: AgentMessage[]): AgentMessage[] {
+  return repairToolCallInputs(messages).messages;
+}
+
+>>>>>>> upstream/main
 export function sanitizeToolUseResultPairing(messages: AgentMessage[]): AgentMessage[] {
   return repairToolUseResultPairing(messages).messages;
 }

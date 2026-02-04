@@ -1,6 +1,10 @@
 {
   "name": "@openclaw/googlechat",
+<<<<<<< HEAD
   "version": "2026.1.30",
+=======
+  "version": "2026.2.2",
+>>>>>>> upstream/main
   "description": "OpenClaw Google Chat channel plugin",
   "type": "module",
   "dependencies": {

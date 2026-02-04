@@ -1,7 +1,12 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+<<<<<<< HEAD
 import type { SessionsListResult } from "../types";
 import { renderChat, type ChatProps } from "./chat";
+=======
+import type { SessionsListResult } from "../types.ts";
+import { renderChat, type ChatProps } from "./chat.ts";
+>>>>>>> upstream/main
 
 function createSessions(): SessionsListResult {
   return {

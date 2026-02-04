@@ -1,6 +1,15 @@
+<<<<<<< HEAD
 import { describe, expect, it } from "vitest";
 import { describeGeminiVideo } from "./video.js";
 
+=======
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as ssrf from "../../../infra/net/ssrf.js";
+import { describeGeminiVideo } from "./video.js";
+
+const TEST_NET_IP = "203.0.113.10";
+
+>>>>>>> upstream/main
 const resolveRequestUrl = (input: RequestInfo | URL) => {
   if (typeof input === "string") {
     return input;
@@ -12,6 +21,31 @@ const resolveRequestUrl = (input: RequestInfo | URL) => {
 };
 
 describe("describeGeminiVideo", () => {
+<<<<<<< HEAD
+=======
+  let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    resolvePinnedHostnameSpy = vi
+      .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+      .mockImplementation(async (hostname) => {
+        // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
+        const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
+        const addresses = [TEST_NET_IP];
+        return {
+          hostname: normalized,
+          addresses,
+          lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
+        };
+      });
+  });
+
+  afterEach(() => {
+    resolvePinnedHostnameSpy?.mockRestore();
+    resolvePinnedHostnameSpy = undefined;
+  });
+
+>>>>>>> upstream/main
   it("respects case-insensitive x-goog-api-key overrides", async () => {
     let seenKey: string | null = null;
     const fetchFn = async (_input: RequestInfo | URL, init?: RequestInit) => {

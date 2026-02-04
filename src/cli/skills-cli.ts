@@ -90,6 +90,10 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         disabled: s.disabled,
         blockedByAllowlist: s.blockedByAllowlist,
         source: s.source,
+<<<<<<< HEAD
+=======
+        bundled: s.bundled,
+>>>>>>> upstream/main
         primaryEnv: s.primaryEnv,
         homepage: s.homepage,
         missing: s.missing,

@@ -280,7 +280,11 @@ TRASH
       --skip-health
 
     # Assert config + workspace scaffolding.
+<<<<<<< HEAD
     workspace_dir="$HOME/openclaw"
+=======
+    workspace_dir="$HOME/.openclaw/workspace"
+>>>>>>> upstream/main
     config_path="$HOME/.openclaw/openclaw.json"
     sessions_dir="$HOME/.openclaw/agents/main/sessions"
 

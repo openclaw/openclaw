@@ -64,7 +64,10 @@ export const twitchOutbound: ChannelOutboundAdapter = {
           return { ok: true, to: normalizedTo };
         }
         // Fallback to first allowFrom entry
+<<<<<<< HEAD
         // biome-ignore lint/style/noNonNullAssertion: length > 0 check ensures element exists
+=======
+>>>>>>> upstream/main
         return { ok: true, to: allowList[0] };
       }
 
@@ -74,7 +77,10 @@ export const twitchOutbound: ChannelOutboundAdapter = {
 
     // No target provided, use allowFrom fallback
     if (allowList.length > 0) {
+<<<<<<< HEAD
       // biome-ignore lint/style/noNonNullAssertion: length > 0 check ensures element exists
+=======
+>>>>>>> upstream/main
       return { ok: true, to: allowList[0] };
     }
 

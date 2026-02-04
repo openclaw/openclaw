@@ -221,6 +221,10 @@ Fetch a URL and extract readable content.
       fetch: {
         enabled: true,
         maxChars: 50000,
+<<<<<<< HEAD
+=======
+        maxCharsCap: 50000,
+>>>>>>> upstream/main
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
         maxRedirects: 3,
@@ -252,6 +256,10 @@ Notes:
 - Firecrawl requests use bot-circumvention mode and cache results by default.
 - `web_fetch` sends a Chrome-like User-Agent and `Accept-Language` by default; override `userAgent` if needed.
 - `web_fetch` blocks private/internal hostnames and re-checks redirects (limit with `maxRedirects`).
+<<<<<<< HEAD
+=======
+- `maxChars` is clamped to `tools.web.fetch.maxCharsCap`.
+>>>>>>> upstream/main
 - `web_fetch` is best-effort extraction; some sites will need the browser tool.
 - See [Firecrawl](/tools/firecrawl) for key setup and service details.
 - Responses are cached (default 15 minutes) to reduce repeated fetches.

@@ -25,7 +25,13 @@ describe("signal createSignalEventHandler inbound contract", () => {
     capturedCtx = undefined;
 
     const handler = createSignalEventHandler({
+<<<<<<< HEAD
       runtime: { log: () => {}, error: () => {} } as any,
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+      runtime: { log: () => {}, error: () => {} } as any,
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
       baseUrl: "http://localhost",
       accountId: "default",
@@ -45,6 +51,10 @@ describe("signal createSignalEventHandler inbound contract", () => {
       fetchAttachment: async () => null,
       deliverReplies: async () => {},
       resolveSignalReactionTargets: () => [],
+<<<<<<< HEAD
+=======
+      // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
       isSignalReactionMessage: () => false as any,
       shouldEmitSignalReactionNotification: () => false,
       buildSignalReactionSystemEventText: () => "reaction",

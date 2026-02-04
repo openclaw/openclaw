@@ -11,7 +11,11 @@ function uuidFromBytes(bytes: Uint8Array): string {
 
   let hex = "";
   for (let i = 0; i < bytes.length; i++) {
+<<<<<<< HEAD
     hex += bytes[i]!.toString(16).padStart(2, "0");
+=======
+    hex += bytes[i].toString(16).padStart(2, "0");
+>>>>>>> upstream/main
   }
 
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(
@@ -23,7 +27,13 @@ function uuidFromBytes(bytes: Uint8Array): string {
 function weakRandomBytes(): Uint8Array {
   const bytes = new Uint8Array(16);
   const now = Date.now();
+<<<<<<< HEAD
   for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+=======
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = Math.floor(Math.random() * 256);
+  }
+>>>>>>> upstream/main
   bytes[0] ^= now & 0xff;
   bytes[1] ^= (now >>> 8) & 0xff;
   bytes[2] ^= (now >>> 16) & 0xff;
@@ -32,13 +42,25 @@ function weakRandomBytes(): Uint8Array {
 }
 
 function warnWeakCryptoOnce() {
+<<<<<<< HEAD
   if (warnedWeakCrypto) return;
+=======
+  if (warnedWeakCrypto) {
+    return;
+  }
+>>>>>>> upstream/main
   warnedWeakCrypto = true;
   console.warn("[uuid] crypto API missing; falling back to weak randomness");
 }
 
 export function generateUUID(cryptoLike: CryptoLike | null = globalThis.crypto): string {
+<<<<<<< HEAD
   if (cryptoLike && typeof cryptoLike.randomUUID === "function") return cryptoLike.randomUUID();
+=======
+  if (cryptoLike && typeof cryptoLike.randomUUID === "function") {
+    return cryptoLike.randomUUID();
+  }
+>>>>>>> upstream/main
 
   if (cryptoLike && typeof cryptoLike.getRandomValues === "function") {
     const bytes = new Uint8Array(16);

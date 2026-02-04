@@ -21,15 +21,30 @@ import type { VoiceCallProvider } from "./base.js";
  * Uses Telnyx Call Control API v2 for managing calls.
  * @see https://developers.telnyx.com/docs/api/v2/call-control
  */
+<<<<<<< HEAD
+=======
+export interface TelnyxProviderOptions {
+  /** Allow unsigned webhooks when no public key is configured */
+  allowUnsignedWebhooks?: boolean;
+}
+
+>>>>>>> upstream/main
 export class TelnyxProvider implements VoiceCallProvider {
   readonly name = "telnyx" as const;
 
   private readonly apiKey: string;
   private readonly connectionId: string;
   private readonly publicKey: string | undefined;
+<<<<<<< HEAD
   private readonly baseUrl = "https://api.telnyx.com/v2";
 
   constructor(config: TelnyxConfig) {
+=======
+  private readonly options: TelnyxProviderOptions;
+  private readonly baseUrl = "https://api.telnyx.com/v2";
+
+  constructor(config: TelnyxConfig, options: TelnyxProviderOptions = {}) {
+>>>>>>> upstream/main
     if (!config.apiKey) {
       throw new Error("Telnyx API key is required");
     }
@@ -40,6 +55,10 @@ export class TelnyxProvider implements VoiceCallProvider {
     this.apiKey = config.apiKey;
     this.connectionId = config.connectionId;
     this.publicKey = config.publicKey;
+<<<<<<< HEAD
+=======
+    this.options = options;
+>>>>>>> upstream/main
   }
 
   /**
@@ -76,8 +95,19 @@ export class TelnyxProvider implements VoiceCallProvider {
    */
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
     if (!this.publicKey) {
+<<<<<<< HEAD
       // No public key configured, skip verification (not recommended for production)
       return { ok: true };
+=======
+      if (this.options.allowUnsignedWebhooks) {
+        console.warn("[telnyx] Webhook verification skipped (no public key configured)");
+        return { ok: true, reason: "verification skipped (no public key configured)" };
+      }
+      return {
+        ok: false,
+        reason: "Missing telnyx.publicKey (configure to verify webhooks)",
+      };
+>>>>>>> upstream/main
     }
 
     const signature = ctx.headers["telnyx-signature-ed25519"];

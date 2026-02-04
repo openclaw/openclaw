@@ -95,7 +95,11 @@ export function registerDirectoryCli(program: Command) {
           return;
         }
         const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+<<<<<<< HEAD
         defaultRuntime.log(`${theme.heading("Self")}`);
+=======
+        defaultRuntime.log(theme.heading("Self"));
+>>>>>>> upstream/main
         defaultRuntime.log(
           renderTable({
             width: tableWidth,

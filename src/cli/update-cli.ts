@@ -1,5 +1,9 @@
 import type { Command } from "commander";
 import { confirm, isCancel, select, spinner } from "@clack/prompts";
+<<<<<<< HEAD
+=======
+import { spawnSync } from "node:child_process";
+>>>>>>> upstream/main
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +33,10 @@ import {
 import {
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
+<<<<<<< HEAD
+=======
+  cleanupGlobalRenameDirs,
+>>>>>>> upstream/main
   globalInstallArgs,
   resolveGlobalPackageRoot,
   type GlobalInstallManager,
@@ -199,6 +207,32 @@ async function pathExists(targetPath: string): Promise<boolean> {
   }
 }
 
+<<<<<<< HEAD
+=======
+async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
+  const binPath = path.join(root, "openclaw.mjs");
+  if (!(await pathExists(binPath))) {
+    return;
+  }
+  const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
+    cwd: root,
+    env: process.env,
+    encoding: "utf-8",
+  });
+  if (result.error) {
+    if (!jsonMode) {
+      defaultRuntime.log(theme.warn(`Completion cache update failed: ${String(result.error)}`));
+    }
+    return;
+  }
+  if (result.status !== 0 && !jsonMode) {
+    const stderr = (result.stderr ?? "").toString().trim();
+    const detail = stderr ? ` (${stderr})` : "";
+    defaultRuntime.log(theme.warn(`Completion cache update failed${detail}.`));
+  }
+}
+
+>>>>>>> upstream/main
 async function isEmptyDir(targetPath: string): Promise<boolean> {
   try {
     const entries = await fs.readdir(targetPath);
@@ -736,6 +770,15 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(root)) ??
       DEFAULT_PACKAGE_NAME;
     const beforeVersion = pkgRoot ? await readPackageVersion(pkgRoot) : null;
+<<<<<<< HEAD
+=======
+    if (pkgRoot) {
+      await cleanupGlobalRenameDirs({
+        globalRoot: path.dirname(pkgRoot),
+        packageName,
+      });
+    }
+>>>>>>> upstream/main
     const updateStep = await runUpdateStep({
       name: "global update",
       argv: globalInstallArgs(manager, `${packageName}@${tag}`),
@@ -952,6 +995,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     defaultRuntime.log(theme.warn("Skipping plugin updates: config is invalid."));
   }
 
+<<<<<<< HEAD
+=======
+  await tryWriteCompletionCache(root, Boolean(opts.json));
+
+>>>>>>> upstream/main
   // Restart service if requested
   if (shouldRestart) {
     if (!opts.json) {

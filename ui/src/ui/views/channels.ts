@@ -12,6 +12,7 @@ import type {
   SlackStatus,
   TelegramStatus,
   WhatsAppStatus,
+<<<<<<< HEAD
 } from "../types";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./channels.types";
 import { formatAgo } from "../format";
@@ -25,6 +26,21 @@ import { renderSignalCard } from "./channels.signal";
 import { renderSlackCard } from "./channels.slack";
 import { renderTelegramCard } from "./channels.telegram";
 import { renderWhatsAppCard } from "./channels.whatsapp";
+=======
+} from "../types.ts";
+import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./channels.types.ts";
+import { formatAgo } from "../format.ts";
+import { renderChannelConfigSection } from "./channels.config.ts";
+import { renderDiscordCard } from "./channels.discord.ts";
+import { renderGoogleChatCard } from "./channels.googlechat.ts";
+import { renderIMessageCard } from "./channels.imessage.ts";
+import { renderNostrCard } from "./channels.nostr.ts";
+import { channelEnabled, renderChannelAccountCount } from "./channels.shared.ts";
+import { renderSignalCard } from "./channels.signal.ts";
+import { renderSlackCard } from "./channels.slack.ts";
+import { renderTelegramCard } from "./channels.telegram.ts";
+import { renderWhatsAppCard } from "./channels.whatsapp.ts";
+>>>>>>> upstream/main
 
 export function renderChannels(props: ChannelsProps) {
   const channels = props.snapshot?.channels as Record<string, unknown> | null;
@@ -43,8 +59,15 @@ export function renderChannels(props: ChannelsProps) {
       enabled: channelEnabled(key, props),
       order: index,
     }))
+<<<<<<< HEAD
     .sort((a, b) => {
       if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+=======
+    .toSorted((a, b) => {
+      if (a.enabled !== b.enabled) {
+        return a.enabled ? -1 : 1;
+      }
+>>>>>>> upstream/main
       return a.order - b.order;
     });
 
@@ -89,7 +112,11 @@ ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
 
 function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
   if (snapshot?.channelMeta?.length) {
+<<<<<<< HEAD
     return snapshot.channelMeta.map((entry) => entry.id) as ChannelKey[];
+=======
+    return snapshot.channelMeta.map((entry) => entry.id);
+>>>>>>> upstream/main
   }
   if (snapshot?.channelOrder?.length) {
     return snapshot.channelOrder;
@@ -122,7 +149,11 @@ function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChan
     case "googlechat":
       return renderGoogleChatCard({
         props,
+<<<<<<< HEAD
         googlechat: data.googlechat,
+=======
+        googleChat: data.googlechat,
+>>>>>>> upstream/main
         accountCountLabel,
       });
     case "slack":
@@ -236,7 +267,13 @@ function renderGenericChannelCard(
 function resolveChannelMetaMap(
   snapshot: ChannelsStatusSnapshot | null,
 ): Record<string, ChannelUiMetaEntry> {
+<<<<<<< HEAD
   if (!snapshot?.channelMeta?.length) return {};
+=======
+  if (!snapshot?.channelMeta?.length) {
+    return {};
+  }
+>>>>>>> upstream/main
   return Object.fromEntries(snapshot.channelMeta.map((entry) => [entry.id, entry]));
 }
 
@@ -248,22 +285,51 @@ function resolveChannelLabel(snapshot: ChannelsStatusSnapshot | null, key: strin
 const RECENT_ACTIVITY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 
 function hasRecentActivity(account: ChannelAccountSnapshot): boolean {
+<<<<<<< HEAD
   if (!account.lastInboundAt) return false;
+=======
+  if (!account.lastInboundAt) {
+    return false;
+  }
+>>>>>>> upstream/main
   return Date.now() - account.lastInboundAt < RECENT_ACTIVITY_THRESHOLD_MS;
 }
 
 function deriveRunningStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" {
+<<<<<<< HEAD
   if (account.running) return "Yes";
   // If we have recent inbound activity, the channel is effectively running
   if (hasRecentActivity(account)) return "Active";
+=======
+  if (account.running) {
+    return "Yes";
+  }
+  // If we have recent inbound activity, the channel is effectively running
+  if (hasRecentActivity(account)) {
+    return "Active";
+  }
+>>>>>>> upstream/main
   return "No";
 }
 
 function deriveConnectedStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" | "n/a" {
+<<<<<<< HEAD
   if (account.connected === true) return "Yes";
   if (account.connected === false) return "No";
   // If connected is null/undefined but we have recent activity, show as active
   if (hasRecentActivity(account)) return "Active";
+=======
+  if (account.connected === true) {
+    return "Yes";
+  }
+  if (account.connected === false) {
+    return "No";
+  }
+  // If connected is null/undefined but we have recent activity, show as active
+  if (hasRecentActivity(account)) {
+    return "Active";
+  }
+>>>>>>> upstream/main
   return "n/a";
 }
 

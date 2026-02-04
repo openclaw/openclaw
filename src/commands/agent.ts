@@ -4,6 +4,10 @@ import {
   resolveAgentDir,
   resolveAgentModelFallbacksOverride,
   resolveAgentModelPrimary,
+<<<<<<< HEAD
+=======
+  resolveAgentSkillsFilter,
+>>>>>>> upstream/main
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
@@ -187,11 +191,19 @@ export async function agentCommand(
 
     const needsSkillsSnapshot = isNewSession || !sessionEntry?.skillsSnapshot;
     const skillsSnapshotVersion = getSkillsSnapshotVersion(workspaceDir);
+<<<<<<< HEAD
+=======
+    const skillFilter = resolveAgentSkillsFilter(cfg, sessionAgentId);
+>>>>>>> upstream/main
     const skillsSnapshot = needsSkillsSnapshot
       ? buildWorkspaceSkillSnapshot(workspaceDir, {
           config: cfg,
           eligibility: { remote: getRemoteSkillEligibility() },
           snapshotVersion: skillsSnapshotVersion,
+<<<<<<< HEAD
+=======
+          skillFilter,
+>>>>>>> upstream/main
         })
       : sessionEntry?.skillsSnapshot;
 

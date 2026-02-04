@@ -86,10 +86,20 @@ export async function resolveDiscordTarget(
 
   const likelyUsername = isLikelyUsername(trimmed);
   const shouldLookup = isExplicitUserLookup(trimmed, parseOptions) || likelyUsername;
+<<<<<<< HEAD
+=======
+
+  // Parse directly if it's already a known format. Use a safe parse so ambiguous
+  // numeric targets don't throw when we still want to attempt username lookup.
+>>>>>>> upstream/main
   const directParse = safeParseDiscordTarget(trimmed, parseOptions);
   if (directParse && directParse.kind !== "channel" && !likelyUsername) {
     return directParse;
   }
+<<<<<<< HEAD
+=======
+
+>>>>>>> upstream/main
   if (!shouldLookup) {
     return directParse ?? parseDiscordTarget(trimmed, parseOptions);
   }

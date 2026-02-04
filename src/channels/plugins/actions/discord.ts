@@ -88,6 +88,12 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       actions.add("kick");
       actions.add("ban");
     }
+<<<<<<< HEAD
+=======
+    if (gate("presence", false)) {
+      actions.add("set-presence");
+    }
+>>>>>>> upstream/main
     return Array.from(actions);
   },
   extractToolSend: ({ args }) => {

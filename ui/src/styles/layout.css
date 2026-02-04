@@ -62,7 +62,14 @@
 
 .shell--chat-focus .content {
   padding-top: 0;
+<<<<<<< HEAD
   gap: 0;
+=======
+}
+
+.shell--chat-focus .content > * + * {
+  margin-top: 0;
+>>>>>>> upstream/main
 }
 
 /* ===========================================
@@ -418,23 +425,47 @@
 .content {
   grid-area: content;
   padding: 12px 16px 32px;
+<<<<<<< HEAD
   display: flex;
   flex-direction: column;
   gap: 24px;
+=======
+  display: block;
+>>>>>>> upstream/main
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
+<<<<<<< HEAD
+=======
+.content > * + * {
+  margin-top: 24px;
+}
+
+>>>>>>> upstream/main
 :root[data-theme="light"] .content {
   background: var(--bg-content);
 }
 
 .content--chat {
+<<<<<<< HEAD
+=======
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+>>>>>>> upstream/main
   overflow: hidden;
   padding-bottom: 0;
 }
 
+<<<<<<< HEAD
+=======
+.content--chat > * + * {
+  margin-top: 0;
+}
+
+>>>>>>> upstream/main
 /* Content header */
 .content-header {
   display: flex;

@@ -193,7 +193,11 @@ for (const [login, lines] of linesByLogin.entries()) {
   }
   let user = apiByLogin.get(login);
   if (!user) {
+<<<<<<< HEAD
     user = fetchUser(login);
+=======
+    user = fetchUser(login) || undefined;
+>>>>>>> upstream/main
   }
   if (user) {
     const contributions = contributionsByLogin.get(login) ?? 0;
@@ -256,7 +260,13 @@ function run(cmd: string): string {
   }).trim();
 }
 
+<<<<<<< HEAD
 function parsePaginatedJson(raw: string): any[] {
+=======
+// oxlint-disable-next-line typescript/no-explicit-any
+function parsePaginatedJson(raw: string): any[] {
+  // oxlint-disable-next-line typescript/no-explicit-any
+>>>>>>> upstream/main
   const items: any[] = [];
   for (const line of raw.split("\n")) {
     if (!line.trim()) {
