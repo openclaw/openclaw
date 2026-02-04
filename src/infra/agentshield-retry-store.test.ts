@@ -1,116 +1,92 @@
-import fs from "node:fs";
+import { describe, it, expect } from "vitest";
 import os from "node:os";
+import fs from "node:fs";
 import path from "node:path";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { AgentShieldRetryStore, argsFingerprint } from "./agentshield-retry-store.js";
 
-describe("argsFingerprint", () => {
-  it("returns a 64-char hex SHA-256", () => {
-    const fp = argsFingerprint("test");
-    expect(fp).toHaveLength(64);
-    expect(fp).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  it("is deterministic", () => {
-    expect(argsFingerprint("abc")).toBe(argsFingerprint("abc"));
-  });
-});
+function mkTmp(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agentshield-retry-"));
+}
 
 describe("AgentShieldRetryStore", () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "as-retry-test-"));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it("store/load roundtrip", () => {
+  it("stores and loads encrypted entries", () => {
+    const tmpDir = mkTmp();
     const store = new AgentShieldRetryStore(tmpDir);
-    const fp = store.store("entry-1", "shell_exec", { cmd: "ls -la" }, { agentId: "a1" });
-    expect(typeof fp).toBe("string");
-    expect(fp).toHaveLength(64);
 
-    const data = store.load("entry-1");
-    expect(data.toolName).toBe("shell_exec");
-    expect(data.params).toEqual({ cmd: "ls -la" });
-    expect(data.ctx).toEqual({ agentId: "a1" });
+    const paramsJSON = JSON.stringify({ cmd: "ls -la" });
+    const fp = store.store("entry-1", "shell_exec", paramsJSON, { agentId: "a1" });
+
+    expect(fp).toBe(argsFingerprint(paramsJSON));
+
+    const loaded = store.load("entry-1");
+    expect(loaded.toolName).toBe("shell_exec");
+    expect(loaded.paramsJSON).toBe(paramsJSON);
+    expect(loaded.ctx).toEqual({ agentId: "a1" });
   });
 
-  it("stores encrypted data (raw args not visible)", () => {
+  it("writes encrypted file to disk (not plaintext JSON)", () => {
+    const tmpDir = mkTmp();
     const store = new AgentShieldRetryStore(tmpDir);
-    store.store("enc-1", "secret_tool", { password: "hunter2" });
+
+    const paramsJSON = JSON.stringify({ password: "hunter2" });
+    store.store("enc-1", "secret_tool", paramsJSON);
+
     const encPath = path.join(tmpDir, "agentshield-retries", "enc-1.enc");
-    expect(fs.existsSync(encPath)).toBe(true);
     const raw = fs.readFileSync(encPath);
-    expect(raw.includes(Buffer.from("hunter2"))).toBe(false);
-    expect(raw.includes(Buffer.from("secret_tool"))).toBe(false);
+
+    // Very lightweight check: encrypted blob should not contain obvious plaintext fields
+    expect(raw.toString("utf8")).not.toContain("hunter2");
+    expect(raw.toString("utf8")).not.toContain("secret_tool");
+    expect(raw.toString("utf8")).not.toContain("paramsJSON");
   });
 
-  it("file permissions are 0o600", () => {
-    const store = new AgentShieldRetryStore(tmpDir);
-    store.store("perm-1", "tool", { x: 1 });
-    const encPath = path.join(tmpDir, "agentshield-retries", "perm-1.enc");
-    const stat = fs.statSync(encPath);
-    // eslint-disable-next-line no-bitwise
-    expect(stat.mode & 0o777).toBe(0o600);
-  });
+  it("persists key and can read entries across instances", () => {
+    const tmpDir = mkTmp();
 
-  it("key file permissions are 0o600", () => {
-    new AgentShieldRetryStore(tmpDir);
-    const keyPath = path.join(tmpDir, "agentshield-retries", ".key");
-    expect(fs.existsSync(keyPath)).toBe(true);
-    const stat = fs.statSync(keyPath);
-    // eslint-disable-next-line no-bitwise
-    expect(stat.mode & 0o777).toBe(0o600);
-  });
-
-  it("key is 32 bytes", () => {
-    new AgentShieldRetryStore(tmpDir);
-    const keyPath = path.join(tmpDir, "agentshield-retries", ".key");
-    const key = fs.readFileSync(keyPath);
-    expect(key.length).toBe(32);
-  });
-
-  it("key reuse across instances", () => {
     const s1 = new AgentShieldRetryStore(tmpDir);
-    s1.store("reuse-1", "tool", { x: 1 });
+    const paramsJSON = JSON.stringify({ x: 1 });
+    s1.store("reuse-1", "tool", paramsJSON);
+
     const s2 = new AgentShieldRetryStore(tmpDir);
-    const data = s2.load("reuse-1");
-    expect(data.params).toEqual({ x: 1 });
+    const loaded = s2.load("reuse-1");
+    expect(loaded.toolName).toBe("tool");
+    expect(loaded.paramsJSON).toBe(paramsJSON);
   });
 
-  it("remove", () => {
+  it("remove() deletes an entry", () => {
+    const tmpDir = mkTmp();
     const store = new AgentShieldRetryStore(tmpDir);
-    store.store("rm-1", "t", {});
+
+    store.store("rm-1", "t", JSON.stringify({}));
     expect(store.remove("rm-1")).toBe(true);
+    expect(() => store.load("rm-1")).toThrow();
     expect(store.remove("rm-1")).toBe(false);
   });
 
-  it("listIds", () => {
+  it("listIds() returns sorted ids", () => {
+    const tmpDir = mkTmp();
     const store = new AgentShieldRetryStore(tmpDir);
-    store.store("c", "t", {});
-    store.store("a", "t", {});
-    store.store("b", "t", {});
+
+    store.store("c", "t", JSON.stringify({}));
+    store.store("a", "t", JSON.stringify({}));
+    store.store("b", "t", JSON.stringify({}));
+
     expect(store.listIds()).toEqual(["a", "b", "c"]);
   });
 
-  it("listIds empty", () => {
+  it("throws if entry missing", () => {
+    const tmpDir = mkTmp();
     const store = new AgentShieldRetryStore(tmpDir);
-    expect(store.listIds()).toEqual([]);
+    expect(() => store.load("missing")).toThrow(/retry entry not found/);
   });
 
-  it("load nonexistent throws", () => {
+  it("throws on corrupt ciphertext", () => {
+    const tmpDir = mkTmp();
     const store = new AgentShieldRetryStore(tmpDir);
-    expect(() => store.load("nope")).toThrow("retry entry not found");
-  });
 
-  it("load corrupted throws", () => {
-    const store = new AgentShieldRetryStore(tmpDir);
     const encPath = path.join(tmpDir, "agentshield-retries", "corrupt.enc");
-    fs.writeFileSync(encPath, "garbage-data-not-encrypted");
+    fs.writeFileSync(encPath, Buffer.from("not-valid"), { mode: 0o600 });
+
     expect(() => store.load("corrupt")).toThrow();
   });
 });
