@@ -8,6 +8,10 @@ Docs: https://docs.openclaw.ai
 
 - TBD.
 
+### Fixes
+
+- Telegram: honor session model overrides in inline model selection. (#8193) Thanks @gildo.
+
 ## 2026.2.2-3
 
 ### Fixes
@@ -54,7 +58,6 @@ Docs: https://docs.openclaw.ai
 - fix(agents): validate AbortSignal instances before calling AbortSignal.any() (#7277) (thanks @Elarwei001)
 - fix(webchat): respect user scroll position during streaming and refresh (#7226) (thanks @marcomarandiz)
 - Telegram: recover from grammY long-poll timed out errors. (#7466) Thanks @macmimi23.
-- Telegram: honor session model overrides in inline model selection. (#8193) Thanks @gildo.
 - Media understanding: skip binary media from file text extraction. (#7475) Thanks @AlexZhangji.
 - Security: enforce access-group gating for Slack slash commands when channel type lookup fails.
 - Security: require validated shared-secret auth before skipping device identity on gateway connect.
