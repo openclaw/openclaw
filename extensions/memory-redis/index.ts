@@ -11,9 +11,9 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { randomUUID } from "node:crypto";
 import { stringEnum } from "openclaw/plugin-sdk";
+// Import embedding provider from plugin-sdk
+import { createEmbeddingProvider, type EmbeddingProvider } from "openclaw/plugin-sdk";
 import { createClient, type RedisClientType } from "redis";
-// Import core embedding provider (available in-process via jiti)
-import { createEmbeddingProvider, type EmbeddingProvider } from "../../src/memory/embeddings.js";
 import {
   MEMORY_CATEGORIES,
   type MemoryCategory,
