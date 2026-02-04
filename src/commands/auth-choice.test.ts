@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { AuthChoice } from "./onboard-types.js";
+import { loadSecureJsonFile } from "../infra/crypto-store.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 
 vi.mock("../providers/github-copilot-auth.js", () => ({
@@ -127,8 +128,7 @@ describe("applyAuthChoice", () => {
     });
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = loadSecureJsonFile(authProfilePath) as {
       profiles?: Record<string, { key?: string }>;
     };
     expect(parsed.profiles?.["minimax:default"]?.key).toBe("sk-minimax-test");
@@ -180,8 +180,7 @@ describe("applyAuthChoice", () => {
     });
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = loadSecureJsonFile(authProfilePath) as {
       profiles?: Record<string, { key?: string }>;
     };
     expect(parsed.profiles?.["synthetic:default"]?.key).toBe("sk-synthetic-test");
@@ -333,8 +332,7 @@ describe("applyAuthChoice", () => {
     expect(result.config.agents?.defaults?.model?.primary).toBe("openrouter/auto");
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = loadSecureJsonFile(authProfilePath) as {
       profiles?: Record<string, { key?: string }>;
     };
     expect(parsed.profiles?.["openrouter:default"]?.key).toBe("sk-openrouter-test");
@@ -396,8 +394,7 @@ describe("applyAuthChoice", () => {
     );
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = loadSecureJsonFile(authProfilePath) as {
       profiles?: Record<string, { key?: string }>;
     };
     expect(parsed.profiles?.["vercel-ai-gateway:default"]?.key).toBe("gateway-test-key");
@@ -477,8 +474,7 @@ describe("applyAuthChoice", () => {
     });
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = loadSecureJsonFile(authProfilePath) as {
       profiles?: Record<
         string,
         { provider?: string; access?: string; refresh?: string; email?: string }
@@ -576,8 +572,7 @@ describe("applyAuthChoice", () => {
     });
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = loadSecureJsonFile(authProfilePath) as {
       profiles?: Record<string, { access?: string; refresh?: string; provider?: string }>;
     };
     expect(parsed.profiles?.["qwen-portal:default"]).toMatchObject({
@@ -671,8 +666,7 @@ describe("applyAuthChoice", () => {
     });
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = loadSecureJsonFile(authProfilePath) as {
       profiles?: Record<string, { access?: string; refresh?: string; provider?: string }>;
     };
     expect(parsed.profiles?.["minimax-portal:default"]).toMatchObject({
