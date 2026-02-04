@@ -92,6 +92,11 @@ import {
   ExecApprovalResolveParamsSchema,
 } from "./exec-approvals.js";
 import {
+  AgentShieldApprovalRequestParamsSchema,
+  AgentShieldApprovalResolveParamsSchema,
+  AgentShieldApprovalListParamsSchema,
+} from "./agentshield-approvals.js";
+import {
   ConnectParamsSchema,
   ErrorShapeSchema,
   EventFrameSchema,
@@ -272,6 +277,9 @@ export const ProtocolSchemas = {
   ExecApprovalsSnapshot: ExecApprovalsSnapshotSchema,
   ExecApprovalRequestParams: ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
+  AgentShieldApprovalRequestParams: AgentShieldApprovalRequestParamsSchema,
+  AgentShieldApprovalResolveParams: AgentShieldApprovalResolveParamsSchema,
+  AgentShieldApprovalListParams: AgentShieldApprovalListParamsSchema,
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,

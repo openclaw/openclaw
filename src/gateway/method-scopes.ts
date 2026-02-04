@@ -33,6 +33,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "exec.approval.request",
     "exec.approval.waitDecision",
     "exec.approval.resolve",
+    "agentshield.approval.request",
+    "agentshield.approval.resolve",
+    "agentshield.approval.list",
   ],
   [PAIRING_SCOPE]: [
     "node.pair.request",
