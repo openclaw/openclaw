@@ -436,6 +436,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
       });
+      // Register the run so server-chat.ts can map agent bus events to chat
+      // WebSocket broadcasts. Without this, channel replies (message-tool sends)
+      // would not appear in the Chat UI until a page reload.
+      context.addChatRun(clientRunId, {
+        sessionKey: p.sessionKey,
+        clientRunId,
+      });
 
       const ackPayload = {
         runId: clientRunId,
@@ -521,6 +528,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       })
         .then(() => {
           if (!agentRunStarted) {
+            // No agent run started (e.g., slash command) — clean up the registry
+            // entry since no lifecycle event will arrive on the bus to shift it.
+            context.removeChatRun(clientRunId, clientRunId, p.sessionKey);
             const combinedReply = finalReplyParts
               .map((part) => part.trim())
               .filter(Boolean)
@@ -569,6 +579,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .catch((err) => {
+          // Clean up registry entry — no lifecycle event will arrive.
+          context.removeChatRun(clientRunId, clientRunId, p.sessionKey);
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           context.dedupe.set(`chat:${clientRunId}`, {
             ts: Date.now(),
