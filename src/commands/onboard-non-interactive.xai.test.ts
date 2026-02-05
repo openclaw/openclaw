@@ -65,7 +65,7 @@ describe("onboard (non-interactive): xAI", () => {
 
       expect(cfg.auth?.profiles?.["xai:default"]?.provider).toBe("xai");
       expect(cfg.auth?.profiles?.["xai:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("xai/grok-2-latest");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("xai/grok-4");
 
       const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
       const store = ensureAuthProfileStore();
