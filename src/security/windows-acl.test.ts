@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import {
+import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
+
+const MOCK_USERNAME = "MockUser";
+
+vi.mock("node:os", () => ({
+  default: { userInfo: () => ({ username: MOCK_USERNAME }) },
+  userInfo: () => ({ username: MOCK_USERNAME }),
+}));
+
+const {
   createIcaclsResetCommand,
   formatIcaclsResetCommand,
   formatWindowsAclSummary,
@@ -7,9 +16,7 @@ import {
   parseIcaclsOutput,
   resolveWindowsUserPrincipal,
   summarizeWindowsAcl,
-  type WindowsAclEntry,
-  type WindowsAclSummary,
-} from "./windows-acl.js";
+} = await import("./windows-acl.js");
 
 describe("windows-acl", () => {
   describe("resolveWindowsUserPrincipal", () => {
@@ -33,7 +40,7 @@ describe("windows-acl", () => {
       const env = { USERNAME: "", USERDOMAIN: "WORKGROUP" };
       const result = resolveWindowsUserPrincipal(env);
       // Should return a username (from os.userInfo fallback) with WORKGROUP domain
-      expect(result).toContain("WORKGROUP\\");
+      expect(result).toBe(`WORKGROUP\\${MOCK_USERNAME}`);
     });
   });
 
@@ -303,8 +310,8 @@ Successfully processed 1 files`;
       // When env is empty, resolveWindowsUserPrincipal falls back to os.userInfo().username
       const result = formatIcaclsResetCommand("C:\\test\\file.txt", { isDir: false, env: {} });
       // Should contain the actual system username from os.userInfo
-      expect(result).toContain(":F");
-      expect(result).toContain("/grant:r");
+      expect(result).toContain(`"${MOCK_USERNAME}:F"`);
+      expect(result).not.toContain("%USERNAME%");
     });
   });
 
@@ -324,6 +331,7 @@ Successfully processed 1 files`;
       // Should return a valid command using the system username
       expect(result).not.toBeNull();
       expect(result?.command).toBe("icacls");
+      expect(result?.args).toContain(`${MOCK_USERNAME}:F`);
     });
 
     it("includes display string matching formatIcaclsResetCommand", () => {
