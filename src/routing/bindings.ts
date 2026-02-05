@@ -1,12 +1,15 @@
-import * as fs from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import createDebug from "debug";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
+
+const debug = createDebug("openclaw:routing:bindings");
 
 const AgentBindingSchema = z.object({
   agentId: z.string(),
@@ -36,16 +39,13 @@ function normalizeBindingChannelId(raw?: string | null): string | null {
 let cachedExtraBindings: AgentBinding[] | null = null;
 
 export function loadExtraBindings(): AgentBinding[] {
-  // console.log("[DEBUG] loadExtraBindings called, cache:", cachedExtraBindings);
   if (cachedExtraBindings !== null) {
     return cachedExtraBindings;
   }
   try {
     const path = join(homedir(), ".openclaw", "routing.json");
-    // console.log("[DEBUG] Checking path:", path, "exists:", fs.existsSync(path));
-    if (fs.existsSync(path)) {
-      const content = fs.readFileSync(path, "utf-8");
-      // console.log("[DEBUG] Content:", content);
+    if (existsSync(path)) {
+      const content = readFileSync(path, "utf-8");
       const json = JSON.parse(content);
       if (Array.isArray(json)) {
         const bindings: AgentBinding[] = [];
@@ -54,17 +54,17 @@ export function loadExtraBindings(): AgentBinding[] {
           if (result.success) {
             bindings.push(result.data as AgentBinding);
           } else {
-            console.error(`[bindings] Invalid binding at index ${i}:`, result.error.format());
+            debug(`Invalid binding at index ${i}: %O`, result.error.format());
           }
         }
         cachedExtraBindings = bindings;
         return cachedExtraBindings;
       } else {
-        console.error("[bindings] routing.json root must be an array");
+        debug("routing.json root must be an array");
       }
     }
   } catch (error) {
-    console.error("[bindings] Failed to load routing.json:", error);
+    debug("Failed to load routing.json: %O", error);
   }
   cachedExtraBindings = [];
   return cachedExtraBindings;
