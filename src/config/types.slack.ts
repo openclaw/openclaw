@@ -45,7 +45,6 @@ export type SlackChannelConfig = {
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
-export type SlackStreamMode = "replace" | "status_final" | "append";
 
 export type SlackActionConfig = {
   reactions?: boolean;
@@ -74,8 +73,6 @@ export type SlackThreadConfig = {
   historyScope?: "thread" | "channel";
   /** If true, thread sessions inherit the parent channel transcript. Default: false. */
   inheritParent?: boolean;
-  /** Maximum number of thread messages to fetch as context when starting a new thread session (default: 20). Set to 0 to disable thread history fetching. */
-  initialHistoryLimit?: number;
 };
 
 export type SlackAccountConfig = {
@@ -125,8 +122,17 @@ export type SlackAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /** Slack stream preview mode (replace|status_final|append). Default: replace. */
-  streamMode?: SlackStreamMode;
+  /**
+   * Enable Slack native text streaming (Agents & AI Apps).
+   *
+   * When true, replies are streamed word-by-word into a single updating
+   * message using `chat.startStream` / `chat.appendStream` / `chat.stopStream`.
+   * Requires the Agents & AI Apps feature enabled in Slack app settings and
+   * the `assistant:write` scope.
+   *
+   * Falls back to normal delivery on error or when the message is not in a thread.
+   */
+  streaming?: boolean;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;
@@ -143,27 +149,12 @@ export type SlackAccountConfig = {
   thread?: SlackThreadConfig;
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
-  /**
-   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
-   * Legacy key: channels.slack.dm.policy.
-   */
-  dmPolicy?: DmPolicy;
-  /**
-   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
-   * Legacy key: channels.slack.dm.allowFrom.
-   */
-  allowFrom?: Array<string | number>;
   dm?: SlackDmConfig;
   channels?: Record<string, SlackChannelConfig>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
-  /**
-   * Per-channel ack reaction override.
-   * Slack uses shortcodes (e.g., "eyes") rather than unicode emoji.
-   */
-  ackReaction?: string;
 };
 
 export type SlackConfig = {
