@@ -585,6 +585,155 @@ describe("runSdkAgent", () => {
     });
   });
 
+  describe("message boundary tracking", () => {
+    it("returns only last turn text when result has no result field (multi-turn)", async () => {
+      // Simulates SDKResultError (max_turns, budget, etc.) where result.result is undefined.
+      // Two turns with intermediate narration — only the last turn's text should be returned.
+      const queryFn = vi.fn().mockReturnValue(
+        eventsFrom([
+          { type: "message_start", message: { role: "assistant" } },
+          { text: "Turn 1: I will search for that." },
+          { type: "tool_use", name: "search", id: "t1", input: {} },
+          {
+            type: "tool_result",
+            id: "t1",
+            is_error: false,
+            content: [{ type: "text", text: "results" }],
+          },
+          { type: "message_start", message: { role: "assistant" } },
+          { text: "Turn 2: Here is the final answer." },
+          // Result without .result field (error/max_turns scenario)
+          { type: "result", subtype: "error" },
+        ]),
+      );
+      mockLoadSdk.mockResolvedValue({ query: queryFn });
+
+      const result = await runSdkAgent(baseParams());
+
+      expect(result.payloads).toHaveLength(1);
+      expect(result.payloads[0].text).toBe("Turn 2: Here is the final answer.");
+      expect(result.payloads[0].text).not.toContain("Turn 1");
+    });
+
+    it("returns only third turn text with three turns and no result", async () => {
+      const queryFn = vi
+        .fn()
+        .mockReturnValue(
+          eventsFrom([
+            { type: "message_start", message: { role: "assistant" } },
+            { text: "Turn 1 narration" },
+            { type: "message_start", message: { role: "assistant" } },
+            { text: "Turn 2 narration" },
+            { type: "message_start", message: { role: "assistant" } },
+            { text: "Turn 3 final" },
+            { type: "result", subtype: "error" },
+          ]),
+        );
+      mockLoadSdk.mockResolvedValue({ query: queryFn });
+
+      const result = await runSdkAgent(baseParams());
+
+      expect(result.payloads[0].text).toBe("Turn 3 final");
+      expect(result.payloads[0].text).not.toContain("Turn 1");
+      expect(result.payloads[0].text).not.toContain("Turn 2");
+    });
+
+    it("still prefers resultText over assistantTexts when result has .result", async () => {
+      const queryFn = vi
+        .fn()
+        .mockReturnValue(
+          eventsFrom([
+            { type: "message_start", message: { role: "assistant" } },
+            { text: "Intermediate narration" },
+            { type: "message_start", message: { role: "assistant" } },
+            { text: "More narration" },
+            { type: "result", subtype: "success", result: "The definitive answer." },
+          ]),
+        );
+      mockLoadSdk.mockResolvedValue({ query: queryFn });
+
+      const result = await runSdkAgent(baseParams());
+
+      expect(result.payloads[0].text).toBe("The definitive answer.");
+    });
+
+    it("returns text when no message_start events (fallback path)", async () => {
+      // Some SDK versions may not emit message_start — text arrives without boundary markers.
+      const queryFn = vi
+        .fn()
+        .mockReturnValue(
+          eventsFrom([
+            { text: "Direct text without message_start" },
+            { type: "result", subtype: "error" },
+          ]),
+        );
+      mockLoadSdk.mockResolvedValue({ query: queryFn });
+
+      const result = await runSdkAgent(baseParams());
+
+      expect(result.payloads[0].text).toBe("Direct text without message_start");
+    });
+
+    it("returns no_output error when only tool events and no text", async () => {
+      const queryFn = vi.fn().mockReturnValue(
+        eventsFrom([
+          { type: "tool_use", name: "exec", id: "t1", input: {} },
+          {
+            type: "tool_result",
+            id: "t1",
+            is_error: false,
+            content: [{ type: "text", text: "ok" }],
+          },
+          { type: "result", subtype: "error" },
+        ]),
+      );
+      mockLoadSdk.mockResolvedValue({ query: queryFn });
+
+      const result = await runSdkAgent(baseParams());
+
+      expect(result.payloads[0].isError).toBe(true);
+      expect(result.meta.error?.kind).toBe("no_output");
+    });
+
+    it("calls onAssistantMessageStart for every message boundary", async () => {
+      const queryFn = vi
+        .fn()
+        .mockReturnValue(
+          eventsFrom([
+            { type: "message_start", message: { role: "assistant" } },
+            { text: "First" },
+            { type: "message_start", message: { role: "assistant" } },
+            { text: "Second" },
+            { type: "result", result: "done" },
+          ]),
+        );
+      mockLoadSdk.mockResolvedValue({ query: queryFn });
+
+      const onAssistantMessageStart = vi.fn();
+      await runSdkAgent(baseParams({ onAssistantMessageStart }));
+
+      expect(onAssistantMessageStart).toHaveBeenCalledTimes(2);
+    });
+
+    it("consolidates multi-chunk single message into one text", async () => {
+      const queryFn = vi.fn().mockReturnValue(
+        eventsFrom([
+          { type: "message_start", message: { role: "assistant" } },
+          { text: "Part A" },
+          { text: "Part B" },
+          // No result.result — fallback to assistantTexts
+          { type: "result", subtype: "error" },
+        ]),
+      );
+      mockLoadSdk.mockResolvedValue({ query: queryFn });
+
+      const result = await runSdkAgent(baseParams());
+
+      // Both chunks should be consolidated into a single message.
+      expect(result.payloads[0].text).toBe("Part A\n\nPart B");
+    });
+  });
+
   describe("compaction handoff stripping", () => {
     it("removes compaction handoff boilerplate from final text", async () => {
       const queryFn = vi.fn().mockReturnValue(
