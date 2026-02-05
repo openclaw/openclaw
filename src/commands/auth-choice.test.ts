@@ -237,7 +237,7 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
     expect(result.config.agents?.defaults?.model?.primary).toBe("openai/gpt-4o-mini");
-    expect(result.agentModelOverride).toBe("xai/grok-2-latest");
+    expect(result.agentModelOverride).toBe("xai/grok-4");
 
     const authProfilePath = authProfilePathFor(requireAgentDir());
     const raw = await fs.readFile(authProfilePath, "utf8");
