@@ -118,7 +118,11 @@ export function createHooksRequestHandler(
     const ct = (req.headers["content-type"] ?? "").split(";")[0].trim().toLowerCase();
     if (ct === "application/x-www-form-urlencoded") {
       body = await readFormUrlEncodedBody(req, hooksConfig.maxBodyBytes);
+    } else if (ct !== "application/json") {
+      sendJson(res, 415, { ok: false, error: "unsupported media type" });
+      return true;
     } else {
+      // Fall back to JSON if no content type is specified
       body = await readJsonBody(req, hooksConfig.maxBodyBytes);
     }
     if (!body.ok) {

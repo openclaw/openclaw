@@ -98,9 +98,6 @@ export async function readBody(
     };
 
     req.on("data", (chunk: Buffer) => {
-      if (done) {
-        return;
-      }
       total += chunk.length;
       if (total > maxBytes) {
         finish({ ok: false, error: "payload too large" });
@@ -110,24 +107,11 @@ export async function readBody(
       chunks.push(chunk);
     });
     req.on("end", () => {
-      if (done) {
-        return;
-      }
       const raw = Buffer.concat(chunks).toString("utf-8");
       finish({ ok: true, value: raw });
     });
-    req.on("error", (err) => {
-      if (done) {
-        return;
-      }
-      finish({ ok: false, error: String(err) });
-    });
+    req.on("error", (err) => finish({ ok: false, error: String(err) }));
     req.on("aborted", () => finish({ ok: false, error: "request aborted" }));
-    req.on("close", () => {
-      if (!done) {
-        finish({ ok: false, error: "connection closed" });
-      }
-    });
   });
 }
 
@@ -154,7 +138,7 @@ export async function readJsonBody(
 export async function readFormUrlEncodedBody(
   req: IncomingMessage,
   maxBytes: number,
-): Promise<{ ok: true; value: { [key: string]: string | string[] } } | { ok: false; error: string }> {
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; error: string }> {
   const body = await readBody(req, maxBytes);
   if (!body.ok) {
     return body;
@@ -164,7 +148,7 @@ export async function readFormUrlEncodedBody(
   }
   try {
     const params = new URLSearchParams(body.value);
-    const result: { [key: string]: string | string[] } = {};
+    const result: Record<string, unknown> = {};
 
     for (const [key, value] of params) {
       if (key in result) {
