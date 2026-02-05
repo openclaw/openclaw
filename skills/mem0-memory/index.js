@@ -18,18 +18,24 @@ function getOrgContext() {
     if (ctx) {
       return {
         org_id: ctx.orgId,
+        workspace_id: ctx.workspaceId || undefined,
+        team_id: ctx.teamId || "default_team",
         user_id: ctx.userId,
         agent_id: ctx.agentId || "default_agent",
         customer_id: "unknown_customer",
-        team_id: "default_team",
+        channel: ctx.channel || "webchat",
+        channel_metadata: ctx.channelMetadata || undefined,
       };
     }
   }
   return {
     org_id: process.env.MEM0_ORG_ID || "default_org",
+    workspace_id: undefined,
+    team_id: "default_team",
     agent_id: "default_agent",
     customer_id: "unknown_customer",
-    team_id: "default_team",
+    channel: "webchat",
+    channel_metadata: undefined,
   };
 }
 
@@ -51,24 +57,32 @@ class Mem0Integration {
     }
 
     const ctx = getOrgContext();
+
+    // Build tenant hierarchy prefix: org:workspace:team
+    const tenantPrefix = [
+      ctx.org_id,
+      ctx.workspace_id || "default_workspace",
+      ctx.team_id || "default_team",
+    ].join(":");
+
     let user_id;
 
-    // Scope-specific user_id for isolation
+    // Scope-specific user_id for isolation with full tenant hierarchy
     switch (scope) {
       case "customer":
-        user_id = `${ctx.org_id}:customer:${metadata.customer_id || ctx.customer_id}`;
+        user_id = `${tenantPrefix}:customer:${metadata.customer_id || ctx.customer_id}`;
         break;
       case "agent":
-        user_id = `${ctx.org_id}:agent:${metadata.agent_id || ctx.agent_id}`;
+        user_id = `${tenantPrefix}:agent:${metadata.agent_id || ctx.agent_id}`;
         break;
       case "team":
-        user_id = `${ctx.org_id}:team:${metadata.team_id || ctx.team_id}`;
+        user_id = `${tenantPrefix}:team:${metadata.team_id || ctx.team_id}`;
         break;
       case "organization":
-        user_id = `${ctx.org_id}:org`;
+        user_id = `${tenantPrefix}:org`;
         break;
       default:
-        user_id = `${ctx.org_id}:agent:${ctx.agent_id}`;
+        user_id = `${tenantPrefix}:agent:${ctx.agent_id}`;
     }
 
     const messages = [{ role: "user", content }];
@@ -79,6 +93,9 @@ class Mem0Integration {
         user_id: user_id,
         metadata: {
           org_id: ctx.org_id,
+          workspace_id: ctx.workspace_id,
+          team_id: ctx.team_id,
+          channel: ctx.channel,
           scope: scope,
           ...metadata,
         },
@@ -94,22 +111,30 @@ class Mem0Integration {
     if (!this.client) return [];
 
     const ctx = getOrgContext();
+
+    // Build tenant hierarchy prefix: org:workspace:team
+    const tenantPrefix = [
+      ctx.org_id,
+      ctx.workspace_id || "default_workspace",
+      ctx.team_id || "default_team",
+    ].join(":");
+
     const results = [];
 
     for (const scope of scopes) {
       let userId;
       switch (scope) {
         case "customer":
-          userId = `${ctx.org_id}:customer:${ctx.customer_id}`;
+          userId = `${tenantPrefix}:customer:${ctx.customer_id}`;
           break;
         case "agent":
-          userId = `${ctx.org_id}:agent:${ctx.agent_id}`;
+          userId = `${tenantPrefix}:agent:${ctx.agent_id}`;
           break;
         case "team":
-          userId = `${ctx.org_id}:team:${ctx.team_id}`;
+          userId = `${tenantPrefix}:team:${ctx.team_id}`;
           break;
         case "organization":
-          userId = `${ctx.org_id}:org`;
+          userId = `${tenantPrefix}:org`;
           break;
       }
 

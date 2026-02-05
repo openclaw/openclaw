@@ -48,6 +48,13 @@ export function buildEmbeddedSystemPrompt(params: {
   userTimeFormat?: ResolvedTimeFormat;
   contextFiles?: EmbeddedContextFile[];
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Multi-tenant context for MCP integration */
+  tenantContext?: {
+    organizationId?: string;
+    workspaceId?: string;
+    teamId?: string;
+    userId?: string;
+  };
 }): string {
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -74,6 +81,7 @@ export function buildEmbeddedSystemPrompt(params: {
     userTimeFormat: params.userTimeFormat,
     contextFiles: params.contextFiles,
     memoryCitationsMode: params.memoryCitationsMode,
+    tenantContext: params.tenantContext,
   });
 }
 

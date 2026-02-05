@@ -72,7 +72,7 @@ export function createMCPTool(options: {
         // Extract tenant context from session
         let tenantContext;
         try {
-          tenantContext = contextManager.extractFromSession(options.agentSessionKey);
+          tenantContext = await contextManager.extractFromSession(options.agentSessionKey);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           return jsonResult({
@@ -157,7 +157,7 @@ export function createMCPListToolsTool(options: {
         // Extract tenant context
         let tenantContext;
         try {
-          tenantContext = contextManager.extractFromSession(options.agentSessionKey);
+          tenantContext = await contextManager.extractFromSession(options.agentSessionKey);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           return jsonResult({

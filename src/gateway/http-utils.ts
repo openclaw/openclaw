@@ -77,3 +77,47 @@ export function resolveSessionKey(params: {
   const mainKey = user ? `${params.prefix}-user:${user}` : `${params.prefix}:${randomUUID()}`;
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
+
+/**
+ * Tenant context extracted from HTTP headers for multi-tenant MCP integration
+ */
+export type TenantContextFromHeaders = {
+  organizationId?: string;
+  workspaceId?: string;
+  teamId?: string;
+  userId?: string;
+};
+
+/**
+ * Extract multi-tenant context from HTTP request headers.
+ *
+ * Reads tenant identifiers from standard headers:
+ * - x-openclaw-organization-id or x-organization-id
+ * - x-openclaw-workspace-id or x-workspace-id
+ * - x-openclaw-team-id or x-team-id
+ * - x-openclaw-user-id or x-user-id
+ *
+ * These values are used for MCP credential isolation and system prompt context.
+ */
+export function extractTenantContext(req: IncomingMessage): TenantContextFromHeaders {
+  const organizationId =
+    getHeader(req, "x-openclaw-organization-id")?.trim() ||
+    getHeader(req, "x-organization-id")?.trim();
+
+  const workspaceId =
+    getHeader(req, "x-openclaw-workspace-id")?.trim() ||
+    getHeader(req, "x-workspace-id")?.trim();
+
+  const teamId =
+    getHeader(req, "x-openclaw-team-id")?.trim() || getHeader(req, "x-team-id")?.trim();
+
+  const userId =
+    getHeader(req, "x-openclaw-user-id")?.trim() || getHeader(req, "x-user-id")?.trim();
+
+  return {
+    organizationId: organizationId || undefined,
+    workspaceId: workspaceId || undefined,
+    teamId: teamId || undefined,
+    userId: userId || undefined,
+  };
+}

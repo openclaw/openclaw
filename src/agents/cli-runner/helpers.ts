@@ -208,6 +208,13 @@ export function buildSystemPrompt(params: {
   contextFiles?: EmbeddedContextFile[];
   modelDisplay: string;
   agentId?: string;
+  /** Multi-tenant context for MCP integration */
+  tenantContext?: {
+    organizationId?: string;
+    workspaceId?: string;
+    teamId?: string;
+    userId?: string;
+  };
 }) {
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
@@ -246,6 +253,7 @@ export function buildSystemPrompt(params: {
     contextFiles: params.contextFiles,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
+    tenantContext: params.tenantContext,
   });
 }
 

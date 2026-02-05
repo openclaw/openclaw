@@ -6,59 +6,53 @@
  */
 
 import type { TenantContext } from './types.js';
+import type { SessionEntry } from '../config/sessions/types.js';
+import { readSessionEntry, updateSessionEntry } from '../config/sessions/store.js';
 
-export interface SessionMetadata {
+export class MCPContextManager {
   /**
-   * Channel-specific peer identifier (phone number, user ID, etc.)
-   */
-  peerId: string;
-
-  /**
-   * Channel type (whatsapp, telegram, discord, etc.)
-   */
-  channel: string;
-
-  /**
-   * Optional session metadata from the session store
-   */
-  metadata?: Record<string, unknown>;
-}
-
-export class ContextManager {
-  /**
-   * Extract tenant context from session metadata
+   * Extract tenant context from a session key
    *
-   * This function looks for org/workspace/team IDs in the session metadata
+   * Looks up the session in OpenClaw's session store and extracts
+   * multi-tenant identifiers (organizationId, workspaceId, teamId, userId).
+   *
+   * @param sessionKey - OpenClaw session key
+   * @returns TenantContext or null if session not found or missing tenant data
+   */
+  async extractFromSession(sessionKey?: string): Promise<TenantContext> {
+    if (!sessionKey) {
+      throw new Error('Session key required for multi-tenant MCP access');
+    }
+
+    // Load session from store
+    const sessionEntry = await readSessionEntry(sessionKey);
+    if (!sessionEntry) {
+      throw new Error(`Session not found: ${sessionKey}`);
+    }
+
+    // Extract tenant context from session
+    const context = this.extractFromSessionEntry(sessionEntry);
+    if (!context) {
+      throw new Error(
+        `Multi-tenant context not configured for session: ${sessionKey}. ` +
+        `Please set organizationId and workspaceId in session metadata.`
+      );
+    }
+
+    return context;
+  }
+
+  /**
+   * Extract tenant context from a SessionEntry
+   *
+   * This function looks for org/workspace/team/user IDs in the session entry
    * and constructs a TenantContext for MCP credential lookup.
    */
-  extractTenantContext(session: SessionMetadata): TenantContext | null {
-    const metadata = session.metadata || {};
-
-    // Look for tenant identifiers in metadata
-    const organizationId = this.extractValue(metadata, [
-      'organizationId',
-      'orgId',
-      'organization_id',
-      'org_id',
-    ]);
-
-    const workspaceId = this.extractValue(metadata, [
-      'workspaceId',
-      'workspace',
-      'workspace_id',
-    ]);
-
-    const userId = this.extractValue(metadata, [
-      'userId',
-      'user_id',
-      'peerId',
-    ]) || session.peerId;
-
-    const teamId = this.extractValue(metadata, [
-      'teamId',
-      'team',
-      'team_id',
-    ]);
+  extractFromSessionEntry(session: SessionEntry): TenantContext | null {
+    const organizationId = session.organizationId;
+    const workspaceId = session.workspaceId;
+    const teamId = session.teamId;
+    const userId = session.userId;
 
     // Organization and workspace are required for multi-tenant mode
     if (!organizationId || !workspaceId) {
@@ -74,25 +68,25 @@ export class ContextManager {
   }
 
   /**
-   * Store tenant context in session metadata
+   * Store tenant context in a session
    *
-   * This updates the session to include tenant identifiers
-   * for future lookups.
+   * Updates the session store to include tenant identifiers
+   * for future MCP credential lookups.
+   *
+   * @param sessionKey - OpenClaw session key
+   * @param context - Tenant context to store
    */
-  storeTenantContext(
-    session: SessionMetadata,
-    context: TenantContext
-  ): SessionMetadata {
-    return {
-      ...session,
-      metadata: {
-        ...session.metadata,
-        organizationId: context.organizationId,
-        workspaceId: context.workspaceId,
-        teamId: context.teamId,
-        userId: context.userId,
-      },
-    };
+  async storeInSession(sessionKey: string, context: TenantContext): Promise<void> {
+    if (!this.validateTenantContext(context)) {
+      throw new Error('Invalid tenant context');
+    }
+
+    await updateSessionEntry(sessionKey, {
+      organizationId: context.organizationId,
+      workspaceId: context.workspaceId,
+      teamId: context.teamId,
+      userId: context.userId,
+    });
   }
 
   /**
@@ -147,7 +141,7 @@ export class ContextManager {
   }
 
   /**
-   * Create a tenant context from MongoDB user data
+   * Create a tenant context from user data
    *
    * This is used when onboarding users from an external system
    * that already has organization/workspace information.
@@ -155,7 +149,7 @@ export class ContextManager {
   createFromUserData(data: {
     organizationId: string;
     workspaceId: string;
-    userId: string;
+    userId?: string;
     teamId?: string;
   }): TenantContext {
     const context: TenantContext = {
@@ -170,21 +164,5 @@ export class ContextManager {
     }
 
     return context;
-  }
-
-  /**
-   * Extract a value from metadata using multiple possible keys
-   */
-  private extractValue(
-    metadata: Record<string, unknown>,
-    keys: string[]
-  ): string | undefined {
-    for (const key of keys) {
-      const value = metadata[key];
-      if (typeof value === 'string' && value.length > 0) {
-        return value;
-      }
-    }
-    return undefined;
   }
 }

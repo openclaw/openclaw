@@ -93,6 +93,14 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /** Multi-tenant context: organization/tenant identifier (primary) */
+  organizationId?: string;
+  /** Multi-tenant context: workspace identifier (optional) */
+  workspaceId?: string;
+  /** Multi-tenant context: team identifier (optional) */
+  teamId?: string;
+  /** Multi-tenant context: user identifier (optional) */
+  userId?: string;
 };
 
 export function mergeSessionEntry(

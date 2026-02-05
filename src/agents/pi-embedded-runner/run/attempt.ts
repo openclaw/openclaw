@@ -7,6 +7,7 @@ import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { readSessionEntry } from "../../../config/sessions/store.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -342,6 +343,25 @@ export async function runEmbeddedAttempt(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
 
+    // Extract tenant context from session for multi-tenant MCP integration
+    let tenantContext: {
+      organizationId?: string;
+      workspaceId?: string;
+      teamId?: string;
+      userId?: string;
+    } | undefined;
+    if (params.sessionKey) {
+      const sessionEntry = await readSessionEntry(params.sessionKey);
+      if (sessionEntry) {
+        tenantContext = {
+          organizationId: sessionEntry.organizationId,
+          workspaceId: sessionEntry.workspaceId,
+          teamId: sessionEntry.teamId,
+          userId: sessionEntry.userId,
+        };
+      }
+    }
+
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
@@ -368,6 +388,7 @@ export async function runEmbeddedAttempt(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      tenantContext,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

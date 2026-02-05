@@ -72,6 +72,40 @@ function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: bool
   return ["## User Identity", ownerLine, ""];
 }
 
+function buildTenantContextSection(params: {
+  organizationId?: string;
+  workspaceId?: string;
+  teamId?: string;
+  userId?: string;
+  isMinimal: boolean;
+}) {
+  const { organizationId, workspaceId, teamId, userId, isMinimal } = params;
+  if (isMinimal || (!organizationId && !workspaceId && !userId)) {
+    return [];
+  }
+  const lines = ["## Multi-Tenant Context"];
+  if (organizationId) {
+    lines.push(`Organization ID: ${organizationId}`);
+  }
+  if (workspaceId) {
+    lines.push(`Workspace ID: ${workspaceId}`);
+  }
+  if (teamId) {
+    lines.push(`Team ID: ${teamId}`);
+  }
+  if (userId) {
+    lines.push(`User ID: ${userId}`);
+  }
+  lines.push(
+    "",
+    "This context identifies which organization, workspace, and user is making the request.",
+    "When using MCP tools (HubSpot, BigQuery, etc.), credentials and data access are scoped to this tenant context.",
+    "Always consider this context when providing answers - different organizations may have different data, policies, and requirements.",
+    "",
+  );
+  return lines;
+}
+
 function buildTimeSection(params: { userTimezone?: string }) {
   if (!params.userTimezone) {
     return [];
@@ -214,6 +248,13 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Multi-tenant context for MCP integration */
+  tenantContext?: {
+    organizationId?: string;
+    workspaceId?: string;
+    teamId?: string;
+    userId?: string;
+  };
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -497,6 +538,13 @@ export function buildAgentSystemPrompt(params: {
       : "",
     params.sandboxInfo?.enabled ? "" : "",
     ...buildUserIdentitySection(ownerLine, isMinimal),
+    ...buildTenantContextSection({
+      organizationId: params.tenantContext?.organizationId,
+      workspaceId: params.tenantContext?.workspaceId,
+      teamId: params.tenantContext?.teamId,
+      userId: params.tenantContext?.userId,
+      isMinimal,
+    }),
     ...buildTimeSection({
       userTimezone,
     }),

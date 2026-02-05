@@ -14,7 +14,14 @@ import {
   setSseHeaders,
   writeDone,
 } from "./http-common.js";
-import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import {
+  extractTenantContext,
+  getBearerToken,
+  resolveAgentIdForRequest,
+  resolveSessionKey,
+} from "./http-utils.js";
+import { updateSessionEntry } from "../config/sessions/store.js";
+import { runWithServerContext } from "./server-context.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -33,6 +40,8 @@ type OpenAiChatCompletionRequest = {
   stream?: unknown;
   messages?: unknown;
   user?: unknown;
+  /** Custom metadata for multi-tenant and channel context */
+  metadata?: unknown;
 };
 
 function writeSse(res: ServerResponse, data: unknown) {
@@ -207,6 +216,39 @@ export async function handleOpenAiHttpRequest(
 
   const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveOpenAiSessionKey({ req, agentId, user });
+
+  // Extract and store multi-tenant context for MCP integration
+  const tenantContext = extractTenantContext(req);
+  if (tenantContext.organizationId || tenantContext.workspaceId) {
+    await updateSessionEntry(sessionKey, {
+      organizationId: tenantContext.organizationId,
+      workspaceId: tenantContext.workspaceId,
+      teamId: tenantContext.teamId,
+      userId: tenantContext.userId,
+    });
+  }
+
+  // Extract metadata from request body for channel context and custom fields
+  const requestMetadata =
+    payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
+  const metadataObj = requestMetadata as Record<string, unknown>;
+
+  // Extract channel information
+  const channel = typeof metadataObj.channel === "string" ? metadataObj.channel : "webchat";
+  const channelMetadata: Record<string, unknown> = {};
+  if (typeof metadataObj.phoneNumber === "string") {
+    channelMetadata.phoneNumber = metadataObj.phoneNumber;
+  }
+  if (typeof metadataObj.chatId === "string") {
+    channelMetadata.chatId = metadataObj.chatId;
+  }
+  if (typeof metadataObj.chatTitle === "string") {
+    channelMetadata.chatTitle = metadataObj.chatTitle;
+  }
+  if (typeof metadataObj.isGroup === "boolean") {
+    channelMetadata.isGroup = metadataObj.isGroup;
+  }
+
   const prompt = buildAgentPrompt(payload.messages);
   if (!prompt.message) {
     sendJson(res, 400, {
@@ -221,20 +263,41 @@ export async function handleOpenAiHttpRequest(
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
 
+  // Build server context for AsyncLocalStorage propagation (Mem0, skills, etc.)
+  const serverContext = {
+    orgId: tenantContext.organizationId || "default_org",
+    userId: tenantContext.userId || user || "anonymous",
+    agentId,
+    sessionId: sessionKey,
+    correlationId: runId,
+    workspaceId: tenantContext.workspaceId,
+    teamId: tenantContext.teamId,
+    channel,
+    channelMetadata: Object.keys(channelMetadata).length > 0 ? channelMetadata : undefined,
+    metadata:
+      metadataObj.conversationContext ||
+      metadataObj.preferences ||
+      Object.keys(metadataObj).length > 0
+        ? metadataObj
+        : undefined,
+  };
+
   if (!stream) {
     try {
-      const result = await agentCommand(
-        {
-          message: prompt.message,
-          extraSystemPrompt: prompt.extraSystemPrompt,
-          sessionKey,
-          runId,
-          deliver: false,
-          messageChannel: "webchat",
-          bestEffortDeliver: false,
-        },
-        defaultRuntime,
-        deps,
+      const result = await runWithServerContext(serverContext, () =>
+        agentCommand(
+          {
+            message: prompt.message,
+            extraSystemPrompt: prompt.extraSystemPrompt,
+            sessionKey,
+            runId,
+            deliver: false,
+            messageChannel: channel,
+            bestEffortDeliver: false,
+          },
+          defaultRuntime,
+          deps,
+        ),
       );
 
       const payloads = (result as { payloads?: Array<{ text?: string }> } | null)?.payloads;
@@ -336,18 +399,20 @@ export async function handleOpenAiHttpRequest(
 
   void (async () => {
     try {
-      const result = await agentCommand(
-        {
-          message: prompt.message,
-          extraSystemPrompt: prompt.extraSystemPrompt,
-          sessionKey,
-          runId,
-          deliver: false,
-          messageChannel: "webchat",
-          bestEffortDeliver: false,
-        },
-        defaultRuntime,
-        deps,
+      const result = await runWithServerContext(serverContext, () =>
+        agentCommand(
+          {
+            message: prompt.message,
+            extraSystemPrompt: prompt.extraSystemPrompt,
+            sessionKey,
+            runId,
+            deliver: false,
+            messageChannel: channel,
+            bestEffortDeliver: false,
+          },
+          defaultRuntime,
+          deps,
+        ),
       );
 
       if (closed) {
