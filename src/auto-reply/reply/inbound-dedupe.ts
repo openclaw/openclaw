@@ -50,6 +50,14 @@ export function shouldSkipDuplicateInbound(
   return skipped;
 }
 
+export function clearInboundDedupeKey(ctx: MsgContext): boolean {
+  const key = buildInboundDedupeKey(ctx);
+  if (!key) {
+    return false;
+  }
+  return inboundDedupeCache.delete(key);
+}
+
 export function resetInboundDedupe(): void {
   inboundDedupeCache.clear();
 }

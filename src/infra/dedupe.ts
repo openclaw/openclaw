@@ -1,5 +1,7 @@
 export type DedupeCache = {
   check: (key: string | undefined | null, now?: number) => boolean;
+  /** Remove a single key from the cache (e.g. to allow re-processing after an edit). */
+  delete: (key: string) => boolean;
   clear: () => void;
   size: () => number;
 };
@@ -55,6 +57,7 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
       prune(now);
       return false;
     },
+    delete: (key) => cache.delete(key),
     clear: () => {
       cache.clear();
     },
