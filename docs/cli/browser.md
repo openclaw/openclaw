@@ -1,16 +1,18 @@
 ---
-summary: "CLI reference for `clawdbot browser` (profiles, tabs, actions, extension relay)"
+summary: "CLI reference for `openclaw browser` (profiles, tabs, actions, extension relay)"
 read_when:
-  - You use `clawdbot browser` and want examples for common tasks
+  - You use `openclaw browser` and want examples for common tasks
   - You want to control a browser running on another machine via a node host
   - You want to use the Chrome extension relay (attach/detach via toolbar button)
+title: "browser"
 ---
 
-# `clawdbot browser`
+# `openclaw browser`
 
-Manage Clawdbot’s browser control server and run browser actions (tabs, snapshots, screenshots, navigation, clicks, typing).
+Manage OpenClaw’s browser control server and run browser actions (tabs, snapshots, screenshots, navigation, clicks, typing).
 
 Related:
+
 - Browser tool + API: [Browser tool](/tools/browser)
 - Chrome extension relay: [Chrome extension](/tools/chrome-extension)
 
@@ -25,37 +27,38 @@ Related:
 ## Quick start (local)
 
 ```bash
-clawdbot browser --browser-profile chrome tabs
-clawdbot browser --browser-profile clawd start
-clawdbot browser --browser-profile clawd open https://example.com
-clawdbot browser --browser-profile clawd snapshot
+openclaw browser --browser-profile chrome tabs
+openclaw browser --browser-profile openclaw start
+openclaw browser --browser-profile openclaw open https://example.com
+openclaw browser --browser-profile openclaw snapshot
 ```
 
 ## Profiles
 
 Profiles are named browser routing configs. In practice:
-- `clawd`: launches/attaches to a dedicated Clawdbot-managed Chrome instance (isolated user data dir).
+
+- `openclaw`: launches/attaches to a dedicated OpenClaw-managed Chrome instance (isolated user data dir).
 - `chrome`: controls your existing Chrome tab(s) via the Chrome extension relay.
 
 ```bash
-clawdbot browser profiles
-clawdbot browser create-profile --name work --color "#FF5A36"
-clawdbot browser delete-profile --name work
+openclaw browser profiles
+openclaw browser create-profile --name work --color "#FF5A36"
+openclaw browser delete-profile --name work
 ```
 
 Use a specific profile:
 
 ```bash
-clawdbot browser --browser-profile work tabs
+openclaw browser --browser-profile work tabs
 ```
 
 ## Tabs
 
 ```bash
-clawdbot browser tabs
-clawdbot browser open https://docs.clawd.bot
-clawdbot browser focus <targetId>
-clawdbot browser close <targetId>
+openclaw browser tabs
+openclaw browser open https://docs.openclaw.ai
+openclaw browser focus <targetId>
+openclaw browser close <targetId>
 ```
 
 ## Snapshot / screenshot / actions
@@ -63,21 +66,21 @@ clawdbot browser close <targetId>
 Snapshot:
 
 ```bash
-clawdbot browser snapshot
+openclaw browser snapshot
 ```
 
 Screenshot:
 
 ```bash
-clawdbot browser screenshot
+openclaw browser screenshot
 ```
 
 Navigate/click/type (ref-based UI automation):
 
 ```bash
-clawdbot browser navigate https://example.com
-clawdbot browser click <ref>
-clawdbot browser type <ref> "hello"
+openclaw browser navigate https://example.com
+openclaw browser click <ref>
+openclaw browser type <ref> "hello"
 ```
 
 ## Chrome extension relay (attach via toolbar button)
@@ -87,8 +90,8 @@ This mode lets the agent control an existing Chrome tab that you attach manually
 Install the unpacked extension to a stable path:
 
 ```bash
-clawdbot browser extension install
-clawdbot browser extension path
+openclaw browser extension install
+openclaw browser extension path
 ```
 
 Then Chrome → `chrome://extensions` → enable “Developer mode” → “Load unpacked” → select the printed folder.

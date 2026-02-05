@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { UpdateRunResult } from "../infra/update-runner.js";
 
 const confirm = vi.fn();
@@ -22,8 +21,8 @@ vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: vi.fn(),
 }));
 
-vi.mock("../infra/clawdbot-root.js", () => ({
-  resolveClawdbotPackageRoot: vi.fn(),
+vi.mock("../infra/openclaw-root.js", () => ({
+  resolveOpenClawPackageRoot: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -40,6 +39,21 @@ vi.mock("../infra/update-check.js", async () => {
     checkUpdateStatus: vi.fn(),
     fetchNpmTagVersion: vi.fn(),
     resolveNpmChannelTag: vi.fn(),
+  };
+});
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawnSync: vi.fn(() => ({
+      pid: 0,
+      output: [],
+      stdout: "",
+      stderr: "",
+      status: 0,
+      signal: null,
+    })),
   };
 });
 
@@ -88,12 +102,12 @@ describe("update-cli", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    const { resolveClawdbotPackageRoot } = await import("../infra/clawdbot-root.js");
+    const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
     const { readConfigFileSnapshot } = await import("../config/config.js");
     const { checkUpdateStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
       await import("../infra/update-check.js");
     const { runCommandWithTimeout } = await import("../process/exec.js");
-    vi.mocked(resolveClawdbotPackageRoot).mockResolvedValue(process.cwd());
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
       tag: "latest",
@@ -185,7 +199,7 @@ describe("update-cli", () => {
     await updateStatusCommand({ json: false });
 
     const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => call[0]);
-    expect(logs.join("\n")).toContain("Clawdbot update status");
+    expect(logs.join("\n")).toContain("OpenClaw update status");
   });
 
   it("updateStatusCommand emits JSON", async () => {
@@ -218,20 +232,20 @@ describe("update-cli", () => {
   });
 
   it("defaults to stable channel for package installs when unset", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-update-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-"));
     try {
       await fs.writeFile(
         path.join(tempDir, "package.json"),
-        JSON.stringify({ name: "clawdbot", version: "1.0.0" }),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
         "utf-8",
       );
 
-      const { resolveClawdbotPackageRoot } = await import("../infra/clawdbot-root.js");
+      const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
       const { runGatewayUpdate } = await import("../infra/update-runner.js");
       const { checkUpdateStatus } = await import("../infra/update-check.js");
       const { updateCommand } = await import("./update-cli.js");
 
-      vi.mocked(resolveClawdbotPackageRoot).mockResolvedValue(tempDir);
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
       vi.mocked(checkUpdateStatus).mockResolvedValue({
         root: tempDir,
         installKind: "package",
@@ -283,22 +297,22 @@ describe("update-cli", () => {
   });
 
   it("falls back to latest when beta tag is older than release", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-update-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-"));
     try {
       await fs.writeFile(
         path.join(tempDir, "package.json"),
-        JSON.stringify({ name: "clawdbot", version: "1.0.0" }),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
         "utf-8",
       );
 
-      const { resolveClawdbotPackageRoot } = await import("../infra/clawdbot-root.js");
+      const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
       const { readConfigFileSnapshot } = await import("../config/config.js");
       const { resolveNpmChannelTag } = await import("../infra/update-check.js");
       const { runGatewayUpdate } = await import("../infra/update-runner.js");
       const { updateCommand } = await import("./update-cli.js");
       const { checkUpdateStatus } = await import("../infra/update-check.js");
 
-      vi.mocked(resolveClawdbotPackageRoot).mockResolvedValue(tempDir);
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
       vi.mocked(readConfigFileSnapshot).mockResolvedValue({
         ...baseSnapshot,
         config: { update: { channel: "beta" } },
@@ -336,19 +350,19 @@ describe("update-cli", () => {
   });
 
   it("honors --tag override", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-update-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-"));
     try {
       await fs.writeFile(
         path.join(tempDir, "package.json"),
-        JSON.stringify({ name: "clawdbot", version: "1.0.0" }),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
         "utf-8",
       );
 
-      const { resolveClawdbotPackageRoot } = await import("../infra/clawdbot-root.js");
+      const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
       const { runGatewayUpdate } = await import("../infra/update-runner.js");
       const { updateCommand } = await import("./update-cli.js");
 
-      vi.mocked(resolveClawdbotPackageRoot).mockResolvedValue(tempDir);
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
       vi.mocked(runGatewayUpdate).mockResolvedValue({
         status: "ok",
         mode: "npm",
@@ -514,23 +528,23 @@ describe("update-cli", () => {
   });
 
   it("requires confirmation on downgrade when non-interactive", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-update-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-"));
     try {
       setTty(false);
       await fs.writeFile(
         path.join(tempDir, "package.json"),
-        JSON.stringify({ name: "clawdbot", version: "2.0.0" }),
+        JSON.stringify({ name: "openclaw", version: "2.0.0" }),
         "utf-8",
       );
 
-      const { resolveClawdbotPackageRoot } = await import("../infra/clawdbot-root.js");
+      const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
       const { resolveNpmChannelTag } = await import("../infra/update-check.js");
       const { runGatewayUpdate } = await import("../infra/update-runner.js");
       const { defaultRuntime } = await import("../runtime.js");
       const { updateCommand } = await import("./update-cli.js");
       const { checkUpdateStatus } = await import("../infra/update-check.js");
 
-      vi.mocked(resolveClawdbotPackageRoot).mockResolvedValue(tempDir);
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
       vi.mocked(checkUpdateStatus).mockResolvedValue({
         root: tempDir,
         installKind: "package",
@@ -567,23 +581,23 @@ describe("update-cli", () => {
   });
 
   it("allows downgrade with --yes in non-interactive mode", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-update-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-"));
     try {
       setTty(false);
       await fs.writeFile(
         path.join(tempDir, "package.json"),
-        JSON.stringify({ name: "clawdbot", version: "2.0.0" }),
+        JSON.stringify({ name: "openclaw", version: "2.0.0" }),
         "utf-8",
       );
 
-      const { resolveClawdbotPackageRoot } = await import("../infra/clawdbot-root.js");
+      const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
       const { resolveNpmChannelTag } = await import("../infra/update-check.js");
       const { runGatewayUpdate } = await import("../infra/update-runner.js");
       const { defaultRuntime } = await import("../runtime.js");
       const { updateCommand } = await import("./update-cli.js");
       const { checkUpdateStatus } = await import("../infra/update-check.js");
 
-      vi.mocked(resolveClawdbotPackageRoot).mockResolvedValue(tempDir);
+      vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
       vi.mocked(checkUpdateStatus).mockResolvedValue({
         root: tempDir,
         installKind: "package",
@@ -636,11 +650,11 @@ describe("update-cli", () => {
   });
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-update-wizard-"));
-    const previousGitDir = process.env.CLAWDBOT_GIT_DIR;
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-wizard-"));
+    const previousGitDir = process.env.OPENCLAW_GIT_DIR;
     try {
       setTty(true);
-      process.env.CLAWDBOT_GIT_DIR = tempDir;
+      process.env.OPENCLAW_GIT_DIR = tempDir;
 
       const { checkUpdateStatus } = await import("../infra/update-check.js");
       const { runGatewayUpdate } = await import("../infra/update-runner.js");
@@ -671,7 +685,7 @@ describe("update-cli", () => {
       const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
       expect(call?.channel).toBe("dev");
     } finally {
-      process.env.CLAWDBOT_GIT_DIR = previousGitDir;
+      process.env.OPENCLAW_GIT_DIR = previousGitDir;
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });

@@ -1,18 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
+import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
 import {
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
 } from "../auto-reply/commands-registry.js";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
-import { expectInboundContextContract } from "../../test/helpers/inbound-contract.js";
+import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
+import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 import { resolveTelegramFetch } from "./fetch.js";
 
-let createTelegramBot: typeof import("./bot.js").createTelegramBot;
-let getTelegramSequentialKey: typeof import("./bot.js").getTelegramSequentialKey;
-let resetInboundDedupe: typeof import("../auto-reply/reply/inbound-dedupe.js").resetInboundDedupe;
 let replyModule: typeof import("../auto-reply/reply.js");
 const { listSkillCommandsForAgents } = vi.hoisted(() => ({
   listSkillCommandsForAgents: vi.fn(() => []),
@@ -22,7 +21,7 @@ vi.mock("../auto-reply/skill-commands.js", () => ({
 }));
 
 const { sessionStorePath } = vi.hoisted(() => ({
-  sessionStorePath: `/tmp/clawdbot-telegram-bot-${Math.random().toString(16).slice(2)}.json`,
+  sessionStorePath: `/tmp/openclaw-telegram-bot-${Math.random().toString(16).slice(2)}.json`,
 }));
 
 function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsForConfig>[0]) {
@@ -56,17 +55,17 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
   };
 });
 
-const { readTelegramAllowFromStore, upsertTelegramPairingRequest } = vi.hoisted(() => ({
-  readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
-  upsertTelegramPairingRequest: vi.fn(async () => ({
+const { readChannelAllowFromStore, upsertChannelPairingRequest } = vi.hoisted(() => ({
+  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
+  upsertChannelPairingRequest: vi.fn(async () => ({
     code: "PAIRCODE",
     created: true,
   })),
 }));
 
-vi.mock("./pairing-store.js", () => ({
-  readTelegramAllowFromStore,
-  upsertTelegramPairingRequest,
+vi.mock("../pairing/pairing-store.js", () => ({
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
 }));
 
 const { enqueueSystemEvent } = vi.hoisted(() => ({
@@ -167,17 +166,19 @@ vi.mock("../auto-reply/reply.js", () => {
 
 const getOnHandler = (event: string) => {
   const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];
-  if (!handler) throw new Error(`Missing handler for event: ${event}`);
+  if (!handler) {
+    throw new Error(`Missing handler for event: ${event}`);
+  }
   return handler as (ctx: Record<string, unknown>) => Promise<void>;
 };
 
 const ORIGINAL_TZ = process.env.TZ;
 describe("createTelegramBot", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ resetInboundDedupe } = await import("../auto-reply/reply/inbound-dedupe.js"));
-    ({ createTelegramBot, getTelegramSequentialKey } = await import("./bot.js"));
+  beforeAll(async () => {
     replyModule = await import("../auto-reply/reply.js");
+  });
+
+  beforeEach(() => {
     process.env.TZ = "UTC";
     resetInboundDedupe();
     loadConfig.mockReturnValue({
@@ -310,8 +311,8 @@ describe("createTelegramBot", () => {
       { command: "custom_backup", description: "Git backup" },
       { command: "custom_generate", description: "Create an image" },
     ]);
-    const reserved = listNativeCommandSpecs().map((command) => command.name);
-    expect(registered.some((command) => reserved.includes(command.command))).toBe(false);
+    const reserved = new Set(listNativeCommandSpecs().map((command) => command.name));
+    expect(registered.some((command) => reserved.has(command.command))).toBe(false);
   });
 
   it("uses wrapped fetch when global fetch is available", () => {
@@ -340,12 +341,17 @@ describe("createTelegramBot", () => {
     expect(getTelegramSequentialKey({ message: { chat: { id: 123 } } })).toBe("telegram:123");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123 }, message_thread_id: 9 },
+        message: { chat: { id: 123, type: "private" }, message_thread_id: 9 },
       }),
     ).toBe("telegram:123:topic:9");
     expect(
       getTelegramSequentialKey({
-        message: { chat: { id: 123, is_forum: true } },
+        message: { chat: { id: 123, type: "supergroup" }, message_thread_id: 9 },
+      }),
+    ).toBe("telegram:123");
+    expect(
+      getTelegramSequentialKey({
+        message: { chat: { id: 123, type: "supergroup", is_forum: true } },
       }),
     ).toBe("telegram:123:topic:1");
     expect(
@@ -377,7 +383,7 @@ describe("createTelegramBot", () => {
           message_id: 10,
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -420,7 +426,7 @@ describe("createTelegramBot", () => {
           message_id: 11,
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -449,7 +455,7 @@ describe("createTelegramBot", () => {
           message_id: 12,
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -501,7 +507,7 @@ describe("createTelegramBot", () => {
           message_id: 13,
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -534,7 +540,7 @@ describe("createTelegramBot", () => {
       };
       await handler({
         message,
-        me: { username: "clawdbot_bot" },
+        me: { username: "openclaw_bot" },
         getFile: async () => ({ download: async () => new Uint8Array() }),
       });
 
@@ -562,8 +568,8 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "pairing" } },
     });
-    readTelegramAllowFromStore.mockResolvedValue([]);
-    upsertTelegramPairingRequest.mockResolvedValue({
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest.mockResolvedValue({
       code: "PAIRME12",
       created: true,
     });
@@ -578,7 +584,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         from: { id: 999, username: "random" },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -599,8 +605,8 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "pairing" } },
     });
-    readTelegramAllowFromStore.mockResolvedValue([]);
-    upsertTelegramPairingRequest
+    readChannelAllowFromStore.mockResolvedValue([]);
+    upsertChannelPairingRequest
       .mockResolvedValueOnce({ code: "PAIRME12", created: true })
       .mockResolvedValueOnce({ code: "PAIRME12", created: false });
 
@@ -616,12 +622,12 @@ describe("createTelegramBot", () => {
 
     await handler({
       message,
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
     await handler({
       message: { ...message, text: "hello again" },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -637,7 +643,7 @@ describe("createTelegramBot", () => {
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     await handler({
       message: { chat: { id: 42, type: "private" }, text: "hi" },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -676,7 +682,7 @@ describe("createTelegramBot", () => {
         message_id: 1,
         from: { id: 9, first_name: "Ada" },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -728,7 +734,7 @@ describe("createTelegramBot", () => {
           username: "ada",
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -776,7 +782,7 @@ describe("createTelegramBot", () => {
         message_id: 123,
         from: { id: 9, first_name: "Ada" },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -819,7 +825,7 @@ describe("createTelegramBot", () => {
         message_id: 2,
         from: { id: 9, first_name: "Ada" },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -881,7 +887,7 @@ describe("createTelegramBot", () => {
           from: { first_name: "Ada" },
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -892,6 +898,73 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToBody).toBe("Can you summarize this?");
     expect(payload.ReplyToSender).toBe("Ada");
+  });
+
+  it("uses quote text when a Telegram partial reply is received", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "Sure, see below",
+        date: 1736380800,
+        reply_to_message: {
+          message_id: 9001,
+          text: "Can you summarize this?",
+          from: { first_name: "Ada" },
+        },
+        quote: {
+          text: "summarize this",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("[Quoting Ada id:9001]");
+    expect(payload.Body).toContain('"summarize this"');
+    expect(payload.ReplyToId).toBe("9001");
+    expect(payload.ReplyToBody).toBe("summarize this");
+    expect(payload.ReplyToSender).toBe("Ada");
+  });
+
+  it("handles quote-only replies without reply metadata", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
+    replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "Sure, see below",
+        date: 1736380800,
+        quote: {
+          text: "summarize this",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("[Quoting unknown sender]");
+    expect(payload.Body).toContain('"summarize this"');
+    expect(payload.ReplyToId).toBeUndefined();
+    expect(payload.ReplyToBody).toBe("summarize this");
+    expect(payload.ReplyToSender).toBe("unknown sender");
   });
 
   it("sends replies without native reply threading", async () => {
@@ -910,7 +983,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 101,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -939,7 +1012,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 101,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -972,7 +1045,7 @@ describe("createTelegramBot", () => {
         text: "hi",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -999,7 +1072,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 101,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1029,10 +1102,10 @@ describe("createTelegramBot", () => {
     await handler({
       message: {
         chat: { id: 456, type: "group", title: "Ops" },
-        text: "@clawdbot_bot hello",
+        text: "@openclaw_bot hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1058,7 +1131,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1086,10 +1159,10 @@ describe("createTelegramBot", () => {
         reply_to_message: {
           message_id: 42,
           text: "original reply",
-          from: { id: 999, first_name: "Clawdbot" },
+          from: { id: 999, first_name: "OpenClaw" },
         },
       },
-      me: { id: 999, username: "clawdbot_bot" },
+      me: { id: 999, username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1102,7 +1175,7 @@ describe("createTelegramBot", () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<typeof vi.fn>;
     replySpy.mockReset();
-    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-telegram-"));
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-"));
     const storePath = path.join(storeDir, "sessions.json");
     fs.writeFileSync(
       storePath,
@@ -1139,7 +1212,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1181,7 +1254,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 42,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1216,7 +1289,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1259,7 +1332,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_thread_id: 99,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1303,7 +1376,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_thread_id: 99,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1346,7 +1419,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_thread_id: 99,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1375,7 +1448,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1437,7 +1510,7 @@ describe("createTelegramBot", () => {
         message_id: 5,
         from: { first_name: "Ada" },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1471,10 +1544,10 @@ describe("createTelegramBot", () => {
       message: {
         chat: { id: -100123456789, type: "group", title: "Test Group" },
         from: { id: 123456789, username: "testuser" },
-        text: "@clawdbot_bot hello",
+        text: "@openclaw_bot hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1502,10 +1575,10 @@ describe("createTelegramBot", () => {
       message: {
         chat: { id: -100123456789, type: "group", title: "Test Group" },
         from: { id: 999999, username: "notallowed" }, // Not in allowFrom
-        text: "@clawdbot_bot hello",
+        text: "@openclaw_bot hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1536,7 +1609,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1567,7 +1640,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1598,7 +1671,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1629,7 +1702,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1659,7 +1732,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1690,7 +1763,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1720,7 +1793,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1749,7 +1822,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1778,7 +1851,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1809,7 +1882,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1839,7 +1912,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1870,7 +1943,7 @@ describe("createTelegramBot", () => {
         text: "hello from prefixed user",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1902,7 +1975,7 @@ describe("createTelegramBot", () => {
         text: "hello from prefixed user",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1933,7 +2006,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -1964,7 +2037,7 @@ describe("createTelegramBot", () => {
         text: "/status",
         date: 1736380800,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -2003,7 +2076,7 @@ describe("createTelegramBot", () => {
         message_id: 42,
         message_thread_id: 99,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -2049,7 +2122,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 42,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -2091,7 +2164,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 42,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -2143,7 +2216,7 @@ describe("createTelegramBot", () => {
         message_id: 42,
         message_thread_id: 99,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -2188,7 +2261,7 @@ describe("createTelegramBot", () => {
         message_id: 42,
         message_thread_id: 99,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -2261,13 +2334,15 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    readTelegramAllowFromStore.mockResolvedValueOnce(["12345"]);
+    readChannelAllowFromStore.mockResolvedValueOnce(["12345"]);
 
     createTelegramBot({ token: "tok" });
     const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!handler) throw new Error("status command handler missing");
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
 
     await handler({
       message: {
@@ -2302,13 +2377,15 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    readTelegramAllowFromStore.mockResolvedValueOnce(["12345"]);
+    readChannelAllowFromStore.mockResolvedValueOnce(["12345"]);
 
     createTelegramBot({ token: "tok" });
     const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!handler) throw new Error("status command handler missing");
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
 
     await handler({
       message: {
@@ -2344,13 +2421,15 @@ describe("createTelegramBot", () => {
         },
       },
     });
-    readTelegramAllowFromStore.mockResolvedValueOnce([]);
+    readChannelAllowFromStore.mockResolvedValueOnce([]);
 
     createTelegramBot({ token: "tok" });
     const handler = commandSpy.mock.calls.find((call) => call[0] === "status")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!handler) throw new Error("status command handler missing");
+    if (!handler) {
+      throw new Error("status command handler missing");
+    }
 
     await handler({
       message: {
@@ -2395,7 +2474,9 @@ describe("createTelegramBot", () => {
     const verboseHandler = commandSpy.mock.calls.find((call) => call[0] === "verbose")?.[1] as
       | ((ctx: Record<string, unknown>) => Promise<void>)
       | undefined;
-    if (!verboseHandler) throw new Error("verbose command handler missing");
+    if (!verboseHandler) {
+      throw new Error("verbose command handler missing");
+    }
 
     await verboseHandler({
       message: {
@@ -2435,7 +2516,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 42,
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     };
 
@@ -2473,7 +2554,7 @@ describe("createTelegramBot", () => {
           message_id: 9001,
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({}),
     };
 
@@ -2510,7 +2591,7 @@ describe("createTelegramBot", () => {
           message_id: 9001,
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({}),
     });
 
@@ -2525,7 +2606,7 @@ describe("createTelegramBot", () => {
           message_id: 9001,
         },
       },
-      me: { username: "clawdbot_bot" },
+      me: { username: "openclaw_bot" },
       getFile: async () => ({}),
     });
 
@@ -2795,7 +2876,7 @@ describe("createTelegramBot", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("uses correct session key for forum group reactions with topic", async () => {
+  it("routes forum group reactions to the general topic (thread id not available on reactions)", async () => {
     onSpy.mockReset();
     enqueueSystemEvent.mockReset();
 
@@ -2810,12 +2891,13 @@ describe("createTelegramBot", () => {
       ctx: Record<string, unknown>,
     ) => Promise<void>;
 
+    // MessageReactionUpdated does not include message_thread_id in the Bot API,
+    // so forum reactions always route to the general topic (1).
     await handler({
       update: { update_id: 505 },
       messageReaction: {
         chat: { id: 5678, type: "supergroup", is_forum: true },
         message_id: 100,
-        message_thread_id: 42,
         user: { id: 10, first_name: "Bob", username: "bob_user" },
         date: 1736380800,
         old_reaction: [],
@@ -2827,7 +2909,7 @@ describe("createTelegramBot", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
       "Telegram reaction added: 🔥 by Bob (@bob_user) on msg 100",
       expect.objectContaining({
-        sessionKey: expect.stringContaining("telegram:group:5678:topic:42"),
+        sessionKey: expect.stringContaining("telegram:group:5678:topic:1"),
         contextKey: expect.stringContaining("telegram:reaction:add:5678:100:10"),
       }),
     );
@@ -2909,42 +2991,5 @@ describe("createTelegramBot", () => {
     // Verify session key does NOT contain :topic:
     const sessionKey = enqueueSystemEvent.mock.calls[0][1].sessionKey;
     expect(sessionKey).not.toContain(":topic:");
-  });
-  it("uses thread session key for dm reactions with topic id", async () => {
-    onSpy.mockReset();
-    enqueueSystemEvent.mockReset();
-
-    loadConfig.mockReturnValue({
-      channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
-      },
-    });
-
-    createTelegramBot({ token: "tok" });
-    const handler = getOnHandler("message_reaction") as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-
-    await handler({
-      update: { update_id: 508 },
-      messageReaction: {
-        chat: { id: 1234, type: "private" },
-        message_id: 300,
-        message_thread_id: 42,
-        user: { id: 12, first_name: "Dana" },
-        date: 1736380800,
-        old_reaction: [],
-        new_reaction: [{ type: "emoji", emoji: "🔥" }],
-      },
-    });
-
-    expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "Telegram reaction added: 🔥 by Dana on msg 300",
-      expect.objectContaining({
-        sessionKey: expect.stringContaining(":thread:42"),
-        contextKey: expect.stringContaining("telegram:reaction:add:1234:300:12"),
-      }),
-    );
   });
 });

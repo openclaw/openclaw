@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../config/config.js";
-import { ensureClawdbotModelsJson } from "./models-config.js";
-import { buildEmbeddedSandboxInfo } from "./pi-embedded-runner.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SandboxContext } from "./sandbox.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
+import { buildEmbeddedSandboxInfo } from "./pi-embedded-runner.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
@@ -68,13 +68,15 @@ const _makeOpenAiConfig = (modelIds: string[]) =>
         },
       },
     },
-  }) satisfies ClawdbotConfig;
+  }) satisfies OpenClawConfig;
 
-const _ensureModels = (cfg: ClawdbotConfig, agentDir: string) =>
-  ensureClawdbotModelsJson(cfg, agentDir) as unknown;
+const _ensureModels = (cfg: OpenClawConfig, agentDir: string) =>
+  ensureOpenClawModelsJson(cfg, agentDir) as unknown;
 
 const _textFromContent = (content: unknown) => {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return content;
+  }
   if (Array.isArray(content) && content[0]?.type === "text") {
     return (content[0] as { text?: string }).text;
   }
@@ -105,14 +107,14 @@ describe("buildEmbeddedSandboxInfo", () => {
     const sandbox = {
       enabled: true,
       sessionKey: "session:test",
-      workspaceDir: "/tmp/clawdbot-sandbox",
-      agentWorkspaceDir: "/tmp/clawdbot-workspace",
+      workspaceDir: "/tmp/openclaw-sandbox",
+      agentWorkspaceDir: "/tmp/openclaw-workspace",
       workspaceAccess: "none",
-      containerName: "clawdbot-sbx-test",
+      containerName: "openclaw-sbx-test",
       containerWorkdir: "/workspace",
       docker: {
-        image: "clawdbot-sandbox:bookworm-slim",
-        containerPrefix: "clawdbot-sbx-",
+        image: "openclaw-sandbox:bookworm-slim",
+        containerPrefix: "openclaw-sbx-",
         workdir: "/workspace",
         readOnlyRoot: true,
         tmpfs: ["/tmp"],
@@ -129,13 +131,13 @@ describe("buildEmbeddedSandboxInfo", () => {
       browser: {
         bridgeUrl: "http://localhost:9222",
         noVncUrl: "http://localhost:6080",
-        containerName: "clawdbot-sbx-browser-test",
+        containerName: "openclaw-sbx-browser-test",
       },
     } satisfies SandboxContext;
 
     expect(buildEmbeddedSandboxInfo(sandbox)).toEqual({
       enabled: true,
-      workspaceDir: "/tmp/clawdbot-sandbox",
+      workspaceDir: "/tmp/openclaw-sandbox",
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
       browserBridgeUrl: "http://localhost:9222",
@@ -147,14 +149,14 @@ describe("buildEmbeddedSandboxInfo", () => {
     const sandbox = {
       enabled: true,
       sessionKey: "session:test",
-      workspaceDir: "/tmp/clawdbot-sandbox",
-      agentWorkspaceDir: "/tmp/clawdbot-workspace",
+      workspaceDir: "/tmp/openclaw-sandbox",
+      agentWorkspaceDir: "/tmp/openclaw-workspace",
       workspaceAccess: "none",
-      containerName: "clawdbot-sbx-test",
+      containerName: "openclaw-sbx-test",
       containerWorkdir: "/workspace",
       docker: {
-        image: "clawdbot-sandbox:bookworm-slim",
-        containerPrefix: "clawdbot-sbx-",
+        image: "openclaw-sandbox:bookworm-slim",
+        containerPrefix: "openclaw-sbx-",
         workdir: "/workspace",
         readOnlyRoot: true,
         tmpfs: ["/tmp"],
@@ -178,7 +180,7 @@ describe("buildEmbeddedSandboxInfo", () => {
       }),
     ).toEqual({
       enabled: true,
-      workspaceDir: "/tmp/clawdbot-sandbox",
+      workspaceDir: "/tmp/openclaw-sandbox",
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
       hostBrowserAllowed: false,

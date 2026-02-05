@@ -28,7 +28,9 @@ export function normalizeMainKey(value: string | undefined | null): string {
 
 export function toAgentRequestSessionKey(storeKey: string | undefined | null): string | undefined {
   const raw = (storeKey ?? "").trim();
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   return parseAgentSessionKey(raw)?.rest ?? raw;
 }
 
@@ -42,7 +44,9 @@ export function toAgentStoreSessionKey(params: {
     return buildAgentMainSessionKey({ agentId: params.agentId, mainKey: params.mainKey });
   }
   const lowered = raw.toLowerCase();
-  if (lowered.startsWith("agent:")) return lowered;
+  if (lowered.startsWith("agent:")) {
+    return lowered;
+  }
   if (lowered.startsWith("subagent:")) {
     return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
   }
@@ -56,9 +60,13 @@ export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | nu
 
 export function normalizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
-  if (!trimmed) return DEFAULT_AGENT_ID;
+  if (!trimmed) {
+    return DEFAULT_AGENT_ID;
+  }
   // Keep it path-safe + shell-friendly.
-  if (VALID_ID_RE.test(trimmed)) return trimmed.toLowerCase();
+  if (VALID_ID_RE.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
   // Best-effort fallback: collapse invalid characters to "-"
   return (
     trimmed
@@ -72,8 +80,12 @@ export function normalizeAgentId(value: string | undefined | null): string {
 
 export function sanitizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
-  if (!trimmed) return DEFAULT_AGENT_ID;
-  if (VALID_ID_RE.test(trimmed)) return trimmed.toLowerCase();
+  if (!trimmed) {
+    return DEFAULT_AGENT_ID;
+  }
+  if (VALID_ID_RE.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
   return (
     trimmed
       .toLowerCase()
@@ -86,8 +98,12 @@ export function sanitizeAgentId(value: string | undefined | null): string {
 
 export function normalizeAccountId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
-  if (!trimmed) return DEFAULT_ACCOUNT_ID;
-  if (VALID_ID_RE.test(trimmed)) return trimmed.toLowerCase();
+  if (!trimmed) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  if (VALID_ID_RE.test(trimmed)) {
+    return trimmed.toLowerCase();
+  }
   return (
     trimmed
       .toLowerCase()
@@ -111,11 +127,12 @@ export function buildAgentPeerSessionKey(params: {
   agentId: string;
   mainKey?: string | undefined;
   channel: string;
+  accountId?: string | null;
   peerKind?: "dm" | "group" | "channel" | null;
   peerId?: string | null;
   identityLinks?: Record<string, string[]>;
   /** DM session scope. */
-  dmScope?: "main" | "per-peer" | "per-channel-peer";
+  dmScope?: "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
 }): string {
   const peerKind = params.peerKind ?? "dm";
   if (peerKind === "dm") {
@@ -129,8 +146,15 @@ export function buildAgentPeerSessionKey(params: {
             channel: params.channel,
             peerId,
           });
-    if (linkedPeerId) peerId = linkedPeerId;
+    if (linkedPeerId) {
+      peerId = linkedPeerId;
+    }
     peerId = peerId.toLowerCase();
+    if (dmScope === "per-account-channel-peer" && peerId) {
+      const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
+      const accountId = normalizeAccountId(params.accountId);
+      return `agent:${normalizeAgentId(params.agentId)}:${channel}:${accountId}:dm:${peerId}`;
+    }
     if (dmScope === "per-channel-peer" && peerId) {
       const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
       return `agent:${normalizeAgentId(params.agentId)}:${channel}:dm:${peerId}`;
@@ -154,22 +178,36 @@ function resolveLinkedPeerId(params: {
   peerId: string;
 }): string | null {
   const identityLinks = params.identityLinks;
-  if (!identityLinks) return null;
+  if (!identityLinks) {
+    return null;
+  }
   const peerId = params.peerId.trim();
-  if (!peerId) return null;
+  if (!peerId) {
+    return null;
+  }
   const candidates = new Set<string>();
   const rawCandidate = normalizeToken(peerId);
-  if (rawCandidate) candidates.add(rawCandidate);
+  if (rawCandidate) {
+    candidates.add(rawCandidate);
+  }
   const channel = normalizeToken(params.channel);
   if (channel) {
     const scopedCandidate = normalizeToken(`${channel}:${peerId}`);
-    if (scopedCandidate) candidates.add(scopedCandidate);
+    if (scopedCandidate) {
+      candidates.add(scopedCandidate);
+    }
   }
-  if (candidates.size === 0) return null;
+  if (candidates.size === 0) {
+    return null;
+  }
   for (const [canonical, ids] of Object.entries(identityLinks)) {
     const canonicalName = canonical.trim();
-    if (!canonicalName) continue;
-    if (!Array.isArray(ids)) continue;
+    if (!canonicalName) {
+      continue;
+    }
+    if (!Array.isArray(ids)) {
+      continue;
+    }
     for (const id of ids) {
       const normalized = normalizeToken(id);
       if (normalized && candidates.has(normalized)) {

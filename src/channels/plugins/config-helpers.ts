@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 
 type ChannelSection = {
@@ -7,12 +7,12 @@ type ChannelSection = {
 };
 
 export function setAccountEnabledInConfigSection(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   sectionKey: string;
   accountId: string;
   enabled: boolean;
   allowTopLevel?: boolean;
-}): ClawdbotConfig {
+}): OpenClawConfig {
   const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
@@ -27,10 +27,10 @@ export function setAccountEnabledInConfigSection(params: {
           enabled: params.enabled,
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
   }
 
-  const baseAccounts = (base?.accounts ?? {}) as Record<string, Record<string, unknown>>;
+  const baseAccounts = base?.accounts ?? {};
   const existing = baseAccounts[accountKey] ?? {};
   return {
     ...params.cfg,
@@ -47,19 +47,21 @@ export function setAccountEnabledInConfigSection(params: {
         },
       },
     },
-  } as ClawdbotConfig;
+  } as OpenClawConfig;
 }
 
 export function deleteAccountFromConfigSection(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   sectionKey: string;
   accountId: string;
   clearBaseFields?: string[];
-}): ClawdbotConfig {
+}): OpenClawConfig {
   const accountKey = params.accountId || DEFAULT_ACCOUNT_ID;
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.sectionKey] as ChannelSection | undefined;
-  if (!base) return params.cfg;
+  if (!base) {
+    return params.cfg;
+  }
 
   const baseAccounts =
     base.accounts && typeof base.accounts === "object" ? { ...base.accounts } : undefined;
@@ -76,14 +78,16 @@ export function deleteAccountFromConfigSection(params: {
           accounts: Object.keys(accounts).length ? accounts : undefined,
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
   }
 
   if (baseAccounts && Object.keys(baseAccounts).length > 0) {
     delete baseAccounts[accountKey];
     const baseRecord = { ...(base as Record<string, unknown>) };
     for (const field of params.clearBaseFields ?? []) {
-      if (field in baseRecord) baseRecord[field] = undefined;
+      if (field in baseRecord) {
+        baseRecord[field] = undefined;
+      }
     }
     return {
       ...params.cfg,
@@ -94,14 +98,14 @@ export function deleteAccountFromConfigSection(params: {
           accounts: Object.keys(baseAccounts).length ? baseAccounts : undefined,
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
   }
 
   const nextChannels = { ...params.cfg.channels } as Record<string, unknown>;
   delete nextChannels[params.sectionKey];
-  const nextCfg = { ...params.cfg } as ClawdbotConfig;
+  const nextCfg = { ...params.cfg } as OpenClawConfig;
   if (Object.keys(nextChannels).length > 0) {
-    nextCfg.channels = nextChannels as ClawdbotConfig["channels"];
+    nextCfg.channels = nextChannels as OpenClawConfig["channels"];
   } else {
     delete nextCfg.channels;
   }

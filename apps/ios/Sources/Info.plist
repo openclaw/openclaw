@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Clawdbot</string>
+	<string>OpenClaw</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIconName</key>
@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2026.1.26</string>
+	<string>2026.2.4</string>
 	<key>CFBundleVersion</key>
-	<string>20260126</string>
+	<string>20260202</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoadsInWebContent</key>
@@ -29,20 +29,20 @@
 	</dict>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_clawdbot-gw._tcp</string>
+		<string>_openclaw-gw._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Clawdbot can capture photos or short video clips when requested via the gateway.</string>
+	<string>OpenClaw can capture photos or short video clips when requested via the gateway.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Clawdbot discovers and connects to your Clawdbot gateway on the local network.</string>
+	<string>OpenClaw discovers and connects to your OpenClaw gateway on the local network.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Clawdbot can share your location in the background when you enable Always.</string>
+	<string>OpenClaw can share your location in the background when you enable Always.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Clawdbot uses your location when you allow location sharing.</string>
+	<string>OpenClaw uses your location when you allow location sharing.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Clawdbot needs microphone access for voice wake.</string>
+	<string>OpenClaw needs microphone access for voice wake.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Clawdbot uses on-device speech recognition for voice wake.</string>
+	<string>OpenClaw uses on-device speech recognition for voice wake.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

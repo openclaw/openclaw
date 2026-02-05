@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
-
 import { DisconnectReason } from "@whiskeysockets/baileys";
+import { randomUUID } from "node:crypto";
 import { loadConfig } from "../config/config.js";
 import { danger, info, success } from "../globals.js";
 import { logInfo } from "../logger.js";
@@ -66,18 +65,24 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
   login.waitPromise = waitForWaConnection(login.sock)
     .then(() => {
       const current = activeLogins.get(accountId);
-      if (current?.id === login.id) current.connected = true;
+      if (current?.id === login.id) {
+        current.connected = true;
+      }
     })
     .catch((err) => {
       const current = activeLogins.get(accountId);
-      if (current?.id !== login.id) return;
+      if (current?.id !== login.id) {
+        return;
+      }
       current.error = formatError(err);
       current.errorStatus = getStatusCode(err);
     });
 }
 
 async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
-  if (login.restartAttempted) return false;
+  if (login.restartAttempted) {
+    return false;
+  }
   login.restartAttempted = true;
   runtime.log(
     info("WhatsApp asked for a restart after pairing (code 515); retrying connection once…"),
@@ -151,10 +156,14 @@ export async function startWebLoginWithQr(
     sock = await createWaSocket(false, Boolean(opts.verbose), {
       authDir: account.authDir,
       onQr: (qr: string) => {
-        if (pendingQr) return;
+        if (pendingQr) {
+          return;
+        }
         pendingQr = qr;
         const current = activeLogins.get(account.accountId);
-        if (current && !current.qr) current.qr = qr;
+        if (current && !current.qr) {
+          current.qr = qr;
+        }
         clearTimeout(qrTimer);
         runtime.log(info("WhatsApp QR received."));
         resolveQr?.(qr);
@@ -180,7 +189,9 @@ export async function startWebLoginWithQr(
     verbose: Boolean(opts.verbose),
   };
   activeLogins.set(account.accountId, login);
-  if (pendingQr && !login.qr) login.qr = pendingQr;
+  if (pendingQr && !login.qr) {
+    login.qr = pendingQr;
+  }
   attachLoginWaiter(account.accountId, login);
 
   let qr: string;

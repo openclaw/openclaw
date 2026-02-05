@@ -1,7 +1,7 @@
 import type { RuntimeEnv } from "../../runtime.js";
+import type { ModelRow } from "./list.types.js";
 import { colorize, theme } from "../../terminal/theme.js";
 import { formatTag, isRich, pad, truncate } from "./list.format.js";
-import type { ModelRow } from "./list.types.js";
 import { formatTokenK } from "./shared.js";
 
 const MODEL_PAD = 42;
@@ -30,7 +30,9 @@ export function printModelTable(
   }
 
   if (opts.plain) {
-    for (const row of rows) runtime.log(row.key);
+    for (const row of rows) {
+      runtime.log(row.key);
+    }
     return;
   }
 

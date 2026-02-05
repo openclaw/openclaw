@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers";
+import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 describe("tool-helpers", () => {
   describe("formatToolOutputForSidebar", () => {
@@ -16,7 +16,7 @@ describe("tool-helpers", () => {
     });
 
     it("formats valid JSON array as code block", () => {
-      const input = '[1, 2, 3]';
+      const input = "[1, 2, 3]";
       const result = formatToolOutputForSidebar(input);
 
       expect(result).toBe(`\`\`\`json

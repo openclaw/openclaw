@@ -1,11 +1,10 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-
-import type { ClawdbotPluginApi } from "../plugins/types.js";
+import type { OpenClawPluginApi } from "../plugins/types.js";
+import type { InternalHookHandler } from "./internal-hooks.js";
 import type { HookEntry } from "./types.js";
 import { shouldIncludeHook } from "./config.js";
 import { loadHookEntriesFromDir } from "./workspace.js";
-import type { InternalHookHandler } from "./internal-hooks.js";
 
 export type PluginHookLoadResult = {
   hooks: HookEntry[];
@@ -14,36 +13,38 @@ export type PluginHookLoadResult = {
   errors: string[];
 };
 
-function resolveHookDir(api: ClawdbotPluginApi, dir: string): string {
-  if (path.isAbsolute(dir)) return dir;
+function resolveHookDir(api: OpenClawPluginApi, dir: string): string {
+  if (path.isAbsolute(dir)) {
+    return dir;
+  }
   return path.resolve(path.dirname(api.source), dir);
 }
 
-function normalizePluginHookEntry(api: ClawdbotPluginApi, entry: HookEntry): HookEntry {
+function normalizePluginHookEntry(api: OpenClawPluginApi, entry: HookEntry): HookEntry {
   return {
     ...entry,
     hook: {
       ...entry.hook,
-      source: "clawdbot-plugin",
+      source: "openclaw-plugin",
       pluginId: api.id,
     },
-    clawdbot: {
-      ...entry.clawdbot,
-      hookKey: entry.clawdbot?.hookKey ?? `${api.id}:${entry.hook.name}`,
-      events: entry.clawdbot?.events ?? [],
+    metadata: {
+      ...entry.metadata,
+      hookKey: entry.metadata?.hookKey ?? `${api.id}:${entry.hook.name}`,
+      events: entry.metadata?.events ?? [],
     },
   };
 }
 
 async function loadHookHandler(
   entry: HookEntry,
-  api: ClawdbotPluginApi,
+  api: OpenClawPluginApi,
 ): Promise<InternalHookHandler | null> {
   try {
     const url = pathToFileURL(entry.hook.handlerPath).href;
     const cacheBustedUrl = `${url}?t=${Date.now()}`;
     const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
-    const exportName = entry.clawdbot?.export ?? "default";
+    const exportName = entry.metadata?.export ?? "default";
     const handler = mod[exportName];
     if (typeof handler === "function") {
       return handler as InternalHookHandler;
@@ -57,13 +58,13 @@ async function loadHookHandler(
 }
 
 export async function registerPluginHooksFromDir(
-  api: ClawdbotPluginApi,
+  api: OpenClawPluginApi,
   dir: string,
 ): Promise<PluginHookLoadResult> {
   const resolvedDir = resolveHookDir(api, dir);
   const hooks = loadHookEntriesFromDir({
     dir: resolvedDir,
-    source: "clawdbot-plugin",
+    source: "openclaw-plugin",
     pluginId: api.id,
   });
 
@@ -76,7 +77,7 @@ export async function registerPluginHooksFromDir(
 
   for (const entry of hooks) {
     const normalizedEntry = normalizePluginHookEntry(api, entry);
-    const events = normalizedEntry.clawdbot?.events ?? [];
+    const events = normalizedEntry.metadata?.events ?? [];
     if (events.length === 0) {
       api.logger.warn?.(`[hooks] ${entry.hook.name} has no events; skipping`);
       api.registerHook(events, async () => undefined, {

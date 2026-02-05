@@ -1,9 +1,12 @@
 {
-  "name": "@moltbot/signal",
-  "version": "2026.1.26",
+  "name": "@openclaw/signal",
+  "version": "2026.2.4",
+  "description": "OpenClaw Signal channel plugin",
   "type": "module",
-  "description": "Clawdbot Signal channel plugin",
-  "clawdbot": {
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ]

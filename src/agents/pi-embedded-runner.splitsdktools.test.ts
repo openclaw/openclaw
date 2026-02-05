@@ -1,8 +1,8 @@
-import fs from "node:fs/promises";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import fs from "node:fs/promises";
 import { describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../config/config.js";
-import { ensureClawdbotModelsJson } from "./models-config.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 import { splitSdkTools } from "./pi-embedded-runner.js";
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -68,13 +68,15 @@ const _makeOpenAiConfig = (modelIds: string[]) =>
         },
       },
     },
-  }) satisfies ClawdbotConfig;
+  }) satisfies OpenClawConfig;
 
-const _ensureModels = (cfg: ClawdbotConfig, agentDir: string) =>
-  ensureClawdbotModelsJson(cfg, agentDir) as unknown;
+const _ensureModels = (cfg: OpenClawConfig, agentDir: string) =>
+  ensureOpenClawModelsJson(cfg, agentDir) as unknown;
 
 const _textFromContent = (content: unknown) => {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return content;
+  }
   if (Array.isArray(content) && content[0]?.type === "text") {
     return (content[0] as { text?: string }).text;
   }

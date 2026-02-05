@@ -1,5 +1,9 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramTargetChatType,
+} from "../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import {
   deleteMessageTelegram,
@@ -10,10 +14,6 @@ import {
 } from "../../telegram/send.js";
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
-import {
-  resolveTelegramInlineButtonsScope,
-  resolveTelegramTargetChatType,
-} from "../../telegram/inline-buttons.js";
 import {
   createActionGate,
   jsonResult,
@@ -32,7 +32,9 @@ export function readTelegramButtons(
   params: Record<string, unknown>,
 ): TelegramButton[][] | undefined {
   const raw = params.buttons;
-  if (raw == null) return undefined;
+  if (raw == null) {
+    return undefined;
+  }
   if (!Array.isArray(raw)) {
     throw new Error("buttons must be an array of button rows");
   }
@@ -69,7 +71,7 @@ export function readTelegramButtons(
 
 export async function handleTelegramAction(
   params: Record<string, unknown>,
-  cfg: ClawdbotConfig,
+  cfg: OpenClawConfig,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
@@ -165,6 +167,7 @@ export async function handleTelegramAction(
     const messageThreadId = readNumberParam(params, "messageThreadId", {
       integer: true,
     });
+    const quoteText = readStringParam(params, "quoteText");
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
@@ -178,6 +181,7 @@ export async function handleTelegramAction(
       buttons,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
+      quoteText: quoteText ?? undefined,
       asVoice: typeof params.asVoice === "boolean" ? params.asVoice : undefined,
       silent: typeof params.silent === "boolean" ? params.silent : undefined,
     });

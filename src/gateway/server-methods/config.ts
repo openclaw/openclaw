@@ -1,6 +1,8 @@
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
-  CONFIG_PATH_CLAWDBOT,
+  CONFIG_PATH,
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
@@ -11,14 +13,13 @@ import {
 import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { buildConfigSchema } from "../../config/schema.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
-import { loadClawdbotPlugins } from "../../plugins/loader.js";
+import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import {
   ErrorCodes,
   errorShape,
@@ -29,11 +30,12 @@ import {
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function resolveBaseHash(params: unknown): string | null {
   const raw = (params as { baseHash?: unknown })?.baseHash;
-  if (typeof raw !== "string") return null;
+  if (typeof raw !== "string") {
+    return null;
+  }
   const trimmed = raw.trim();
   return trimmed ? trimmed : null;
 }
@@ -43,7 +45,9 @@ function requireConfigBaseHash(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
 ): boolean {
-  if (!snapshot.exists) return true;
+  if (!snapshot.exists) {
+    return true;
+  }
   const snapshotHash = resolveConfigSnapshotHash(snapshot);
   if (!snapshotHash) {
     respond(
@@ -112,7 +116,7 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const cfg = loadConfig();
     const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-    const pluginRegistry = loadClawdbotPlugins({
+    const pluginRegistry = loadOpenClawPlugins({
       config: cfg,
       workspaceDir,
       logger: {
@@ -186,7 +190,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH_CLAWDBOT,
+        path: CONFIG_PATH,
         config: validated.config,
       },
       undefined,
@@ -284,7 +288,7 @@ export const configHandlers: GatewayRequestHandlers = {
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {
         mode: "config.patch",
-        root: CONFIG_PATH_CLAWDBOT,
+        root: CONFIG_PATH,
       },
     };
     let sentinelPath: string | null = null;
@@ -301,7 +305,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH_CLAWDBOT,
+        path: CONFIG_PATH,
         config: validated.config,
         restart,
         sentinel: {
@@ -381,7 +385,7 @@ export const configHandlers: GatewayRequestHandlers = {
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {
         mode: "config.apply",
-        root: CONFIG_PATH_CLAWDBOT,
+        root: CONFIG_PATH,
       },
     };
     let sentinelPath: string | null = null;
@@ -398,7 +402,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH_CLAWDBOT,
+        path: CONFIG_PATH,
         config: validated.config,
         restart,
         sentinel: {

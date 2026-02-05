@@ -5,13 +5,13 @@ import type {
   ReactionTypeEmoji,
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
+import type { RetryConfig } from "../infra/retry.js";
 import { loadConfig } from "../config/config.js";
+import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
-import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
-import type { RetryConfig } from "../infra/retry.js";
+import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -19,16 +19,16 @@ import { mediaKindFromMime } from "../media/constants.js";
 import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
-import { resolveTelegramFetch } from "./fetch.js";
-import { makeProxyFetch } from "./proxy.js";
-import { renderTelegramHtmlText } from "./format.js";
-import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { buildTelegramThreadParams } from "./bot/helpers.js";
 import { splitTelegramCaption } from "./caption.js";
+import { resolveTelegramFetch } from "./fetch.js";
+import { renderTelegramHtmlText } from "./format.js";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { parseTelegramTarget, stripTelegramInternalPrefixes } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
-import { buildTelegramThreadParams } from "./bot/helpers.js";
 
 type TelegramSendOpts = {
   token?: string;
@@ -46,6 +46,8 @@ type TelegramSendOpts = {
   silent?: boolean;
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
+  /** Quote text for Telegram reply_parameters. */
+  quoteText?: string;
   /** Forum topic thread ID (for forum supergroups) */
   messageThreadId?: number;
   /** Inline keyboard buttons (reply markup). */
@@ -75,7 +77,9 @@ function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
     return () => {};
   }
   return (label: string, err: unknown) => {
-    if (!(err instanceof HttpError)) return;
+    if (!(err instanceof HttpError)) {
+      return;
+    }
     const detail = redactSensitiveText(formatUncaughtError(err.error ?? err));
     diagLogger.warn(`telegram http error (${label}): ${detail}`);
   };
@@ -103,7 +107,9 @@ function resolveTelegramClientOptions(
 }
 
 function resolveToken(explicit: string | undefined, params: { accountId: string; token: string }) {
-  if (explicit?.trim()) return explicit.trim();
+  if (explicit?.trim()) {
+    return explicit.trim();
+  }
   if (!params.token) {
     throw new Error(
       `Telegram bot token missing for account "${params.accountId}" (set channels.telegram.accounts.${params.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
@@ -114,7 +120,9 @@ function resolveToken(explicit: string | undefined, params: { accountId: string;
 
 function normalizeChatId(to: string): string {
   const trimmed = to.trim();
-  if (!trimmed) throw new Error("Recipient is required for Telegram sends");
+  if (!trimmed) {
+    throw new Error("Recipient is required for Telegram sends");
+  }
 
   // Common internal prefixes that sometimes leak into outbound sends.
   // - ctx.To uses `telegram:<id>`
@@ -126,14 +134,24 @@ function normalizeChatId(to: string): string {
   const m =
     /^https?:\/\/t\.me\/([A-Za-z0-9_]+)$/i.exec(normalized) ??
     /^t\.me\/([A-Za-z0-9_]+)$/i.exec(normalized);
-  if (m?.[1]) normalized = `@${m[1]}`;
+  if (m?.[1]) {
+    normalized = `@${m[1]}`;
+  }
 
-  if (!normalized) throw new Error("Recipient is required for Telegram sends");
-  if (normalized.startsWith("@")) return normalized;
-  if (/^-?\d+$/.test(normalized)) return normalized;
+  if (!normalized) {
+    throw new Error("Recipient is required for Telegram sends");
+  }
+  if (normalized.startsWith("@")) {
+    return normalized;
+  }
+  if (/^-?\d+$/.test(normalized)) {
+    return normalized;
+  }
 
   // If the user passed a username without `@`, assume they meant a public chat/channel.
-  if (/^[A-Za-z0-9_]{5,}$/i.test(normalized)) return `@${normalized}`;
+  if (/^[A-Za-z0-9_]{5,}$/i.test(normalized)) {
+    return `@${normalized}`;
+  }
 
   return normalized;
 }
@@ -148,7 +166,9 @@ function normalizeMessageId(raw: string | number): number {
       throw new Error("Message id is required for Telegram actions");
     }
     const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) return parsed;
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
   }
   throw new Error("Message id is required for Telegram actions");
 }
@@ -156,7 +176,9 @@ function normalizeMessageId(raw: string | number): number {
 export function buildInlineKeyboard(
   buttons?: TelegramSendOpts["buttons"],
 ): InlineKeyboardMarkup | undefined {
-  if (!buttons?.length) return undefined;
+  if (!buttons?.length) {
+    return undefined;
+  }
   const rows = buttons
     .map((row) =>
       row
@@ -169,7 +191,9 @@ export function buildInlineKeyboard(
         ),
     )
     .filter((row) => row.length > 0);
-  if (rows.length === 0) return undefined;
+  if (rows.length === 0) {
+    return undefined;
+  }
   return { inline_keyboard: rows };
 }
 
@@ -197,10 +221,20 @@ export async function sendMessageTelegram(
   // Only include these if actually provided to keep API calls clean.
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
-  const threadIdParams = buildTelegramThreadParams(messageThreadId);
-  const threadParams: Record<string, number> = threadIdParams ? { ...threadIdParams } : {};
+  const threadSpec =
+    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+  const threadIdParams = buildTelegramThreadParams(threadSpec);
+  const threadParams: Record<string, unknown> = threadIdParams ? { ...threadIdParams } : {};
+  const quoteText = opts.quoteText?.trim();
   if (opts.replyToMessageId != null) {
-    threadParams.reply_to_message_id = Math.trunc(opts.replyToMessageId);
+    if (quoteText) {
+      threadParams.reply_parameters = {
+        message_id: Math.trunc(opts.replyToMessageId),
+        quote: quoteText,
+      };
+    } else {
+      threadParams.reply_to_message_id = Math.trunc(opts.replyToMessageId);
+    }
   }
   const hasThreadParams = Object.keys(threadParams).length > 0;
   const request = createTelegramRetryRunner({
@@ -219,7 +253,9 @@ export async function sendMessageTelegram(
       throw err;
     });
   const wrapChatNotFound = (err: unknown) => {
-    if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err))) return err;
+    if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err))) {
+      return err;
+    }
     return new Error(
       [
         `Telegram send failed: chat not found (chat_id=${chatId}).`,
@@ -660,7 +696,9 @@ export async function sendStickerTelegram(
 
   const messageThreadId =
     opts.messageThreadId != null ? opts.messageThreadId : target.messageThreadId;
-  const threadIdParams = buildTelegramThreadParams(messageThreadId);
+  const threadSpec =
+    messageThreadId != null ? { id: messageThreadId, scope: "forum" as const } : undefined;
+  const threadIdParams = buildTelegramThreadParams(threadSpec);
   const threadParams: Record<string, number> = threadIdParams ? { ...threadIdParams } : {};
   if (opts.replyToMessageId != null) {
     threadParams.reply_to_message_id = Math.trunc(opts.replyToMessageId);
@@ -680,7 +718,9 @@ export async function sendStickerTelegram(
     });
 
   const wrapChatNotFound = (err: unknown) => {
-    if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err))) return err;
+    if (!/400: Bad Request: chat not found/i.test(formatErrorMessage(err))) {
+      return err;
+    }
     return new Error(
       [
         `Telegram send failed: chat not found (chat_id=${chatId}).`,

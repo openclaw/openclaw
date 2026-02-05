@@ -58,9 +58,13 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
 
 export function clearFollowupQueue(key: string): number {
   const cleaned = key.trim();
-  if (!cleaned) return 0;
+  if (!cleaned) {
+    return 0;
+  }
   const queue = FOLLOWUP_QUEUES.get(cleaned);
-  if (!queue) return 0;
+  if (!queue) {
+    return 0;
+  }
   const cleared = queue.items.length + queue.droppedCount;
   queue.items.length = 0;
   queue.droppedCount = 0;

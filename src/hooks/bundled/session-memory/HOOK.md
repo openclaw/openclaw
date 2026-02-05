@@ -1,15 +1,15 @@
 ---
 name: session-memory
 description: "Save session context to memory when /new command is issued"
-homepage: https://docs.clawd.bot/hooks#session-memory
+homepage: https://docs.openclaw.ai/hooks#session-memory
 metadata:
   {
-    "clawdbot":
+    "openclaw":
       {
         "emoji": "💾",
         "events": ["command:new"],
         "requires": { "config": ["workspace.dir"] },
-        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with Clawdbot" }],
+        "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
       },
   }
 ---
@@ -23,7 +23,7 @@ Automatically saves session context to your workspace memory when you issue the 
 When you run `/new` to start a fresh session:
 
 1. **Finds the previous session** - Uses the pre-reset session entry to locate the correct transcript
-2. **Extracts conversation** - Reads the last 15 lines of conversation from the session
+2. **Extracts conversation** - Reads the last N user/assistant messages from the session (default: 15, configurable)
 3. **Generates descriptive slug** - Uses LLM to create a meaningful filename slug based on conversation content
 4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-slug.md`
 5. **Sends confirmation** - Notifies you with the file path
@@ -57,9 +57,32 @@ The hook uses your configured LLM provider to generate slugs, so it works with a
 
 ## Configuration
 
-No additional configuration required. The hook automatically:
+The hook supports optional configuration:
 
-- Uses your workspace directory (`~/clawd` by default)
+| Option     | Type   | Default | Description                                                     |
+| ---------- | ------ | ------- | --------------------------------------------------------------- |
+| `messages` | number | 15      | Number of user/assistant messages to include in the memory file |
+
+Example configuration:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "entries": {
+        "session-memory": {
+          "enabled": true,
+          "messages": 25
+        }
+      }
+    }
+  }
+}
+```
+
+The hook automatically:
+
+- Uses your workspace directory (`~/.openclaw/workspace` by default)
 - Uses your configured LLM for slug generation
 - Falls back to timestamp slugs if LLM is unavailable
 
@@ -68,7 +91,7 @@ No additional configuration required. The hook automatically:
 To disable this hook:
 
 ```bash
-clawdbot hooks disable session-memory
+openclaw hooks disable session-memory
 ```
 
 Or remove it from your config:

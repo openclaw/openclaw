@@ -1,10 +1,9 @@
 import crypto from "node:crypto";
-
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../../config/sessions.js";
 
 export function resolveCronSession(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   sessionKey: string;
   nowMs: number;
   agentId: string;

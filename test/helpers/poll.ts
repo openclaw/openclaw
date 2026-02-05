@@ -17,7 +17,9 @@ export async function pollUntil<T>(
 
   while (Date.now() - start < timeoutMs) {
     const value = await fn();
-    if (value !== null && value !== undefined) return value;
+    if (value !== null && value !== undefined) {
+      return value;
+    }
     await sleep(intervalMs);
   }
 

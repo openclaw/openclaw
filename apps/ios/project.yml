@@ -1,6 +1,6 @@
-name: Clawdbot
+name: OpenClaw
 options:
-  bundleIdPrefix: com.clawdbot
+  bundleIdPrefix: ai.openclaw
   deploymentTarget:
     iOS: "18.0"
   xcodeVersion: "16.0"
@@ -10,33 +10,33 @@ settings:
     SWIFT_VERSION: "6.0"
 
 packages:
-  ClawdbotKit:
-    path: ../shared/ClawdbotKit
+  OpenClawKit:
+    path: ../shared/OpenClawKit
   Swabble:
     path: ../../Swabble
 
 schemes:
-  Clawdbot:
+  OpenClaw:
     shared: true
     build:
       targets:
-        Clawdbot: all
+        OpenClaw: all
     test:
       targets:
-        - ClawdbotTests
+        - OpenClawTests
 
 targets:
-  Clawdbot:
+  OpenClaw:
     type: application
     platform: iOS
     sources:
       - path: Sources
     dependencies:
-      - package: ClawdbotKit
-      - package: ClawdbotKit
-        product: ClawdbotChatUI
-      - package: ClawdbotKit
-        product: ClawdbotProtocol
+      - package: OpenClawKit
+      - package: OpenClawKit
+        product: OpenClawChatUI
+      - package: OpenClawKit
+        product: OpenClawProtocol
       - package: Swabble
         product: SwabbleKit
       - sdk: AppIntents.framework
@@ -71,33 +71,33 @@ targets:
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: Y5PE65HELJ
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdbot.ios
-        PROVISIONING_PROFILE_SPECIFIER: "com.clawdbot.ios Development"
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios
+        PROVISIONING_PROFILE_SPECIFIER: "ai.openclaw.ios Development"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         ENABLE_APPINTENTS_METADATA: NO
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: Clawdbot
+        CFBundleDisplayName: OpenClaw
         CFBundleIconName: AppIcon
-        CFBundleShortVersionString: "2026.1.26"
-        CFBundleVersion: "20260126"
+        CFBundleShortVersionString: "2026.2.4"
+        CFBundleVersion: "20260202"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
-        NSLocalNetworkUsageDescription: Clawdbot discovers and connects to your Clawdbot gateway on the local network.
+        NSLocalNetworkUsageDescription: OpenClaw discovers and connects to your OpenClaw gateway on the local network.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
         NSBonjourServices:
-          - _clawdbot-gw._tcp
-        NSCameraUsageDescription: Clawdbot can capture photos or short video clips when requested via the gateway.
-        NSLocationWhenInUseUsageDescription: Clawdbot uses your location when you allow location sharing.
-        NSLocationAlwaysAndWhenInUseUsageDescription: Clawdbot can share your location in the background when you enable Always.
-        NSMicrophoneUsageDescription: Clawdbot needs microphone access for voice wake.
-        NSSpeechRecognitionUsageDescription: Clawdbot uses on-device speech recognition for voice wake.
+          - _openclaw-gw._tcp
+        NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
+        NSLocationWhenInUseUsageDescription: OpenClaw uses your location when you allow location sharing.
+        NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
+        NSMicrophoneUsageDescription: OpenClaw needs microphone access for voice wake.
+        NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for voice wake.
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -109,26 +109,26 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
 
-  ClawdbotTests:
+  OpenClawTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: Tests
     dependencies:
-      - target: Clawdbot
+      - target: OpenClaw
       - package: Swabble
         product: SwabbleKit
       - sdk: AppIntents.framework
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdbot.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.tests
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clawdbot.app/Clawdbot"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/OpenClaw.app/OpenClaw"
         BUNDLE_LOADER: "$(TEST_HOST)"
     info:
       path: Tests/Info.plist
       properties:
-        CFBundleDisplayName: ClawdbotTests
-        CFBundleShortVersionString: "2026.1.26"
-        CFBundleVersion: "20260126"
+        CFBundleDisplayName: OpenClawTests
+        CFBundleShortVersionString: "2026.2.4"
+        CFBundleVersion: "20260202"

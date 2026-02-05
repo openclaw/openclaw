@@ -1,32 +1,34 @@
 ---
-summary: "Clawdbot on Raspberry Pi (budget self-hosted setup)"
+summary: "OpenClaw on Raspberry Pi (budget self-hosted setup)"
 read_when:
-  - Setting up Clawdbot on a Raspberry Pi
-  - Running Clawdbot on ARM devices
+  - Setting up OpenClaw on a Raspberry Pi
+  - Running OpenClaw on ARM devices
   - Building a cheap always-on personal AI
+title: "Raspberry Pi"
 ---
 
-# Clawdbot on Raspberry Pi
+# OpenClaw on Raspberry Pi
 
 ## Goal
 
-Run a persistent, always-on Clawdbot Gateway on a Raspberry Pi for **~$35-80** one-time cost (no monthly fees).
+Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi for **~$35-80** one-time cost (no monthly fees).
 
 Perfect for:
+
 - 24/7 personal AI assistant
 - Home automation hub
 - Low-power, always-available Telegram/WhatsApp bot
 
 ## Hardware Requirements
 
-| Pi Model | RAM | Works? | Notes |
-|----------|-----|--------|-------|
-| **Pi 5** | 4GB/8GB | ✅ Best | Fastest, recommended |
-| **Pi 4** | 4GB | ✅ Good | Sweet spot for most users |
-| **Pi 4** | 2GB | ✅ OK | Works, add swap |
-| **Pi 4** | 1GB | ⚠️ Tight | Possible with swap, minimal config |
-| **Pi 3B+** | 1GB | ⚠️ Slow | Works but sluggish |
-| **Pi Zero 2 W** | 512MB | ❌ | Not recommended |
+| Pi Model        | RAM     | Works?   | Notes                              |
+| --------------- | ------- | -------- | ---------------------------------- |
+| **Pi 5**        | 4GB/8GB | ✅ Best  | Fastest, recommended               |
+| **Pi 4**        | 4GB     | ✅ Good  | Sweet spot for most users          |
+| **Pi 4**        | 2GB     | ✅ OK    | Works, add swap                    |
+| **Pi 4**        | 1GB     | ⚠️ Tight | Possible with swap, minimal config |
+| **Pi 3B+**      | 1GB     | ⚠️ Slow  | Works but sluggish                 |
+| **Pi Zero 2 W** | 512MB   | ❌       | Not recommended                    |
 
 **Minimum specs:** 1GB RAM, 1 core, 500MB disk  
 **Recommended:** 2GB+ RAM, 64-bit OS, 16GB+ SD card (or USB SSD)
@@ -105,19 +107,19 @@ echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 ```
 
-## 6) Install Clawdbot
+## 6) Install OpenClaw
 
 ### Option A: Standard Install (Recommended)
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 ### Option B: Hackable Install (For tinkering)
 
 ```bash
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot
+git clone https://github.com/openclaw/openclaw.git
+cd openclaw
 npm install
 npm run build
 npm link
@@ -128,10 +130,11 @@ The hackable install gives you direct access to logs and code — useful for deb
 ## 7) Run Onboarding
 
 ```bash
-clawdbot onboard --install-daemon
+openclaw onboard --install-daemon
 ```
 
 Follow the wizard:
+
 1. **Gateway mode:** Local
 2. **Auth:** API keys recommended (OAuth can be finicky on headless Pi)
 3. **Channels:** Telegram is easiest to start with
@@ -141,13 +144,13 @@ Follow the wizard:
 
 ```bash
 # Check status
-clawdbot status
+openclaw status
 
 # Check service
-sudo systemctl status clawdbot
+sudo systemctl status openclaw
 
 # View logs
-journalctl -u clawdbot -f
+journalctl -u openclaw -f
 ```
 
 ## 9) Access the Dashboard
@@ -170,8 +173,8 @@ curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up
 
 # Update config
-clawdbot config set gateway.bind tailnet
-sudo systemctl restart clawdbot
+openclaw config set gateway.bind tailnet
+sudo systemctl restart openclaw
 ```
 
 ---
@@ -218,15 +221,15 @@ htop
 
 ### Binary Compatibility
 
-Most Clawdbot features work on ARM64, but some external binaries may need ARM builds:
+Most OpenClaw features work on ARM64, but some external binaries may need ARM builds:
 
-| Tool | ARM64 Status | Notes |
-|------|--------------|-------|
-| Node.js | ✅ | Works great |
-| WhatsApp (Baileys) | ✅ | Pure JS, no issues |
-| Telegram | ✅ | Pure JS, no issues |
-| gog (Gmail CLI) | ⚠️ | Check for ARM release |
-| Chromium (browser) | ✅ | `sudo apt install chromium-browser` |
+| Tool               | ARM64 Status | Notes                               |
+| ------------------ | ------------ | ----------------------------------- |
+| Node.js            | ✅           | Works great                         |
+| WhatsApp (Baileys) | ✅           | Pure JS, no issues                  |
+| Telegram           | ✅           | Pure JS, no issues                  |
+| gog (Gmail CLI)    | ⚠️           | Check for ARM release               |
+| Chromium (browser) | ✅           | `sudo apt install chromium-browser` |
 
 If a skill fails, check if its binary has an ARM build. Many Go/Rust tools do; some don't.
 
@@ -268,13 +271,13 @@ The onboarding wizard sets this up, but to verify:
 
 ```bash
 # Check service is enabled
-sudo systemctl is-enabled clawdbot
+sudo systemctl is-enabled openclaw
 
 # Enable if not
-sudo systemctl enable clawdbot
+sudo systemctl enable openclaw
 
 # Start on boot
-sudo systemctl start clawdbot
+sudo systemctl start openclaw
 ```
 
 ---
@@ -301,17 +304,18 @@ free -h
 
 ```bash
 # Check logs
-journalctl -u clawdbot --no-pager -n 100
+journalctl -u openclaw --no-pager -n 100
 
 # Common fix: rebuild
-cd ~/clawdbot  # if using hackable install
+cd ~/openclaw  # if using hackable install
 npm run build
-sudo systemctl restart clawdbot
+sudo systemctl restart openclaw
 ```
 
 ### ARM Binary Issues
 
 If a skill fails with "exec format error":
+
 1. Check if the binary has an ARM64 build
 2. Try building from source
 3. Or use a Docker container with ARM support
@@ -332,14 +336,14 @@ echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 
 ## Cost Comparison
 
-| Setup | One-Time Cost | Monthly Cost | Notes |
-|-------|---------------|--------------|-------|
-| **Pi 4 (2GB)** | ~$45 | $0 | + power (~$5/yr) |
-| **Pi 4 (4GB)** | ~$55 | $0 | Recommended |
-| **Pi 5 (4GB)** | ~$60 | $0 | Best performance |
-| **Pi 5 (8GB)** | ~$80 | $0 | Overkill but future-proof |
-| DigitalOcean | $0 | $6/mo | $72/year |
-| Hetzner | $0 | €3.79/mo | ~$50/year |
+| Setup          | One-Time Cost | Monthly Cost | Notes                     |
+| -------------- | ------------- | ------------ | ------------------------- |
+| **Pi 4 (2GB)** | ~$45          | $0           | + power (~$5/yr)          |
+| **Pi 4 (4GB)** | ~$55          | $0           | Recommended               |
+| **Pi 5 (4GB)** | ~$60          | $0           | Best performance          |
+| **Pi 5 (8GB)** | ~$80          | $0           | Overkill but future-proof |
+| DigitalOcean   | $0            | $6/mo        | $72/year                  |
+| Hetzner        | $0            | €3.79/mo     | ~$50/year                 |
 
 **Break-even:** A Pi pays for itself in ~6-12 months vs cloud VPS.
 

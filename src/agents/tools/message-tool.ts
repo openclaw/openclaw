@@ -1,4 +1,7 @@
 import { Type } from "@sinclair/typebox";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
+import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
 import {
   listChannelMessageActions,
   supportsChannelMessageButtons,
@@ -8,21 +11,30 @@ import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
 } from "../../channels/plugins/types.js";
-import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
-import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
-import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
-import { resolveSessionAgentId } from "../agent-scope.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
-import { listChannelSupportedActions } from "../channel-tools.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
-import type { AnyAgentTool } from "./common.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
+import { listChannelSupportedActions } from "../channel-tools.js";
+import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
+const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
+  "send",
+  "sendWithEffect",
+  "sendAttachment",
+  "reply",
+  "thread-reply",
+  "broadcast",
+]);
+
+function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
+  return EXPLICIT_TARGET_ACTIONS.has(action);
+}
 function buildRoutingSchema() {
   return {
     channel: Type.Optional(Type.String()),
@@ -44,7 +56,11 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
     effect: Type.Optional(
       Type.String({ description: "Alias for effectId (e.g., invisible-ink, balloons)." }),
     ),
-    media: Type.Optional(Type.String()),
+    media: Type.Optional(
+      Type.String({
+        description: "Media URL or local path. data: URLs are not supported here, use buffer.",
+      }),
+    ),
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({
@@ -60,6 +76,9 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
     threadId: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
     silent: Type.Optional(Type.Boolean()),
+    quoteText: Type.Optional(
+      Type.String({ description: "Quote text for Telegram reply_parameters" }),
+    ),
     bestEffort: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     buttons: Type.Optional(
@@ -85,8 +104,12 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
       ),
     ),
   };
-  if (!options.includeButtons) delete props.buttons;
-  if (!options.includeCards) delete props.card;
+  if (!options.includeButtons) {
+    delete props.buttons;
+  }
+  if (!options.includeCards) {
+    delete props.card;
+  }
   return props;
 }
 
@@ -185,6 +208,36 @@ function buildGatewaySchema() {
   };
 }
 
+function buildPresenceSchema() {
+  return {
+    activityType: Type.Optional(
+      Type.String({
+        description: "Activity type: playing, streaming, listening, watching, competing, custom.",
+      }),
+    ),
+    activityName: Type.Optional(
+      Type.String({
+        description: "Activity name shown in sidebar (e.g. 'with fire'). Ignored for custom type.",
+      }),
+    ),
+    activityUrl: Type.Optional(
+      Type.String({
+        description:
+          "Streaming URL (Twitch or YouTube). Only used with streaming type; may not render for bots.",
+      }),
+    ),
+    activityState: Type.Optional(
+      Type.String({
+        description:
+          "State text. For custom type this is the status text; for others it shows in the flyout.",
+      }),
+    ),
+    status: Type.Optional(
+      Type.String({ description: "Bot status: online, dnd, idle, invisible." }),
+    ),
+  };
+}
+
 function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
@@ -217,6 +270,7 @@ function buildMessageToolSchemaProps(options: { includeButtons: boolean; include
     ...buildModerationSchema(),
     ...buildGatewaySchema(),
     ...buildChannelManagementSchema(),
+    ...buildPresenceSchema(),
   };
 }
 
@@ -239,15 +293,17 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
-  config?: ClawdbotConfig;
+  config?: OpenClawConfig;
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
+  sandboxRoot?: string;
+  requireExplicitTarget?: boolean;
 };
 
-function buildMessageToolSchema(cfg: ClawdbotConfig) {
+function buildMessageToolSchema(cfg: OpenClawConfig) {
   const actions = listChannelMessageActions(cfg);
   const includeButtons = supportsChannelMessageButtons(cfg);
   const includeCards = supportsChannelMessageCards(cfg);
@@ -259,7 +315,9 @@ function buildMessageToolSchema(cfg: ClawdbotConfig) {
 
 function resolveAgentAccountId(value?: string): string | undefined {
   const trimmed = value?.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   return normalizeAccountId(trimmed);
 }
 
@@ -269,9 +327,13 @@ function filterActionsForContext(params: {
   currentChannelId?: string;
 }): ChannelMessageActionName[] {
   const channel = normalizeMessageChannel(params.channel);
-  if (!channel || channel !== "bluebubbles") return params.actions;
+  if (!channel || channel !== "bluebubbles") {
+    return params.actions;
+  }
   const currentChannelId = params.currentChannelId?.trim();
-  if (!currentChannelId) return params.actions;
+  if (!currentChannelId) {
+    return params.actions;
+  }
   const normalizedTarget =
     normalizeTargetForProvider(channel, currentChannelId) ?? currentChannelId;
   const lowered = normalizedTarget.trim().toLowerCase();
@@ -280,12 +342,14 @@ function filterActionsForContext(params: {
     lowered.startsWith("chat_id:") ||
     lowered.startsWith("chat_identifier:") ||
     lowered.startsWith("group:");
-  if (isGroupTarget) return params.actions;
+  if (isGroupTarget) {
+    return params.actions;
+  }
   return params.actions.filter((action) => !BLUEBUBBLES_GROUP_ACTIONS.has(action));
 }
 
 function buildMessageToolDescription(options?: {
-  config?: ClawdbotConfig;
+  config?: OpenClawConfig;
   currentChannel?: string;
   currentChannelId?: string;
 }): string {
@@ -304,7 +368,7 @@ function buildMessageToolDescription(options?: {
     if (channelActions.length > 0) {
       // Always include "send" as a base action
       const allActions = new Set(["send", ...channelActions]);
-      const actionList = Array.from(allActions).sort().join(", ");
+      const actionList = Array.from(allActions).toSorted().join(", ");
       return `${baseDescription} Current channel (${options.currentChannel}) supports: ${actionList}.`;
     }
   }
@@ -346,6 +410,20 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      const requireExplicitTarget = options?.requireExplicitTarget === true;
+      if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
+        const explicitTarget =
+          (typeof params.target === "string" && params.target.trim().length > 0) ||
+          (typeof params.to === "string" && params.to.trim().length > 0) ||
+          (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
+          (Array.isArray(params.targets) &&
+            params.targets.some((value) => typeof value === "string" && value.trim().length > 0));
+        if (!explicitTarget) {
+          throw new Error(
+            "Explicit message target required for this run. Provide target/targets (and channel when needed).",
+          );
+        }
+      }
 
       const accountId = readStringParam(params, "accountId") ?? agentAccountId;
       if (accountId) {
@@ -389,11 +467,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         agentId: options?.agentSessionKey
           ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
           : undefined,
+        sandboxRoot: options?.sandboxRoot,
         abortSignal: signal,
       });
 
       const toolResult = getToolResult(result);
-      if (toolResult) return toolResult;
+      if (toolResult) {
+        return toolResult;
+      }
       return jsonResult(result.payload);
     },
   };
