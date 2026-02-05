@@ -173,8 +173,22 @@ function rejectUpgrade(socket: Duplex, status: number, bodyText: string) {
   }
 }
 
-const serversByPort = new Map<number, ChromeExtensionRelayServer>();
-const relayAuthByPort = new Map<number, string>();
+// Use globalThis to persist state across module hot-reloads (dev mode with --watch).
+// Without this, module reload resets the Map but leaves old HTTP servers running.
+const SERVERS_KEY = Symbol.for("openclaw.extension-relay.servers");
+const INIT_KEY = Symbol.for("openclaw.extension-relay.init");
+const AUTH_KEY = Symbol.for("openclaw.extension-relay.auth");
+
+const globalAny = globalThis as Record<symbol, unknown>;
+const serversByPort: Map<number, ChromeExtensionRelayServer> =
+  (globalAny[SERVERS_KEY] as Map<number, ChromeExtensionRelayServer>) ??
+  (globalAny[SERVERS_KEY] = new Map<number, ChromeExtensionRelayServer>());
+const serverInitByPort: Map<number, Promise<ChromeExtensionRelayServer>> = (globalAny[
+  INIT_KEY
+] as Map<number, Promise<ChromeExtensionRelayServer>>) ??
+(globalAny[INIT_KEY] = new Map<number, Promise<ChromeExtensionRelayServer>>());
+const relayAuthByPort: Map<number, string> =
+  (globalAny[AUTH_KEY] as Map<number, string>) ?? (globalAny[AUTH_KEY] = new Map<number, string>());
 
 function relayAuthTokenForUrl(url: string): string | null {
   try {
@@ -213,11 +227,34 @@ export async function ensureChromeExtensionRelayServer(opts: {
     throw new Error(`extension relay requires loopback cdpUrl host (got ${info.host})`);
   }
 
+  // Return existing server if already initialized
   const existing = serversByPort.get(info.port);
   if (existing) {
     return existing;
   }
 
+  // Return pending initialization if already in progress (prevents race condition)
+  const pending = serverInitByPort.get(info.port);
+  if (pending) {
+    return pending;
+  }
+
+  // Create initialization promise and cache it immediately before any await
+  const initPromise = initChromeExtensionRelayServer(info);
+  serverInitByPort.set(info.port, initPromise);
+
+  try {
+    return await initPromise;
+  } finally {
+    serverInitByPort.delete(info.port);
+  }
+}
+
+async function initChromeExtensionRelayServer(info: {
+  host: string;
+  port: number;
+  baseUrl: string;
+}): Promise<ChromeExtensionRelayServer> {
   let extensionWs: WebSocket | null = null;
   const cdpClients = new Set<WebSocket>();
   const connectedTargets = new Map<string, ConnectedTarget>();

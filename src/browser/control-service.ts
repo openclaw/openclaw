@@ -1,7 +1,10 @@
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
-import { ensureChromeExtensionRelayServer } from "./extension-relay.js";
+import {
+  ensureChromeExtensionRelayServer,
+  stopChromeExtensionRelayServer,
+} from "./extension-relay.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
 
 let state: BrowserServerState | null = null;
@@ -74,6 +77,15 @@ export async function stopBrowserControlService(): Promise<void> {
     }
   } catch (err) {
     logService.warn(`openclaw browser stop failed: ${String(err)}`);
+  }
+
+  // Stop Chrome extension relay servers for profiles using the extension driver.
+  for (const name of Object.keys(current.resolved.profiles)) {
+    const profile = resolveProfile(current.resolved, name);
+    if (!profile || profile.driver !== "extension") {
+      continue;
+    }
+    await stopChromeExtensionRelayServer({ cdpUrl: profile.cdpUrl }).catch(() => {});
   }
 
   state = null;
