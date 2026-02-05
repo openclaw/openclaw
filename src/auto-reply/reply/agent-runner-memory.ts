@@ -42,7 +42,12 @@ export async function runMemoryFlushIfNeeded(params: {
 }): Promise<{ entry: SessionEntry | undefined; hookMessages: string[] }> {
   const memoryFlushSettings = resolveMemoryFlushSettings(params.cfg);
   if (!memoryFlushSettings) {
-    return { entry: params.sessionEntry, hookMessages: [] };
+    return {
+      entry:
+        params.sessionEntry ??
+        (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined),
+      hookMessages: [],
+    };
   }
 
   const memoryFlushWritable = (() => {
@@ -80,7 +85,7 @@ export async function runMemoryFlushIfNeeded(params: {
     });
 
   if (!shouldFlushMemory) {
-    return { entry: params.sessionEntry, hookMessages: [] };
+    return { entry: entryForFlush, hookMessages: [] };
   }
 
   // Lifecycle hook: Memory Flush Start
