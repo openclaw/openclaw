@@ -47,6 +47,26 @@ describe("CopilotInitiatorTracker", () => {
     // After reset, first call should return 'user' again
     expect(tracker.getInitiator(sessionId)).toBe("user");
   });
+
+  it("should cleanup old sessions", () => {
+    const tracker = new CopilotInitiatorTracker();
+    const sessionId = "session-cleanup";
+
+    // First call creates a session entry
+    expect(tracker.getInitiator(sessionId)).toBe("user");
+
+    // Advance time by 25 hours (past the 24-hour cleanup interval)
+    vi.useFakeTimers();
+    vi.advanceTimersByTime(25 * 60 * 60 * 1000); // 25 hours
+
+    // Run cleanup
+    tracker.cleanup();
+
+    // Session should be cleaned up, so getInitiator returns 'user' again
+    expect(tracker.getInitiator(sessionId)).toBe("user");
+
+    vi.useRealTimers();
+  });
 });
 
 describe("createCopilotAwareStream", () => {

@@ -1,19 +1,34 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { log } from "./pi-embedded-runner/logger.js";
 
+const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
 export class CopilotInitiatorTracker {
   #firstCallMade = new Set<string>();
+  #sessionTimestamps = new Map<string, number>();
 
   getInitiator(sessionId: string): "user" | "agent" {
     if (this.#firstCallMade.has(sessionId)) {
       return "agent";
     }
     this.#firstCallMade.add(sessionId);
+    this.#sessionTimestamps.set(sessionId, Date.now());
     return "user";
   }
 
   reset(sessionId: string): void {
     this.#firstCallMade.delete(sessionId);
+    this.#sessionTimestamps.delete(sessionId);
+  }
+
+  cleanup(): void {
+    const now = Date.now();
+    for (const [sessionId, timestamp] of this.#sessionTimestamps) {
+      if (now - timestamp > CLEANUP_INTERVAL_MS) {
+        this.#firstCallMade.delete(sessionId);
+        this.#sessionTimestamps.delete(sessionId);
+      }
+    }
   }
 }
 
