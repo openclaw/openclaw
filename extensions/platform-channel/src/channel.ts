@@ -467,18 +467,18 @@ const gateway: ChannelGatewayAdapter<ResolvedPlatformAccount> = {
     // Register webhook target
     const unregister = registerPlatformWebhookTarget({
       account: ctx.account,
-      config: ctx.config,
+      config: ctx.cfg,
       runtime: {
         log: (msg) => ctx.log?.info(msg),
         error: (msg) => ctx.log?.error(msg),
       },
       core,
       path: webhookPath,
-      statusSink: ctx.statusSink,
+      statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
     });
 
     // Handle cleanup on abort
-    ctx.signal?.addEventListener("abort", () => {
+    ctx.abortSignal?.addEventListener("abort", () => {
       unregister();
       ctx.log?.info("Stopping platform-channel webhook target");
     });
