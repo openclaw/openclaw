@@ -65,9 +65,8 @@ export function resolveCanvasHostUrl(params: CanvasHostUrlParams) {
     return undefined;
   }
 
-  // If an explicit advertisedUrl is configured, use it directly (for remote nodes)
   if (params.advertisedUrl?.trim()) {
-    return params.advertisedUrl.trim();
+    return new URL(params.advertisedUrl.trim()).origin;
   }
 
   const scheme =
