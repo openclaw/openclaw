@@ -11,7 +11,9 @@ export function resolveFeishuCredentials(cfg?: FeishuConfig): {
 } | null {
   const appId = cfg?.appId?.trim();
   const appSecret = cfg?.appSecret?.trim();
-  if (!appId || !appSecret) return null;
+  if (!appId || !appSecret) {
+    return null;
+  }
   return {
     appId,
     appSecret,

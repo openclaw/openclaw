@@ -21,7 +21,9 @@ export function extractMentionTargets(
   return mentions
     .filter((m) => {
       // Exclude the bot itself
-      if (botOpenId && m.id.open_id === botOpenId) return false;
+      if (botOpenId && m.id.open_id === botOpenId) {
+        return false;
+      }
       // Must have open_id
       return !!m.id.open_id;
     })
@@ -40,7 +42,9 @@ export function extractMentionTargets(
  */
 export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: string): boolean {
   const mentions = event.message.mentions ?? [];
-  if (mentions.length === 0) return false;
+  if (mentions.length === 0) {
+    return false;
+  }
 
   const isDirectMessage = event.message.chat_type === "p2p";
   const hasOtherMention = mentions.some((m) => m.id.open_id !== botOpenId);
@@ -101,7 +105,9 @@ export function formatMentionAllForCard(): string {
  * Build complete message with @mentions (text format)
  */
 export function buildMentionedMessage(targets: MentionTarget[], message: string): string {
-  if (targets.length === 0) return message;
+  if (targets.length === 0) {
+    return message;
+  }
 
   const mentionParts = targets.map((t) => formatMentionForText(t));
   return `${mentionParts.join(" ")} ${message}`;
@@ -111,7 +117,9 @@ export function buildMentionedMessage(targets: MentionTarget[], message: string)
  * Build card content with @mentions (Markdown format)
  */
 export function buildMentionedCardContent(targets: MentionTarget[], message: string): string {
-  if (targets.length === 0) return message;
+  if (targets.length === 0) {
+    return message;
+  }
 
   const mentionParts = targets.map((t) => formatMentionForCard(t));
   return `${mentionParts.join(" ")} ${message}`;

@@ -38,7 +38,6 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   }
 
   const log = opts.runtime?.log ?? console.log;
-  const error = opts.runtime?.error ?? console.error;
 
   if (feishuCfg) {
     botOpenId = await fetchBotOpenId(feishuCfg);
@@ -136,7 +135,7 @@ async function monitorWebSocket(params: {
     abortSignal?.addEventListener("abort", handleAbort, { once: true });
 
     try {
-      wsClient.start({
+      void wsClient.start({
         eventDispatcher,
       });
 

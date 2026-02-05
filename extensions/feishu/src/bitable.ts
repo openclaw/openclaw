@@ -71,10 +71,14 @@ async function getAppTokenFromWiki(
   const res = await client.wiki.space.getNode({
     params: { token: nodeToken },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   const node = res.data?.node;
-  if (!node) throw new Error("Node not found");
+  if (!node) {
+    throw new Error("Node not found");
+  }
   if (node.obj_type !== "bitable") {
     throw new Error(`Node is not a bitable (type: ${node.obj_type})`);
   }
@@ -100,7 +104,9 @@ async function getBitableMeta(client: ReturnType<typeof createFeishuClient>, url
   const res = await client.bitable.app.get({
     path: { app_token: appToken },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   // List tables if no table_id specified
   let tables: { table_id: string; name: string }[] = [];
@@ -136,7 +142,9 @@ async function listFields(
   const res = await client.bitable.appTableField.list({
     path: { app_token: appToken, table_id: tableId },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   const fields = res.data?.items ?? [];
   return {
@@ -166,7 +174,9 @@ async function listRecords(
       ...(pageToken && { page_token: pageToken }),
     },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     records: res.data?.items ?? [],
@@ -185,7 +195,9 @@ async function getRecord(
   const res = await client.bitable.appTableRecord.get({
     path: { app_token: appToken, table_id: tableId, record_id: recordId },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     record: res.data?.record,
@@ -202,7 +214,9 @@ async function createRecord(
     path: { app_token: appToken, table_id: tableId },
     data: { fields },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     record: res.data?.record,
@@ -220,7 +234,9 @@ async function updateRecord(
     path: { app_token: appToken, table_id: tableId, record_id: recordId },
     data: { fields },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     record: res.data?.record,

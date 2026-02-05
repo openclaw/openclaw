@@ -15,6 +15,7 @@ export async function probeFeishu(cfg?: FeishuConfig): Promise<FeishuProbeResult
     const client = createFeishuClient(cfg!);
     // Use im.chat.list as a simple connectivity test
     // The bot info API path varies by SDK version
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing internal SDK method
     const response = await (client as any).request({
       method: "GET",
       url: "/open-apis/bot/v3/info",

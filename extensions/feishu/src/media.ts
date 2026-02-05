@@ -38,6 +38,7 @@ export async function downloadImageFeishu(params: {
     path: { image_key: imageKey },
   });
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type varies
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {
     throw new Error(
@@ -117,6 +118,7 @@ export async function downloadMessageResourceFeishu(params: {
     params: { type },
   });
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type varies
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {
     throw new Error(
@@ -212,12 +214,14 @@ export async function uploadImageFeishu(params: {
   const response = await client.im.image.create({
     data: {
       image_type: imageType,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK expects stream
       image: imageStream as any,
     },
   });
 
   // SDK v1.30+ returns data directly without code wrapper on success
   // On error, it throws or returns { code, msg }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type varies
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {
     throw new Error(`Feishu image upload failed: ${responseAny.msg || `code ${responseAny.code}`}`);
@@ -258,12 +262,14 @@ export async function uploadFileFeishu(params: {
     data: {
       file_type: fileType,
       file_name: fileName,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK expects stream
       file: fileStream as any,
       ...(duration !== undefined && { duration }),
     },
   });
 
   // SDK v1.30+ returns data directly without code wrapper on success
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type varies
   const responseAny = response as any;
   if (responseAny.code !== undefined && responseAny.code !== 0) {
     throw new Error(`Feishu file upload failed: ${responseAny.msg || `code ${responseAny.code}`}`);

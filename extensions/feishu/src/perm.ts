@@ -53,7 +53,9 @@ async function listMembers(client: Lark.Client, token: string, type: string) {
     path: { token },
     params: { type: type as ListTokenType },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     members:
@@ -83,7 +85,9 @@ async function addMember(
       perm: perm as PermType,
     },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     success: true,
@@ -102,7 +106,9 @@ async function removeMember(
     path: { token, member_id: memberId },
     params: { type: type as CreateTokenType, member_type: memberType as MemberType },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     success: true,
@@ -146,6 +152,7 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
             case "remove":
               return json(await removeMember(client, p.token, p.type, p.member_type, p.member_id));
             default:
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
               return json({ error: `Unknown action: ${(p as any).action}` });
           }
         } catch (err) {

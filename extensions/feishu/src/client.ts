@@ -6,8 +6,12 @@ let cachedClient: Lark.Client | null = null;
 let cachedConfig: { appId: string; appSecret: string; domain: FeishuDomain } | null = null;
 
 function resolveDomain(domain: FeishuDomain): Lark.Domain | string {
-  if (domain === "lark") return Lark.Domain.Lark;
-  if (domain === "feishu") return Lark.Domain.Feishu;
+  if (domain === "lark") {
+    return Lark.Domain.Lark;
+  }
+  if (domain === "feishu") {
+    return Lark.Domain.Feishu;
+  }
   return domain.replace(/\/+$/, ""); // Custom URL, remove trailing slashes
 }
 

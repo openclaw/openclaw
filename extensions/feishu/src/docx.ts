@@ -55,7 +55,8 @@ const BLOCK_TYPE_NAMES: Record<number, string> = {
 const UNSUPPORTED_CREATE_TYPES = new Set([31, 32]);
 
 /** Clean blocks for insertion (remove unsupported types and read-only fields) */
-function cleanBlocksForInsert(blocks: any[]): { cleaned: any[]; skipped: string[] } {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
+function cleanBlocksForInsert(blocks: any[]): { cleaned: unknown[]; skipped: string[] } {
   const skipped: string[] = [];
   const cleaned = blocks
     .filter((block) => {
@@ -68,7 +69,7 @@ function cleanBlocksForInsert(blocks: any[]): { cleaned: any[]; skipped: string[
     })
     .map((block) => {
       if (block.block_type === 31 && block.table?.merge_info) {
-        const { merge_info, ...tableRest } = block.table;
+        const { merge_info: _merge_info, ...tableRest } = block.table;
         return { ...block, table: tableRest };
       }
       return block;
@@ -82,7 +83,9 @@ async function convertMarkdown(client: Lark.Client, markdown: string) {
   const res = await client.docx.document.convert({
     data: { content_type: "markdown", content: markdown },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
   return {
     blocks: res.data?.blocks ?? [],
     firstLevelBlockIds: res.data?.first_level_block_ids ?? [],
@@ -92,9 +95,10 @@ async function convertMarkdown(client: Lark.Client, markdown: string) {
 async function insertBlocks(
   client: Lark.Client,
   docToken: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
   blocks: any[],
   parentBlockId?: string,
-): Promise<{ children: any[]; skipped: string[] }> {
+): Promise<{ children: unknown[]; skipped: string[] }> {
   const { cleaned, skipped } = cleanBlocksForInsert(blocks);
   const blockId = parentBlockId ?? docToken;
 
@@ -106,7 +110,9 @@ async function insertBlocks(
     path: { document_id: docToken, block_id: blockId },
     data: { children: cleaned },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
   return { children: res.data?.children ?? [], skipped };
 }
 
@@ -114,7 +120,9 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
   const existing = await client.docx.documentBlock.list({
     path: { document_id: docToken },
   });
-  if (existing.code !== 0) throw new Error(existing.msg);
+  if (existing.code !== 0) {
+    throw new Error(existing.msg);
+  }
 
   const childIds =
     existing.data?.items
@@ -126,7 +134,9 @@ async function clearDocumentContent(client: Lark.Client, docToken: string) {
       path: { document_id: docToken, block_id: docToken },
       data: { start_index: 0, end_index: childIds.length },
     });
-    if (res.code !== 0) throw new Error(res.msg);
+    if (res.code !== 0) {
+      throw new Error(res.msg);
+    }
   }
 
   return childIds.length;
@@ -144,6 +154,7 @@ async function uploadImageToDocx(
       parent_type: "docx_image",
       parent_node: blockId,
       size: imageBuffer.length,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK expects stream
       file: Readable.from(imageBuffer) as any,
     },
   });
@@ -167,10 +178,13 @@ async function processImages(
   client: Lark.Client,
   docToken: string,
   markdown: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
   insertedBlocks: any[],
 ): Promise<number> {
   const imageUrls = extractImageUrls(markdown);
-  if (imageUrls.length === 0) return 0;
+  if (imageUrls.length === 0) {
+    return 0;
+  }
 
   const imageBlocks = insertedBlocks.filter((b) => b.block_type === 27);
 
@@ -212,7 +226,9 @@ async function readDoc(client: Lark.Client, docToken: string) {
     client.docx.documentBlock.list({ path: { document_id: docToken } }),
   ]);
 
-  if (contentRes.code !== 0) throw new Error(contentRes.msg);
+  if (contentRes.code !== 0) {
+    throw new Error(contentRes.msg);
+  }
 
   const blocks = blocksRes.data?.items ?? [];
   const blockCounts: Record<string, number> = {};
@@ -247,7 +263,9 @@ async function createDoc(client: Lark.Client, title: string, folderToken?: strin
   const res = await client.docx.document.create({
     data: { title, folder_token: folderToken },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
   const doc = res.data?.document;
   return {
     document_id: doc?.document_id,
@@ -291,6 +309,7 @@ async function appendDoc(client: Lark.Client, docToken: string, markdown: string
     success: true,
     blocks_added: inserted.length,
     images_processed: imagesProcessed,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
     block_ids: inserted.map((b: any) => b.block_id),
     ...(skipped.length > 0 && {
       warning: `Skipped unsupported block types: ${skipped.join(", ")}. Tables are not supported via this API.`,
@@ -307,7 +326,9 @@ async function updateBlock(
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: blockId },
   });
-  if (blockInfo.code !== 0) throw new Error(blockInfo.msg);
+  if (blockInfo.code !== 0) {
+    throw new Error(blockInfo.msg);
+  }
 
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },
@@ -317,7 +338,9 @@ async function updateBlock(
       },
     },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return { success: true, block_id: blockId };
 }
@@ -326,24 +349,33 @@ async function deleteBlock(client: Lark.Client, docToken: string, blockId: strin
   const blockInfo = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: blockId },
   });
-  if (blockInfo.code !== 0) throw new Error(blockInfo.msg);
+  if (blockInfo.code !== 0) {
+    throw new Error(blockInfo.msg);
+  }
 
   const parentId = blockInfo.data?.block?.parent_id ?? docToken;
 
   const children = await client.docx.documentBlockChildren.get({
     path: { document_id: docToken, block_id: parentId },
   });
-  if (children.code !== 0) throw new Error(children.msg);
+  if (children.code !== 0) {
+    throw new Error(children.msg);
+  }
 
   const items = children.data?.items ?? [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
   const index = items.findIndex((item: any) => item.block_id === blockId);
-  if (index === -1) throw new Error("Block not found");
+  if (index === -1) {
+    throw new Error("Block not found");
+  }
 
   const res = await client.docx.documentBlockChildren.batchDelete({
     path: { document_id: docToken, block_id: parentId },
     data: { start_index: index, end_index: index + 1 },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return { success: true, deleted_block_id: blockId };
 }
@@ -352,7 +384,9 @@ async function listBlocks(client: Lark.Client, docToken: string) {
   const res = await client.docx.documentBlock.list({
     path: { document_id: docToken },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     blocks: res.data?.items ?? [],
@@ -363,7 +397,9 @@ async function getBlock(client: Lark.Client, docToken: string, blockId: string) 
   const res = await client.docx.documentBlock.get({
     path: { document_id: docToken, block_id: blockId },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     block: res.data?.block,
@@ -372,7 +408,9 @@ async function getBlock(client: Lark.Client, docToken: string, blockId: string) 
 
 async function listAppScopes(client: Lark.Client) {
   const res = await client.application.scope.list({});
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   const scopes = res.data?.scopes ?? [];
   const granted = scopes.filter((s) => s.grant_status === 1);
@@ -429,6 +467,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
               case "delete_block":
                 return json(await deleteBlock(client, p.doc_token, p.block_id));
               default:
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
                 return json({ error: `Unknown action: ${(p as any).action}` });
             }
           } catch (err) {

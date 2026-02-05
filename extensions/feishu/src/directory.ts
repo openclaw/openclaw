@@ -26,12 +26,16 @@ export async function listFeishuDirectoryPeers(params: {
 
   for (const entry of feishuCfg?.allowFrom ?? []) {
     const trimmed = String(entry).trim();
-    if (trimmed && trimmed !== "*") ids.add(trimmed);
+    if (trimmed && trimmed !== "*") {
+      ids.add(trimmed);
+    }
   }
 
   for (const userId of Object.keys(feishuCfg?.dms ?? {})) {
     const trimmed = userId.trim();
-    if (trimmed) ids.add(trimmed);
+    if (trimmed) {
+      ids.add(trimmed);
+    }
   }
 
   return Array.from(ids)
@@ -54,12 +58,16 @@ export async function listFeishuDirectoryGroups(params: {
 
   for (const groupId of Object.keys(feishuCfg?.groups ?? {})) {
     const trimmed = groupId.trim();
-    if (trimmed && trimmed !== "*") ids.add(trimmed);
+    if (trimmed && trimmed !== "*") {
+      ids.add(trimmed);
+    }
   }
 
   for (const entry of feishuCfg?.groupAllowFrom ?? []) {
     const trimmed = String(entry).trim();
-    if (trimmed && trimmed !== "*") ids.add(trimmed);
+    if (trimmed && trimmed !== "*") {
+      ids.add(trimmed);
+    }
   }
 
   return Array.from(ids)
@@ -104,7 +112,9 @@ export async function listFeishuDirectoryPeersLive(params: {
             });
           }
         }
-        if (peers.length >= limit) break;
+        if (peers.length >= limit) {
+          break;
+        }
       }
     }
 
@@ -148,7 +158,9 @@ export async function listFeishuDirectoryGroupsLive(params: {
             });
           }
         }
-        if (groups.length >= limit) break;
+        if (groups.length >= limit) {
+          break;
+        }
       }
     }
 

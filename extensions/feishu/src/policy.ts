@@ -16,7 +16,9 @@ export function resolveFeishuAllowlistMatch(params: {
     .map((entry) => String(entry).trim().toLowerCase())
     .filter(Boolean);
 
-  if (allowFrom.length === 0) return { allowed: false };
+  if (allowFrom.length === 0) {
+    return { allowed: false };
+  }
   if (allowFrom.includes("*")) {
     return { allowed: true, matchKey: "*", matchSource: "wildcard" };
   }
@@ -40,21 +42,28 @@ export function resolveFeishuGroupConfig(params: {
 }): FeishuGroupConfig | undefined {
   const groups = params.cfg?.groups ?? {};
   const groupId = params.groupId?.trim();
-  if (!groupId) return undefined;
+  if (!groupId) {
+    return undefined;
+  }
 
-  const direct = groups[groupId] as FeishuGroupConfig | undefined;
-  if (direct) return direct;
+  const direct = groups[groupId];
+  if (direct) {
+    return direct;
+  }
 
   const lowered = groupId.toLowerCase();
   const matchKey = Object.keys(groups).find((key) => key.toLowerCase() === lowered);
-  return matchKey ? (groups[matchKey] as FeishuGroupConfig | undefined) : undefined;
+  return matchKey ? groups[matchKey] : undefined;
 }
 
 export function resolveFeishuGroupToolPolicy(
   params: ChannelGroupContext,
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- type resolution issue with plugin-sdk
 ): GroupToolPolicyConfig | undefined {
   const cfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
-  if (!cfg) return undefined;
+  if (!cfg) {
+    return undefined;
+  }
 
   const groupConfig = resolveFeishuGroupConfig({
     cfg,
@@ -71,8 +80,12 @@ export function isFeishuGroupAllowed(params: {
   senderName?: string | null;
 }): boolean {
   const { groupPolicy } = params;
-  if (groupPolicy === "disabled") return false;
-  if (groupPolicy === "open") return true;
+  if (groupPolicy === "disabled") {
+    return false;
+  }
+  if (groupPolicy === "open") {
+    return true;
+  }
   return resolveFeishuAllowlistMatch(params).allowed;
 }
 

@@ -24,7 +24,9 @@ const WIKI_ACCESS_HINT =
 
 async function listSpaces(client: Lark.Client) {
   const res = await client.wiki.space.list({});
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   const spaces =
     res.data?.items?.map((s) => ({
@@ -45,7 +47,9 @@ async function listNodes(client: Lark.Client, spaceId: string, parentNodeToken?:
     path: { space_id: spaceId },
     params: { parent_node_token: parentNodeToken },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     nodes:
@@ -63,7 +67,9 @@ async function getNode(client: Lark.Client, token: string) {
   const res = await client.wiki.space.getNode({
     params: { token },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   const node = res.data?.node;
   return {
@@ -95,7 +101,9 @@ async function createNode(
       parent_node_token: parentNodeToken,
     },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   const node = res.data?.node;
   return {
@@ -120,7 +128,9 @@ async function moveNode(
       target_parent_token: targetParentToken,
     },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     success: true,
@@ -133,7 +143,9 @@ async function renameNode(client: Lark.Client, spaceId: string, nodeToken: strin
     path: { space_id: spaceId, node_token: nodeToken },
     data: { title },
   });
-  if (res.code !== 0) throw new Error(res.msg);
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
 
   return {
     success: true,
@@ -199,6 +211,7 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
             case "rename":
               return json(await renameNode(client, p.space_id, p.node_token, p.title));
             default:
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
               return json({ error: `Unknown action: ${(p as any).action}` });
           }
         } catch (err) {

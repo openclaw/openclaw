@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk";
 import type { FeishuConfig, FeishuMessageContext, FeishuMediaInfo } from "./types.js";
 import { createFeishuClient } from "./client.js";
-import { downloadImageFeishu, downloadMessageResourceFeishu } from "./media.js";
+import { downloadMessageResourceFeishu } from "./media.js";
 import { extractMentionTargets, extractMessageBody, isMentionForwardRequest } from "./mention.js";
 import {
   resolveFeishuGroupConfig,
@@ -29,12 +29,16 @@ type PermissionError = {
 };
 
 function extractPermissionError(err: unknown): PermissionError | null {
-  if (!err || typeof err !== "object") return null;
+  if (!err || typeof err !== "object") {
+    return null;
+  }
 
   // Axios error structure: err.response.data contains the Feishu error
   const axiosErr = err as { response?: { data?: unknown } };
   const data = axiosErr.response?.data;
-  if (!data || typeof data !== "object") return null;
+  if (!data || typeof data !== "object") {
+    return null;
+  }
 
   const feishuErr = data as {
     code?: number;
@@ -43,7 +47,9 @@ function extractPermissionError(err: unknown): PermissionError | null {
   };
 
   // Feishu permission error code: 99991672
-  if (feishuErr.code !== 99991672) return null;
+  if (feishuErr.code !== 99991672) {
+    return null;
+  }
 
   // Extract the grant URL from the error message (contains the direct link)
   const msg = feishuErr.msg ?? "";
@@ -75,21 +81,27 @@ type SenderNameResult = {
 async function resolveFeishuSenderName(params: {
   feishuCfg?: FeishuConfig;
   senderOpenId: string;
-  log: (...args: any[]) => void;
+  log: (...args: unknown[]) => void;
 }): Promise<SenderNameResult> {
   const { feishuCfg, senderOpenId, log } = params;
-  if (!feishuCfg) return {};
-  if (!senderOpenId) return {};
+  if (!feishuCfg) {
+    return {};
+  }
+  if (!senderOpenId) {
+    return {};
+  }
 
   const cached = senderNameCache.get(senderOpenId);
   const now = Date.now();
-  if (cached && cached.expireAt > now) return { name: cached.name };
+  if (cached && cached.expireAt > now) {
+    return { name: cached.name };
+  }
 
   try {
     const client = createFeishuClient(feishuCfg);
 
     // contact/v3/users/:user_id?user_id_type=open_id
-    const res: any = await client.contact.user.get({
+    const res = await client.contact.user.get({
       path: { user_id: senderOpenId },
       params: { user_id_type: "open_id" },
     });
@@ -181,8 +193,12 @@ function parseMessageContent(content: string, messageType: string): string {
 
 function checkBotMentioned(event: FeishuMessageEvent, botOpenId?: string): boolean {
   const mentions = event.message.mentions ?? [];
-  if (mentions.length === 0) return false;
-  if (!botOpenId) return mentions.length > 0;
+  if (mentions.length === 0) {
+    return false;
+  }
+  if (!botOpenId) {
+    return mentions.length > 0;
+  }
   return mentions.some((m) => m.id.open_id === botOpenId);
 }
 
@@ -190,7 +206,9 @@ function stripBotMention(
   text: string,
   mentions?: FeishuMessageEvent["message"]["mentions"],
 ): string {
-  if (!mentions || mentions.length === 0) return text;
+  if (!mentions || mentions.length === 0) {
+    return text;
+  }
   let result = text;
   for (const mention of mentions) {
     result = result.replace(new RegExp(`@${mention.name}\\s*`, "g"), "").trim();
@@ -503,7 +521,9 @@ export async function handleFeishuMessage(params: {
     senderOpenId: ctx.senderOpenId,
     log,
   });
-  if (senderResult.name) ctx = { ...ctx, senderName: senderResult.name };
+  if (senderResult.name) {
+    ctx = { ...ctx, senderName: senderResult.name };
+  }
 
   // Track permission error to inform agent later (with cooldown to avoid repetition)
   let permissionErrorForAgent: PermissionError | undefined;

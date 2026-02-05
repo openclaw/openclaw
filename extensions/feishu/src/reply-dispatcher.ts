@@ -18,9 +18,13 @@ import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } 
  */
 function shouldUseCard(text: string): boolean {
   // Code blocks (fenced)
-  if (/```[\s\S]*?```/.test(text)) return true;
+  if (/```[\s\S]*?```/.test(text)) {
+    return true;
+  }
   // Tables (at least header + separator row with |)
-  if (/\|.+\|[\r\n]+\|[-:| ]+\|/.test(text)) return true;
+  if (/\|.+\|[\r\n]+\|[-:| ]+\|/.test(text)) {
+    return true;
+  }
   return false;
 }
 
@@ -49,12 +53,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   const typingCallbacks = createTypingCallbacks({
     start: async () => {
-      if (!replyToMessageId) return;
+      if (!replyToMessageId) {
+        return;
+      }
       typingState = await addTypingIndicator({ cfg, messageId: replyToMessageId });
       params.runtime.log?.(`feishu: added typing indicator reaction`);
     },
     stop: async () => {
-      if (!typingState) return;
+      if (!typingState) {
+        return;
+      }
       await removeTypingIndicator({ cfg, state: typingState });
       typingState = null;
       params.runtime.log?.(`feishu: removed typing indicator reaction`);

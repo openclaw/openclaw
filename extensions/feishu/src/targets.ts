@@ -6,15 +6,23 @@ const USER_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
 
 export function detectIdType(id: string): FeishuIdType | null {
   const trimmed = id.trim();
-  if (trimmed.startsWith(CHAT_ID_PREFIX)) return "chat_id";
-  if (trimmed.startsWith(OPEN_ID_PREFIX)) return "open_id";
-  if (USER_ID_REGEX.test(trimmed)) return "user_id";
+  if (trimmed.startsWith(CHAT_ID_PREFIX)) {
+    return "chat_id";
+  }
+  if (trimmed.startsWith(OPEN_ID_PREFIX)) {
+    return "open_id";
+  }
+  if (USER_ID_REGEX.test(trimmed)) {
+    return "user_id";
+  }
   return null;
 }
 
 export function normalizeFeishuTarget(raw: string): string | null {
   const trimmed = raw.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
 
   const lowered = trimmed.toLowerCase();
   if (lowered.startsWith("chat:")) {
@@ -43,16 +51,28 @@ export function formatFeishuTarget(id: string, type?: FeishuIdType): string {
 
 export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_id" {
   const trimmed = id.trim();
-  if (trimmed.startsWith(CHAT_ID_PREFIX)) return "chat_id";
-  if (trimmed.startsWith(OPEN_ID_PREFIX)) return "open_id";
+  if (trimmed.startsWith(CHAT_ID_PREFIX)) {
+    return "chat_id";
+  }
+  if (trimmed.startsWith(OPEN_ID_PREFIX)) {
+    return "open_id";
+  }
   return "open_id";
 }
 
 export function looksLikeFeishuId(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) return false;
-  if (/^(chat|user|open_id):/i.test(trimmed)) return true;
-  if (trimmed.startsWith(CHAT_ID_PREFIX)) return true;
-  if (trimmed.startsWith(OPEN_ID_PREFIX)) return true;
+  if (!trimmed) {
+    return false;
+  }
+  if (/^(chat|user|open_id):/i.test(trimmed)) {
+    return true;
+  }
+  if (trimmed.startsWith(CHAT_ID_PREFIX)) {
+    return true;
+  }
+  if (trimmed.startsWith(OPEN_ID_PREFIX)) {
+    return true;
+  }
   return false;
 }
