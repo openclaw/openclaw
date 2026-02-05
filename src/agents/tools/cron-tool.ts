@@ -1,8 +1,11 @@
 import { Type } from "@sinclair/typebox";
-import { type ChannelId } from "../../channels/plugins/types.js";
+import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  parseAgentSessionKey,
+  resolveThreadParentSessionKey,
+} from "../../sessions/session-key-utils.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
@@ -155,60 +158,60 @@ async function buildReminderContextLines(params: {
   }
 }
 
-function inferDeliveryFromSessionKey(
-  agentSessionKey?: string,
-): { mode: "announce"; channel: ChannelId; to?: string } | null {
-  const parsed = parseAgentSessionKey(agentSessionKey);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
+  const rawSessionKey = agentSessionKey?.trim();
+  if (!rawSessionKey) {
+    return null;
+  }
+  const baseSessionKey = resolveThreadParentSessionKey(rawSessionKey) ?? rawSessionKey;
+  const parsed = parseAgentSessionKey(baseSessionKey);
   if (!parsed || !parsed.rest) {
     return null;
   }
-  // Format: "agent:<agentId>:<channel>:<rest...>" or "agent:<agentId>:main"
-  // parsed.rest is "<channel>:<rest...>"
   const parts = parsed.rest.split(":").filter(Boolean);
   if (parts.length === 0) {
-    return null; // "main" or empty
-  }
-  if (parts[0] === "main") {
     return null;
   }
-  const channel = parts[0] as ChannelId;
+  const head = parts[0]?.trim().toLowerCase();
+  if (!head || head === "main" || head === "subagent" || head === "acp") {
+    return null;
+  }
 
-  // Handle various formats:
-  // channel:dm:<peerId>
-  // channel:group:<groupId>
-  // channel:channel:<channelId>
-  // channel:<accountId>:...
-
-  // Heuristic: If we can parse a peerId, use it.
-  // Note: This logic duplicates session key parsing in buildAgentPeerSessionKey, which is tricky.
-  // We opt for a safe subset: if we see "dm", "group", or "channel" token, extract the ID.
-
-  // Check for accountId scenarios
-  // agent:main:telegram:default:dm:123 -> parts=[telegram, default, dm, 123]
-  // agent:main:telegram:dm:123 -> parts=[telegram, dm, 123]
-
-  let to: string | undefined;
-
-  // Try to find peer marker
+  // buildAgentPeerSessionKey encodes peers as:
+  // - dm:<peerId>
+  // - <channel>:dm:<peerId>
+  // - <channel>:<accountId>:dm:<peerId>
+  // - <channel>:group:<peerId>
+  // - <channel>:channel:<peerId>
+  // Threads append :thread:<id> or :topic:<id>, which we already strip.
   const markerIndex = parts.findIndex(
-    (p) => p === "dm" || p === "group" || p === "channel" || p === "thread",
+    (part) => part === "dm" || part === "group" || part === "channel",
   );
-  if (markerIndex !== -1 && markerIndex + 1 < parts.length) {
-    // Reconstruct the ID from remaining parts allow for colons in IDs
-    to = parts.slice(markerIndex + 1).join(":");
+  if (markerIndex === -1) {
+    return null;
   }
-
-  // If we can't find a peer marker, we might be in channel:<channelId> implicit form?
-  // Let's stick to explicit marker for safety.
-
-  if (!to) {
-    // Can't infer 'to', so we can't fully construct delivery.
-    // However, if the user just wants the channel, maybe that's enough?
-    // ResolvedDeliveryTarget logic handles missing 'to' by failing or warning.
+  const peerId = parts
+    .slice(markerIndex + 1)
+    .join(":")
+    .trim();
+  if (!peerId) {
     return null;
   }
 
-  return { mode: "announce", channel, to };
+  let channel: CronMessageChannel | undefined;
+  if (markerIndex >= 1) {
+    channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
+  }
+
+  const delivery: CronDelivery = { mode: "announce", to: peerId };
+  if (channel) {
+    delivery.channel = channel;
+  }
+  return delivery;
 }
 
 export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
@@ -307,13 +310,26 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             opts?.agentSessionKey &&
             job &&
             typeof job === "object" &&
-            !("delivery" in job) &&
             "payload" in job &&
             (job as { payload?: { kind?: string } }).payload?.kind === "agentTurn"
           ) {
-            const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
-            if (inferred) {
-              (job as { delivery?: unknown }).delivery = inferred;
+            const deliveryValue = (job as { delivery?: unknown }).delivery;
+            const delivery = isRecord(deliveryValue) ? deliveryValue : null;
+            const modeRaw = delivery && typeof delivery.mode === "string" ? delivery.mode : "";
+            const mode = modeRaw.trim().toLowerCase();
+            const hasTarget =
+              (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
+              (typeof delivery?.to === "string" && delivery.to.trim());
+            const shouldInfer =
+              (deliveryValue == null || delivery) && mode !== "none" && !hasTarget;
+            if (shouldInfer) {
+              const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
+              if (inferred) {
+                (job as { delivery?: unknown }).delivery = {
+                  ...(delivery ?? {}),
+                  ...inferred,
+                } satisfies CronDelivery;
+              }
             }
           }
 
