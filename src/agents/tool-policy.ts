@@ -1,3 +1,5 @@
+import type { AnyAgentTool } from "./tools/common.js";
+
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 type ToolProfilePolicy = {
@@ -56,6 +58,8 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   ],
 };
 
+const OWNER_ONLY_TOOL_NAMES = new Set<string>(["whatsapp_login"]);
+
 const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   minimal: {
     allow: ["session_status"],
@@ -78,6 +82,31 @@ const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
 export function normalizeToolName(name: string) {
   const normalized = name.trim().toLowerCase();
   return TOOL_NAME_ALIASES[normalized] ?? normalized;
+}
+
+export function isOwnerOnlyToolName(name: string) {
+  return OWNER_ONLY_TOOL_NAMES.has(normalizeToolName(name));
+}
+
+export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
+  const withGuard = tools.map((tool) => {
+    if (!isOwnerOnlyToolName(tool.name)) {
+      return tool;
+    }
+    if (senderIsOwner || !tool.execute) {
+      return tool;
+    }
+    return {
+      ...tool,
+      execute: async () => {
+        throw new Error("Tool restricted to owner senders.");
+      },
+    };
+  });
+  if (senderIsOwner) {
+    return withGuard;
+  }
+  return withGuard.filter((tool) => !isOwnerOnlyToolName(tool.name));
 }
 
 export function normalizeToolList(list?: string[]) {

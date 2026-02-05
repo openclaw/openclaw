@@ -1,5 +1,6 @@
-// @ts-nocheck
 import type { Message } from "@grammyjs/types";
+import type { TelegramMediaRef } from "./bot-message-context.js";
+import type { TelegramContext } from "./bot/types.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
@@ -63,7 +64,7 @@ export const registerTelegramHandlers = ({
 
   type TextFragmentEntry = {
     key: string;
-    messages: Array<{ msg: Message; ctx: unknown; receivedAtMs: number }>;
+    messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
     timer: ReturnType<typeof setTimeout>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
@@ -71,9 +72,9 @@ export const registerTelegramHandlers = ({
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   type TelegramDebounceEntry = {
-    ctx: unknown;
+    ctx: TelegramContext;
     msg: Message;
-    allMedia: Array<{ path: string; contentType?: string }>;
+    allMedia: TelegramMediaRef[];
     storeAllowFrom: string[];
     debounceKey: string | null;
     botUsername?: string;
@@ -108,7 +109,7 @@ export const registerTelegramHandlers = ({
         return;
       }
       const first = entries[0];
-      const baseCtx = first.ctx as { me?: unknown; getFile?: unknown } & Record<string, unknown>;
+      const baseCtx = first.ctx;
       const getFile =
         typeof baseCtx.getFile === "function" ? baseCtx.getFile.bind(baseCtx) : async () => ({});
       const syntheticMessage: Message = {
@@ -193,11 +194,7 @@ export const registerTelegramHandlers = ({
       const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
       const primaryEntry = captionMsg ?? entry.messages[0];
 
-      const allMedia: Array<{
-        path: string;
-        contentType?: string;
-        stickerMetadata?: { emoji?: string; setName?: string; fileId?: string };
-      }> = [];
+      const allMedia: TelegramMediaRef[] = [];
       for (const { ctx } of entry.messages) {
         const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
         if (media) {
@@ -241,7 +238,7 @@ export const registerTelegramHandlers = ({
       };
 
       const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
-      const baseCtx = first.ctx as { me?: unknown; getFile?: unknown } & Record<string, unknown>;
+      const baseCtx = first.ctx;
       const getFile =
         typeof baseCtx.getFile === "function" ? baseCtx.getFile.bind(baseCtx) : async () => ({});
 
@@ -308,8 +305,8 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      const messageThreadId = (callbackMessage as { message_thread_id?: number }).message_thread_id;
-      const isForum = (callbackMessage.chat as { is_forum?: boolean }).is_forum === true;
+      const messageThreadId = callbackMessage.message_thread_id;
+      const isForum = callbackMessage.chat.is_forum === true;
       const resolvedThreadId = resolveTelegramForumThreadId({
         isForum,
         messageThreadId,
@@ -613,7 +610,7 @@ export const registerTelegramHandlers = ({
 
       const oldChatId = String(msg.chat.id);
       const newChatId = String(msg.migrate_to_chat_id);
-      const chatTitle = (msg.chat as { title?: string }).title ?? "Unknown";
+      const chatTitle = msg.chat.title ?? "Unknown";
 
       runtime.log?.(warn(`[telegram] Group migrated: "${chatTitle}" ${oldChatId} → ${newChatId}`));
 
@@ -664,8 +661,8 @@ export const registerTelegramHandlers = ({
 
       const chatId = msg.chat.id;
       const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-      const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
-      const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+      const messageThreadId = msg.message_thread_id;
+      const isForum = msg.chat.is_forum === true;
       const resolvedThreadId = resolveTelegramForumThreadId({
         isForum,
         messageThreadId,
@@ -817,7 +814,7 @@ export const registerTelegramHandlers = ({
       }
 
       // Media group handling - buffer multi-image messages
-      const mediaGroupId = (msg as { media_group_id?: string }).media_group_id;
+      const mediaGroupId = msg.media_group_id;
       if (mediaGroupId) {
         const existing = mediaGroupBuffer.get(mediaGroupId);
         if (existing) {

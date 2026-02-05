@@ -1517,6 +1517,25 @@ See [Messages](/concepts/messages) for queueing, sessions, and streaming context
 `responsePrefix` is applied to **all outbound replies** (tool summaries, block
 streaming, final replies) across channels unless already present.
 
+Overrides can be configured per channel and per account:
+
+- `channels.<channel>.responsePrefix`
+- `channels.<channel>.accounts.<id>.responsePrefix`
+
+Resolution order (most specific wins):
+
+1. `channels.<channel>.accounts.<id>.responsePrefix`
+2. `channels.<channel>.responsePrefix`
+3. `messages.responsePrefix`
+
+Semantics:
+
+- `undefined` falls through to the next level.
+- `""` explicitly disables the prefix and stops the cascade.
+- `"auto"` derives `[{identity.name}]` for the routed agent.
+
+Overrides apply to all channels, including extensions, and to every outbound reply kind.
+
 If `messages.responsePrefix` is unset, no prefix is applied by default. WhatsApp self-chat
 replies are the exception: they default to `[{identity.name}]` when set, otherwise
 `[openclaw]`, so same-phone conversations stay legible.
