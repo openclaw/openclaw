@@ -570,14 +570,22 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
         webhookUrl: account.config.webhookUrl,
         statusSink: (patch) => ctx.setStatus({ accountId: account.accountId, ...patch }),
       });
-      return () => {
-        unregister?.();
-        ctx.setStatus({
-          accountId: account.accountId,
-          running: false,
-          lastStopAt: Date.now(),
-        });
-      };
+      // Keep the promise pending until the abort signal fires.
+      // The gateway framework treats a resolved promise as "channel stopped",
+      // so webhook-based channels must stay alive until explicitly aborted.
+      await new Promise<void>((resolve) => {
+        if (ctx.abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      unregister?.();
+      ctx.setStatus({
+        accountId: account.accountId,
+        running: false,
+        lastStopAt: Date.now(),
+      });
     },
   },
 };
