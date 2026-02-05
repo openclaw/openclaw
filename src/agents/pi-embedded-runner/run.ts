@@ -52,6 +52,8 @@ import { runEmbeddedAttempt } from "./run/attempt.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { describeUnknownError } from "./utils.js";
 
+const FAILOVER_HISTORY_LIMIT = 5;
+
 type ApiKeyInfo = ResolvedProviderAuth;
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
@@ -304,6 +306,7 @@ export async function runEmbeddedPiAgent(
       }
 
       let overflowCompactionAttempted = false;
+      let hasRotated = false;
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -366,6 +369,7 @@ export async function runEmbeddedPiAgent(
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
+            limitHistoryTurns: hasRotated ? FAILOVER_HISTORY_LIMIT : undefined,
           });
 
           const { aborted, promptError, timedOut, sessionIdUsed, lastAssistant } = attempt;
@@ -592,6 +596,7 @@ export async function runEmbeddedPiAgent(
 
             const rotated = await advanceAuthProfile();
             if (rotated) {
+              hasRotated = true;
               continue;
             }
 

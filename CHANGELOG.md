@@ -2,6 +2,25 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.2.4 (Unreleased)
+
+### Breaking Changes
+
+- **Template Simplification**: AGENTS.md and SOUL.md have been significantly streamlined
+- **XML Response Protocol**: New required structure with `<think>` and `<final>` tags
+- Removed social interaction guidelines (Discord reactions, group chat etiquette)
+
+### Features
+
+- **Local Routing Config**: Load extra agent bindings from `~/.openclaw/routing.json`
+- **Failover Optimization**: Limit conversation history to 5 turns after auth rotation
+- Added strict runtime validation for routing.json with Zod schema
+
+### Improvements
+
+- Extracted `FAILOVER_HISTORY_LIMIT` constant for better maintainability
+- Added comprehensive unit tests for routing bindings
+
 ## 2026.2.3
 
 ### Changes

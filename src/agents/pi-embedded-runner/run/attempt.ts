@@ -556,7 +556,8 @@ export async function runEmbeddedAttempt(
           : validatedGemini;
         const limited = limitHistoryTurns(
           validated,
-          getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+          params.limitHistoryTurns ??
+            getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
         cacheTrace?.recordStage("session:limited", { messages: limited });
         if (limited.length > 0) {
