@@ -819,7 +819,7 @@ export async function applyAuthChoiceApiProviders(
         "QIANFAN",
       );
     }
-    const envKey = resolveEnvApiKey("qianfan-api-key");
+    const envKey = resolveEnvApiKey("qianfan");
     if (envKey) {
       const useExisting = await params.prompter.confirm({
         message: `Use existing QIANFAN_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
