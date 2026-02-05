@@ -29,3 +29,6 @@ else
   echo "ERROR: Gateway failed to start"
   exit 1
 fi
+
+echo "==> Starting node..."
+pnpm openclaw node run --host 127.0.0.1 --port 18789 --display-name "Mea的Mac Mini"
