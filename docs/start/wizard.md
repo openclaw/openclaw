@@ -4,14 +4,15 @@ read_when:
   - Running or configuring the onboarding wizard
   - Setting up a new machine
 title: "Onboarding Wizard (CLI)"
-sidebarTitle: "Wizard (CLI)"
+sidebarTitle: "Onboarding: CLI"
 ---
 
 # Onboarding Wizard (CLI)
 
-The CLI onboarding wizard is the recommended setup path for OpenClaw on macOS,
-Linux, and Windows (via WSL2). It configures a local gateway or a remote
-gateway connection, plus workspace defaults, channels, and skills.
+The onboarding wizard is the **recommended** way to set up OpenClaw on macOS,
+Linux, or Windows (via WSL2; strongly recommended).
+It configures a local Gateway or a remote Gateway connection, plus channels, skills,
+and workspace defaults in one guided flow.
 
 ```bash
 openclaw onboard
@@ -22,36 +23,7 @@ Fastest first chat: open the Control UI (no channel setup needed). Run
 `openclaw dashboard` and chat in the browser. Docs: [Dashboard](/web/dashboard).
 </Info>
 
-## QuickStart vs Advanced
-
-The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
-
-<Tabs>
-  <Tab title="QuickStart (defaults)">
-    - Local gateway on loopback
-    - Existing workspace or default workspace
-    - Gateway port `18789`
-    - Gateway auth token auto-generated (even on loopback)
-    - Tailscale exposure off
-    - Telegram and WhatsApp DMs default to allowlist (you may be prompted for your phone number)
-  </Tab>
-  <Tab title="Advanced (full control)">
-    - Exposes full prompt flow for mode, workspace, gateway, channels, daemon, and skills
-  </Tab>
-</Tabs>
-
-## CLI onboarding details
-
-<Columns>
-  <Card title="CLI reference" href="/start/wizard-cli-reference">
-    Full local and remote flow, auth and model matrix, config outputs, wizard RPC, and signal-cli behavior.
-  </Card>
-  <Card title="Automation and scripts" href="/start/wizard-cli-automation">
-    Non-interactive onboarding recipes and automated `agents add` examples.
-  </Card>
-</Columns>
-
-## Common follow-up commands
+To reconfigure later:
 
 ```bash
 openclaw configure
@@ -67,6 +39,67 @@ Recommended: set up a Brave Search API key so the agent can use `web_search`
 (`web_fetch` works without a key). Easiest path: `openclaw configure --section web`
 which stores `tools.web.search.apiKey`. Docs: [Web tools](/tools/web).
 </Tip>
+
+## QuickStart vs Advanced
+
+The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
+
+<Tabs>
+  <Tab title="QuickStart (defaults)">
+    - Local gateway (loopback)
+    - Workspace default (or existing workspace)
+    - Gateway port **18789**
+    - Gateway auth **Token** (auto‑generated, even on loopback)
+    - Tailscale exposure **Off**
+    - Telegram + WhatsApp DMs default to **allowlist** (you'll be prompted for your phone number)
+  </Tab>
+  <Tab title="Advanced (full control)">
+    - Exposes every step (mode, workspace, gateway, channels, daemon, skills).
+  </Tab>
+</Tabs>
+
+## What the wizard configures
+
+**Local mode (default)** walks you through these steps:
+
+1. **Model/Auth** — Anthropic API key (recommended), OAuth, OpenAI, or other providers. Pick a default model.
+2. **Workspace** — Location for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
+3. **Gateway** — Port, bind address, auth mode, Tailscale exposure.
+4. **Channels** — WhatsApp, Telegram, Discord, Google Chat, Mattermost, Signal, BlueBubbles, or iMessage.
+5. **Daemon** — Installs a LaunchAgent (macOS) or systemd user unit (Linux/WSL2).
+6. **Health check** — Starts the Gateway and verifies it's running.
+7. **Skills** — Installs recommended skills and optional dependencies.
+
+<Note>
+Re-running the wizard does **not** wipe anything unless you explicitly choose **Reset** (or pass `--reset`).
+If the config is invalid or contains legacy keys, the wizard asks you to run `openclaw doctor` first.
+</Note>
+
+**Remote mode** only configures the local client to connect to a Gateway elsewhere.
+It does **not** install or change anything on the remote host.
+
+## Add another agent
+
+Use `openclaw agents add <name>` to create a separate agent with its own workspace,
+sessions, and auth profiles. Running without `--workspace` launches the wizard.
+
+What it sets:
+
+- `agents.list[].name`
+- `agents.list[].workspace`
+- `agents.list[].agentDir`
+
+Notes:
+
+- Default workspaces follow `~/.openclaw/workspace-<agentId>`.
+- Add `bindings` to route inbound messages (the wizard can do this).
+- Non-interactive flags: `--model`, `--agent-dir`, `--bind`, `--non-interactive`.
+
+## Full reference
+
+For detailed step-by-step breakdowns, non-interactive scripting, Signal setup,
+RPC API, and a full list of config fields the wizard writes, see the
+[Wizard Reference](/reference/wizard).
 
 ## Related docs
 
