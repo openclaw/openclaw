@@ -68,8 +68,7 @@ describe("sessions_spawn model e2e", () => {
     });
 
     // Step 2: Read and update (like agent handler does)
-    const store1 = loadSessionStore(storePath);
-    const entry1 = store1[sessionKey];
+    loadSessionStore(storePath);
 
     await updateSessionStore(storePath, (store) => {
       const existing = store[sessionKey];
