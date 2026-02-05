@@ -19,13 +19,13 @@ Use `session.dmScope` to control how **direct messages** are grouped:
 
 ### Secure DM mode (recommended for multi-user setups)
 
-> **Security Warning:** If your agent can receive DMs from **multiple people**, you should enable secure DM mode. Without it, all users share the same conversation context, which can leak private information between users.
+> **Security Warning:** If your agent can receive DMs from **multiple people**, you should strongly consider enabling secure DM mode. Without it, all users share the same conversation context, which can leak private information between users.
 
 **Example of the problem with default settings:**
 
-- User A (+1555) messages your agent about their medical appointment
-- User B (+2666) messages your agent asking "What were we talking about?"
-- User B sees User A's private medical information because they share the same session
+- Alice (`<SENDER_A>`) messages your agent about a private topic (for example, a medical appointment)
+- Bob (`<SENDER_B>`) messages your agent asking "What were we talking about?"
+- Because both DMs share the same session, the model may answer Bob using Alice's prior context.
 
 **The fix:** Set `dmScope` to isolate sessions per user:
 
@@ -51,6 +51,7 @@ Notes:
 - Default is `dmScope: "main"` for continuity (all DMs share the main session). This is fine for single-user setups.
 - For multi-account inboxes on the same channel, prefer `per-account-channel-peer`.
 - If the same person contacts you on multiple channels, use `session.identityLinks` to collapse their DM sessions into one canonical identity.
+- You can verify your DM settings with `openclaw security audit` (see [security](/cli/security)).
 
 ## Gateway is the source of truth
 
