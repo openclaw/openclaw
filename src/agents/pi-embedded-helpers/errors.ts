@@ -653,7 +653,11 @@ export function isNetworkError(error: unknown): boolean {
 
   // Check error message
   const errorMessage =
-    error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : JSON.stringify(error);
 
   const lowerMessage = errorMessage.toLowerCase();
 
