@@ -55,8 +55,9 @@ export function loadActiveCallsFromStore(
     if (TerminalStates.has(call.state)) {
       continue;
     }
-    // Discard stale calls that outlived maxAgeMs (crash recovery)
-    if (typeof maxAgeMs === "number" && now - call.startedAt > maxAgeMs) {
+    // Discard stale calls that outlived maxAgeMs (crash recovery).
+    // Also discard calls with future startedAt (clock skew / corrupted data).
+    if (typeof maxAgeMs === "number" && (call.startedAt > now || now - call.startedAt > maxAgeMs)) {
       continue;
     }
     activeCalls.set(callId, call);

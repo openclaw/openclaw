@@ -865,8 +865,9 @@ export class CallManager {
       if (TerminalStates.has(call.state)) {
         continue;
       }
-      // Discard stale calls that outlived maxDurationSeconds (crash recovery)
-      if (now - call.startedAt > maxAgeMs) {
+      // Discard stale calls that outlived maxDurationSeconds (crash recovery).
+      // Also discard calls with future startedAt (clock skew / corrupted data).
+      if (call.startedAt > now || now - call.startedAt > maxAgeMs) {
         continue;
       }
       this.activeCalls.set(callId, call);

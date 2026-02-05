@@ -73,6 +73,19 @@ describe("loadActiveCallsFromStore", () => {
     expect(result.activeCalls.has("fresh-1")).toBe(true);
   });
 
+  it("discards calls with future startedAt when maxAgeMs is set", () => {
+    const futureCall = makeCall({
+      callId: "future-1",
+      state: "ringing",
+      startedAt: Date.now() + 600_000, // 10 minutes in the future
+    });
+    fs.writeFileSync(path.join(tmpDir, "calls.jsonl"), JSON.stringify(futureCall) + "\n");
+
+    const result = loadActiveCallsFromStore(tmpDir, { maxAgeMs: 300_000 });
+    expect(result.activeCalls.size).toBe(0);
+    expect(result.activeCalls.has("future-1")).toBe(false);
+  });
+
   it("keeps all non-terminal calls when maxAgeMs is not set", () => {
     const oldCall = makeCall({
       callId: "old-1",
