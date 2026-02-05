@@ -156,6 +156,25 @@ export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInsta
   const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
   await fs.mkdir(installRoot, { recursive: true });
 
+  // Validate archive entries to prevent path traversal (Zip Slip / CWE-22)
+  const listArgv = assetName.endsWith(".zip")
+    ? ["unzip", "-Z1", archivePath]
+    : ["tar", "tf", archivePath];
+  const listResult = await runCommandWithTimeout(listArgv, { timeoutMs: 60_000 });
+  if (listResult.code === 0) {
+    const resolvedRoot = path.resolve(installRoot);
+    const entries = listResult.stdout
+      .split("\n")
+      .map((e) => e.trim())
+      .filter(Boolean);
+    for (const entry of entries) {
+      const resolved = path.resolve(installRoot, entry);
+      if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep)) {
+        return { ok: false, error: `Archive entry escapes target directory: ${entry}` };
+      }
+    }
+  }
+
   if (assetName.endsWith(".zip")) {
     await runCommandWithTimeout(["unzip", "-q", archivePath, "-d", installRoot], {
       timeoutMs: 60_000,
