@@ -192,10 +192,8 @@ export async function updateSessionEntry(
     const storePath = path.join(process.env.HOME || "/home/node", ".openclaw", "sessions.json");
     return await updateSessionStore(storePath, (store) => {
       const existing = store[sessionKey];
-      if (!existing) {
-        return null;
-      }
-      const next = mergeSessionEntry(existing, update);
+      // Create new session if it doesn't exist
+      const next = mergeSessionEntry(existing || { updatedAt: Date.now() }, update);
       store[sessionKey] = next;
       return next;
     });
