@@ -1,5 +1,5 @@
 ---
-summary: "Feishu bot support status, features, and configuration"
+summary: "Feishu bot overview, features, and configuration"
 read_when:
   - You want to connect a Feishu/Lark bot
   - You are configuring the Feishu channel
@@ -8,7 +8,7 @@ title: Feishu
 
 # Feishu bot
 
-Status: production-ready, supports bot DMs and group chats. Uses WebSocket long connection mode to receive events.
+Feishu (Lark) is a team chat platform used by companies for messaging and collaboration. This plugin connects OpenClaw to a Feishu/Lark bot using the platform’s WebSocket event subscription so messages can be received without exposing a public webhook URL.
 
 ---
 

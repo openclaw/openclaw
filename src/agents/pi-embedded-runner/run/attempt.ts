@@ -225,6 +225,7 @@ export async function runEmbeddedAttempt(
           senderName: params.senderName,
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
+          senderIsOwner: params.senderIsOwner,
           sessionKey: params.sessionKey ?? params.sessionId,
           agentDir,
           workspaceDir: effectiveWorkspace,
@@ -238,6 +239,9 @@ export async function runEmbeddedAttempt(
           replyToMode: params.replyToMode,
           hasRepliedRef: params.hasRepliedRef,
           modelHasVision,
+          requireExplicitMessageTarget:
+            params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+          disableMessageTool: params.disableMessageTool,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });

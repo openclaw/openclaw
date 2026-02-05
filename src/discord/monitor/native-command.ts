@@ -19,7 +19,7 @@ import type {
 } from "../../auto-reply/commands-registry.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig, loadConfig } from "../../config/config.js";
-import { resolveEffectiveMessagesConfig, resolveHumanDelayConfig } from "../../agents/identity.js";
+import { resolveHumanDelayConfig } from "../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
 import {
   buildCommandTextFromArgs,
@@ -33,12 +33,14 @@ import {
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
 import { loadWebMedia } from "../../web/media.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import {
@@ -758,14 +760,22 @@ async function dispatchDiscordCommandInteraction(params: {
     GroupSubject: isGuild ? interaction.guild?.name : undefined,
     GroupSystemPrompt: isGuild
       ? (() => {
+          const systemPromptParts = [channelConfig?.systemPrompt?.trim() || null].filter(
+            (entry): entry is string => Boolean(entry),
+          );
+          return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+        })()
+      : undefined,
+    UntrustedContext: isGuild
+      ? (() => {
           const channelTopic =
             channel && "topic" in channel ? (channel.topic ?? undefined) : undefined;
-          const channelDescription = channelTopic?.trim();
-          const systemPromptParts = [
-            channelDescription ? `Channel topic: ${channelDescription}` : null,
-            channelConfig?.systemPrompt?.trim() || null,
-          ].filter((entry): entry is string => Boolean(entry));
-          return systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+          const untrustedChannelMetadata = buildUntrustedChannelMetadata({
+            source: "discord",
+            label: "Discord channel topic",
+            entries: [channelTopic],
+          });
+          return untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined;
         })()
       : undefined,
     SenderName: user.globalName ?? user.username,
@@ -781,12 +791,19 @@ async function dispatchDiscordCommandInteraction(params: {
     CommandSource: "native" as const,
   });
 
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    cfg,
+    agentId: route.agentId,
+    channel: "discord",
+    accountId: route.accountId,
+  });
+
   let didReply = false;
   await dispatchReplyWithDispatcher({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
-      responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId).responsePrefix,
+      ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       deliver: async (payload) => {
         try {
@@ -819,6 +836,7 @@ async function dispatchDiscordCommandInteraction(params: {
         typeof discordConfig?.blockStreaming === "boolean"
           ? !discordConfig.blockStreaming
           : undefined,
+      onModelSelected,
     },
   });
 }

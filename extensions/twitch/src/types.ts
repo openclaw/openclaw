@@ -55,6 +55,8 @@ export interface TwitchAccountConfig {
   allowedRoles?: TwitchRole[];
   /** Require @mention to trigger bot responses */
   requireMention?: boolean;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
   /** Twitch client secret (required for token refresh via RefreshingAuthProvider) */
   clientSecret?: string;
   /** Refresh token (required for automatic token refresh) */

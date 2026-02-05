@@ -1,7 +1,7 @@
 import type { Bot } from "grammy";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
-import type { TelegramContext } from "./bot/types.js";
+import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
   findModelInCatalog,
@@ -54,16 +54,10 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 
-type TelegramMediaRef = {
+export type TelegramMediaRef = {
   path: string;
   contentType?: string;
-  stickerMetadata?: {
-    emoji?: string;
-    setName?: string;
-    fileId?: string;
-    fileUniqueId?: string;
-    cachedDescription?: string;
-  };
+  stickerMetadata?: StickerMetadata;
 };
 
 type TelegramMessageContextOptions = {
@@ -89,7 +83,7 @@ type ResolveGroupActivation = (params: {
 
 type ResolveGroupRequireMention = (chatId: string | number) => boolean;
 
-type BuildTelegramMessageContextParams = {
+export type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
   storeAllowFrom: string[];
@@ -598,6 +592,8 @@ export const buildTelegramMessageContext = async ({
     ForwardedFromUsername: forwardOrigin?.fromUsername,
     ForwardedFromTitle: forwardOrigin?.fromTitle,
     ForwardedFromSignature: forwardOrigin?.fromSignature,
+    ForwardedFromChatType: forwardOrigin?.fromChatType,
+    ForwardedFromMessageId: forwardOrigin?.fromMessageId,
     ForwardedDate: forwardOrigin?.date ? forwardOrigin.date * 1000 : undefined,
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
@@ -693,3 +689,7 @@ export const buildTelegramMessageContext = async ({
     accountId: account.accountId,
   };
 };
+
+export type TelegramMessageContext = NonNullable<
+  Awaited<ReturnType<typeof buildTelegramMessageContext>>
+>;

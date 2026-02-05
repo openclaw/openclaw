@@ -1001,6 +1001,16 @@
   line-height: 1;
 }
 
+/* New messages indicator */
+.chat-new-messages {
+  align-self: center;
+  margin: 8px auto 0;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 1;
+}
+
 /* Chat lines */
 .chat-line {
   display: flex;
@@ -1649,6 +1659,13 @@
 .agent-kv {
   display: grid;
   gap: 6px;
+  min-width: 0;
+}
+
+.agent-kv > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .agent-kv-sub {
