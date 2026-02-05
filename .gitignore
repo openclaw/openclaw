@@ -71,3 +71,6 @@ USER.md
 
 # local tooling
 .serena/
+
+# Playwright login storage state (contains cookies/tokens)
+google-state.json
