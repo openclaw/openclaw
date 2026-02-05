@@ -14,7 +14,7 @@ export const DEFAULT_ALLOWED_DOMAINS = [
   "auth.openai.com",
   // Google APIs (covers generativelanguage, cloudcode-pa, oauth2, ai.google.dev, etc.)
   "googleapis.com",
-  "google.com",     // accounts.google.com for OAuth
+  "google.com", // accounts.google.com for OAuth
   "ai.google.dev",
   // OpenRouter
   "openrouter.ai",
@@ -122,10 +122,12 @@ export function saveAllowlist(userDomains: string[]): void {
 export function isDomainAllowed(url: string, allowedDomains: string[]): boolean {
   try {
     const parsed = new URL(url);
+    // Reject URLs with userinfo to prevent data exfiltration via Basic Auth headers
+    if (parsed.username || parsed.password) {
+      return false;
+    }
     const hostname = parsed.hostname.toLowerCase();
-    return allowedDomains.some(
-      (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
-    );
+    return allowedDomains.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
   } catch {
     return false;
   }
@@ -134,7 +136,7 @@ export function isDomainAllowed(url: string, allowedDomains: string[]): boolean 
 export function addToAllowlist(domain: string): void {
   const current = loadAllowlist();
   const normalized = domain.trim().toLowerCase();
-  
+
   // We only save user domains to the file, not the defaults
   // So we need to figure out which ones are user domains
   const userDomains = getUserDomains();
