@@ -46,8 +46,11 @@ beforeEach(() => {
   mockPrimary.probeEmbeddingAvailability.mockClear();
   mockPrimary.probeVectorAvailability.mockClear();
   mockPrimary.close.mockClear();
+  // eslint-disable-next-line @typescript-eslint/unbound-method
   vi.mocked(QmdMemoryManager.create).mockClear();
+  // eslint-disable-next-line @typescript-eslint/unbound-method
   vi.mocked(MemoryIndexManager.get).mockClear();
+  // eslint-disable-next-line @typescript-eslint/unbound-method
   vi.mocked(MemoryIndexManager.get).mockResolvedValue(null);
 });
 
@@ -79,6 +82,7 @@ describe("getMemorySearchManager caching", () => {
     mockPrimary.search.mockRejectedValueOnce(new Error("QMD search failed"));
 
     // Mock builtin index to fail due to missing auth (simulating no OpenAI key)
+    // eslint-disable-next-line @typescript-eslint/unbound-method
     vi.mocked(MemoryIndexManager.get).mockRejectedValueOnce(
       new Error("No API key found for provider: openai"),
     );
