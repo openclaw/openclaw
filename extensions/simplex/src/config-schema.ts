@@ -32,7 +32,6 @@ export const SimplexAccountConfigSchema = z
     name: z.string().optional(),
     enabled: z.boolean().optional(),
     markdown: MarkdownConfigSchema,
-    connection: SimplexConnectionSchema.optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     dmHistoryLimit: z.number().int().min(0).optional(),
@@ -43,6 +42,7 @@ export const SimplexAccountConfigSchema = z
     groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
     groupAllowFrom: z.array(allowFromEntry).optional(),
     groups: z.object({}).catchall(groupConfigSchema).optional(),
+    connection: SimplexConnectionSchema.optional(),
   })
   .strict();
 
