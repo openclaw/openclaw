@@ -167,9 +167,11 @@ export function getChildLogger(
   const base = getLogger();
   const minLevel = opts?.level ? levelToMinLevel(opts.level) : undefined;
   const name = bindings ? JSON.stringify(bindings) : undefined;
+  // Only pass minLevel when explicitly set; spreading `minLevel: undefined`
+  // overwrites the parent logger's minLevel, disabling tslog's level filter.
   return base.getSubLogger({
     name,
-    minLevel,
+    ...(minLevel != null ? { minLevel } : {}),
     prefix: bindings ? [name ?? ""] : [],
   });
 }
