@@ -290,6 +290,8 @@ struct VoiceWakeSettings: View {
             return
         }
 
+        // Sync trigger entries to state before starting test
+        self.syncTriggerEntriesToState()
         let triggers = self.sanitizedTriggers()
         self.tester.stop()
         self.testTimeoutTask?.cancel()
