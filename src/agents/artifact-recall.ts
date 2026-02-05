@@ -34,6 +34,30 @@ function buildNarrative(summaries: string[], maxChars: number): string | null {
   return truncateText(sentence, maxChars);
 }
 
+function buildListLinesWithinBudget(lines: string[], maxChars: number): string[] {
+  if (maxChars <= 0) {
+    return [];
+  }
+  const selected: string[] = [];
+  for (const line of lines) {
+    const separator = selected.length === 0 ? "" : "\n";
+    const candidate = `${selected.join("\n")}${separator}${line}`;
+    if (candidate.length <= maxChars) {
+      selected.push(line);
+      continue;
+    }
+    const ellipsis = "- …";
+    const withEllipsis = `${selected.join("\n")}${separator}${ellipsis}`;
+    if (selected.length === 0 && ellipsis.length <= maxChars) {
+      selected.push(ellipsis);
+    } else if (withEllipsis.length <= maxChars) {
+      selected.push(ellipsis);
+    }
+    break;
+  }
+  return selected;
+}
+
 export function buildArtifactRecallSection(params: {
   sessionFile?: string | null;
   sessionKey?: string;
@@ -55,28 +79,46 @@ export function buildArtifactRecallSection(params: {
   const summaries = recent.map((entry) => entry.artifact.summary).filter(Boolean);
   const narrative = buildNarrative(summaries, cfg.narrativeMaxChars);
 
-  const lines: string[] = [];
+  const lineCandidates: string[] = [];
   for (const entry of recent) {
     const summary = entry.artifact.summary || "artifact";
     const line = `- ${summary} (artifact: ${entry.artifact.id}, path: ${entry.artifact.path})`;
-    if (lines.join("\n").length + line.length + 1 > cfg.maxChars) {
-      lines.push("- …");
-      break;
-    }
-    lines.push(line);
+    lineCandidates.push(line);
   }
 
-  const sectionParts: string[] = [
+  const header = [
     "## Artifact Recall",
     "These artifacts are referenced for exact recall. Use the artifact id/path when needed.",
+    "",
+    "### Recall Strategy",
+    "- Exact: read the artifact file by path when you need verbatim output.",
+    "- Semantic: use memory_search for related context.",
   ];
+
+  const headerText = header.join("\n");
+  let available = cfg.maxChars - headerText.length;
+  let narrativeBlock = "";
+
   if (narrative) {
-    sectionParts.push("", "### Narrative", narrative);
-  }
-  if (lines.length > 0) {
-    sectionParts.push("", "### Recent Artifacts", lines.join("\n"));
+    const block = `\n\n### Narrative\n${narrative}`;
+    if (available - block.length >= 0) {
+      narrativeBlock = block;
+      available -= block.length;
+    }
   }
 
-  const section = sectionParts.join("\n");
+  let listBlock = "";
+  if (lineCandidates.length > 0 && available > 0) {
+    const listHeader = "\n\n### Recent Artifacts\n";
+    const listBudget = available - listHeader.length;
+    if (listBudget > 0) {
+      const lines = buildListLinesWithinBudget(lineCandidates, listBudget);
+      if (lines.length > 0) {
+        listBlock = `${listHeader}${lines.join("\n")}`;
+      }
+    }
+  }
+
+  const section = `${headerText}${narrativeBlock}${listBlock}`;
   return truncateText(section, cfg.maxChars);
 }

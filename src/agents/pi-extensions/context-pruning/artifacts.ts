@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { ArtifactRef } from "../../session-artifacts.js";
+export type { ArtifactRef } from "../../session-artifacts.js";
 import { appendArtifactRegistryEntry, computeArtifactHash } from "../../artifact-registry.js";
 
 type ToolResultArtifact = {

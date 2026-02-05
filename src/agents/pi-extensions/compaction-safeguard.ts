@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ToolResultMessage } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
 import {
   BASE_CHUNK_RATIO,
@@ -186,10 +187,11 @@ function externalizeToolResultMessages(params: {
       content: message.content,
     });
     const placeholder = buildToolResultPlaceholder(ref);
+    const content: ToolResultMessage["content"] = [{ type: "text", text: placeholder }];
     changed = true;
     return {
       ...message,
-      content: [{ type: "text", text: placeholder }],
+      content,
     };
   });
   return changed ? updated : messages;

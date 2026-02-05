@@ -44,7 +44,18 @@ describe("migrateSessionFileArtifactsIfNeeded", () => {
     const entries = updated
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { type: string; version?: number; message?: any });
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type: string;
+            version?: number;
+            message?: {
+              role?: string;
+              details?: { artifactRef?: { id?: string } };
+              content?: Array<{ text?: string }>;
+            };
+          },
+      );
 
     expect(entries[0]?.type).toBe("session");
     expect(entries[0]?.version).toBe(3);

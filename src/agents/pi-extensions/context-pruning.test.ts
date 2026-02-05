@@ -631,7 +631,9 @@ describe("context-pruning artifacts", () => {
       | undefined;
     const api = {
       on: (name: string, fn: unknown) => {
-        if (name === "context") handler = fn as typeof handler;
+        if (name === "context") {
+          handler = fn as typeof handler;
+        }
       },
       appendEntry: () => {},
     } as unknown as ExtensionAPI;

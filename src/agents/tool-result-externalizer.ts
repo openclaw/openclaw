@@ -36,15 +36,16 @@ export function externalizeToolResultForSession(params: {
   const artifactDir = path.join(path.dirname(sessionFile), "artifacts");
   const ref = writeToolResultArtifact({
     artifactDir,
-    toolName: message.toolName ?? params.message.toolName,
+    toolName: message.toolName,
     content: message.content,
     sessionKey,
   });
   const placeholder = buildToolResultPlaceholder(ref);
   const details = withToolResultArtifactRef((message as { details?: unknown }).details, ref);
+  const content: ToolResultMessage["content"] = [{ type: "text", text: placeholder }];
   return {
     ...message,
-    content: [{ type: "text", text: placeholder }],
+    content,
     details,
   };
 }

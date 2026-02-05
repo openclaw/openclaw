@@ -40,12 +40,11 @@ export function guardSessionManager(
       isSynthetic: meta.isSynthetic,
     });
     if (hookRunner?.hasHooks("tool_result_persist")) {
-      // oxlint-disable-next-line typescript/no-explicit-any
       const out = hookRunner.runToolResultPersist(
         {
           toolName: meta.toolName,
           toolCallId: meta.toolCallId,
-          message: next as any,
+          message: next,
           isSynthetic: meta.isSynthetic,
         },
         {

@@ -1,5 +1,5 @@
-import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { ToolResultMessage } from "@mariozechner/pi-ai";
+import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { writeToolResultArtifact } from "./artifacts.js";
 import { pruneContextMessages } from "./pruner.js";
 import { getContextPruningRuntime } from "./runtime.js";

@@ -98,6 +98,11 @@ Enable a bounded recall section in the system prompt with `memory.artifacts`:
 
 Notes:
 
+- **Breaking change (2026.2.5):** Session transcripts no longer embed tool
+  payloads. Tool results are externalized as artifacts and referenced by
+  `details.artifactRef` (id + path). Custom readers must follow artifact
+  references or migrate legacy logs; OpenClaw auto-migrates older sessions on
+  read.
 - Artifacts live alongside session transcripts under
   `~/.openclaw/agents/<agentId>/sessions/artifacts/`.
 - The recall section is **session-scoped** and keeps only recent artifact

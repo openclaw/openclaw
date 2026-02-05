@@ -47,11 +47,16 @@ export function rehydrateToolResultMessage(params: {
     return null;
   }
   const details = withToolResultArtifactRef(undefined, params.artifactRef);
+  const timestamp = Number.isFinite(Date.parse(payload.createdAt))
+    ? Date.parse(payload.createdAt)
+    : Date.now();
   return {
     role: "toolResult",
     toolCallId: params.toolCallId ?? "",
-    toolName: payload.toolName ?? params.artifactRef.toolName,
+    toolName: payload.toolName ?? params.artifactRef.toolName ?? "unknown",
     content: payload.content,
     details,
+    isError: false,
+    timestamp,
   };
 }
