@@ -64,6 +64,8 @@ async function spawnAndWaitForSpawn(
   argv: string[],
   options: SpawnOptions,
 ): Promise<ChildProcess> {
+  // closeOnExec removed - it closes stdio fds and causes EBADF
+  // FD leak prevention is now handled by disabling PTY on macOS
   const child = spawnImpl(argv[0], argv.slice(1), options);
 
   return await new Promise((resolve, reject) => {

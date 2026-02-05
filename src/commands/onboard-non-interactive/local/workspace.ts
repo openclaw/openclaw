@@ -12,5 +12,13 @@ export function resolveNonInteractiveWorkspaceDir(params: {
     params.baseConfig.agents?.defaults?.workspace ??
     params.defaultWorkspaceDir
   ).trim();
-  return resolveUserPath(raw);
+  let resolved = resolveUserPath(raw);
+
+  // Docker container safety: if the workspace path looks like a macOS/host path
+  // but we're in a Linux container, fall back to the container-native default.
+  if (process.platform === "linux" && resolved.startsWith("/Users/")) {
+    resolved = resolveUserPath(params.defaultWorkspaceDir);
+  }
+
+  return resolved;
 }

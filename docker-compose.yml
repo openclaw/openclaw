@@ -8,6 +8,7 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      TELEGRAM_USERBOT_HOST: host.docker.internal
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
@@ -16,10 +17,11 @@ services:
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
+    working_dir: /home/node/clawd
     command:
       [
         "node",
-        "dist/index.js",
+        "/app/dist/index.js",
         "gateway",
         "--bind",
         "${OPENCLAW_GATEWAY_BIND:-lan}",

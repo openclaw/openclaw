@@ -97,6 +97,13 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  /**
+   * Optional logical path mapping used for portability across machines.
+   * Example: {"@workspace/clawd": "/Users/name/clawd"}
+   */
+  pathMap?: {
+    roots?: Record<string, string>;
+  };
 };
 
 export type ConfigValidationIssue = {

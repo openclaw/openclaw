@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { toLogicalPath, toPhysicalPath } from "../../agents/path-map.js";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -98,6 +99,96 @@ function normalizeSessionStore(store: Record<string, SessionEntry>): void {
   }
 }
 
+type PathMapRoots = Record<string, string>;
+
+function resolvePathMapRootsFromEnv(): PathMapRoots {
+  const raw = process.env.OPENCLAW_PATHMAP_ROOTS;
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    const normalized: PathMapRoots = {};
+    for (const [key, value] of Object.entries(parsed)) {
+      if (!key || !value) {
+        continue;
+      }
+      normalized[key] = value;
+    }
+    return normalized;
+  } catch {
+    return {};
+  }
+}
+
+function mapSessionEntryPaths(
+  entry: SessionEntry,
+  roots: PathMapRoots,
+  mapper: (value: string, roots: PathMapRoots) => string,
+): SessionEntry {
+  if (!roots || Object.keys(roots).length === 0) {
+    return entry;
+  }
+  let changed = false;
+  const next: SessionEntry = { ...entry };
+  if (entry.sessionFile) {
+    const mapped = mapper(entry.sessionFile, roots);
+    if (mapped !== entry.sessionFile) {
+      next.sessionFile = mapped;
+      changed = true;
+    }
+  }
+  if (entry.systemPromptReport?.workspaceDir) {
+    const mapped = mapper(entry.systemPromptReport.workspaceDir, roots);
+    if (mapped !== entry.systemPromptReport.workspaceDir) {
+      next.systemPromptReport = {
+        ...entry.systemPromptReport,
+        workspaceDir: mapped,
+      };
+      changed = true;
+    }
+  }
+  if (entry.systemPromptReport?.injectedWorkspaceFiles?.length) {
+    const mappedFiles = entry.systemPromptReport.injectedWorkspaceFiles.map((file) => {
+      const mapped = mapper(file.path, roots);
+      if (mapped === file.path) {
+        return file;
+      }
+      changed = true;
+      return { ...file, path: mapped };
+    });
+    if (changed) {
+      next.systemPromptReport = {
+        ...entry.systemPromptReport,
+        injectedWorkspaceFiles: mappedFiles,
+      };
+    }
+  }
+  return changed ? next : entry;
+}
+
+function applyPathMapToStore(
+  store: Record<string, SessionEntry>,
+  roots: PathMapRoots,
+  mapper: (value: string, roots: PathMapRoots) => string,
+): void {
+  if (!roots || Object.keys(roots).length === 0) {
+    return;
+  }
+  for (const [key, entry] of Object.entries(store)) {
+    if (!entry) {
+      continue;
+    }
+    const mapped = mapSessionEntryPaths(entry, roots, mapper);
+    if (mapped !== entry) {
+      store[key] = mapped;
+    }
+  }
+}
+
 export function clearSessionStoreCacheForTest(): void {
   SESSION_STORE_CACHE.clear();
 }
@@ -161,6 +252,10 @@ export function loadSessionStore(
     }
   }
 
+  // Optional: map logical paths to physical paths on load.
+  const pathMapRoots = resolvePathMapRootsFromEnv();
+  applyPathMapToStore(store, pathMapRoots, toPhysicalPath);
+
   // Cache the result if caching is enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
     SESSION_STORE_CACHE.set(storePath, {
@@ -194,6 +289,9 @@ async function saveSessionStoreUnlocked(
   invalidateSessionStoreCache(storePath);
 
   normalizeSessionStore(store);
+  // Optional: map physical paths to logical paths before persisting.
+  const pathMapRoots = resolvePathMapRootsFromEnv();
+  applyPathMapToStore(store, pathMapRoots, toLogicalPath);
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);

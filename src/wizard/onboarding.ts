@@ -349,7 +349,15 @@ export async function runOnboardingWizard(
           initialValue: baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE,
         }));
 
-  const workspaceDir = resolveUserPath(workspaceInput.trim() || DEFAULT_WORKSPACE);
+  let workspaceDir = resolveUserPath(workspaceInput.trim() || DEFAULT_WORKSPACE);
+
+  // Docker container safety: if the workspace path looks like a macOS/host path
+  // but we're in a Linux container, fall back to the container-native default.
+  if (process.platform === "linux" && workspaceDir.startsWith("/Users/")) {
+    const containerDefault = resolveUserPath(DEFAULT_WORKSPACE);
+    runtime.log(`Docker/container detected: using ${containerDefault} instead of ${workspaceDir}`);
+    workspaceDir = containerDefault;
+  }
 
   let nextConfig: OpenClawConfig = {
     ...baseConfig,
