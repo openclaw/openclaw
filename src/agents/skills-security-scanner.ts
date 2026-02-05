@@ -90,7 +90,7 @@ const DANGEROUS_PATTERNS = [
 // Network activity patterns
 const NETWORK_PATTERNS = [
   {
-    pattern: /https?:\/\/(?!github\.com|npmjs\.com|pypi\.org)/gi,
+    pattern: /https?:\/\/(?!(?:www\.)?(?:github\.com|npmjs\.com|pypi\.org)(?:\/|$))/gi,
     severity: "medium" as SecurityRiskLevel,
     message: "External network connection",
   },
@@ -137,7 +137,9 @@ function scanForSensitivePaths(content: string, filePath: string): SecurityIssue
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     for (const pattern of SENSITIVE_PATHS) {
-      if (pattern.test(line)) {
+      // Create a new regex instance to avoid stateful .test() issues with global flags
+      const testPattern = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
+      if (testPattern.test(line)) {
         issues.push({
           type: "file_access",
           severity: "high",

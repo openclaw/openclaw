@@ -374,9 +374,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
 
   // If there are warnings but it passed, log them to stdout
   const securityWarning =
-    scanResult.issues.length > 0
-      ? `\nSecurity scan: ${formatSecurityScanResult(scanResult)}\n`
-      : "";
+    scanResult.issues.length > 0 ? `Security scan: ${formatSecurityScanResult(scanResult)}\n` : "";
 
   const spec = findInstallSpec(entry, params.installId);
   if (!spec) {
