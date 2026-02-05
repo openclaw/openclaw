@@ -176,11 +176,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     return null;
   }
 
-  // Final from another run (e.g. sub-agent announce): refresh history to show new message.
+  // Terminal from another run (e.g. sub-agent announce): refresh history to show new message.
   // See https://github.com/openclaw/openclaw/issues/1909
   if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
-    if (payload.state === "final") {
-      return "final";
+    if (payload.state === "final" || payload.state === "error" || payload.state === "aborted") {
+      return payload.state;
     }
     return null;
   }

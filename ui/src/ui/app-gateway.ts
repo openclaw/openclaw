@@ -156,6 +156,7 @@ export function connectGateway(host: GatewayHost) {
     onEvent: (evt) => handleGatewayEvent(host, evt),
     onGap: ({ expected, received }) => {
       host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
+      void loadChatHistory(host as unknown as OpenClawApp);
     },
   });
   host.client.start();
@@ -211,7 +212,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
         }
       }
     }
-    if (state === "final") {
+    if (state === "final" || state === "error" || state === "aborted") {
       void loadChatHistory(host as unknown as OpenClawApp);
     }
     return;

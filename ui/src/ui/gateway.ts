@@ -94,6 +94,7 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
+    this.lastSeq = null;
     this.ws = new WebSocket(this.opts.url);
     this.ws.addEventListener("open", () => this.queueConnect());
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
