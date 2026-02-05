@@ -70,8 +70,6 @@ services:
       # We use names instead of paths for better Coolify compatibility
       - openclaw_config:/home/node/.openclaw
       - openclaw_workspace:/home/node/.openclaw/workspace
-      # Mount config file
-      - ./openclaw.yaml:/home/node/.openclaw/config.yaml:ro
     depends_on:
       redis:
         condition: service_healthy
