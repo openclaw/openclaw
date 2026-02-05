@@ -663,8 +663,7 @@ export const registerTelegramHandlers = ({
 const t = (msg.text ?? "").trim();
 const base = t.split(/\s+/)[0].split("@")[0];
 if (base === "/aff") {
-  await ctx.reply("[native aff]");
-  return;
+  await ctx.reply("[native aff]"); return;
 const ws =
 cfg?.agents?.defaults?.workspace ??
 process.env.OPENCLAW_WORKSPACE ??
