@@ -10,6 +10,7 @@ import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -127,6 +128,30 @@ export async function getReplyFromConfig(
       cfg,
     });
   }
+
+  // Trigger message:transcribed hook after media understanding completes
+  // At this point, audio has been transcribed and Transcript field is populated
+  await triggerInternalHook(
+    createInternalHookEvent("message", "transcribed", finalized.SessionKey ?? "", {
+      from: finalized.From,
+      to: finalized.To,
+      body: finalized.Body,
+      bodyForAgent: finalized.BodyForAgent,
+      transcript: finalized.Transcript,
+      timestamp: finalized.Timestamp,
+      channelId: finalized.ChannelId,
+      conversationId: finalized.ConversationId,
+      messageId: finalized.MessageSid,
+      senderId: finalized.SenderId,
+      senderName: finalized.SenderName,
+      senderUsername: finalized.SenderUsername,
+      provider: finalized.Provider,
+      surface: finalized.Surface,
+      mediaPath: finalized.MediaPath,
+      mediaType: finalized.MediaType,
+      cfg,
+    }),
+  );
 
   const commandAuthorized = finalized.CommandAuthorized;
   resolveCommandAuthorization({

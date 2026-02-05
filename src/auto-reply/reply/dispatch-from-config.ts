@@ -5,6 +5,7 @@ import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   logMessageProcessed,
@@ -147,25 +148,25 @@ export async function dispatchReplyFromConfig(params: {
 
   const inboundAudio = isInboundAudioContext(ctx);
   const sessionTtsAuto = resolveSessionTtsAuto(ctx, cfg);
+
+  // Extract message context for hooks
+  const timestamp =
+    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
+  const messageIdForHook =
+    ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
+  const content =
+    typeof ctx.BodyForCommands === "string"
+      ? ctx.BodyForCommands
+      : typeof ctx.RawBody === "string"
+        ? ctx.RawBody
+        : typeof ctx.Body === "string"
+          ? ctx.Body
+          : "";
+  const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
+  const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
+
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("message_received")) {
-    const timestamp =
-      typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp)
-        ? ctx.Timestamp
-        : undefined;
-    const messageIdForHook =
-      ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-    const content =
-      typeof ctx.BodyForCommands === "string"
-        ? ctx.BodyForCommands
-        : typeof ctx.RawBody === "string"
-          ? ctx.RawBody
-          : typeof ctx.Body === "string"
-            ? ctx.Body
-            : "";
-    const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
-    const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
-
     void hookRunner
       .runMessageReceived(
         {
@@ -196,6 +197,27 @@ export async function dispatchReplyFromConfig(params: {
         logVerbose(`dispatch-from-config: message_received hook failed: ${String(err)}`);
       });
   }
+
+  // Trigger internal hook for message:received
+  const messageEvent = createInternalHookEvent("message", "received", ctx.SessionKey ?? "", {
+    from: ctx.From,
+    to: ctx.To,
+    content,
+    timestamp,
+    channelId,
+    conversationId,
+    messageId: messageIdForHook,
+    senderId: ctx.SenderId,
+    senderName: ctx.SenderName,
+    senderUsername: ctx.SenderUsername,
+    senderE164: ctx.SenderE164,
+    provider: ctx.Provider,
+    surface: ctx.Surface,
+    threadId: ctx.MessageThreadId,
+    originatingChannel: ctx.OriginatingChannel,
+    originatingTo: ctx.OriginatingTo,
+  });
+  await triggerInternalHook(messageEvent);
 
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
