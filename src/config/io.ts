@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
+import { normalizePathMapRoots } from "../agents/path-map.js";
 import {
   loadShellEnvFallback,
   resolveShellEnvFallbackTimeoutMs,
@@ -293,6 +294,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
 
       applyConfigEnv(cfg, deps.env);
+
+      // If pathMap roots are set in config, expose them to runtime via env (opt-in).
+      if (!deps.env.OPENCLAW_PATHMAP_ROOTS && cfg.pathMap?.roots) {
+        const roots = normalizePathMapRoots(cfg.pathMap.roots);
+        if (Object.keys(roots).length > 0) {
+          deps.env.OPENCLAW_PATHMAP_ROOTS = JSON.stringify(roots);
+        }
+      }
 
       const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
       if (enabled && !shouldDeferShellEnvFallback(deps.env)) {

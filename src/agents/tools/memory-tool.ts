@@ -8,6 +8,8 @@ import { getMemorySearchManager } from "../../memory/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope.js";
+import { resolvePathMapRoots, toLogicalPath, toPhysicalPath } from "../path-map.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const MemorySearchSchema = Type.Object({
@@ -67,13 +69,20 @@ export function createMemorySearchTool(options: {
         });
         const status = manager.status();
         const decorated = decorateCitations(rawResults, includeCitations);
+        const roots = resolvePathMapRoots(cfg);
+        const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+        const results = mapMemoryResultsToLogical({
+          results: decorated,
+          workspaceDir,
+          roots,
+        });
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
-        const results =
+        const clamped =
           status.backend === "qmd"
-            ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
-            : decorated;
+            ? clampResultsByInjectedChars(results, resolved.qmd?.limits.maxInjectedChars)
+            : results;
         return jsonResult({
-          results,
+          results: clamped,
           provider: status.provider,
           model: status.model,
           fallback: status.fallback,
@@ -120,12 +129,15 @@ export function createMemoryGetTool(options: {
         return jsonResult({ path: relPath, text: "", disabled: true, error });
       }
       try {
+        const roots = resolvePathMapRoots(cfg);
+        const physicalPath = toPhysicalPath(relPath, roots);
         const result = await manager.readFile({
-          relPath,
+          relPath: physicalPath,
           from: from ?? undefined,
           lines: lines ?? undefined,
         });
-        return jsonResult(result);
+        const logicalPath = toLogicalPath(result.path, roots);
+        return jsonResult({ ...result, path: logicalPath });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonResult({ path: relPath, text: "", disabled: true, error: message });
@@ -159,6 +171,30 @@ function formatCitation(entry: MemorySearchResult): string {
       ? `#L${entry.startLine}`
       : `#L${entry.startLine}-L${entry.endLine}`;
   return `${entry.path}${lineRange}`;
+}
+
+function mapMemoryResultsToLogical(params: {
+  results: MemorySearchResult[];
+  workspaceDir: string;
+  roots: Record<string, string>;
+}): MemorySearchResult[] {
+  const { results, workspaceDir, roots } = params;
+  if (!roots || Object.keys(roots).length === 0) {
+    return results;
+  }
+  return results.map((entry) => {
+    if (!entry.path) {
+      return entry;
+    }
+    const abs = entry.path.startsWith("/")
+      ? entry.path
+      : `${workspaceDir.replace(/\\/$/, "")}/${entry.path}`;
+    const logical = toLogicalPath(abs, roots);
+    if (logical === entry.path) {
+      return entry;
+    }
+    return { ...entry, path: logical };
+  });
 }
 
 function clampResultsByInjectedChars(
