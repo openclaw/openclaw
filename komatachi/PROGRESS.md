@@ -206,7 +206,7 @@ See [ROADMAP.md](./ROADMAP.md) for the full sequenced plan. Summary:
 
 - [ ] **Phase 1**: Storage & Conversation Foundation (Storage, Conversation Store)
 - [ ] **Phase 2**: Context Pipeline (Context Window with History Management folded in)
-- [ ] **Phase 3**: Agent Alignment (System Prompt, Tool Policy, Workspace Bootstrap)
+- [ ] **Phase 3**: Agent Identity (System Prompt with identity loading, Tool Registry)
 - [ ] **Phase 4**: Agent Loop (main execution loop wiring everything together)
 - [ ] **Phase 5**: Integration Validation (end-to-end pipeline test)
 

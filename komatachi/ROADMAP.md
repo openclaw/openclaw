@@ -93,7 +93,7 @@ These were discussed during roadmap creation and are settled:
 
 4. **History Management merges into Context Window** -- In the original, these are separate because history has independent pruning rules. With a single session and modern context windows, the distilled version treats history management as a policy within the Context Window module, not a separate module. The interface allows separating them later if needed.
 
-5. **Agent Alignment is thin** -- The scouting report covers plugin hooks, skills config, extension loading -- all dropped per "no plugin hooks for core behavior" (Decision #2 in PROGRESS.md). What remains: prompt assembly from parts, a tool permission model, and project config loading. Each is a small, focused module.
+5. **Agent Alignment is thin** -- The scouting report covers plugin hooks, skills config, extension loading -- all dropped per "no plugin hooks for core behavior" (Decision #2 in PROGRESS.md). What remains: system prompt assembly (including identity file loading) and a tool registry. Two modules, not three -- project detection and workspace bootstrap are not core to agent identity.
 
 6. **Cross-Agent Access is out of scope** -- Already deferred in PROGRESS.md Decision #4. Not on this roadmap.
 
@@ -110,6 +110,16 @@ These were discussed during roadmap creation and are settled:
 12. **Context Window is a pure function** -- Caller passes in messages and a token budget. Context Window returns the messages that fit and reports what was dropped. It does not know about models, API limits, or compaction. The Agent Loop computes the budget (model context limit minus system prompt minus response reserve) and decides whether to trigger compaction based on Context Window's overflow report. No separate history policies (max messages, max age) -- the token budget is the only policy.
 
 13. **Claude API message types, not a custom format** -- Komatachi is explicitly built for Claude. Transcript messages use Claude's API message format (user/assistant roles, content blocks with text/tool_use/tool_result). No provider-agnostic abstraction layer. This eliminates a translation layer and means the transcript is directly usable as API input. If Rust portability requires it, we define a minimal mirror of Claude's types rather than an abstraction over multiple providers.
+
+14. **System prompt is a simple function, not a registry** -- The system prompt is assembled by a function that calls section builders in order. No dynamic section registry, no add/replace mechanism. The section list is known at compile time. If you want to change sections, change the code. A registry adds indirection without value for a single-agent system.
+
+15. **String interpolation, no template engine** -- Variable substitution in system prompt sections uses template literals (`${variable}`). The dynamic content is simple (timestamps, tool lists, identity file contents). A template engine would be accidental complexity.
+
+16. **Identity files are user-editable markdown** -- The agent's sense of self comes from user-editable markdown files in the agent's home directory: SOUL.md (personality, values), IDENTITY.md (name, characteristics), USER.md (context about the human), MEMORY.md (long-term curated memory), AGENTS.md (behavioral guidelines), TOOLS.md (tool-specific notes). The system prompt builder loads these and injects their contents. OpenClaw's bootstrap file system is one of its best ideas -- simple, auditable, and directly serving the vision of persistent AI entities with evolving identity. No template initialization system; the human creates these files (or asks the agent for help).
+
+17. **Tool registry is a flat array, no profiles or permissions** -- Tools are an array of definitions: name, description, input schema, handler. No tool groups, no profiles (minimal/coding/full), no allow/deny lists. With one agent, one set of tools, the registry *is* the policy. If per-context restrictions are needed later, the Agent Loop filters the array before passing it to the API.
+
+18. **No project detection in the minimal agent** -- Project awareness (git root, project type, project config) is a coding-assistant concern, not core agent identity. The minimal agent has identity, memory, conversation, and tools. "I can look at this codebase" is a capability module for later, not a system prompt section. This eliminates Phase 3.3 (Workspace Bootstrap) entirely.
 
 ---
 
@@ -187,61 +197,49 @@ Future note: when compaction is triggered, the Agent Loop could augment the comp
 
 ---
 
-### Phase 3: Agent Alignment
+### Phase 3: Agent Identity
 
-How the agent knows what it is and what it can do.
+How the agent knows who it is and what it can do.
 
 **3.1 -- System Prompt**
 
-Scope: Assemble the system prompt from parts. The system prompt defines the agent's identity, instructions, and constraints.
+Scope: Assemble the system prompt that defines the agent's sense of self. This includes loading identity files (SOUL.md, IDENTITY.md, etc.) from the agent's home directory and composing them with tool definitions and runtime metadata into a complete system prompt.
 
-Source material: `scouting/agent-alignment.md` (prompt generation sections, ~4,261 lines total but much of this is plugin/extension machinery we're dropping).
+Source material: `scouting/agent-alignment.md` (system-prompt.ts ~591 lines, workspace.ts ~288 lines). Study for the section-builder pattern and bootstrap file concepts; discard plugin hooks, skills injection, multi-channel sections.
 
 What to build:
-- Prompt assembly from ordered sections (identity, instructions, constraints, project context)
-- Section registry (named sections that can be added/replaced)
-- Template rendering (variable substitution for dynamic content like project name, current date)
+- Identity file loading: given the agent's home directory, read SOUL.md, IDENTITY.md, USER.md, MEMORY.md, AGENTS.md, TOOLS.md. Return their contents (or null if missing). This is a pure function, not a separate module.
+- Section builders: ordered functions that each produce a section of the system prompt (identity, tools, runtime metadata). Each returns a string array of lines.
+- Prompt assembly: compose section outputs into the final system prompt string. String interpolation for dynamic content (current time, tool list).
+- Runtime metadata: current timestamp, environment info -- simple values injected into the prompt.
 
 What to omit:
+- Section registry / dynamic add-replace (see Pre-Resolved Decision #14)
+- Template engine (see Pre-Resolved Decision #15)
 - Plugin hooks for prompt modification
 - Dynamic prompt adjustment based on conversation state
 - Skills/capability injection from extensions
 - Prompt versioning or A/B testing
+- Project detection / workspace context (see Pre-Resolved Decision #18)
+- Template initialization / first-run bootstrap (human creates identity files)
 
-**3.2 -- Tool Policy**
+**3.2 -- Tool Registry**
 
-Scope: Define which tools the agent can use and under what conditions.
+Scope: Define the agent's tools as a flat array of definitions. Each tool has a name, description, input schema, and handler function. The registry is the policy -- every tool in the array is available to the agent.
 
-Source material: `scouting/agent-alignment.md` (tool policy sections).
+Source material: `scouting/agent-alignment.md` (tool-policy.ts ~234 lines, types.tools.ts ~450 lines). Study for tool definition structure; discard profiles, groups, plugin tool expansion, allow/deny lists.
 
 What to build:
-- Tool registry (name, description, schema, handler reference)
-- Permission model (allow/deny per tool, possibly per-project config)
-- Tool definition export (format tools for LLM API consumption)
+- Tool definition type: name, description, input schema (JSON Schema), handler function
+- Tool definition export: format the tool array into Claude's API tool format (name, description, input_schema) for the API call. The handler stays on our side.
+- Tool result type: structured return from tool execution (success with content, or error)
 
 What to omit:
+- Tool groups and profiles (see Pre-Resolved Decision #17)
+- Allow/deny lists, permission model
 - Dynamic tool enabling/disabling mid-conversation
-- Tool usage analytics
-- Tool fallback chains
-- Per-user tool permissions (single-user system)
-
-**3.3 -- Workspace Bootstrap**
-
-Scope: Detect what project/workspace the agent is operating in and load relevant configuration.
-
-Source material: `scouting/agent-alignment.md` (workspace detection, config loading).
-
-What to build:
-- Project detection (find project root, identify project type)
-- Config file loading (read project-specific agent config)
-- Configuration object assembly (merge defaults with project overrides)
-- Feed configuration into System Prompt and Tool Policy
-
-What to omit:
-- Extension/plugin discovery and loading
-- Remote configuration
-- Config file generation/scaffolding
-- Multi-project workspaces
+- Tool usage analytics or fallback chains
+- Plugin tool discovery and expansion
 
 ---
 
@@ -295,6 +293,7 @@ Explicitly not on this roadmap. Documented here so future sessions don't re-deri
 | Multi-conversation management | One conversation per agent. Want another thread? Start another agent. |
 | Multi-agent routing | One agent per process. Inter-agent communication is IPC, not in-process routing. |
 | Gateway / IPC broker | Only needed for multi-agent or multi-client. Single-process for now (PROGRESS.md Decision #7). |
+| Project detection / workspace context | Coding-assistant concern, not core agent identity. Add as a capability module when needed. |
 
 ---
 
