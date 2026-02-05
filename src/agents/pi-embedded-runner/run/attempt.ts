@@ -5,6 +5,7 @@ import { createAgentSession, SessionManager, SettingsManager } from "@mariozechn
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import { modelSupportsTools } from "../../model-compat.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -205,7 +206,18 @@ export async function runEmbeddedAttempt(
 
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
-    const toolsRaw = params.disableTools
+
+    // Check if model supports tools via compat.supportedParameters
+    // If not declared (undefined), assume tools are supported (backward compat with cloud providers)
+    // If explicitly declared, check if "tools" is in the array
+    const modelHasToolSupport = modelSupportsTools(params.model);
+
+    if (!modelHasToolSupport) {
+      log.debug(
+        `Tools disabled for model ${params.modelId}: compat.supportedParameters does not include "tools"`,
+      );
+    }
+    const toolsRaw = params.disableTools || !modelHasToolSupport
       ? []
       : createOpenClawCodingTools({
           exec: {

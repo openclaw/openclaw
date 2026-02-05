@@ -1,8 +1,9 @@
 import { Type } from "@sinclair/typebox";
+import { ProxyAgent, fetch as undiciFetch, type Dispatcher } from "undici";
+
 import type { OpenClawConfig } from "../../config/config.js";
-import type { AnyAgentTool } from "./common.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { wrapWebContent } from "../../security/external-content.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   CacheEntry,
@@ -17,11 +18,12 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "duckduckgo"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
+const DUCKDUCKGO_HTML_ENDPOINT = "https://html.duckduckgo.com/html/";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_MODEL = "perplexity/sonar-pro";
@@ -29,8 +31,53 @@ const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
-const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
-const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
+
+// Cached proxy agent for reuse
+let proxyDispatcher: Dispatcher | undefined;
+
+/**
+ * Detect proxy URL from environment variables.
+ * Checks HTTPS_PROXY, https_proxy, HTTP_PROXY, http_proxy (in that order).
+ */
+function detectProxyUrl(): string | undefined {
+  return (
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    undefined
+  );
+}
+
+/**
+ * Get or create a cached proxy dispatcher.
+ * Returns undefined if no proxy is configured.
+ */
+function getProxyDispatcher(): Dispatcher | undefined {
+  if (proxyDispatcher !== undefined) return proxyDispatcher;
+  const proxyUrl = detectProxyUrl();
+  if (!proxyUrl) return undefined;
+  proxyDispatcher = new ProxyAgent(proxyUrl);
+  return proxyDispatcher;
+}
+
+/**
+ * Proxy-aware fetch wrapper.
+ * Uses environment proxy if available, falls back to global fetch otherwise.
+ */
+async function proxyFetch(
+  input: string | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const dispatcher = getProxyDispatcher();
+  if (dispatcher) {
+    // Use undici fetch with proxy dispatcher
+    // Cast to Response since undici Response is compatible at runtime
+    return undiciFetch(input, { ...init, dispatcher } as Parameters<typeof undiciFetch>[1]) as unknown as Response;
+  }
+  // No proxy configured, use global fetch
+  return fetch(input, init);
+}
 
 const WebSearchSchema = Type.Object({
   query: Type.String({ description: "Search query string." }),
@@ -55,12 +102,6 @@ const WebSearchSchema = Type.Object({
   ui_lang: Type.Optional(
     Type.String({
       description: "ISO language code for UI elements.",
-    }),
-  ),
-  freshness: Type.Optional(
-    Type.String({
-      description:
-        "Filter results by discovery time (Brave only). Values: 'pd' (past 24h), 'pw' (past week), 'pm' (past month), 'py' (past year), or date range 'YYYY-MM-DDtoYYYY-MM-DD'.",
     }),
   ),
 });
@@ -105,19 +146,13 @@ type PerplexityBaseUrlHint = "direct" | "openrouter";
 
 function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   const search = cfg?.tools?.web?.search;
-  if (!search || typeof search !== "object") {
-    return undefined;
-  }
+  if (!search || typeof search !== "object") return undefined;
   return search as WebSearchConfig;
 }
 
 function resolveSearchEnabled(params: { search?: WebSearchConfig; sandboxed?: boolean }): boolean {
-  if (typeof params.search?.enabled === "boolean") {
-    return params.search.enabled;
-  }
-  if (params.sandboxed) {
-    return true;
-  }
+  if (typeof params.search?.enabled === "boolean") return params.search.enabled;
+  if (params.sandboxed) return true;
   return true;
 }
 
@@ -134,13 +169,13 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       error: "missing_perplexity_api_key",
       message:
         "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey.",
-      docs: "https://docs.openclaw.ai/tools/web",
+      docs: "https://docs.clawd.bot/tools/web",
     };
   }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
-    docs: "https://docs.openclaw.ai/tools/web",
+    docs: "https://docs.clawd.bot/tools/web",
   };
 }
 
@@ -149,23 +184,16 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
       : "";
-  if (raw === "perplexity") {
-    return "perplexity";
-  }
-  if (raw === "brave") {
-    return "brave";
-  }
+  if (raw === "perplexity") return "perplexity";
+  if (raw === "duckduckgo" || raw === "ddg") return "duckduckgo";
+  if (raw === "brave") return "brave";
   return "brave";
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
-  if (!search || typeof search !== "object") {
-    return {};
-  }
+  if (!search || typeof search !== "object") return {};
   const perplexity = "perplexity" in search ? search.perplexity : undefined;
-  if (!perplexity || typeof perplexity !== "object") {
-    return {};
-  }
+  if (!perplexity || typeof perplexity !== "object") return {};
   return perplexity as PerplexityConfig;
 }
 
@@ -196,9 +224,7 @@ function normalizeApiKey(key: unknown): string {
 }
 
 function inferPerplexityBaseUrlFromApiKey(apiKey?: string): PerplexityBaseUrlHint | undefined {
-  if (!apiKey) {
-    return undefined;
-  }
+  if (!apiKey) return undefined;
   const normalized = apiKey.toLowerCase();
   if (PERPLEXITY_KEY_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
     return "direct";
@@ -218,23 +244,13 @@ function resolvePerplexityBaseUrl(
     perplexity && "baseUrl" in perplexity && typeof perplexity.baseUrl === "string"
       ? perplexity.baseUrl.trim()
       : "";
-  if (fromConfig) {
-    return fromConfig;
-  }
-  if (apiKeySource === "perplexity_env") {
-    return PERPLEXITY_DIRECT_BASE_URL;
-  }
-  if (apiKeySource === "openrouter_env") {
-    return DEFAULT_PERPLEXITY_BASE_URL;
-  }
+  if (fromConfig) return fromConfig;
+  if (apiKeySource === "perplexity_env") return PERPLEXITY_DIRECT_BASE_URL;
+  if (apiKeySource === "openrouter_env") return DEFAULT_PERPLEXITY_BASE_URL;
   if (apiKeySource === "config") {
     const inferred = inferPerplexityBaseUrlFromApiKey(apiKey);
-    if (inferred === "direct") {
-      return PERPLEXITY_DIRECT_BASE_URL;
-    }
-    if (inferred === "openrouter") {
-      return DEFAULT_PERPLEXITY_BASE_URL;
-    }
+    if (inferred === "direct") return PERPLEXITY_DIRECT_BASE_URL;
+    if (inferred === "openrouter") return DEFAULT_PERPLEXITY_BASE_URL;
   }
   return DEFAULT_PERPLEXITY_BASE_URL;
 }
@@ -253,59 +269,128 @@ function resolveSearchCount(value: unknown, fallback: number): number {
   return clamped;
 }
 
-function normalizeFreshness(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const lower = trimmed.toLowerCase();
-  if (BRAVE_FRESHNESS_SHORTCUTS.has(lower)) {
-    return lower;
-  }
-
-  const match = trimmed.match(BRAVE_FRESHNESS_RANGE);
-  if (!match) {
-    return undefined;
-  }
-
-  const [, start, end] = match;
-  if (!isValidIsoDate(start) || !isValidIsoDate(end)) {
-    return undefined;
-  }
-  if (start > end) {
-    return undefined;
-  }
-
-  return `${start}to${end}`;
-}
-
-function isValidIsoDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return false;
-  }
-  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
-    return false;
-  }
-
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return (
-    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
-  );
-}
-
 function resolveSiteName(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
-  }
+  if (!url) return undefined;
   try {
     return new URL(url).hostname;
   } catch {
     return undefined;
+  }
+}
+
+type DuckDuckGoSearchResult = {
+  title: string;
+  url: string;
+  description: string;
+  siteName?: string;
+};
+
+/**
+ * Parse DuckDuckGo HTML search results.
+ * DuckDuckGo Lite returns HTML, we extract results from it.
+ */
+function parseDuckDuckGoHtml(html: string): DuckDuckGoSearchResult[] {
+  const results: DuckDuckGoSearchResult[] = [];
+
+  // Match result links: <a rel="nofollow" class="result__a" href="...">title</a>
+  const linkRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/gi;
+  // Match snippets: <a class="result__snippet" ...>snippet text</a>
+  const snippetRegex = /<a[^>]*class="result__snippet"[^>]*>([^<]*(?:<[^>]*>[^<]*)*)<\/a>/gi;
+
+  const links: { url: string; title: string }[] = [];
+  let match;
+
+  while ((match = linkRegex.exec(html)) !== null) {
+    let url = match[1] ?? "";
+    const title = (match[2] ?? "").trim();
+
+    // DuckDuckGo wraps URLs in redirect: //duckduckgo.com/l/?uddg=ENCODED_URL
+    if (url.includes("uddg=")) {
+      try {
+        const parsed = new URL(url, "https://duckduckgo.com");
+        const realUrl = parsed.searchParams.get("uddg");
+        if (realUrl) url = decodeURIComponent(realUrl);
+      } catch {
+        // Keep original URL if parsing fails
+      }
+    }
+
+    if (url && title && url.startsWith("http")) {
+      links.push({ url, title });
+    }
+  }
+
+  const snippets: string[] = [];
+  while ((match = snippetRegex.exec(html)) !== null) {
+    // Remove HTML tags from snippet
+    const snippet = (match[1] ?? "").replace(/<[^>]*>/g, "").trim();
+    snippets.push(snippet);
+  }
+
+  for (let i = 0; i < links.length; i++) {
+    const link = links[i];
+    if (!link) continue;
+    results.push({
+      title: link.title,
+      url: link.url,
+      description: snippets[i] ?? "",
+      siteName: resolveSiteName(link.url),
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Run DuckDuckGo search using curl command.
+ * Uses curl because undici/fetch triggers DuckDuckGo's anti-bot detection.
+ * This is a free, no-API-key-required search method.
+ * Automatically uses HTTP/HTTPS proxy from environment variables.
+ */
+async function runDuckDuckGoSearch(params: {
+  query: string;
+  count: number;
+  timeoutSeconds: number;
+}): Promise<DuckDuckGoSearchResult[]> {
+  const { execFileSync } = await import("child_process");
+
+  // Build curl command arguments - curl automatically uses https_proxy/http_proxy env vars
+  const curlArgs = [
+    "-s", // silent
+    "--max-time",
+    String(params.timeoutSeconds),
+    "-X",
+    "POST",
+    "-H",
+    "Content-Type: application/x-www-form-urlencoded",
+    "-H",
+    "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "-H",
+    "Accept: text/html",
+    "-d",
+    `q=${encodeURIComponent(params.query)}`,
+    DUCKDUCKGO_HTML_ENDPOINT,
+  ];
+
+  try {
+    // Use execFileSync with array args to avoid shell escaping issues
+    const html = execFileSync("curl", curlArgs, {
+      encoding: "utf-8",
+      maxBuffer: 2 * 1024 * 1024, // 2MB buffer
+      timeout: params.timeoutSeconds * 1000,
+    });
+
+    const allResults = parseDuckDuckGoHtml(html);
+
+    // If no results found, check if we got the homepage (anti-bot detection)
+    if (allResults.length === 0 && html.includes("<title>") && !html.includes("at DuckDuckGo")) {
+      throw new Error("DuckDuckGo returned homepage instead of search results (possible anti-bot detection)");
+    }
+
+    return allResults.slice(0, params.count);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`DuckDuckGo search failed: ${message}`);
   }
 }
 
@@ -318,12 +403,12 @@ async function runPerplexitySearch(params: {
 }): Promise<{ content: string; citations: string[] }> {
   const endpoint = `${params.baseUrl.replace(/\/$/, "")}/chat/completions`;
 
-  const res = await fetch(endpoint, {
+  const res = await proxyFetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${params.apiKey}`,
-      "HTTP-Referer": "https://openclaw.ai",
+      "HTTP-Referer": "https://openclaw.dev",
       "X-Title": "OpenClaw Web Search",
     },
     body: JSON.stringify({
@@ -353,33 +438,28 @@ async function runPerplexitySearch(params: {
 async function runWebSearch(params: {
   query: string;
   count: number;
-  apiKey: string;
+  apiKey?: string;
   timeoutSeconds: number;
   cacheTtlMs: number;
   provider: (typeof SEARCH_PROVIDERS)[number];
   country?: string;
   search_lang?: string;
   ui_lang?: string;
-  freshness?: string;
   perplexityBaseUrl?: string;
   perplexityModel?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    params.provider === "brave"
-      ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
-      : `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
+    `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
-  if (cached) {
-    return { ...cached.value, cached: true };
-  }
+  if (cached) return { ...cached.value, cached: true };
 
   const start = Date.now();
 
   if (params.provider === "perplexity") {
     const { content, citations } = await runPerplexitySearch({
       query: params.query,
-      apiKey: params.apiKey,
+      apiKey: params.apiKey!,
       baseUrl: params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL,
       model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
       timeoutSeconds: params.timeoutSeconds,
@@ -390,8 +470,25 @@ async function runWebSearch(params: {
       provider: params.provider,
       model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
       tookMs: Date.now() - start,
-      content: wrapWebContent(content),
+      content,
       citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "duckduckgo") {
+    const ddgResults = await runDuckDuckGoSearch({
+      query: params.query,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: ddgResults.length,
+      tookMs: Date.now() - start,
+      results: ddgResults,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -413,15 +510,12 @@ async function runWebSearch(params: {
   if (params.ui_lang) {
     url.searchParams.set("ui_lang", params.ui_lang);
   }
-  if (params.freshness) {
-    url.searchParams.set("freshness", params.freshness);
-  }
 
-  const res = await fetch(url.toString(), {
+  const res = await proxyFetch(url.toString(), {
     method: "GET",
     headers: {
       Accept: "application/json",
-      "X-Subscription-Token": params.apiKey,
+      "X-Subscription-Token": params.apiKey!,
     },
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
@@ -433,19 +527,13 @@ async function runWebSearch(params: {
 
   const data = (await res.json()) as BraveSearchResponse;
   const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
-  const mapped = results.map((entry) => {
-    const description = entry.description ?? "";
-    const title = entry.title ?? "";
-    const url = entry.url ?? "";
-    const rawSiteName = resolveSiteName(url);
-    return {
-      title: title ? wrapWebContent(title, "web_search") : "",
-      url, // Keep raw for tool chaining
-      description: description ? wrapWebContent(description, "web_search") : "",
-      published: entry.age || undefined,
-      siteName: rawSiteName || undefined,
-    };
-  });
+  const mapped = results.map((entry) => ({
+    title: entry.title ?? "",
+    url: entry.url ?? "",
+    description: entry.description ?? "",
+    published: entry.age ?? undefined,
+    siteName: resolveSiteName(entry.url ?? ""),
+  }));
 
   const payload = {
     query: params.query,
@@ -463,17 +551,17 @@ export function createWebSearchTool(options?: {
   sandboxed?: boolean;
 }): AnyAgentTool | null {
   const search = resolveSearchConfig(options?.config);
-  if (!resolveSearchEnabled({ search, sandboxed: options?.sandboxed })) {
-    return null;
-  }
+  if (!resolveSearchEnabled({ search, sandboxed: options?.sandboxed })) return null;
 
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
 
   const description =
     provider === "perplexity"
-      ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
-      : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+      ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search. IMPORTANT: Always use this tool for web searches instead of exec curl - search engines block curl requests and return no useful data."
+      : provider === "duckduckgo"
+        ? "Search the web using DuckDuckGo. Free, no API key required. Returns titles, URLs, and snippets. IMPORTANT: Always use this tool for web searches instead of exec curl - search engines block curl requests and return no useful data."
+        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research. IMPORTANT: Always use this tool for web searches instead of exec curl - search engines block curl requests and return no useful data.";
 
   return {
     label: "Web Search",
@@ -486,7 +574,7 @@ export function createWebSearchTool(options?: {
       const apiKey =
         provider === "perplexity" ? perplexityAuth?.apiKey : resolveSearchApiKey(search);
 
-      if (!apiKey) {
+      if (!apiKey && provider !== "duckduckgo") {
         return jsonResult(missingSearchKeyPayload(provider));
       }
       const params = args as Record<string, unknown>;
@@ -496,23 +584,6 @@ export function createWebSearchTool(options?: {
       const country = readStringParam(params, "country");
       const search_lang = readStringParam(params, "search_lang");
       const ui_lang = readStringParam(params, "ui_lang");
-      const rawFreshness = readStringParam(params, "freshness");
-      if (rawFreshness && provider !== "brave") {
-        return jsonResult({
-          error: "unsupported_freshness",
-          message: "freshness is only supported by the Brave web_search provider.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        });
-      }
-      const freshness = rawFreshness ? normalizeFreshness(rawFreshness) : undefined;
-      if (rawFreshness && !freshness) {
-        return jsonResult({
-          error: "invalid_freshness",
-          message:
-            "freshness must be one of pd, pw, pm, py, or a range like YYYY-MM-DDtoYYYY-MM-DD.",
-          docs: "https://docs.openclaw.ai/tools/web",
-        });
-      }
       const result = await runWebSearch({
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
@@ -523,7 +594,6 @@ export function createWebSearchTool(options?: {
         country,
         search_lang,
         ui_lang,
-        freshness,
         perplexityBaseUrl: resolvePerplexityBaseUrl(
           perplexityConfig,
           perplexityAuth?.source,
@@ -539,5 +609,4 @@ export function createWebSearchTool(options?: {
 export const __testing = {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
-  normalizeFreshness,
 } as const;
