@@ -130,3 +130,13 @@ The OpenClaw codebase is our teacher, not our starting point.
 - **Don't copy-paste** - Understand why code exists, then write something new
 - **Question everything** - "Is this essential, or is it historical accident?"
 - **Document decisions** - Record what we preserved, discarded, and why
+
+### Preserving Research
+
+When you send a Task agent (Explore, general-purpose, etc.) to investigate the OpenClaw codebase or research a question, **save the results** so future sessions don't repeat the work:
+
+- **Scouting/architecture findings** -- Add to the relevant file in `scouting/` (or create a new one if the topic doesn't fit existing reports). Update `docs/INDEX.md` if a new file is created.
+- **Decision-relevant analysis** -- If the research informed an architectural decision, capture the key findings in the decision record (PROGRESS.md decisions section, ROADMAP.md pre-resolved decisions, or the relevant module's DECISIONS.md).
+- **Implementation-relevant findings** -- If the research will inform a specific module's implementation, add it to the relevant roadmap phase entry in ROADMAP.md under a "Findings" or "Source material" note.
+
+The goal: no research result should exist only in a session transcript. If it was worth investigating, it's worth persisting.
