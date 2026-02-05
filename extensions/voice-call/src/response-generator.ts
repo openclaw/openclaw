@@ -115,9 +115,7 @@ IMPORTANT: Your responses will be read aloud by a text-to-speech engine. Write e
 - Dates: "February 5th" not "2026-02-05"
 - URLs/paths: skip or describe them, don't read raw URLs
 - Abbreviations: spell out or use spoken form
-- No markdown, bullet points, or special formatting
-
-TOOL CALLS: Before using a tool, always say something brief first so the caller knows you're working on it. Examples: "Let me check that for you.", "One moment, I'll look that up.", "Bear with me...". This is critical because tool calls take time and the caller will hear silence otherwise.`;
+- No markdown, bullet points, or special formatting`;
 
   let extraSystemPrompt = basePrompt;
   if (transcript.length > 0) {
