@@ -610,6 +610,44 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(ctx)) {
         return;
       }
+      // openVB3: aff auto-touch for Boss (Telegram)
+// Deterministic + non-blocking: keeps affection/lastMessageAt fresh without involving the model.
+try {
+  const senderId = msg.from?.id != null ? String(msg.from.id) : "";
+  if (senderId) {
+    const ws =
+      cfg?.agents?.defaults?.workspace ??
+      process.env.OPENCLAW_WORKSPACE ??
+      "/home/node/.openclaw/workspace";
+    const cacheKey = "__openvb3_aff_identity_v1";
+    const cached = (globalThis as any)[cacheKey] as { bossTelegramUserId?: string } | undefined;
+    let bossTelegramUserId = cached?.bossTelegramUserId;
+    if (!bossTelegramUserId) {
+      try {
+        const raw = await fs.promises.readFile(path.join(ws, "affection", "identity.json"), "utf8");
+        bossTelegramUserId = String(JSON.parse(raw)?.boss?.telegramUserId ?? "");
+      } catch {
+        bossTelegramUserId = "";
+      }
+      (globalThis as any)[cacheKey] = { bossTelegramUserId };
+    }
+    if (bossTelegramUserId && senderId === bossTelegramUserId) {
+      const cp = await import("node:child_process");
+      const script = path.join(ws, "affection", "aff_log.mjs");
+      cp.spawn(
+        process.execPath,
+        [script, "log", "touch", `auto-touch telegram:${senderId} msg:${msg.message_id}`],
+        {
+          stdio: "ignore",
+          detached: true,
+          env: { ...process.env, OPENCLAW_WORKSPACE: ws },
+        },
+      ).unref();
+    }
+  }
+} catch {
+  // ignore
+}
 
       const oldChatId = String(msg.chat.id);
       const newChatId = String(msg.migrate_to_chat_id);
