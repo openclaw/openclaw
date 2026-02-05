@@ -2,7 +2,7 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { Readable } from "stream";
-import type { FeishuConfig } from "./types.js";
+import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { resolveToolsConfig } from "./tools-config.js";
@@ -55,8 +55,8 @@ const BLOCK_TYPE_NAMES: Record<number, string> = {
 const UNSUPPORTED_CREATE_TYPES = new Set([31, 32]);
 
 /** Clean blocks for insertion (remove unsupported types and read-only fields) */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
-function cleanBlocksForInsert(blocks: any[]): { cleaned: unknown[]; skipped: string[] } {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
+function cleanBlocksForInsert(blocks: any[]): { cleaned: any[]; skipped: string[] } {
   const skipped: string[] = [];
   const cleaned = blocks
     .filter((block) => {
@@ -92,13 +92,14 @@ async function convertMarkdown(client: Lark.Client, markdown: string) {
   };
 }
 
+/* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
 async function insertBlocks(
   client: Lark.Client,
   docToken: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
   blocks: any[],
   parentBlockId?: string,
-): Promise<{ children: unknown[]; skipped: string[] }> {
+): Promise<{ children: any[]; skipped: string[] }> {
+  /* eslint-enable @typescript-eslint/no-explicit-any */
   const { cleaned, skipped } = cleanBlocksForInsert(blocks);
   const blockId = parentBlockId ?? docToken;
 
@@ -154,7 +155,7 @@ async function uploadImageToDocx(
       parent_type: "docx_image",
       parent_node: blockId,
       size: imageBuffer.length,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK expects stream
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK stream type
       file: Readable.from(imageBuffer) as any,
     },
   });
@@ -174,13 +175,14 @@ async function downloadImage(url: string): Promise<Buffer> {
   return Buffer.from(await response.arrayBuffer());
 }
 
+/* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
 async function processImages(
   client: Lark.Client,
   docToken: string,
   markdown: string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
   insertedBlocks: any[],
 ): Promise<number> {
+  /* eslint-enable @typescript-eslint/no-explicit-any */
   const imageUrls = extractImageUrls(markdown);
   if (imageUrls.length === 0) {
     return 0;
@@ -426,14 +428,24 @@ async function listAppScopes(client: Lark.Client) {
 // ============ Tool Registration ============
 
 export function registerFeishuDocTools(api: OpenClawPluginApi) {
-  const feishuCfg = api.config?.channels?.feishu as FeishuConfig | undefined;
-  if (!feishuCfg?.appId || !feishuCfg?.appSecret) {
-    api.logger.debug?.("feishu_doc: Feishu credentials not configured, skipping doc tools");
+  if (!api.config) {
+    api.logger.debug?.("feishu_doc: No config available, skipping doc tools");
     return;
   }
 
-  const toolsCfg = resolveToolsConfig(feishuCfg.tools);
-  const getClient = () => createFeishuClient(feishuCfg);
+  // Check if any account is configured
+  const accounts = listEnabledFeishuAccounts(api.config);
+  if (accounts.length === 0) {
+    api.logger.debug?.("feishu_doc: No Feishu accounts configured, skipping doc tools");
+    return;
+  }
+
+  // Use first account's config for tools configuration
+  const firstAccount = accounts[0];
+  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
+
+  // Helper to get client for the default account
+  const getClient = () => createFeishuClient(firstAccount);
   const registered: string[] = [];
 
   // Main document tool with action-based dispatch

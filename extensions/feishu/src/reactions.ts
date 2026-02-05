@@ -1,5 +1,5 @@
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import type { FeishuConfig } from "./types.js";
+import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 
 export type FeishuReaction = {
@@ -18,14 +18,15 @@ export async function addReactionFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;
   emojiType: string;
+  accountId?: string;
 }): Promise<{ reactionId: string }> {
-  const { cfg, messageId, emojiType } = params;
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-  if (!feishuCfg) {
-    throw new Error("Feishu channel not configured");
+  const { cfg, messageId, emojiType, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const client = createFeishuClient(feishuCfg);
+  const client = createFeishuClient(account);
 
   const response = (await client.im.messageReaction.create({
     path: { message_id: messageId },
@@ -59,14 +60,15 @@ export async function removeReactionFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;
   reactionId: string;
+  accountId?: string;
 }): Promise<void> {
-  const { cfg, messageId, reactionId } = params;
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-  if (!feishuCfg) {
-    throw new Error("Feishu channel not configured");
+  const { cfg, messageId, reactionId, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const client = createFeishuClient(feishuCfg);
+  const client = createFeishuClient(account);
 
   const response = (await client.im.messageReaction.delete({
     path: {
@@ -87,14 +89,15 @@ export async function listReactionsFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;
   emojiType?: string;
+  accountId?: string;
 }): Promise<FeishuReaction[]> {
-  const { cfg, messageId, emojiType } = params;
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-  if (!feishuCfg) {
-    throw new Error("Feishu channel not configured");
+  const { cfg, messageId, emojiType, accountId } = params;
+  const account = resolveFeishuAccount({ cfg, accountId });
+  if (!account.configured) {
+    throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
 
-  const client = createFeishuClient(feishuCfg);
+  const client = createFeishuClient(account);
 
   const response = (await client.im.messageReaction.list({
     path: { message_id: messageId },

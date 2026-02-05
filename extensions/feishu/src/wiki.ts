@@ -1,6 +1,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import type { FeishuConfig } from "./types.js";
+import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
 import { FeishuWikiSchema, type FeishuWikiParams } from "./wiki-schema.js";
@@ -157,19 +157,25 @@ async function renameNode(client: Lark.Client, spaceId: string, nodeToken: strin
 // ============ Tool Registration ============
 
 export function registerFeishuWikiTools(api: OpenClawPluginApi) {
-  const feishuCfg = api.config?.channels?.feishu as FeishuConfig | undefined;
-  if (!feishuCfg?.appId || !feishuCfg?.appSecret) {
-    api.logger.debug?.("feishu_wiki: Feishu credentials not configured, skipping wiki tools");
+  if (!api.config) {
+    api.logger.debug?.("feishu_wiki: No config available, skipping wiki tools");
     return;
   }
 
-  const toolsCfg = resolveToolsConfig(feishuCfg.tools);
+  const accounts = listEnabledFeishuAccounts(api.config);
+  if (accounts.length === 0) {
+    api.logger.debug?.("feishu_wiki: No Feishu accounts configured, skipping wiki tools");
+    return;
+  }
+
+  const firstAccount = accounts[0];
+  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
   if (!toolsCfg.wiki) {
     api.logger.debug?.("feishu_wiki: wiki tool disabled in config");
     return;
   }
 
-  const getClient = () => createFeishuClient(feishuCfg);
+  const getClient = () => createFeishuClient(firstAccount);
 
   api.registerTool(
     {

@@ -1,72 +1,118 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
-import type { FeishuConfig, FeishuDomain } from "./types.js";
-import { resolveFeishuCredentials } from "./accounts.js";
+import type { FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
-let cachedClient: Lark.Client | null = null;
-let cachedConfig: { appId: string; appSecret: string; domain: FeishuDomain } | null = null;
+// Multi-account client cache
+const clientCache = new Map<
+  string,
+  {
+    client: Lark.Client;
+    config: { appId: string; appSecret: string; domain?: FeishuDomain };
+  }
+>();
 
-function resolveDomain(domain: FeishuDomain): Lark.Domain | string {
+function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
   if (domain === "lark") {
     return Lark.Domain.Lark;
   }
-  if (domain === "feishu") {
+  if (domain === "feishu" || !domain) {
     return Lark.Domain.Feishu;
   }
-  return domain.replace(/\/+$/, ""); // Custom URL, remove trailing slashes
+  return domain.replace(/\/+$/, ""); // Custom URL for private deployment
 }
 
-export function createFeishuClient(cfg: FeishuConfig): Lark.Client {
-  const creds = resolveFeishuCredentials(cfg);
-  if (!creds) {
-    throw new Error("Feishu credentials not configured (appId, appSecret required)");
+/**
+ * Credentials needed to create a Feishu client.
+ * Both FeishuConfig and ResolvedFeishuAccount satisfy this interface.
+ */
+export type FeishuClientCredentials = {
+  accountId?: string;
+  appId?: string;
+  appSecret?: string;
+  domain?: FeishuDomain;
+};
+
+/**
+ * Create or get a cached Feishu client for an account.
+ * Accepts any object with appId, appSecret, and optional domain/accountId.
+ */
+export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client {
+  const { accountId = "default", appId, appSecret, domain } = creds;
+
+  if (!appId || !appSecret) {
+    throw new Error(`Feishu credentials not configured for account "${accountId}"`);
   }
 
+  // Check cache
+  const cached = clientCache.get(accountId);
   if (
-    cachedClient &&
-    cachedConfig &&
-    cachedConfig.appId === creds.appId &&
-    cachedConfig.appSecret === creds.appSecret &&
-    cachedConfig.domain === creds.domain
+    cached &&
+    cached.config.appId === appId &&
+    cached.config.appSecret === appSecret &&
+    cached.config.domain === domain
   ) {
-    return cachedClient;
+    return cached.client;
   }
 
+  // Create new client
   const client = new Lark.Client({
-    appId: creds.appId,
-    appSecret: creds.appSecret,
+    appId,
+    appSecret,
     appType: Lark.AppType.SelfBuild,
-    domain: resolveDomain(creds.domain),
+    domain: resolveDomain(domain),
   });
 
-  cachedClient = client;
-  cachedConfig = { appId: creds.appId, appSecret: creds.appSecret, domain: creds.domain };
+  // Cache it
+  clientCache.set(accountId, {
+    client,
+    config: { appId, appSecret, domain },
+  });
 
   return client;
 }
 
-export function createFeishuWSClient(cfg: FeishuConfig): Lark.WSClient {
-  const creds = resolveFeishuCredentials(cfg);
-  if (!creds) {
-    throw new Error("Feishu credentials not configured (appId, appSecret required)");
+/**
+ * Create a Feishu WebSocket client for an account.
+ * Note: WSClient is not cached since each call creates a new connection.
+ */
+export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSClient {
+  const { accountId, appId, appSecret, domain } = account;
+
+  if (!appId || !appSecret) {
+    throw new Error(`Feishu credentials not configured for account "${accountId}"`);
   }
 
   return new Lark.WSClient({
-    appId: creds.appId,
-    appSecret: creds.appSecret,
-    domain: resolveDomain(creds.domain),
+    appId,
+    appSecret,
+    domain: resolveDomain(domain),
     loggerLevel: Lark.LoggerLevel.info,
   });
 }
 
-export function createEventDispatcher(cfg: FeishuConfig): Lark.EventDispatcher {
-  const creds = resolveFeishuCredentials(cfg);
+/**
+ * Create an event dispatcher for an account.
+ */
+export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.EventDispatcher {
   return new Lark.EventDispatcher({
-    encryptKey: creds?.encryptKey,
-    verificationToken: creds?.verificationToken,
+    encryptKey: account.encryptKey,
+    verificationToken: account.verificationToken,
   });
 }
 
-export function clearClientCache() {
-  cachedClient = null;
-  cachedConfig = null;
+/**
+ * Get a cached client for an account (if exists).
+ */
+export function getFeishuClient(accountId: string): Lark.Client | null {
+  return clientCache.get(accountId)?.client ?? null;
+}
+
+/**
+ * Clear client cache for a specific account or all accounts.
+ */
+export function clearClientCache(accountId?: string): void {
+  if (accountId) {
+    clientCache.delete(accountId);
+  } else {
+    clientCache.clear();
+  }
 }
