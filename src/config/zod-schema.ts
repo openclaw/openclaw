@@ -357,6 +357,7 @@ export const OpenClawSchema = z
         outputFormat: z.string().optional(),
         apiKey: z.string().optional(),
         interruptOnSpeech: z.boolean().optional(),
+        systemVoice: z.string().optional(),
       })
       .strict()
       .optional(),

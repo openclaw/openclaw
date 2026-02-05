@@ -58,6 +58,7 @@ actor TalkModeRuntime {
     private var modelOverrideActive = false
     private var defaultOutputFormat: String?
     private var interruptOnSpeech: Bool = true
+    private var systemVoice: String?
     private var lastInterruptedAtSeconds: Double?
     private var voiceAliases: [String: String] = [:]
     private var lastSpokenText: String?
@@ -644,16 +645,28 @@ actor TalkModeRuntime {
     }
 
     private func playSystemVoice(input: TalkPlaybackInput) async throws {
-        self.ttsLogger.info("talk system voice start chars=\(input.cleanedText.count, privacy: .public)")
+        let useSay = self.systemVoice?.isEmpty == false
+        self.ttsLogger.info(
+            "talk system voice start chars=\(input.cleanedText.count, privacy: .public) " +
+                "mode=\(useSay ? "say" : "avspeech", privacy: .public)")
         if self.interruptOnSpeech {
             guard await self.prepareForPlayback(generation: input.generation) else { return }
         }
         await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
         self.phase = .speaking
-        await TalkSystemSpeechSynthesizer.shared.stop()
-        try await TalkSystemSpeechSynthesizer.shared.speak(
-            text: input.cleanedText,
-            language: input.language)
+        if useSay {
+            // Use /usr/bin/say which accesses enhanced Siri neural voices
+            let sayVoice = self.systemVoice?.lowercased() == "siri" ? nil : self.systemVoice
+            await TalkSayCommandSynthesizer.shared.stop()
+            try await TalkSayCommandSynthesizer.shared.speak(
+                text: input.cleanedText,
+                voice: sayVoice)
+        } else {
+            await TalkSystemSpeechSynthesizer.shared.stop()
+            try await TalkSystemSpeechSynthesizer.shared.speak(
+                text: input.cleanedText,
+                language: input.language)
+        }
         self.ttsLogger.info("talk system voice done")
     }
 
@@ -714,6 +727,7 @@ actor TalkModeRuntime {
         let interruptedAt = usePCM ? await self.stopPCM() : await self.stopMP3()
         _ = usePCM ? await self.stopMP3() : await self.stopPCM()
         await TalkSystemSpeechSynthesizer.shared.stop()
+        await TalkSayCommandSynthesizer.shared.stop()
         guard self.phase == .speaking else { return }
         if reason == .speech, let interruptedAt {
             self.lastInterruptedAtSeconds = interruptedAt
@@ -772,15 +786,18 @@ extension TalkModeRuntime {
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
         self.apiKey = cfg.apiKey
+        self.systemVoice = cfg.systemVoice
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
         let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
         let modelLabel = (cfg.modelId?.isEmpty == false) ? cfg.modelId! : "none"
+        let sysVoiceLabel = (cfg.systemVoice?.isEmpty == false) ? cfg.systemVoice! : "none"
         self.logger
             .info(
                 "talk config voiceId=\(voiceLabel, privacy: .public) " +
                     "modelId=\(modelLabel, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
-                    "interrupt=\(cfg.interruptOnSpeech, privacy: .public)")
+                    "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
+                    "systemVoice=\(sysVoiceLabel, privacy: .public)")
     }
 
     private struct TalkRuntimeConfig {
@@ -790,6 +807,13 @@ extension TalkModeRuntime {
         let outputFormat: String?
         let interruptOnSpeech: Bool
         let apiKey: String?
+        /// When set to "siri" (or any non-empty value), the system voice fallback
+        /// uses `/usr/bin/say` instead of AVSpeechSynthesizer. The `say` command
+        /// accesses the enhanced Siri neural voice configured in System Settings >
+        /// Accessibility > Spoken Content — a premium voice not available through
+        /// AVSpeechSynthesizer. Set to "siri" to use the system default (enhanced
+        /// Siri), or a specific voice name like "Samantha" to pass as `-v` to say.
+        let systemVoice: String?
     }
 
     private func fetchTalkConfig() async -> TalkRuntimeConfig {
@@ -823,6 +847,7 @@ extension TalkModeRuntime {
             let outputFormat = talk?["outputFormat"]?.stringValue
             let interrupt = talk?["interruptOnSpeech"]?.boolValue
             let apiKey = talk?["apiKey"]?.stringValue
+            let sysVoice = talk?["systemVoice"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
             let resolvedVoice =
                 (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
@@ -836,7 +861,8 @@ extension TalkModeRuntime {
                 modelId: resolvedModel,
                 outputFormat: outputFormat,
                 interruptOnSpeech: interrupt ?? true,
-                apiKey: resolvedApiKey)
+                apiKey: resolvedApiKey,
+                systemVoice: sysVoice)
         } catch {
             let resolvedVoice =
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
@@ -848,7 +874,8 @@ extension TalkModeRuntime {
                 modelId: Self.defaultModelIdFallback,
                 outputFormat: nil,
                 interruptOnSpeech: true,
-                apiKey: resolvedApiKey)
+                apiKey: resolvedApiKey,
+                systemVoice: nil)
         }
     }
 
