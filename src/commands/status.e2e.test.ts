@@ -536,4 +536,51 @@ describe("statusCommand", () => {
       mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
     }
   });
+
+  it("skips deep health probe when gateway is unreachable (guard test)", async () => {
+    // Default probeGateway mock returns ok: false, so gatewayReachable is false.
+    // The health probe callGateway should NOT be called at all.
+    mocks.callGateway.mockClear();
+    (runtime.log as vi.Mock).mockClear();
+
+    await expect(statusCommand({ deep: true }, runtime as never)).resolves.not.toThrow();
+
+    // Verify callGateway was only called for channels.status (from scanStatus), not for health
+    const healthCalls = mocks.callGateway.mock.calls.filter((call) => call[0]?.method === "health");
+    expect(healthCalls).toHaveLength(0);
+
+    // Health section should not appear (check for distinctive table content, not just "Health" keyword)
+    const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
+    // The Health section renders a table with "Gateway" as an Item - this is distinctive
+    expect(logs.some((l) => /Item.*Status.*Detail/.test(l) && l.includes("Gateway"))).toBe(false);
+  });
+
+  it("captures health probe error in result when gateway is reachable (catch test)", async () => {
+    // Gateway is reachable but the health probe itself fails
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: true,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 10,
+      error: null,
+      close: null,
+      health: {},
+      status: {},
+      presence: [],
+      configSnapshot: null,
+    });
+    // First callGateway (channels.status from scanStatus) succeeds
+    // Second callGateway (health probe) fails
+    mocks.callGateway
+      .mockResolvedValueOnce({}) // channels.status
+      .mockRejectedValueOnce(new Error("gateway closed (1008): unauthorized"));
+    (runtime.log as vi.Mock).mockClear();
+
+    // Should not throw — error should be captured gracefully
+    await expect(statusCommand({ deep: true }, runtime as never)).resolves.not.toThrow();
+
+    // Health section should show the error
+    const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
+    expect(logs.some((l) => l.includes("Health"))).toBe(true);
+    expect(logs.some((l) => l.includes("gateway closed (1008): unauthorized"))).toBe(true);
+  });
 });
