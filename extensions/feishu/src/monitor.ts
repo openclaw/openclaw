@@ -1,7 +1,7 @@
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "openclaw/plugin-sdk";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import type { FeishuConfig } from "./types.js";
-import { resolveFeishuCredentials } from "./accounts.js";
+import type { ResolvedFeishuAccount } from "./types.js";
+import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
 import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { probeFeishu } from "./probe.js";
@@ -13,71 +13,52 @@ export type MonitorFeishuOpts = {
   accountId?: string;
 };
 
-let currentWsClient: Lark.WSClient | null = null;
-let botOpenId: string | undefined;
+// Per-account WebSocket clients and bot info
+const wsClients = new Map<string, Lark.WSClient>();
+const botOpenIds = new Map<string, string>();
 
-async function fetchBotOpenId(cfg: FeishuConfig): Promise<string | undefined> {
+async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | undefined> {
   try {
-    const result = await probeFeishu(cfg);
+    const result = await probeFeishu(account);
     return result.ok ? result.botOpenId : undefined;
   } catch {
     return undefined;
   }
 }
 
-export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promise<void> {
-  const cfg = opts.config;
-  if (!cfg) {
-    throw new Error("Config is required for Feishu monitor");
-  }
-
-  const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-  const creds = resolveFeishuCredentials(feishuCfg);
-  if (!creds) {
-    throw new Error("Feishu credentials not configured (appId, appSecret required)");
-  }
-
-  const log = opts.runtime?.log ?? console.log;
-
-  if (feishuCfg) {
-    botOpenId = await fetchBotOpenId(feishuCfg);
-    log(`feishu: bot open_id resolved: ${botOpenId ?? "unknown"}`);
-  }
-
-  const connectionMode = feishuCfg?.connectionMode ?? "websocket";
-
-  if (connectionMode === "websocket") {
-    return monitorWebSocket({
-      cfg,
-      feishuCfg: feishuCfg!,
-      runtime: opts.runtime,
-      abortSignal: opts.abortSignal,
-    });
-  }
-
-  throw new Error(
-    "feishu: webhook mode not implemented in monitor. Use websocket mode or configure an external HTTP server.",
-  );
-}
-
-async function monitorWebSocket(params: {
+/**
+ * Monitor a single Feishu account.
+ */
+async function monitorSingleAccount(params: {
   cfg: ClawdbotConfig;
-  feishuCfg: FeishuConfig;
+  account: ResolvedFeishuAccount;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
 }): Promise<void> {
-  const { cfg, feishuCfg, runtime, abortSignal } = params;
+  const { cfg, account, runtime, abortSignal } = params;
+  const { accountId } = account;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  log("feishu: starting WebSocket connection...");
+  // Fetch bot open_id
+  const botOpenId = await fetchBotOpenId(account);
+  botOpenIds.set(accountId, botOpenId ?? "");
+  log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
-  const wsClient = createFeishuWSClient(feishuCfg);
-  currentWsClient = wsClient;
+  const connectionMode = account.config.connectionMode ?? "websocket";
+
+  if (connectionMode !== "websocket") {
+    log(`feishu[${accountId}]: webhook mode not implemented in monitor`);
+    return;
+  }
+
+  log(`feishu[${accountId}]: starting WebSocket connection...`);
+
+  const wsClient = createFeishuWSClient(account);
+  wsClients.set(accountId, wsClient);
 
   const chatHistories = new Map<string, HistoryEntry[]>();
-
-  const eventDispatcher = createEventDispatcher(feishuCfg);
+  const eventDispatcher = createEventDispatcher(account);
 
   eventDispatcher.register({
     "im.message.receive_v1": async (data) => {
@@ -86,12 +67,13 @@ async function monitorWebSocket(params: {
         await handleFeishuMessage({
           cfg,
           event,
-          botOpenId,
+          botOpenId: botOpenIds.get(accountId),
           runtime,
           chatHistories,
+          accountId,
         });
       } catch (err) {
-        error(`feishu: error handling message event: ${String(err)}`);
+        error(`feishu[${accountId}]: error handling message: ${String(err)}`);
       }
     },
     "im.message.message_read_v1": async () => {
@@ -100,30 +82,29 @@ async function monitorWebSocket(params: {
     "im.chat.member.bot.added_v1": async (data) => {
       try {
         const event = data as unknown as FeishuBotAddedEvent;
-        log(`feishu: bot added to chat ${event.chat_id}`);
+        log(`feishu[${accountId}]: bot added to chat ${event.chat_id}`);
       } catch (err) {
-        error(`feishu: error handling bot added event: ${String(err)}`);
+        error(`feishu[${accountId}]: error handling bot added event: ${String(err)}`);
       }
     },
     "im.chat.member.bot.deleted_v1": async (data) => {
       try {
         const event = data as unknown as { chat_id: string };
-        log(`feishu: bot removed from chat ${event.chat_id}`);
+        log(`feishu[${accountId}]: bot removed from chat ${event.chat_id}`);
       } catch (err) {
-        error(`feishu: error handling bot removed event: ${String(err)}`);
+        error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
       }
     },
   });
 
   return new Promise((resolve, reject) => {
     const cleanup = () => {
-      if (currentWsClient === wsClient) {
-        currentWsClient = null;
-      }
+      wsClients.delete(accountId);
+      botOpenIds.delete(accountId);
     };
 
     const handleAbort = () => {
-      log("feishu: abort signal received, stopping WebSocket client");
+      log(`feishu[${accountId}]: abort signal received, stopping`);
       cleanup();
       resolve();
     };
@@ -137,11 +118,8 @@ async function monitorWebSocket(params: {
     abortSignal?.addEventListener("abort", handleAbort, { once: true });
 
     try {
-      void wsClient.start({
-        eventDispatcher,
-      });
-
-      log("feishu: WebSocket client started");
+      void wsClient.start({ eventDispatcher });
+      log(`feishu[${accountId}]: WebSocket client started`);
     } catch (err) {
       cleanup();
       abortSignal?.removeEventListener("abort", handleAbort);
@@ -150,8 +128,63 @@ async function monitorWebSocket(params: {
   });
 }
 
-export function stopFeishuMonitor(): void {
-  if (currentWsClient) {
-    currentWsClient = null;
+/**
+ * Main entry: start monitoring for all enabled accounts.
+ */
+export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promise<void> {
+  const cfg = opts.config;
+  if (!cfg) {
+    throw new Error("Config is required for Feishu monitor");
+  }
+
+  const log = opts.runtime?.log ?? console.log;
+
+  // If accountId is specified, only monitor that account
+  if (opts.accountId) {
+    const account = resolveFeishuAccount({ cfg, accountId: opts.accountId });
+    if (!account.enabled || !account.configured) {
+      throw new Error(`Feishu account "${opts.accountId}" not configured or disabled`);
+    }
+    return monitorSingleAccount({
+      cfg,
+      account,
+      runtime: opts.runtime,
+      abortSignal: opts.abortSignal,
+    });
+  }
+
+  // Otherwise, start all enabled accounts
+  const accounts = listEnabledFeishuAccounts(cfg);
+  if (accounts.length === 0) {
+    throw new Error("No enabled Feishu accounts configured");
+  }
+
+  log(
+    `feishu: starting ${accounts.length} account(s): ${accounts.map((a) => a.accountId).join(", ")}`,
+  );
+
+  // Start all accounts in parallel
+  await Promise.all(
+    accounts.map((account) =>
+      monitorSingleAccount({
+        cfg,
+        account,
+        runtime: opts.runtime,
+        abortSignal: opts.abortSignal,
+      }),
+    ),
+  );
+}
+
+/**
+ * Stop monitoring for a specific account or all accounts.
+ */
+export function stopFeishuMonitor(accountId?: string): void {
+  if (accountId) {
+    wsClients.delete(accountId);
+    botOpenIds.delete(accountId);
+  } else {
+    wsClients.clear();
+    botOpenIds.clear();
   }
 }

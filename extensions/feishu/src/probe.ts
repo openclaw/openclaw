@@ -1,10 +1,8 @@
-import type { FeishuConfig, FeishuProbeResult } from "./types.js";
-import { resolveFeishuCredentials } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
+import type { FeishuProbeResult } from "./types.js";
+import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
 
-export async function probeFeishu(cfg?: FeishuConfig): Promise<FeishuProbeResult> {
-  const creds = resolveFeishuCredentials(cfg);
-  if (!creds) {
+export async function probeFeishu(creds?: FeishuClientCredentials): Promise<FeishuProbeResult> {
+  if (!creds?.appId || !creds?.appSecret) {
     return {
       ok: false,
       error: "missing credentials (appId, appSecret)",
@@ -12,10 +10,9 @@ export async function probeFeishu(cfg?: FeishuConfig): Promise<FeishuProbeResult
   }
 
   try {
-    const client = createFeishuClient(cfg!);
-    // Use im.chat.list as a simple connectivity test
-    // The bot info API path varies by SDK version
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing internal SDK method
+    const client = createFeishuClient(creds);
+    // Use bot/v3/info API to get bot information
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK generic request method
     const response = await (client as any).request({
       method: "GET",
       url: "/open-apis/bot/v3/info",
