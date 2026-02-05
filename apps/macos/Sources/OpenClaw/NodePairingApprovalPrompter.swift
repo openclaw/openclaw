@@ -452,7 +452,7 @@ final class NodePairingApprovalPrompter {
     }
 
     private func notify(resolution: PairingResolution, request: PendingRequest, via: String) async {
-        let center = UNUserNotificationCenter.current()
+        guard let center = notificationCenterIfAvailable() else { return }
         let settings = await center.notificationSettings()
         guard settings.authorizationStatus == .authorized ||
             settings.authorizationStatus == .provisional

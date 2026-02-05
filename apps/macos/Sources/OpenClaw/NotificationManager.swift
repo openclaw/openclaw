@@ -3,6 +3,14 @@ import Foundation
 import Security
 import UserNotifications
 
+/// `UNUserNotificationCenter.current()` crashes when the process has no bundle
+/// identifier (e.g. running via `swift run` outside a .app bundle). This helper
+/// returns `nil` in that case so callers can bail out gracefully.
+func notificationCenterIfAvailable() -> UNUserNotificationCenter? {
+    guard Bundle.main.bundleIdentifier != nil else { return nil }
+    return UNUserNotificationCenter.current()
+}
+
 @MainActor
 struct NotificationManager {
     private let logger = Logger(subsystem: "ai.openclaw", category: "notifications")
@@ -15,7 +23,10 @@ struct NotificationManager {
     }()
 
     func send(title: String, body: String, sound: String?, priority: NotificationPriority? = nil) async -> Bool {
-        let center = UNUserNotificationCenter.current()
+        guard let center = notificationCenterIfAvailable() else {
+            self.logger.debug("notifications unavailable (no bundle identifier)")
+            return false
+        }
         let status = await center.notificationSettings()
         if status.authorizationStatus == .notDetermined {
             let granted = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
