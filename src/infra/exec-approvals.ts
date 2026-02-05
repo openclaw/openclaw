@@ -132,18 +132,11 @@ function ensureDir(filePath: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
-/**
- * Coerce each allowlist item into a proper {@link ExecAllowlistEntry}.
- * Older config formats or manual edits may store bare strings (e.g.
- * `["ls", "cat"]`).  Spreading a string (`{ ..."ls" }`) produces
- * `{"0":"l","1":"s"}`, so we must detect and convert strings first.
- * Non-object, non-string entries and blank strings are dropped.
- */
-function coerceAllowlistEntries(
-  allowlist: unknown[] | undefined,
-): ExecAllowlistEntry[] | undefined {
+// Coerce legacy/corrupted allowlists into `ExecAllowlistEntry[]` before we spread
+// entries to add ids (spreading strings creates {"0":"l","1":"s",...}).
+function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | undefined {
   if (!Array.isArray(allowlist) || allowlist.length === 0) {
-    return allowlist as ExecAllowlistEntry[] | undefined;
+    return Array.isArray(allowlist) ? (allowlist as ExecAllowlistEntry[]) : undefined;
   }
   let changed = false;
   const result: ExecAllowlistEntry[] = [];
@@ -157,7 +150,12 @@ function coerceAllowlistEntries(
         changed = true; // dropped empty string
       }
     } else if (item && typeof item === "object" && !Array.isArray(item)) {
-      result.push(item as ExecAllowlistEntry);
+      const pattern = (item as { pattern?: unknown }).pattern;
+      if (typeof pattern === "string" && pattern.trim().length > 0) {
+        result.push(item as ExecAllowlistEntry);
+      } else {
+        changed = true; // dropped invalid entry
+      }
     } else {
       changed = true; // dropped invalid entry
     }
@@ -193,7 +191,7 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     delete agents.default;
   }
   for (const [key, agent] of Object.entries(agents)) {
-    const coerced = coerceAllowlistEntries(agent.allowlist as unknown[]);
+    const coerced = coerceAllowlistEntries(agent.allowlist);
     const allowlist = ensureAllowlistIds(coerced);
     if (allowlist !== agent.allowlist) {
       agents[key] = { ...agent, allowlist };

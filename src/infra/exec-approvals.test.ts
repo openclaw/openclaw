@@ -680,4 +680,37 @@ describe("normalizeExecApprovals handles string allowlist entries (#9790)", () =
     // Only "ls" should survive; empty/whitespace strings should be dropped
     expect(entries.map((e) => e.pattern)).toEqual(["ls"]);
   });
+
+  it("drops malformed object entries with missing/non-string patterns", () => {
+    const file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [{ pattern: "/usr/bin/ls" }, {}, { pattern: 123 }, { pattern: "   " }, "echo"],
+        },
+      },
+    } as unknown as ExecApprovalsFile;
+
+    const normalized = normalizeExecApprovals(file);
+    const entries = normalized.agents?.main?.allowlist ?? [];
+
+    expect(entries.map((e) => e.pattern)).toEqual(["/usr/bin/ls", "echo"]);
+    for (const entry of entries) {
+      expect(entry).not.toHaveProperty("0");
+    }
+  });
+
+  it("drops non-array allowlist values", () => {
+    const file = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: "ls",
+        },
+      },
+    } as unknown as ExecApprovalsFile;
+
+    const normalized = normalizeExecApprovals(file);
+    expect(normalized.agents?.main?.allowlist).toBeUndefined();
+  });
 });
