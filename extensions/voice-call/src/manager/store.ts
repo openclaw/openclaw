@@ -12,7 +12,10 @@ export function persistCallRecord(storePath: string, call: CallRecord): void {
   });
 }
 
-export function loadActiveCallsFromStore(storePath: string): {
+export function loadActiveCallsFromStore(
+  storePath: string,
+  opts?: { maxAgeMs?: number },
+): {
   activeCalls: Map<CallId, CallRecord>;
   providerCallIdMap: Map<string, CallId>;
   processedEventIds: Set<string>;
@@ -45,9 +48,15 @@ export function loadActiveCallsFromStore(storePath: string): {
   const activeCalls = new Map<CallId, CallRecord>();
   const providerCallIdMap = new Map<string, CallId>();
   const processedEventIds = new Set<string>();
+  const maxAgeMs = opts?.maxAgeMs;
+  const now = Date.now();
 
   for (const [callId, call] of callMap) {
     if (TerminalStates.has(call.state)) {
+      continue;
+    }
+    // Discard stale calls that outlived maxAgeMs (crash recovery)
+    if (typeof maxAgeMs === "number" && now - call.startedAt > maxAgeMs) {
       continue;
     }
     activeCalls.set(callId, call);
