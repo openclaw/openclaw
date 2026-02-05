@@ -36,6 +36,24 @@ describe("agent-events sequencing", () => {
     expect(seen["run-2"]).toEqual([1]);
   });
 
+  test("resets seq when clearing run context", async () => {
+    const seqs: number[] = [];
+    const stop = onAgentEvent((evt) => {
+      if (evt.runId === "run-1") {
+        seqs.push(evt.seq);
+      }
+    });
+
+    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: {} });
+    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: {} });
+    clearAgentRunContext("run-1");
+    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: {} });
+
+    stop();
+
+    expect(seqs).toEqual([1, 2, 1]);
+  });
+
   test("preserves compaction ordering on the event bus", async () => {
     const phases: Array<string> = [];
     const stop = onAgentEvent((evt) => {
