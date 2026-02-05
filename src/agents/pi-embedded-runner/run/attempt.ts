@@ -665,6 +665,8 @@ export async function runEmbeddedAttempt(
 
       let aborted = Boolean(params.abortSignal?.aborted);
       let timedOut = false;
+      let timedOutDuringCompaction = false;
+      let awaitingCompaction = false;
       const getAbortReason = (signal: AbortSignal): unknown =>
         "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
       const makeTimeoutAbortReason = (): Error => {
@@ -768,6 +770,12 @@ export async function runEmbeddedAttempt(
             log.warn(
               `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
             );
+          }
+          // Classify as compaction timeout if we're in the compaction wait OR compaction is active
+          // awaitingCompaction is the primary signal (set while blocked on waitForCompactionRetry)
+          // subscription.isCompacting() catches compaction that started but hasn't entered the wait yet
+          if (awaitingCompaction || subscription.isCompacting()) {
+            timedOutDuringCompaction = true;
           }
           abortRun(true);
           if (!abortWarnTimer) {
@@ -939,16 +947,34 @@ export async function runEmbeddedAttempt(
           );
         }
 
+        // Capture snapshot before compaction wait so we have complete messages if timeout occurs
+        // Check compaction state before and after to avoid race condition where compaction starts during capture
+        // Use session state (not subscription) for snapshot decisions - need instantaneous compaction status
+        const wasCompactingBefore = activeSession.isCompacting;
+        const snapshot = activeSession.messages.slice();
+        const wasCompactingAfter = activeSession.isCompacting;
+        // Only trust snapshot if compaction wasn't running before or after capture
+        const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
+        const preCompactionSessionId = activeSession.sessionId;
+
+        awaitingCompaction = true;
         try {
-          await waitForCompactionRetry();
+          await abortable(waitForCompactionRetry());
         } catch (err) {
           if (isRunnerAbortError(err)) {
             if (!promptError) {
               promptError = err;
             }
+            if (!isProbeSession) {
+              log.debug(
+                `compaction wait aborted: runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
           } else {
             throw err;
           }
+        } finally {
+          awaitingCompaction = false;
         }
 
         // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
@@ -956,27 +982,55 @@ export async function runEmbeddedAttempt(
         // inserted between compaction and the next prompt — breaking the
         // prepareCompaction() guard that checks the last entry type, leading to
         // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
-        const shouldTrackCacheTtl =
-          params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
-          isCacheTtlEligibleProvider(params.provider, params.modelId);
-        if (shouldTrackCacheTtl) {
-          appendCacheTtlTimestamp(sessionManager, {
-            timestamp: Date.now(),
-            provider: params.provider,
-            modelId: params.modelId,
-          });
+        // Skip when timed out during compaction — session state may be inconsistent.
+        if (!timedOutDuringCompaction) {
+          const shouldTrackCacheTtl =
+            params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
+            isCacheTtlEligibleProvider(params.provider, params.modelId);
+          if (shouldTrackCacheTtl) {
+            appendCacheTtlTimestamp(sessionManager, {
+              timestamp: Date.now(),
+              provider: params.provider,
+              modelId: params.modelId,
+            });
+          }
         }
 
-        messagesSnapshot = activeSession.messages.slice();
-        sessionIdUsed = activeSession.sessionId;
+        // If timeout occurred during compaction, use pre-compaction snapshot
+        // (compaction doesn't add messages, just restructures them)
+        // Note: timedOutDuringCompaction is set in timeout handler to avoid race condition
+        if (timedOutDuringCompaction) {
+          if (!isProbeSession) {
+            log.warn(
+              `using ${preCompactionSnapshot ? "pre-compaction" : "current"} snapshot: timed out during compaction runId=${params.runId} sessionId=${params.sessionId}`,
+            );
+          }
+          // Use pre-compaction snapshot if available (captured when not compacting), otherwise current
+          // Keep sessionId consistent with whichever snapshot source is used
+          if (preCompactionSnapshot) {
+            messagesSnapshot = preCompactionSnapshot;
+            sessionIdUsed = preCompactionSessionId;
+          } else {
+            messagesSnapshot = activeSession.messages.slice();
+            sessionIdUsed = activeSession.sessionId;
+          }
+        } else {
+          messagesSnapshot = activeSession.messages.slice();
+          sessionIdUsed = activeSession.sessionId;
+        }
         cacheTrace?.recordStage("session:after", {
           messages: messagesSnapshot,
-          note: promptError ? "prompt error" : undefined,
+          note: timedOutDuringCompaction
+            ? "compaction timeout"
+            : promptError
+              ? "prompt error"
+              : undefined,
         });
         anthropicPayloadLogger?.recordUsage(messagesSnapshot, promptError);
 
         // Run agent_end hooks to allow plugins to analyze the conversation
         // This is fire-and-forget, so we don't await
+        // Run even on compaction timeout so plugins can log/cleanup
         if (hookRunner?.hasHooks("agent_end")) {
           hookRunner
             .runAgentEnd(
@@ -1003,7 +1057,16 @@ export async function runEmbeddedAttempt(
         if (abortWarnTimer) {
           clearTimeout(abortWarnTimer);
         }
-        unsubscribe();
+        if (!isProbeSession && (aborted || timedOut) && !timedOutDuringCompaction) {
+          log.debug(
+            `run cleanup: runId=${params.runId} sessionId=${params.sessionId} aborted=${aborted} timedOut=${timedOut}`,
+          );
+        }
+        try {
+          unsubscribe();
+        } catch (err) {
+          log.warn(`unsubscribe failed: runId=${params.runId} ${String(err)}`);
+        }
         clearActiveEmbeddedRun(params.sessionId, queueHandle);
         params.abortSignal?.removeEventListener?.("abort", onAbort);
       }
@@ -1023,6 +1086,7 @@ export async function runEmbeddedAttempt(
       return {
         aborted,
         timedOut,
+        timedOutDuringCompaction,
         promptError,
         sessionIdUsed,
         systemPromptReport,

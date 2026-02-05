@@ -55,7 +55,9 @@ export type EmbeddedPiSubscribeState = {
   compactionInFlight: boolean;
   pendingCompactionRetry: number;
   compactionRetryResolve?: () => void;
+  compactionRetryReject?: (reason?: unknown) => void;
   compactionRetryPromise: Promise<void> | null;
+  unsubscribed: boolean;
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
