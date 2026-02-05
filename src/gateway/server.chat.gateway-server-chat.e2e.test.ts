@@ -270,7 +270,9 @@ describe("gateway server chat", () => {
       expect(audioRes.ok).toBe(true);
       expect(audioRes.payload?.runId).toBeDefined();
       await waitFor(() => spy.mock.calls.length > callsBeforeAudio, 8000);
-      const audioCtx = spy.mock.calls.at(-1)?.[0] as { MediaPath?: string; MediaType?: string } | undefined;
+      const audioCtx = spy.mock.calls.at(-1)?.[0] as
+        | { MediaPath?: string; MediaType?: string }
+        | undefined;
       expect(audioCtx?.MediaPath).toBeDefined();
       expect(audioCtx?.MediaType).toBe("audio/ogg");
 
