@@ -106,4 +106,75 @@ describe("getReplyFromConfig typing (heartbeat)", () => {
       expect(onReplyStart).not.toHaveBeenCalled();
     });
   });
+
+  it("uses heartbeatModel option over global defaults", async () => {
+    await withTempHome(async (home) => {
+      runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "HEARTBEAT_OK" }],
+        meta: {},
+      });
+
+      const cfg = {
+        ...makeCfg(home),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "openclaw"),
+            heartbeat: {
+              model: "anthropic/claude-haiku-4-5", // Global default heartbeat model
+            },
+          },
+        },
+      };
+
+      await getReplyFromConfig(
+        { Body: "hi", From: "+1000", To: "+2000", Provider: "heartbeat" },
+        {
+          isHeartbeat: true,
+          heartbeatModel: "ollama/qwen2.5:3b", // Per-agent override
+        },
+        cfg,
+      );
+
+      // The heartbeatModel option should override the global heartbeat.model
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
+      const callParams = runEmbeddedPiAgentMock.mock.calls[0][0];
+      expect(callParams.provider).toBe("ollama");
+      expect(callParams.model).toBe("qwen2.5:3b");
+    });
+  });
+
+  it("falls back to global heartbeat.model when heartbeatModel option is not provided", async () => {
+    await withTempHome(async (home) => {
+      runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "HEARTBEAT_OK" }],
+        meta: {},
+      });
+
+      const cfg = {
+        ...makeCfg(home),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "openclaw"),
+            heartbeat: {
+              model: "openai/gpt-4.1-mini", // Global default heartbeat model
+            },
+          },
+        },
+      };
+
+      await getReplyFromConfig(
+        { Body: "hi", From: "+1000", To: "+2000", Provider: "heartbeat" },
+        { isHeartbeat: true }, // No heartbeatModel option
+        cfg,
+      );
+
+      // Should use global heartbeat.model
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
+      const callParams = runEmbeddedPiAgentMock.mock.calls[0][0];
+      expect(callParams.provider).toBe("openai");
+      expect(callParams.model).toBe("gpt-4.1-mini");
+    });
+  });
 });
