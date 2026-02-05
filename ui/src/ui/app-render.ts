@@ -791,26 +791,40 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const cfg = configValue as { agents?: { list?: unknown[] } };
+                  let list = cfg.agents?.list;
+                  // Create agents.list if it doesn't exist
                   if (!Array.isArray(list)) {
-                    return;
+                    updateConfigFormValue(state as unknown as ConfigState, ["agents", "list"], []);
+                    list = (state.configForm as { agents?: { list?: unknown[] } } | null)?.agents
+                      ?.list;
+                    if (!Array.isArray(list)) {
+                      return;
+                    }
                   }
-                  const index = list.findIndex(
+                  let index = list.findIndex(
                     (entry) =>
                       entry &&
                       typeof entry === "object" &&
                       "id" in entry &&
                       (entry as { id?: string }).id === agentId,
                   );
+                  // Create agent entry if it doesn't exist
                   if (index < 0) {
-                    return;
+                    const newEntry = { id: agentId };
+                    updateConfigFormValue(
+                      state as unknown as ConfigState,
+                      ["agents", "list", list.length],
+                      newEntry,
+                    );
+                    index = list.length;
                   }
                   const basePath = ["agents", "list", index, "model"];
                   if (!modelId) {
                     removeConfigFormValue(state as unknown as ConfigState, basePath);
                     return;
                   }
-                  const entry = list[index] as { model?: unknown };
+                  const entry = list[index] as { model?: unknown } | undefined;
                   const existing = entry?.model;
                   if (existing && typeof existing === "object" && !Array.isArray(existing)) {
                     const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
@@ -827,24 +841,38 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const cfg = configValue as { agents?: { list?: unknown[] } };
+                  let list = cfg.agents?.list;
+                  // Create agents.list if it doesn't exist
                   if (!Array.isArray(list)) {
-                    return;
+                    updateConfigFormValue(state as unknown as ConfigState, ["agents", "list"], []);
+                    list = (state.configForm as { agents?: { list?: unknown[] } } | null)?.agents
+                      ?.list;
+                    if (!Array.isArray(list)) {
+                      return;
+                    }
                   }
-                  const index = list.findIndex(
+                  let index = list.findIndex(
                     (entry) =>
                       entry &&
                       typeof entry === "object" &&
                       "id" in entry &&
                       (entry as { id?: string }).id === agentId,
                   );
+                  // Create agent entry if it doesn't exist
                   if (index < 0) {
-                    return;
+                    const newEntry = { id: agentId };
+                    updateConfigFormValue(
+                      state as unknown as ConfigState,
+                      ["agents", "list", list.length],
+                      newEntry,
+                    );
+                    index = list.length;
                   }
                   const basePath = ["agents", "list", index, "model"];
-                  const entry = list[index] as { model?: unknown };
+                  const entry = list[index] as { model?: unknown } | undefined;
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
-                  const existing = entry.model;
+                  const existing = entry?.model;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;
