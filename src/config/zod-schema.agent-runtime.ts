@@ -427,6 +427,7 @@ export const AgentEntrySchema = z
     default: z.boolean().optional(),
     name: z.string().optional(),
     workspace: z.string().optional(),
+    identityDir: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
     skills: z.array(z.string()).optional(),
