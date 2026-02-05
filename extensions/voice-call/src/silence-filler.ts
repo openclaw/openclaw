@@ -77,7 +77,7 @@ export class SilenceFiller {
       thresholdMs: config?.thresholdMs ?? 3500,
       sfxSet: config?.sfxSet ?? "typing",
       enabled: config?.enabled ?? true,
-      volumeReduction: config?.volumeReduction ?? 3,
+      volumeReduction: config?.volumeReduction ?? 1,
     };
   }
 
