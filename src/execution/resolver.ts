@@ -294,10 +294,10 @@ export class DefaultRuntimeResolver implements RuntimeResolver {
     // Collect all allow lists (profile + global + agent + alsoAllow)
     const allowLists: Array<string[] | undefined> = [
       profilePolicy?.allow,
-      toolsCfg?.allow as string[] | undefined,
-      toolsCfg?.alsoAllow as string[] | undefined,
-      agentToolsCfg?.allow as string[] | undefined,
-      agentToolsCfg?.alsoAllow as string[] | undefined,
+      toolsCfg?.allow,
+      toolsCfg?.alsoAllow,
+      agentToolsCfg?.allow,
+      agentToolsCfg?.alsoAllow,
     ];
 
     const filteredAllowLists = allowLists.filter(
@@ -312,8 +312,8 @@ export class DefaultRuntimeResolver implements RuntimeResolver {
     // Collect all deny lists
     const denyLists: Array<string[] | undefined> = [
       profilePolicy?.deny,
-      toolsCfg?.deny as string[] | undefined,
-      agentToolsCfg?.deny as string[] | undefined,
+      toolsCfg?.deny,
+      agentToolsCfg?.deny,
     ];
 
     const filteredDenyLists = denyLists.filter(

@@ -378,9 +378,9 @@ describe("createLegacyEventAdapter", () => {
     const emitted: Array<{ runId: string; stream: string; data: Record<string, unknown> }> = [];
     const adapter = createLegacyEventAdapter((event) => emitted.push(event));
 
-    adapter(createLifecycleStartEvent("run-1", { prompt: "test" }));
-    adapter(createLifecycleEndEvent("run-1", { success: true }));
-    adapter(createLifecycleErrorEvent("run-1", { error: "fail" }));
+    void adapter(createLifecycleStartEvent("run-1", { prompt: "test" }));
+    void adapter(createLifecycleEndEvent("run-1", { success: true }));
+    void adapter(createLifecycleErrorEvent("run-1", { error: "fail" }));
 
     expect(emitted).toHaveLength(3);
     expect(emitted.every((e) => e.stream === "lifecycle")).toBe(true);
@@ -390,8 +390,10 @@ describe("createLegacyEventAdapter", () => {
     const emitted: Array<{ runId: string; stream: string; data: Record<string, unknown> }> = [];
     const adapter = createLegacyEventAdapter((event) => emitted.push(event));
 
-    adapter(createToolStartEvent("run-1", { toolName: "bash", toolCallId: "tc-1" }));
-    adapter(createToolEndEvent("run-1", { toolName: "bash", toolCallId: "tc-1", success: true }));
+    void adapter(createToolStartEvent("run-1", { toolName: "bash", toolCallId: "tc-1" }));
+    void adapter(
+      createToolEndEvent("run-1", { toolName: "bash", toolCallId: "tc-1", success: true }),
+    );
 
     expect(emitted).toHaveLength(2);
     expect(emitted.every((e) => e.stream === "tool")).toBe(true);
@@ -401,8 +403,8 @@ describe("createLegacyEventAdapter", () => {
     const emitted: Array<{ runId: string; stream: string; data: Record<string, unknown> }> = [];
     const adapter = createLegacyEventAdapter((event) => emitted.push(event));
 
-    adapter(createAssistantPartialEvent("run-1", { text: "partial" }));
-    adapter(createAssistantCompleteEvent("run-1", { text: "complete" }));
+    void adapter(createAssistantPartialEvent("run-1", { text: "partial" }));
+    void adapter(createAssistantCompleteEvent("run-1", { text: "complete" }));
 
     expect(emitted).toHaveLength(2);
     expect(emitted.every((e) => e.stream === "assistant")).toBe(true);
@@ -417,7 +419,7 @@ describe("createLegacyEventAdapter", () => {
     }> = [];
     const adapter = createLegacyEventAdapter((event) => emitted.push(event));
 
-    adapter(
+    void adapter(
       createLifecycleStartEvent("run-1", {
         prompt: "test",
         sessionKey: "sess-123",

@@ -58,7 +58,7 @@ export function anyNewExecutionLayerEnabled(config: OpenClawConfig | undefined):
     return false;
   }
 
-  return Object.values(flags).some((v) => v === true);
+  return Object.values(flags).some((v) => v);
 }
 
 /**
