@@ -49,7 +49,9 @@ export class Embeddings {
    */
   private truncateToContext(text: string): string {
     const maxChars = this.contextLength * 3;
-    if (text.length <= maxChars) return text;
+    if (text.length <= maxChars) {
+      return text;
+    }
 
     // Try to truncate at a word boundary
     let truncated = text.slice(0, maxChars);
