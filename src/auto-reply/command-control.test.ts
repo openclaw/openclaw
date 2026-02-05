@@ -165,7 +165,7 @@ describe("resolveCommandAuthorization", () => {
       commandAuthorized: true,
     });
     expect(otherAuth.senderIsOwner).toBe(false);
-    expect(otherAuth.isAuthorizedSender).toBe(true);
+    expect(otherAuth.isAuthorizedSender).toBe(false);
   });
 });
 

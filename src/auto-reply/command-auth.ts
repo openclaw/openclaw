@@ -204,6 +204,7 @@ export function resolveCommandAuthorization(params: {
       ownerCandidatesForCommands.push(...normalizedTo);
     }
   }
+  const ownerAllowAll = ownerAllowFromList.some((entry) => entry.trim() === "*");
   const explicitOwners = ownerAllowFromList.filter((entry) => entry !== "*");
   const ownerList = Array.from(
     new Set(explicitOwners.length > 0 ? explicitOwners : ownerCandidatesForCommands),
@@ -228,11 +229,15 @@ export function resolveCommandAuthorization(params: {
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
   const senderIsOwner = Boolean(matchedSender);
-  const isOwnerForCommands =
-    !enforceOwner ||
-    allowAll ||
-    ownerCandidatesForCommands.length === 0 ||
-    Boolean(matchedCommandOwner);
+  const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
+  const requireOwner = enforceOwner || ownerAllowlistConfigured;
+  const isOwnerForCommands = !requireOwner
+    ? true
+    : ownerAllowAll
+      ? true
+      : ownerAllowlistConfigured
+        ? senderIsOwner
+        : allowAll || ownerCandidatesForCommands.length === 0 || Boolean(matchedCommandOwner);
   const isAuthorizedSender = commandAuthorized && isOwnerForCommands;
 
   return {
