@@ -6,8 +6,11 @@ import {
 import type { ModelApi } from "../config/types.models.js";
 import {
   buildQianfanProvider,
+<<<<<<< HEAD
   buildXiaomiProvider,
   QIANFAN_DEFAULT_MODEL_ID,
+=======
+>>>>>>> 7af00f040 (Optimize import)
   XIAOMI_DEFAULT_MODEL_ID,
 } from "../agents/models-config.providers.js";
 import {
@@ -35,6 +38,7 @@ import {
   buildXaiModelDefinition,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
+  QIANFAN_DEFAULT_MODEL_ID,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_BASE_URL,
   MOONSHOT_CN_BASE_URL,
