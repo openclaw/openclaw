@@ -80,6 +80,7 @@ export interface ConfigAPIResponse {
 export async function verifyTailscaleWhois(
   remoteAddress: string,
   exec: typeof runExec = runExec,
+  getTailscaleBin: typeof getTailscaleBinary = getTailscaleBinary,
 ): Promise<TailscaleWhoisResult> {
   // Strip IPv6 prefix if present (::ffff:100.x.x.x -> 100.x.x.x)
   const cleanAddress = remoteAddress.replace(/^::ffff:/, "");
@@ -96,7 +97,7 @@ export async function verifyTailscaleWhois(
   }
 
   try {
-    const tailscaleBin = await getTailscaleBinary();
+    const tailscaleBin = await getTailscaleBin();
     const { stdout } = await exec(tailscaleBin, ["whois", "--json", cleanAddress], {
       timeoutMs: 5000,
     });

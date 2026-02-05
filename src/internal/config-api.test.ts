@@ -21,6 +21,8 @@ import {
 
 // Mock runExec for Tailscale whois
 const mockRunExec = vi.fn();
+// Mock getTailscaleBinary to avoid requiring Tailscale installation
+const mockGetTailscaleBinary = vi.fn().mockResolvedValue("/usr/bin/tailscale");
 
 describe("verifyTailscaleWhois", () => {
   beforeEach(() => {
@@ -60,7 +62,7 @@ describe("verifyTailscaleWhois", () => {
 
     mockRunExec.mockResolvedValue({ stdout: JSON.stringify(whoisResponse) });
 
-    const result = await verifyTailscaleWhois("100.100.100.1", mockRunExec);
+    const result = await verifyTailscaleWhois("100.100.100.1", mockRunExec, mockGetTailscaleBinary);
 
     expect(result.valid).toBe(true);
     expect(result.nodeId).toBe("12345");
@@ -72,7 +74,7 @@ describe("verifyTailscaleWhois", () => {
   it("should handle whois command failure gracefully", async () => {
     mockRunExec.mockRejectedValue(new Error("tailscale not running"));
 
-    const result = await verifyTailscaleWhois("100.100.100.1", mockRunExec);
+    const result = await verifyTailscaleWhois("100.100.100.1", mockRunExec, mockGetTailscaleBinary);
 
     expect(result.valid).toBe(false);
     expect(result.error).toContain("Whois failed");
@@ -80,7 +82,7 @@ describe("verifyTailscaleWhois", () => {
 
   it("should validate Tailscale IP range boundaries", async () => {
     // Lower bound: 100.64.0.0
-    const lower = await verifyTailscaleWhois("100.64.0.1", mockRunExec);
+    const lower = await verifyTailscaleWhois("100.64.0.1", mockRunExec, mockGetTailscaleBinary);
     // Should attempt whois (IP is valid Tailscale range)
     expect(mockRunExec).toHaveBeenCalled();
 
@@ -88,18 +90,30 @@ describe("verifyTailscaleWhois", () => {
 
     // Upper bound: 100.127.255.255
     mockRunExec.mockResolvedValue({ stdout: JSON.stringify({ Node: { ID: 1 } }) });
-    const upper = await verifyTailscaleWhois("100.127.255.254", mockRunExec);
+    const upper = await verifyTailscaleWhois(
+      "100.127.255.254",
+      mockRunExec,
+      mockGetTailscaleBinary,
+    );
     expect(mockRunExec).toHaveBeenCalled();
 
     mockRunExec.mockClear();
 
     // Outside range: 100.63.x.x
-    const belowRange = await verifyTailscaleWhois("100.63.255.255", mockRunExec);
+    const belowRange = await verifyTailscaleWhois(
+      "100.63.255.255",
+      mockRunExec,
+      mockGetTailscaleBinary,
+    );
     expect(belowRange.valid).toBe(false);
     expect(mockRunExec).not.toHaveBeenCalled();
 
     // Outside range: 100.128.x.x
-    const aboveRange = await verifyTailscaleWhois("100.128.0.1", mockRunExec);
+    const aboveRange = await verifyTailscaleWhois(
+      "100.128.0.1",
+      mockRunExec,
+      mockGetTailscaleBinary,
+    );
     expect(aboveRange.valid).toBe(false);
   });
 });
