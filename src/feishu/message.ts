@@ -250,7 +250,7 @@ export async function processFeishuMessage(
   const botOpenId = options.botOpenId?.trim();
   const wasMentioned = botOpenId
     ? mentions.some((m) => m.id?.open_id === botOpenId || m.id?.user_id === botOpenId)
-    : mentions.length > 0;
+    : false;
 
   // In group chat, check requireMention setting
   if (isGroup) {
