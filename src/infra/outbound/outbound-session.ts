@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -598,6 +599,76 @@ function resolveMattermostSession(
   };
 }
 
+function resolveZulipDefaultTopic(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): string | undefined {
+  const channels = params.cfg.channels as Record<string, unknown> | undefined;
+  const zulip = channels?.zulip as Record<string, unknown> | undefined;
+  if (!zulip) {
+    return undefined;
+  }
+  const accountId = typeof params.accountId === "string" ? params.accountId.trim() : "";
+  const accounts = zulip.accounts as Record<string, unknown> | undefined;
+  if (accountId && accounts && typeof accounts === "object") {
+    const entry = accounts[accountId] as Record<string, unknown> | undefined;
+    const topic = typeof entry?.defaultTopic === "string" ? entry.defaultTopic.trim() : "";
+    if (topic) {
+      return topic;
+    }
+  }
+  const topic = typeof zulip.defaultTopic === "string" ? zulip.defaultTopic.trim() : "";
+  return topic || undefined;
+}
+
+function resolveZulipSession(
+  params: ResolveOutboundSessionRouteParams,
+): OutboundSessionRoute | null {
+  let trimmed = params.target.trim();
+  if (!trimmed) {
+    return null;
+  }
+  trimmed = trimmed.replace(/^zulip:/i, "").trim();
+  trimmed = trimmed.replace(/^stream:/i, "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  const hash = trimmed.indexOf("#");
+  const streamRaw = hash >= 0 ? trimmed.slice(0, hash) : trimmed;
+  const topicRaw = hash >= 0 ? trimmed.slice(hash + 1) : "";
+  const stream = streamRaw.trim().replace(/^#/, "");
+  if (!stream) {
+    return null;
+  }
+  const defaultTopic =
+    resolveZulipDefaultTopic({ cfg: params.cfg, accountId: params.accountId }) ?? "general chat";
+  const topic = topicRaw.trim() || defaultTopic;
+  const peer: RoutePeer = { kind: "channel", id: stream };
+  const baseSessionKey = buildBaseSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "zulip",
+    accountId: params.accountId,
+    peer,
+  });
+  const normalized = topic.trim().toLowerCase();
+  const encoded = encodeURIComponent(normalized);
+  const topicKey =
+    encoded.length <= 80
+      ? encoded
+      : `${encoded.slice(0, 64)}~${crypto.createHash("sha256").update(normalized).digest("hex").slice(0, 16)}`;
+  const sessionKey = `${baseSessionKey}:topic:${topicKey}`;
+  return {
+    sessionKey,
+    baseSessionKey,
+    peer,
+    chatType: "channel",
+    from: `zulip:stream:${stream}`,
+    to: `stream:${stream}#${topic}`,
+    threadId: topic,
+  };
+}
+
 function resolveBlueBubblesSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
@@ -933,6 +1004,8 @@ export async function resolveOutboundSessionRoute(
       return resolveMSTeamsSession({ ...params, target });
     case "mattermost":
       return resolveMattermostSession({ ...params, target });
+    case "zulip":
+      return resolveZulipSession({ ...params, target });
     case "bluebubbles":
       return resolveBlueBubblesSession({ ...params, target });
     case "nextcloud-talk":

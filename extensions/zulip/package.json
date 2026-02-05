@@ -1,0 +1,28 @@
+{
+  "name": "@openclaw/zulip",
+  "version": "2026.2.4",
+  "description": "OpenClaw Zulip channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "zulip",
+      "label": "Zulip",
+      "selectionLabel": "Zulip (plugin)",
+      "docsPath": "/channels/zulip",
+      "docsLabel": "zulip",
+      "blurb": "Zulip streams/topics with reaction-based reply indicators (plugin, installed separately).",
+      "order": 70
+    },
+    "install": {
+      "npmSpec": "@openclaw/zulip",
+      "localPath": "extensions/zulip",
+      "defaultChoice": "npm"
+    }
+  }
+}

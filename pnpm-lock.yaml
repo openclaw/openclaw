@@ -546,6 +546,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/zulip:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   packages/clawdbot:
     dependencies:
       openclaw:
