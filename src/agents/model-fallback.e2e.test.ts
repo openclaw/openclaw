@@ -581,4 +581,45 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
   });
+
+  it("does not inject anthropic into fallback chain (#5790)", async () => {
+    // Verifies that when a user configures only Google models, the fallback loop
+    // does not secretly add anthropic to the candidate list.
+    // Note: The root cause of #5790 was in resolveModelTarget (models/shared.ts),
+    // but this test documents that the fallback loop itself also respects user config.
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "google-antigravity/gemini-3-flash",
+            fallbacks: ["google-antigravity/gemini-3-pro-low", "google-antigravity/gemini-3-flash"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const calls: Array<{ provider: string; model: string }> = [];
+
+    // All configured models fail with a failover-eligible error (401 auth error)
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "google-antigravity",
+        model: "gemini-3-flash",
+        run: async (provider, model) => {
+          calls.push({ provider, model });
+          throw Object.assign(new Error("auth failed"), { status: 401 });
+        },
+      }),
+    ).rejects.toThrow("All models failed");
+
+    // Should only try the configured models, NOT fall back to anthropic
+    expect(calls.every((c) => c.provider !== "anthropic")).toBe(true);
+    // Should try: primary (google-antigravity/gemini-3-flash), then each fallback
+    // Note: gemini-3-flash appears twice (primary + fallback) but deduplication should handle it
+    expect(calls).toEqual([
+      { provider: "google-antigravity", model: "gemini-3-flash" },
+      { provider: "google-antigravity", model: "gemini-3-pro-low" },
+    ]);
+  });
 });

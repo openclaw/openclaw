@@ -76,17 +76,27 @@ export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig })
   provider: string;
   model: string;
 } {
+  const trimmed = params.raw.trim();
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
   const resolved = resolveModelRefFromString({
-    raw: params.raw,
+    raw: trimmed,
     defaultProvider: DEFAULT_PROVIDER,
     aliasIndex,
   });
   if (!resolved) {
-    throw new Error(`Invalid model reference: ${params.raw}`);
+    throw new Error(`Invalid model reference: ${trimmed}`);
+  }
+  // If the raw input has no provider prefix (no "/") and it's not a known alias,
+  // reject it instead of defaulting to anthropic. This prevents confusing errors
+  // when users try to set local/Ollama models without specifying the provider.
+  // (#5790: models set qwen2.5-coder:7b should not become anthropic/qwen2.5-coder:7b)
+  if (!trimmed.includes("/") && !resolved.alias) {
+    throw new Error(
+      `Model "${trimmed}" requires a provider prefix. Use "provider/${trimmed}" format (e.g., "ollama/${trimmed}", "openrouter/${trimmed}").`,
+    );
   }
   return resolved.ref;
 }
