@@ -9,6 +9,7 @@ export type CommandAuthorization = {
   providerId?: ChannelId;
   ownerList: string[];
   senderId?: string;
+  senderIsOwner: boolean;
   isAuthorizedSender: boolean;
   from?: string;
   to?: string;
@@ -83,6 +84,47 @@ function normalizeAllowFromEntry(params: {
   return normalized.filter((entry) => entry.trim().length > 0);
 }
 
+function resolveOwnerAllowFromList(params: {
+  dock?: ChannelDock;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  providerId?: ChannelId;
+}): string[] {
+  const raw = params.cfg.commands?.ownerAllowFrom;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return [];
+  }
+  const filtered: string[] = [];
+  for (const entry of raw) {
+    const trimmed = String(entry ?? "").trim();
+    if (!trimmed) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf(":");
+    if (separatorIndex > 0) {
+      const prefix = trimmed.slice(0, separatorIndex);
+      const channel = normalizeAnyChannelId(prefix);
+      if (channel) {
+        if (params.providerId && channel !== params.providerId) {
+          continue;
+        }
+        const remainder = trimmed.slice(separatorIndex + 1).trim();
+        if (remainder) {
+          filtered.push(remainder);
+        }
+        continue;
+      }
+    }
+    filtered.push(trimmed);
+  }
+  return formatAllowFromList({
+    dock: params.dock,
+    cfg: params.cfg,
+    accountId: params.accountId,
+    allowFrom: filtered,
+  });
+}
+
 function resolveSenderCandidates(params: {
   dock?: ChannelDock;
   providerId?: ChannelId;
@@ -141,11 +183,17 @@ export function resolveCommandAuthorization(params: {
     accountId: ctx.AccountId,
     allowFrom: Array.isArray(allowFromRaw) ? allowFromRaw : [],
   });
+  const ownerAllowFromList = resolveOwnerAllowFromList({
+    dock,
+    cfg,
+    accountId: ctx.AccountId,
+    providerId,
+  });
   const allowAll =
     allowFromList.length === 0 || allowFromList.some((entry) => entry.trim() === "*");
 
-  const ownerCandidates = allowAll ? [] : allowFromList.filter((entry) => entry !== "*");
-  if (!allowAll && ownerCandidates.length === 0 && to) {
+  const ownerCandidatesForCommands = allowAll ? [] : allowFromList.filter((entry) => entry !== "*");
+  if (!allowAll && ownerCandidatesForCommands.length === 0 && to) {
     const normalizedTo = normalizeAllowFromEntry({
       dock,
       cfg,
@@ -153,10 +201,13 @@ export function resolveCommandAuthorization(params: {
       value: to,
     });
     if (normalizedTo.length > 0) {
-      ownerCandidates.push(...normalizedTo);
+      ownerCandidatesForCommands.push(...normalizedTo);
     }
   }
-  const ownerList = Array.from(new Set(ownerCandidates));
+  const explicitOwners = ownerAllowFromList.filter((entry) => entry !== "*");
+  const ownerList = Array.from(
+    new Set(explicitOwners.length > 0 ? explicitOwners : ownerCandidatesForCommands),
+  );
 
   const senderCandidates = resolveSenderCandidates({
     dock,
@@ -170,16 +221,25 @@ export function resolveCommandAuthorization(params: {
   const matchedSender = ownerList.length
     ? senderCandidates.find((candidate) => ownerList.includes(candidate))
     : undefined;
+  const matchedCommandOwner = ownerCandidatesForCommands.length
+    ? senderCandidates.find((candidate) => ownerCandidatesForCommands.includes(candidate))
+    : undefined;
   const senderId = matchedSender ?? senderCandidates[0];
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
-  const isOwner = !enforceOwner || allowAll || ownerList.length === 0 || Boolean(matchedSender);
-  const isAuthorizedSender = commandAuthorized && isOwner;
+  const senderIsOwner = Boolean(matchedSender);
+  const isOwnerForCommands =
+    !enforceOwner ||
+    allowAll ||
+    ownerCandidatesForCommands.length === 0 ||
+    Boolean(matchedCommandOwner);
+  const isAuthorizedSender = commandAuthorized && isOwnerForCommands;
 
   return {
     providerId,
     ownerList,
     senderId: senderId || undefined,
+    senderIsOwner,
     isAuthorizedSender,
     from: from || undefined,
     to: to || undefined,
