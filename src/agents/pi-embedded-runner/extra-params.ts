@@ -33,11 +33,11 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
 };
 
 const CONTEXT_WINDOW_OVERRIDES: Record<string, number> = {
-  "zai/glm-4.7": 204800,
+  "zai/glm-4.7": 200000,
 };
 
 const MODEL_MAX_TOKENS_OVERRIDES: Record<string, number> = {
-  "zai/glm-4.7": 131072,
+  "zai/glm-4.7": 128000,
 };
 
 /**
