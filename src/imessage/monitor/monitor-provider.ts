@@ -414,7 +414,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const mediaPaths = validAttachments.map((a) => a.original_path).filter(Boolean) as string[];
     const mediaTypes = validAttachments.map((a) => a.mime_type ?? undefined);
     const kind = mediaKindFromMime(mediaType ?? undefined);
-    const placeholder = kind ? `<media:${kind}>` : attachments?.length ? "<media:attachment>" : "";
+    const placeholder =
+      kind && kind !== "unknown"
+        ? `<media:${kind}>`
+        : attachments?.length
+          ? "<media:attachment>"
+          : "";
     const bodyText = messageText || placeholder;
     if (!bodyText) {
       return;
