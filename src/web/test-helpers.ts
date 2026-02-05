@@ -65,22 +65,20 @@ vi.mock("qrcode-terminal", () => ({
   generate: vi.fn(),
 }));
 
-export const baileys =
-  (await import("@whiskeysockets/baileys")) as unknown as typeof import("@whiskeysockets/baileys") & {
-    makeWASocket: ReturnType<typeof vi.fn>;
-    useMultiFileAuthState: ReturnType<typeof vi.fn>;
-    fetchLatestBaileysVersion: ReturnType<typeof vi.fn>;
-    makeCacheableSignalKeyStore: ReturnType<typeof vi.fn>;
-  };
+export const baileys = await import("@whiskeysockets/baileys");
 
 export function resetBaileysMocks() {
   const recreated = createMockBaileys();
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     recreated.lastSocket;
-  baileys.makeWASocket.mockImplementation(recreated.mod.makeWASocket);
-  baileys.useMultiFileAuthState.mockImplementation(recreated.mod.useMultiFileAuthState);
-  baileys.fetchLatestBaileysVersion.mockImplementation(recreated.mod.fetchLatestBaileysVersion);
-  baileys.makeCacheableSignalKeyStore.mockImplementation(recreated.mod.makeCacheableSignalKeyStore);
+  // @ts-expect-error
+  baileys.makeWASocket = vi.fn(recreated.mod.makeWASocket);
+  // @ts-expect-error
+  baileys.useMultiFileAuthState = vi.fn(recreated.mod.useMultiFileAuthState);
+  // @ts-expect-error
+  baileys.fetchLatestBaileysVersion = vi.fn(recreated.mod.fetchLatestBaileysVersion);
+  // @ts-expect-error
+  baileys.makeCacheableSignalKeyStore = vi.fn(recreated.mod.makeCacheableSignalKeyStore);
 }
 
 export function getLastSocket(): MockBaileysSocket {
