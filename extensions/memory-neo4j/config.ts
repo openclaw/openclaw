@@ -93,6 +93,36 @@ export function vectorDimsForModel(model: string): number {
   return DEFAULT_EMBEDDING_DIMS;
 }
 
+/** Max input token lengths for known embedding models. */
+export const EMBEDDING_CONTEXT_LENGTHS: Record<string, number> = {
+  // OpenAI models
+  "text-embedding-3-small": 8191,
+  "text-embedding-3-large": 8191,
+  // Ollama models
+  "mxbai-embed-large": 512,
+  "mxbai-embed-large-2k": 2048,
+  "mxbai-embed-large-8k": 8192,
+  "nomic-embed-text": 8192,
+  "all-minilm": 256,
+};
+
+/** Conservative default for unknown models. */
+export const DEFAULT_EMBEDDING_CONTEXT_LENGTH = 512;
+
+export function contextLengthForModel(model: string): number {
+  if (EMBEDDING_CONTEXT_LENGTHS[model]) {
+    return EMBEDDING_CONTEXT_LENGTHS[model];
+  }
+  // Prefer longest matching prefix (e.g. "mxbai-embed-large-8k" over "mxbai-embed-large")
+  let best: { len: number; keyLen: number } | undefined;
+  for (const [known, len] of Object.entries(EMBEDDING_CONTEXT_LENGTHS)) {
+    if (model.startsWith(known) && (!best || known.length > best.keyLen)) {
+      best = { len, keyLen: known.length };
+    }
+  }
+  return best?.len ?? DEFAULT_EMBEDDING_CONTEXT_LENGTH;
+}
+
 /**
  * Resolve ${ENV_VAR} references in string values.
  */

@@ -4,7 +4,7 @@
  * Tests the Embeddings class with mocked OpenAI client and mocked fetch for Ollama.
  */
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 
 // ============================================================================
 // Constructor
@@ -188,5 +188,113 @@ describe("Embeddings - embedBatch", () => {
       expect(Array.isArray(r)).toBe(true);
       expect(r.length).toBe(2);
     }
+  });
+});
+
+// ============================================================================
+// Ollama context-length truncation
+// ============================================================================
+
+describe("Embeddings - Ollama context-length truncation", () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ embeddings: [[0.1, 0.2, 0.3]] }),
+    });
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("should truncate long input before calling Ollama embed", async () => {
+    const { Embeddings } = await import("./embeddings.js");
+    const emb = new Embeddings(undefined, "mxbai-embed-large", "ollama");
+
+    // mxbai-embed-large context length is 512, so maxChars = 512 * 3 = 1536
+    // Create input that exceeds the limit
+    const longText = "word ".repeat(500); // ~2500 chars, well above 1536
+    await emb.embed(longText);
+
+    // Verify the text sent to Ollama was truncated
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const body = JSON.parse(call[1].body as string);
+    expect(body.input.length).toBeLessThanOrEqual(512 * 3);
+  });
+
+  it("should truncate at word boundary (not mid-word)", async () => {
+    const { Embeddings } = await import("./embeddings.js");
+    const emb = new Embeddings(undefined, "mxbai-embed-large", "ollama");
+
+    // maxChars for mxbai-embed-large = 512 * 3 = 1536
+    // Each "abcdefghij " is 11 chars; 200 repeats = 2200 chars total (exceeds 1536)
+    const longText = "abcdefghij ".repeat(200);
+    await emb.embed(longText);
+
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const body = JSON.parse(call[1].body as string);
+    const sentText = body.input as string;
+
+    expect(sentText.length).toBeLessThanOrEqual(512 * 3);
+    // The truncation should land on a word boundary: the sent text should
+    // be a prefix of the original that ends at a complete word (i.e. the
+    // character after the sent text in the original should be a space).
+    // Since the pattern is "abcdefghij " repeated, a word-boundary cut
+    // means sentText ends with "abcdefghij" (no trailing partial word).
+    expect(sentText).toMatch(/abcdefghij$/);
+    // Verify it's a proper prefix of the original
+    expect(longText.startsWith(sentText)).toBe(true);
+  });
+
+  it("should pass short input through unchanged", async () => {
+    const { Embeddings } = await import("./embeddings.js");
+    const emb = new Embeddings(undefined, "mxbai-embed-large", "ollama");
+
+    const shortText = "This is a short text that fits within context length.";
+    await emb.embed(shortText);
+
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const body = JSON.parse(call[1].body as string);
+    expect(body.input).toBe(shortText);
+  });
+
+  it("should use model-specific context length for truncation", async () => {
+    const { Embeddings } = await import("./embeddings.js");
+    // nomic-embed-text has context length 8192, maxChars = 8192 * 3 = 24576
+    const emb = new Embeddings(undefined, "nomic-embed-text", "ollama");
+
+    // Create text that exceeds mxbai limit (1536) but fits nomic limit (24576)
+    const mediumText = "hello ".repeat(400); // ~2400 chars
+    await emb.embed(mediumText);
+
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const body = JSON.parse(call[1].body as string);
+    // Should NOT be truncated since 2400 < 24576
+    expect(body.input).toBe(mediumText);
+  });
+
+  it("should truncate each item individually in embedBatch", async () => {
+    const { Embeddings } = await import("./embeddings.js");
+    const emb = new Embeddings(undefined, "mxbai-embed-large", "ollama");
+
+    // maxChars for mxbai-embed-large = 512 * 3 = 1536
+    const longText = "word ".repeat(500); // ~2500 chars, exceeds limit
+    const shortText = "short text"; // well under limit
+
+    await emb.embedBatch([longText, shortText]);
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(2);
+
+    // First call: long text should be truncated
+    const body1 = JSON.parse(calls[0][1].body as string);
+    expect(body1.input.length).toBeLessThanOrEqual(512 * 3);
+    expect(body1.input.length).toBeLessThan(longText.length);
+
+    // Second call: short text should pass through unchanged
+    const body2 = JSON.parse(calls[1][1].body as string);
+    expect(body2.input).toBe(shortText);
   });
 });
