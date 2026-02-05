@@ -331,12 +331,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const dataMessage = envelope.dataMessage ?? envelope.editMessage?.dataMessage;
+    const isEdit = Boolean(envelope.editMessage?.targetSentTimestamp);
+    const editTargetTimestamp = isEdit
+      ? Number(envelope.editMessage.targetSentTimestamp)
+      : undefined;
     const reaction = deps.isSignalReactionMessage(envelope.reactionMessage)
       ? envelope.reactionMessage
       : deps.isSignalReactionMessage(dataMessage?.reaction)
         ? dataMessage?.reaction
         : null;
-    const messageText = (dataMessage?.message ?? "").trim();
+    let messageText = (dataMessage?.message ?? "").trim();
+    // Mark edited messages
+    if (isEdit && messageText) {
+      messageText = `[edited] ${messageText}`;
+    }
     const quoteText = dataMessage?.quote?.text?.trim() ?? "";
     const hasBodyContent =
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
@@ -560,8 +568,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const senderName = envelope.sourceName ?? senderDisplay;
-    const messageId =
-      typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
+    // For edits, use target timestamp as messageId to help with deduplication
+    const messageId = isEdit
+      ? String(editTargetTimestamp)
+      : typeof envelope.timestamp === "number"
+        ? String(envelope.timestamp)
+        : undefined;
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
