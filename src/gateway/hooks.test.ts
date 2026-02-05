@@ -39,7 +39,7 @@ describe("gateway hooks helpers", () => {
     expect(() => resolveHooksConfig(cfg)).toThrow("hooks.path may not be '/'");
   });
 
-  test("extractHookToken prefers bearer > header > query", () => {
+  test("extractHookToken prefers bearer > header and ignores query", () => {
     const req = {
       headers: {
         authorization: "Bearer top",
@@ -60,8 +60,8 @@ describe("gateway hooks helpers", () => {
 
     const req3 = { headers: {} } as unknown as IncomingMessage;
     const result3 = extractHookToken(req3, url);
-    expect(result3.token).toBe("query");
-    expect(result3.fromQuery).toBe(true);
+    expect(result3.token).toBeUndefined();
+    expect(result3.fromQuery).toBe(false);
   });
 
   test("normalizeWakePayload trims + validates", () => {

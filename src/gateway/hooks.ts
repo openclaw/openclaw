@@ -64,10 +64,6 @@ export function extractHookToken(req: IncomingMessage, url: URL): HookTokenResul
   if (headerToken) {
     return { token: headerToken, fromQuery: false };
   }
-  const queryToken = url.searchParams.get("token");
-  if (queryToken) {
-    return { token: queryToken.trim(), fromQuery: true };
-  }
   return { token: undefined, fromQuery: false };
 }
 
