@@ -205,6 +205,8 @@ export async function launchOpenClawChrome(
       // Best-effort; older Chromes may ignore.
       args.push("--headless=new");
       args.push("--disable-gpu");
+      // Disable automation flags that sites use for headless detection
+      args.push("--disable-blink-features=AutomationControlled");
     }
     if (resolved.noSandbox) {
       args.push("--no-sandbox");

@@ -69,10 +69,20 @@ export async function checkInboundAccessControl(params: {
       ? allowFrom.filter((entry) => entry !== "*").map(normalizeE164)
       : [];
   const groupHasWildcard = groupAllowFrom?.includes("*") ?? false;
-  const normalizedGroupAllowFrom =
-    groupAllowFrom && groupAllowFrom.length > 0
-      ? groupAllowFrom.filter((entry) => entry !== "*").map(normalizeE164)
-      : [];
+  // groupAllowFrom may contain group JIDs (@g.us) and/or phone numbers.
+  // Split them so we can match the group JID OR the sender phone number.
+  const groupAllowFromJids: string[] = [];
+  const groupAllowFromPhones: string[] = [];
+  if (groupAllowFrom && groupAllowFrom.length > 0) {
+    for (const entry of groupAllowFrom) {
+      if (entry === "*") continue;
+      if (entry.endsWith("@g.us")) {
+        groupAllowFromJids.push(entry);
+      } else {
+        groupAllowFromPhones.push(normalizeE164(entry));
+      }
+    }
+  }
 
   // Group policy filtering:
   // - "open": groups bypass allowFrom, only mention-gating applies
@@ -99,12 +109,13 @@ export async function checkInboundAccessControl(params: {
         resolvedAccountId: account.accountId,
       };
     }
-    const senderAllowed =
-      groupHasWildcard ||
-      (params.senderE164 != null && normalizedGroupAllowFrom.includes(params.senderE164));
+    const groupJidAllowed = groupAllowFromJids.includes(params.remoteJid);
+    const senderPhoneAllowed =
+      params.senderE164 != null && groupAllowFromPhones.includes(params.senderE164);
+    const senderAllowed = groupHasWildcard || groupJidAllowed || senderPhoneAllowed;
     if (!senderAllowed) {
       logVerbose(
-        `Blocked group message from ${params.senderE164 ?? "unknown sender"} (groupPolicy: allowlist)`,
+        `Blocked group message from ${params.senderE164 ?? "unknown sender"} in ${params.remoteJid} (groupPolicy: allowlist)`,
       );
       return {
         allowed: false,
