@@ -826,7 +826,7 @@ export async function runEmbeddedAttempt(
         }
 
         try {
-          await waitForCompactionRetry();
+          await abortable(waitForCompactionRetry());
         } catch (err) {
           if (isAbortError(err)) {
             if (!promptError) {
