@@ -80,7 +80,17 @@ export function recomputeNextRuns(state: CronServiceState) {
       );
       job.state.runningAtMs = undefined;
     }
-    job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+    // Only recompute if nextRunAtMs is not already set.
+    // Existing values (even past-due) are intentionally preserved so that
+    // runDueJobs can fire them.  After execution, finish() will set the
+    // correct next value via computeJobNextRunAtMs.
+    //
+    // Without this guard, "every"-schedule jobs whose anchorMs is unset
+    // get their nextRunAtMs pushed to `now + interval` on every
+    // forceReload inside onTimer, making them perpetually not-yet-due.
+    if (typeof job.state.nextRunAtMs !== "number") {
+      job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+    }
   }
 }
 
