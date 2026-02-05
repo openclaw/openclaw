@@ -252,6 +252,54 @@ async function downloadFile(
   }
 }
 
+/** Check whether an archive entry path would escape the target directory. */
+export function entryEscapesTarget(entryPath: string, targetDir: string): boolean {
+  const resolved = path.resolve(targetDir, entryPath);
+  const resolvedTarget = path.resolve(targetDir);
+  return resolved !== resolvedTarget && !resolved.startsWith(resolvedTarget + path.sep);
+}
+
+/**
+ * List archive entries and reject any that would write outside targetDir.
+ * Prevents Zip Slip / path traversal attacks (CWE-22).
+ */
+async function validateArchiveEntries(params: {
+  archivePath: string;
+  archiveType: string;
+  targetDir: string;
+  timeoutMs: number;
+}): Promise<{ ok: boolean; error?: string }> {
+  const { archivePath, archiveType, targetDir, timeoutMs } = params;
+
+  let listResult: { stdout: string; stderr: string; code: number | null };
+  if (archiveType === "zip") {
+    if (!hasBinary("unzip")) {
+      return { ok: true };
+    }
+    listResult = await runCommandWithTimeout(["unzip", "-Z1", archivePath], { timeoutMs });
+  } else {
+    if (!hasBinary("tar")) {
+      return { ok: true };
+    }
+    listResult = await runCommandWithTimeout(["tar", "tf", archivePath], { timeoutMs });
+  }
+
+  if (listResult.code !== 0) {
+    return { ok: false, error: "failed to list archive contents" };
+  }
+
+  const entries = listResult.stdout
+    .split("\n")
+    .map((e) => e.trim())
+    .filter(Boolean);
+  for (const entry of entries) {
+    if (entryEscapesTarget(entry, targetDir)) {
+      return { ok: false, error: `archive entry escapes target directory: ${entry}` };
+    }
+  }
+  return { ok: true };
+}
+
 async function extractArchive(params: {
   archivePath: string;
   archiveType: string;
@@ -260,6 +308,17 @@ async function extractArchive(params: {
   timeoutMs: number;
 }): Promise<{ stdout: string; stderr: string; code: number | null }> {
   const { archivePath, archiveType, targetDir, stripComponents, timeoutMs } = params;
+
+  const validation = await validateArchiveEntries({
+    archivePath,
+    archiveType,
+    targetDir,
+    timeoutMs,
+  });
+  if (!validation.ok) {
+    return { stdout: "", stderr: validation.error ?? "archive validation failed", code: null };
+  }
+
   if (archiveType === "zip") {
     if (!hasBinary("unzip")) {
       return { stdout: "", stderr: "unzip not found on PATH", code: null };

