@@ -129,6 +129,65 @@ describe("gateway tool", () => {
     );
   });
 
+  it("passes gateway.startupCommands.append through gateway call", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:whatsapp:dm:+15555550123",
+    }).find((candidate) => candidate.name === "gateway");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing gateway tool");
+    }
+
+    await tool.execute("call5", {
+      action: "gateway.startupCommands.append",
+      startupCommand: {
+        command: "/usr/local/bin/qmd",
+        args: ["serve"],
+      },
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "gateway.startupCommands.append",
+      expect.any(Object),
+      expect.objectContaining({
+        baseHash: "hash-1",
+        sessionKey: "agent:main:whatsapp:dm:+15555550123",
+        startupCommand: expect.objectContaining({
+          command: "/usr/local/bin/qmd",
+        }),
+      }),
+    );
+  });
+
+  it("passes gateway.startupCommands.remove through gateway call", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:whatsapp:dm:+15555550123",
+    }).find((candidate) => candidate.name === "gateway");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing gateway tool");
+    }
+
+    await tool.execute("call6", {
+      action: "gateway.startupCommands.remove",
+      startupCommandId: "qmd-sidecar",
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "gateway.startupCommands.remove",
+      expect.any(Object),
+      expect.objectContaining({
+        baseHash: "hash-1",
+        sessionKey: "agent:main:whatsapp:dm:+15555550123",
+        startupCommandId: "qmd-sidecar",
+      }),
+    );
+  });
+
   it("passes update.run through gateway call", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const tool = createOpenClawTools({

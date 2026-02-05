@@ -64,6 +64,9 @@ import type {
   ConfigSchemaParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSetParamsSchema,
+  StartupCommandsAppendParamsSchema,
+  StartupCommandsListParamsSchema,
+  StartupCommandsRemoveParamsSchema,
   UpdateRunParamsSchema,
 } from "./config.js";
 import type {
@@ -185,6 +188,9 @@ export type ConfigApplyParams = Static<typeof ConfigApplyParamsSchema>;
 export type ConfigPatchParams = Static<typeof ConfigPatchParamsSchema>;
 export type ConfigSchemaParams = Static<typeof ConfigSchemaParamsSchema>;
 export type ConfigSchemaResponse = Static<typeof ConfigSchemaResponseSchema>;
+export type StartupCommandsListParams = Static<typeof StartupCommandsListParamsSchema>;
+export type StartupCommandsAppendParams = Static<typeof StartupCommandsAppendParamsSchema>;
+export type StartupCommandsRemoveParams = Static<typeof StartupCommandsRemoveParamsSchema>;
 export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
 export type WizardNextParams = Static<typeof WizardNextParamsSchema>;
 export type WizardCancelParams = Static<typeof WizardCancelParamsSchema>;

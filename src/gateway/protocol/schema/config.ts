@@ -53,6 +53,61 @@ export const ConfigPatchParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const GatewayStartupCommandLogSchema = Type.Object(
+  {
+    mode: Type.Optional(
+      Type.Union([Type.Literal("inherit"), Type.Literal("file"), Type.Literal("discard")]),
+    ),
+    stdoutPath: Type.Optional(Type.String()),
+    stderrPath: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+const GatewayStartupCommandSchema = Type.Object(
+  {
+    id: Type.Optional(Type.String()),
+    name: Type.Optional(Type.String()),
+    command: NonEmptyString,
+    args: Type.Optional(Type.Array(Type.String())),
+    cwd: Type.Optional(Type.String()),
+    env: Type.Optional(Type.Record(Type.String(), Type.String())),
+    enabled: Type.Optional(Type.Boolean()),
+    startPolicy: Type.Optional(
+      Type.Union([Type.Literal("always"), Type.Literal("reuse"), Type.Literal("never")]),
+    ),
+    stopSignal: Type.Optional(Type.String()),
+    stopTimeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    restart: Type.Optional(Type.Union([Type.Literal("off"), Type.Literal("on-failure")])),
+    log: Type.Optional(GatewayStartupCommandLogSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const StartupCommandsListParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const StartupCommandsAppendParamsSchema = Type.Object(
+  {
+    startupCommand: GatewayStartupCommandSchema,
+    baseHash: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(Type.String()),
+    note: Type.Optional(Type.String()),
+    restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const StartupCommandsRemoveParamsSchema = Type.Object(
+  {
+    startupCommandId: NonEmptyString,
+    baseHash: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(Type.String()),
+    note: Type.Optional(Type.String()),
+    restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
 /**
  * ConfigSchemaParams supports filtering to reduce response size.
  *
