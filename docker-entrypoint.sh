@@ -99,14 +99,15 @@ cfg.browser.profiles.github = {
   headless: true
 };
 
-// Agent model config - OpenRouter auto routing with Haiku fallback
+// Agent model config - Opus brain with OpenRouter muscle fallback
 cfg.agents = cfg.agents || {};
 cfg.agents.defaults = cfg.agents.defaults || {};
 cfg.agents.defaults.model = {
-  primary: 'openrouter/openrouter/auto',
-  fallbacks: ['openrouter/anthropic/claude-haiku-4.5']
+  primary: 'anthropic/claude-opus-4-5',
+  fallbacks: ['openrouter/openrouter/auto', 'openrouter/anthropic/claude-haiku-4.5']
 };
 cfg.agents.defaults.models = {
+  'anthropic/claude-opus-4-5': {},
   'openrouter/openrouter/auto': {},
   'openrouter/anthropic/claude-haiku-4.5': {}
 };
