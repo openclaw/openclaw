@@ -19,13 +19,13 @@ export interface SanitizedMounts {
 /**
  * Pre-sanitize config files on the host for secure container mounting.
  * This is called BEFORE starting the Docker container.
- * 
+ *
  * Mount Strategy:
  * - Sanitized auth-profiles.json files mounted read-only (individual files)
  * - Sanitized config file mounted read-only
  * - Conversations directories mounted read-write (need persistence)
  * - Workspace directories mounted read-write (need file access)
- * 
+ *
  * NOT Mounted (secrets stay on host):
  * - ~/.openclaw/credentials/ (OAuth tokens - proxy handles refresh)
  * - Original config with real channel tokens
@@ -35,19 +35,19 @@ export async function prepareSanitizedMounts(): Promise<SanitizedMounts> {
   const homeDir = os.homedir();
   const openclawDir = path.join(homeDir, ".openclaw");
   const sanitizedDir = path.join(openclawDir, ".sanitized");
-  
+
   // Clean up any previous sanitized files
   try {
     await fs.promises.rm(sanitizedDir, { recursive: true, force: true });
   } catch {
     // Ignore
   }
-  
+
   // Create sanitized directory
   await fs.promises.mkdir(sanitizedDir, { recursive: true });
-  
+
   const binds: string[] = [];
-  
+
   // =========================================================================
   // 1. SANITIZED CONFIG FILE (read-only)
   // =========================================================================
@@ -55,17 +55,17 @@ export async function prepareSanitizedMounts(): Promise<SanitizedMounts> {
   if (configPath && fs.existsSync(configPath)) {
     const originalSecureMode = process.env.OPENCLAW_SECURE_MODE;
     const originalCacheDisable = process.env.OPENCLAW_DISABLE_CONFIG_CACHE;
-    
+
     // Set secure mode so sanitizeConfigSecrets runs
     process.env.OPENCLAW_SECURE_MODE = "1";
     // Disable config cache to ensure we get a fresh sanitized config
     // Otherwise we might get a cached unsanitized version
     process.env.OPENCLAW_DISABLE_CONFIG_CACHE = "1";
-    
+
     try {
       // Load config (sanitizeConfigSecrets is applied automatically)
       const config = loadConfig();
-      
+
       // Disable device auth for Control UI in container mode.
       // Docker connections come from 172.17.0.1, not localhost, so
       // auto-pairing for local connections doesn't work.
@@ -77,16 +77,12 @@ export async function prepareSanitizedMounts(): Promise<SanitizedMounts> {
         (config.gateway as any).controlUi = {};
       }
       (config.gateway.controlUi as any).dangerouslyDisableDeviceAuth = true;
-      
+
       const ext = path.extname(configPath);
       const sanitizedConfigPath = path.join(sanitizedDir, `openclaw${ext}`);
-      
-      await fs.promises.writeFile(
-        sanitizedConfigPath, 
-        JSON.stringify(config, null, 2), 
-        "utf8"
-      );
-      
+
+      await fs.promises.writeFile(sanitizedConfigPath, JSON.stringify(config, null, 2), "utf8");
+
       // Mount to expected container path (container runs as 'node' user)
       binds.push(`${sanitizedConfigPath}:/home/node/.openclaw/openclaw${ext}:ro`);
     } finally {
@@ -102,28 +98,34 @@ export async function prepareSanitizedMounts(): Promise<SanitizedMounts> {
       }
     }
   }
-  
+
   // =========================================================================
   // 2. SANITIZED AUTH-PROFILES + REAL CONVERSATIONS (per-agent)
   // =========================================================================
   const agentsDir = path.join(openclawDir, "agents");
   if (fs.existsSync(agentsDir)) {
     const agentIds = await fs.promises.readdir(agentsDir);
-    
+
     for (const agentId of agentIds) {
       const agentAgentDir = path.join(agentsDir, agentId, "agent");
       if (!fs.existsSync(agentAgentDir)) continue;
-      
+
       // Sanitized auth-profiles.json (read-only, mount individual file)
       const authProfilesPath = path.join(agentAgentDir, "auth-profiles.json");
       if (fs.existsSync(authProfilesPath)) {
-        const sanitizedAuthPath = path.join(sanitizedDir, "agents", agentId, "agent", "auth-profiles.json");
+        const sanitizedAuthPath = path.join(
+          sanitizedDir,
+          "agents",
+          agentId,
+          "agent",
+          "auth-profiles.json",
+        );
         await fs.promises.mkdir(path.dirname(sanitizedAuthPath), { recursive: true });
-        
+
         try {
           const authContent = await fs.promises.readFile(authProfilesPath, "utf8");
           const authProfiles = JSON.parse(authContent);
-          
+
           // Sanitize credentials
           const sanitizedProfiles: Record<string, any> = {};
           for (const [profileId, cred] of Object.entries(authProfiles.profiles || {})) {
@@ -155,27 +157,35 @@ export async function prepareSanitizedMounts(): Promise<SanitizedMounts> {
               };
             }
           }
-          
+
           const sanitizedAuth = { ...authProfiles, profiles: sanitizedProfiles };
-          await fs.promises.writeFile(sanitizedAuthPath, JSON.stringify(sanitizedAuth, null, 2), "utf8");
-          
+          await fs.promises.writeFile(
+            sanitizedAuthPath,
+            JSON.stringify(sanitizedAuth, null, 2),
+            "utf8",
+          );
+
           // Mount sanitized auth file (read-write for OAuth token refresh)
-          binds.push(`${sanitizedAuthPath}:/home/node/.openclaw/agents/${agentId}/agent/auth-profiles.json:rw`);
+          binds.push(
+            `${sanitizedAuthPath}:/home/node/.openclaw/agents/${agentId}/agent/auth-profiles.json:rw`,
+          );
         } catch (err) {
           console.warn(`Skipping auth profiles for agent ${agentId}: ${err}`);
         }
       }
-      
+
       // REAL conversations directory (read-write, no secrets here)
       const conversationsDir = path.join(agentAgentDir, "conversations");
       await fs.promises.mkdir(conversationsDir, { recursive: true });
-      binds.push(`${conversationsDir}:/home/node/.openclaw/agents/${agentId}/agent/conversations:rw`);
-      
-      // REAL memory directory (read-write, no secrets here)  
+      binds.push(
+        `${conversationsDir}:/home/node/.openclaw/agents/${agentId}/agent/conversations:rw`,
+      );
+
+      // REAL memory directory (read-write, no secrets here)
       const memoryDir = path.join(agentAgentDir, "memory");
       await fs.promises.mkdir(memoryDir, { recursive: true });
       binds.push(`${memoryDir}:/home/node/.openclaw/agents/${agentId}/agent/memory:rw`);
-      
+
       // Sessions directory - note: this is at /agents/{id}/sessions, NOT /agents/{id}/agent/sessions
       // Use a separate sessions-secure directory to avoid sessions.json with host paths
       const agentDir = path.join(agentsDir, agentId);
@@ -184,14 +194,14 @@ export async function prepareSanitizedMounts(): Promise<SanitizedMounts> {
       binds.push(`${sessionsSecureDir}:/home/node/.openclaw/agents/${agentId}/sessions:rw`);
     }
   }
-  
+
   // =========================================================================
   // 3. WORKSPACE DIRECTORIES (read-write)
   // =========================================================================
   const workspaceDir = path.join(openclawDir, "workspace");
   await fs.promises.mkdir(workspaceDir, { recursive: true });
   binds.push(`${workspaceDir}:/home/node/.openclaw/workspace:rw`);
-  
+
   // Per-agent workspaces (workspace-{agentId})
   try {
     const entries = await fs.promises.readdir(openclawDir);
@@ -207,7 +217,7 @@ export async function prepareSanitizedMounts(): Promise<SanitizedMounts> {
   } catch {
     // Ignore
   }
-  
+
   // =========================================================================
   // 4. CONTROL UI (canvas) - read-only
   // =========================================================================
@@ -215,27 +225,32 @@ export async function prepareSanitizedMounts(): Promise<SanitizedMounts> {
   if (fs.existsSync(canvasDir)) {
     binds.push(`${canvasDir}:/home/node/.openclaw/canvas:ro`);
   }
-  
+
   // =========================================================================
   // 5. DEVICES DIRECTORY (read-write) - for device pairing
   // =========================================================================
   const devicesDir = path.join(openclawDir, "devices");
   await fs.promises.mkdir(devicesDir, { recursive: true });
   binds.push(`${devicesDir}:/home/node/.openclaw/devices:rw`);
-  
+
   // =========================================================================
   // 6. CRON DIRECTORY (read-write) - for scheduled tasks
   // =========================================================================
   const cronDir = path.join(openclawDir, "cron");
   await fs.promises.mkdir(cronDir, { recursive: true });
   binds.push(`${cronDir}:/home/node/.openclaw/cron:rw`);
-  
+
   // =========================================================================
-  // 4. DO NOT MOUNT CREDENTIALS (stay on host only)
+  // 7. CREDENTIALS DIRECTORY (read-only) - for pairing/allowFrom files
   // =========================================================================
-  // ~/.openclaw/credentials/ contains real OAuth tokens
-  // The proxy handles OAuth refresh on the host side
-  
+  // Note: This contains pairing files (telegram-pairing.json, telegram-allowFrom.json)
+  // and OAuth tokens. OAuth tokens contain placeholders after sanitization,
+  // and the proxy handles token refresh on the host side.
+  const credentialsDir = path.join(openclawDir, "credentials");
+  if (fs.existsSync(credentialsDir)) {
+    binds.push(`${credentialsDir}:/home/node/.openclaw/credentials:ro`);
+  }
+
   return { binds, sanitizedDir };
 }
 
