@@ -29,6 +29,7 @@ export type FeishuStreamingCardState = {
   sequence: number;
   elementId: string;
   currentText: string;
+  committedText?: string;
 };
 
 // Token cache (keyed by domain + appId)
@@ -88,13 +89,13 @@ export async function createStreamingCard(
     schema: "2.0",
     ...(title
       ? {
-          header: {
-            title: {
-              content: title,
-              tag: "plain_text",
-            },
+        header: {
+          title: {
+            content: title,
+            tag: "plain_text",
           },
-        }
+        },
+      }
       : {}),
     config: {
       streaming_mode: true,
@@ -300,20 +301,37 @@ export class FeishuStreamingSession {
   }
 
   /**
-   * Update the streaming card with new text (appends to existing)
+   * Update the streaming card
+   * @param text The text to update (partial block or full block)
+   * @param isCommit If true, treating this text as a finished block and committing to permanent storage
    */
-  async update(text: string): Promise<void> {
+  async update(text: string, isCommit: boolean = false): Promise<void> {
     if (!this.state || this.closed) {
+      return;
+    }
+
+    if (isCommit) {
+      this.state.committedText = (this.state.committedText || "") + text;
+    }
+
+    const fullText = isCommit
+      ? this.state.committedText || ""
+      : (this.state.committedText || "") + text;
+
+    // Dedup optimization: if text hasn't changed, skip
+    if (fullText === this.state.currentText) {
       return;
     }
 
     // Queue updates to ensure order
     this.updateQueue = this.updateQueue.then(async () => {
-      if (!this.state || this.closed) {
+      // NOTE: Do NOT check this.closed here. Even if closed, we want 
+      // pending updates in the queue to finish to ensure state consistency.
+      if (!this.state) {
         return;
       }
 
-      this.state.currentText = text;
+      this.state.currentText = fullText;
       this.state.sequence += 1;
 
       try {
@@ -321,7 +339,7 @@ export class FeishuStreamingSession {
           this.credentials,
           this.state.cardId,
           this.state.elementId,
-          text,
+          fullText,
           this.state.sequence,
         );
       } catch (err) {
@@ -341,22 +359,35 @@ export class FeishuStreamingSession {
     }
     this.closed = true;
 
-    // Wait for pending updates
-    await this.updateQueue;
-
-    const text = finalText ?? this.state.currentText;
-    this.state.sequence += 1;
-
     try {
-      // Update final text
-      if (text) {
-        await updateStreamingCardText(
-          this.credentials,
-          this.state.cardId,
-          this.state.elementId,
-          text,
-          this.state.sequence,
-        );
+      // Wait for all pending updates to complete first
+      await this.updateQueue;
+
+      const text = finalText ?? this.state.currentText;
+
+      // Validate text integrity: if final text is significantly shorter than current,
+      // it risks truncating the head (if client passed a partial delta mistake).
+      // Trust current accumulated text in that case.
+      const effectiveText = (text && text.length >= this.state.currentText.length)
+        ? text
+        : this.state.currentText;
+
+      // Optimization: If the text hasn't changed from the last update,
+      // skip the extra API call and just close.
+      if (effectiveText && effectiveText !== this.state.currentText) {
+        this.state.currentText = effectiveText;
+        this.state.sequence += 1;
+        try {
+          await updateStreamingCardText(
+            this.credentials,
+            this.state.cardId,
+            this.state.elementId,
+            effectiveText,
+            this.state.sequence,
+          );
+        } catch (err) {
+          logger.warn(`Final stream update failed: ${String(err)}`);
+        }
       }
 
       // Close streaming mode
