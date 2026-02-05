@@ -4,7 +4,7 @@
  * Tests memoryNeo4jConfigSchema.parse(), vectorDimsForModel(), and resolveExtractionConfig().
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { memoryNeo4jConfigSchema, vectorDimsForModel, resolveExtractionConfig } from "./config.js";
 
 // ============================================================================

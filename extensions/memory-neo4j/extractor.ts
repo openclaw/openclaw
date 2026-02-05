@@ -115,7 +115,9 @@ const MAX_EXTRACTION_RETRIES = 3;
  * Check if an error is transient (network/timeout) vs permanent (JSON parse, etc.)
  */
 function isTransientError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
+  if (!(err instanceof Error)) {
+    return false;
+  }
   const msg = err.message.toLowerCase();
   return (
     err.name === "AbortError" ||
