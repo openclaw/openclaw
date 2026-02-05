@@ -223,6 +223,9 @@ OPENCLAW_GATEWAY_PORT=18789
 OPENCLAW_CONFIG_DIR=/home/$USER/.openclaw
 OPENCLAW_WORKSPACE_DIR=/home/$USER/.openclaw/workspace
 
+# If running rootless via podman you will need
+# OPENCLAW_VOLUME_OPTS=":U"
+
 GOG_KEYRING_PASSWORD=change-me-now
 XDG_CONFIG_HOME=/home/node/.openclaw
 ```

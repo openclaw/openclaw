@@ -6,6 +6,7 @@ COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
+OPENCLAW_VOLUME_OPTS="${OPENCLAW_VOLUME_OPTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
 
 require_cmd() {
@@ -29,6 +30,7 @@ mkdir -p "$OPENCLAW_WORKSPACE_DIR"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
+export OPENCLAW_VOLUME_OPTS
 export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
 export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
 export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
@@ -161,6 +163,7 @@ upsert_env() {
 upsert_env "$ENV_FILE" \
   OPENCLAW_CONFIG_DIR \
   OPENCLAW_WORKSPACE_DIR \
+  OPENCLAW_VOLUME_OPTS \
   OPENCLAW_GATEWAY_PORT \
   OPENCLAW_BRIDGE_PORT \
   OPENCLAW_GATEWAY_BIND \
@@ -207,6 +210,7 @@ echo "Gateway running with host port mapping."
 echo "Access from tailnet devices via the host's tailnet IP."
 echo "Config: $OPENCLAW_CONFIG_DIR"
 echo "Workspace: $OPENCLAW_WORKSPACE_DIR"
+echo "Docker volume mount options: $OPENCLAW_VOLUME_OPTS"
 echo "Token: $OPENCLAW_GATEWAY_TOKEN"
 echo ""
 echo "Commands:"
