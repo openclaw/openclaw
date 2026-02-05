@@ -152,7 +152,63 @@ describe("runMessageAction threading auto-injection", () => {
       agentId: "main",
     });
 
-    const call = mocks.executeSendAction.mock.calls[0]?.[0] as { ctx?: { params?: any } };
+    const call = mocks.executeSendAction.mock.calls[0]?.[0] as {
+      ctx?: { params?: Record<string, unknown> };
+    };
+    expect(call?.ctx?.params?.threadId).toBe("42");
+  });
+
+  it("skips telegram auto-threading when target chat differs", async () => {
+    mocks.executeSendAction.mockResolvedValue({
+      handledBy: "plugin",
+      payload: {},
+    });
+
+    await runMessageAction({
+      cfg: telegramConfig,
+      action: "send",
+      params: {
+        channel: "telegram",
+        target: "telegram:999",
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "telegram:123",
+        currentThreadTs: "42",
+      },
+      agentId: "main",
+    });
+
+    const call = mocks.executeSendAction.mock.calls[0]?.[0] as {
+      ctx?: { params?: Record<string, unknown> };
+    };
+    expect(call?.ctx?.params?.threadId).toBeUndefined();
+  });
+
+  it("matches telegram target with internal prefix variations", async () => {
+    mocks.executeSendAction.mockResolvedValue({
+      handledBy: "plugin",
+      payload: {},
+    });
+
+    await runMessageAction({
+      cfg: telegramConfig,
+      action: "send",
+      params: {
+        channel: "telegram",
+        target: "telegram:group:123",
+        message: "hi",
+      },
+      toolContext: {
+        currentChannelId: "telegram:123",
+        currentThreadTs: "42",
+      },
+      agentId: "main",
+    });
+
+    const call = mocks.executeSendAction.mock.calls[0]?.[0] as {
+      ctx?: { params?: Record<string, unknown> };
+    };
     expect(call?.ctx?.params?.threadId).toBe("42");
   });
 
@@ -178,7 +234,9 @@ describe("runMessageAction threading auto-injection", () => {
       agentId: "main",
     });
 
-    const call = mocks.executeSendAction.mock.calls[0]?.[0] as { ctx?: { params?: any } };
+    const call = mocks.executeSendAction.mock.calls[0]?.[0] as {
+      ctx?: { params?: Record<string, unknown> };
+    };
     expect(call?.ctx?.params?.threadId).toBe("999");
   });
 });
