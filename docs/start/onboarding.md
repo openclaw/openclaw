@@ -4,7 +4,7 @@ read_when:
   - Designing the macOS onboarding assistant
   - Implementing auth or identity setup
 title: "Onboarding (macOS App)"
-sidebarTitle: "macOS app"
+sidebarTitle: "Onboarding: macOS App"
 ---
 
 # Onboarding (macOS App)
@@ -16,22 +16,22 @@ wizard, and let the agent bootstrap itself.
 <Steps>
 <Step title="Approve macOS warning">
 <Frame>
-<img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt=""></img>
+<img src="/assets/macos-onboarding/01-macos-warning.jpeg" alt="" />
 </Frame>
 </Step>
 <Step title="Approve find local networks">
 <Frame>
-<img src="/assets/macos-onboarding/02-local-networks.jpeg" alt=""></img>
+<img src="/assets/macos-onboarding/02-local-networks.jpeg" alt="" />
 </Frame>
 </Step>
 <Step title="Welcome and security notice">
 <Frame caption="Read the security notice displayed and decide accordingly">
-<img src="/assets/macos-onboarding/03-security-notice.png" alt=""></img>
+<img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
 </Step>
 <Step title="Local vs Remote">
 <Frame>
-<img src="/assets/macos-onboarding/04-choose-gateway.png" alt=""></img>
+<img src="/assets/macos-onboarding/04-choose-gateway.png" alt="" />
 </Frame>
 
 Where does the **Gateway** run?
@@ -51,7 +51,7 @@ Where does the **Gateway** run?
 </Step>
 <Step title="Permissions">
 <Frame caption="Choose what permissions do you want to give OpenClaw">
-<img src="/assets/macos-onboarding/05-permissions.png" alt=""></img>
+<img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
 
 Onboarding requests TCC permissions needed for:
