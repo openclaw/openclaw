@@ -242,6 +242,42 @@ export async function preflightDiscordMessage(
       (message.mentionedUsers?.length ?? 0) > 0 ||
       (message.mentionedRoles?.length ?? 0) > 0),
   );
+
+  // Preflight audio transcription for mention detection in guilds
+  // This allows voice notes to be checked for mentions before being dropped
+  let preflightTranscript: string | undefined;
+  const hasAudioAttachment = message.attachments?.some((att) =>
+    att.contentType?.startsWith("audio/"),
+  );
+  const needsPreflightTranscription =
+    !isDirectMessage && hasAudioAttachment && !baseText && mentionRegexes.length > 0;
+
+  if (needsPreflightTranscription) {
+    try {
+      const { transcribeFirstAudio } = await import("../../media-understanding/audio-preflight.js");
+      const audioPaths =
+        message.attachments
+          ?.filter((att) => att.contentType?.startsWith("audio/"))
+          .map((att) => att.url) ?? [];
+      if (audioPaths.length > 0) {
+        const tempCtx = {
+          MediaUrls: audioPaths,
+          MediaTypes: message.attachments
+            ?.filter((att) => att.contentType?.startsWith("audio/"))
+            .map((att) => att.contentType)
+            .filter(Boolean) as string[],
+        };
+        preflightTranscript = await transcribeFirstAudio({
+          ctx: tempCtx,
+          cfg: params.cfg,
+          agentDir: undefined,
+        });
+      }
+    } catch (err) {
+      logVerbose(`discord: audio preflight transcription failed: ${String(err)}`);
+    }
+  }
+
   const wasMentioned =
     !isDirectMessage &&
     matchesMentionWithExplicit({
@@ -252,6 +288,7 @@ export async function preflightDiscordMessage(
         isExplicitlyMentioned: explicitlyMentioned,
         canResolveExplicit: Boolean(botId),
       },
+      transcript: preflightTranscript,
     });
   const implicitMention = Boolean(
     !isDirectMessage &&
