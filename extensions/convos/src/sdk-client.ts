@@ -81,8 +81,10 @@ function keyHash8(privateKey: string): string {
 }
 
 /**
- * Build a deterministic dbPath directory under the OpenClaw state directory:
- *   <stateDir>/convos/xmtp/<env>/<accountId>/<keyHash8>/
+ * Build a deterministic dbPath file under the OpenClaw state directory.
+ * Agent.create() expects a **file** path (SQLite DB), not a directory.
+ *
+ *   <stateDir>/convos/xmtp/<env>/<accountId>/<keyHash8>/xmtp.db
  */
 export function resolveConvosDbPath(params: {
   stateDir: string;
@@ -91,23 +93,25 @@ export function resolveConvosDbPath(params: {
   privateKey: string;
 }): string {
   const hash = keyHash8(params.privateKey);
-  return path.join(params.stateDir, "convos", "xmtp", params.env, params.accountId, hash);
+  const dir = path.join(params.stateDir, "convos", "xmtp", params.env, params.accountId, hash);
+  return path.join(dir, "xmtp.db");
 }
 
 /**
- * Ensure a dbPath directory exists and is writable. Throws a clear error
- * (instead of the opaque libxmtp "Pool error … Unable to open database file")
- * if the directory cannot be created or written to.
+ * Ensure the parent directory of a dbPath file exists and is writable.
+ * Throws a clear error (instead of the opaque libxmtp "Pool error …
+ * Unable to open database file") if the directory cannot be written to.
  */
 export function ensureDbPathWritable(dbPath: string): void {
-  fs.mkdirSync(dbPath, { recursive: true });
-  const probe = path.join(dbPath, `.probe-${process.pid}`);
+  const dir = path.dirname(dbPath);
+  fs.mkdirSync(dir, { recursive: true });
+  const probe = path.join(dir, `.probe-${process.pid}`);
   try {
     fs.writeFileSync(probe, "");
     fs.unlinkSync(probe);
   } catch (err) {
     throw new Error(
-      `XMTP dbPath is not writable: ${dbPath} — ${err instanceof Error ? err.message : String(err)}`,
+      `XMTP dbPath parent dir is not writable: ${dir} — ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
