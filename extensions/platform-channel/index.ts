@@ -1,6 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-import { platformChannelPlugin } from "./src/channel.js";
+import { platformChannelPlugin, handlePlatformWebhookRequest } from "./src/channel.js";
 import { setPlatformChannelRuntime } from "./src/runtime.js";
 
 const plugin = {
@@ -11,6 +11,7 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setPlatformChannelRuntime(api.runtime);
     api.registerChannel({ plugin: platformChannelPlugin });
+    api.registerHttpHandler(handlePlatformWebhookRequest);
   },
 };
 

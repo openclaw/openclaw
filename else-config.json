@@ -11,5 +11,34 @@
         "responses": { "enabled": true }
       }
     }
+  },
+  "agents": {
+    "defaults": {
+      "memorySearch": {
+        "enabled": true,
+        "provider": "openai",
+        "sources": ["memory", "sessions"],
+        "remote": {
+          "batch": {
+            "enabled": true,
+            "wait": true
+          }
+        },
+        "query": {
+          "maxResults": 10,
+          "minScore": 0.35,
+          "hybrid": {
+            "enabled": true,
+            "vectorWeight": 0.7,
+            "textWeight": 0.3
+          }
+        }
+      }
+    }
+  },
+  "channels": {
+    "platform-channel": {
+      "enabled": true
+    }
   }
 }
