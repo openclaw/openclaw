@@ -1,4 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { AssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { CopilotInitiatorTracker, createCopilotAwareStream } from "./copilot-initiator-header.js";
@@ -54,16 +55,9 @@ describe("createCopilotAwareStream", () => {
     const sessionId = "test-session-1";
 
     let capturedHeaders: Record<string, string> | undefined;
-    const mockStream: StreamFn = vi.fn().mockImplementation(async (model, options) => {
+    const mockStream: StreamFn = vi.fn().mockImplementation(async (_model, _context, options) => {
       capturedHeaders = options?.headers as Record<string, string> | undefined;
-      return new AssistantMessageEventStream(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: "assistantText", text: "test" });
-            controller.close();
-          },
-        }),
-      );
+      return new AssistantMessageEventStream();
     });
 
     const wrappedStream = createCopilotAwareStream(
@@ -73,7 +67,14 @@ describe("createCopilotAwareStream", () => {
       mockStream,
     );
 
-    await wrappedStream("gpt-4", {});
+    const model = {
+      api: "openai-completions",
+      provider: "github-copilot",
+      id: "gpt-4",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    await wrappedStream(model, context, {});
 
     expect(capturedHeaders).toBeDefined();
     expect(capturedHeaders?.["X-Initiator"]).toBe("user");
@@ -83,16 +84,7 @@ describe("createCopilotAwareStream", () => {
     const tracker = new CopilotInitiatorTracker();
     const sessionId = "test-session-2";
 
-    const mockStream: StreamFn = vi.fn().mockImplementation(async (model, options) => {
-      return new AssistantMessageEventStream(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: "assistantText", text: "test" });
-            controller.close();
-          },
-        }),
-      );
-    });
+    const mockStream: StreamFn = vi.fn().mockResolvedValue(new AssistantMessageEventStream());
 
     const wrappedStream = createCopilotAwareStream(
       "github-copilot",
@@ -101,24 +93,24 @@ describe("createCopilotAwareStream", () => {
       mockStream,
     );
 
+    const model = {
+      api: "openai-completions",
+      provider: "github-copilot",
+      id: "gpt-4",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
     // First call
-    await wrappedStream("gpt-4", {});
+    await wrappedStream(model, context, {});
 
     // Second call should get initiator="agent"
     let capturedHeaders: Record<string, string> | undefined;
-    vi.mocked(mockStream).mockImplementationOnce(async (model, options) => {
+    vi.mocked(mockStream).mockImplementationOnce(async (_model, _context, options) => {
       capturedHeaders = options?.headers as Record<string, string> | undefined;
-      return new AssistantMessageEventStream(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: "assistantText", text: "test" });
-            controller.close();
-          },
-        }),
-      );
+      return new AssistantMessageEventStream();
     });
 
-    await wrappedStream("gpt-4", {});
+    await wrappedStream(model, context, {});
 
     expect(capturedHeaders).toBeDefined();
     expect(capturedHeaders?.["X-Initiator"]).toBe("agent");
@@ -129,21 +121,21 @@ describe("createCopilotAwareStream", () => {
     const sessionId = "test-session-3";
 
     let capturedHeaders: Record<string, string> | undefined;
-    const mockStream: StreamFn = vi.fn().mockImplementation(async (model, options) => {
+    const mockStream: StreamFn = vi.fn().mockImplementation(async (_model, _context, options) => {
       capturedHeaders = options?.headers as Record<string, string> | undefined;
-      return new AssistantMessageEventStream(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue({ type: "assistantText", text: "test" });
-            controller.close();
-          },
-        }),
-      );
+      return new AssistantMessageEventStream();
     });
 
     const wrappedStream = createCopilotAwareStream("anthropic", sessionId, tracker, mockStream);
 
-    await wrappedStream("claude-3-5-sonnet", {});
+    const model = {
+      api: "anthropic-completions",
+      provider: "anthropic",
+      id: "claude-3-5-sonnet",
+    } as Model<"anthropic-completions">;
+    const context: Context = { messages: [] };
+
+    await wrappedStream(model, context, {});
 
     expect(capturedHeaders).toBeDefined();
     expect(capturedHeaders?.["X-Initiator"]).toBeUndefined();

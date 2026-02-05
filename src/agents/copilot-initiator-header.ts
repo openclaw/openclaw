@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 
 export class CopilotInitiatorTracker {
   #firstCallMade = new Set<string>();
@@ -22,7 +22,7 @@ export function createCopilotAwareStream(
   tracker: CopilotInitiatorTracker,
   originalStreamSimple: StreamFn,
 ): StreamFn {
-  return async function streamWithInitiatorHeader(model, options) {
+  return async function streamWithInitiatorHeader(model, context, options) {
     const headers = { ...options?.headers };
 
     if (provider === "github-copilot") {
@@ -30,7 +30,7 @@ export function createCopilotAwareStream(
       headers["X-Initiator"] = initiator;
     }
 
-    return originalStreamSimple(model, { ...options, headers });
+    return originalStreamSimple(model, context, { ...options, headers });
   };
 }
 
