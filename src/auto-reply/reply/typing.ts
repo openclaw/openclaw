@@ -84,11 +84,15 @@ export function createTypingController(params: {
       if (!typingTimer) {
         return;
       }
+      // If the run is still active (e.g. extended model thinking), keep typing alive.
+      // During long thinking phases (10+ min), no streaming events arrive to refresh
+      // the TTL, so we re-extend it until the run completes.
+      if (!runComplete) {
+        log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); run still active, extending`);
+        refreshTypingTtl();
+        return;
+      }
       log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); pausing typing indicator`);
-      // Pause the typing loop instead of sealing the controller. Long model thinking
-      // periods (>2min) caused the old cleanup() call to permanently seal the controller,
-      // preventing typing from ever restarting even though the run was still active.
-      // Now we just clear the interval so new signals can restart it.
       clearInterval(typingTimer);
       typingTimer = undefined;
       started = false;

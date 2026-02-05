@@ -24,12 +24,13 @@ describe("typing controller", () => {
     expect(onReplyStart).toHaveBeenCalledTimes(3);
 
     typing.markRunComplete();
+    // markRunComplete immediately clears the interval, so no more calls.
     vi.advanceTimersByTime(1_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(4);
+    expect(onReplyStart).toHaveBeenCalledTimes(3);
 
     typing.markDispatchIdle();
     vi.advanceTimersByTime(2_000);
-    expect(onReplyStart).toHaveBeenCalledTimes(4);
+    expect(onReplyStart).toHaveBeenCalledTimes(3);
   });
 
   it("keeps typing until both idle and run completion are set", async () => {
@@ -51,6 +52,36 @@ describe("typing controller", () => {
     typing.markRunComplete();
     vi.advanceTimersByTime(2_000);
     expect(onReplyStart).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps typing alive when TTL expires during active run", async () => {
+    vi.useFakeTimers();
+    const onReplyStart = vi.fn(async () => {});
+    const log = vi.fn();
+    const typing = createTypingController({
+      onReplyStart,
+      typingIntervalSeconds: 1,
+      typingTtlMs: 5_000,
+      log,
+    });
+
+    await typing.startTypingLoop();
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+
+    // Advance past TTL — run is still active so typing should continue.
+    vi.advanceTimersByTime(5_000);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("run still active, extending"));
+
+    // Typing interval should still be firing after TTL re-extension.
+    vi.advanceTimersByTime(2_000);
+    expect(onReplyStart.mock.calls.length).toBeGreaterThan(5);
+
+    // After run completes, the next TTL expiry should actually pause.
+    typing.markRunComplete();
+    typing.markDispatchIdle();
+    const callsAfterStop = onReplyStart.mock.calls.length;
+    vi.advanceTimersByTime(10_000);
+    expect(onReplyStart.mock.calls.length).toBe(callsAfterStop);
   });
 
   it("does not start typing after run completion", async () => {
