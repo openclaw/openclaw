@@ -1,7 +1,7 @@
 import type { Bot } from "grammy";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
-import type { TelegramContext } from "./bot/types.js";
+import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { resolveAckReaction } from "../agents/identity.js";
 import {
   findModelInCatalog,
@@ -57,13 +57,7 @@ import {
 export type TelegramMediaRef = {
   path: string;
   contentType?: string;
-  stickerMetadata?: {
-    emoji?: string;
-    setName?: string;
-    fileId?: string;
-    fileUniqueId?: string;
-    cachedDescription?: string;
-  };
+  stickerMetadata?: StickerMetadata;
 };
 
 type TelegramMessageContextOptions = {
