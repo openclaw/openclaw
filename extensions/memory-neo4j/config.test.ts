@@ -5,7 +5,13 @@
  */
 
 import { describe, it, expect, afterEach } from "vitest";
-import { memoryNeo4jConfigSchema, vectorDimsForModel, resolveExtractionConfig } from "./config.js";
+import {
+  memoryNeo4jConfigSchema,
+  vectorDimsForModel,
+  contextLengthForModel,
+  DEFAULT_EMBEDDING_CONTEXT_LENGTH,
+  resolveExtractionConfig,
+} from "./config.js";
 
 // ============================================================================
 // memoryNeo4jConfigSchema.parse()
@@ -545,5 +551,59 @@ describe("resolveExtractionConfig", () => {
     const config = resolveExtractionConfig();
     expect(config.temperature).toBe(0.0);
     expect(config.maxRetries).toBe(2);
+  });
+});
+
+// ============================================================================
+// contextLengthForModel()
+// ============================================================================
+
+describe("contextLengthForModel", () => {
+  describe("exact match", () => {
+    it("should return 512 for mxbai-embed-large", () => {
+      expect(contextLengthForModel("mxbai-embed-large")).toBe(512);
+    });
+
+    it("should return 8191 for text-embedding-3-small (OpenAI)", () => {
+      expect(contextLengthForModel("text-embedding-3-small")).toBe(8191);
+    });
+
+    it("should return 8191 for text-embedding-3-large (OpenAI)", () => {
+      expect(contextLengthForModel("text-embedding-3-large")).toBe(8191);
+    });
+
+    it("should return 8192 for nomic-embed-text", () => {
+      expect(contextLengthForModel("nomic-embed-text")).toBe(8192);
+    });
+
+    it("should return 256 for all-minilm", () => {
+      expect(contextLengthForModel("all-minilm")).toBe(256);
+    });
+  });
+
+  describe("prefix match", () => {
+    it("should match mxbai-embed-large-8k:latest via prefix to 8192", () => {
+      expect(contextLengthForModel("mxbai-embed-large-8k:latest")).toBe(8192);
+    });
+
+    it("should match nomic-embed-text:v1.5 via prefix to 8192", () => {
+      expect(contextLengthForModel("nomic-embed-text:v1.5")).toBe(8192);
+    });
+  });
+
+  describe("unknown model fallback", () => {
+    it("should return DEFAULT_EMBEDDING_CONTEXT_LENGTH for unknown model", () => {
+      expect(contextLengthForModel("some-unknown-model")).toBe(DEFAULT_EMBEDDING_CONTEXT_LENGTH);
+    });
+
+    it("should return 512 as the default context length", () => {
+      // Verify the default value itself is 512
+      expect(DEFAULT_EMBEDDING_CONTEXT_LENGTH).toBe(512);
+      expect(contextLengthForModel("some-unknown-model")).toBe(512);
+    });
+
+    it("should return default for empty string", () => {
+      expect(contextLengthForModel("")).toBe(DEFAULT_EMBEDDING_CONTEXT_LENGTH);
+    });
   });
 });
