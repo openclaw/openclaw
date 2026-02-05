@@ -31,6 +31,8 @@ export type EmbeddedRunAttemptParams = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  /** Whether the sender is an owner (required for owner-only tools). */
+  senderIsOwner?: boolean;
   currentChannelId?: string;
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all";
