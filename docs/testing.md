@@ -22,7 +22,7 @@ This doc is a “how we test” guide:
 
 Most days:
 
-- Full gate (expected before push): `pnpm lint && pnpm build && pnpm test`
+- Full gate (expected before push): `pnpm build && pnpm check && pnpm test`
 
 When you touch tests or want extra confidence:
 

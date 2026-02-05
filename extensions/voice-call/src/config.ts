@@ -211,15 +211,36 @@ export const VoiceCallTunnelConfigSchema = z
      * will be allowed only for loopback requests (ngrok local agent).
      */
     allowNgrokFreeTierLoopbackBypass: z.boolean().default(false),
-    /**
-     * Legacy ngrok free tier compatibility mode (deprecated).
-     * Use allowNgrokFreeTierLoopbackBypass instead.
-     */
-    allowNgrokFreeTier: z.boolean().optional(),
   })
   .strict()
   .default({ provider: "none", allowNgrokFreeTierLoopbackBypass: false });
 export type VoiceCallTunnelConfig = z.infer<typeof VoiceCallTunnelConfigSchema>;
+
+// -----------------------------------------------------------------------------
+// Webhook Security Configuration
+// -----------------------------------------------------------------------------
+
+export const VoiceCallWebhookSecurityConfigSchema = z
+  .object({
+    /**
+     * Allowed hostnames for webhook URL reconstruction.
+     * Only these hosts are accepted from forwarding headers.
+     */
+    allowedHosts: z.array(z.string().min(1)).default([]),
+    /**
+     * Trust X-Forwarded-* headers without a hostname allowlist.
+     * WARNING: Only enable if you trust your proxy configuration.
+     */
+    trustForwardingHeaders: z.boolean().default(false),
+    /**
+     * Trusted proxy IP addresses. Forwarded headers are only trusted when
+     * the remote IP matches one of these addresses.
+     */
+    trustedProxyIPs: z.array(z.string().min(1)).default([]),
+  })
+  .strict()
+  .default({ allowedHosts: [], trustForwardingHeaders: false, trustedProxyIPs: [] });
+export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Outbound Call Configuration
@@ -339,6 +360,9 @@ export const VoiceCallConfigSchema = z
     /** Tunnel configuration (unified ngrok/tailscale) */
     tunnel: VoiceCallTunnelConfigSchema,
 
+    /** Webhook signature reconstruction and proxy trust configuration */
+    webhookSecurity: VoiceCallWebhookSecurityConfigSchema,
+
     /** Real-time audio streaming configuration */
     streaming: VoiceCallStreamingConfigSchema,
 
@@ -409,9 +433,20 @@ export function resolveVoiceCallConfig(config: VoiceCallConfig): VoiceCallConfig
     allowNgrokFreeTierLoopbackBypass: false,
   };
   resolved.tunnel.allowNgrokFreeTierLoopbackBypass =
-    resolved.tunnel.allowNgrokFreeTierLoopbackBypass || resolved.tunnel.allowNgrokFreeTier || false;
+    resolved.tunnel.allowNgrokFreeTierLoopbackBypass ?? false;
   resolved.tunnel.ngrokAuthToken = resolved.tunnel.ngrokAuthToken ?? process.env.NGROK_AUTHTOKEN;
   resolved.tunnel.ngrokDomain = resolved.tunnel.ngrokDomain ?? process.env.NGROK_DOMAIN;
+
+  // Webhook Security Config
+  resolved.webhookSecurity = resolved.webhookSecurity ?? {
+    allowedHosts: [],
+    trustForwardingHeaders: false,
+    trustedProxyIPs: [],
+  };
+  resolved.webhookSecurity.allowedHosts = resolved.webhookSecurity.allowedHosts ?? [];
+  resolved.webhookSecurity.trustForwardingHeaders =
+    resolved.webhookSecurity.trustForwardingHeaders ?? false;
+  resolved.webhookSecurity.trustedProxyIPs = resolved.webhookSecurity.trustedProxyIPs ?? [];
 
   return resolved;
 }
@@ -446,6 +481,14 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     if (!config.telnyx?.connectionId) {
       errors.push(
         "plugins.entries.voice-call.config.telnyx.connectionId is required (or set TELNYX_CONNECTION_ID env)",
+      );
+    }
+    if (
+      (config.inboundPolicy === "allowlist" || config.inboundPolicy === "pairing") &&
+      !config.telnyx?.publicKey
+    ) {
+      errors.push(
+        "plugins.entries.voice-call.config.telnyx.publicKey is required for inboundPolicy allowlist/pairing",
       );
     }
   }

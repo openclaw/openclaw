@@ -3,10 +3,10 @@ summary: "Install OpenClaw (recommended installer, global install, or from sourc
 read_when:
   - Installing OpenClaw
   - You want to install from GitHub
-title: "Install"
+title: "Install Overview"
 ---
 
-# Install
+# Install Overview
 
 Use the installer unless you have a reason not to. It sets up the CLI and runs onboarding.
 
@@ -79,10 +79,9 @@ Or with pnpm:
 ```bash
 pnpm add -g openclaw@latest
 pnpm approve-builds -g                # approve openclaw, node-llama-cpp, sharp, etc.
-pnpm add -g openclaw@latest           # re-run to execute postinstall scripts
 ```
 
-pnpm requires explicit approval for packages with build scripts. After the first install shows the "Ignored build scripts" warning, run `pnpm approve-builds -g` and select the listed packages, then re-run the install so postinstall scripts execute.
+pnpm requires explicit approval for packages with build scripts. After the first install shows the "Ignored build scripts" warning, run `pnpm approve-builds -g` and select the listed packages.
 
 Then:
 
@@ -102,6 +101,8 @@ openclaw onboard --install-daemon
 ```
 
 Tip: if you don’t have a global install yet, run repo commands via `pnpm openclaw ...`.
+
+For deeper development workflows, see [Setup](/start/setup).
 
 ### 4) Other install options
 

@@ -1,23 +1,26 @@
-import type { OpenClawApp } from "./app";
-import { refreshChat } from "./app-chat";
+import type { OpenClawApp } from "./app.ts";
+import { refreshChat } from "./app-chat.ts";
 import {
   startLogsPolling,
   stopLogsPolling,
   startDebugPolling,
   stopDebugPolling,
-} from "./app-polling";
-import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll";
-import { loadChannels } from "./controllers/channels";
-import { loadConfig, loadConfigSchema } from "./controllers/config";
-import { loadCronJobs, loadCronStatus } from "./controllers/cron";
-import { loadDebug } from "./controllers/debug";
-import { loadDevices } from "./controllers/devices";
-import { loadExecApprovals } from "./controllers/exec-approvals";
-import { loadLogs } from "./controllers/logs";
-import { loadNodes } from "./controllers/nodes";
-import { loadPresence } from "./controllers/presence";
-import { loadSessions } from "./controllers/sessions";
-import { loadSkills } from "./controllers/skills";
+} from "./app-polling.ts";
+import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
+import { loadAgentSkills } from "./controllers/agent-skills.ts";
+import { loadAgents } from "./controllers/agents.ts";
+import { loadChannels } from "./controllers/channels.ts";
+import { loadConfig, loadConfigSchema } from "./controllers/config.ts";
+import { loadCronJobs, loadCronStatus } from "./controllers/cron.ts";
+import { loadDebug } from "./controllers/debug.ts";
+import { loadDevices } from "./controllers/devices.ts";
+import { loadExecApprovals } from "./controllers/exec-approvals.ts";
+import { loadLogs } from "./controllers/logs.ts";
+import { loadNodes } from "./controllers/nodes.ts";
+import { loadPresence } from "./controllers/presence.ts";
+import { loadSessions } from "./controllers/sessions.ts";
+import { loadSkills } from "./controllers/skills.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -25,10 +28,10 @@ import {
   pathForTab,
   tabFromPath,
   type Tab,
-} from "./navigation";
-import { saveSettings, type UiSettings } from "./storage";
-import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme";
-import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition";
+} from "./navigation.ts";
+import { saveSettings, type UiSettings } from "./storage.ts";
+import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
+import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme.ts";
 
 type SettingsHost = {
   settings: UiSettings;
@@ -48,6 +51,30 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
 };
 
+function isTopLevelWindow(): boolean {
+  try {
+    return window.top === window.self;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeGatewayUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return null;
+    }
+    return trimmed;
+  } catch {
+    return null;
+  }
+}
+
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
     ...next,
@@ -64,13 +91,19 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
 
 export function setLastActiveSessionKey(host: SettingsHost, next: string) {
   const trimmed = next.trim();
-  if (!trimmed) return;
-  if (host.settings.lastActiveSessionKey === trimmed) return;
+  if (!trimmed) {
+    return;
+  }
+  if (host.settings.lastActiveSessionKey === trimmed) {
+    return;
+  }
   applySettings(host, { ...host.settings, lastActiveSessionKey: trimmed });
 }
 
 export function applySettingsFromUrl(host: SettingsHost) {
-  if (!window.location.search) return;
+  if (!window.location.search) {
+    return;
+  }
   const params = new URLSearchParams(window.location.search);
   const tokenRaw = params.get("token");
   const passwordRaw = params.get("password");
@@ -90,7 +123,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
   if (passwordRaw != null) {
     const password = passwordRaw.trim();
     if (password) {
-      (host as { password: string }).password = password;
+      (host as unknown as { password: string }).password = password;
     }
     params.delete("password");
     shouldCleanUrl = true;
@@ -109,28 +142,39 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (gatewayUrlRaw != null) {
-    const gatewayUrl = gatewayUrlRaw.trim();
-    if (gatewayUrl && gatewayUrl !== host.settings.gatewayUrl) {
+    const gatewayUrl = normalizeGatewayUrl(gatewayUrlRaw);
+    if (gatewayUrl && gatewayUrl !== host.settings.gatewayUrl && isTopLevelWindow()) {
       host.pendingGatewayUrl = gatewayUrl;
     }
     params.delete("gatewayUrl");
     shouldCleanUrl = true;
   }
 
-  if (!shouldCleanUrl) return;
+  if (!shouldCleanUrl) {
+    return;
+  }
   const url = new URL(window.location.href);
   url.search = params.toString();
   window.history.replaceState({}, "", url.toString());
 }
 
 export function setTab(host: SettingsHost, next: Tab) {
-  if (host.tab !== next) host.tab = next;
-  if (next === "chat") host.chatHasAutoScrolled = false;
-  if (next === "logs") startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
-  else stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
-  if (next === "debug")
+  if (host.tab !== next) {
+    host.tab = next;
+  }
+  if (next === "chat") {
+    host.chatHasAutoScrolled = false;
+  }
+  if (next === "logs") {
+    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
+  } else {
+    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+  }
+  if (next === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
-  else stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  } else {
+    stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  }
   void refreshActiveTab(host);
   syncUrlWithTab(host, next, false);
 }
@@ -150,12 +194,47 @@ export function setTheme(host: SettingsHost, next: ThemeMode, context?: ThemeTra
 }
 
 export async function refreshActiveTab(host: SettingsHost) {
-  if (host.tab === "overview") await loadOverview(host);
-  if (host.tab === "channels") await loadChannelsTab(host);
-  if (host.tab === "instances") await loadPresence(host as unknown as OpenClawApp);
-  if (host.tab === "sessions") await loadSessions(host as unknown as OpenClawApp);
-  if (host.tab === "cron") await loadCron(host);
-  if (host.tab === "skills") await loadSkills(host as unknown as OpenClawApp);
+  if (host.tab === "overview") {
+    await loadOverview(host);
+  }
+  if (host.tab === "channels") {
+    await loadChannelsTab(host);
+  }
+  if (host.tab === "instances") {
+    await loadPresence(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "sessions") {
+    await loadSessions(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "cron") {
+    await loadCron(host);
+  }
+  if (host.tab === "skills") {
+    await loadSkills(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "agents") {
+    const app = host as unknown as OpenClawApp;
+    await loadAgents(app);
+    await loadConfig(app);
+    const agentIds = app.agentsList?.agents?.map((entry) => entry.id) ?? [];
+    if (agentIds.length > 0) {
+      void loadAgentIdentities(app, agentIds);
+    }
+    const agentId =
+      app.agentsSelectedId ?? app.agentsList?.defaultId ?? app.agentsList?.agents?.[0]?.id;
+    if (agentId) {
+      void loadAgentIdentity(app, agentId);
+      if (app.agentsPanel === "skills") {
+        void loadAgentSkills(app, agentId);
+      }
+      if (app.agentsPanel === "channels") {
+        void loadChannels(app, false);
+      }
+      if (app.agentsPanel === "cron") {
+        void loadCron(host);
+      }
+    }
+  }
   if (host.tab === "nodes") {
     await loadNodes(host as unknown as OpenClawApp);
     await loadDevices(host as unknown as OpenClawApp);
@@ -185,7 +264,9 @@ export async function refreshActiveTab(host: SettingsHost) {
 }
 
 export function inferBasePath() {
-  if (typeof window === "undefined") return "";
+  if (typeof window === "undefined") {
+    return "";
+  }
   const configured = window.__OPENCLAW_CONTROL_UI_BASE_PATH__;
   if (typeof configured === "string" && configured.trim()) {
     return normalizeBasePath(configured);
@@ -200,17 +281,23 @@ export function syncThemeWithSettings(host: SettingsHost) {
 
 export function applyResolvedTheme(host: SettingsHost, resolved: ResolvedTheme) {
   host.themeResolved = resolved;
-  if (typeof document === "undefined") return;
+  if (typeof document === "undefined") {
+    return;
+  }
   const root = document.documentElement;
   root.dataset.theme = resolved;
   root.style.colorScheme = resolved;
 }
 
 export function attachThemeListener(host: SettingsHost) {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return;
+  }
   host.themeMedia = window.matchMedia("(prefers-color-scheme: dark)");
   host.themeMediaHandler = (event) => {
-    if (host.theme !== "system") return;
+    if (host.theme !== "system") {
+      return;
+    }
     applyResolvedTheme(host, event.matches ? "dark" : "light");
   };
   if (typeof host.themeMedia.addEventListener === "function") {
@@ -224,7 +311,9 @@ export function attachThemeListener(host: SettingsHost) {
 }
 
 export function detachThemeListener(host: SettingsHost) {
-  if (!host.themeMedia || !host.themeMediaHandler) return;
+  if (!host.themeMedia || !host.themeMediaHandler) {
+    return;
+  }
   if (typeof host.themeMedia.removeEventListener === "function") {
     host.themeMedia.removeEventListener("change", host.themeMediaHandler);
     return;
@@ -238,16 +327,22 @@ export function detachThemeListener(host: SettingsHost) {
 }
 
 export function syncTabWithLocation(host: SettingsHost, replace: boolean) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") {
+    return;
+  }
   const resolved = tabFromPath(window.location.pathname, host.basePath) ?? "chat";
   setTabFromRoute(host, resolved);
   syncUrlWithTab(host, resolved, replace);
 }
 
 export function onPopState(host: SettingsHost) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") {
+    return;
+  }
   const resolved = tabFromPath(window.location.pathname, host.basePath);
-  if (!resolved) return;
+  if (!resolved) {
+    return;
+  }
 
   const url = new URL(window.location.href);
   const session = url.searchParams.get("session")?.trim();
@@ -264,18 +359,31 @@ export function onPopState(host: SettingsHost) {
 }
 
 export function setTabFromRoute(host: SettingsHost, next: Tab) {
-  if (host.tab !== next) host.tab = next;
-  if (next === "chat") host.chatHasAutoScrolled = false;
-  if (next === "logs") startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
-  else stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
-  if (next === "debug")
+  if (host.tab !== next) {
+    host.tab = next;
+  }
+  if (next === "chat") {
+    host.chatHasAutoScrolled = false;
+  }
+  if (next === "logs") {
+    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
+  } else {
+    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
+  }
+  if (next === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
-  else stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
-  if (host.connected) void refreshActiveTab(host);
+  } else {
+    stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  }
+  if (host.connected) {
+    void refreshActiveTab(host);
+  }
 }
 
 export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined") {
+    return;
+  }
   const targetPath = normalizePath(pathForTab(tab, host.basePath));
   const currentPath = normalizePath(window.location.pathname);
   const url = new URL(window.location.href);
@@ -297,12 +405,17 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   }
 }
 
-export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
-  if (typeof window === "undefined") return;
+export function syncUrlWithSessionKey(sessionKey: string, replace: boolean) {
+  if (typeof window === "undefined") {
+    return;
+  }
   const url = new URL(window.location.href);
   url.searchParams.set("session", sessionKey);
-  if (replace) window.history.replaceState({}, "", url.toString());
-  else window.history.pushState({}, "", url.toString());
+  if (replace) {
+    window.history.replaceState({}, "", url.toString());
+  } else {
+    window.history.pushState({}, "", url.toString());
+  }
 }
 
 export async function loadOverview(host: SettingsHost) {

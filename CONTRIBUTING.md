@@ -19,6 +19,9 @@ Welcome to the lobster tank! 🦞
 - **Jos** - Telegram, API, Nix mode
   - GitHub: [@joshp123](https://github.com/joshp123) · X: [@jjpcodes](https://x.com/jjpcodes)
 
+- **Christoph Nakazawa** - JS Infra
+  - GitHub: [@cpojer](https://github.com/cpojer) · X: [@cnakazawa](https://x.com/cnakazawa)
+
 ## How to Contribute
 
 1. **Bugs & small fixes** → Open a PR!
@@ -28,9 +31,24 @@ Welcome to the lobster tank! 🦞
 ## Before You PR
 
 - Test locally with your OpenClaw instance
-- Run tests: `pnpm tsgo && pnpm format && pnpm lint && pnpm build && pnpm test`
+- Run tests: `pnpm build && pnpm check && pnpm test`
 - Keep PRs focused (one thing per PR)
 - Describe what & why
+
+## Control UI Decorators
+
+The Control UI uses Lit with **legacy** decorators (current Rollup parsing does not support
+`accessor` fields required for standard decorators). When adding reactive fields, keep the
+legacy style:
+
+```ts
+@state() foo = "bar";
+@property({ type: Number }) count = 0;
+```
+
+The root `tsconfig.json` is configured for legacy decorators (`experimentalDecorators: true`)
+with `useDefineForClassFields: false`. Avoid flipping these unless you are also updating the UI
+build tooling to support standard decorators.
 
 ## AI/Vibe-Coded PRs Welcome! 🤖
 

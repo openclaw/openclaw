@@ -161,3 +161,58 @@ describe("message tool description", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 });
+
+describe("message tool sandbox passthrough", () => {
+  it("forwards sandboxRoot to runMessageAction", async () => {
+    mocks.runMessageAction.mockClear();
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "telegram",
+      to: "telegram:123",
+      handledBy: "plugin",
+      payload: {},
+      dryRun: true,
+    } satisfies MessageActionRunResult);
+
+    const tool = createMessageTool({
+      config: {} as never,
+      sandboxRoot: "/tmp/sandbox",
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "telegram:123",
+      message: "",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.sandboxRoot).toBe("/tmp/sandbox");
+  });
+
+  it("omits sandboxRoot when not configured", async () => {
+    mocks.runMessageAction.mockClear();
+    mocks.runMessageAction.mockResolvedValue({
+      kind: "send",
+      action: "send",
+      channel: "telegram",
+      to: "telegram:123",
+      handledBy: "plugin",
+      payload: {},
+      dryRun: true,
+    } satisfies MessageActionRunResult);
+
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "telegram:123",
+      message: "",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.sandboxRoot).toBeUndefined();
+  });
+});

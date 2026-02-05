@@ -335,12 +335,14 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
     for (const hook of hooks) {
       try {
+        // oxlint-disable-next-line typescript/no-explicit-any
         const out = (hook.handler as any)({ ...event, message: current }, ctx) as
           | PluginHookToolResultPersistResult
           | void
           | Promise<unknown>;
 
         // Guard against accidental async handlers (this hook is sync-only).
+        // oxlint-disable-next-line typescript/no-explicit-any
         if (out && typeof (out as any).then === "function") {
           const msg =
             `[hooks] tool_result_persist handler from ${hook.pluginId} returned a Promise; ` +
