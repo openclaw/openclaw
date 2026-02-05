@@ -45,7 +45,7 @@ export const PolicyRuleSchema = z.object({
   action: z.enum(POLICY_ACTIONS),
   tool: z.string().min(1),
   dataClass: z.enum(POLICY_DATA_CLASSES).optional(),
-  params: z.record(z.any()).optional(),
+  params: z.record(z.string(), z.any()).optional(),
   scope: z.enum(POLICY_SCOPES).optional(),
 });
 
@@ -241,7 +241,6 @@ export function evaluatePolicy(params: {
 } {
   const { policy, toolName, toolParams } = params;
   const dataClasses = detectDataClasses(toolName, toolParams);
-  let approvalMatch: PolicyRule | null = null;
 
   for (const rule of policy.rules) {
     if (!toolMatches(rule.tool, toolName)) {
@@ -261,18 +260,21 @@ export function evaluatePolicy(params: {
         dataClasses: Array.from(dataClasses),
       };
     }
-    if (rule.action === "require_approval" && !approvalMatch) {
-      approvalMatch = rule;
+    if (rule.action === "require_approval") {
+      return {
+        allowed: false,
+        reason: `ArmorIQ policy requires approval: ${rule.id}`,
+        matchedRule: rule,
+        dataClasses: Array.from(dataClasses),
+      };
     }
-  }
-
-  if (approvalMatch) {
-    return {
-      allowed: false,
-      reason: `ArmorIQ policy requires approval: ${approvalMatch.id}`,
-      matchedRule: approvalMatch,
-      dataClasses: Array.from(dataClasses),
-    };
+    if (rule.action === "allow") {
+      return {
+        allowed: true,
+        matchedRule: rule,
+        dataClasses: Array.from(dataClasses),
+      };
+    }
   }
 
   return {
@@ -292,24 +294,49 @@ function mergeRules(existing: PolicyRule[], updates: PolicyRule[]): PolicyRule[]
   return Array.from(map.values());
 }
 
+export type PolicyChangeCallback = (state: PolicyState) => void | Promise<void>;
+
 export class PolicyStore {
   private state: PolicyState;
   private readonly filePath: string;
   private readonly logger?: { info?: (message: string) => void; warn?: (message: string) => void };
+  private readonly onPolicyChange?: PolicyChangeCallback;
+  private cryptoTokenDigest?: string;
 
   constructor(params: {
     filePath: string;
     basePolicy: PolicyDefinition;
     logger?: { info?: (message: string) => void; warn?: (message: string) => void };
+    onPolicyChange?: PolicyChangeCallback;
   }) {
     this.filePath = params.filePath;
     this.logger = params.logger;
+    this.onPolicyChange = params.onPolicyChange;
     this.state = {
       version: 0,
       updatedAt: new Date().toISOString(),
       policy: params.basePolicy,
       history: [],
     };
+  }
+
+  setCryptoTokenDigest(digest: string): void {
+    this.cryptoTokenDigest = digest;
+    this.logger?.info?.(`armoriq: crypto token digest set: ${digest.slice(0, 16)}...`);
+  }
+
+  getCryptoTokenDigest(): string | undefined {
+    return this.cryptoTokenDigest;
+  }
+
+  private async notifyPolicyChange(): Promise<void> {
+    if (this.onPolicyChange) {
+      try {
+        await this.onPolicyChange(this.state);
+      } catch (err) {
+        this.logger?.warn?.(`armoriq: policy change callback failed: ${String(err)}`);
+      }
+    }
   }
 
   async load(): Promise<void> {
@@ -383,6 +410,7 @@ export class PolicyStore {
 
     await fs.mkdir(dirname(this.filePath), { recursive: true });
     await fs.writeFile(this.filePath, JSON.stringify(this.state, null, 2), "utf8");
+    await this.notifyPolicyChange();
     return this.state;
   }
 
@@ -411,6 +439,48 @@ export class PolicyStore {
 
     await fs.mkdir(dirname(this.filePath), { recursive: true });
     await fs.writeFile(this.filePath, JSON.stringify(this.state, null, 2), "utf8");
+    await this.notifyPolicyChange();
+    return this.state;
+  }
+
+  async reorderRule(
+    id: string,
+    position: number,
+    actor?: string,
+    reason?: string,
+  ): Promise<PolicyState> {
+    const rules = [...this.state.policy.rules];
+    const index = rules.findIndex((rule) => rule.id === id);
+    if (index === -1) {
+      throw new Error(`Policy rule not found: ${id}`);
+    }
+    const clamped = Math.min(Math.max(position, 1), rules.length);
+    const [rule] = rules.splice(index, 1);
+    rules.splice(clamped - 1, 0, rule);
+
+    const nextVersion = this.state.version + 1;
+    const updatedAt = new Date().toISOString();
+    const updatedBy = actor;
+
+    const entry: PolicyHistoryEntry = {
+      version: nextVersion,
+      updatedAt,
+      updatedBy,
+      reason: reason ?? `Policy reorder: ${id} -> ${clamped}`,
+      policy: { rules },
+    };
+
+    this.state = {
+      version: nextVersion,
+      updatedAt,
+      updatedBy,
+      policy: { rules },
+      history: [...this.state.history, entry],
+    };
+
+    await fs.mkdir(dirname(this.filePath), { recursive: true });
+    await fs.writeFile(this.filePath, JSON.stringify(this.state, null, 2), "utf8");
+    await this.notifyPolicyChange();
     return this.state;
   }
 }

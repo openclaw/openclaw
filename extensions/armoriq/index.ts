@@ -15,6 +15,7 @@ import {
   type PolicyRule,
   type PolicyDataClass,
 } from "./src/policy.js";
+import { CryptoPolicyService, computePolicyDigest } from "./src/crypto-policy.service.js";
 
 type ArmorIqConfig = {
   enabled: boolean;
@@ -35,6 +36,8 @@ type ArmorIqConfig = {
   policyStorePath?: string;
   policyUpdateEnabled?: boolean;
   policyUpdateAllowList?: string[];
+  cryptoPolicyEnabled?: boolean;
+  csrgEndpoint?: string;
   validitySeconds: number;
   useProduction?: boolean;
   iapEndpoint?: string;
@@ -206,6 +209,7 @@ type PolicyCommand =
   | { kind: "get"; id: string }
   | { kind: "help" }
   | { kind: "need_id" }
+  | { kind: "reorder"; id: string; position: number; reason: string }
   | { kind: "delete"; ids: string[]; reason: string }
   | { kind: "reset"; reason: string }
   | { kind: "update"; update: PolicyUpdate };
@@ -240,7 +244,7 @@ function formatPolicyRule(rule: PolicyRule): string {
 
 function formatPolicyHelp(): string {
   return [
-    "Policy commands (7):",
+    "Policy commands (8):",
     "1. Policy list: list all rules",
     "2. Policy get policy1: show one rule by id",
     "3. Policy delete policy1: remove a rule by id",
@@ -248,6 +252,8 @@ function formatPolicyHelp(): string {
     "5. Policy update policy1: block send_email for payment data",
     "6. Policy update policy2: allow write_file",
     "7. Policy new: block upload_file for PII (creates new policyN)",
+    "8. Policy prioritize policy2 1: move rule to position 1 (higher priority)",
+    "Note: Rules are evaluated top-to-bottom; first match wins.",
   ].join("\n");
 }
 
@@ -265,18 +271,8 @@ function formatPolicyList(state: PolicyState): string {
   if (!state.policy.rules.length) {
     return `Policy version ${state.version}. No rules configured.`;
   }
-  const sorted = [...state.policy.rules].sort((a, b) => {
-    const aMatch = a.id.match(/^policy(\d+)$/i);
-    const bMatch = b.id.match(/^policy(\d+)$/i);
-    if (aMatch && bMatch) {
-      return Number.parseInt(aMatch[1] ?? "0", 10) - Number.parseInt(bMatch[1] ?? "0", 10);
-    }
-    if (aMatch) return -1;
-    if (bMatch) return 1;
-    return a.id.localeCompare(b.id);
-  });
-  const lines = sorted.map(
-    (rule, idx) => `${idx + 1}. ${formatPolicyRule(rule)}`,
+  const lines = state.policy.rules.map(
+    (rule, idx) => `${idx + 1}. ${formatPolicyRule(rule)} (order=${idx + 1})`,
   );
   return `Policy version ${state.version}:\n${lines.join("\n")}`;
 }
@@ -418,6 +414,21 @@ function parsePolicyTextCommand(text: string, state: PolicyState): PolicyCommand
   if (/\b(help|commands|prompt)\b/.test(lower) && /\bpolicy|policies\b/.test(lower)) {
     return { kind: "help" };
   }
+  const reorderMatch = trimmed.match(
+    /\bpolicy\s*(?:priorit(?:y|ize|ise)|reorder|move)\s+(policy\d+|[a-z0-9][\w.-]*)\s+(?:to\s+)?(\d+)\b/i,
+  );
+  if (reorderMatch?.[1] && reorderMatch?.[2]) {
+    const id = reorderMatch[1];
+    const position = Number.parseInt(reorderMatch[2], 10);
+    if (Number.isFinite(position)) {
+      return {
+        kind: "reorder",
+        id,
+        position,
+        reason: truncateReason(`Policy reorder: ${trimmed}`),
+      };
+    }
+  }
   if (/\b(new|create|add)\b/.test(lower) && /\bpolicy|policies\b/.test(lower)) {
     return { kind: "update", update: buildPolicyUpdateFromText(trimmed, state) };
   }
@@ -477,6 +488,11 @@ function resolveConfig(api: OpenClawPluginApi): ArmorIqConfig {
     policyUpdateAllowList:
       readStringArray(raw.policyUpdateAllowList) ??
       readStringArray(process.env.ARMORIQ_POLICY_UPDATE_ALLOWLIST),
+    cryptoPolicyEnabled:
+      readBoolean(raw.cryptoPolicyEnabled) ??
+      readBoolean(process.env.ARMORIQ_CRYPTO_POLICY_ENABLED),
+    csrgEndpoint:
+      readString(raw.csrgEndpoint) ?? readString(process.env.CSRG_URL) ?? "http://localhost:8000",
     validitySeconds: readNumber(raw.validitySeconds) ?? DEFAULT_VALIDITY_SECONDS,
     useProduction: readBoolean(raw.useProduction),
     iapEndpoint: readString(raw.iapEndpoint) ?? readString(process.env.IAP_ENDPOINT),
@@ -1255,12 +1271,47 @@ export default function register(api: OpenClawPluginApi) {
     return;
   }
 
+  const cryptoPolicyService = cfg.cryptoPolicyEnabled
+    ? new CryptoPolicyService({
+        csrgBaseUrl: cfg.csrgEndpoint,
+        timeoutMs: cfg.timeoutMs ?? 30000,
+        logger: api.logger,
+      })
+    : null;
+
+  const handleCryptoPolicyUpdate = async (state: { version: number; updatedAt: string; updatedBy?: string; policy: { rules: any[] }; history: any[] }) => {
+    if (!cryptoPolicyService) return;
+    try {
+      const identity = {
+        userId: cfg.userId ?? "plugin-user",
+        agentId: cfg.agentId ?? "openclaw-agent",
+        contextId: cfg.contextId ?? "default",
+      };
+      const token = await cryptoPolicyService.issuePolicyToken(
+        state,
+        identity,
+        cfg.validitySeconds,
+      );
+      policyStore.setCryptoTokenDigest(token.policy_digest);
+      api.logger.info(
+        `armoriq: crypto-bound policy token issued, digest=${token.policy_digest.slice(0, 16)}..., merkle_root=${token.merkle_root?.slice(0, 16)}...`,
+      );
+    } catch (err) {
+      api.logger.warn(`armoriq: crypto policy token issuance failed: ${String(err)}`);
+    }
+  };
+
   const policyStore = new PolicyStore({
     filePath: resolvePolicyStorePath(api, cfg),
     basePolicy: normalizePolicyDefinition(cfg.policy),
     logger: api.logger,
+    onPolicyChange: cfg.cryptoPolicyEnabled ? handleCryptoPolicyUpdate : undefined,
   });
-  const policyReady = policyStore.load();
+  const policyReady = policyStore.load().then(async () => {
+    if (cfg.cryptoPolicyEnabled && policyStore.getPolicy().rules.length > 0) {
+      await handleCryptoPolicyUpdate(policyStore.getState());
+    }
+  });
 
   if (cfg.policyUpdateEnabled) {
     api.registerTool(
@@ -1312,6 +1363,42 @@ export default function register(api: OpenClawPluginApi) {
                 ],
                 details: { action: "get", id: command.id, found: Boolean(rule) },
               };
+            }
+            if (command.kind === "reorder") {
+              try {
+                const nextState = await policyStore.reorderRule(
+                  command.id,
+                  command.position,
+                  actor,
+                  command.reason,
+                );
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Policy ${command.id} moved to position ${command.position}.`,
+                    },
+                  ],
+                  details: {
+                    action: "reorder",
+                    id: command.id,
+                    position: command.position,
+                    version: nextState.version,
+                  },
+                };
+              } catch (err) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Policy reorder failed: ${
+                        err instanceof Error ? err.message : String(err)
+                      }`,
+                    },
+                  ],
+                  details: { action: "reorder", error: String(err) },
+                };
+              }
             }
             if (command.kind === "delete") {
               const beforeCount = policyStore.getState().policy.rules.length;
@@ -1570,6 +1657,23 @@ export default function register(api: OpenClawPluginApi) {
       if (!policy.rules.length) {
         return null;
       }
+
+      if (cfg.cryptoPolicyEnabled && cryptoPolicyService) {
+        const currentDigest = computePolicyDigest(policy.rules);
+        const tokenDigest = policyStore.getCryptoTokenDigest();
+        const verifyResult = cryptoPolicyService.verifyPolicyDigest(currentDigest, tokenDigest);
+        if (!verifyResult.valid) {
+          api.logger.warn(
+            `armoriq: crypto policy verification failed: ${verifyResult.reason}`,
+          );
+          return {
+            block: true,
+            blockReason: `ArmorIQ crypto policy mismatch: ${verifyResult.reason}`,
+          };
+        }
+        api.logger.info?.(`armoriq: crypto policy digest verified`);
+      }
+
       const rawParams = isPlainObject(event.params) ? (event.params as Record<string, unknown>) : {};
       const sanitized = sanitizeParams(rawParams, cfg);
       const decision = evaluatePolicy({

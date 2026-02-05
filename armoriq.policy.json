@@ -1,6 +1,6 @@
 {
-  "version": 8,
-  "updatedAt": "2026-02-04T13:44:08.767Z",
+  "version": 14,
+  "updatedAt": "2026-02-04T20:35:39.472Z",
   "updatedBy": "main",
   "policy": {
     "rules": [
@@ -169,6 +169,171 @@
     {
       "version": 8,
       "updatedAt": "2026-02-04T13:44:08.767Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: Policy reset",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          }
+        ]
+      }
+    },
+    {
+      "version": 9,
+      "updatedAt": "2026-02-04T16:58:36.104Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy reset Policy new: block send_email for PAYMENT Policy new: block upload_file for PII Policy new: require approval before write_file",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          }
+        ]
+      }
+    },
+    {
+      "version": 10,
+      "updatedAt": "2026-02-04T17:00:34.838Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy reset Policy new: block send_email for PAYMENT Policy new: block upload_file for PII Policy new: require approval before write_file",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy2",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          }
+        ]
+      }
+    },
+    {
+      "version": 11,
+      "updatedAt": "2026-02-04T17:39:21.695Z",
+      "updatedBy": "main",
+      "reason": "User policy update: policy lsit",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy2",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy3",
+            "action": "deny",
+            "tool": "*"
+          }
+        ]
+      }
+    },
+    {
+      "version": 12,
+      "updatedAt": "2026-02-04T17:40:24.545Z",
+      "updatedBy": "main",
+      "reason": "Policy reorder: Policy prioritize policy3 1",
+      "policy": {
+        "rules": [
+          {
+            "id": "policy3",
+            "action": "deny",
+            "tool": "*"
+          },
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy2",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          }
+        ]
+      }
+    },
+    {
+      "version": 13,
+      "updatedAt": "2026-02-04T20:33:05.602Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy reset Policy new: block write_file for PAYMENT",
+      "policy": {
+        "rules": [
+          {
+            "id": "policy3",
+            "action": "deny",
+            "tool": "*"
+          },
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy2",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy4",
+            "action": "deny",
+            "tool": "write_file",
+            "dataClass": "PAYMENT"
+          }
+        ]
+      }
+    },
+    {
+      "version": 14,
+      "updatedAt": "2026-02-04T20:35:39.472Z",
       "updatedBy": "main",
       "reason": "Policy reset: Policy reset",
       "policy": {
