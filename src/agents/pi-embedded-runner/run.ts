@@ -303,7 +303,8 @@ export async function runEmbeddedPiAgent(
         }
       }
 
-      let overflowCompactionAttempted = false;
+      const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+      let overflowCompactionAttempts = 0;
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -373,13 +374,23 @@ export async function runEmbeddedPiAgent(
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
             if (isContextOverflowError(errorText)) {
+              const msgCount = attempt.messagesSnapshot?.length ?? 0;
+              log.warn(
+                `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                  `provider=${provider}/${modelId} messages=${msgCount} ` +
+                  `sessionFile=${params.sessionFile} compactionAttempts=${overflowCompactionAttempts} ` +
+                  `error=${errorText.slice(0, 200)}`,
+              );
               const isCompactionFailure = isCompactionFailureError(errorText);
               // Attempt auto-compaction on context overflow (not compaction_failure)
-              if (!isCompactionFailure && !overflowCompactionAttempted) {
+              if (
+                !isCompactionFailure &&
+                overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
+              ) {
+                overflowCompactionAttempts++;
                 log.warn(
-                  `context overflow detected; attempting auto-compaction for ${provider}/${modelId}`,
+                  `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
                 );
-                overflowCompactionAttempted = true;
                 const compactResult = await compactEmbeddedPiSessionDirect({
                   sessionId: params.sessionId,
                   sessionKey: params.sessionKey,
