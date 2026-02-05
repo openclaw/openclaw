@@ -3,6 +3,56 @@
     <channel>
         <title>OpenClaw</title>
         <item>
+            <title>2026.2.3</title>
+            <pubDate>Wed, 04 Feb 2026 17:47:10 -0800</pubDate>
+            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
+            <sparkle:version>8900</sparkle:version>
+            <sparkle:shortVersionString>2026.2.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>OpenClaw 2026.2.3</h2>
+<h3>Changes</h3>
+<ul>
+<li>Telegram: remove last <code>@ts-nocheck</code> from <code>bot-handlers.ts</code>, use Grammy types directly, deduplicate <code>StickerMetadata</code>. Zero <code>@ts-nocheck</code> remaining in <code>src/telegram/</code>. (#9206)</li>
+<li>Telegram: remove <code>@ts-nocheck</code> from <code>bot-message.ts</code>, type deps via <code>Omit<BuildTelegramMessageContextParams></code>, widen <code>allMedia</code> to <code>TelegramMediaRef[]</code>. (#9180)</li>
+<li>Telegram: remove <code>@ts-nocheck</code> from <code>bot.ts</code>, fix duplicate <code>bot.catch</code> error handler (Grammy overrides), remove dead reaction <code>message_thread_id</code> routing, harden sticker cache guard. (#9077)</li>
+<li>Onboarding: add Cloudflare AI Gateway provider setup and docs. (#7914) Thanks @roerohan.</li>
+<li>Onboarding: add Moonshot (.cn) auth choice and keep the China base URL when preserving defaults. (#7180) Thanks @waynelwz.</li>
+<li>Docs: clarify tmux send-keys for TUI by splitting text and Enter. (#7737) Thanks @Wangnov.</li>
+<li>Docs: mirror the landing page revamp for zh-CN (features, quickstart, docs directory, network model, credits). (#8994) Thanks @joshp123.</li>
+<li>Messages: add per-channel and per-account responsePrefix overrides across channels. (#9001) Thanks @mudrii.</li>
+<li>Cron: add announce delivery mode for isolated jobs (CLI + Control UI) and delivery mode config.</li>
+<li>Cron: default isolated jobs to announce delivery; accept ISO 8601 <code>schedule.at</code> in tool inputs.</li>
+<li>Cron: hard-migrate isolated jobs to announce/none delivery; drop legacy post-to-main/payload delivery fields and <code>atMs</code> inputs.</li>
+<li>Cron: delete one-shot jobs after success by default; add <code>--keep-after-run</code> for CLI.</li>
+<li>Cron: suppress messaging tools during announce delivery so summaries post consistently.</li>
+<li>Cron: avoid duplicate deliveries when isolated runs send messages directly.</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li>Heartbeat: allow explicit accountId routing for multi-account channels. (#8702) Thanks @lsh411.</li>
+<li>TUI/Gateway: handle non-streaming finals, refresh history for non-local chat runs, and avoid event gap warnings for targeted tool streams. (#8432) Thanks @gumadeiras.</li>
+<li>Shell completion: auto-detect and migrate slow dynamic patterns to cached files for faster terminal startup; add completion health checks to doctor/update/onboard.</li>
+<li>Telegram: honor session model overrides in inline model selection. (#8193) Thanks @gildo.</li>
+<li>Web UI: fix agent model selection saves for default/non-default agents and wrap long workspace paths. Thanks @Takhoffman.</li>
+<li>Web UI: resolve header logo path when <code>gateway.controlUi.basePath</code> is set. (#7178) Thanks @Yeom-JinHo.</li>
+<li>Web UI: apply button styling to the new-messages indicator.</li>
+<li>Security: keep untrusted channel metadata out of system prompts (Slack/Discord). Thanks @KonstantinMirin.</li>
+<li>Security: enforce sandboxed media paths for message tool attachments. (#9182) Thanks @victormier.</li>
+<li>Security: require explicit credentials for gateway URL overrides to prevent credential leakage. (#8113) Thanks @victormier.</li>
+<li>Security: gate <code>whatsapp_login</code> tool to owner senders and default-deny non-owner contexts. (#8768) Thanks @victormier.</li>
+<li>Voice call: harden webhook verification with host allowlists/proxy trust and keep ngrok loopback bypass.</li>
+<li>Voice call: add regression coverage for anonymous inbound caller IDs with allowlist policy. (#8104) Thanks @victormier.</li>
+<li>Cron: accept epoch timestamps and 0ms durations in CLI <code>--at</code> parsing.</li>
+<li>Cron: reload store data when the store file is recreated or mtime changes.</li>
+<li>Cron: deliver announce runs directly, honor delivery mode, and respect wakeMode for summaries. (#8540) Thanks @tyler6204.</li>
+<li>Telegram: include forward_from_chat metadata in forwarded messages and harden cron delivery target checks. (#8392) Thanks @Glucksberg.</li>
+<li>macOS: fix cron payload summary rendering and ISO 8601 formatter concurrency safety.</li>
+</ul>
+<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.3/OpenClaw-2026.2.3.zip" length="22530161" type="application/octet-stream" sparkle:edSignature="7eHUaQC6cx87HWbcaPh9T437+LqfE9VtQBf4p9JBjIyBrqGYxxp9KPvI5unEjg55j9j2djCXhseSMeyyRmvYBg=="/>
+        </item>
+        <item>
             <title>2026.2.2</title>
             <pubDate>Tue, 03 Feb 2026 17:04:17 -0800</pubDate>
             <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
@@ -111,51 +161,6 @@
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.1/OpenClaw-2026.2.1.zip" length="22458919" type="application/octet-stream" sparkle:edSignature="kA/8VQlVdtYphcB1iuFrhWczwWKgkVZMfDfQ7T9WD405D8JKTv5CZ1n8lstIVkpk4xog3UhrfaaoTG8Bf8DMAQ=="/>
-        </item>
-        <item>
-            <title>2026.1.30</title>
-            <pubDate>Sat, 31 Jan 2026 14:29:57 +0100</pubDate>
-            <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
-            <sparkle:version>8469</sparkle:version>
-            <sparkle:shortVersionString>2026.1.30</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.1.30</h2>
-<h3>Changes</h3>
-<ul>
-<li>CLI: add <code>completion</code> command (Zsh/Bash/PowerShell/Fish) and auto-setup during postinstall/onboarding.</li>
-<li>CLI: add per-agent <code>models status</code> (<code>--agent</code> filter). (#4780) Thanks @jlowin.</li>
-<li>Agents: add Kimi K2.5 to the synthetic model catalog. (#4407) Thanks @manikv12.</li>
-<li>Auth: switch Kimi Coding to built-in provider; normalize OAuth profile email.</li>
-<li>Auth: add MiniMax OAuth plugin + onboarding option. (#4521) Thanks @Maosghoul.</li>
-<li>Agents: update pi SDK/API usage and dependencies.</li>
-<li>Web UI: refresh sessions after chat commands and improve session display names.</li>
-<li>Build: move TypeScript builds to <code>tsdown</code> + <code>tsgo</code> (faster builds, CI typechecks), update tsconfig target, and clean up lint rules.</li>
-<li>Build: align npm tar override and bin metadata so the <code>openclaw</code> CLI entrypoint is preserved in npm publishes.</li>
-<li>Docs: add pi/pi-dev docs and update OpenClaw branding + install links.</li>
-</ul>
-<h3>Fixes</h3>
-<ul>
-<li>Security: restrict local path extraction in media parser to prevent LFI. (#4880)</li>
-<li>Gateway: prevent token defaults from becoming the literal "undefined". (#4873) Thanks @Hisleren.</li>
-<li>Control UI: fix assets resolution for npm global installs. (#4909) Thanks @YuriNachos.</li>
-<li>macOS: avoid stderr pipe backpressure in gateway discovery. (#3304) Thanks @abhijeet117.</li>
-<li>Telegram: normalize account token lookup for non-normalized IDs. (#5055) Thanks @jasonsschin.</li>
-<li>Telegram: preserve delivery thread fallback and fix threadId handling in delivery context.</li>
-<li>Telegram: fix HTML nesting for overlapping styles/links. (#4578) Thanks @ThanhNguyxn.</li>
-<li>Telegram: accept numeric messageId/chatId in react actions. (#4533) Thanks @Ayush10.</li>
-<li>Telegram: honor per-account proxy dispatcher via undici fetch. (#4456) Thanks @spiceoogway.</li>
-<li>Telegram: scope skill commands to bound agent per bot. (#4360) Thanks @robhparker.</li>
-<li>BlueBubbles: debounce by messageId to preserve attachments in text+image messages. (#4984)</li>
-<li>Routing: prefer requesterOrigin over stale session entries for sub-agent announce delivery. (#4957)</li>
-<li>Extensions: restore embedded extension discovery typings.</li>
-<li>CLI: fix <code>tui:dev</code> port resolution.</li>
-<li>LINE: fix status command TypeError. (#4651)</li>
-<li>OAuth: skip expired-token warnings when refresh tokens are still valid. (#4593)</li>
-<li>Build: skip redundant UI install step in Dockerfile. (#4584) Thanks @obviyus.</li>
-</ul>
-<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.1.30/OpenClaw-2026.1.30.zip" length="22458594" type="application/octet-stream" sparkle:edSignature="77/GuEcruKGgu2CJyMq+OVwzaJ2v1VzRQC9NmOirKO3uH5Nn5HaoouwrOHnOanrzlD4OvPW0FS5GH2E4Ntu4CQ=="/>
         </item>
     </channel>
 </rss>

@@ -142,6 +142,9 @@ Other Gateway slash commands (for example, `/context`) are forwarded to the Gate
 - `--thinking <level>`: Override thinking level for sends
 - `--timeout-ms <ms>`: Agent timeout in ms (defaults to `agents.defaults.timeoutSeconds`)
 
+Note: when you set `--url`, the TUI does not fall back to config or environment credentials.
+Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
+
 ## Troubleshooting
 
 No output after sending a message:

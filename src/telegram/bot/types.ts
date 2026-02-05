@@ -1,4 +1,4 @@
-import type { Message } from "@grammyjs/types";
+import type { Message, UserFromGetMe } from "@grammyjs/types";
 
 /** App-specific stream mode for Telegram draft streaming. */
 export type TelegramStreamMode = "off" | "partial" | "block";
@@ -10,7 +10,7 @@ export type TelegramStreamMode = "off" | "partial" | "block";
  */
 export type TelegramContext = {
   message: Message;
-  me?: { id?: number; username?: string };
+  me?: UserFromGetMe;
   getFile: () => Promise<{ file_path?: string }>;
 };
 

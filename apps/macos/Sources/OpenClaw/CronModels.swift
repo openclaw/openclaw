@@ -97,25 +97,21 @@ enum CronSchedule: Codable, Equatable {
     static func parseAtDate(_ value: String) -> Date? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return nil }
-        if let date = isoFormatterWithFractional.date(from: trimmed) { return date }
-        return isoFormatter.date(from: trimmed)
+        if let date = makeIsoFormatter(withFractional: true).date(from: trimmed) { return date }
+        return makeIsoFormatter(withFractional: false).date(from: trimmed)
     }
 
     static func formatIsoDate(_ date: Date) -> String {
-        isoFormatter.string(from: date)
+        makeIsoFormatter(withFractional: false).string(from: date)
     }
 
-    private static let isoFormatter: ISO8601DateFormatter = {
+    private static func makeIsoFormatter(withFractional: Bool) -> ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
+        formatter.formatOptions = withFractional
+            ? [.withInternetDateTime, .withFractionalSeconds]
+            : [.withInternetDateTime]
         return formatter
-    }()
-
-    private static let isoFormatterWithFractional: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
+    }
 }
 
 enum CronPayload: Codable, Equatable {

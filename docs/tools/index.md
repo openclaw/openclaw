@@ -465,6 +465,9 @@ Gateway-backed tools (`canvas`, `nodes`, `cron`):
 - `gatewayToken` (if auth enabled)
 - `timeoutMs`
 
+Note: when `gatewayUrl` is set, include `gatewayToken` explicitly. Tools do not inherit config
+or environment credentials for overrides, and missing explicit credentials is an error.
+
 Browser tool:
 
 - `profile` (optional; defaults to `browser.defaultProfile`)

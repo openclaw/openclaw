@@ -44,7 +44,7 @@ describe("gateway broadcaster", () => {
       },
     ]);
 
-    const { broadcast } = createGatewayBroadcaster({ clients });
+    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
     broadcast("exec.approval.requested", { id: "1" });
     broadcast("device.pair.requested", { requestId: "r1" });
@@ -52,5 +52,10 @@ describe("gateway broadcaster", () => {
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
     expect(readSocket.send).toHaveBeenCalledTimes(0);
+
+    broadcastToConnIds("tick", { ts: 1 }, new Set(["c-read"]));
+    expect(readSocket.send).toHaveBeenCalledTimes(1);
+    expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
+    expect(pairingSocket.send).toHaveBeenCalledTimes(1);
   });
 });
