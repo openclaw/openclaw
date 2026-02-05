@@ -43,6 +43,13 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
+// Legacy schedule shape that may have atMs before normalization
+type LegacyAtSchedule = {
+  kind: "at";
+  at?: string;
+  atMs?: number;
+};
+
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
   if (!job.enabled) {
     return undefined;
@@ -52,7 +59,10 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
       return undefined;
     }
-    const atMs = parseAbsoluteTimeMs(job.schedule.at);
+    const schedule = job.schedule as LegacyAtSchedule;
+    const at = schedule.at;
+    const atMsFallback = typeof schedule.atMs === "number" ? schedule.atMs : null;
+    const atMs = typeof at === "string" ? parseAbsoluteTimeMs(at) : atMsFallback;
     return atMs !== null ? atMs : undefined;
   }
   return computeNextRunAtMs(job.schedule, nowMs);

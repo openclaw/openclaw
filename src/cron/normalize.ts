@@ -36,7 +36,8 @@ function coerceSchedule(schedule: UnknownRecord) {
     if (
       typeof schedule.atMs === "number" ||
       typeof schedule.at === "string" ||
-      typeof schedule.atMs === "string"
+      typeof schedule.atMs === "string" ||
+      typeof schedule.at === "number"
     ) {
       next.kind = "at";
     } else if (typeof schedule.everyMs === "number") {
@@ -46,13 +47,17 @@ function coerceSchedule(schedule: UnknownRecord) {
     }
   }
 
-  if (atString) {
-    next.at = parsedAtMs ? new Date(parsedAtMs).toISOString() : atString;
-  } else if (parsedAtMs !== null) {
-    next.at = new Date(parsedAtMs).toISOString();
-  }
-  if ("atMs" in next) {
-    delete next.atMs;
+  if (next.kind === "at") {
+    if (atString) {
+      next.at = parsedAtMs ? new Date(parsedAtMs).toISOString() : atString;
+    } else if (parsedAtMs !== null) {
+      next.at = new Date(parsedAtMs).toISOString();
+    } else if (typeof atRaw === "number") {
+      next.at = new Date(atRaw).toISOString();
+    }
+    if ("atMs" in next) {
+      delete next.atMs;
+    }
   }
 
   return next;
