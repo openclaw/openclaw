@@ -3,13 +3,13 @@
     <channel>
         <title>OpenClaw</title>
         <item>
-            <title>2026.2.3</title>
+            <title>2026.2.4</title>
             <pubDate>Wed, 04 Feb 2026 17:47:10 -0800</pubDate>
             <link>https://raw.githubusercontent.com/openclaw/openclaw/main/appcast.xml</link>
             <sparkle:version>8900</sparkle:version>
-            <sparkle:shortVersionString>2026.2.3</sparkle:shortVersionString>
+            <sparkle:shortVersionString>2026.2.4</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>OpenClaw 2026.2.3</h2>
+            <description><![CDATA[<h2>OpenClaw 2026.2.4</h2>
 <h3>Changes</h3>
 <ul>
 <li>Telegram: remove last <code>@ts-nocheck</code> from <code>bot-handlers.ts</code>, use Grammy types directly, deduplicate <code>StickerMetadata</code>. Zero <code>@ts-nocheck</code> remaining in <code>src/telegram/</code>. (#9206)</li>
@@ -50,7 +50,7 @@
 </ul>
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.3/OpenClaw-2026.2.3.zip" length="22530161" type="application/octet-stream" sparkle:edSignature="7eHUaQC6cx87HWbcaPh9T437+LqfE9VtQBf4p9JBjIyBrqGYxxp9KPvI5unEjg55j9j2djCXhseSMeyyRmvYBg=="/>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.4/OpenClaw-2026.2.4.zip" length="22530161" type="application/octet-stream" sparkle:edSignature="7eHUaQC6cx87HWbcaPh9T437+LqfE9VtQBf4p9JBjIyBrqGYxxp9KPvI5unEjg55j9j2djCXhseSMeyyRmvYBg=="/>
         </item>
         <item>
             <title>2026.2.2</title>
