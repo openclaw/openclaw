@@ -11,7 +11,7 @@ import type {
   MemorySource,
   MemorySyncProgressUpdate,
 } from "./types.js";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentIdentityDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -96,7 +96,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.cfg = params.cfg;
     this.agentId = params.agentId;
     this.qmd = params.resolved;
-    this.workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    // Use identityDir for memory files (MEMORY.md, memory/*.md)
+    this.workspaceDir = resolveAgentIdentityDir(params.cfg, params.agentId);
     this.stateDir = resolveStateDir(process.env, os.homedir);
     this.agentStateDir = path.join(this.stateDir, "agents", this.agentId);
     this.qmdDir = path.join(this.agentStateDir, "qmd");

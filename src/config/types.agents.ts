@@ -22,6 +22,8 @@ export type AgentConfig = {
   default?: boolean;
   name?: string;
   workspace?: string;
+  /** Optional identity directory for bootstrap files (AGENTS.md, SOUL.md, etc.). Defaults to workspace root. */
+  identityDir?: string;
   agentDir?: string;
   model?: AgentModelConfig;
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */

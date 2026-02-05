@@ -14,7 +14,7 @@ import type {
   MemorySource,
   MemorySyncProgressUpdate,
 } from "./types.js";
-import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveAgentIdentityDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -171,7 +171,8 @@ export class MemoryIndexManager implements MemorySearchManager {
     if (!settings) {
       return null;
     }
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    // Use identityDir for memory files (MEMORY.md, memory/*.md)
+    const workspaceDir = resolveAgentIdentityDir(cfg, agentId);
     const key = `${agentId}:${workspaceDir}:${JSON.stringify(settings)}`;
     const existing = INDEX_CACHE.get(key);
     if (existing) {

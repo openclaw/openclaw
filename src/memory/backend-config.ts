@@ -7,7 +7,7 @@ import type {
   MemoryQmdConfig,
   MemoryQmdIndexPath,
 } from "../config/types.memory.js";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentIdentityDir } from "../agents/agent-scope.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { resolveUserPath } from "../utils.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
@@ -237,7 +237,8 @@ export function resolveMemoryBackendConfig(params: {
     return { backend: "builtin", citations };
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  // Use identityDir for memory files (MEMORY.md, memory/*.md)
+  const workspaceDir = resolveAgentIdentityDir(params.cfg, params.agentId);
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
