@@ -44,6 +44,16 @@ export function listKookAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 /**
+ * List all enabled KOOK accounts (with valid tokens)
+ */
+export function listEnabledKookAccounts(cfg: OpenClawConfig): ResolvedKookAccount[] {
+  const ids = listKookAccountIds(cfg);
+  return ids
+    .map((id) => resolveKookAccount({ cfg, accountId: id }))
+    .filter((account) => account.tokenSource !== "none");
+}
+
+/**
  * Merge base config with account-specific config
  */
 function mergeKookAccountConfig(cfg: OpenClawConfig, accountId: string): KookAccountConfig {

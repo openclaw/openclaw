@@ -1,7 +1,7 @@
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { createActionGate, readStringParam } from "../../../agents/tools/common.js";
 import { handleKookAction } from "../../../agents/tools/kook-actions.js";
-import { listKookAccountIds } from "../../../kook/accounts.js";
+import { listEnabledKookAccounts, listKookAccountIds } from "../../../kook/accounts.js";
 
 const providerId = "kook";
 
@@ -50,8 +50,8 @@ const KOOK_ACTION_NAME_MAP: Record<string, string> = {
 
 export const kookMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
-    const accountIds = listKookAccountIds(cfg);
-    if (accountIds.length === 0) {
+    const accounts = listEnabledKookAccounts(cfg);
+    if (accounts.length === 0) {
       return [];
     }
     const gate = createActionGate(cfg.channels?.kook?.actions);

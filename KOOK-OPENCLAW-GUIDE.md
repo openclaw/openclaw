@@ -253,7 +253,7 @@ node -v
 在命令行中粘贴以下命令，然后按回车：
 
 ```bash
-npm install -g kook-openclaw
+npm install -g kook-openclaw@lastest
 ```
 
 ### 等待安装完成
@@ -438,7 +438,7 @@ npm config get prefix
 6. Token 看起来像这样：
 
    ```
-   1/MTA4NjQ0MDE5MjY5MjU4NTg5Mg==.Oz1t9K.52q4b6fZJJkX1234567890abcdef
+   1/MTA4NjQxxxxxxxxxxxxxxxxxx==.Oz1t9K.52q4b6fZJJkX1234567890abcdef
    ```
 
 7. **临时保存好这个 Token**（可以粘贴到记事本里）

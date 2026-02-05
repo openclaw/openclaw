@@ -161,15 +161,23 @@ export const kookPlugin: ChannelPlugin<ResolvedKookAccount> = {
    */
   messaging: {
     normalizeTarget: (target: string) => {
+      // Strip kook: prefix if present (e.g., "kook:user:id" -> "user:id")
+      const withoutPrefix = target.replace(/^kook:/i, "");
       // Normalize target format
-      if (target.startsWith("user:") || target.startsWith("channel:")) {
-        return target;
+      if (withoutPrefix.startsWith("user:") || withoutPrefix.startsWith("channel:")) {
+        return withoutPrefix;
       }
       // Default to channel if just an ID
-      return target;
+      return withoutPrefix;
     },
     targetResolver: {
-      looksLikeId: (input: string) => /^\d+$/.test(input),
+      looksLikeId: (input: string, normalized?: string) => {
+        // Accept bare IDs, or channel:/user: prefixed IDs
+        if (/^\d+$/.test(input)) return true;
+        if (normalized && /^(channel:|user:)/.test(normalized)) return true;
+        if (/^(channel:|user:)/.test(input)) return true;
+        return false;
+      },
       hint: "<channelId|user:ID|channel:ID>",
     },
   },

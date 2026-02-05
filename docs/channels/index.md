@@ -32,6 +32,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Twitch](/channels/twitch) — Twitch chat via IRC connection (plugin, installed separately).
 - [Zalo](/channels/zalo) — Zalo Bot API; Vietnam's popular messenger (plugin, installed separately).
 - [Zalo Personal](/channels/zalouser) — Zalo personal account via QR login (plugin, installed separately).
+- [KOOK (开黑啦)](/channels/kook) — KOOK Bot API via WebSocket + Gateway.
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
 
 ## Notes

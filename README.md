@@ -1,5 +1,7 @@
 # 🦞 OpenClaw — Personal AI Assistant
 
+> **嗨，初次见面！** 这里是KOOK团队为你提供的一点小Tips: 如果你不太熟悉代码或 npm，别担心——我们为你准备了一份[中文新手入门指南](./KOOK-OPENCLAW-GUIDE.md)。不需要任何编程基础，跟着步骤一步步来，10 分钟就能让你的 KOOK 机器人跑起来。遇到问题随时回来看这份文档，祝你玩得开心！
+
 <p align="center">
     <picture>
         <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/openclaw/openclaw/main/docs/assets/openclaw-logo-text-dark.png">
