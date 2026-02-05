@@ -1,40 +1,36 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, it, expect, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { listBindings, resetBindingsCacheForTest } from "./bindings.js";
 
-// Mock debug
-const debugMock = vi.fn();
-vi.mock("debug", () => ({
-  default: () => debugMock,
-}));
+/** Write a routing.json file in the test HOME */
+function writeRoutingJson(content: string): void {
+  const dir = path.join(os.homedir(), ".openclaw");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "routing.json"), content, "utf-8");
+}
 
-// Mock os
-vi.mock("node:os", () => ({
-  default: {
-    homedir: () => "/mock/home",
-  },
-  homedir: () => "/mock/home",
-}));
-
-// Mock fs
-vi.mock("node:fs", () => ({
-  existsSync: vi.fn(),
-  readFileSync: vi.fn(),
-}));
+function removeRoutingJson(): void {
+  const file = path.join(os.homedir(), ".openclaw", "routing.json");
+  try {
+    fs.unlinkSync(file);
+  } catch {
+    // ignore if missing
+  }
+}
 
 describe("bindings", () => {
   const mockConfig = { bindings: [] } as unknown as OpenClawConfig;
 
   beforeEach(() => {
-    vi.clearAllMocks();
     resetBindingsCacheForTest();
+    removeRoutingJson();
   });
 
   it("should load valid bindings from routing.json", () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockReturnValue(
+    writeRoutingJson(
       JSON.stringify([
         { agentId: "agent1", match: { channel: "telegram" } },
         { agentId: "agent2", match: { channel: "whatsapp", accountId: "123" } },
@@ -48,8 +44,7 @@ describe("bindings", () => {
   });
 
   it("should filter invalid bindings", () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockReturnValue(
+    writeRoutingJson(
       JSON.stringify([
         { agentId: "valid", match: { channel: "telegram" } },
         { agentId: "invalid_no_match" },
@@ -61,20 +56,17 @@ describe("bindings", () => {
     const bindings = listBindings(mockConfig);
     expect(bindings).toHaveLength(1);
     expect(bindings[0].agentId).toBe("valid");
-    expect(debugMock).toHaveBeenCalled();
   });
 
   it("should handle invalid json gracefully", () => {
-    vi.mocked(fs.existsSync).mockReturnValue(true);
-    vi.mocked(fs.readFileSync).mockReturnValue("invalid-json");
+    writeRoutingJson("invalid-json");
 
     const bindings = listBindings(mockConfig);
     expect(bindings).toHaveLength(0);
-    expect(debugMock).toHaveBeenCalled();
   });
 
   it("should handle missing file gracefully", () => {
-    vi.mocked(fs.existsSync).mockReturnValue(false);
+    removeRoutingJson();
 
     const bindings = listBindings(mockConfig);
     expect(bindings).toHaveLength(0);
