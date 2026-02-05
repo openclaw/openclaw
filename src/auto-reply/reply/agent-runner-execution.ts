@@ -79,6 +79,40 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
+  const configuredBrainProvider = params.followupRun.run.provider;
+  const configuredBrainModel = params.followupRun.run.model;
+  const isConfiguredBrainModel = (provider: string, model: string): boolean =>
+    provider === configuredBrainProvider && model === configuredBrainModel;
+
+  const buildMuscleSynthesisPrompt = (payloads: ReplyPayload[]): string => {
+    const serializedPayloads = payloads
+      .map((payload, idx) => {
+        const cleanText = payload.text?.trim();
+        const media = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+        const lines: string[] = [`${idx + 1}.`];
+        if (cleanText) {
+          lines.push(`text: ${cleanText}`);
+        }
+        if (media.length > 0) {
+          lines.push(`media: ${media.join(", ")}`);
+        }
+        if (payload.isError) {
+          lines.push("isError: true");
+        }
+        return lines.join("\n");
+      })
+      .filter((entry) => entry.length > 0)
+      .join("\n\n");
+
+    return [
+      "Synthesize a final user-visible assistant reply from executor output.",
+      "Treat the executor output as internal tool payloads; do not expose internal framing.",
+      "If output indicates failure, provide a concise user-facing failure summary.",
+      "\nExecutor payloads:\n",
+      serializedPayloads || "(no payloads)",
+    ].join("\n");
+  };
+
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
@@ -153,6 +187,7 @@ export async function runAgentTurnWithFallback(params: {
           resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
         ),
         run: (provider, model) => {
+          const isBrainRun = isConfiguredBrainModel(provider, model);
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -197,7 +232,7 @@ export async function runAgentTurnWithFallback(params: {
                 // emit one with the final text so server-chat can populate its buffer
                 // and send the response to TUI/WebSocket clients.
                 const cliText = result.payloads?.[0]?.text?.trim();
-                if (cliText) {
+                if (cliText && isBrainRun) {
                   emitAgentEvent({
                     runId,
                     stream: "assistant",
@@ -310,22 +345,27 @@ export async function runAgentTurnWithFallback(params: {
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
             onPartialReply: allowPartialStream
-              ? async (payload) => {
-                  const textForTyping = await handlePartialForTyping(payload);
-                  if (!params.opts?.onPartialReply || textForTyping === undefined) {
-                    return;
+              ? isBrainRun
+                ? async (payload) => {
+                    const textForTyping = await handlePartialForTyping(payload);
+                    if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                      return;
+                    }
+                    await params.opts.onPartialReply({
+                      text: textForTyping,
+                      mediaUrls: payload.mediaUrls,
+                    });
                   }
-                  await params.opts.onPartialReply({
-                    text: textForTyping,
-                    mediaUrls: payload.mediaUrls,
-                  });
+                : undefined
+              : undefined,
+            onAssistantMessageStart: isBrainRun
+              ? async () => {
+                  await params.typingSignals.signalMessageStart();
                 }
               : undefined,
-            onAssistantMessageStart: async () => {
-              await params.typingSignals.signalMessageStart();
-            },
             onReasoningStream:
-              params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
+              isBrainRun &&
+              (params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream)
                 ? async (payload) => {
                     await params.typingSignals.signalReasoningDelta();
                     await params.opts?.onReasoningStream?.({
@@ -337,7 +377,7 @@ export async function runAgentTurnWithFallback(params: {
             onAgentEvent: async (evt) => {
               // Trigger typing when tools start executing.
               // Must await to ensure typing indicator starts before tool summaries are emitted.
-              if (evt.stream === "tool") {
+              if (isBrainRun && evt.stream === "tool") {
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
                 if (phase === "start" || phase === "update") {
                   await params.typingSignals.signalToolStart();
@@ -355,7 +395,7 @@ export async function runAgentTurnWithFallback(params: {
             // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
             // even when regular block streaming is disabled. The handler sends directly
             // via opts.onBlockReply when the pipeline isn't available.
-            onBlockReply: params.opts?.onBlockReply
+            onBlockReply: isBrainRun && params.opts?.onBlockReply
               ? async (payload) => {
                   const { text, skip } = normalizeStreamingText(payload);
                   const hasPayloadMedia = (payload.mediaUrls?.length ?? 0) > 0;
@@ -432,9 +472,9 @@ export async function runAgentTurnWithFallback(params: {
                     await blockReplyPipeline.flush({ force: true });
                   }
                 : undefined,
-            shouldEmitToolResult: params.shouldEmitToolResult,
-            shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onToolResult: onToolResult
+            shouldEmitToolResult: isBrainRun ? params.shouldEmitToolResult : () => false,
+            shouldEmitToolOutput: isBrainRun ? params.shouldEmitToolOutput : () => false,
+            onToolResult: isBrainRun && onToolResult
               ? (payload) => {
                   // `subscribeEmbeddedPiSession` may invoke tool callbacks without awaiting them.
                   // If a tool callback starts typing after the run finalized, we can end up with
@@ -465,6 +505,95 @@ export async function runAgentTurnWithFallback(params: {
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
+
+      if (!isConfiguredBrainModel(fallbackProvider, fallbackModel)) {
+        params.opts?.onModelSelected?.({
+          provider: configuredBrainProvider,
+          model: configuredBrainModel,
+          thinkLevel: params.followupRun.run.thinkLevel,
+        });
+
+        runResult = await runEmbeddedPiAgent({
+          sessionId: params.followupRun.run.sessionId,
+          sessionKey: params.sessionKey,
+          messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
+          agentAccountId: params.sessionCtx.AccountId,
+          messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
+          messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+          groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
+          groupChannel: params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
+          groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
+          senderId: params.sessionCtx.SenderId?.trim() || undefined,
+          senderName: params.sessionCtx.SenderName?.trim() || undefined,
+          senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
+          senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
+          ...buildThreadingToolContext({
+            sessionCtx: params.sessionCtx,
+            config: params.followupRun.run.config,
+            hasRepliedRef: params.opts?.hasRepliedRef,
+          }),
+          sessionFile: params.followupRun.run.sessionFile,
+          workspaceDir: params.followupRun.run.workspaceDir,
+          agentDir: params.followupRun.run.agentDir,
+          config: params.followupRun.run.config,
+          skillsSnapshot: params.followupRun.run.skillsSnapshot,
+          prompt: buildMuscleSynthesisPrompt(runResult.payloads ?? []),
+          extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+          ownerNumbers: params.followupRun.run.ownerNumbers,
+          enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, configuredBrainProvider),
+          provider: configuredBrainProvider,
+          model: configuredBrainModel,
+          authProfileId: params.followupRun.run.authProfileId,
+          authProfileIdSource: params.followupRun.run.authProfileId
+            ? params.followupRun.run.authProfileIdSource
+            : undefined,
+          thinkLevel: params.followupRun.run.thinkLevel,
+          verboseLevel: params.followupRun.run.verboseLevel,
+          reasoningLevel: params.followupRun.run.reasoningLevel,
+          execOverrides: params.followupRun.run.execOverrides,
+          toolResultFormat: (() => {
+            const channel = resolveMessageChannel(params.sessionCtx.Surface, params.sessionCtx.Provider);
+            if (!channel) {
+              return "markdown";
+            }
+            return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
+          })(),
+          bashElevated: params.followupRun.run.bashElevated,
+          timeoutMs: params.followupRun.run.timeoutMs,
+          runId,
+          images: params.opts?.images,
+          abortSignal: params.opts?.abortSignal,
+          blockReplyBreak: params.resolvedBlockStreamingBreak,
+          blockReplyChunking: params.blockReplyChunking,
+          onPartialReply: allowPartialStream
+            ? async (payload) => {
+                const textForTyping = await handlePartialForTyping(payload);
+                if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                  return;
+                }
+                await params.opts.onPartialReply({
+                  text: textForTyping,
+                  mediaUrls: payload.mediaUrls,
+                });
+              }
+            : undefined,
+          onAssistantMessageStart: async () => {
+            await params.typingSignals.signalMessageStart();
+          },
+          onReasoningStream:
+            params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
+              ? async (payload) => {
+                  await params.typingSignals.signalReasoningDelta();
+                  await params.opts?.onReasoningStream?.({
+                    text: payload.text,
+                    mediaUrls: payload.mediaUrls,
+                  });
+                }
+              : undefined,
+        });
+        fallbackProvider = configuredBrainProvider;
+        fallbackModel = configuredBrainModel;
+      }
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.

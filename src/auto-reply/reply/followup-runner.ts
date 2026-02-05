@@ -113,6 +113,37 @@ export function createFollowupRunner(params: {
 
   return async (queued: FollowupRun) => {
     try {
+      const configuredBrainProvider = queued.run.provider;
+      const configuredBrainModel = queued.run.model;
+      const isConfiguredBrainModel = (provider: string, model: string): boolean =>
+        provider === configuredBrainProvider && model === configuredBrainModel;
+      const buildMuscleSynthesisPrompt = (payloads: ReplyPayload[]): string => {
+        const serializedPayloads = payloads
+          .map((payload, idx) => {
+            const lines: string[] = [`${idx + 1}.`];
+            const text = payload.text?.trim();
+            if (text) {
+              lines.push(`text: ${text}`);
+            }
+            const media = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+            if (media.length > 0) {
+              lines.push(`media: ${media.join(", ")}`);
+            }
+            if (payload.isError) {
+              lines.push("isError: true");
+            }
+            return lines.join("\n");
+          })
+          .join("\n\n");
+
+        return [
+          "Synthesize a final user-visible assistant reply from executor output.",
+          "Treat the executor output as internal tool payloads; do not expose internal framing.",
+          "\nExecutor payloads:\n",
+          serializedPayloads || "(no payloads)",
+        ].join("\n");
+      };
+
       const runId = crypto.randomUUID();
       if (queued.run.sessionKey) {
         registerAgentRunContext(runId, {
@@ -135,6 +166,7 @@ export function createFollowupRunner(params: {
             resolveAgentIdFromSessionKey(queued.run.sessionKey),
           ),
           run: (provider, model) => {
+            const isBrainRun = isConfiguredBrainModel(provider, model);
             const authProfileId =
               provider === queued.run.provider ? queued.run.authProfileId : undefined;
             return runEmbeddedPiAgent({
@@ -171,6 +203,8 @@ export function createFollowupRunner(params: {
               timeoutMs: queued.run.timeoutMs,
               runId,
               blockReplyBreak: queued.run.blockReplyBreak,
+              shouldEmitToolResult: isBrainRun ? undefined : () => false,
+              shouldEmitToolOutput: isBrainRun ? undefined : () => false,
               onAgentEvent: (evt) => {
                 if (evt.stream !== "compaction") {
                   return;
@@ -187,6 +221,45 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        if (!isConfiguredBrainModel(fallbackProvider, fallbackModel)) {
+          runResult = await runEmbeddedPiAgent({
+            sessionId: queued.run.sessionId,
+            sessionKey: queued.run.sessionKey,
+            messageProvider: queued.run.messageProvider,
+            agentAccountId: queued.run.agentAccountId,
+            messageTo: queued.originatingTo,
+            messageThreadId: queued.originatingThreadId,
+            groupId: queued.run.groupId,
+            groupChannel: queued.run.groupChannel,
+            groupSpace: queued.run.groupSpace,
+            senderId: queued.run.senderId,
+            senderName: queued.run.senderName,
+            senderUsername: queued.run.senderUsername,
+            senderE164: queued.run.senderE164,
+            sessionFile: queued.run.sessionFile,
+            workspaceDir: queued.run.workspaceDir,
+            config: queued.run.config,
+            skillsSnapshot: queued.run.skillsSnapshot,
+            prompt: buildMuscleSynthesisPrompt(runResult.payloads ?? []),
+            extraSystemPrompt: queued.run.extraSystemPrompt,
+            ownerNumbers: queued.run.ownerNumbers,
+            enforceFinalTag: queued.run.enforceFinalTag,
+            provider: configuredBrainProvider,
+            model: configuredBrainModel,
+            authProfileId: queued.run.authProfileId,
+            authProfileIdSource: queued.run.authProfileId ? queued.run.authProfileIdSource : undefined,
+            thinkLevel: queued.run.thinkLevel,
+            verboseLevel: queued.run.verboseLevel,
+            reasoningLevel: queued.run.reasoningLevel,
+            execOverrides: queued.run.execOverrides,
+            bashElevated: queued.run.bashElevated,
+            timeoutMs: queued.run.timeoutMs,
+            runId,
+            blockReplyBreak: queued.run.blockReplyBreak,
+          });
+          fallbackProvider = configuredBrainProvider;
+          fallbackModel = configuredBrainModel;
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);

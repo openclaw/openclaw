@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
@@ -7,6 +7,7 @@ import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
+let fallbackSelection: { provider: string; model: string } | undefined;
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: async ({
@@ -17,11 +18,14 @@ vi.mock("../../agents/model-fallback.js", () => ({
     provider: string;
     model: string;
     run: (provider: string, model: string) => Promise<unknown>;
-  }) => ({
-    result: await run(provider, model),
-    provider,
-    model,
-  }),
+  }) => {
+    const selected = fallbackSelection ?? { provider, model };
+    return {
+      result: await run(selected.provider, selected.model),
+      provider: selected.provider,
+      model: selected.model,
+    };
+  },
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
@@ -117,6 +121,36 @@ function createMinimalRun(params?: {
 }
 
 describe("runReplyAgent typing (heartbeat)", () => {
+  afterEach(() => {
+    fallbackSelection = undefined;
+  });
+
+  it("suppresses non-brain partial streaming and synthesizes through the configured brain", async () => {
+    fallbackSelection = { provider: "openai", model: "gpt-5.2" };
+    const onPartialReply = vi.fn();
+    runEmbeddedPiAgentMock
+      .mockImplementationOnce(async (params: EmbeddedPiAgentParams) => {
+        await params.onPartialReply?.({ text: "muscle partial" });
+        return { payloads: [{ text: "executor payload" }], meta: {} };
+      })
+      .mockImplementationOnce(async (params: EmbeddedPiAgentParams) => {
+        await params.onPartialReply?.({ text: "brain partial" });
+        return { payloads: [{ text: "brain final" }], meta: {} };
+      });
+
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: false, onPartialReply },
+    });
+    const reply = await run();
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "brain partial", mediaUrls: undefined });
+    expect(typing.startTypingOnText).toHaveBeenCalledWith("brain partial");
+    expect(reply).toEqual({ text: "brain final" });
+
+  });
+
   it("signals typing for normal runs", async () => {
     const onPartialReply = vi.fn();
     runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedPiAgentParams) => {
