@@ -69,7 +69,7 @@ export async function getReplyFromConfig(
     opts?.skillFilter,
     resolveAgentSkillsFilter(cfg, agentId),
   );
-  const resolvedOpts =
+  let resolvedOpts: typeof opts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
@@ -104,6 +104,18 @@ export async function getReplyFromConfig(
       provider = heartbeatRef.ref.provider;
       model = heartbeatRef.ref.model;
       hasResolvedHeartbeatModelOverride = true;
+    }
+
+    // Wire heartbeat-specific fallbacks so runWithModelFallback uses them.
+    if (
+      typeof heartbeatModel === "object" &&
+      heartbeatModel &&
+      Array.isArray(heartbeatModel.fallbacks)
+    ) {
+      resolvedOpts = {
+        ...resolvedOpts,
+        heartbeatFallbacksOverride: heartbeatModel.fallbacks,
+      };
     }
   }
 
