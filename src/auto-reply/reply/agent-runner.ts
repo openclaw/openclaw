@@ -30,7 +30,7 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
-import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
+import { runBeforeClearFlush, runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -55,6 +55,7 @@ export async function runReplyAgent(params: {
   isStreaming: boolean;
   opts?: GetReplyOptions;
   typing: TypingController;
+  previousSessionEntry?: SessionEntry;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -86,6 +87,7 @@ export async function runReplyAgent(params: {
     isStreaming,
     opts,
     typing,
+    previousSessionEntry,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -198,6 +200,25 @@ export async function runReplyAgent(params: {
   }
 
   await typingSignals.signalRunStart();
+
+  // Run pre-destructive memory flush when session was reset via /new or rotation.
+  // This gives the agent one turn to persist important context from the previous
+  // session before the new session begins processing the user's message.
+  if (isNewSession && previousSessionEntry) {
+    await runBeforeClearFlush({
+      cfg,
+      followupRun,
+      sessionCtx,
+      opts,
+      defaultModel,
+      agentCfgContextTokens,
+      resolvedVerboseLevel,
+      sessionEntry: previousSessionEntry,
+      sessionStore: activeSessionStore,
+      sessionKey,
+      storePath,
+    });
+  }
 
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,

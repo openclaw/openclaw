@@ -195,7 +195,6 @@ export async function initSessionState(params: {
 
   sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   const entry = sessionStore[sessionKey];
-  const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();
   const isThread = resolveThreadFlag({
     sessionKey,
@@ -340,6 +339,9 @@ export async function initSessionState(params: {
     // Preserve per-session overrides while resetting compaction state on /new.
     store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
   });
+
+  const previousSessionEntry =
+    entry && isNewSession && (resetTriggered || !freshEntry) ? { ...entry } : undefined;
 
   const sessionCtx: TemplateContext = {
     ...ctx,

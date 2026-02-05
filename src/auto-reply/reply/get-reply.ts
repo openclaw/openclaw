@@ -323,6 +323,7 @@ export async function getReplyFromConfig(
     isNewSession,
     resetTriggered,
     systemSent,
+    previousSessionEntry,
     sessionEntry,
     sessionStore,
     sessionKey,

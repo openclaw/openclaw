@@ -97,6 +97,21 @@ export const AgentDefaultsSchema = z
             softThresholdTokens: z.number().int().nonnegative().optional(),
             prompt: z.string().optional(),
             systemPrompt: z.string().optional(),
+            checkpoints: z
+              .array(
+                z
+                  .object({
+                    percent: z.number().min(1).max(99),
+                    prompt: z.string().optional(),
+                    systemPrompt: z.string().optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
+            beforeClear: z.boolean().optional(),
+            minTokensForFlush: z.number().int().nonnegative().optional(),
+            beforeClearPrompt: z.string().optional(),
+            beforeClearSystemPrompt: z.string().optional(),
           })
           .strict()
           .optional(),
