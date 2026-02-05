@@ -46,6 +46,9 @@ import {
   ConfigSchemaParamsSchema,
   ConfigSchemaResponseSchema,
   ConfigSetParamsSchema,
+  StartupCommandsAppendParamsSchema,
+  StartupCommandsListParamsSchema,
+  StartupCommandsRemoveParamsSchema,
   UpdateRunParamsSchema,
 } from "./config.js";
 import {
@@ -191,6 +194,9 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ConfigPatchParams: ConfigPatchParamsSchema,
   ConfigSchemaParams: ConfigSchemaParamsSchema,
   ConfigSchemaResponse: ConfigSchemaResponseSchema,
+  StartupCommandsListParams: StartupCommandsListParamsSchema,
+  StartupCommandsAppendParams: StartupCommandsAppendParamsSchema,
+  StartupCommandsRemoveParams: StartupCommandsRemoveParamsSchema,
   WizardStartParams: WizardStartParamsSchema,
   WizardNextParams: WizardNextParamsSchema,
   WizardCancelParams: WizardCancelParamsSchema,

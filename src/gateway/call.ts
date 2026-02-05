@@ -49,6 +49,9 @@ const DEFAULT_GATEWAY_HEALTH_SUPPRESS_METHODS = new Set<string>([
   "config.apply",
   "config.patch",
   "config.schema",
+  "gateway.startupCommands.list",
+  "gateway.startupCommands.append",
+  "gateway.startupCommands.remove",
 ]);
 
 export type CallGatewayOptions = {

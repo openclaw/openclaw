@@ -33,6 +33,9 @@ const GATEWAY_ACTIONS = [
   "config.schema",
   "config.apply",
   "config.patch",
+  "gateway.startupCommands.list",
+  "gateway.startupCommands.append",
+  "gateway.startupCommands.remove",
   "update.run",
 ] as const;
 
@@ -51,6 +54,37 @@ const GatewayToolSchema = Type.Object({
   // config.apply, config.patch
   raw: Type.Optional(Type.String()),
   baseHash: Type.Optional(Type.String()),
+  // gateway.startupCommands.append
+  startupCommand: Type.Optional(
+    Type.Object(
+      {
+        id: Type.Optional(Type.String()),
+        name: Type.Optional(Type.String()),
+        command: Type.String(),
+        args: Type.Optional(Type.Array(Type.String())),
+        cwd: Type.Optional(Type.String()),
+        env: Type.Optional(Type.Record(Type.String(), Type.String())),
+        enabled: Type.Optional(Type.Boolean()),
+        startPolicy: Type.Optional(stringEnum(["always", "reuse", "never"])),
+        stopSignal: Type.Optional(Type.String()),
+        stopTimeoutMs: Type.Optional(Type.Number()),
+        restart: Type.Optional(stringEnum(["off", "on-failure"])),
+        log: Type.Optional(
+          Type.Object(
+            {
+              mode: Type.Optional(stringEnum(["inherit", "file", "discard"])),
+              stdoutPath: Type.Optional(Type.String()),
+              stderrPath: Type.Optional(Type.String()),
+            },
+            { additionalProperties: false },
+          ),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+  ),
+  // gateway.startupCommands.remove
+  startupCommandId: Type.Optional(Type.String()),
   // config.apply, config.patch, update.run
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
@@ -69,7 +103,7 @@ export function createGatewayTool(opts?: {
     label: "Gateway",
     name: "gateway",
     description:
-      "Restart, apply config, or update the gateway in-place (SIGUSR1). Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Both trigger restart after writing.",
+      "Restart, update gateway config, or manage gateway.startupCommands without replacing the full array. Use config.patch for safe partial config updates (merges with existing, arrays replace). Use config.apply only when replacing entire config. Use gateway.startupCommands.list to read the current commands + hash, gateway.startupCommands.append to add a command (startupCommand.command required), and gateway.startupCommands.remove to delete one by startupCommandId. Config updates trigger a restart after writing.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -217,6 +251,75 @@ export function createGatewayTool(opts?: {
             : undefined;
         const result = await callGatewayTool("config.patch", gatewayOpts, {
           raw,
+          baseHash,
+          sessionKey,
+          note,
+          restartDelayMs,
+        });
+        return jsonResult({ ok: true, result });
+      }
+      if (action === "gateway.startupCommands.list") {
+        const result = await callGatewayTool("gateway.startupCommands.list", gatewayOpts, {});
+        return jsonResult({ ok: true, result });
+      }
+      if (action === "gateway.startupCommands.append") {
+        const startupCommand = params.startupCommand;
+        if (
+          !startupCommand ||
+          typeof startupCommand !== "object" ||
+          Array.isArray(startupCommand)
+        ) {
+          throw new Error("startupCommand object is required for gateway.startupCommands.append.");
+        }
+        if (
+          !("command" in startupCommand) ||
+          typeof (startupCommand as { command?: unknown }).command !== "string"
+        ) {
+          throw new Error("startupCommand.command is required for gateway.startupCommands.append.");
+        }
+        let baseHash = readStringParam(params, "baseHash");
+        if (!baseHash) {
+          const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
+          baseHash = resolveBaseHashFromSnapshot(snapshot);
+        }
+        const sessionKey =
+          typeof params.sessionKey === "string" && params.sessionKey.trim()
+            ? params.sessionKey.trim()
+            : opts?.agentSessionKey?.trim() || undefined;
+        const note =
+          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        const restartDelayMs =
+          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
+            ? Math.floor(params.restartDelayMs)
+            : undefined;
+        const result = await callGatewayTool("gateway.startupCommands.append", gatewayOpts, {
+          startupCommand,
+          baseHash,
+          sessionKey,
+          note,
+          restartDelayMs,
+        });
+        return jsonResult({ ok: true, result });
+      }
+      if (action === "gateway.startupCommands.remove") {
+        const startupCommandId = readStringParam(params, "startupCommandId", { required: true });
+        let baseHash = readStringParam(params, "baseHash");
+        if (!baseHash) {
+          const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
+          baseHash = resolveBaseHashFromSnapshot(snapshot);
+        }
+        const sessionKey =
+          typeof params.sessionKey === "string" && params.sessionKey.trim()
+            ? params.sessionKey.trim()
+            : opts?.agentSessionKey?.trim() || undefined;
+        const note =
+          typeof params.note === "string" && params.note.trim() ? params.note.trim() : undefined;
+        const restartDelayMs =
+          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
+            ? Math.floor(params.restartDelayMs)
+            : undefined;
+        const result = await callGatewayTool("gateway.startupCommands.remove", gatewayOpts, {
+          startupCommandId,
           baseHash,
           sessionKey,
           note,
