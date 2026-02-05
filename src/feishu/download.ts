@@ -21,13 +21,15 @@ type FeishuMessagePayload = {
  * Download a resource from a user message using messageResource.get
  * This is the correct API for downloading resources from messages sent by users.
  *
- * @param type - Resource type: "image", "file", "audio", or "video"
+ * @param type - Resource type: "image" or "file" only (per Feishu API docs)
+ *               Audio/video must use type="file" despite being different media types.
+ * @see https://open.feishu.cn/document/server-docs/im-v1/message/get-2
  */
 export async function downloadFeishuMessageResource(
   client: Client,
   messageId: string,
   fileKey: string,
-  type: "image" | "file" | "audio" | "video",
+  type: "image" | "file",
   maxBytes: number = 30 * 1024 * 1024,
 ): Promise<FeishuMediaRef> {
   logger.debug(`Downloading Feishu ${type}: messageId=${messageId}, fileKey=${fileKey}`);
@@ -148,27 +150,41 @@ export async function resolveFeishuMedia(
       }
     } else if (msgType === "audio") {
       // Audio message: content = { file_key: "..." }
+      // Note: Feishu API only supports type="image" or type="file" for messageResource.get
+      // Audio must be downloaded using type="file" per official docs:
+      // https://open.feishu.cn/document/server-docs/im-v1/message/get-2
       const content = JSON.parse(rawContent);
       if (content.file_key) {
-        return await downloadFeishuMessageResource(
+        const result = await downloadFeishuMessageResource(
           client,
           messageId,
           content.file_key,
-          "audio",
+          "file", // Use "file" type for audio download (API limitation)
           maxBytes,
         );
+        // Override placeholder to indicate audio content
+        return {
+          ...result,
+          placeholder: "<media:audio>",
+        };
       }
     } else if (msgType === "media") {
       // Video message: content = { file_key: "...", image_key: "..." (thumbnail) }
+      // Note: Video must also be downloaded using type="file" per Feishu API docs
       const content = JSON.parse(rawContent);
       if (content.file_key) {
-        return await downloadFeishuMessageResource(
+        const result = await downloadFeishuMessageResource(
           client,
           messageId,
           content.file_key,
-          "video",
+          "file", // Use "file" type for video download (API limitation)
           maxBytes,
         );
+        // Override placeholder to indicate video content
+        return {
+          ...result,
+          placeholder: "<media:video>",
+        };
       }
     } else if (msgType === "sticker") {
       // Sticker - not supported for download via messageResource API
@@ -180,4 +196,82 @@ export async function resolveFeishuMedia(
   }
 
   return null;
+}
+
+/**
+ * Extract image keys from post (rich text) message content
+ * Post content structure: { post: { locale: { content: [[{ tag: "img", image_key: "..." }]] } } }
+ */
+export function extractPostImageKeys(content: unknown): string[] {
+  const imageKeys: string[] = [];
+
+  if (!content || typeof content !== "object") {
+    return imageKeys;
+  }
+
+  const obj = content as Record<string, unknown>;
+
+  // Handle locale-wrapped format: { post: { zh_cn: { content: [...] } } }
+  let postData = obj;
+  if (obj.post && typeof obj.post === "object") {
+    const post = obj.post as Record<string, unknown>;
+    const localeKey = Object.keys(post).find((key) => post[key] && typeof post[key] === "object");
+    if (localeKey) {
+      postData = post[localeKey] as Record<string, unknown>;
+    }
+  }
+
+  // Extract image_key from content elements
+  const contentArray = postData.content;
+  if (!Array.isArray(contentArray)) {
+    return imageKeys;
+  }
+
+  for (const line of contentArray) {
+    if (!Array.isArray(line)) {
+      continue;
+    }
+    for (const element of line) {
+      if (
+        element &&
+        typeof element === "object" &&
+        (element as Record<string, unknown>).tag === "img" &&
+        typeof (element as Record<string, unknown>).image_key === "string"
+      ) {
+        imageKeys.push((element as Record<string, unknown>).image_key as string);
+      }
+    }
+  }
+
+  return imageKeys;
+}
+
+/**
+ * Download embedded images from a post (rich text) message
+ */
+export async function downloadPostImages(
+  client: Client,
+  messageId: string,
+  imageKeys: string[],
+  maxBytes: number = 30 * 1024 * 1024,
+  maxImages: number = 5,
+): Promise<FeishuMediaRef[]> {
+  const results: FeishuMediaRef[] = [];
+
+  for (const imageKey of imageKeys.slice(0, maxImages)) {
+    try {
+      const media = await downloadFeishuMessageResource(
+        client,
+        messageId,
+        imageKey,
+        "image",
+        maxBytes,
+      );
+      results.push(media);
+    } catch (err) {
+      logger.warn(`Failed to download post image ${imageKey}: ${formatErrorMessage(err)}`);
+    }
+  }
+
+  return results;
 }

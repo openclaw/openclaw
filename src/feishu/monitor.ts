@@ -7,6 +7,7 @@ import { resolveFeishuAccount } from "./accounts.js";
 import { resolveFeishuConfig } from "./config.js";
 import { normalizeFeishuDomain } from "./domain.js";
 import { processFeishuMessage } from "./message.js";
+import { probeFeishu } from "./probe.js";
 
 const logger = getChildLogger({ module: "feishu-monitor" });
 
@@ -70,6 +71,13 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     },
   });
 
+  // Get bot's open_id for detecting mentions in group chats
+  const probeResult = await probeFeishu(appId, appSecret, 5000, domain);
+  const botOpenId = probeResult.bot?.openId ?? undefined;
+  if (!botOpenId) {
+    logger.warn(`Could not get bot open_id, group mention detection may not work correctly`);
+  }
+
   // Create event dispatcher
   const eventDispatcher = new Lark.EventDispatcher({}).register({
     "im.message.receive_v1": async (data) => {
@@ -81,6 +89,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
           resolvedConfig: feishuCfg,
           credentials: { appId, appSecret, domain },
           botName: account.name,
+          botOpenId,
         });
       } catch (err) {
         logger.error(`Error processing Feishu message: ${String(err)}`);
