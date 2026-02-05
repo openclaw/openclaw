@@ -52,7 +52,7 @@ type FeishuEventPayload = {
 };
 
 // Supported message types for processing
-const SUPPORTED_MSG_TYPES = new Set(["text", "image", "file", "audio", "media", "sticker"]);
+const SUPPORTED_MSG_TYPES = new Set(["text", "post", "image", "file", "audio", "media", "sticker"]);
 
 export type ProcessFeishuMessageOptions = {
   cfg?: OpenClawConfig;
@@ -236,6 +236,33 @@ export async function processFeishuMessage(
       }
     } catch (err) {
       logger.error(`Failed to parse text message content: ${formatErrorMessage(err)}`);
+    }
+  } else if (msgType === "post") {
+    // Parse rich text (post) messages - extract plain text from structured content
+    try {
+      if (message.content) {
+        const content = JSON.parse(message.content);
+        const lines: string[] = [];
+        if (content.title) {
+          lines.push(content.title);
+        }
+        if (Array.isArray(content.content)) {
+          for (const paragraph of content.content) {
+            if (Array.isArray(paragraph)) {
+              const lineText = paragraph
+                .filter((el: { tag?: string }) => el.tag === "text")
+                .map((el: { text?: string }) => el.text || "")
+                .join("");
+              if (lineText) {
+                lines.push(lineText);
+              }
+            }
+          }
+        }
+        text = lines.join("\n");
+      }
+    } catch (err) {
+      logger.error(`Failed to parse post message content: ${formatErrorMessage(err)}`);
     }
   }
 
