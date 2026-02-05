@@ -37,6 +37,7 @@ const FeishuAccountSchema = z
     blockStreaming: z.boolean().optional(),
     streaming: z.boolean().optional(),
     mediaMaxMb: z.number().optional(),
+    responsePrefix: z.string().optional(),
     groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
   })
   .strict();
