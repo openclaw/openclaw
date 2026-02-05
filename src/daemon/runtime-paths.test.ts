@@ -30,7 +30,8 @@ describe("resolvePreferredNodePath", () => {
       throw new Error("missing");
     });
 
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.1.0\n", stderr: "" });
+    // Node 22.12.0+ is the minimum required version
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -51,7 +52,8 @@ describe("resolvePreferredNodePath", () => {
       throw new Error("missing");
     });
 
-    const execFile = vi.fn().mockResolvedValue({ stdout: "18.19.0\n", stderr: "" });
+    // Node 22.11.x is below minimum 22.12.0
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.11.0\n", stderr: "" });
 
     const result = await resolvePreferredNodePath({
       env: {},
@@ -92,7 +94,8 @@ describe("resolveSystemNodeInfo", () => {
       throw new Error("missing");
     });
 
-    const execFile = vi.fn().mockResolvedValue({ stdout: "22.0.0\n", stderr: "" });
+    // Node 22.12.0+ is the minimum required version
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.12.0\n", stderr: "" });
 
     const result = await resolveSystemNodeInfo({
       env: {},
@@ -102,7 +105,7 @@ describe("resolveSystemNodeInfo", () => {
 
     expect(result).toEqual({
       path: darwinNode,
-      version: "22.0.0",
+      version: "22.12.0",
       supported: true,
     });
   });
