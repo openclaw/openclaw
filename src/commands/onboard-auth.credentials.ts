@@ -205,7 +205,7 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
   });
 }
 
-export async function setXaiApiKey(key: string, agentDir?: string) {
+export function setXaiApiKey(key: string, agentDir?: string) {
   upsertAuthProfile({
     profileId: "xai:default",
     credential: {
