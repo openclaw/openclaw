@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Feishu: expand channel handling (posts with images, doc links, routing, reactions/typing, replies, native commands). (#8975) Thanks @jiulingyun.
 - Onboarding: add Cloudflare AI Gateway provider setup and docs. (#7914) Thanks @roerohan.
 - Onboarding: add Moonshot (.cn) auth choice and keep the China base URL when preserving defaults. (#7180) Thanks @waynelwz.
+- Onboarding: add xAI (Grok) auth choice and provider defaults. (#9885) Thanks @grp06.
 - Docs: clarify tmux send-keys for TUI by splitting text and Enter. (#7737) Thanks @Wangnov.
 - Docs: mirror the landing page revamp for zh-CN (features, quickstart, docs directory, network model, credits). (#8994) Thanks @joshp123.
 - Docs: strengthen secure DM mode guidance for multi-user inboxes with an explicit warning and example. (#9377) Thanks @Shrinija17.
