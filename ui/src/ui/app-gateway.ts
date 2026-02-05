@@ -39,14 +39,35 @@ import type {
   UpdateAvailable,
 } from "./types.ts";
 
+/** Fetch CHATLOOP.md system prompt via gateway RPC. */
+async function loadChatLoopSystemPrompt(host: GatewayHost): Promise<string | null> {
+  const client = host.client;
+  if (!client) return null;
+  try {
+    const res = await client.request<{ file?: { content?: string } } | null>("agents.files.get", {
+      agentId: "main",
+      name: "CHATLOOP.md",
+    });
+    return res?.file?.content?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 /** Chat-loop: after assistant reply, forward full history to a second model and fill the input box. */
 async function triggerChatLoop(host: GatewayHost) {
   const app = host as unknown as Record<string, unknown>;
   const chatMessages = app.chatMessages as Array<{ role: string; content: unknown }> | undefined;
   if (!chatMessages || chatMessages.length === 0) return;
 
+  // Load system prompt from CHATLOOP.md
+  const systemPrompt = await loadChatLoopSystemPrompt(host);
+
   // Build OpenAI-compatible messages array from full chat history
   const apiMessages: Array<{ role: string; content: string }> = [];
+  if (systemPrompt) {
+    apiMessages.push({ role: "system", content: systemPrompt });
+  }
   for (const msg of chatMessages) {
     const role = msg.role === "assistant" ? "assistant" : "user";
     const text = extractText(msg);
@@ -54,7 +75,7 @@ async function triggerChatLoop(host: GatewayHost) {
       apiMessages.push({ role, content: text });
     }
   }
-  if (apiMessages.length === 0) return;
+  if (apiMessages.length <= (systemPrompt ? 1 : 0)) return;
 
   try {
     const token = host.settings.token?.trim() || "";
