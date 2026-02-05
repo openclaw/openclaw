@@ -41,10 +41,10 @@ export const convosOutbound: ChannelOutboundAdapter = {
         `Convos client not running for account ${account.accountId}. Is the gateway started?`,
       );
     }
-    await client.sendMessage(to, text);
+    const result = await client.sendMessage(to, text);
     return {
       channel: "convos",
-      messageId: `convos-${Date.now()}`,
+      messageId: result.messageId ?? `convos-${Date.now()}`,
     };
   },
 

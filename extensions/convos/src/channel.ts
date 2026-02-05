@@ -18,7 +18,11 @@ import { ConvosSDKClient, type InboundMessage } from "./sdk-client.js";
 import { convosChannelConfigSchema } from "./config-schema.js";
 import { convosOnboardingAdapter } from "./onboarding.js";
 import { convosMessageActions } from "./actions.js";
-import { convosOutbound, setClientForAccount } from "./outbound.js";
+import {
+  convosOutbound,
+  getClientForAccount,
+  setClientForAccount,
+} from "./outbound.js";
 import { getConvosRuntime } from "./runtime.js";
 
 type RuntimeLogger = {
@@ -37,9 +41,6 @@ const meta = {
   order: 75,
   quickstartAllowFrom: false,
 };
-
-// Track SDK clients per account
-const clients = new Map<string, ConvosSDKClient>();
 
 function normalizeConvosMessagingTarget(raw: string): string | undefined {
   let normalized = raw.trim();
@@ -121,7 +122,7 @@ export const convosPlugin: ChannelPlugin<ResolvedConvosAccount> = {
     },
     notifyApproval: async ({ cfg, id, runtime }) => {
       const account = resolveConvosAccount({ cfg: cfg as CoreConfig });
-      const client = clients.get(account.accountId);
+      const client = getClientForAccount(account.accountId);
       if (!client || !account.ownerConversationId) {
         return;
       }
@@ -154,7 +155,7 @@ export const convosPlugin: ChannelPlugin<ResolvedConvosAccount> = {
     listPeers: async () => [], // Convos doesn't have a user directory
     listGroups: async ({ cfg, accountId, query, limit }) => {
       const account = resolveConvosAccount({ cfg: cfg as CoreConfig, accountId });
-      const client = clients.get(account.accountId);
+      const client = getClientForAccount(account.accountId);
       if (!client) {
         return [];
       }
@@ -219,17 +220,19 @@ export const convosPlugin: ChannelPlugin<ResolvedConvosAccount> = {
       }
 
       try {
-        // Create a temporary client to verify connectivity
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), timeoutMs ?? 10000);
+        // Create a temporary client to verify connectivity, with a timeout
+        const limit = timeoutMs ?? 10000;
+        const tempClient = await Promise.race([
+          ConvosSDKClient.create({
+            privateKey: account.privateKey,
+            env: account.env,
+            debug: account.debug,
+          }),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Probe timed out")), limit),
+          ),
+        ]);
 
-        const tempClient = await ConvosSDKClient.create({
-          privateKey: account.privateKey,
-          env: account.env,
-          debug: account.debug,
-        });
-
-        clearTimeout(timeout);
         await tempClient.stop();
 
         return { ok: true };
@@ -292,7 +295,6 @@ export const convosPlugin: ChannelPlugin<ResolvedConvosAccount> = {
       });
 
       // Store client for outbound use
-      clients.set(account.accountId, client);
       setClientForAccount(account.accountId, client);
 
       // Start listening for messages
@@ -444,7 +446,7 @@ async function deliverConvosReply(params: {
 }): Promise<void> {
   const { payload, conversationId, accountId, runtime, log, tableMode = "code" } = params;
 
-  const client = clients.get(accountId);
+  const client = getClientForAccount(accountId);
   if (!client) {
     throw new Error("Convos client not available");
   }
@@ -476,14 +478,13 @@ async function deliverConvosReply(params: {
  * Stop SDK client for an account
  */
 async function stopClient(accountId: string, log?: RuntimeLogger) {
-  const client = clients.get(accountId);
+  const client = getClientForAccount(accountId);
   if (client) {
     try {
       await client.stop();
     } catch (err) {
       log?.error(`[${accountId}] Error stopping client: ${String(err)}`);
     }
-    clients.delete(accountId);
     setClientForAccount(accountId, null);
   }
 }

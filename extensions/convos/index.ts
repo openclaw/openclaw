@@ -114,6 +114,14 @@ function handleStatus() {
   };
 }
 
+async function handleCancel() {
+  const wasActive = setupAgent !== null;
+  setupResult = null;
+  await cleanupSetupAgent();
+  setupJoinState = { joined: false, joinerInboxId: null };
+  return { cancelled: wasActive };
+}
+
 async function handleComplete() {
   if (!setupResult) {
     throw new Error("No active setup to complete. Run convos.setup first.");
@@ -122,24 +130,26 @@ async function handleComplete() {
   const runtime = getConvosRuntime();
   const cfg = runtime.config.loadConfig() as OpenClawConfig;
 
-  const channels = (cfg as Record<string, unknown>).channels as
+  const existingChannels = (cfg as Record<string, unknown>).channels as
     | Record<string, unknown>
     | undefined;
-  if (!channels) {
-    (cfg as Record<string, unknown>).channels = {};
-  }
-  const convosSection =
-    ((cfg as Record<string, unknown>).channels as Record<string, unknown>).convos ?? {};
-  const convos = convosSection as Record<string, unknown>;
+  const existingConvos = (existingChannels?.convos ?? {}) as Record<string, unknown>;
 
-  convos.privateKey = setupResult.privateKey;
-  convos.ownerConversationId = setupResult.conversationId;
-  convos.env = setupResult.env;
-  convos.enabled = true;
+  const updatedCfg = {
+    ...cfg,
+    channels: {
+      ...existingChannels,
+      convos: {
+        ...existingConvos,
+        privateKey: setupResult.privateKey,
+        ownerConversationId: setupResult.conversationId,
+        env: setupResult.env,
+        enabled: true,
+      },
+    },
+  };
 
-  ((cfg as Record<string, unknown>).channels as Record<string, unknown>).convos = convos;
-
-  await runtime.config.writeConfigFile(cfg);
+  await runtime.config.writeConfigFile(updatedCfg);
   console.log("[convos-setup] Config saved successfully");
 
   const saved = { ...setupResult };
@@ -213,6 +223,11 @@ const plugin = {
       }
     });
 
+    api.registerGatewayMethod("convos.setup.cancel", async ({ respond }) => {
+      const result = await handleCancel();
+      respond(true, result, undefined);
+    });
+
     // ---- HTTP routes (for Railway template and other HTTP clients) ----
 
     api.registerHttpRoute({
@@ -262,6 +277,18 @@ const plugin = {
         } catch (err) {
           jsonResponse(res, 400, { error: err instanceof Error ? err.message : String(err) });
         }
+      },
+    });
+
+    api.registerHttpRoute({
+      path: "/convos/setup/cancel",
+      handler: async (req, res) => {
+        if (req.method !== "POST") {
+          jsonResponse(res, 405, { error: "Method Not Allowed" });
+          return;
+        }
+        const result = await handleCancel();
+        jsonResponse(res, 200, result);
       },
     });
   },

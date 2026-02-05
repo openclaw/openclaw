@@ -28,8 +28,8 @@ export const convosMessageActions: ChannelMessageActionAdapter = {
     if (action === "send") {
       const to = readStringParam(params, "to", { required: true });
       const message = readStringParam(params, "message", { required: true, allowEmpty: true });
-      await client.sendMessage(to!, message!);
-      return jsonResult({ ok: true, to, messageId: `convos-${Date.now()}` });
+      const result = await client.sendMessage(to!, message!);
+      return jsonResult({ ok: true, to, messageId: result.messageId ?? `convos-${Date.now()}` });
     }
 
     if (action === "react") {

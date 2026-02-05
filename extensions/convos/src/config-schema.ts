@@ -61,7 +61,7 @@ export const ConvosConfigSchema = z.object({
   ownerConversationId: z.string().optional(),
 });
 
-export type ConvosConfig = z.infer<typeof ConvosConfigSchema>;
+export type ConvosConfigInput = z.infer<typeof ConvosConfigSchema>;
 
 /**
  * JSON Schema for Control UI (converted from Zod)

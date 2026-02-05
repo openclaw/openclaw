@@ -272,7 +272,10 @@ export class ConvosSDKClient {
   /**
    * Send a message to a conversation
    */
-  async sendMessage(conversationId: string, message: string): Promise<{ success: boolean }> {
+  async sendMessage(
+    conversationId: string,
+    message: string,
+  ): Promise<{ success: boolean; messageId?: string }> {
     if (this.debug) {
       console.log(`[convos-sdk] Sending message to ${conversationId.slice(0, 8)}...`);
     }
@@ -282,9 +285,9 @@ export class ConvosSDKClient {
       throw new Error(`Conversation not found: ${conversationId}`);
     }
 
-    await conversation.send(message);
+    const messageId = await conversation.send(message);
 
-    return { success: true };
+    return { success: true, messageId: typeof messageId === "string" ? messageId : undefined };
   }
 
   /**
