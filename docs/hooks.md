@@ -235,20 +235,43 @@ Triggered when agent commands are issued:
 Triggered during session lifecycle when session persistence is enabled (requires a valid `sessionKey`):
 
 - **`session:start`**: When a new persisted session begins (user-initiated or auto-recovery; non-persisted flows do not fire this hook)
-- **`session:end`**: When a persisted session is terminated (auto-recovery resets only; requires persisted session entry)
-- **`session:reset`**: Emitted after `session:end` during resets to provide transition context (auto-recovery resets only; requires persisted session entry)
+- **`session:end`**: When a persisted session is terminated (all reset types: user-initiated, idle timeout, daily reset, auto-recovery)
+- **`session:reset`**: Emitted after `session:end` during all resets to provide transition context
 
-**Context includes**:
+**Context for `session:start`**:
 
-- `sessionId`: The session ID (present in current implementation; for `session:reset`, equals `newSessionId`)
-- `oldSessionId` and `newSessionId`: (for `session:reset` only) The session transition (both present in current implementation)
+- `sessionId`: The new session ID
 
-**Note:** While current implementation guards ensure these IDs are present when events fire, hooks should handle missing values defensively.
+**Context for `session:end`**:
+
+- `sessionId`: The ending session's ID
+- `sessionEntry`: Full session entry for the ending session (includes updatedAt, compactionCount, thinkingLevel, modelOverride, etc.)
+- `newSessionEntry`: Full session entry for the new session that's replacing it
+- `reason`: Reset reason - one of: `"user_command"`, `"idle_timeout"`, `"daily_reset"`, `"compaction_failure"`, `"role_ordering_conflict"`
+- Additional reason-specific fields:
+  - For `user_command`: `trigger`, `previousSessionId`, `previousUpdatedAt`
+  - For `idle_timeout`: `idleSeconds`, `idleExpiresAt`, `previousSessionId`, `previousUpdatedAt`
+  - For `daily_reset`: `dailyResetAt`, `previousSessionId`, `previousUpdatedAt`
+  - For `compaction_failure`: `failureReason`, `previousSessionId`, `previousUpdatedAt`
+  - For `role_ordering_conflict`: `conflictReason`, `previousSessionId`, `previousUpdatedAt`
+
+**Context for `session:reset`**:
+
+- `oldSessionId`: The previous session's ID
+- `newSessionId`: The new session's ID
+- `previousSessionEntry`: Full session entry for the old session
+- `sessionEntry`: Full session entry for the new session
+- `reason`: Reset reason (same values as `session:end`)
+- Additional reason-specific fields (same as `session:end`)
+
+**Note:** While current implementation guards ensure these IDs and entries are present when events fire, hooks should handle missing values defensively.
 
 **Lifecycle patterns**:
 
-- **User-initiated reset** (`/new` or `/reset`): `command:new` or `command:reset` fires immediately; `session:start` fires during the agent turn if a session key exists (requires persistence). `session:end` and `session:reset` do NOT fire for user-initiated resets.
-- **Auto-recovery reset** (compaction failure, role-ordering conflict): `session:end` → `session:reset` fire during the reset if a persisted session entry exists; `session:start` fires when the agent turn runs (if session key exists).
+- **User-initiated reset** (`/new` or `/reset`): `command:new` or `command:reset` fires immediately → `session:end` → `session:reset` fire if an existing session is being replaced → `session:start` fires during the agent turn (if session key exists)
+- **Idle timeout reset**: `session:end` → `session:reset` fire when session expires due to inactivity → `session:start` fires during the agent turn
+- **Daily reset**: `session:end` → `session:reset` fire when session expires based on daily reset hour → `session:start` fires during the agent turn
+- **Auto-recovery reset** (compaction failure, role-ordering conflict): `session:end` → `session:reset` fire during the reset if a persisted session entry exists → `session:start` fires when the agent turn runs
 
 ### Agent Events
 

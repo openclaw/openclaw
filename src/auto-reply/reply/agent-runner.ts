@@ -280,11 +280,15 @@ export async function runReplyAgent(params: {
     failureLabel: string;
     buildLogMessage: (nextSessionId: string) => string;
     cleanupTranscripts?: boolean;
+    reason?: string;
+    reasonDetails?: Record<string, unknown>;
   };
   const resetSession = async ({
     failureLabel,
     buildLogMessage,
     cleanupTranscripts,
+    reason,
+    reasonDetails,
   }: SessionResetOptions): Promise<{ success: boolean; hookMessages: string[] }> => {
     if (!sessionKey || !activeSessionStore || !storePath) {
       return { success: false, hookMessages: [] };
@@ -371,6 +375,8 @@ export async function runReplyAgent(params: {
       try {
         const hookEvent = createInternalHookEvent("session", "end", sessionKey, {
           sessionId: prevEntryFromStore.sessionId,
+          reason: reason ?? "auto_recovery",
+          ...reasonDetails,
         });
         await triggerInternalHook(hookEvent);
         collectedHookMessages.push(...hookEvent.messages);
@@ -388,10 +394,11 @@ export async function runReplyAgent(params: {
           clonedPrevEntry = undefined;
         }
         const resetEvent = createInternalHookEvent("session", "reset", sessionKey, {
-          sessionId: nextSessionId,
           oldSessionId: prevEntryFromStore.sessionId,
           newSessionId: nextSessionId,
           previousSessionEntry: clonedPrevEntry,
+          reason: reason ?? "auto_recovery",
+          ...reasonDetails,
         });
         await triggerInternalHook(resetEvent);
         collectedHookMessages.push(...resetEvent.messages);
@@ -407,6 +414,8 @@ export async function runReplyAgent(params: {
       failureLabel: "compaction failure",
       buildLogMessage: (nextSessionId) =>
         `Auto-compaction failed (${reason}). Restarting session ${sessionKey} -> ${nextSessionId} and retrying.`,
+      reason: "compaction_failure",
+      reasonDetails: { failureReason: reason },
     });
     sessionResetHookMessages.push(...result.hookMessages);
     return result.success;
@@ -417,6 +426,8 @@ export async function runReplyAgent(params: {
       buildLogMessage: (nextSessionId) =>
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
+      reason: "role_ordering_conflict",
+      reasonDetails: { conflictReason: reason },
     });
     sessionResetHookMessages.push(...result.hookMessages);
     return result.success;

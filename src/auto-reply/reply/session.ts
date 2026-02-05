@@ -23,6 +23,7 @@ import {
   resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
+  type SessionFreshness,
   type SessionScope,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -50,6 +51,8 @@ export type SessionInitResult = {
   isGroup: boolean;
   bodyStripped?: string;
   triggerBodyNormalized: string;
+  resetReason?: string;
+  resetDetails?: Record<string, unknown>;
 };
 
 function forkSessionFromParent(params: {
@@ -89,6 +92,64 @@ function forkSessionFromParent(params: {
   } catch {
     return null;
   }
+}
+
+type ResetReasonResult = {
+  reason: string;
+  details: Record<string, unknown>;
+};
+
+function determineResetReason(params: {
+  resetTriggered: boolean;
+  freshness: SessionFreshness;
+  previousSessionEntry?: SessionEntry;
+  now: number;
+}): ResetReasonResult {
+  const { resetTriggered, freshness, previousSessionEntry, now } = params;
+
+  if (resetTriggered) {
+    return {
+      reason: "user_command",
+      details: {
+        trigger: "explicit",
+        previousSessionId: previousSessionEntry?.sessionId,
+        previousUpdatedAt: previousSessionEntry?.updatedAt,
+      },
+    };
+  }
+
+  if (!freshness.fresh) {
+    const updatedAt = previousSessionEntry?.updatedAt ?? now;
+    // Check if idle timeout caused the staleness
+    if (freshness.idleExpiresAt != null && now > freshness.idleExpiresAt) {
+      const idleMs = now - updatedAt;
+      return {
+        reason: "idle_timeout",
+        details: {
+          idleSeconds: Math.floor(idleMs / 1000),
+          idleExpiresAt: freshness.idleExpiresAt,
+          previousSessionId: previousSessionEntry?.sessionId,
+          previousUpdatedAt: updatedAt,
+        },
+      };
+    }
+    // Check if daily reset caused the staleness
+    if (freshness.dailyResetAt != null && updatedAt < freshness.dailyResetAt) {
+      return {
+        reason: "daily_reset",
+        details: {
+          dailyResetAt: freshness.dailyResetAt,
+          previousSessionId: previousSessionEntry?.sessionId,
+          previousUpdatedAt: updatedAt,
+        },
+      };
+    }
+  }
+
+  return {
+    reason: "unknown",
+    details: {},
+  };
 }
 
 export async function initSessionState(params: {
@@ -218,9 +279,10 @@ export async function initSessionState(params: {
     resetType,
     resetOverride: channelReset,
   });
-  const freshEntry = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
-    : false;
+  const freshness: SessionFreshness = entry
+    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy })
+    : { fresh: false };
+  const freshEntry = freshness.fresh;
 
   if (!isNewSession && freshEntry) {
     sessionId = entry.sessionId;
@@ -237,11 +299,6 @@ export async function initSessionState(params: {
     isNewSession = true;
     systemSent = false;
     abortedLastRun = false;
-
-    // Note: For user-initiated resets, command:new/reset hooks fire immediately.
-    // session:start will fire later in agent-runner.ts (if sessionKey exists).
-    // session:end/reset are NOT emitted for user-initiated resets; they only fire
-    // in agent-runner.ts for auto-recovery resets (compaction failure, role-ordering conflict).
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
@@ -366,6 +423,20 @@ export async function initSessionState(params: {
     IsNewSession: isNewSession ? "true" : "false",
   };
 
+  // Compute reset reason for session lifecycle hooks
+  let resetReason: string | undefined;
+  let resetDetails: Record<string, unknown> | undefined;
+  if (isNewSession && entry) {
+    const resetInfo = determineResetReason({
+      resetTriggered,
+      freshness,
+      previousSessionEntry: entry,
+      now,
+    });
+    resetReason = resetInfo.reason;
+    resetDetails = resetInfo.details;
+  }
+
   return {
     sessionCtx,
     sessionEntry,
@@ -383,5 +454,7 @@ export async function initSessionState(params: {
     isGroup,
     bodyStripped,
     triggerBodyNormalized,
+    resetReason,
+    resetDetails,
   };
 }
