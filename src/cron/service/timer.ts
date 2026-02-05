@@ -1,7 +1,12 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { CronJob } from "../types.js";
 import type { CronEvent, CronServiceState } from "./state.js";
-import { computeJobNextRunAtMs, nextWakeAtMs, resolveJobPayloadTextForMain } from "./jobs.js";
+import {
+  computeJobNextRunAtMs,
+  nextWakeAtMs,
+  recomputeNextRuns,
+  resolveJobPayloadTextForMain,
+} from "./jobs.js";
 import { locked } from "./locked.js";
 import { ensureLoaded, persist } from "./store.js";
 
@@ -45,8 +50,12 @@ export async function onTimer(state: CronServiceState) {
   state.running = true;
   try {
     await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true });
+      // Load jobs WITHOUT recomputing nextRunAtMs first.
+      // This preserves the scheduled times so runDueJobs can detect due jobs.
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       await runDueJobs(state);
+      // Now recompute next runs for jobs that weren't executed (e.g., disabled).
+      recomputeNextRuns(state);
       await persist(state);
       armTimer(state);
     });
