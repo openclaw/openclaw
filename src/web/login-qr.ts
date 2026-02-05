@@ -2,8 +2,13 @@ import { DisconnectReason } from "@whiskeysockets/baileys";
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "../config/config.js";
 import { danger, info, success } from "../globals.js";
-import { logInfo } from "../logger.js";
+import { logInfo, logWarn, logError } from "../logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+
+// Debug logging for WhatsApp connection issues
+function waDebug(msg: string, data?: Record<string, unknown>) {
+  logInfo(`[WA-LOGIN-DEBUG] ${msg}` + (data ? ` ${JSON.stringify(data)}` : ""));
+}
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { renderQrPngBase64 } from "./qr-image.js";
 import {
@@ -67,15 +72,44 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
       const current = activeLogins.get(accountId);
       if (current?.id === login.id) {
         current.connected = true;
+        waDebug("attachLoginWaiter: connection succeeded!");
       }
     })
-    .catch((err) => {
+    .catch(async (err) => {
       const current = activeLogins.get(accountId);
       if (current?.id !== login.id) {
+        waDebug("attachLoginWaiter: login id mismatch, ignoring error");
         return;
       }
       current.error = formatError(err);
       current.errorStatus = getStatusCode(err);
+      waDebug("attachLoginWaiter: caught error", {
+        error: current.error,
+        errorStatus: current.errorStatus,
+        rawErrorKeys: err ? Object.keys(err as object) : [],
+      });
+
+      // Auto-restart on 515 without waiting for waitForWebLogin to be called
+      if (current.errorStatus === 515 && !current.restartAttempted && isLoginFresh(current)) {
+        waDebug("attachLoginWaiter: auto-restarting on 515");
+        current.restartAttempted = true;
+        closeSocket(current.sock);
+        try {
+          const sock = await createWaSocket(false, current.verbose, {
+            authDir: current.authDir,
+          });
+          current.sock = sock;
+          current.connected = false;
+          current.error = undefined;
+          current.errorStatus = undefined;
+          waDebug("attachLoginWaiter: restart successful, re-attaching waiter");
+          attachLoginWaiter(accountId, current);
+        } catch (restartErr) {
+          current.error = formatError(restartErr);
+          current.errorStatus = getStatusCode(restartErr);
+          waDebug("attachLoginWaiter: restart failed", { error: current.error });
+        }
+      }
     });
 }
 
@@ -122,7 +156,7 @@ export async function startWebLoginWithQr(
   if (hasWeb && !opts.force) {
     const who = selfId.e164 ?? selfId.jid ?? "unknown";
     return {
-      message: `WhatsApp is already linked (${who}). Say “relink” if you want a fresh QR.`,
+      message: `WhatsApp is already linked (${who}). Say "relink" if you want a fresh QR.`,
     };
   }
 
@@ -135,6 +169,7 @@ export async function startWebLoginWithQr(
   }
 
   await resetActiveLogin(account.accountId);
+  waDebug("Starting fresh login", { accountId: account.accountId, authDir: account.authDir });
 
   let resolveQr: ((qr: string) => void) | null = null;
   let rejectQr: ((err: Error) => void) | null = null;
@@ -143,20 +178,23 @@ export async function startWebLoginWithQr(
     rejectQr = reject;
   });
 
-  const qrTimer = setTimeout(
-    () => {
-      rejectQr?.(new Error("Timed out waiting for WhatsApp QR"));
-    },
-    Math.max(opts.timeoutMs ?? 30_000, 5000),
-  );
+  const timeoutMs = Math.max(opts.timeoutMs ?? 30_000, 5000);
+  waDebug("Setting QR timeout", { timeoutMs });
+  const qrTimer = setTimeout(() => {
+    waDebug("QR timeout triggered - no QR received from WhatsApp servers");
+    rejectQr?.(new Error("Timed out waiting for WhatsApp QR"));
+  }, timeoutMs);
 
   let sock: WaSocket;
   let pendingQr: string | null = null;
   try {
+    waDebug("Creating WhatsApp socket...");
     sock = await createWaSocket(false, Boolean(opts.verbose), {
       authDir: account.authDir,
       onQr: (qr: string) => {
+        waDebug("onQr callback fired", { qrLength: qr.length, hasPendingQr: !!pendingQr });
         if (pendingQr) {
+          waDebug("Ignoring duplicate QR");
           return;
         }
         pendingQr = qr;
@@ -165,11 +203,14 @@ export async function startWebLoginWithQr(
           current.qr = qr;
         }
         clearTimeout(qrTimer);
+        waDebug("QR received successfully, timer cleared");
         runtime.log(info("WhatsApp QR received."));
         resolveQr?.(qr);
       },
     });
+    waDebug("Socket created successfully");
   } catch (err) {
+    waDebug("Socket creation FAILED", { error: String(err) });
     clearTimeout(qrTimer);
     await resetActiveLogin(account.accountId);
     return {
@@ -219,8 +260,10 @@ export async function waitForWebLogin(
   const runtime = opts.runtime ?? defaultRuntime;
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
+  waDebug("waitForWebLogin called", { accountId: account.accountId });
   const activeLogin = activeLogins.get(account.accountId);
   if (!activeLogin) {
+    waDebug("No active login found");
     return {
       connected: false,
       message: "No active WhatsApp login in progress.",
@@ -229,6 +272,7 @@ export async function waitForWebLogin(
 
   const login = activeLogin;
   if (!isLoginFresh(login)) {
+    waDebug("Login expired", { startedAt: login.startedAt, age: Date.now() - login.startedAt });
     await resetActiveLogin(account.accountId);
     return {
       connected: false,
@@ -237,28 +281,38 @@ export async function waitForWebLogin(
   }
   const timeoutMs = Math.max(opts.timeoutMs ?? 120_000, 1000);
   const deadline = Date.now() + timeoutMs;
+  waDebug("Waiting for connection", { timeoutMs });
 
   while (true) {
     const remaining = deadline - Date.now();
+    waDebug("Wait loop iteration", {
+      remaining,
+      connected: login.connected,
+      hasError: !!login.error,
+    });
     if (remaining <= 0) {
+      waDebug("Wait timeout reached");
       return {
         connected: false,
-        message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
+        message: "Still waiting for the QR scan. Let me know when you've scanned it.",
       };
     }
     const timeout = new Promise<"timeout">((resolve) =>
       setTimeout(() => resolve("timeout"), remaining),
     );
     const result = await Promise.race([login.waitPromise.then(() => "done"), timeout]);
+    waDebug("Promise race result", { result });
 
     if (result === "timeout") {
+      waDebug("Promise race timed out");
       return {
         connected: false,
-        message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
+        message: "Still waiting for the QR scan. Let me know when you've scanned it.",
       };
     }
 
     if (login.error) {
+      waDebug("Login has error", { error: login.error, errorStatus: login.errorStatus });
       if (login.errorStatus === DisconnectReason.loggedOut) {
         await logoutWeb({
           authDir: login.authDir,
@@ -272,8 +326,10 @@ export async function waitForWebLogin(
         return { connected: false, message };
       }
       if (login.errorStatus === 515) {
+        waDebug("Got 515, attempting restart");
         const restarted = await restartLoginSocket(login, runtime);
         if (restarted && isLoginFresh(login)) {
+          waDebug("Restart successful, continuing loop");
           continue;
         }
       }
@@ -284,12 +340,14 @@ export async function waitForWebLogin(
     }
 
     if (login.connected) {
+      waDebug("LOGIN SUCCESSFUL!");
       const message = "✅ Linked! WhatsApp is ready.";
       runtime.log(success(message));
       await resetActiveLogin(account.accountId);
       return { connected: true, message };
     }
 
+    waDebug("Login ended without connection (unexpected state)");
     return { connected: false, message: "Login ended without a connection." };
   }
 }
