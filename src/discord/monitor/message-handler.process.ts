@@ -40,6 +40,7 @@ import {
 } from "./message-utils.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
+import { startSmartAck, type SmartAckConfig } from "./smart-ack.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import { sendTyping } from "./typing.js";
 
@@ -474,6 +475,43 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     }, intervalSec * 1000);
   }
 
+  // Start smart acknowledgment generation in parallel (uses Haiku for fast contextual response).
+  // Only sends if main response takes longer than the configured delay.
+  const smartAckConfig = discordConfig?.smartAck;
+  const smartAckEnabled =
+    smartAckConfig === true ||
+    (typeof smartAckConfig === "object" && smartAckConfig?.enabled !== false);
+  const smartAckController = smartAckEnabled
+    ? startSmartAck({
+        message: text,
+        senderName: sender.name,
+        cfg,
+        config: typeof smartAckConfig === "object" ? (smartAckConfig as SmartAckConfig) : undefined,
+      })
+    : null;
+
+  // Set up listener to send smart ack when delay passes (if not cancelled).
+  if (smartAckController) {
+    smartAckController.result.then((ackText) => {
+      if (ackText) {
+        deliverDiscordReply({
+          replies: [{ text: ackText }],
+          target: deliverTarget,
+          token,
+          accountId,
+          rest: client.rest,
+          runtime,
+          textLimit,
+          maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
+          tableMode,
+          chunkMode: resolveChunkMode(cfg, "discord", accountId),
+        }).catch((err) => {
+          logVerbose(`discord: smart ack delivery failed: ${String(err)}`);
+        });
+      }
+    });
+  }
+
   const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: ctxPayload,
     cfg,
@@ -499,6 +537,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   if (progressInterval) {
     clearInterval(progressInterval);
     progressInterval = undefined;
+  }
+  // Cancel smart ack (main response arrived).
+  if (smartAckController) {
+    smartAckController.cancel();
   }
   if (!queuedFinal) {
     if (isGuildMessage) {

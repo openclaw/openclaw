@@ -274,6 +274,18 @@ export const DiscordAccountSchema = z
     quickAck: z.union([z.boolean(), z.string()]).optional(),
     progressUpdates: z.union([z.boolean(), z.number().int().min(15)]).optional(),
     startupRecovery: z.union([z.boolean(), z.number().int().min(1)]).optional(),
+    smartAck: z
+      .union([
+        z.boolean(),
+        z.object({
+          enabled: z.boolean().optional(),
+          delayMs: z.number().int().min(1000).optional(),
+          provider: z.string().optional(),
+          model: z.string().optional(),
+          timeoutMs: z.number().int().min(1000).optional(),
+        }),
+      ])
+      .optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),

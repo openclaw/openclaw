@@ -86,6 +86,22 @@ export type DiscordIntentsConfig = {
   guildMembers?: boolean;
 };
 
+export type DiscordSmartAckConfig = {
+  /** Enable smart contextual acknowledgments. */
+  enabled?: boolean;
+  /**
+   * Delay in milliseconds before sending acknowledgment.
+   * Only sends if main response hasn't arrived. Default: 30000 (30 seconds).
+   */
+  delayMs?: number;
+  /** Model provider for acknowledgment generation. Default: anthropic. */
+  provider?: string;
+  /** Model ID for acknowledgment generation. Default: claude-3-5-haiku-latest. */
+  model?: string;
+  /** Timeout for acknowledgment generation in ms. Default: 5000. */
+  timeoutMs?: number;
+};
+
 export type DiscordExecApprovalConfig = {
   /** Enable exec approval forwarding to Discord DMs. Default: false. */
   enabled?: boolean;
@@ -180,6 +196,13 @@ export type DiscordAccountConfig = {
    * - number: Check messages from the last N minutes (default: 10)
    */
   startupRecovery?: boolean | number;
+  /**
+   * Smart contextual acknowledgment using a fast model (Haiku).
+   * Generates a context-aware response if main model takes too long.
+   * - true: Enable with default settings (30s delay)
+   * - object: Configure delay, model, and timeout
+   */
+  smartAck?: boolean | DiscordSmartAckConfig;
 };
 
 export type DiscordConfig = {
