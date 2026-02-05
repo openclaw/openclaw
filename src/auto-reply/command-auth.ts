@@ -89,8 +89,9 @@ function resolveOwnerAllowFromList(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   providerId?: ChannelId;
+  allowFrom?: Array<string | number>;
 }): string[] {
-  const raw = params.cfg.commands?.ownerAllowFrom;
+  const raw = params.allowFrom ?? params.cfg.commands?.ownerAllowFrom;
   if (!Array.isArray(raw) || raw.length === 0) {
     return [];
   }
@@ -183,11 +184,19 @@ export function resolveCommandAuthorization(params: {
     accountId: ctx.AccountId,
     allowFrom: Array.isArray(allowFromRaw) ? allowFromRaw : [],
   });
-  const ownerAllowFromList = resolveOwnerAllowFromList({
+  const configOwnerAllowFromList = resolveOwnerAllowFromList({
     dock,
     cfg,
     accountId: ctx.AccountId,
     providerId,
+    allowFrom: cfg.commands?.ownerAllowFrom,
+  });
+  const contextOwnerAllowFromList = resolveOwnerAllowFromList({
+    dock,
+    cfg,
+    accountId: ctx.AccountId,
+    providerId,
+    allowFrom: ctx.OwnerAllowFrom,
   });
   const allowAll =
     allowFromList.length === 0 || allowFromList.some((entry) => entry.trim() === "*");
@@ -204,10 +213,19 @@ export function resolveCommandAuthorization(params: {
       ownerCandidatesForCommands.push(...normalizedTo);
     }
   }
-  const ownerAllowAll = ownerAllowFromList.some((entry) => entry.trim() === "*");
-  const explicitOwners = ownerAllowFromList.filter((entry) => entry !== "*");
+  const ownerAllowAll = configOwnerAllowFromList.some((entry) => entry.trim() === "*");
+  const explicitOwners = configOwnerAllowFromList.filter((entry) => entry !== "*");
+  const explicitOverrides = contextOwnerAllowFromList.filter((entry) => entry !== "*");
   const ownerList = Array.from(
-    new Set(explicitOwners.length > 0 ? explicitOwners : ownerCandidatesForCommands),
+    new Set(
+      explicitOwners.length > 0
+        ? explicitOwners
+        : ownerAllowAll
+          ? []
+          : explicitOverrides.length > 0
+            ? explicitOverrides
+            : ownerCandidatesForCommands,
+    ),
   );
 
   const senderCandidates = resolveSenderCandidates({
