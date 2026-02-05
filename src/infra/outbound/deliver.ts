@@ -253,7 +253,7 @@ export async function deliverOutboundPayloads(params: {
     if (!hookRunner || !canMessageSendHook) {
       return { content };
     }
-    // TODO(opik): Message hooks are unparented when sessionKey is unavailable.
+    // TODO(hooks): Message hooks are unparented when sessionKey is unavailable.
     let result: { cancel?: boolean; content?: string } | undefined;
     try {
       result = await hookRunner.runMessageSending(
