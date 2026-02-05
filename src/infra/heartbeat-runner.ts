@@ -65,6 +65,11 @@ type HeartbeatDeps = OutboundSendDeps &
 const log = createSubsystemLogger("gateway/heartbeat");
 let heartbeatsEnabled = true;
 
+// Maximum safe value for setTimeout delay (32-bit signed integer max).
+// Values above this overflow and get set to 1ms, causing immediate firing.
+// See: https://github.com/openclaw/openclaw/issues/8123
+export const MAX_TIMEOUT_MS = 2_147_483_647;
+
 export function setHeartbeatsEnabled(enabled: boolean) {
   heartbeatsEnabled = enabled;
 }
@@ -888,7 +893,9 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = Math.max(0, nextDue - now);
+    // Safety clamp: ensure delay never exceeds MAX_TIMEOUT_MS (already clamped in updateConfig,
+    // but kept here as a defensive measure against setTimeout 32-bit overflow).
+    const delay = Math.min(Math.max(0, nextDue - now), MAX_TIMEOUT_MS);
     state.timer = setTimeout(() => {
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     }, delay);
@@ -905,9 +912,20 @@ export function startHeartbeatRunner(opts: {
     const nextAgents = new Map<string, HeartbeatAgentState>();
     const intervals: number[] = [];
     for (const agent of resolveHeartbeatAgents(cfg)) {
-      const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, agent.heartbeat);
-      if (!intervalMs) {
+      const rawIntervalMs = resolveHeartbeatIntervalMs(cfg, undefined, agent.heartbeat);
+      if (!rawIntervalMs) {
         continue;
+      }
+      // Clamp interval to MAX_TIMEOUT_MS to avoid 32-bit signed integer overflow in setTimeout.
+      // Without this, intervals > ~596 hours overflow to 1ms and cause immediate/repeated firing.
+      const intervalMs = Math.min(rawIntervalMs, MAX_TIMEOUT_MS);
+      if (rawIntervalMs > MAX_TIMEOUT_MS) {
+        log.info("heartbeat: interval clamped to maximum safe value", {
+          agentId: agent.agentId,
+          configuredMs: rawIntervalMs,
+          effectiveMs: intervalMs,
+          effectiveHours: Math.round(intervalMs / 3_600_000),
+        });
       }
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
