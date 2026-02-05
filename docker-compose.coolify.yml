@@ -7,10 +7,15 @@ services:
     container_name: openclaw_init
     user: root # Run as root to change permissions
     command:
-      ["sh", "-c", "chown -R node:node /home/node/.openclaw && chmod -R 755 /home/node/.openclaw"]
+      [
+        "sh",
+        "-c",
+        "chown -R 1000:1000 /home/node/.openclaw && chmod -R 755 /home/node/.openclaw && echo 'Init completed'",
+      ]
     volumes:
       - openclaw_config:/home/node/.openclaw
       - openclaw_workspace:/home/node/.openclaw/workspace
+    restart: "no"
 
   openclaw:
     build:
@@ -25,9 +30,9 @@ services:
       - NODE_ENV=production
       - HOME=/home/node
       - OPENCLAW_GATEWAY_BIND=lan
-      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN} # REQUIRED: Set in Coolify Env Vars
-      - OPENCLAW_GATEWAY_CONTROLUI_ALLOWINSECUREAUTH=${OPENCLAW_GATEWAY_CONTROLUI_ALLOWINSECUREAUTH:-false}
-      - REDIS_URL=redis://openclaw_redis:6379
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-changeme}
+      - OPENCLAW_GATEWAY_CONTROLUI_ALLOWINSECUREAUTH=${OPENCLAW_GATEWAY_CONTROLUI_ALLOWINSECUREAUTH:-true}
+      - REDIS_URL=redis://redis:6379
 
       # Default Model Configuration (uses OpenAI by default)
       - OPENCLAW_MODEL=${OPENCLAW_MODEL:-openai/gpt-4o}
@@ -40,18 +45,29 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
 
-      # Skills & Integrations
-      - HUBSPOT_API_KEY=${HUBSPOT_API_KEY}
-      - BIGQUERY_PROJECT_ID=${BIGQUERY_PROJECT_ID}
+      # MCP Server URLs (your deployed servers)
+      - BIGQUERY_MCP_URL=${BIGQUERY_MCP_URL:-http://ck8c84oo40gkcwwk4gcokco0.5.161.117.36.sslip.io}
+      - QDRANT_MCP_URL=${QDRANT_MCP_URL:-http://gw80os8k0kcgc488o0gw0so8.5.161.117.36.sslip.io/sse}
+      - HUBSPOT_CLIENT_ID=${HUBSPOT_CLIENT_ID}
+      - HUBSPOT_CLIENT_SECRET=${HUBSPOT_CLIENT_SECRET}
+      - MONGODB_URL=${MONGODB_URL}
     volumes:
       # We use names instead of paths for better Coolify compatibility
       - openclaw_config:/home/node/.openclaw
       - openclaw_workspace:/home/node/.openclaw/workspace
     depends_on:
-      openclaw-init:
-        condition: service_completed_successfully
       redis:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget --no-verbose --tries=1 --spider http://localhost:18789/health || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     restart: always
 
   redis:
