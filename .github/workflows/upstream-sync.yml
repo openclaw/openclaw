@@ -1,0 +1,95 @@
+# Sincroniza fork com upstream openclaw/openclaw diariamente
+
+name: Sync Fork with Upstream
+
+on:
+  schedule:
+    # Executa diariamente às 06:00 UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    # Permite execução manual
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    name: Sync with upstream
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/openclaw/openclaw.git || true
+          git fetch upstream
+
+      - name: Sync main branch
+        id: sync
+        run: |
+          git checkout main
+
+          # Check if there are new commits
+          UPSTREAM_COMMITS=$(git rev-list HEAD..upstream/main --count)
+          echo "upstream_commits=$UPSTREAM_COMMITS" >> $GITHUB_OUTPUT
+
+          if [ "$UPSTREAM_COMMITS" -eq "0" ]; then
+            echo "✅ Fork is already up to date with upstream"
+            echo "synced=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "📥 Found $UPSTREAM_COMMITS new commits from upstream"
+
+          # Try fast-forward merge first
+          if git merge upstream/main --ff-only; then
+            echo "✅ Fast-forward merge successful"
+            git push origin main
+            echo "synced=true" >> $GITHUB_OUTPUT
+            echo "conflict=false" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Fast-forward not possible, creating sync branch"
+            git reset --hard HEAD
+            git checkout -b upstream-sync-$(date +%Y%m%d) || git checkout upstream-sync-$(date +%Y%m%d)
+            git merge upstream/main --no-edit || true
+            echo "synced=false" >> $GITHUB_OUTPUT
+            echo "conflict=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create PR if conflict
+        if: steps.sync.outputs.conflict == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: upstream-sync-${{ github.run_number }}
+          title: "🔄 Sync with upstream (manual merge required)"
+          body: |
+            ## Upstream Sync
+
+            This PR was automatically created because fast-forward merge was not possible.
+
+            **Action required:** Please resolve any conflicts and merge manually.
+
+            - Upstream: `openclaw/openclaw:main`
+            - Commits behind: ${{ steps.sync.outputs.upstream_commits }}
+          labels: |
+            upstream-sync
+            needs-review
+
+      - name: Summary
+        run: |
+          echo "## Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Upstream commits: ${{ steps.sync.outputs.upstream_commits }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Synced: ${{ steps.sync.outputs.synced }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Conflict: ${{ steps.sync.outputs.conflict || 'false' }}" >> $GITHUB_STEP_SUMMARY
