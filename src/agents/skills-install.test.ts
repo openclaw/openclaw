@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { entryEscapesTarget, installSkill } from "./skills-install.js";
+import { entryEscapesTarget, installSkill, parseTarSymlinkTarget } from "./skills-install.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const scanDirectoryWithSummaryMock = vi.fn();
@@ -144,8 +144,6 @@ describe("entryEscapesTarget", () => {
   });
 
   it("rejects backslash-separated traversal paths (normalized to /)", () => {
-    // Backslashes are normalized to forward slashes before validation
-    // because some zip tools use `\` as separator even on POSIX
     expect(entryEscapesTarget("..\\etc\\passwd", target)).toBe(true);
     expect(entryEscapesTarget("foo\\..\\..\\etc\\shadow", target)).toBe(true);
   });
@@ -153,5 +151,41 @@ describe("entryEscapesTarget", () => {
   it("allows entry that resolves exactly to targetDir", () => {
     expect(entryEscapesTarget(".", target)).toBe(false);
     expect(entryEscapesTarget("./", target)).toBe(false);
+  });
+});
+
+describe("parseTarSymlinkTarget", () => {
+  it("returns undefined for regular files", () => {
+    expect(
+      parseTarSymlinkTarget("-rw-r--r--  0 user group  1234 2026-01-01 00:00 file.txt"),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for directories", () => {
+    expect(
+      parseTarSymlinkTarget("drwxr-xr-x  0 user group     0 2026-01-01 00:00 dir/"),
+    ).toBeUndefined();
+  });
+
+  it("extracts symlink target from tar tvf line", () => {
+    expect(
+      parseTarSymlinkTarget("lrwxr-xr-x  0 user group     0 2026-01-01 00:00 ./evil-link -> /etc"),
+    ).toBe("/etc");
+  });
+
+  it("extracts relative symlink targets", () => {
+    expect(
+      parseTarSymlinkTarget(
+        "lrwxr-xr-x  0 user group     0 2026-01-01 00:00 ./link -> ../../../etc",
+      ),
+    ).toBe("../../../etc");
+  });
+
+  it("handles symlink to local path (safe)", () => {
+    expect(
+      parseTarSymlinkTarget(
+        "lrwxr-xr-x  0 user group     0 2026-01-01 00:00 ./bin/cli -> ./lib/main",
+      ),
+    ).toBe("./lib/main");
   });
 });
