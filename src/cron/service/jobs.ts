@@ -52,7 +52,18 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {
       return undefined;
     }
-    const atMs = parseAbsoluteTimeMs(job.schedule.at);
+    // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
+    // The store migration should convert atMs→at, but be defensive in case
+    // the migration hasn't run yet or was bypassed.
+    const schedule = job.schedule as { at?: string; atMs?: number | string };
+    const atMs =
+      typeof schedule.atMs === "number" && Number.isFinite(schedule.atMs) && schedule.atMs > 0
+        ? schedule.atMs
+        : typeof schedule.atMs === "string"
+          ? parseAbsoluteTimeMs(schedule.atMs)
+          : typeof schedule.at === "string"
+            ? parseAbsoluteTimeMs(schedule.at)
+            : null;
     return atMs !== null ? atMs : undefined;
   }
   return computeNextRunAtMs(job.schedule, nowMs);

@@ -4,7 +4,18 @@ import { parseAbsoluteTimeMs } from "./parse.js";
 
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
-    const atMs = parseAbsoluteTimeMs(schedule.at);
+    // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
+    // The store migration should convert atMs→at, but be defensive in case
+    // the migration hasn't run yet or was bypassed.
+    const sched = schedule as { at?: string; atMs?: number | string };
+    const atMs =
+      typeof sched.atMs === "number" && Number.isFinite(sched.atMs) && sched.atMs > 0
+        ? sched.atMs
+        : typeof sched.atMs === "string"
+          ? parseAbsoluteTimeMs(sched.atMs)
+          : typeof sched.at === "string"
+            ? parseAbsoluteTimeMs(sched.at)
+            : null;
     if (atMs === null) {
       return undefined;
     }
