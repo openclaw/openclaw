@@ -657,12 +657,13 @@ export function isNetworkError(error: unknown): boolean {
 
   const lowerMessage = errorMessage.toLowerCase();
 
-  // TLS/SSL errors
+  // TLS/SSL errors (only transient handshake/connection errors, not certificate validation)
   if (
-    lowerMessage.includes("tls") ||
-    lowerMessage.includes("ssl") ||
     lowerMessage.includes("setsession") ||
-    lowerMessage.includes("certificate")
+    lowerMessage.includes("tls handshake") ||
+    lowerMessage.includes("ssl handshake") ||
+    (lowerMessage.includes("tls") && lowerMessage.includes("timeout")) ||
+    (lowerMessage.includes("ssl") && lowerMessage.includes("timeout"))
   ) {
     return true;
   }

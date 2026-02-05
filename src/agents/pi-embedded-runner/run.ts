@@ -515,6 +515,10 @@ export async function runEmbeddedPiAgent(
             }
             // Network error retry: Retry transient network errors (TLS, socket, DNS failures)
             if (isNetworkError(promptError) && networkRetryAttempt < MAX_NETWORK_RETRIES) {
+              // Check if already aborted before retrying
+              if (params.abortSignal?.aborted) {
+                throw promptError;
+              }
               const delayMs = Math.min(1000 * Math.pow(2, networkRetryAttempt), 8000);
               networkRetryAttempt += 1;
               if (!isProbeSession) {
@@ -522,7 +526,15 @@ export async function runEmbeddedPiAgent(
                   `network error detected; retrying (${networkRetryAttempt}/${MAX_NETWORK_RETRIES}) after ${delayMs}ms delay: ${errorText.slice(0, 150)}`,
                 );
               }
-              await new Promise((resolve) => setTimeout(resolve, delayMs));
+              // Respect abort signal during backoff delay
+              await new Promise((resolve, reject) => {
+                const timeout = setTimeout(resolve, delayMs);
+                const onAbort = () => {
+                  clearTimeout(timeout);
+                  reject(promptError);
+                };
+                params.abortSignal?.addEventListener("abort", onAbort, { once: true });
+              });
               continue;
             }
             // FIX: Throw FailoverError for prompt errors when fallbacks configured
