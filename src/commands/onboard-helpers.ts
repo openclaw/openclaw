@@ -2,6 +2,7 @@ import { cancel, isCancel } from "@clack/prompts";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import chalk from "chalk";
 import { inspect } from "node:util";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -190,7 +191,7 @@ export function formatControlUiSshHint(params: {
   const tokenParam = params.token ? `?token=${encodeURIComponent(params.token)}` : "";
   const authedUrl = params.token ? `${localUrl}${tokenParam}` : undefined;
   const sshTarget = resolveSshTargetHint();
-  return [
+  const lines = [
     "No GUI detected. Open from your computer:",
     `ssh -N -L ${params.port}:127.0.0.1:${params.port} ${sshTarget}`,
     "Then open:",
@@ -199,9 +200,12 @@ export function formatControlUiSshHint(params: {
     "Docs:",
     "https://docs.openclaw.ai/gateway/remote",
     "https://docs.openclaw.ai/web/control-ui",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ];
+  if (params.token) {
+    lines.push("");
+    lines.push(chalk.yellow("⚠️ The URL above contains your gateway token. Avoid sharing it."));
+  }
+  return lines.filter(Boolean).join("\n");
 }
 
 function resolveSshTargetHint(): string {
