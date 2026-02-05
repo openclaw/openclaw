@@ -26,6 +26,15 @@ describe("ensureSkillsWatcher", () => {
     );
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/dist/index.js"))).toBe(true);
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/.git/config"))).toBe(true);
+    expect(
+      ignored.some((re) => re.test("/tmp/workspace/skills/.venv/lib/python3.12/site.py")),
+    ).toBe(true);
+    expect(
+      ignored.some((re) => re.test("/tmp/workspace/skills/__pycache__/mod.cpython-312.pyc")),
+    ).toBe(true);
+    expect(ignored.some((re) => re.test("/tmp/workspace/skills/browser_data/Default/Cache"))).toBe(
+      true,
+    );
     expect(ignored.some((re) => re.test("/tmp/.hidden/skills/index.md"))).toBe(false);
   });
 });
