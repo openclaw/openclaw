@@ -135,12 +135,15 @@ What you set:
   <Accordion title="OpenAI Code subscription (OAuth)">
     Browser flow; paste `code#state`.
 
-    Sets `agents.defaults.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
+    Sets `agents.defaults.model` to `openai-codex/gpt-5.3-codex` when model is unset or `openai/*`.
 
   </Accordion>
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then saves it to
     `~/.openclaw/.env` so launchd can read it.
+
+    Sets `agents.defaults.model` to `openai/gpt-5.1-codex` when model is unset, `openai/*`, or `openai-codex/*`.
+
   </Accordion>
   <Accordion title="OpenCode Zen">
     Prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`).

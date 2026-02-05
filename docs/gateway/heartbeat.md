@@ -83,7 +83,7 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
     defaults: {
       heartbeat: {
         every: "30m", // default: 30m (0m disables)
-        model: "anthropic/claude-opus-4-5",
+        model: "anthropic/claude-opus-4-6",
         includeReasoning: false, // default: false (deliver separate Reasoning: message when available)
         target: "last", // last | none | <channel id> (core or plugin, e.g. "bluebubbles")
         to: "+15551234567", // optional channel-specific override

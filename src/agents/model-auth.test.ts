@@ -140,7 +140,7 @@ describe("getApiKeyForModel", () => {
       } catch (err) {
         error = err;
       }
-      expect(String(error)).toContain("openai-codex/gpt-5.2");
+      expect(String(error)).toContain("openai-codex/gpt-5.3-codex");
     } finally {
       if (previousOpenAiKey === undefined) {
         delete process.env.OPENAI_API_KEY;
