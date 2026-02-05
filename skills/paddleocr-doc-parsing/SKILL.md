@@ -2,7 +2,19 @@
 name: paddleocr-doc-parsing
 description: Parse documents using PaddleOCR's API.
 homepage: https://www.paddleocr.com
-metadata: { "openclaw": { "emoji": "📄", "os": ["darwin", "linux"], "requires": { "bins": ["curl", "base64", "jq"], "env": ["PADDLEOCR_API_URL", "PADDLEOCR_ACCESS_TOKEN"] } } }
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "📄",
+        "os": ["darwin", "linux"],
+        "requires":
+          {
+            "bins": ["curl", "base64", "jq"],
+            "env": ["PADDLEOCR_API_URL", "PADDLEOCR_ACCESS_TOKEN"],
+          },
+      },
+  }
 ---
 
 # PaddleOCR Document Parsing
@@ -72,6 +84,7 @@ export PADDLEOCR_ACCESS_TOKEN="your_access_token"
 ```
 
 **Important Fields:**
+
 - **`prunedResult`** - Contains detailed layout element information including positions, categories, etc.
 - **`markdown`** - Stores the document content converted to Markdown format with preserved structure and formatting.
 
