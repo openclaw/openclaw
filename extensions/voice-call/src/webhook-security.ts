@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
 import type { WebhookContext } from "./types.js";
+import { voiceCallLogger } from "./logger.js";
+
+const log = voiceCallLogger;
 
 /**
  * Validate Twilio webhook signature using HMAC-SHA1.
@@ -402,7 +405,7 @@ export function verifyTwilioWebhook(
     verificationUrl.includes(".ngrok-free.app") || verificationUrl.includes(".ngrok.io");
 
   if (isNgrokFreeTier && options?.allowNgrokFreeTierLoopbackBypass && isLoopback) {
-    console.warn(
+    log.warn(
       "[voice-call] Twilio signature validation failed (ngrok free tier compatibility, loopback only)",
     );
     return {

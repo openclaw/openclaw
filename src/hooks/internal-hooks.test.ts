@@ -118,7 +118,7 @@ describe("hooks", () => {
     });
 
     it("should catch and log errors from handlers", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const consoleError = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
       const errorHandler = vi.fn(() => {
         throw new Error("Handler failed");
       });

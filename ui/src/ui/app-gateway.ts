@@ -165,7 +165,7 @@ export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
   try {
     handleGatewayEventUnsafe(host, evt);
   } catch (err) {
-    console.error("[gateway] handleGatewayEvent error:", evt.event, err);
+    process.stderr.write(`[gateway] handleGatewayEvent error: ${evt.event} ${String(err)}\n`);
   }
 }
 

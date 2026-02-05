@@ -13,8 +13,11 @@ import type {
   WebhookVerificationResult,
 } from "../types.js";
 import type { VoiceCallProvider } from "./base.js";
+import { voiceCallLogger } from "../logger.js";
 import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
+
+const log = voiceCallLogger;
 
 export interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */
@@ -101,7 +104,7 @@ export class PlivoProvider implements VoiceCallProvider {
     });
 
     if (!result.ok) {
-      console.warn(`[plivo] Webhook verification failed: ${result.reason}`);
+      log.warn(`[plivo] Webhook verification failed: ${result.reason}`);
     }
 
     return { ok: result.ok, reason: result.reason };

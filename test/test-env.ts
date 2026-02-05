@@ -44,7 +44,7 @@ function loadProfileEnv(): void {
       applied += 1;
     }
     if (applied > 0) {
-      console.log(`[live] loaded ${applied} env vars from ~/.profile`);
+      process.stdout.write(`[live] loaded ${applied} env vars from ~/.profile\n`);
     }
   } catch {
     // ignore profile load failures

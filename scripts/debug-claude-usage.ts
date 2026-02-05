@@ -19,6 +19,10 @@ const mask = (value: string) => {
   return `${compact.slice(0, edge)}…${compact.slice(-edge)}`;
 };
 
+const writeStdout = (message: string): void => {
+  process.stdout.write(`${message}\n`);
+};
+
 const parseArgs = (): Args => {
   const args = process.argv.slice(2);
   let agentId = "main";
@@ -325,35 +329,35 @@ const fetchClaudeWebUsage = async (sessionKey: string) => {
 const main = async () => {
   const opts = parseArgs();
   const { authPath, store } = loadAuthProfiles(opts.agentId);
-  console.log(`Auth file: ${authPath}`);
+  writeStdout(`Auth file: ${authPath}`);
 
   const keychain = readClaudeCliKeychain();
   if (keychain) {
-    console.log(
+    writeStdout(
       `Claude Code CLI keychain: accessToken=${opts.reveal ? keychain.accessToken : mask(keychain.accessToken)} scopes=${keychain.scopes?.join(",") ?? "(unknown)"}`,
     );
     const oauth = await fetchAnthropicOAuthUsage(keychain.accessToken);
-    console.log(
+    writeStdout(
       `OAuth usage (keychain): HTTP ${oauth.status} (${oauth.contentType ?? "no content-type"})`,
     );
-    console.log(oauth.text.slice(0, 200).replace(/\s+/g, " ").trim());
+    writeStdout(oauth.text.slice(0, 200).replace(/\s+/g, " ").trim());
   } else {
-    console.log("Claude Code CLI keychain: missing/unreadable");
+    writeStdout("Claude Code CLI keychain: missing/unreadable");
   }
 
   const anthropic = pickAnthropicTokens(store);
   if (anthropic.length === 0) {
-    console.log("Auth profiles: no Anthropic token profiles found");
+    writeStdout("Auth profiles: no Anthropic token profiles found");
   } else {
     for (const entry of anthropic) {
-      console.log(
+      writeStdout(
         `Auth profiles: ${entry.profileId} token=${opts.reveal ? entry.token : mask(entry.token)}`,
       );
       const oauth = await fetchAnthropicOAuthUsage(entry.token);
-      console.log(
+      writeStdout(
         `OAuth usage (${entry.profileId}): HTTP ${oauth.status} (${oauth.contentType ?? "no content-type"})`,
       );
-      console.log(oauth.text.slice(0, 200).replace(/\s+/g, " ").trim());
+      writeStdout(oauth.text.slice(0, 200).replace(/\s+/g, " ").trim());
     }
   }
 
@@ -369,23 +373,23 @@ const main = async () => {
       : (findClaudeSessionKey()?.source ?? "auto");
 
   if (!sessionKey) {
-    console.log(
+    writeStdout(
       "Claude web: no sessionKey found (try --session-key or export CLAUDE_AI_SESSION_KEY)",
     );
     return;
   }
 
-  console.log(
+  writeStdout(
     `Claude web: sessionKey=${opts.reveal ? sessionKey : mask(sessionKey)} (source: ${source})`,
   );
   const web = await fetchClaudeWebUsage(sessionKey);
   if (!web.ok) {
-    console.log(`Claude web: ${web.step} HTTP ${web.status}`);
-    console.log(String(web.body).slice(0, 400).replace(/\s+/g, " ").trim());
+    writeStdout(`Claude web: ${web.step} HTTP ${web.status}`);
+    writeStdout(String(web.body).slice(0, 400).replace(/\s+/g, " ").trim());
     return;
   }
-  console.log(`Claude web: org=${web.orgId} OK`);
-  console.log(web.body.slice(0, 400).replace(/\s+/g, " ").trim());
+  writeStdout(`Claude web: org=${web.orgId} OK`);
+  writeStdout(web.body.slice(0, 400).replace(/\s+/g, " ").trim());
 };
 
 await main();

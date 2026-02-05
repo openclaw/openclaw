@@ -28,7 +28,7 @@ const existing = fetchExistingLabels(repo);
 
 const missing = labelNames.filter((label) => !existing.has(label));
 if (!missing.length) {
-  console.log("All labeler labels already exist.");
+  process.stdout.write("All labeler labels already exist.\n");
   process.exit(0);
 }
 
@@ -39,7 +39,7 @@ for (const label of missing) {
     ["api", "-X", "POST", `repos/${repo}/labels`, "-f", `name=${label}`, "-f", `color=${color}`],
     { stdio: "inherit" },
   );
-  console.log(`Created label: ${label}`);
+  process.stdout.write(`Created label: ${label}\n`);
 }
 
 function extractLabelNames(contents: string): string[] {

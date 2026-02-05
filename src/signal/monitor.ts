@@ -6,6 +6,7 @@ import { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } from "../a
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { loadConfig } from "../config/config.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
+import { createSubsystemRuntime } from "../logging/subsystem.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveSignalAccount } from "./accounts.js";
@@ -58,13 +59,10 @@ export type MonitorSignalOpts = {
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
   return (
-    opts.runtime ?? {
-      log: console.log,
-      error: console.error,
-      exit: (code: number): never => {
-        throw new Error(`exit ${code}`);
-      },
-    }
+    opts.runtime ??
+    createSubsystemRuntime("signal/monitor", (code: number): never => {
+      throw new Error(`exit ${code}`);
+    })
   );
 }
 

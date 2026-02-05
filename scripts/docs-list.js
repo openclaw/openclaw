@@ -3,6 +3,14 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
+const writeStdout = (message) => {
+  process.stdout.write(`${message}\n`);
+};
+
+const writeStderr = (message) => {
+  process.stderr.write(`${message}\n`);
+};
+
 process.stdout.on("error", (error) => {
   if (error?.code === "EPIPE") {
     process.exit(0);
@@ -12,11 +20,11 @@ process.stdout.on("error", (error) => {
 
 const DOCS_DIR = join(process.cwd(), "docs");
 if (!existsSync(DOCS_DIR)) {
-  console.error("docs:list: missing docs directory. Run from repo root.");
+  writeStderr("docs:list: missing docs directory. Run from repo root.");
   process.exit(1);
 }
 if (!statSync(DOCS_DIR).isDirectory()) {
-  console.error("docs:list: docs path is not a directory.");
+  writeStderr("docs:list: docs path is not a directory.");
   process.exit(1);
 }
 
@@ -150,7 +158,7 @@ function extractMetadata(fullPath) {
   return { summary: normalized, readWhen };
 }
 
-console.log("Listing all markdown files in docs folder:");
+writeStdout("Listing all markdown files in docs folder:");
 
 const markdownFiles = walkMarkdownFiles(DOCS_DIR);
 
@@ -158,16 +166,16 @@ for (const relativePath of markdownFiles) {
   const fullPath = join(DOCS_DIR, relativePath);
   const { summary, readWhen, error } = extractMetadata(fullPath);
   if (summary) {
-    console.log(`${relativePath} - ${summary}`);
+    writeStdout(`${relativePath} - ${summary}`);
     if (readWhen.length > 0) {
-      console.log(`  Read when: ${readWhen.join("; ")}`);
+      writeStdout(`  Read when: ${readWhen.join("; ")}`);
     }
   } else {
     const reason = error ? ` - [${error}]` : "";
-    console.log(`${relativePath}${reason}`);
+    writeStdout(`${relativePath}${reason}`);
   }
 }
 
-console.log(
+writeStdout(
   '\nReminder: keep docs up to date as behavior changes. When your task matches any "Read when" hint above (React hooks, cache directives, database work, tests, etc.), read that doc before coding, and suggest new coverage when it is missing.',
 );

@@ -18,7 +18,7 @@ export async function copyA2uiAssets({ srcDir, outDir }: { srcDir: string; outDi
   } catch (err) {
     const message = 'Missing A2UI bundle assets. Run "pnpm canvas:a2ui:bundle" and retry.';
     if (skipMissing) {
-      console.warn(`${message} Skipping copy (OPENCLAW_A2UI_SKIP_MISSING=1).`);
+      process.stderr.write(`${message} Skipping copy (OPENCLAW_A2UI_SKIP_MISSING=1).\n`);
       return;
     }
     throw new Error(message, { cause: err });
@@ -34,7 +34,7 @@ async function main() {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((err) => {
-    console.error(String(err));
+    process.stderr.write(`${String(err)}\n`);
     process.exit(1);
   });
 }

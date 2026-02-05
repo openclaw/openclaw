@@ -41,7 +41,7 @@ const soulEvilHook: HookHandler = async (event) => {
     userTimezone: cfg?.agents?.defaults?.userTimezone,
     log: {
       warn: (message) => log.warn(message),
-      debug: (message) => log.debug?.(message),
+      debug: (message) => log.debug(message),
     },
   });
 

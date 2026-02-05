@@ -6,6 +6,9 @@
 import crypto from "node:crypto";
 import type { VoiceCallConfig } from "./config.js";
 import { loadCoreAgentDeps, type CoreConfig } from "./core-bridge.js";
+import { formatVoiceCallError, voiceCallLogger } from "./logger.js";
+
+const log = voiceCallLogger;
 
 export type VoiceResponseParams = {
   /** Voice call config */
@@ -152,7 +155,7 @@ export async function generateVoiceResponse(
 
     return { text };
   } catch (err) {
-    console.error(`[voice-call] Response generation failed:`, err);
+    log.error(`[voice-call] Response generation failed: ${formatVoiceCallError(err)}`);
     return { text: null, error: String(err) };
   }
 }

@@ -11,6 +11,14 @@ const DEFAULT_URLS = [
 const urls = process.argv.slice(2);
 const targets = urls.length > 0 ? urls : DEFAULT_URLS;
 
+const writeStdout = (message: string): void => {
+  process.stdout.write(`${message}\n`);
+};
+
+const writeStderr = (message: string): void => {
+  process.stderr.write(`${message}\n`);
+};
+
 async function runFetch(url: string, readability: boolean) {
   if (!readability) {
     throw new Error("Basic extraction removed. Set readability=true or enable Firecrawl.");
@@ -45,22 +53,23 @@ function truncate(value: string, max = 160): string {
 
 async function run() {
   for (const url of targets) {
-    console.log(`\n=== ${url}`);
+    writeStdout(`\n=== ${url}`);
     const readable = await runFetch(url, true);
 
-    console.log(
+    writeStdout(
       `readability: ${readable.extractor ?? "unknown"} len=${readable.length ?? 0} title=${truncate(
         readable.title ?? "",
         80,
       )}`,
     );
     if (readable.text) {
-      console.log(`readability sample: ${truncate(readable.text)}`);
+      writeStdout(`readability sample: ${truncate(readable.text)}`);
     }
   }
 }
 
 run().catch((error) => {
-  console.error(error);
+  const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  writeStderr(message);
   process.exit(1);
 });

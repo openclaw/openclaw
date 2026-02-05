@@ -151,7 +151,7 @@ describe("loader", () => {
     });
 
     it("should handle module loading errors gracefully", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const consoleError = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
       const cfg: OpenClawConfig = {
         hooks: {
@@ -182,7 +182,7 @@ describe("loader", () => {
     });
 
     it("should handle non-function exports", async () => {
-      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+      const consoleError = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
       // Create a module with a non-function export
       const handlerPath = path.join(tmpDir, "bad-export.js");

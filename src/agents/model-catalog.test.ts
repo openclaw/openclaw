@@ -57,7 +57,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("returns partial results on discovery errors", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     __setModelCatalogImportForTest(
       async () =>

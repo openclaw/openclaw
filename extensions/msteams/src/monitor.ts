@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { createSubsystemRuntime } from "openclaw";
 import {
   mergeAllowlist,
   summarizeMapping,
@@ -51,13 +52,11 @@ export async function monitorMSTeamsProvider(
   }
   const appId = creds.appId; // Extract for use in closures
 
-  const runtime: RuntimeEnv = opts.runtime ?? {
-    log: console.log,
-    error: console.error,
-    exit: (code: number): never => {
+  const runtime: RuntimeEnv =
+    opts.runtime ??
+    createSubsystemRuntime("msteams/monitor", (code: number): never => {
       throw new Error(`exit ${code}`);
-    },
-  };
+    });
 
   let allowFrom = msteamsCfg.allowFrom;
   let groupAllowFrom = msteamsCfg.groupAllowFrom;

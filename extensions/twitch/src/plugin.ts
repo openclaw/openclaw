@@ -60,7 +60,9 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
     notifyApproval: async ({ id }) => {
       // Note: Twitch doesn't support DMs from bots, so pairing approval is limited
       // We'll log the approval instead
-      console.warn(`Pairing approved for user ${id} (notification sent via chat if possible)`);
+      process.stderr.write(
+        `Pairing approved for user ${id} (notification sent via chat if possible)\n`,
+      );
     },
   },
 

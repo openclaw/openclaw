@@ -11,6 +11,14 @@ type RunResult = {
   stderr: string;
 };
 
+const writeStdout = (message: string): void => {
+  process.stdout.write(`${message}\n`);
+};
+
+const writeStderr = (message: string): void => {
+  process.stderr.write(`${message}\n`);
+};
+
 function pickAnthropicEnv(): { type: "oauth" | "api"; value: string } | null {
   const oauth = process.env.ANTHROPIC_OAUTH_TOKEN?.trim();
   if (oauth) {
@@ -59,7 +67,7 @@ async function runCommand(
       const summary = signal
         ? `${label} exited with signal ${signal}`
         : `${label} exited with code ${code}`;
-      console.error(summary);
+      writeStderr(summary);
     });
   });
 }
@@ -68,11 +76,11 @@ async function main() {
   const anthropic = pickAnthropicEnv();
   const zaiKey = pickZaiKey();
   if (!anthropic) {
-    console.error("Missing ANTHROPIC_OAUTH_TOKEN or ANTHROPIC_API_KEY.");
+    writeStderr("Missing ANTHROPIC_OAUTH_TOKEN or ANTHROPIC_API_KEY.");
     process.exit(1);
   }
   if (!zaiKey) {
-    console.error("Missing ZAI_API_KEY or Z_AI_API_KEY.");
+    writeStderr("Missing ZAI_API_KEY or Z_AI_API_KEY.");
     process.exit(1);
   }
 
@@ -125,7 +133,7 @@ async function main() {
     ANTHROPIC_API_KEY: anthropic.type === "api" ? "invalid" : "",
   };
 
-  console.log("== Run 1: create tool history (primary only)");
+  writeStdout("== Run 1: create tool history (primary only)");
   const toolPrompt =
     "Use the exec tool to create a file named zai-fallback-tool.txt with the content tool-ok. " +
     "Then use the read tool to display the file contents. Reply with just the file contents.";
@@ -141,10 +149,10 @@ async function main() {
   const sessionFile = path.join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`);
   const transcript = await fs.readFile(sessionFile, "utf8").catch(() => "");
   if (!transcript.includes('"toolResult"')) {
-    console.warn("Warning: no toolResult entries detected in session history.");
+    writeStderr("Warning: no toolResult entries detected in session history.");
   }
 
-  console.log("== Run 2: force auth failover to Z.AI");
+  writeStdout("== Run 2: force auth failover to Z.AI");
   const followupPrompt =
     "What is the content of zai-fallback-tool.txt? Reply with just the contents.";
   const run2 = await runCommand(
@@ -154,15 +162,16 @@ async function main() {
   );
 
   if (run2.code === 0) {
-    console.log("PASS: fallback succeeded.");
+    writeStdout("PASS: fallback succeeded.");
     process.exit(0);
   }
 
-  console.error("FAIL: fallback failed.");
+  writeStderr("FAIL: fallback failed.");
   process.exit(run2.code ?? 1);
 }
 
 main().catch((err) => {
-  console.error(err);
+  const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  writeStderr(message);
   process.exit(1);
 });

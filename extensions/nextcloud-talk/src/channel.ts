@@ -56,7 +56,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     normalizeAllowEntry: (entry) =>
       entry.replace(/^(nextcloud-talk|nc-talk|nc):/i, "").toLowerCase(),
     notifyApproval: async ({ id }) => {
-      console.log(`[nextcloud-talk] User ${id} approved for pairing`);
+      process.stdout.write(`[nextcloud-talk] User ${id} approved for pairing\n`);
     },
   },
   capabilities: {

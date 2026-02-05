@@ -246,7 +246,7 @@ function logGroupAllowlistHint(params: {
   chatName?: string;
   accountId?: string;
 }): void {
-  const log = params.runtime.log ?? console.log;
+  const log = params.runtime.log ?? ((message: string) => process.stdout.write(`${message}\n`));
   const nameHint = params.chatName ? ` (group name: ${params.chatName})` : "";
   const accountHint = params.accountId
     ? ` (or channels.bluebubbles.accounts.${params.accountId}.groupAllowFrom)`
@@ -1461,7 +1461,7 @@ export async function handleBlueBubblesWebhookRequest(
   if (!body.ok) {
     res.statusCode = body.error === "payload too large" ? 413 : 400;
     res.end(body.error ?? "invalid payload");
-    console.warn(`[bluebubbles] webhook rejected: ${body.error ?? "invalid payload"}`);
+    process.stderr.write(`[bluebubbles] webhook rejected: ${body.error ?? "invalid payload"}\n`);
     return true;
   }
 
@@ -1512,7 +1512,7 @@ export async function handleBlueBubblesWebhookRequest(
   if (!message && !reaction) {
     res.statusCode = 400;
     res.end("invalid payload");
-    console.warn("[bluebubbles] webhook rejected: unable to parse message payload");
+    process.stderr.write("[bluebubbles] webhook rejected: unable to parse message payload\n");
     return true;
   }
 
@@ -1541,8 +1541,8 @@ export async function handleBlueBubblesWebhookRequest(
   if (matching.length === 0) {
     res.statusCode = 401;
     res.end("unauthorized");
-    console.warn(
-      `[bluebubbles] webhook rejected: unauthorized guid=${maskSecret(url.searchParams.get("guid") ?? url.searchParams.get("password") ?? "")}`,
+    process.stderr.write(
+      `[bluebubbles] webhook rejected: unauthorized guid=${maskSecret(url.searchParams.get("guid") ?? url.searchParams.get("password") ?? "")}\n`,
     );
     return true;
   }

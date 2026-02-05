@@ -157,7 +157,7 @@ export async function sendMessageNextcloudTalk(
   }
 
   if (opts.verbose) {
-    console.log(`[nextcloud-talk] Sent message ${messageId} to room ${roomToken}`);
+    process.stdout.write(`[nextcloud-talk] Sent message ${messageId} to room ${roomToken}\n`);
   }
 
   getNextcloudTalkRuntime().channel.activity.record({

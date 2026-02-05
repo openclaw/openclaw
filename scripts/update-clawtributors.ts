@@ -246,7 +246,7 @@ if (start === -1 || end === -1) {
 const next = `${readme.slice(0, start)}<p align="left">\n${block}${readme.slice(end)}`;
 writeFileSync(readmePath, next);
 
-console.log(`Updated README clawtributors: ${entries.length} entries`);
+process.stdout.write(`Updated README clawtributors: ${entries.length} entries\n`);
 
 function run(cmd: string): string {
   return execSync(cmd, {

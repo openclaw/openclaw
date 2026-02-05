@@ -3,6 +3,7 @@ import type { CoreConfig } from "./core-bridge.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { resolveVoiceCallConfig, validateProviderConfig } from "./config.js";
+import { voiceCallLogger } from "./logger.js";
 import { CallManager } from "./manager.js";
 import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
@@ -100,12 +101,7 @@ export async function createVoiceCallRuntime(params: {
   logger?: Logger;
 }): Promise<VoiceCallRuntime> {
   const { config: rawConfig, coreConfig, ttsRuntime, logger } = params;
-  const log = logger ?? {
-    info: console.log,
-    warn: console.warn,
-    error: console.error,
-    debug: console.debug,
-  };
+  const log = logger ?? voiceCallLogger;
 
   const config = resolveVoiceCallConfig(rawConfig);
 

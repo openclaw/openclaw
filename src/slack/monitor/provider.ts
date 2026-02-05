@@ -8,6 +8,7 @@ import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import { mergeAllowlist, summarizeMapping } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
 import { warn } from "../../globals.js";
+import { createSubsystemRuntime } from "../../logging/subsystem.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
@@ -76,13 +77,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     );
   }
 
-  const runtime: RuntimeEnv = opts.runtime ?? {
-    log: console.log,
-    error: console.error,
-    exit: (code: number): never => {
+  const runtime: RuntimeEnv =
+    opts.runtime ??
+    createSubsystemRuntime("slack/monitor", (code: number): never => {
       throw new Error(`exit ${code}`);
-    },
-  };
+    });
 
   const slackCfg = account.config;
   const dmConfig = slackCfg.dm;

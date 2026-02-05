@@ -36,7 +36,7 @@ function checkPluginVersions() {
   const targetVersion = rootPackage.version;
 
   if (!targetVersion) {
-    console.error("release-check: root package.json missing version.");
+    process.stderr.write("release-check: root package.json missing version.\n");
     process.exit(1);
   }
 
@@ -66,11 +66,11 @@ function checkPluginVersions() {
   }
 
   if (mismatches.length > 0) {
-    console.error(`release-check: plugin versions must match ${targetVersion}:`);
+    process.stderr.write(`release-check: plugin versions must match ${targetVersion}:\n`);
     for (const item of mismatches) {
-      console.error(`  - ${item}`);
+      process.stderr.write(`  - ${item}\n`);
     }
-    console.error("release-check: run `pnpm plugins:sync` to align plugin versions.");
+    process.stderr.write("release-check: run `pnpm plugins:sync` to align plugin versions.\n");
     process.exit(1);
   }
 }
@@ -96,21 +96,21 @@ function main() {
 
   if (missing.length > 0 || forbidden.length > 0) {
     if (missing.length > 0) {
-      console.error("release-check: missing files in npm pack:");
+      process.stderr.write("release-check: missing files in npm pack:\n");
       for (const path of missing) {
-        console.error(`  - ${path}`);
+        process.stderr.write(`  - ${path}\n`);
       }
     }
     if (forbidden.length > 0) {
-      console.error("release-check: forbidden files in npm pack:");
+      process.stderr.write("release-check: forbidden files in npm pack:\n");
       for (const path of forbidden) {
-        console.error(`  - ${path}`);
+        process.stderr.write(`  - ${path}\n`);
       }
     }
     process.exit(1);
   }
 
-  console.log("release-check: npm pack contents look OK.");
+  process.stdout.write("release-check: npm pack contents look OK.\n");
 }
 
 main();

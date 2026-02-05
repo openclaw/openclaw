@@ -38,7 +38,7 @@ function warnWeakCryptoOnce() {
     return;
   }
   warnedWeakCrypto = true;
-  console.warn("[uuid] crypto API missing; falling back to weak randomness");
+  process.stderr.write("[uuid] crypto API missing; falling back to weak randomness\n");
 }
 
 export function generateUUID(cryptoLike: CryptoLike | null = globalThis.crypto): string {
