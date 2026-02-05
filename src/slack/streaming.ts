@@ -11,7 +11,8 @@
  * @see https://docs.slack.dev/reference/methods/chat.stopStream
  */
 
-import type { ChatStreamer, WebClient } from "@slack/web-api";
+import type { WebClient } from "@slack/web-api";
+import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { logVerbose } from "../globals.js";
 
 // ---------------------------------------------------------------------------
