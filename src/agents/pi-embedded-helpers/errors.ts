@@ -97,7 +97,7 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
   }
   const blocks = trimmed.split(/\n{2,}/);
   if (blocks.length < 2) {
-    return text;
+    return trimmed;
   }
 
   const normalizeBlock = (value: string) => value.trim().replace(/\s+/g, " ");
@@ -417,7 +417,7 @@ export function sanitizeUserFacingText(text: string): string {
     return formatRawAssistantErrorForUi(trimmed);
   }
 
-  return collapseConsecutiveDuplicateBlocks(stripped);
+  return collapseConsecutiveDuplicateBlocks(stripped).trim();
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
