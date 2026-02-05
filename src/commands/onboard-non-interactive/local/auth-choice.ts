@@ -21,6 +21,7 @@ import {
   applySyntheticConfig,
   applyVeniceConfig,
   applyVercelAiGatewayConfig,
+  applyXaiConfig,
   applyXiaomiConfig,
   applyZaiConfig,
   setAnthropicApiKey,
@@ -32,6 +33,7 @@ import {
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
+  setXaiApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
@@ -216,6 +218,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXiaomiConfig(nextConfig);
+  }
+
+  if (authChoice === "xai-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "xai",
+      cfg: baseConfig,
+      flagValue: opts.xaiApiKey,
+      flagName: "--xai-api-key",
+      envVar: "XAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setXaiApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "xai:default",
+      provider: "xai",
+      mode: "api_key",
+    });
+    return applyXaiConfig(nextConfig);
   }
 
   if (authChoice === "openai-api-key") {
