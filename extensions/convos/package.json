@@ -5,7 +5,8 @@
   "type": "module",
   "dependencies": {
     "convos-node-sdk": "github:xmtplabs/convos-node-sdk",
-    "@xmtp/agent-sdk": "^2.0.1"
+    "@xmtp/agent-sdk": "^2.0.1",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "openclaw": "workspace:*"

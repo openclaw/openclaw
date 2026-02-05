@@ -15,6 +15,7 @@ import {
   type ResolvedConvosAccount,
 } from "./accounts.js";
 import { ConvosSDKClient, type InboundMessage } from "./sdk-client.js";
+import { convosChannelConfigSchema } from "./config-schema.js";
 import { convosOnboardingAdapter } from "./onboarding.js";
 import { convosOutbound, setClientForAccount } from "./outbound.js";
 import { getConvosRuntime } from "./runtime.js";
@@ -61,6 +62,7 @@ export const convosPlugin: ChannelPlugin<ResolvedConvosAccount> = {
     media: false,
   },
   reload: { configPrefixes: ["channels.convos"] },
+  configSchema: convosChannelConfigSchema,
   onboarding: convosOnboardingAdapter,
   config: {
     listAccountIds: (cfg) => listConvosAccountIds(cfg as CoreConfig),
