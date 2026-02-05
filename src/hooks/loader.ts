@@ -79,7 +79,6 @@ export async function loadInternalHooks(
         // Register for all events listed in metadata
         const events = entry.metadata?.events ?? [];
         if (events.length === 0) {
-          console.warn(`Hook warning: Hook '${entry.hook.name}' has no events defined in metadata`);
           continue;
         }
 
@@ -87,7 +86,6 @@ export async function loadInternalHooks(
           registerInternalHook(event, handler as InternalHookHandler);
         }
 
-        console.log(
           `Registered hook: ${entry.hook.name} -> ${events.join(", ")}${exportName !== "default" ? ` (export: ${exportName})` : ""}`,
         );
         loadedCount++;
@@ -130,7 +128,6 @@ export async function loadInternalHooks(
 
       // Register the handler
       registerInternalHook(handlerConfig.event, handler as InternalHookHandler);
-      console.log(
         `Registered hook (legacy): ${handlerConfig.event} -> ${modulePath}${exportName !== "default" ? `#${exportName}` : ""}`,
       );
       loadedCount++;
