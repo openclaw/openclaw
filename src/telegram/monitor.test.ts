@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { monitorTelegramProvider } from "./monitor.js";
 
 type MockCtx = {
@@ -54,8 +53,12 @@ vi.mock("./bot.js", () => ({
       const chatId = ctx.message.chat.id;
       const isGroup = ctx.message.chat.type !== "private";
       const text = ctx.message.text ?? ctx.message.caption ?? "";
-      if (isGroup && !text.includes("@mybot")) return;
-      if (!text.trim()) return;
+      if (isGroup && !text.includes("@mybot")) {
+        return;
+      }
+      if (!text.trim()) {
+        return;
+      }
       await api.sendMessage(chatId, `echo:${text}`, { parse_mode: "HTML" });
     };
     return {

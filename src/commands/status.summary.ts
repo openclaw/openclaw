@@ -1,3 +1,4 @@
+import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
@@ -14,11 +15,14 @@ import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-runner.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveLinkChannelContext } from "./status.link-channel.js";
-import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
 const classifyKey = (key: string, entry?: SessionEntry): SessionStatus["kind"] => {
-  if (key === "global") return "global";
-  if (key === "unknown") return "unknown";
+  if (key === "global") {
+    return "global";
+  }
+  if (key === "unknown") {
+    return "unknown";
+  }
   if (entry?.chatType === "group" || entry?.chatType === "channel") {
     return "group";
   }
@@ -29,20 +33,36 @@ const classifyKey = (key: string, entry?: SessionEntry): SessionStatus["kind"] =
 };
 
 const buildFlags = (entry?: SessionEntry): string[] => {
-  if (!entry) return [];
+  if (!entry) {
+    return [];
+  }
   const flags: string[] = [];
   const think = entry?.thinkingLevel;
-  if (typeof think === "string" && think.length > 0) flags.push(`think:${think}`);
+  if (typeof think === "string" && think.length > 0) {
+    flags.push(`think:${think}`);
+  }
   const verbose = entry?.verboseLevel;
-  if (typeof verbose === "string" && verbose.length > 0) flags.push(`verbose:${verbose}`);
+  if (typeof verbose === "string" && verbose.length > 0) {
+    flags.push(`verbose:${verbose}`);
+  }
   const reasoning = entry?.reasoningLevel;
-  if (typeof reasoning === "string" && reasoning.length > 0) flags.push(`reasoning:${reasoning}`);
+  if (typeof reasoning === "string" && reasoning.length > 0) {
+    flags.push(`reasoning:${reasoning}`);
+  }
   const elevated = entry?.elevatedLevel;
-  if (typeof elevated === "string" && elevated.length > 0) flags.push(`elevated:${elevated}`);
-  if (entry?.systemSent) flags.push("system");
-  if (entry?.abortedLastRun) flags.push("aborted");
+  if (typeof elevated === "string" && elevated.length > 0) {
+    flags.push(`elevated:${elevated}`);
+  }
+  if (entry?.systemSent) {
+    flags.push("system");
+  }
+  if (entry?.abortedLastRun) {
+    flags.push("aborted");
+  }
   const sessionId = entry?.sessionId as unknown;
-  if (typeof sessionId === "string" && sessionId.length > 0) flags.push(`id:${sessionId}`);
+  if (typeof sessionId === "string" && sessionId.length > 0) {
+    flags.push(`id:${sessionId}`);
+  }
   return flags;
 };
 
@@ -81,7 +101,9 @@ export async function getStatusSummary(): Promise<StatusSummary> {
   const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
   const loadStore = (storePath: string) => {
     const cached = storeCache.get(storePath);
-    if (cached) return cached;
+    if (cached) {
+      return cached;
+    }
     const store = loadSessionStore(storePath);
     storeCache.set(storePath, store);
     return store;
@@ -150,7 +172,7 @@ export async function getStatusSummary(): Promise<StatusSummary> {
 
   const allSessions = Array.from(paths)
     .flatMap((storePath) => buildSessionRows(loadStore(storePath)))
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   const recent = allSessions.slice(0, 10);
   const totalSessions = allSessions.length;
 

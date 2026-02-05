@@ -8,17 +8,13 @@ export const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
 export const DEFAULT_MINIMAX_MAX_TOKENS = 8192;
 
 export const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
-export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2-0905-preview";
+export const MOONSHOT_CN_BASE_URL = "https://api.moonshot.cn/v1";
+export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
 export const MOONSHOT_DEFAULT_MODEL_REF = `moonshot/${MOONSHOT_DEFAULT_MODEL_ID}`;
 export const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
 export const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
-export const KIMI_CODE_BASE_URL = "https://api.kimi.com/coding/v1";
-export const KIMI_CODE_MODEL_ID = "kimi-for-coding";
-export const KIMI_CODE_MODEL_REF = `kimi-code/${KIMI_CODE_MODEL_ID}`;
-export const KIMI_CODE_CONTEXT_WINDOW = 262144;
-export const KIMI_CODE_MAX_TOKENS = 32768;
-export const KIMI_CODE_HEADERS = { "User-Agent": "KimiCLI/0.77" } as const;
-export const KIMI_CODE_COMPAT = { supportsDeveloperRole: false } as const;
+export const KIMI_CODING_MODEL_ID = "k2p5";
+export const KIMI_CODING_MODEL_REF = `kimi-coding/${KIMI_CODING_MODEL_ID}`;
 
 // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
 export const MINIMAX_API_COST = {
@@ -40,12 +36,6 @@ export const MINIMAX_LM_STUDIO_COST = {
   cacheWrite: 0,
 };
 export const MOONSHOT_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
-export const KIMI_CODE_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -94,25 +84,11 @@ export function buildMinimaxApiModelDefinition(modelId: string): ModelDefinition
 export function buildMoonshotModelDefinition(): ModelDefinitionConfig {
   return {
     id: MOONSHOT_DEFAULT_MODEL_ID,
-    name: "Kimi K2 0905 Preview",
+    name: "Kimi K2.5",
     reasoning: false,
     input: ["text"],
     cost: MOONSHOT_DEFAULT_COST,
     contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
-  };
-}
-
-export function buildKimiCodeModelDefinition(): ModelDefinitionConfig {
-  return {
-    id: KIMI_CODE_MODEL_ID,
-    name: "Kimi For Coding",
-    reasoning: true,
-    input: ["text"],
-    cost: KIMI_CODE_DEFAULT_COST,
-    contextWindow: KIMI_CODE_CONTEXT_WINDOW,
-    maxTokens: KIMI_CODE_MAX_TOKENS,
-    headers: KIMI_CODE_HEADERS,
-    compat: KIMI_CODE_COMPAT,
   };
 }

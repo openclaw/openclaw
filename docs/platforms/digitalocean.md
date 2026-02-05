@@ -1,29 +1,31 @@
 ---
-summary: "Moltbot on DigitalOcean (simple paid VPS option)"
+summary: "OpenClaw on DigitalOcean (simple paid VPS option)"
 read_when:
-  - Setting up Moltbot on DigitalOcean
-  - Looking for cheap VPS hosting for Moltbot
+  - Setting up OpenClaw on DigitalOcean
+  - Looking for cheap VPS hosting for OpenClaw
+title: "DigitalOcean"
 ---
 
-# Moltbot on DigitalOcean
+# OpenClaw on DigitalOcean
 
 ## Goal
 
-Run a persistent Moltbot Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
+Run a persistent OpenClaw Gateway on DigitalOcean for **$6/month** (or $4/mo with reserved pricing).
 
 If you want a $0/month option and don’t mind ARM + provider-specific setup, see the [Oracle Cloud guide](/platforms/oracle).
 
 ## Cost Comparison (2026)
 
-| Provider | Plan | Specs | Price/mo | Notes |
-|----------|------|-------|----------|-------|
-| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0 | ARM, limited capacity / signup quirks |
-| Hetzner | CX22 | 2 vCPU, 4GB RAM | €3.79 (~$4) | Cheapest paid option |
-| DigitalOcean | Basic | 1 vCPU, 1GB RAM | $6 | Easy UI, good docs |
-| Vultr | Cloud Compute | 1 vCPU, 1GB RAM | $6 | Many locations |
-| Linode | Nanode | 1 vCPU, 1GB RAM | $5 | Now part of Akamai |
+| Provider     | Plan            | Specs                  | Price/mo    | Notes                                 |
+| ------------ | --------------- | ---------------------- | ----------- | ------------------------------------- |
+| Oracle Cloud | Always Free ARM | up to 4 OCPU, 24GB RAM | $0          | ARM, limited capacity / signup quirks |
+| Hetzner      | CX22            | 2 vCPU, 4GB RAM        | €3.79 (~$4) | Cheapest paid option                  |
+| DigitalOcean | Basic           | 1 vCPU, 1GB RAM        | $6          | Easy UI, good docs                    |
+| Vultr        | Cloud Compute   | 1 vCPU, 1GB RAM        | $6          | Many locations                        |
+| Linode       | Nanode          | 1 vCPU, 1GB RAM        | $5          | Now part of Akamai                    |
 
 **Picking a provider:**
+
 - DigitalOcean: simplest UX + predictable setup (this guide)
 - Hetzner: good price/perf (see [Hetzner guide](/platforms/hetzner))
 - Oracle Cloud: can be $0/month, but is more finicky and ARM-only (see [Oracle guide](/platforms/oracle))
@@ -54,7 +56,7 @@ If you want a $0/month option and don’t mind ARM + provider-specific setup, se
 ssh root@YOUR_DROPLET_IP
 ```
 
-## 3) Install Moltbot
+## 3) Install OpenClaw
 
 ```bash
 # Update system
@@ -64,20 +66,21 @@ apt update && apt upgrade -y
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt install -y nodejs
 
-# Install Moltbot
-curl -fsSL https://molt.bot/install.sh | bash
+# Install OpenClaw
+curl -fsSL https://openclaw.ai/install.sh | bash
 
 # Verify
-moltbot --version
+openclaw --version
 ```
 
 ## 4) Run Onboarding
 
 ```bash
-moltbot onboard --install-daemon
+openclaw onboard --install-daemon
 ```
 
 The wizard will walk you through:
+
 - Model auth (API keys or OAuth)
 - Channel setup (Telegram, WhatsApp, Discord, etc.)
 - Gateway token (auto-generated)
@@ -87,13 +90,13 @@ The wizard will walk you through:
 
 ```bash
 # Check status
-moltbot status
+openclaw status
 
 # Check service
-systemctl --user status moltbot-gateway.service
+systemctl --user status openclaw-gateway.service
 
 # View logs
-journalctl --user -u moltbot-gateway.service -f
+journalctl --user -u openclaw-gateway.service -f
 ```
 
 ## 6) Access the Dashboard
@@ -101,6 +104,7 @@ journalctl --user -u moltbot-gateway.service -f
 The gateway binds to loopback by default. To access the Control UI:
 
 **Option A: SSH Tunnel (recommended)**
+
 ```bash
 # From your local machine
 ssh -L 18789:localhost:18789 root@YOUR_DROPLET_IP
@@ -109,26 +113,29 @@ ssh -L 18789:localhost:18789 root@YOUR_DROPLET_IP
 ```
 
 **Option B: Tailscale Serve (HTTPS, loopback-only)**
+
 ```bash
 # On the droplet
 curl -fsSL https://tailscale.com/install.sh | sh
 tailscale up
 
 # Configure Gateway to use Tailscale Serve
-moltbot config set gateway.tailscale.mode serve
-moltbot gateway restart
+openclaw config set gateway.tailscale.mode serve
+openclaw gateway restart
 ```
 
 Open: `https://<magicdns>/`
 
 Notes:
+
 - Serve keeps the Gateway loopback-only and authenticates via Tailscale identity headers.
 - To require token/password instead, set `gateway.auth.allowTailscale: false` or use `gateway.auth.mode: "password"`.
 
 **Option C: Tailnet bind (no Serve)**
+
 ```bash
-moltbot config set gateway.bind tailnet
-moltbot gateway restart
+openclaw config set gateway.bind tailnet
+openclaw gateway restart
 ```
 
 Open: `http://<tailscale-ip>:18789` (token required).
@@ -136,14 +143,16 @@ Open: `http://<tailscale-ip>:18789` (token required).
 ## 7) Connect Your Channels
 
 ### Telegram
+
 ```bash
-moltbot pairing list telegram
-moltbot pairing approve telegram <CODE>
+openclaw pairing list telegram
+openclaw pairing approve telegram <CODE>
 ```
 
 ### WhatsApp
+
 ```bash
-moltbot channels login whatsapp
+openclaw channels login whatsapp
 # Scan QR code
 ```
 
@@ -156,6 +165,7 @@ See [Channels](/channels) for other providers.
 The $6 droplet only has 1GB RAM. To keep things running smoothly:
 
 ### Add swap (recommended)
+
 ```bash
 fallocate -l 2G /swapfile
 chmod 600 /swapfile
@@ -165,11 +175,14 @@ echo '/swapfile none swap sw 0 0' >> /etc/fstab
 ```
 
 ### Use a lighter model
+
 If you're hitting OOMs, consider:
+
 - Using API-based models (Claude, GPT) instead of local models
 - Setting `agents.defaults.model.primary` to a smaller model
 
 ### Monitor memory
+
 ```bash
 free -h
 htop
@@ -180,12 +193,14 @@ htop
 ## Persistence
 
 All state lives in:
-- `~/.clawdbot/` — config, credentials, session data
-- `~/clawd/` — workspace (SOUL.md, memory, etc.)
+
+- `~/.openclaw/` — config, credentials, session data
+- `~/.openclaw/workspace/` — workspace (SOUL.md, memory, etc.)
 
 These survive reboots. Back them up periodically:
+
 ```bash
-tar -czvf moltbot-backup.tar.gz ~/.clawdbot ~/clawd
+tar -czvf openclaw-backup.tar.gz ~/.openclaw ~/.openclaw/workspace
 ```
 
 ---
@@ -194,14 +209,15 @@ tar -czvf moltbot-backup.tar.gz ~/.clawdbot ~/clawd
 
 Oracle Cloud offers **Always Free** ARM instances that are significantly more powerful than any paid option here — for $0/month.
 
-| What you get | Specs |
-|--------------|-------|
-| **4 OCPUs** | ARM Ampere A1 |
-| **24GB RAM** | More than enough |
-| **200GB storage** | Block volume |
-| **Forever free** | No credit card charges |
+| What you get      | Specs                  |
+| ----------------- | ---------------------- |
+| **4 OCPUs**       | ARM Ampere A1          |
+| **24GB RAM**      | More than enough       |
+| **200GB storage** | Block volume           |
+| **Forever free**  | No credit card charges |
 
 **Caveats:**
+
 - Signup can be finicky (retry if it fails)
 - ARM architecture — most things work, but some binaries need ARM builds
 
@@ -212,19 +228,22 @@ For the full setup guide, see [Oracle Cloud](/platforms/oracle). For signup tips
 ## Troubleshooting
 
 ### Gateway won't start
+
 ```bash
-moltbot gateway status
-moltbot doctor --non-interactive
-journalctl -u moltbot --no-pager -n 50
+openclaw gateway status
+openclaw doctor --non-interactive
+journalctl -u openclaw --no-pager -n 50
 ```
 
 ### Port already in use
+
 ```bash
 lsof -i :18789
 kill <PID>
 ```
 
 ### Out of memory
+
 ```bash
 # Check memory
 free -h

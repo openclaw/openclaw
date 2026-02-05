@@ -74,9 +74,13 @@ export async function storageGetViaPlaywright(opts: {
       const out: Record<string, string> = {};
       for (let i = 0; i < store.length; i += 1) {
         const k = store.key(i);
-        if (!k) continue;
+        if (!k) {
+          continue;
+        }
         const v = store.getItem(k);
-        if (v !== null) out[k] = v;
+        if (v !== null) {
+          out[k] = v;
+        }
       }
       return out;
     },
@@ -95,7 +99,9 @@ export async function storageSetViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   const key = String(opts.key ?? "");
-  if (!key) throw new Error("key is required");
+  if (!key) {
+    throw new Error("key is required");
+  }
   await page.evaluate(
     ({ kind, key: k, value }) => {
       const store = kind === "session" ? window.sessionStorage : window.localStorage;

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { resolveChannelConfigWrites } from "./config-writes.js";
 
 describe("resolveChannelConfigWrites", () => {

@@ -130,6 +130,14 @@ export type TelegramAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
+  /**
+   * Per-channel outbound response prefix override.
+   *
+   * When set, this takes precedence over the global `messages.responsePrefix`.
+   * Use `""` to explicitly disable a global prefix for this channel.
+   * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
+   */
+  responsePrefix?: string;
 };
 
 export type TelegramTopicConfig = {

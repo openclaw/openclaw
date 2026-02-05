@@ -39,7 +39,9 @@ export function resolveResponsePrefixTemplate(
   template: string | undefined,
   context: ResponsePrefixContext,
 ): string | undefined {
-  if (!template) return undefined;
+  if (!template) {
+    return undefined;
+  }
 
   return template.replace(TEMPLATE_VAR_PATTERN, (match, varName: string) => {
     const normalizedVar = varName.toLowerCase();
@@ -90,7 +92,9 @@ export function extractShortModelName(fullModel: string): string {
  * Check if a template string contains any template variables.
  */
 export function hasTemplateVariables(template: string | undefined): boolean {
-  if (!template) return false;
+  if (!template) {
+    return false;
+  }
   // Reset lastIndex since we're using a global regex
   TEMPLATE_VAR_PATTERN.lastIndex = 0;
   return TEMPLATE_VAR_PATTERN.test(template);

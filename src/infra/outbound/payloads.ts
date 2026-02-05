@@ -1,6 +1,6 @@
+import type { ReplyPayload } from "../../auto-reply/types.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { isRenderablePayload } from "../../auto-reply/reply/reply-payloads.js";
-import type { ReplyPayload } from "../../auto-reply/types.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -19,11 +19,17 @@ function mergeMediaUrls(...lists: Array<Array<string | undefined> | undefined>):
   const seen = new Set<string>();
   const merged: string[] = [];
   for (const list of lists) {
-    if (!list) continue;
+    if (!list) {
+      continue;
+    }
     for (const entry of list) {
       const trimmed = entry?.trim();
-      if (!trimmed) continue;
-      if (seen.has(trimmed)) continue;
+      if (!trimmed) {
+        continue;
+      }
+      if (seen.has(trimmed)) {
+        continue;
+      }
       seen.add(trimmed);
       merged.push(trimmed);
     }
@@ -52,8 +58,12 @@ export function normalizeReplyPayloadsForDelivery(payloads: ReplyPayload[]): Rep
       replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
     };
-    if (parsed.isSilent && mergedMedia.length === 0) return [];
-    if (!isRenderablePayload(next)) return [];
+    if (parsed.isSilent && mergedMedia.length === 0) {
+      return [];
+    }
+    if (!isRenderablePayload(next)) {
+      return [];
+    }
     return [next];
   });
 }
@@ -90,7 +100,11 @@ export function normalizeOutboundPayloadsForJson(payloads: ReplyPayload[]): Outb
 
 export function formatOutboundPayloadLog(payload: NormalizedOutboundPayload): string {
   const lines: string[] = [];
-  if (payload.text) lines.push(payload.text.trimEnd());
-  for (const url of payload.mediaUrls) lines.push(`MEDIA:${url}`);
+  if (payload.text) {
+    lines.push(payload.text.trimEnd());
+  }
+  for (const url of payload.mediaUrls) {
+    lines.push(`MEDIA:${url}`);
+  }
   return lines.join("\n");
 }

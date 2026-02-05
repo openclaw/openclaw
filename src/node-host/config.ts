@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { resolveStateDir } from "../config/paths.js";
 
 export type NodeHostGatewayConfig = {
