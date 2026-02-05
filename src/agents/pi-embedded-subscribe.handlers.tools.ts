@@ -1,6 +1,6 @@
+import crypto from "node:crypto";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
-import crypto from "node:crypto";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
