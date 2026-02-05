@@ -58,6 +58,10 @@ export function createOpenClawTools(options?: {
   modelHasVision?: boolean;
   /** Explicit agent ID override for cron/hook sessions. */
   requesterAgentIdOverride?: string;
+  /** Require explicit message targets (no implicit last-route sends). */
+  requireExplicitMessageTarget?: boolean;
+  /** If true, omit the message tool from the tool list. */
+  disableMessageTool?: boolean;
 }): AnyAgentTool[] {
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
@@ -80,6 +84,22 @@ export function createOpenClawTools(options?: {
     sandboxed: options?.sandboxed,
     agentSessionKey: options?.agentSessionKey,
   });
+  const messageTool = options?.disableMessageTool
+    ? null
+    : createMessageTool({
+        agentAccountId: options?.agentAccountId,
+        agentSessionKey: options?.agentSessionKey,
+        config: options?.config,
+        currentChannelId: options?.currentChannelId,
+        currentChannelProvider: options?.agentChannel,
+        currentThreadTs: options?.currentThreadTs,
+        replyToMode: options?.replyToMode,
+        hasRepliedRef: options?.hasRepliedRef,
+        sandboxRoot: options?.sandboxRoot,
+        requireExplicitTarget: options?.requireExplicitMessageTarget,
+        originatingChannel: options?.originatingChannel,
+        originatingSenderId: options?.originatingSenderId,
+      });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
@@ -99,19 +119,7 @@ export function createOpenClawTools(options?: {
         threadId: options?.agentThreadId,
       },
     }),
-    createMessageTool({
-      agentAccountId: options?.agentAccountId,
-      agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-      currentChannelId: options?.currentChannelId,
-      currentChannelProvider: options?.agentChannel,
-      currentThreadTs: options?.currentThreadTs,
-      replyToMode: options?.replyToMode,
-      hasRepliedRef: options?.hasRepliedRef,
-      sandboxRoot: options?.sandboxRoot,
-      originatingChannel: options?.originatingChannel,
-      originatingSenderId: options?.originatingSenderId,
-    }),
+    ...(messageTool ? [messageTool] : []),
     createTtsTool({
       agentChannel: options?.agentChannel,
       config: options?.config,

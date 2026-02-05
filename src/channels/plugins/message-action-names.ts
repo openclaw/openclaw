@@ -54,6 +54,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "x-like",
   "x-unlike",
   "x-reply",
+  "set-presence",
 ] as const;
 
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];

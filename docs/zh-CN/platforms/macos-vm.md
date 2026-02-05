@@ -1,13 +1,13 @@
 ---
 read_when:
-  - 你希望将 OpenClaw 与主 macOS 环境隔离运行
-  - 你需要在沙盒中集成 iMessage（BlueBubbles）
-  - 你需要一个可重置、可克隆的 macOS 环境
-  - 你想比较本地与托管 macOS 虚拟机方案
-summary: 在沙盒化的 macOS 虚拟机（本地或托管）中运行 OpenClaw，适用于需要隔离环境或 iMessage 的场景
+  - 你想让 OpenClaw 与你的主 macOS 环境隔离
+  - 你想在沙箱中集成 iMessage（BlueBubbles）
+  - 你想要一个可重置、可克隆的 macOS 环境
+  - 你想比较本地与托管 macOS VM 选项
+summary: 在沙箱隔离的 macOS VM（本地或托管）中运行 OpenClaw，当你需要隔离或 iMessage 时
 title: macOS 虚拟机
 x-i18n:
-  generated_at: "2026-02-01T21:33:51Z"
+  generated_at: "2026-02-03T07:53:09Z"
   model: claude-opus-4-5
   provider: pi
   source_hash: 4d1c85a5e4945f9f0796038cd5960edecb71ec4dffb6f9686be50adb75180716
@@ -15,37 +15,37 @@ x-i18n:
   workflow: 15
 ---
 
-# 在 macOS 虚拟机上运行 OpenClaw（沙盒化）
+# 在 macOS 虚拟机上运行 OpenClaw（沙箱隔离）
 
 ## 推荐默认方案（大多数用户）
 
-- **小型 Linux VPS**，用于始终在线的 Gateway网关，成本低廉。参阅 [VPS 托管](/vps)。
-- **专用硬件**（Mac mini 或 Linux 主机），如果你需要完全控制和**住宅 IP** 以进行浏览器自动化。许多网站会屏蔽数据中心 IP，因此本地浏览通常效果更好。
-- **混合方案：** 将 Gateway网关部署在廉价 VPS 上，需要浏览器/UI 自动化时将你的 Mac 作为**节点**连接。参阅 [节点](/nodes) 和 [Gateway网关远程控制](/gateway/remote)。
+- **小型 Linux VPS** 用于永久在线的 Gateway 网关，成本低。参见 [VPS 托管](/vps)。
+- **专用硬件**（Mac mini 或 Linux 机器）如果你想要完全控制和**住宅 IP** 用于浏览器自动化。许多网站会屏蔽数据中心 IP，所以本地浏览通常效果更好。
+- **混合方案：** 将 Gateway 网关保持在廉价 VPS 上，当你需要浏览器/UI 自动化时，将你的 Mac 作为**节点**连接。参见[节点](/nodes)和 [Gateway 网关远程](/gateway/remote)。
 
-当你特别需要 macOS 专有功能（iMessage/BlueBubbles）或希望与日常使用的 Mac 严格隔离时，请使用 macOS 虚拟机。
+当你特别需要 macOS 独有功能（iMessage/BlueBubbles）或想要与日常 Mac 严格隔离时，使用 macOS VM。
 
-## macOS 虚拟机方案
+## macOS VM 选项
 
-### 在 Apple Silicon Mac 上运行本地虚拟机（Lume）
+### 在你的 Apple Silicon Mac 上运行本地 VM（Lume）
 
-使用 [Lume](https://cua.ai/docs/lume) 在现有的 Apple Silicon Mac 上以沙盒化的 macOS 虚拟机运行 OpenClaw。
+使用 [Lume](https://cua.ai/docs/lume) 在你现有的 Apple Silicon Mac 上的沙箱 macOS VM 中运行 OpenClaw。
 
-这将为你提供：
+这为你提供：
 
-- 隔离的完整 macOS 环境（宿主机保持干净）
-- 通过 BlueBubbles 支持 iMessage（Linux/Windows 上无法实现）
-- 通过克隆虚拟机即时重置
-- 无需额外硬件或云端费用
+- 隔离的完整 macOS 环境（你的主机保持干净）
+- 通过 BlueBubbles 支持 iMessage（在 Linux/Windows 上不可能）
+- 通过克隆 VM 即时重置
+- 无需额外硬件或云成本
 
-### 托管 Mac 提供商（云端）
+### 托管 Mac 提供商（云）
 
-如果你需要云端的 macOS，托管 Mac 提供商也可以：
+如果你想要云端的 macOS，托管 Mac 提供商也可以：
 
 - [MacStadium](https://www.macstadium.com/)（托管 Mac）
-- 其他托管 Mac 供应商同样适用；按照其虚拟机 + SSH 文档操作
+- 其他托管 Mac 供应商也可以；按照他们的 VM + SSH 文档操作
 
-获得 macOS 虚拟机的 SSH 访问权限后，继续下方步骤 6。
+一旦你有了 macOS VM 的 SSH 访问权限，继续下面的步骤 6。
 
 ---
 
@@ -53,18 +53,18 @@ x-i18n:
 
 1. 安装 Lume
 2. `lume create openclaw --os macos --ipsw latest`
-3. 完成设置助理，启用远程登录（SSH）
+3. 完成设置助手，启用远程登录（SSH）
 4. `lume run openclaw --no-display`
-5. SSH 登录，安装 OpenClaw，配置渠道
+5. SSH 进入，安装 OpenClaw，配置渠道
 6. 完成
 
 ---
 
-## 准备工作（Lume）
+## 你需要什么（Lume）
 
 - Apple Silicon Mac（M1/M2/M3/M4）
-- 宿主机运行 macOS Sequoia 或更高版本
-- 每个虚拟机约 60 GB 可用磁盘空间
+- 主机上安装 macOS Sequoia 或更高版本
+- 每个 VM 约 60 GB 可用磁盘空间
 - 约 20 分钟
 
 ---
@@ -87,28 +87,28 @@ echo 'export PATH="$PATH:$HOME/.local/bin"' >> ~/.zshrc && source ~/.zshrc
 lume --version
 ```
 
-文档：[Lume 安装指南](https://cua.ai/docs/lume/guide/getting-started/installation)
+文档：[Lume 安装](https://cua.ai/docs/lume/guide/getting-started/installation)
 
 ---
 
-## 2) 创建 macOS 虚拟机
+## 2) 创建 macOS VM
 
 ```bash
 lume create openclaw --os macos --ipsw latest
 ```
 
-这将下载 macOS 并创建虚拟机。VNC 窗口会自动打开。
+这会下载 macOS 并创建 VM。VNC 窗口会自动打开。
 
-注意：下载时间取决于你的网络连接速度。
+注意：下载可能需要一段时间，取决于你的网络连接。
 
 ---
 
-## 3) 完成设置助理
+## 3) 完成设置助手
 
 在 VNC 窗口中：
 
 1. 选择语言和地区
-2. 跳过 Apple ID（如果以后需要 iMessage 则登录）
+2. 跳过 Apple ID（或者如果你以后想要 iMessage 就登录）
 3. 创建用户账户（记住用户名和密码）
 4. 跳过所有可选功能
 
@@ -119,29 +119,29 @@ lume create openclaw --os macos --ipsw latest
 
 ---
 
-## 4) 获取虚拟机的 IP 地址
+## 4) 获取 VM 的 IP 地址
 
 ```bash
 lume get openclaw
 ```
 
-查找 IP 地址（通常为 `192.168.64.x`）。
+查找 IP 地址（通常是 `192.168.64.x`）。
 
 ---
 
-## 5) SSH 登录虚拟机
+## 5) SSH 进入 VM
 
 ```bash
 ssh youruser@192.168.64.X
 ```
 
-将 `youruser` 替换为你创建的账户，IP 替换为你的虚拟机 IP。
+将 `youruser` 替换为你创建的账户，IP 替换为你 VM 的 IP。
 
 ---
 
 ## 6) 安装 OpenClaw
 
-在虚拟机内：
+在 VM 内：
 
 ```bash
 npm install -g openclaw@latest
@@ -184,16 +184,16 @@ openclaw channels login
 
 ---
 
-## 8) 无界面运行虚拟机
+## 8) 无头运行 VM
 
-停止虚拟机并以无显示模式重启：
+停止 VM 并在无显示器模式下重启：
 
 ```bash
 lume stop openclaw
 lume run openclaw --no-display
 ```
 
-虚拟机将在后台运行。OpenClaw 的守护进程会保持 Gateway网关运行。
+VM 在后台运行。OpenClaw 的守护进程保持 Gateway 网关运行。
 
 检查状态：
 
@@ -203,16 +203,16 @@ ssh youruser@192.168.64.X "openclaw status"
 
 ---
 
-## 附加功能：iMessage 集成
+## 额外：iMessage 集成
 
 这是在 macOS 上运行的杀手级功能。使用 [BlueBubbles](https://bluebubbles.app) 将 iMessage 添加到 OpenClaw。
 
-在虚拟机内：
+在 VM 内：
 
 1. 从 bluebubbles.app 下载 BlueBubbles
-2. 使用你的 Apple ID 登录
+2. 用你的 Apple ID 登录
 3. 启用 Web API 并设置密码
-4. 将 BlueBubbles webhook 指向你的 Gateway网关（示例：`https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`）
+4. 将 BlueBubbles webhooks 指向你的 Gateway 网关（示例：`https://your-gateway-host:3000/bluebubbles-webhook?password=<password>`）
 
 添加到你的 OpenClaw 配置：
 
@@ -228,7 +228,7 @@ ssh youruser@192.168.64.X "openclaw status"
 }
 ```
 
-重启 Gateway网关。现在你的智能体可以收发 iMessage 了。
+重启 Gateway 网关。现在你的智能体可以发送和接收 iMessage 了。
 
 完整设置详情：[BlueBubbles 渠道](/channels/bluebubbles)
 
@@ -236,7 +236,7 @@ ssh youruser@192.168.64.X "openclaw status"
 
 ## 保存黄金镜像
 
-在进一步自定义之前，快照保存你的干净状态：
+在进一步自定义之前，快照你的干净状态：
 
 ```bash
 lume stop openclaw
@@ -253,26 +253,26 @@ lume run openclaw --no-display
 
 ---
 
-## 全天候运行
+## 24/7 运行
 
-通过以下方式保持虚拟机运行：
+通过以下方式保持 VM 运行：
 
-- 保持 Mac 接通电源
+- 保持你的 Mac 插电
 - 在系统设置 → 节能中禁用睡眠
-- 如有需要使用 `caffeinate`
+- 如需要使用 `caffeinate`
 
-如需真正的始终在线，请考虑专用 Mac mini 或小型 VPS。参阅 [VPS 托管](/vps)。
+对于真正的永久在线，考虑专用 Mac mini 或小型 VPS。参见 [VPS 托管](/vps)。
 
 ---
 
 ## 故障排除
 
-| 问题                    | 解决方案                                                        |
-| ----------------------- | --------------------------------------------------------------- |
-| 无法 SSH 登录虚拟机     | 检查虚拟机系统设置中是否已启用"远程登录"                        |
-| 虚拟机 IP 未显示        | 等待虚拟机完全启动，再次运行 `lume get openclaw`                |
-| Lume 命令未找到         | 将 `~/.local/bin` 添加到你的 PATH                               |
-| WhatsApp 二维码无法扫描 | 确保运行 `openclaw channels login` 时登录的是虚拟机（非宿主机） |
+| 问题                    | 解决方案                                                         |
+| ----------------------- | ---------------------------------------------------------------- |
+| 无法 SSH 进入 VM        | 检查 VM 的系统设置中是否启用了"远程登录"                         |
+| VM IP 未显示            | 等待 VM 完全启动，再次运行 `lume get openclaw`                   |
+| 找不到 Lume 命令        | 将 `~/.local/bin` 添加到你的 PATH                                |
+| WhatsApp 二维码扫描失败 | 确保运行 `openclaw channels login` 时你是登录到 VM（而不是主机） |
 
 ---
 
@@ -280,9 +280,9 @@ lume run openclaw --no-display
 
 - [VPS 托管](/vps)
 - [节点](/nodes)
-- [Gateway网关远程控制](/gateway/remote)
+- [Gateway 网关远程](/gateway/remote)
 - [BlueBubbles 渠道](/channels/bluebubbles)
 - [Lume 快速入门](https://cua.ai/docs/lume/guide/getting-started/quickstart)
 - [Lume CLI 参考](https://cua.ai/docs/lume/reference/cli-reference)
-- [无人值守虚拟机设置](https://cua.ai/docs/lume/guide/fundamentals/unattended-setup)（高级）
-- [Docker 沙盒化](/install/docker)（替代隔离方案）
+- [无人值守 VM 设置](https://cua.ai/docs/lume/guide/fundamentals/unattended-setup)（高级）
+- [Docker 沙箱隔离](/install/docker)（替代隔离方案）

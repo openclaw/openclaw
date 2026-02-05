@@ -5,18 +5,18 @@
  * This delegates to core implementation in src/x/.
  */
 
-import type { OpenClawConfig } from "../../../src/plugin-sdk/index.js";
-import { buildChannelConfigSchema } from "../../../src/plugin-sdk/index.js";
-import { XConfigSchema } from "./config-schema.js";
-import { getXRuntime } from "./runtime.js";
-import type { ChannelPlugin } from "../../../src/channels/plugins/types.plugin.js";
 import type {
   ChannelAccountSnapshot,
   ChannelCapabilities,
   ChannelMeta,
   ChannelMessageActionName,
 } from "../../../src/channels/plugins/types.core.js";
+import type { ChannelPlugin } from "../../../src/channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../../../src/plugin-sdk/index.js";
 import { handleXAction } from "../../../src/agents/tools/x-actions.js";
+import { buildChannelConfigSchema } from "../../../src/plugin-sdk/index.js";
+import { XConfigSchema } from "./config-schema.js";
+import { getXRuntime } from "./runtime.js";
 
 const DEFAULT_ACCOUNT_ID = "default";
 
@@ -86,9 +86,35 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
     },
   },
 
+  messaging: {
+    targetResolver: {
+      looksLikeId: (raw: string) => {
+        const trimmed = raw.trim();
+        if (!trimmed) {
+          return false;
+        }
+        // Recognize X-specific target formats:
+        // - x:user:123456789 (user ID)
+        // - x:tweet:123456789 (tweet ID for replies)
+        // - user:123456789 (user ID without prefix)
+        // - Numeric IDs (Twitter user/tweet IDs)
+        if (/^x:(user|tweet):\d+$/i.test(trimmed)) {
+          return true;
+        }
+        if (/^user:\d+$/i.test(trimmed)) {
+          return true;
+        }
+        if (/^\d{10,}$/.test(trimmed)) {
+          return true;
+        }
+        return false;
+      },
+      hint: "<userId|x:user:ID|x:tweet:ID>",
+    },
+  },
+
   config: {
-    listAccountIds: (cfg: OpenClawConfig): string[] =>
-      getXRuntime().channel.x.listXAccountIds(cfg),
+    listAccountIds: (cfg: OpenClawConfig): string[] => getXRuntime().channel.x.listXAccountIds(cfg),
 
     resolveAccount: (cfg: OpenClawConfig, accountId?: string | null): XAccountConfig => {
       const account = getXRuntime().channel.x.resolveXAccount(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
@@ -104,8 +130,7 @@ export const xPlugin: ChannelPlugin<XAccountConfig> = {
       return account;
     },
 
-    defaultAccountId: (): string =>
-      getXRuntime().channel.x.defaultAccountId,
+    defaultAccountId: (): string => getXRuntime().channel.x.defaultAccountId,
 
     isConfigured: (_account: unknown, cfg: OpenClawConfig): boolean => {
       const account = getXRuntime().channel.x.resolveXAccount(cfg, DEFAULT_ACCOUNT_ID);

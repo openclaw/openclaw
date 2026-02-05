@@ -12,23 +12,22 @@ export function formatAgo(ms?: number | null): string {
     return "n/a";
   }
   const diff = Date.now() - ms;
-  if (diff < 0) {
-    return "just now";
-  }
-  const sec = Math.round(diff / 1000);
+  const absDiff = Math.abs(diff);
+  const suffix = diff < 0 ? "from now" : "ago";
+  const sec = Math.round(absDiff / 1000);
   if (sec < 60) {
-    return `${sec}s ago`;
+    return diff < 0 ? "just now" : `${sec}s ago`;
   }
   const min = Math.round(sec / 60);
   if (min < 60) {
-    return `${min}m ago`;
+    return `${min}m ${suffix}`;
   }
   const hr = Math.round(min / 60);
   if (hr < 48) {
-    return `${hr}h ago`;
+    return `${hr}h ${suffix}`;
   }
   const day = Math.round(hr / 24);
-  return `${day}d ago`;
+  return `${day}d ${suffix}`;
 }
 
 export function formatDurationMs(ms?: number | null): string {

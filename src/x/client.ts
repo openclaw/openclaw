@@ -15,6 +15,7 @@ import type {
   XDmResult,
   XLikeResult,
   XUserInfo,
+  XTweet,
 } from "./types.js";
 
 /**
@@ -80,23 +81,35 @@ export class XClientManager {
     name: string;
   }> {
     const client = this.getClient(account, accountId);
+    const endpoint = `/2/users/me`;
+    const method = "GET";
+
     try {
+      this.logger.info(`[X API] ${method} ${endpoint}`);
+
       const me = await client.v2.me({
         "user.fields": ["id", "username", "name"],
       });
+
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (user: ${me.data.id})`);
+      this.logRateLimitFromClient(client, "users/me", `${method} ${endpoint}`);
+
       return {
         id: me.data.id,
         username: me.data.username,
         name: me.data.name,
       };
     } catch (error: unknown) {
-      // Log detailed error info for debugging
       const apiError = error as {
         code?: number;
         data?: { detail?: string; title?: string; errors?: Array<{ message?: string }> };
         rateLimitError?: boolean;
         rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
       };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
+
       if (apiError.data) {
         this.logger.error(
           `X API error - code: ${apiError.code}, detail: ${JSON.stringify(apiError.data)}`,
@@ -121,59 +134,84 @@ export class XClientManager {
     accountId: string,
     sinceId?: string,
   ): Promise<{ mentions: XMention[]; newestId?: string }> {
-    const client = this.getClient(account, accountId);
+    const endpoint = `/2/users/:id/mentions`;
+    const method = "GET";
 
-    // First get the authenticated user's ID
-    const me = await this.getMe(account, accountId);
+    try {
+      const client = this.getClient(account, accountId);
 
-    const options: Parameters<typeof client.v2.userMentionTimeline>[1] = {
-      max_results: 100,
-      "tweet.fields": [
-        "id",
-        "text",
-        "author_id",
-        "created_at",
-        "conversation_id",
-        "in_reply_to_user_id",
-      ],
-      "user.fields": ["id", "username", "name"],
-      expansions: ["author_id"],
-    };
+      // Get authenticated user's ID (consumes users/me rate limit once per getMentions call, e.g. every poll)
+      const me = await this.getMe(account, accountId);
 
-    if (sinceId) {
-      options.since_id = sinceId;
-    }
+      this.logger.info(
+        `[X API] ${method} ${endpoint} - user: ${me.id}${sinceId ? `, since: ${sinceId}` : ""}`,
+      );
 
-    const response = await client.v2.userMentionTimeline(me.id, options);
+      const options: Parameters<typeof client.v2.userMentionTimeline>[1] = {
+        max_results: 100,
+        "tweet.fields": [
+          "id",
+          "text",
+          "author_id",
+          "created_at",
+          "conversation_id",
+          "in_reply_to_user_id",
+        ],
+        "user.fields": ["id", "username", "name"],
+        expansions: ["author_id"],
+      };
 
-    const mentions: XMention[] = [];
-    const users = new Map<string, { username: string; name: string }>();
-
-    // Build user lookup from includes
-    if (response.includes?.users) {
-      for (const user of response.includes.users) {
-        users.set(user.id, { username: user.username, name: user.name });
+      if (sinceId) {
+        options.since_id = sinceId;
       }
+
+      const response = await client.v2.userMentionTimeline(me.id, options);
+
+      const mentions: XMention[] = [];
+      const users = new Map<string, { username: string; name: string }>();
+
+      // Build user lookup from includes
+      if (response.includes?.users) {
+        for (const user of response.includes.users) {
+          users.set(user.id, { username: user.username, name: user.name });
+        }
+      }
+
+      // Process tweets
+      for (const tweet of response.data?.data ?? []) {
+        const author = users.get(tweet.author_id ?? "");
+        mentions.push({
+          id: tweet.id,
+          text: tweet.text,
+          authorId: tweet.author_id ?? "",
+          authorUsername: author?.username,
+          authorName: author?.name,
+          createdAt: tweet.created_at ? new Date(tweet.created_at) : undefined,
+          conversationId: tweet.conversation_id,
+        });
+      }
+
+      // Get the newest ID for next poll
+      const newestId = response.data?.meta?.newest_id;
+
+      this.logger.info(
+        `[X API] ${method} ${endpoint} - Success (${mentions.length} mentions, newest: ${newestId})`,
+      );
+      // twitter-api-v2 stores this endpoint's rate limit under "users/:id/mentions" (literal :id)
+      this.logRateLimitFromClient(client, "users/:id/mentions", `${method} ${endpoint}`);
+
+      return { mentions, newestId };
+    } catch (error: unknown) {
+      const apiError = error as {
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
+      throw error;
     }
-
-    // Process tweets
-    for (const tweet of response.data?.data ?? []) {
-      const author = users.get(tweet.author_id ?? "");
-      mentions.push({
-        id: tweet.id,
-        text: tweet.text,
-        authorId: tweet.author_id ?? "",
-        authorUsername: author?.username,
-        authorName: author?.name,
-        createdAt: tweet.created_at ? new Date(tweet.created_at) : undefined,
-        conversationId: tweet.conversation_id,
-      });
-    }
-
-    // Get the newest ID for next poll
-    const newestId = response.data?.meta?.newest_id;
-
-    return { mentions, newestId };
   }
 
   /**
@@ -185,8 +223,15 @@ export class XClientManager {
     replyToTweetId: string,
     text: string,
   ): Promise<XSendResult> {
+    const endpoint = `/2/tweets`;
+    const method = "POST";
+
     try {
       const client = this.getClient(account, accountId);
+
+      this.logger.info(
+        `[X API] ${method} ${endpoint} - reply to: ${replyToTweetId}, text length: ${text.length}`,
+      );
 
       const result = await client.v2.tweet({
         text,
@@ -195,29 +240,38 @@ export class XClientManager {
         },
       });
 
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (reply tweet: ${result.data.id})`);
       this.logger.info(`Sent reply to tweet ${replyToTweetId}: ${result.data.id}`);
+      this.logRateLimitFromClient(client, "tweets", `${method} ${endpoint}`);
 
       return {
         ok: true,
         tweetId: result.data.id,
       };
     } catch (error: unknown) {
-      let errorMsg = error instanceof Error ? error.message : String(error);
-
-      // Extract more details from twitter-api-v2 errors
       const apiError = error as {
         code?: number;
         data?: { detail?: string; title?: string; errors?: Array<{ message?: string }> };
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
       };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
+      let errorMsg = error instanceof Error ? error.message : String(error);
+      if (apiError.code) {
+        errorMsg = `HTTP ${apiError.code} - ${errorMsg}`;
+      }
       if (apiError.data) {
         const detail = apiError.data.detail || apiError.data.title || "";
-        const errors = apiError.data.errors?.map((e) => e.message).join(", ") || "";
+        const errors =
+          apiError.data.errors?.map((e: { message?: string }) => e.message).join(", ") || "";
         if (detail || errors) {
           errorMsg = `${errorMsg} - ${detail} ${errors}`.trim();
         }
         this.logger.error(`X API error details: ${JSON.stringify(apiError.data)}`);
       }
 
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
       this.logger.error(`Failed to reply to tweet ${replyToTweetId}: ${errorMsg}`);
       return {
         ok: false,
@@ -230,25 +284,37 @@ export class XClientManager {
    * Send a standalone tweet (not a reply)
    */
   async sendTweet(account: XAccountConfig, accountId: string, text: string): Promise<XSendResult> {
+    const endpoint = `/2/tweets`;
+    const method = "POST";
+
     try {
       const client = this.getClient(account, accountId);
 
+      this.logger.info(`[X API] ${method} ${endpoint} - text length: ${text.length}`);
+
       const result = await client.v2.tweet({ text });
 
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (tweet: ${result.data.id})`);
       this.logger.info(`Sent tweet: ${result.data.id}`);
+      this.logRateLimitFromClient(client, "tweets", `${method} ${endpoint}`);
 
       return {
         ok: true,
         tweetId: result.data.id,
       };
     } catch (error: unknown) {
-      let errorMsg = error instanceof Error ? error.message : String(error);
-
-      // Extract more details from twitter-api-v2 errors
       const apiError = error as {
         code?: number;
         data?: { detail?: string; title?: string; errors?: Array<{ message?: string }> };
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
       };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
+      let errorMsg = error instanceof Error ? error.message : String(error);
+      if (apiError.code) {
+        errorMsg = `HTTP ${apiError.code} - ${errorMsg}`;
+      }
       if (apiError.data) {
         const detail = apiError.data.detail || apiError.data.title || "";
         const errors = apiError.data.errors?.map((e) => e.message).join(", ") || "";
@@ -258,6 +324,7 @@ export class XClientManager {
         this.logger.error(`X API error details: ${JSON.stringify(apiError.data)}`);
       }
 
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
       this.logger.error(`Failed to send tweet: ${errorMsg}`);
       return {
         ok: false,
@@ -275,14 +342,31 @@ export class XClientManager {
     accountId: string,
     tweetId: string,
   ): Promise<string | null> {
+    const endpoint = `/2/tweets/:id`;
+    const method = "GET";
+
     try {
       const client = this.getClient(account, accountId);
+
+      this.logger.debug?.(`[X API] ${method} ${endpoint} - tweet: ${tweetId}`);
+
       const result = await client.v2.singleTweet(tweetId, {
         "tweet.fields": ["author_id"],
       });
+
       const authorId = result.data?.author_id ?? null;
+
+      this.logger.debug?.(`[X API] ${method} ${endpoint} - Success (author: ${authorId})`);
+      this.logRateLimitFromClient(client, `tweets/${tweetId}`, `${method} ${endpoint}`);
+
       return authorId;
     } catch (error: unknown) {
+      const apiError = error as {
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
       this.logger.debug?.(
         `Failed to get tweet ${tweetId}: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -299,17 +383,36 @@ export class XClientManager {
     accountId: string,
     username: string,
   ): Promise<XUserInfo | null> {
+    // Strip @ prefix if present
+    const cleanUsername = username.replace(/^@/, "");
+    const endpoint = `/2/users/by/username/:username`;
+    const method = "GET";
+
     try {
       const client = this.getClient(account, accountId);
-      // Strip @ prefix if present
-      const cleanUsername = username.replace(/^@/, "");
+
+      this.logger.info(`[X API] ${method} ${endpoint} - username: ${cleanUsername}`);
+
       const result = await client.v2.userByUsername(cleanUsername, {
         "user.fields": ["id", "username", "name"],
       });
 
       if (!result.data) {
+        this.logger.info(`[X API] ${method} ${endpoint} - User not found: ${cleanUsername}`);
+        this.logRateLimitFromClient(
+          client,
+          `users/by/username/${cleanUsername}`,
+          `${method} ${endpoint}`,
+        );
         return null;
       }
+
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (user: ${result.data.id})`);
+      this.logRateLimitFromClient(
+        client,
+        `users/by/username/${cleanUsername}`,
+        `${method} ${endpoint}`,
+      );
 
       return {
         id: result.data.id,
@@ -317,10 +420,67 @@ export class XClientManager {
         name: result.data.name,
       };
     } catch (error: unknown) {
-      this.logger.error(
-        `Failed to look up user @${username}: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const apiError = error as {
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
+      this.logger.error(`Failed to look up user @${username}: ${errorMsg}`);
       return null;
+    }
+  }
+
+  /**
+   * Get user tweets/timeline by user ID
+   */
+  async getUserTweets(
+    account: XAccountConfig,
+    accountId: string,
+    userId: string,
+    maxResults: number = 5,
+  ): Promise<XTweet[]> {
+    const endpoint = `/2/users/:id/tweets`;
+    const method = "GET";
+
+    try {
+      const client = this.getClient(account, accountId);
+
+      this.logger.info(`[X API] ${method} ${endpoint} - user: ${userId}, max: ${maxResults}`);
+
+      const response = await client.v2.userTimeline(userId, {
+        max_results: maxResults,
+        "tweet.fields": ["id", "text", "author_id", "created_at", "conversation_id"],
+      });
+
+      const tweets: XTweet[] = [];
+      for (const tweet of response.data?.data ?? []) {
+        tweets.push({
+          id: tweet.id,
+          text: tweet.text,
+          authorId: tweet.author_id,
+          createdAt: tweet.created_at ? new Date(tweet.created_at) : undefined,
+          conversationId: tweet.conversation_id,
+        });
+      }
+
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (${tweets.length} tweets)`);
+      this.logRateLimitFromClient(client, `users/${userId}/tweets`, `${method} ${endpoint}`);
+
+      return tweets;
+    } catch (error: unknown) {
+      const apiError = error as {
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
+      this.logger.error(`Failed to get tweets for user ${userId}: ${errorMsg}`);
+      return [];
     }
   }
 
@@ -332,20 +492,34 @@ export class XClientManager {
     accountId: string,
     targetUserId: string,
   ): Promise<XFollowResult> {
+    const endpoint = `/2/users/:id/following`;
+    const method = "POST";
+
     try {
       const client = this.getClient(account, accountId);
       const me = await this.getMe(account, accountId);
 
+      this.logger.info(`[X API] ${method} ${endpoint} - target: ${targetUserId}, me: ${me.id}`);
+
       const result = await client.v2.follow(me.id, targetUserId);
 
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (target: ${targetUserId})`);
       this.logger.info(`Followed user ${targetUserId}`);
+      this.logRateLimitFromClient(client, `users/${me.id}/following`, `${method} ${endpoint}`);
 
       return {
         ok: true,
         following: result.data.following,
       };
     } catch (error: unknown) {
+      const apiError = error as {
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
       const errorMsg = this.extractApiError(error);
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
       this.logger.error(`Failed to follow user ${targetUserId}: ${errorMsg}`);
       return {
         ok: false,
@@ -362,20 +536,34 @@ export class XClientManager {
     accountId: string,
     targetUserId: string,
   ): Promise<XFollowResult> {
+    const endpoint = `/2/users/:id/following/:target`;
+    const method = "DELETE";
+
     try {
       const client = this.getClient(account, accountId);
       const me = await this.getMe(account, accountId);
 
+      this.logger.info(`[X API] ${method} ${endpoint} - target: ${targetUserId}, me: ${me.id}`);
+
       const result = await client.v2.unfollow(me.id, targetUserId);
 
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (target: ${targetUserId})`);
       this.logger.info(`Unfollowed user ${targetUserId}`);
+      this.logRateLimitFromClient(client, `users/${me.id}/following`, `${method} ${endpoint}`);
 
       return {
         ok: true,
         following: result.data.following,
       };
     } catch (error: unknown) {
+      const apiError = error as {
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
       const errorMsg = this.extractApiError(error);
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
       this.logger.error(`Failed to unfollow user ${targetUserId}: ${errorMsg}`);
       return {
         ok: false,
@@ -393,12 +581,23 @@ export class XClientManager {
     recipientId: string,
     text: string,
   ): Promise<XDmResult> {
+    const endpoint = `/2/dm_conversations/with/:participant_id/messages`;
+    const method = "POST";
+
     try {
       const client = this.getClient(account, accountId);
 
+      this.logger.info(`[X API] ${method} ${endpoint} - recipient: ${recipientId}`);
+
       const result = await client.v2.sendDmToParticipant(recipientId, { text });
 
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (dm: ${result.dm_event_id})`);
       this.logger.info(`Sent DM to user ${recipientId}: ${result.dm_event_id}`);
+      this.logRateLimitFromClient(
+        client,
+        `dm_conversations/with/${recipientId}/messages`,
+        `${method} ${endpoint}`,
+      );
 
       return {
         ok: true,
@@ -406,7 +605,14 @@ export class XClientManager {
         conversationId: result.dm_conversation_id,
       };
     } catch (error: unknown) {
+      const apiError = error as {
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
       const errorMsg = this.extractApiError(error);
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
       this.logger.error(`Failed to send DM to user ${recipientId}: ${errorMsg}`);
       return {
         ok: false,
@@ -423,20 +629,34 @@ export class XClientManager {
     accountId: string,
     tweetId: string,
   ): Promise<XLikeResult> {
+    const endpoint = `/2/users/:id/likes`;
+    const method = "POST";
+
     try {
       const client = this.getClient(account, accountId);
       const me = await this.getMe(account, accountId);
 
+      this.logger.info(`[X API] ${method} ${endpoint} - tweet: ${tweetId}, me: ${me.id}`);
+
       const result = await client.v2.like(me.id, tweetId);
 
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (tweet: ${tweetId})`);
       this.logger.info(`Liked tweet ${tweetId}`);
+      this.logRateLimitFromClient(client, `users/${me.id}/likes`, `${method} ${endpoint}`);
 
       return {
         ok: true,
         liked: result.data.liked,
       };
     } catch (error: unknown) {
+      const apiError = error as {
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
       const errorMsg = this.extractApiError(error);
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
       this.logger.error(`Failed to like tweet ${tweetId}: ${errorMsg}`);
       return {
         ok: false,
@@ -453,25 +673,146 @@ export class XClientManager {
     accountId: string,
     tweetId: string,
   ): Promise<XLikeResult> {
+    const endpoint = `/2/users/:id/likes/:tweet_id`;
+    const method = "DELETE";
+
     try {
       const client = this.getClient(account, accountId);
       const me = await this.getMe(account, accountId);
 
+      this.logger.info(`[X API] ${method} ${endpoint} - tweet: ${tweetId}, me: ${me.id}`);
+
       const result = await client.v2.unlike(me.id, tweetId);
 
+      this.logger.info(`[X API] ${method} ${endpoint} - Success (tweet: ${tweetId})`);
       this.logger.info(`Unliked tweet ${tweetId}`);
+      this.logRateLimitFromClient(client, `users/${me.id}/likes`, `${method} ${endpoint}`);
 
       return {
         ok: true,
         liked: result.data.liked,
       };
     } catch (error: unknown) {
+      const apiError = error as {
+        rateLimit?: { limit?: number; remaining?: number; reset?: number };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      this.logRateLimitFromResponse(`${method} ${endpoint}`, apiError.rateLimit, apiError.headers);
+      this.logApiCall(endpoint, method, undefined, undefined, error);
       const errorMsg = this.extractApiError(error);
+      this.logger.error(`[X API] ${method} ${endpoint} - Failed: ${errorMsg}`);
       this.logger.error(`Failed to unlike tweet ${tweetId}: ${errorMsg}`);
       return {
         ok: false,
         error: errorMsg,
       };
+    }
+  }
+
+  /**
+   * Log rate limit info from response (success or error). Always uses info level so it is always printed.
+   * @param endpointLabel - e.g. "GET /2/users/me" to identify which API call the rate limit applies to.
+   */
+  private logRateLimitFromResponse(
+    endpointLabel: string,
+    rateLimit?: { limit?: number; remaining?: number; reset?: number },
+    headers?: Record<string, string | string[] | undefined>,
+  ): void {
+    const parts: string[] = [];
+    if (rateLimit) {
+      if (rateLimit.limit != null) parts.push(`limit=${rateLimit.limit}`);
+      if (rateLimit.remaining != null) parts.push(`remaining=${rateLimit.remaining}`);
+      if (rateLimit.reset != null) parts.push(`reset=${rateLimit.reset}`);
+    }
+    if (!parts.length && headers) {
+      const get = (name: string) => {
+        const v = headers[name.toLowerCase()] ?? headers[name];
+        return Array.isArray(v) ? v[0] : v;
+      };
+      const limit = get("x-rate-limit-limit");
+      const remaining = get("x-rate-limit-remaining");
+      const reset = get("x-rate-limit-reset");
+      if (limit != null) parts.push(`limit=${limit}`);
+      if (remaining != null) parts.push(`remaining=${remaining}`);
+      if (reset != null) parts.push(`reset=${reset}`);
+    }
+    if (parts.length) {
+      this.logger.info(`[X API] Rate limit (${endpointLabel}): ${parts.join(", ")}`);
+    }
+  }
+
+  /**
+   * Log rate limit from client's last saved status for the given v2 endpoint path (e.g. "users/me", "tweets").
+   * @param endpointLabel - e.g. "GET /2/users/me" to identify which API call the rate limit applies to.
+   */
+  private logRateLimitFromClient(
+    client: TwitterApi,
+    endpointPath: string,
+    endpointLabel: string,
+  ): void {
+    try {
+      const rl = client.v2.getLastRateLimitStatus(endpointPath);
+      if (rl) {
+        this.logRateLimitFromResponse(endpointLabel, {
+          limit: rl.limit,
+          remaining: rl.remaining,
+          reset: rl.reset,
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Log detailed API request/response info for debugging
+   */
+  private logApiCall(
+    endpoint: string,
+    method: string,
+    statusCode?: number,
+    headers?: Record<string, string | string[] | undefined>,
+    error?: unknown,
+  ): void {
+    this.logger.debug?.(`[X API] ${method} ${endpoint}`);
+
+    if (statusCode) {
+      this.logger.debug?.(`[X API] Response status: ${statusCode}`);
+    }
+
+    if (headers) {
+      // Log rate limit headers
+      const rateLimitHeaders = [
+        "x-rate-limit-limit",
+        "x-rate-limit-remaining",
+        "x-rate-limit-reset",
+        "x-app-rate-limit-limit",
+        "x-app-rate-limit-remaining",
+        "x-app-rate-limit-reset",
+      ];
+      for (const header of rateLimitHeaders) {
+        const value = headers[header];
+        if (value) {
+          this.logger.debug?.(`[X API] ${header}: ${value}`);
+        }
+      }
+    }
+
+    if (error) {
+      const apiError = error as {
+        code?: number;
+        data?: { detail?: string; title?: string; errors?: Array<{ message?: string }> };
+        headers?: Record<string, string | string[] | undefined>;
+      };
+      if (apiError.code) {
+        this.logger.error(`[X API] Error code: ${apiError.code}`);
+      }
+      if (apiError.data) {
+        this.logger.error(`[X API] Error details: ${JSON.stringify(apiError.data)}`);
+      }
+      if (apiError.headers) {
+        this.logApiCall(endpoint, method, apiError.code, apiError.headers);
+      }
     }
   }
 
@@ -484,7 +825,11 @@ export class XClientManager {
     const apiError = error as {
       code?: number;
       data?: { detail?: string; title?: string; errors?: Array<{ message?: string }> };
+      headers?: Record<string, string | string[] | undefined>;
     };
+    if (apiError.code) {
+      errorMsg = `HTTP ${apiError.code} - ${errorMsg}`;
+    }
     if (apiError.data) {
       const detail = apiError.data.detail || apiError.data.title || "";
       const errors = apiError.data.errors?.map((e) => e.message).join(", ") || "";

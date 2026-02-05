@@ -129,7 +129,13 @@ export async function resolveDeliveryTarget(
   const threadId = useOrigin && origin?.threadId != null ? origin.threadId : resolved.threadId;
 
   if (!toCandidate) {
-    return { channel, to: undefined, accountId, threadId, mode };
+    return {
+      channel,
+      to: undefined,
+      accountId: resolved.accountId,
+      threadId: resolved.threadId,
+      mode,
+    };
   }
 
   const docked = resolveOutboundTarget({
@@ -142,8 +148,8 @@ export async function resolveDeliveryTarget(
   return {
     channel,
     to: docked.ok ? docked.to : undefined,
-    accountId,
-    threadId,
+    accountId: resolved.accountId,
+    threadId: resolved.threadId,
     mode,
     error: docked.ok ? undefined : docked.error,
   };

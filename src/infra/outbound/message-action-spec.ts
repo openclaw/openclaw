@@ -59,6 +59,7 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "x-like": "to",
     "x-unlike": "to",
     "x-reply": "to",
+    "set-presence": "none",
   };
 
 const ACTION_TARGET_ALIASES: Partial<Record<ChannelMessageActionName, string[]>> = {
