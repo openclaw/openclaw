@@ -365,6 +365,19 @@ export async function statusCommand(
     },
     { Item: "Gateway", Value: gatewayValue },
     { Item: "Gateway service", Value: daemonValue },
+    ...(daemon.extraResources &&
+    daemon.extraResources.agents +
+      daemon.extraResources.skills +
+      daemon.extraResources.rules +
+      daemon.extraResources.commands >
+      0
+      ? [
+          {
+            Item: "Resources",
+            Value: `${daemon.extraResources.agents} agents · ${daemon.extraResources.skills} skills · ${daemon.extraResources.rules} rules · ${daemon.extraResources.commands} commands`,
+          },
+        ]
+      : []),
     { Item: "Node service", Value: nodeDaemonValue },
     { Item: "Agents", Value: agentsValue },
     { Item: "Memory", Value: memoryValue },

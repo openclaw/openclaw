@@ -1,9 +1,15 @@
+import { readdir } from "node:fs/promises";
 import type { GatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig, readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import {
+  loadConfig,
+  readConfigFileSnapshot,
+  resolveGatewayPort,
+  resolveStateDir,
+} from "../config/config.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveNodeService } from "../daemon/node-service.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -174,12 +180,38 @@ export async function statusAllCommand(
           service.readCommand(process.env).catch(() => null),
         ]);
         const installed = command != null;
+
+        let extraResources:
+          | { agents: number; skills: number; rules: number; commands: number }
+          | undefined;
+        if (installed) {
+          try {
+            const mergedEnv = { ...process.env, ...(command?.environment ?? {}) };
+            const stateDir = resolveStateDir(mergedEnv as NodeJS.ProcessEnv);
+            const countDirItems = async (dir: string) => {
+              try {
+                const items = await readdir(dir);
+                return items.filter((i) => !i.startsWith(".")).length;
+              } catch {
+                return 0;
+              }
+            };
+            extraResources = {
+              agents: await countDirItems(`${stateDir}/agents`),
+              skills: await countDirItems(`${stateDir}/skills`),
+              rules: await countDirItems(`${stateDir}/rules`),
+              commands: await countDirItems(`${stateDir}/commands`),
+            };
+          } catch {}
+        }
+
         return {
           label: service.label,
           installed,
           loaded,
           loadedText: loaded ? service.loadedText : service.notLoadedText,
           runtime: runtimeInfo,
+          extraResources,
         };
       } catch {
         return null;
@@ -415,6 +447,19 @@ export async function statusAllCommand(
               : `${daemon.label} ${daemon.installed ? "installed · " : ""}${daemon.loadedText}${daemon.runtime?.status ? ` · ${daemon.runtime.status}` : ""}${daemon.runtime?.pid ? ` (pid ${daemon.runtime.pid})` : ""}`,
           }
         : { Item: "Gateway service", Value: "unknown" },
+      ...(daemon?.extraResources &&
+      daemon.extraResources.agents +
+        daemon.extraResources.skills +
+        daemon.extraResources.rules +
+        daemon.extraResources.commands >
+        0
+        ? [
+            {
+              Item: "Resources",
+              Value: `${daemon.extraResources.agents} agents · ${daemon.extraResources.skills} skills · ${daemon.extraResources.rules} rules · ${daemon.extraResources.commands} commands`,
+            },
+          ]
+        : []),
       nodeService
         ? {
             Item: "Node service",

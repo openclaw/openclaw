@@ -43,6 +43,7 @@ function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
       ...status.service,
       command: nextCommand,
     },
+    extraResources: status.extraResources,
   };
 }
 
@@ -179,6 +180,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
             ? theme.muted
             : theme.warn;
     defaultRuntime.log(`${label("Runtime:")} ${colorize(rich, runtimeColor, runtimeLine)}`);
+  }
+
+  if (status.extraResources) {
+    const { agents, skills, rules, commands } = status.extraResources;
+    if (agents + skills + rules + commands > 0) {
+      defaultRuntime.log(
+        `${label("Resources:")} ${infoText(
+          `${agents} agents · ${skills} skills · ${rules} rules · ${commands} commands`,
+        )}`,
+      );
+    }
   }
 
   if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {

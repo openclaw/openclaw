@@ -93,6 +93,12 @@ export type DaemonStatus = {
     url?: string;
   };
   extraServices: Array<{ label: string; detail: string; scope: string }>;
+  extraResources?: {
+    agents: number;
+    skills: number;
+    rules: number;
+    commands: number;
+  };
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
@@ -103,6 +109,18 @@ function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: bool
     return false;
   }
   return true;
+}
+
+async function countDirItems(dir: string): Promise<number> {
+  try {
+    const { readdir } = await import("node:fs/promises");
+    console.error("DEBUG: reading", dir);
+    const items = await readdir(dir);
+    return items.filter((i) => !i.startsWith(".")).length;
+  } catch (e) {
+    console.error("DEBUG: failed reading", dir, e);
+    return 0;
+  }
 }
 
 export async function gatherDaemonStatus(
@@ -271,6 +289,21 @@ export async function gatherDaemonStatus(
     lastError,
     ...(rpc ? { rpc: { ...rpc, url: probeUrl } } : {}),
     extraServices,
+    extraResources: await (async () => {
+      const stateDir = resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv);
+      console.error("DEBUG: stateDir", stateDir);
+      try {
+        return {
+          agents: await countDirItems(`${stateDir}/agents`),
+          skills: await countDirItems(`${stateDir}/skills`),
+          rules: await countDirItems(`${stateDir}/rules`),
+          commands: await countDirItems(`${stateDir}/commands`),
+        };
+      } catch (e) {
+        console.error("DEBUG: error counting", e);
+        return { agents: 0, skills: 0, rules: 0, commands: 0 };
+      }
+    })(),
   };
 }
 
