@@ -909,13 +909,33 @@ try {
         throw mediaErr;
       }
 
-      // Skip sticker-only messages where the sticker was skipped (animated/video)
-      // These have no media and no text content to process.
-      const hasText = Boolean((msg.text ?? msg.caption ?? "").trim());
-      if (msg.sticker && !media && !hasText) {
-        logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
-        return;
-      }
+      // Sticker metadata support for animated/video stickers (no vision).
+// If resolveMedia skipped the sticker (animated/video), keep metadata so the agent can respond sensibly.
+const hasText = Boolean((msg.text ?? msg.caption ?? "").trim());
+if (msg.sticker && !media && !hasText) {
+  const s = msg.sticker;
+  const emoji = s.emoji ?? undefined;
+  const setName = s.set_name ?? undefined;
+  const isAnimated = s.is_animated === true;
+  const isVideo = s.is_video === true;
+  const fileId = s.file_id ?? undefined;
+  const fileUniqueId = s.file_unique_id ?? undefined;
+  const kind = isVideo ? "video" : isAnimated ? "animated" : "sticker";
+  media = {
+    // no local file; this is metadata-only
+    path: "",
+    contentType: undefined,
+    placeholder: `<media:${kind}>`,
+    stickerMetadata: {
+      emoji,
+      setName,
+      fileId: fileId ?? "",
+      fileUniqueId: fileUniqueId ?? "",
+      isAnimated,
+      isVideo,
+    },
+  };
+}
 
       const allMedia = media
         ? [
