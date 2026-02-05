@@ -569,11 +569,14 @@ async function handleInboundMessage(
                 );
 
                 // Request HTTP upload slot
-                const slot = await client.requestUploadSlot({
-                  filename: media.fileName || "file",
-                  size: media.buffer.length,
-                  contentType: media.contentType || "application/octet-stream",
-                });
+                const slot = await client.requestUploadSlot(
+                  {
+                    filename: media.fileName || "file",
+                    size: media.buffer.length,
+                    contentType: media.contentType || "application/octet-stream",
+                  },
+                  cfg.channels?.xmpp?.blockedMediaTypes,
+                );
                 log(`[XMPP] Received upload slot: ${slot.putUrl.substring(0, 60)}...`);
 
                 // Upload to slot
@@ -845,11 +848,14 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
           const media = await loadWebMedia(mediaUrl, mediaMaxBytes);
 
           log(`[XMPP] Requesting HTTP upload slot (${media.buffer.length} bytes)`);
-          const slot = await client.requestUploadSlot({
-            filename: media.fileName || "file",
-            size: media.buffer.length,
-            contentType: media.contentType,
-          });
+          const slot = await client.requestUploadSlot(
+            {
+              filename: media.fileName || "file",
+              size: media.buffer.length,
+              contentType: media.contentType,
+            },
+            cfg.channels?.xmpp?.blockedMediaTypes,
+          );
 
           log(`[XMPP] Uploading to ${slot.putUrl}`);
           await uploadToSlot(slot, media.buffer, media.contentType);

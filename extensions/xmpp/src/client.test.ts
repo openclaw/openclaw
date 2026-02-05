@@ -13,6 +13,7 @@ type XmppClientPrivate = {
   extractThreadInfo: (stanza: unknown) => { thread?: string; parentThread?: string };
   buildXmppMessage: (...args: unknown[]) => unknown;
   validateUploadUrl: (url: string) => void;
+  validateContentType: (contentType: string | undefined, blockedTypes?: string[]) => void;
 };
 
 describe("XmppClient - Message Parsing", () => {
@@ -408,6 +409,94 @@ describe("XmppClient - Message Parsing", () => {
 
       expect(() => validate("not-a-url")).toThrow(/Invalid URL format/);
       expect(() => validate("javascript:alert(1)")).toThrow();
+    });
+  });
+
+  describe("validateContentType (blocked media types)", () => {
+    it("should allow safe content types", () => {
+      const client = new XmppClient({
+        jid: "test@example.com",
+        password: "password",
+        server: "example.com",
+      });
+      const validate = (client as unknown as XmppClientPrivate).validateContentType.bind(client);
+
+      expect(() => validate("image/jpeg")).not.toThrow();
+      expect(() => validate("image/png")).not.toThrow();
+      expect(() => validate("application/pdf")).not.toThrow();
+      expect(() => validate("text/plain")).not.toThrow();
+      expect(() => validate("video/mp4")).not.toThrow();
+    });
+
+    it("should allow undefined content type", () => {
+      const client = new XmppClient({
+        jid: "test@example.com",
+        password: "password",
+        server: "example.com",
+      });
+      const validate = (client as unknown as XmppClientPrivate).validateContentType.bind(client);
+
+      expect(() => validate(undefined)).not.toThrow();
+    });
+
+    it("should block dangerous executable types (default list)", () => {
+      const client = new XmppClient({
+        jid: "test@example.com",
+        password: "password",
+        server: "example.com",
+      });
+      const validate = (client as unknown as XmppClientPrivate).validateContentType.bind(client);
+
+      expect(() => validate("application/x-msdownload")).toThrow(/Blocked media type/);
+      expect(() => validate("application/x-executable")).toThrow(/Blocked media type/);
+      expect(() => validate("application/x-sh")).toThrow(/Blocked media type/);
+      expect(() => validate("application/x-bat")).toThrow(/Blocked media type/);
+      expect(() => validate("text/x-shellscript")).toThrow(/Blocked media type/);
+    });
+
+    it("should be case-insensitive", () => {
+      const client = new XmppClient({
+        jid: "test@example.com",
+        password: "password",
+        server: "example.com",
+      });
+      const validate = (client as unknown as XmppClientPrivate).validateContentType.bind(client);
+
+      expect(() => validate("APPLICATION/X-MSDOWNLOAD")).toThrow(/Blocked media type/);
+      expect(() => validate("Application/X-Executable")).toThrow(/Blocked media type/);
+    });
+
+    it("should respect custom blocked types", () => {
+      const client = new XmppClient({
+        jid: "test@example.com",
+        password: "password",
+        server: "example.com",
+      });
+      const validate = (client as unknown as XmppClientPrivate).validateContentType.bind(client);
+
+      const customBlocked = ["application/zip", "application/x-rar"];
+
+      expect(() => validate("application/zip", customBlocked)).toThrow(/Blocked media type/);
+      expect(() => validate("application/x-rar", customBlocked)).toThrow(/Blocked media type/);
+      // Default blocked types should NOT be blocked when custom list is provided
+      expect(() => validate("application/x-msdownload", customBlocked)).not.toThrow();
+    });
+
+    it("should support wildcard patterns", () => {
+      const client = new XmppClient({
+        jid: "test@example.com",
+        password: "password",
+        server: "example.com",
+      });
+      const validate = (client as unknown as XmppClientPrivate).validateContentType.bind(client);
+
+      const customBlocked = ["application/x-*", "text/*script"];
+
+      expect(() => validate("application/x-anything", customBlocked)).toThrow(/matches pattern/);
+      expect(() => validate("application/x-test", customBlocked)).toThrow(/matches pattern/);
+      expect(() => validate("text/javascript", customBlocked)).toThrow(/matches pattern/);
+      expect(() => validate("text/typescript", customBlocked)).toThrow(/matches pattern/);
+      expect(() => validate("application/json", customBlocked)).not.toThrow();
     });
   });
 });

@@ -6,6 +6,26 @@ import type { HttpUploadSlot, HttpUploadSlotRequest } from "./xep0363.js";
 import type { MessageReactions } from "./xep0444.js";
 import { XEP0363_FEATURE } from "./xep0363.js";
 
+/**
+ * Default blocked media types (executable files, scripts, etc.)
+ * Prevents uploading potentially dangerous file types that could be auto-executed
+ */
+export const DEFAULT_BLOCKED_MEDIA_TYPES = [
+  "application/x-msdownload", // .exe
+  "application/x-executable", // Linux executables
+  "application/x-mach-binary", // macOS executables
+  "application/x-sh", // Shell scripts
+  "application/x-bash", // Bash scripts
+  "application/x-csh", // C shell scripts
+  "application/x-tcl", // Tcl scripts
+  "application/x-perl", // Perl scripts
+  "application/x-python-code", // Python bytecode
+  "application/x-bat", // Windows batch files
+  "application/x-dosexec", // DOS executables
+  "text/x-shellscript", // Shell scripts
+  "application/vnd.microsoft.portable-executable", // PE executables
+];
+
 export interface XmppMessage {
   id: string;
   from: string;
@@ -564,6 +584,33 @@ export class XmppClient {
   }
 
   /**
+   * Validate content type to prevent uploading dangerous files
+   */
+  private validateContentType(contentType: string | undefined, blockedTypes?: string[]): void {
+    if (!contentType) {
+      return; // No content type provided, allow
+    }
+
+    const blocked = blockedTypes ?? DEFAULT_BLOCKED_MEDIA_TYPES;
+    const normalizedType = contentType.toLowerCase().trim();
+
+    // Check exact match
+    if (blocked.includes(normalizedType)) {
+      throw new Error(`Blocked media type: ${contentType}`);
+    }
+
+    // Check pattern match (e.g., "application/x-*")
+    for (const pattern of blocked) {
+      if (pattern.includes("*")) {
+        const regex = new RegExp(`^${pattern.replace(/\*/g, ".*")}$`, "i");
+        if (regex.test(normalizedType)) {
+          throw new Error(`Blocked media type: ${contentType} (matches pattern: ${pattern})`);
+        }
+      }
+    }
+  }
+
+  /**
    * Validate upload URL to prevent SSRF attacks
    */
   private validateUploadUrl(url: string): void {
@@ -623,10 +670,16 @@ export class XmppClient {
   /**
    * XEP-0363: Request an HTTP upload slot
    */
-  async requestUploadSlot(request: HttpUploadSlotRequest): Promise<HttpUploadSlot> {
+  async requestUploadSlot(
+    request: HttpUploadSlotRequest,
+    blockedMediaTypes?: string[],
+  ): Promise<HttpUploadSlot> {
     if (!this.connected) {
       throw new Error("XMPP client not connected");
     }
+
+    // Validate content type to prevent uploading dangerous files
+    this.validateContentType(request.contentType, blockedMediaTypes);
 
     // Discover upload service if not cached
     if (!this.httpUploadService) {

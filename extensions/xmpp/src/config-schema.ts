@@ -38,5 +38,6 @@ export const XmppConfigSchema = z.object({
   mucRooms: z.object({}).catchall(xmppRoomSchema).optional(),
   textChunkLimit: z.number().optional(),
   mediaMaxMb: z.number().optional(),
+  blockedMediaTypes: z.array(z.string()).optional(),
   actions: xmppActionSchema,
 });
