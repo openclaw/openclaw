@@ -55,7 +55,9 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     });
   }
 
-  log("feishu: webhook mode not implemented in monitor, use HTTP server directly");
+  throw new Error(
+    "feishu: webhook mode not implemented in monitor. Use websocket mode or configure an external HTTP server.",
+  );
 }
 
 async function monitorWebSocket(params: {

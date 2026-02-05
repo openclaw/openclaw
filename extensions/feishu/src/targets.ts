@@ -57,7 +57,8 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
   if (trimmed.startsWith(OPEN_ID_PREFIX)) {
     return "open_id";
   }
-  return "open_id";
+  // Default to user_id for other alphanumeric IDs (e.g., enterprise user IDs)
+  return "user_id";
 }
 
 export function looksLikeFeishuId(raw: string): boolean {
