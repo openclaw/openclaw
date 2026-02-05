@@ -6,6 +6,7 @@
 
 import OpenAI from "openai";
 import type { EmbeddingProvider } from "./config.js";
+import { contextLengthForModel } from "./config.js";
 
 type Logger = {
   info: (msg: string) => void;
@@ -19,6 +20,7 @@ export class Embeddings {
   private readonly provider: EmbeddingProvider;
   private readonly baseUrl: string;
   private readonly logger: Logger | undefined;
+  private readonly contextLength: number;
 
   constructor(
     private readonly apiKey: string | undefined,
@@ -30,6 +32,7 @@ export class Embeddings {
     this.provider = provider;
     this.baseUrl = baseUrl ?? (provider === "ollama" ? "http://localhost:11434" : "");
     this.logger = logger;
+    this.contextLength = contextLengthForModel(model);
 
     if (provider === "openai") {
       if (!apiKey) {
@@ -40,13 +43,36 @@ export class Embeddings {
   }
 
   /**
+   * Truncate text to fit within the model's context length.
+   * Uses a conservative ~3 chars/token estimate to leave headroom.
+   * Truncates at a word boundary when possible.
+   */
+  private truncateToContext(text: string): string {
+    const maxChars = this.contextLength * 3;
+    if (text.length <= maxChars) return text;
+
+    // Try to truncate at a word boundary
+    let truncated = text.slice(0, maxChars);
+    const lastSpace = truncated.lastIndexOf(" ");
+    if (lastSpace > maxChars * 0.8) {
+      truncated = truncated.slice(0, lastSpace);
+    }
+
+    this.logger?.debug?.(
+      `memory-neo4j: truncated embedding input from ${text.length} to ${truncated.length} chars (model context: ${this.contextLength} tokens)`,
+    );
+    return truncated;
+  }
+
+  /**
    * Generate an embedding vector for a single text.
    */
   async embed(text: string): Promise<number[]> {
+    const input = this.truncateToContext(text);
     if (this.provider === "ollama") {
-      return this.embedOllama(text);
+      return this.embedOllama(input);
     }
-    return this.embedOpenAI(text);
+    return this.embedOpenAI(input);
   }
 
   /**
@@ -61,9 +87,11 @@ export class Embeddings {
       return [];
     }
 
+    const truncated = texts.map((t) => this.truncateToContext(t));
+
     if (this.provider === "ollama") {
       // Ollama doesn't support batch, so we do sequential with resilient error handling
-      const results = await Promise.allSettled(texts.map((t) => this.embedOllama(t)));
+      const results = await Promise.allSettled(truncated.map((t) => this.embedOllama(t)));
       const embeddings: number[][] = [];
       let failures = 0;
 
@@ -90,7 +118,7 @@ export class Embeddings {
       return embeddings;
     }
 
-    return this.embedBatchOpenAI(texts);
+    return this.embedBatchOpenAI(truncated);
   }
 
   private async embedOpenAI(text: string): Promise<number[]> {

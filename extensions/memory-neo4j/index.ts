@@ -805,9 +805,10 @@ const memoryNeo4jPlugin = {
 
         const agentId = ctx.agentId || "default";
 
-        // Truncate prompt to avoid exceeding embedding model context length
-        // ~6000 chars is safe for most embedding models (leaves headroom for 2k tokens)
-        const MAX_QUERY_CHARS = 6000;
+        // ~1500 chars is a safe ceiling for most embedding models (~500 tokens).
+        // Models with larger context (8k+) can handle more, but recall queries
+        // don't benefit from very long inputs — the embedding quality plateaus.
+        const MAX_QUERY_CHARS = 1500;
         const query =
           event.prompt.length > MAX_QUERY_CHARS
             ? event.prompt.slice(0, MAX_QUERY_CHARS)
