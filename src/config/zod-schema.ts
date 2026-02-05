@@ -32,6 +32,32 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
+const GatewayStartupCommandLogSchema = z
+  .object({
+    mode: z.union([z.literal("inherit"), z.literal("file"), z.literal("discard")]).optional(),
+    stdoutPath: z.string().optional(),
+    stderrPath: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+const GatewayStartupCommandSchema = z
+  .object({
+    id: z.string().optional(),
+    name: z.string().optional(),
+    command: z.string(),
+    args: z.array(z.string()).optional(),
+    cwd: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    enabled: z.boolean().optional(),
+    startPolicy: z.union([z.literal("startup"), z.literal("manual")]).optional(),
+    stopSignal: z.string().optional(),
+    stopTimeoutMs: z.number().int().nonnegative().optional(),
+    restart: z.union([z.literal("never"), z.literal("on-failure"), z.literal("always")]).optional(),
+    log: GatewayStartupCommandLogSchema,
+  })
+  .strict();
+
 const MemoryQmdPathSchema = z
   .object({
     path: z.string(),
@@ -462,6 +488,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        startupCommands: z.array(GatewayStartupCommandSchema).optional(),
         tls: z
           .object({
             enabled: z.boolean().optional(),

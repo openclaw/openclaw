@@ -124,6 +124,48 @@ export type GatewayReloadConfig = {
   debounceMs?: number;
 };
 
+export type GatewayStartupCommandStartPolicy = "startup" | "manual";
+
+export type GatewayStartupCommandRestartPolicy = "never" | "on-failure" | "always";
+
+export type GatewayStartupCommandLogMode = "inherit" | "file" | "discard";
+
+export type GatewayStartupCommandLogConfig = {
+  /** Log handling mode for child process output (default: inherit). */
+  mode?: GatewayStartupCommandLogMode;
+  /** Optional file path for stdout when mode is "file". */
+  stdoutPath?: string;
+  /** Optional file path for stderr when mode is "file". */
+  stderrPath?: string;
+};
+
+export type GatewayStartupCommand = {
+  /** Optional stable id for this command. */
+  id?: string;
+  /** Optional display name for UI/logging. */
+  name?: string;
+  /** Executable or shell command to run. */
+  command: string;
+  /** Command arguments. */
+  args?: string[];
+  /** Working directory for the command. */
+  cwd?: string;
+  /** Additional environment variables for the command. */
+  env?: Record<string, string>;
+  /** Enable/disable this command entry (default: true). */
+  enabled?: boolean;
+  /** When to start the process (default: startup). */
+  startPolicy?: GatewayStartupCommandStartPolicy;
+  /** Signal to use for graceful stop (default: SIGTERM). */
+  stopSignal?: string;
+  /** Timeout (ms) before force kill (default: 10000). */
+  stopTimeoutMs?: number;
+  /** Restart policy for the process (default: never). */
+  restart?: GatewayStartupCommandRestartPolicy;
+  /** Log configuration for child process output. */
+  log?: GatewayStartupCommandLogConfig;
+};
+
 export type GatewayHttpChatCompletionsConfig = {
   /**
    * If false, the Gateway will not serve `POST /v1/chat/completions`.
@@ -236,6 +278,8 @@ export type GatewayConfig = {
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
   reload?: GatewayReloadConfig;
+  /** Optional startup commands to spawn alongside the gateway. */
+  startupCommands?: GatewayStartupCommand[];
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
   nodes?: GatewayNodesConfig;

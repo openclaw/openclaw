@@ -215,6 +215,21 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.nodes.browser.node": "Gateway Node Browser Pin",
   "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",
   "gateway.nodes.denyCommands": "Gateway Node Denylist",
+  "gateway.startupCommands": "Gateway Startup Commands",
+  "gateway.startupCommands.*.id": "Gateway Startup Command ID",
+  "gateway.startupCommands.*.name": "Gateway Startup Command Name",
+  "gateway.startupCommands.*.command": "Gateway Startup Command",
+  "gateway.startupCommands.*.args": "Gateway Startup Command Arguments",
+  "gateway.startupCommands.*.cwd": "Gateway Startup Command Working Directory",
+  "gateway.startupCommands.*.env": "Gateway Startup Command Environment",
+  "gateway.startupCommands.*.enabled": "Gateway Startup Command Enabled",
+  "gateway.startupCommands.*.startPolicy": "Gateway Startup Command Start Policy",
+  "gateway.startupCommands.*.stopSignal": "Gateway Startup Command Stop Signal",
+  "gateway.startupCommands.*.stopTimeoutMs": "Gateway Startup Command Stop Timeout (ms)",
+  "gateway.startupCommands.*.restart": "Gateway Startup Command Restart Policy",
+  "gateway.startupCommands.*.log.mode": "Gateway Startup Command Log Mode",
+  "gateway.startupCommands.*.log.stdoutPath": "Gateway Startup Command Stdout Path",
+  "gateway.startupCommands.*.log.stderrPath": "Gateway Startup Command Stderr Path",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
   "skills.load.watch": "Watch Skills",
@@ -443,6 +458,26 @@ const FIELD_HELP: Record<string, string> = {
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings).",
   "gateway.nodes.denyCommands":
     "Commands to block even if present in node claims or default allowlist.",
+  "gateway.startupCommands":
+    "Optional list of startup processes to run alongside the gateway (best-effort; not a sandbox).",
+  "gateway.startupCommands.*.id": "Stable identifier used for logging and restart tracking.",
+  "gateway.startupCommands.*.name": "Optional display name for UI/logging.",
+  "gateway.startupCommands.*.command": "Executable or shell command to run.",
+  "gateway.startupCommands.*.args": "Arguments passed to the command.",
+  "gateway.startupCommands.*.cwd": "Working directory for the command.",
+  "gateway.startupCommands.*.env": "Extra environment variables applied to the command.",
+  "gateway.startupCommands.*.enabled": "Enable/disable this command entry (default: true).",
+  "gateway.startupCommands.*.startPolicy":
+    'When to start the process ("startup" or "manual"; default: startup).',
+  "gateway.startupCommands.*.stopSignal": "Signal used for graceful shutdown (default: SIGTERM).",
+  "gateway.startupCommands.*.stopTimeoutMs":
+    "Timeout in ms before force killing the process (default: 10000).",
+  "gateway.startupCommands.*.restart":
+    'Restart policy ("never", "on-failure", or "always"; default: never).',
+  "gateway.startupCommands.*.log.mode":
+    'Log handling mode ("inherit", "file", or "discard"; default: inherit).',
+  "gateway.startupCommands.*.log.stdoutPath": 'File path for stdout when log mode is "file".',
+  "gateway.startupCommands.*.log.stderrPath": 'File path for stderr when log mode is "file".',
   "nodeHost.browserProxy.enabled": "Expose the local browser control server via node proxy.",
   "nodeHost.browserProxy.allowProfiles":
     "Optional allowlist of browser profile names exposed via the node proxy.",

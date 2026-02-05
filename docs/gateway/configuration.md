@@ -3009,6 +3009,49 @@ Notes:
 - The onboarding wizard generates a gateway token by default (even on loopback).
 - `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` is ignored.
 
+#### `gateway.startupCommands` (Gateway startup commands)
+
+Use `gateway.startupCommands` to spawn best-effort helper processes alongside the gateway. These run on the gateway host and are **not** sandboxed; they share the same machine resources and permissions as the gateway process.
+
+Defaults (when fields are omitted):
+
+- enabled: `true`
+- startPolicy: `"startup"`
+- restart: `"never"`
+- stopSignal: `"SIGTERM"`
+- stopTimeoutMs: `10000`
+- log.mode: `"inherit"`
+
+```json5
+{
+  gateway: {
+    startupCommands: [
+      {
+        id: "qmd-sidecar",
+        name: "QMD sidecar",
+        command: "/usr/local/bin/qmd",
+        args: ["serve", "--config", "/etc/openclaw/qmd.json"],
+        cwd: "/var/lib/openclaw",
+        env: { QMD_LOG_LEVEL: "info" },
+        startPolicy: "startup",
+        restart: "on-failure",
+        log: {
+          mode: "file",
+          stdoutPath: "/var/log/openclaw/qmd.stdout.log",
+          stderrPath: "/var/log/openclaw/qmd.stderr.log",
+        },
+      },
+    ],
+  },
+}
+```
+
+Limitations:
+
+- Startup commands are **best-effort** helpers; they do not provide isolation or resource limits.
+- Use `startPolicy: "manual"` to define a command without auto-starting it.
+- `log.mode: "file"` writes stdout/stderr to the supplied paths; when omitted, output inherits the gateway process settings.
+
 Auth and Tailscale:
 
 - `gateway.auth.mode` sets the handshake requirements (`token` or `password`). When unset, token auth is assumed.
