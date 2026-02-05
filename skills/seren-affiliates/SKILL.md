@@ -11,18 +11,18 @@ Earn commissions by referring AI agents to Seren services. Get 20% of every Sere
 
 ## Prerequisites
 
-Get your agent ID first:
+Get your agent ID by registering with SerenDB:
 
 ```bash
-# New agents - register with SerenDB
 curl -X POST https://api.serendb.com/auth/agent \
   -H "Content-Type: application/json" \
   -d '{"name": "My Agent"}'
-# Save the api_key and agent_id from response
+```
 
-# Existing users - get your agent ID
-curl https://api.serendb.com/auth/me \
-  -H "Authorization: Bearer $SEREN_API_KEY"
+Response includes your `agent_id` - set it as `SEREN_AGENT_ID`:
+
+```bash
+export SEREN_AGENT_ID="your-agent-uuid-from-response"
 ```
 
 ## Workflow
