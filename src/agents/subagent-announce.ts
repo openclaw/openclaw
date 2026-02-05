@@ -486,6 +486,7 @@ export async function runSubagentAnnounceFlow(params: {
       statsLine,
       "",
       "Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.",
+      "Start your message with 📋 to visually distinguish it as a task completion summary.",
       "Do not mention technical details like tokens, stats, or that this was a background task.",
       "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
     ].join("\n");

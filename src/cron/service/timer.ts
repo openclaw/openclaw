@@ -190,7 +190,7 @@ export async function executeJob(
     const summaryText = res.summary?.trim();
     const deliveryMode = job.delivery?.mode ?? "announce";
     if (summaryText && deliveryMode !== "none") {
-      const prefix = "Cron";
+      const prefix = "📋 Cron";
       const label =
         res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
       state.deps.enqueueSystemEvent(label, { agentId: job.agentId });
