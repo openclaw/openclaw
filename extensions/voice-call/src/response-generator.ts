@@ -118,7 +118,7 @@ IMPORTANT: Your responses will be read aloud by a text-to-speech engine. Write e
 - Abbreviations: spell out or use spoken form
 - No markdown, bullet points, or special formatting
 
-You have an end_call tool. Use it when the conversation is naturally over or the caller says goodbye. Always say a brief farewell before ending the call.`;
+When the conversation is naturally over or the caller says goodbye, say a brief farewell and end your response with the exact tag [END_CALL]. This signals the system to hang up the phone after your farewell is spoken.`;
 
   let extraSystemPrompt = basePrompt;
   if (transcript.length > 0) {
@@ -133,19 +133,8 @@ You have an end_call tool. Use it when the conversation is naturally over or the
   const runId = `voice:${callId}:${Date.now()}`;
 
   try {
-    // Inject end_call tool so the agent can hang up
+    // Track whether the agent wants to hang up
     let endCallRequested = false;
-    const clientTools = [
-      {
-        type: "function" as const,
-        function: {
-          name: "end_call",
-          description:
-            "End the phone call. Use when the conversation is naturally over, the caller says goodbye, or there is nothing more to discuss. Always say a brief goodbye before calling this.",
-          parameters: { type: "object", properties: {} },
-        },
-      },
-    ];
 
     const result = await deps.runEmbeddedPiAgent({
       sessionId,
@@ -164,7 +153,6 @@ You have an end_call tool. Use it when the conversation is naturally over or the
       lane: "voice",
       extraSystemPrompt,
       agentDir,
-      clientTools,
     });
 
     // Extract text from payloads
@@ -173,15 +161,17 @@ You have an end_call tool. Use it when the conversation is naturally over or the
       .map((p) => p.text?.trim())
       .filter(Boolean);
 
-    const text = texts.join(" ") || null;
+    let text = texts.join(" ") || null;
 
     if (!text && result.meta?.aborted) {
       return { text: null, error: "Response generation was aborted" };
     }
 
-    // Check if the agent called end_call
-    const pendingCalls = result.meta?.pendingToolCalls as Array<{ name: string }> | undefined;
-    endCallRequested = pendingCalls?.some((tc) => tc.name === "end_call") ?? false;
+    // Check for [END_CALL] marker and strip it from spoken text
+    if (text && text.includes("[END_CALL]")) {
+      endCallRequested = true;
+      text = text.replace(/\s*\[END_CALL\]\s*/g, "").trim() || null;
+    }
 
     return { text, endCall: endCallRequested };
   } catch (err) {
