@@ -217,7 +217,9 @@ export async function dispatchReplyFromConfig(params: {
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
   });
-  await triggerInternalHook(messageEvent);
+  void triggerInternalHook(messageEvent).catch((err) => {
+    logVerbose(`dispatch-from-config: message:received internal hook failed: ${String(err)}`);
+  });
 
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
