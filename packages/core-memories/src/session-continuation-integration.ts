@@ -72,50 +72,60 @@ interface SessionRecord {
   gap?: number;
 }
 
+function resolveWorkspaceRoot(): string {
+  return process.env.OPENCLAW_WORKSPACE || ".";
+}
+
+function resolveSessionDir(): string {
+  // Store per-user session state to avoid clobber/race hazards with a shared JSON file.
+  // (A single sessions.json is prone to lost updates when multiple processes write concurrently.)
+  return [resolveWorkspaceRoot(), ".openclaw", "sessions"].join("/");
+}
+
 async function getLastSessionTime(userId: string): Promise<SessionRecord | null> {
+  const fs = await import("fs/promises");
+  const path = await import("path");
+
+  // Preferred (race-safe): per-user file
   try {
-    const fs = await import("fs/promises");
-    const path = await import("path");
+    const sessionDir = path.resolve(resolveSessionDir());
+    const userFile = path.join(sessionDir, `${userId}.json`);
+    const data = await fs.readFile(userFile, "utf-8");
+    return JSON.parse(data) as SessionRecord;
+  } catch {
+    // fall through
+  }
 
-    const sessionFile = path.join(
-      process.env.OPENCLAW_WORKSPACE || ".",
-      ".openclaw",
-      "sessions.json",
-    );
-
-    const data = await fs.readFile(sessionFile, "utf-8");
-    const sessions = JSON.parse(data);
-
+  // Back-compat: legacy shared sessions.json
+  try {
+    const legacyFile = path.join(path.resolve(resolveWorkspaceRoot()), ".openclaw", "sessions.json");
+    const data = await fs.readFile(legacyFile, "utf-8");
+    const sessions = JSON.parse(data) as Record<string, SessionRecord>;
     return sessions[userId] || null;
   } catch {
     return null;
   }
 }
 
+async function atomicWriteFile(filePath: string, content: string): Promise<void> {
+  const fs = await import("fs/promises");
+  const path = await import("path");
+
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  await fs.writeFile(tmpPath, content);
+  await fs.rename(tmpPath, filePath);
+}
+
 async function updateLastSessionTime(userId: string): Promise<void> {
   try {
-    const fs = await import("fs/promises");
     const path = await import("path");
 
-    const sessionFile = path.join(
-      process.env.OPENCLAW_WORKSPACE || ".",
-      ".openclaw",
-      "sessions.json",
-    );
+    const sessionDir = path.resolve(resolveSessionDir());
+    const userFile = path.join(sessionDir, `${userId}.json`);
+    const record: SessionRecord = { timestamp: Date.now() };
 
-    let sessions: Record<string, SessionRecord> = {};
-
-    try {
-      const data = await fs.readFile(sessionFile, "utf-8");
-      sessions = JSON.parse(data);
-    } catch {
-      // File doesn't exist yet
-    }
-
-    sessions[userId] = { timestamp: Date.now() };
-
-    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    await fs.writeFile(sessionFile, JSON.stringify(sessions, null, 2));
+    await atomicWriteFile(userFile, JSON.stringify(record, null, 2));
   } catch {
     console.error("Failed to update session time");
   }
@@ -125,7 +135,7 @@ export async function onSessionStart(
   coreMemories: CoreMemories,
   sendMessage: (msg: string) => void | Promise<void>,
 ): Promise<void> {
-  const message = await initSessionContinuation(coreMemories);
+  const message = await initSessionContinuation(coreMemories, "default");
 
   if (message) {
     await Promise.resolve(sendMessage(message));
