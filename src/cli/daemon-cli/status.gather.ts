@@ -323,6 +323,12 @@ export type DaemonStatus = {
     staleGatewayPids: number[];
   };
   extraServices: Array<{ label: string; detail: string; scope: string }>;
+  extraResources?: {
+    agents: number;
+    skills: number;
+    rules: number;
+    commands: number;
+  };
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
@@ -670,6 +676,21 @@ export async function gatherDaemonStatus(
         }
       : {}),
     extraServices,
+    extraResources: await (async () => {
+      const stateDir = resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv);
+      console.error("DEBUG: stateDir", stateDir);
+      try {
+        return {
+          agents: await countDirItems(`${stateDir}/agents`),
+          skills: await countDirItems(`${stateDir}/skills`),
+          rules: await countDirItems(`${stateDir}/rules`),
+          commands: await countDirItems(`${stateDir}/commands`),
+        };
+      } catch (e) {
+        console.error("DEBUG: error counting", e);
+        return { agents: 0, skills: 0, rules: 0, commands: 0 };
+      }
+    })(),
   };
 }
 

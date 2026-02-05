@@ -257,7 +257,20 @@ Details: [Development channels](https://docs.openclaw.ai/install/development-cha
 
 - Workspace root: `~/.openclaw/workspace` (configurable via `agents.defaults.workspace`).
 - Injected prompt files: `AGENTS.md`, `SOUL.md`, `TOOLS.md`.
+- Workspace root: `~/.openclaw/workspace` (configurable via `agents.defaults.workspace`).
+- Injected prompt files: `AGENTS.md`, `SOUL.md`, `TOOLS.md`.
 - Skills: `~/.openclaw/workspace/skills/<skill>/SKILL.md`.
+
+### Everything Claude Code Integration
+
+This installation includes the "Everything Claude Code" resource pack, pre-populating your environment with a rich set of community-driven capabilities:
+
+- **Agents:** Specialized personas found in `~/.openclaw/agents`.
+- **Skills:** Extended capabilities in `~/.openclaw/skills`.
+- **Rules:** Behavioral guidelines in `~/.openclaw/rules`.
+- **Commands:** Custom CLI extensions in `~/.openclaw/commands`.
+
+Verifying installation: `openclaw status --all`
 
 ## Configuration
 

@@ -30,13 +30,13 @@ export async function statusAllCommand(
         summarizingChannels: "Summarizing channels…",
       },
     });
-    progress.setLabel("Checking services…");
     const [daemon, nodeService] = await resolveStatusServiceSummaries();
     const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
       daemon,
       node: nodeService,
     });
     progress.tick();
+
     const lines = await buildStatusAllReportLines({
       progress,
       ...(await buildStatusAllReportData({
