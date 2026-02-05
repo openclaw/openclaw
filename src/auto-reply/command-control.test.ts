@@ -178,6 +178,18 @@ describe("resolveCommandAuthorization", () => {
   });
 
   it("uses owner allowlist override from context when configured", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          plugin: createOutboundTestPlugin({
+            id: "discord",
+            outbound: { deliveryMode: "direct" },
+          }),
+          source: "test",
+        },
+      ]),
+    );
     const cfg = {
       channels: { discord: {} },
     } as OpenClawConfig;
