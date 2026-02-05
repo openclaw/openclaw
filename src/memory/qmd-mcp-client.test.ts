@@ -10,9 +10,17 @@ import { describe, it, expect } from "vitest";
 import { QmdMcpClient, type QmdMcpConfig } from "./qmd-mcp-client.js";
 
 describe("QmdMcpClient", () => {
+  // Filter undefined values from process.env to match Record<string, string>
+  const filteredEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) {
+      filteredEnv[key] = value;
+    }
+  }
+
   const defaultConfig: Partial<QmdMcpConfig> & Pick<QmdMcpConfig, "command" | "env" | "cwd"> = {
     command: "qmd",
-    env: { ...process.env },
+    env: filteredEnv,
     cwd: "/tmp/test",
     startupTimeoutMs: 1000,
     requestTimeoutMs: 1000,
@@ -56,9 +64,11 @@ describe("QmdMcpClient", () => {
   });
 });
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 describe("QmdMcpClient result parsing", () => {
   // These tests verify the result parsing logic works correctly
   // without needing to actually spawn a QMD process
+  // Note: Using 'any' to access private methods for testing
 
   it("handles empty search results", async () => {
     const client = new QmdMcpClient({

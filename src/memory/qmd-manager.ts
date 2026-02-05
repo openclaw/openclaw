@@ -15,7 +15,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { QmdMcpClient, type QmdMcpSearchResult } from "./qmd-mcp-client.js";
+import { QmdMcpClient } from "./qmd-mcp-client.js";
 import {
   listSessionFilesForAgent,
   buildSessionEntry,
@@ -74,7 +74,6 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgConfigHome: string;
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
-  private readonly env: NodeJS.ProcessEnv;
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
   private readonly docPathCache = new Map<
@@ -82,6 +81,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     { rel: string; abs: string; source: MemorySource }
   >();
   private readonly sessionExporter: SessionExporterConfig | null;
+  private readonly env: Record<string, string>;
   private updateTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
   private closed = false;
@@ -111,8 +111,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.xdgCacheHome = path.join(this.qmdDir, "xdg-cache");
     this.indexPath = path.join(this.xdgCacheHome, "qmd", "index.sqlite");
 
+    // Filter undefined values from process.env to satisfy Record<string, string>
+    const filteredEnv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value !== undefined) {
+        filteredEnv[key] = value;
+      }
+    }
     this.env = {
-      ...process.env,
+      ...filteredEnv,
       XDG_CONFIG_HOME: this.xdgConfigHome,
       XDG_CACHE_HOME: this.xdgCacheHome,
       NO_COLOR: "1",

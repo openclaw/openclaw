@@ -10,11 +10,36 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("memory:mcp");
+
+// ============================================================================
+// Type Conversion Helpers
+// ============================================================================
+
+/** Convert unknown to string, with fallback for non-primitives */
+function toString(value: unknown, fallback = ""): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return fallback;
+}
+
+/** Convert unknown to string or undefined (for optional fields) */
+function toStringOrUndefined(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return undefined;
+}
 
 // ============================================================================
 // Types
@@ -26,7 +51,7 @@ export interface QmdMcpConfig {
   /** QMD command (e.g., "qmd") */
   command: string;
   /** Environment variables for the subprocess */
-  env: NodeJS.ProcessEnv;
+  env: Record<string, string>;
   /** Working directory for the subprocess */
   cwd: string;
   /** Maximum time to wait for MCP server initialization (ms) */
@@ -173,6 +198,8 @@ export class QmdMcpClient extends EventEmitter {
       );
 
       // Set up error handling for transport close
+      // MCP SDK uses callback properties, not DOM events
+      // eslint-disable-next-line unicorn/prefer-add-event-listener
       this.transport.onclose = () => {
         if (this.state === "running") {
           log.warn("MCP transport closed unexpectedly");
@@ -181,6 +208,7 @@ export class QmdMcpClient extends EventEmitter {
         }
       };
 
+      // eslint-disable-next-line unicorn/prefer-add-event-listener
       this.transport.onerror = (err) => {
         log.warn(`MCP transport error: ${err.message}`);
         if (this.state === "running") {
@@ -296,7 +324,7 @@ export class QmdMcpClient extends EventEmitter {
    * Uses embedding model + reranker. First call may be slow (~7s) to load models.
    */
   async query(queryText: string, opts?: QmdMcpQueryOptions): Promise<QmdMcpSearchResult[]> {
-    const client = await this.ensureConnected();
+    await this.ensureConnected();
 
     const args: Record<string, unknown> = {
       query: queryText,
@@ -322,7 +350,7 @@ export class QmdMcpClient extends EventEmitter {
    * BM25 full-text search (fast, no model loading).
    */
   async search(queryText: string, opts?: QmdMcpSearchOptions): Promise<QmdMcpSearchResult[]> {
-    const client = await this.ensureConnected();
+    await this.ensureConnected();
 
     const args: Record<string, unknown> = {
       query: queryText,
@@ -342,7 +370,7 @@ export class QmdMcpClient extends EventEmitter {
    * Vector semantic search (uses embedding model only).
    */
   async vsearch(queryText: string, opts?: QmdMcpQueryOptions): Promise<QmdMcpSearchResult[]> {
-    const client = await this.ensureConnected();
+    await this.ensureConnected();
 
     const args: Record<string, unknown> = {
       query: queryText,
@@ -368,7 +396,7 @@ export class QmdMcpClient extends EventEmitter {
    * Get a document by path or docid.
    */
   async get(pathOrDocid: string): Promise<QmdMcpDocument | null> {
-    const client = await this.ensureConnected();
+    await this.ensureConnected();
 
     log.debug(`MCP get: "${pathOrDocid}"`);
 
@@ -380,7 +408,7 @@ export class QmdMcpClient extends EventEmitter {
    * Get index status information.
    */
   async status(): Promise<Record<string, unknown>> {
-    const client = await this.ensureConnected();
+    await this.ensureConnected();
 
     log.debug("MCP status");
 
@@ -462,13 +490,13 @@ export class QmdMcpClient extends EventEmitter {
   private normalizeSearchResult(raw: unknown): QmdMcpSearchResult {
     const item = raw as Record<string, unknown>;
     return {
-      docid: String(item.docid ?? ""),
-      file: String(item.file ?? ""),
-      title: item.title != null ? String(item.title) : undefined,
+      docid: toString(item.docid),
+      file: toString(item.file),
+      title: toStringOrUndefined(item.title),
       score: typeof item.score === "number" ? item.score : 0,
-      context: item.context != null ? String(item.context) : null,
-      snippet: item.snippet != null ? String(item.snippet) : undefined,
-      body: item.body != null ? String(item.body) : undefined,
+      context: toStringOrUndefined(item.context) ?? null,
+      snippet: toStringOrUndefined(item.snippet),
+      body: toStringOrUndefined(item.body),
     };
   }
 
@@ -483,10 +511,10 @@ export class QmdMcpClient extends EventEmitter {
     if (response.structuredContent?.document) {
       const doc = response.structuredContent.document as Record<string, unknown>;
       return {
-        docid: String(doc.docid ?? ""),
-        file: String(doc.file ?? ""),
-        title: doc.title != null ? String(doc.title) : undefined,
-        content: String(doc.content ?? ""),
+        docid: toString(doc.docid),
+        file: toString(doc.file),
+        title: toStringOrUndefined(doc.title),
+        content: toString(doc.content),
       };
     }
 
