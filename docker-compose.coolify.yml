@@ -37,7 +37,7 @@ services:
         # Clean up any old config files
         rm -f /home/node/.openclaw/openclaw.yaml
         rm -f /home/node/.openclaw/config.yaml
-        # Create fresh openclaw.json (correct filename and format!)
+        # Create comprehensive OpenClaw config with full intelligence features
         cat > /home/node/.openclaw/openclaw.json << 'EOF'
         {
           "gateway": {
@@ -75,6 +75,66 @@ services:
               "maxTools": 10
             },
             "toolTimeoutMs": 60000
+          },
+          "skills": {
+            "allowBundled": [
+              "mem0-memory",
+              "autonomy-engine",
+              "implicit-feedback",
+              "proactive-intelligence",
+              "role-router",
+              "bigquery-mcp",
+              "mongodb-mcp"
+            ],
+            "entries": {
+              "mem0-memory": {
+                "enabled": true,
+                "env": {
+                  "MEM0_API_KEY": "${MEM0_API_KEY}",
+                  "MEM0_ORG_ID": "${MEM0_ORG_ID}"
+                }
+              },
+              "autonomy-engine": {
+                "enabled": true
+              },
+              "implicit-feedback": {
+                "enabled": true
+              },
+              "proactive-intelligence": {
+                "enabled": true
+              },
+              "role-router": {
+                "enabled": true
+              },
+              "bigquery-mcp": {
+                "enabled": true,
+                "env": {
+                  "BIGQUERY_MCP_URL": "${BIGQUERY_MCP_URL}",
+                  "MONGODB_URL": "${MONGODB_URL}"
+                }
+              },
+              "mongodb-mcp": {
+                "enabled": true,
+                "env": {
+                  "MONGODB_URL": "${MONGODB_URL}"
+                }
+              }
+            }
+          },
+          "agents": {
+            "defaults": {
+              "model": "${OPENCLAW_MODEL}",
+              "skills": [
+                "mem0-memory",
+                "autonomy-engine",
+                "implicit-feedback",
+                "proactive-intelligence",
+                "role-router",
+                "bigquery-mcp",
+                "mongodb-mcp"
+              ],
+              "thinking": "enabled"
+            }
           }
         }
         EOF
@@ -84,6 +144,9 @@ services:
         sed -i "s|\${QDRANT_MCP_URL}|${QDRANT_MCP_URL}|g" /home/node/.openclaw/openclaw.json
         sed -i "s|\${HUBSPOT_CLIENT_ID}|${HUBSPOT_CLIENT_ID}|g" /home/node/.openclaw/openclaw.json
         sed -i "s|\${HUBSPOT_CLIENT_SECRET}|${HUBSPOT_CLIENT_SECRET}|g" /home/node/.openclaw/openclaw.json
+        sed -i "s|\${MEM0_API_KEY}|${MEM0_API_KEY}|g" /home/node/.openclaw/openclaw.json
+        sed -i "s|\${MEM0_ORG_ID}|${MEM0_ORG_ID}|g" /home/node/.openclaw/openclaw.json
+        sed -i "s|\${OPENCLAW_MODEL}|${OPENCLAW_MODEL}|g" /home/node/.openclaw/openclaw.json
         exec node dist/index.js gateway --allow-unconfigured --bind lan
     environment:
       - NODE_ENV=production
