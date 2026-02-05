@@ -18,6 +18,10 @@ export type FeishuSendOpts = {
   maxBytes?: number;
   /** Whether to auto-convert Markdown to rich text (post). Default: true */
   autoRichText?: boolean;
+  /** Message ID to reply to (uses reply API instead of create) */
+  replyToMessageId?: string;
+  /** Whether to reply in thread mode. Default: false */
+  replyInThread?: boolean;
 };
 
 export type FeishuSendResult = {
@@ -230,18 +234,25 @@ export async function sendMessageFeishu(
       // First send the media, then send text as a follow-up
       if (typeof contentText === "string" && contentText.trim()) {
         // Send media first
-        const mediaRes = await client.im.message.create({
-          params: { receive_id_type: receiveIdType },
-          data: {
-            receive_id: receiveId,
-            msg_type: msgType,
-            content: JSON.stringify(finalContent),
-          },
-        });
+        const mediaContent = JSON.stringify(finalContent);
+        if (opts.replyToMessageId) {
+          await replyMessageFeishu(client, opts.replyToMessageId, mediaContent, msgType, {
+            replyInThread: opts.replyInThread,
+          });
+        } else {
+          const mediaRes = await client.im.message.create({
+            params: { receive_id_type: receiveIdType },
+            data: {
+              receive_id: receiveId,
+              msg_type: msgType,
+              content: mediaContent,
+            },
+          });
 
-        if (mediaRes.code !== 0) {
-          logger.error(`Feishu media send failed: ${mediaRes.code} - ${mediaRes.msg}`);
-          throw new Error(`Feishu API Error: ${mediaRes.msg}`);
+          if (mediaRes.code !== 0) {
+            logger.error(`Feishu media send failed: ${mediaRes.code} - ${mediaRes.msg}`);
+            throw new Error(`Feishu API Error: ${mediaRes.msg}`);
+          }
         }
 
         // Then send text
@@ -297,6 +308,13 @@ export async function sendMessageFeishu(
 
   const contentStr = typeof finalContent === "string" ? finalContent : JSON.stringify(finalContent);
 
+  // Use reply API if replyToMessageId is provided
+  if (opts.replyToMessageId) {
+    return replyMessageFeishu(client, opts.replyToMessageId, contentStr, msgType, {
+      replyInThread: opts.replyInThread,
+    });
+  }
+
   try {
     const res = await client.im.message.create({
       params: { receive_id_type: receiveIdType },
@@ -314,6 +332,43 @@ export async function sendMessageFeishu(
     return res.data ?? null;
   } catch (err) {
     logger.error(`Feishu send error: ${formatErrorMessage(err)}`);
+    throw err;
+  }
+}
+
+export type FeishuReplyOpts = {
+  /** Whether to reply in thread mode. Default: false */
+  replyInThread?: boolean;
+};
+
+/**
+ * Reply to a specific message in Feishu
+ * Uses the Feishu reply API: POST /open-apis/im/v1/messages/:message_id/reply
+ */
+export async function replyMessageFeishu(
+  client: Client,
+  messageId: string,
+  content: string,
+  msgType: FeishuMsgType,
+  opts: FeishuReplyOpts = {},
+): Promise<FeishuSendResult | null> {
+  try {
+    const res = await client.im.message.reply({
+      path: { message_id: messageId },
+      data: {
+        msg_type: msgType,
+        content: content,
+        reply_in_thread: opts.replyInThread ?? false,
+      },
+    });
+
+    if (res.code !== 0) {
+      logger.error(`Feishu reply failed: ${res.code} - ${res.msg}`);
+      throw new Error(`Feishu API Error: ${res.msg}`);
+    }
+    return res.data ?? null;
+  } catch (err) {
+    logger.error(`Feishu reply error: ${formatErrorMessage(err)}`);
     throw err;
   }
 }
