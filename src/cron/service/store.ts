@@ -126,7 +126,7 @@ async function getFileMtimeMs(path: string): Promise<number | null> {
   }
 }
 
-export async function ensureLoaded(state: CronServiceState, opts?: { forceReload?: boolean }) {
+export async function ensureLoaded(state: CronServiceState, opts?: { forceReload?: boolean; skipRecompute?: boolean }) {
   // Fast path: store is already in memory. Other callers (add, list, run, …)
   // trust the in-memory copy to avoid a stat syscall on every operation.
   if (state.store && !opts?.forceReload) {
@@ -255,8 +255,12 @@ export async function ensureLoaded(state: CronServiceState, opts?: { forceReload
   state.storeLoadedAtMs = state.deps.nowMs();
   state.storeFileMtimeMs = fileMtimeMs;
 
-  // Recompute next runs after loading to ensure accuracy
-  recomputeNextRuns(state);
+  // Recompute next runs after loading to ensure accuracy (unless skipped)
+  // skipRecompute is used by onTimer to avoid race condition where nextRunAtMs
+  // gets advanced before runDueJobs can check if the job is due
+  if (!opts?.skipRecompute) {
+    recomputeNextRuns(state);
+  }
 
   if (mutated) {
     await persist(state);
