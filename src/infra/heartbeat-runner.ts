@@ -912,9 +912,18 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    // Safety clamp: ensure delay never exceeds MAX_TIMEOUT_MS (already clamped in updateConfig,
-    // but kept here as a defensive measure against setTimeout 32-bit overflow).
-    const delay = Math.min(Math.max(0, nextDue - now), MAX_TIMEOUT_MS);
+    const rawDelay = Math.max(0, nextDue - now);
+    // Clamp delay to MAX_TIMEOUT_MS to avoid 32-bit signed integer overflow in setTimeout.
+    // For intervals > ~596 hours, this creates a chain of timeouts: the timer fires at
+    // MAX_TIMEOUT_MS, the run() handler skips (now < nextDueMs), and scheduleNext() is
+    // called again with the remaining time. This preserves the configured interval.
+    const delay = Math.min(rawDelay, MAX_TIMEOUT_MS);
+    if (rawDelay > MAX_TIMEOUT_MS) {
+      log.debug("heartbeat: scheduling chunked timeout (interval exceeds MAX_TIMEOUT_MS)", {
+        remainingMs: rawDelay,
+        scheduledMs: delay,
+      });
+    }
     state.timer = setTimeout(() => {
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     }, delay);
@@ -931,20 +940,9 @@ export function startHeartbeatRunner(opts: {
     const nextAgents = new Map<string, HeartbeatAgentState>();
     const intervals: number[] = [];
     for (const agent of resolveHeartbeatAgents(cfg)) {
-      const rawIntervalMs = resolveHeartbeatIntervalMs(cfg, undefined, agent.heartbeat);
-      if (!rawIntervalMs) {
+      const intervalMs = resolveHeartbeatIntervalMs(cfg, undefined, agent.heartbeat);
+      if (!intervalMs) {
         continue;
-      }
-      // Clamp interval to MAX_TIMEOUT_MS to avoid 32-bit signed integer overflow in setTimeout.
-      // Without this, intervals > ~596 hours overflow to 1ms and cause immediate/repeated firing.
-      const intervalMs = Math.min(rawIntervalMs, MAX_TIMEOUT_MS);
-      if (rawIntervalMs > MAX_TIMEOUT_MS) {
-        log.info("heartbeat: interval clamped to maximum safe value", {
-          agentId: agent.agentId,
-          configuredMs: rawIntervalMs,
-          effectiveMs: intervalMs,
-          effectiveHours: Math.round(intervalMs / 3_600_000),
-        });
       }
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);

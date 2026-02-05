@@ -55,14 +55,18 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
-  it("clamps large intervals to MAX_TIMEOUT_MS to avoid setTimeout overflow (#8123)", async () => {
+  it("chains timeouts for large intervals to preserve configured cadence (#8123)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
 
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
 
-    // 720 hours = 2,592,000,000 ms, which exceeds 32-bit signed int max (2,147,483,647)
-    // Without the fix, this would overflow and setTimeout would fire immediately
+    // 720 hours = 30 days = 2,592,000,000 ms
+    // This exceeds MAX_TIMEOUT_MS (2,147,483,647 ms = ~24.8 days)
+    // Without the fix, setTimeout would overflow to 1ms and fire immediately.
+    // With the fix, timeouts are chained: first fires at ~24.8 days (skipped because
+    // not yet due), second fires at remaining ~5.2 days (total 30 days, runs).
+    const intervalMs = 720 * 60 * 60_000; // 720h in ms
     const runner = startHeartbeatRunner({
       cfg: {
         agents: { defaults: { heartbeat: { every: "720h" } } },
@@ -74,17 +78,18 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(runSpy).toHaveBeenCalledTimes(0);
 
-    // Advance by another 23 hours (total 24h) - still shouldn't run
-    await vi.advanceTimersByTimeAsync(23 * 60 * 60_000);
+    // Advance to 25 days (past MAX_TIMEOUT_MS but before 720h interval)
+    // The first chained timeout fires at ~24.8 days, but heartbeat is skipped
+    // because nextDueMs (30 days) > now (25 days)
+    await vi.advanceTimersByTimeAsync(24 * 24 * 60 * 60_000); // 24 more days (total ~25 days)
     expect(runSpy).toHaveBeenCalledTimes(0);
 
-    // Advance to just before MAX_TIMEOUT_MS (which is the clamped value)
-    // MAX_TIMEOUT_MS is ~24.8 days, so after ~24 days we should still not have run
-    await vi.advanceTimersByTimeAsync(23 * 24 * 60 * 60_000); // 23 more days
+    // Advance to just before the full 720h interval
+    await vi.advanceTimersByTimeAsync(4 * 24 * 60 * 60_000); // 4 more days (total ~29 days)
     expect(runSpy).toHaveBeenCalledTimes(0);
 
-    // Advance past MAX_TIMEOUT_MS - now it should run
-    await vi.advanceTimersByTimeAsync(2 * 24 * 60 * 60_000); // 2 more days (total ~25 days)
+    // Advance past the full 720h interval - now it should run
+    await vi.advanceTimersByTimeAsync(2 * 24 * 60 * 60_000); // 2 more days (total ~31 days)
     expect(runSpy).toHaveBeenCalledTimes(1);
 
     runner.stop();
