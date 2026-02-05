@@ -48,10 +48,11 @@ export async function onTimer(state: CronServiceState) {
       await runDueJobs(state);
       recomputeNextRuns(state);
       await persist(state);
-      armTimer(state);
     });
   } finally {
     state.running = false;
+    // Always re-arm so transient errors (e.g. ENOSPC) don't kill the scheduler.
+    armTimer(state);
   }
 }
 
