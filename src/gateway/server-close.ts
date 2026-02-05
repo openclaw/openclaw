@@ -1,10 +1,10 @@
 import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
 import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.js";
-import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
-import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -28,6 +28,7 @@ export function createGatewayCloseHandler(params: {
   browserControl: { stop: () => Promise<void> } | null;
   wss: WebSocketServer;
   httpServer: HttpServer;
+  httpServers?: HttpServer[];
 }) {
   return async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
     const reasonRaw = typeof opts?.reason === "string" ? opts.reason.trim() : "";
@@ -108,14 +109,20 @@ export function createGatewayCloseHandler(params: {
       await params.browserControl.stop().catch(() => {});
     }
     await new Promise<void>((resolve) => params.wss.close(() => resolve()));
-    const httpServer = params.httpServer as HttpServer & {
-      closeIdleConnections?: () => void;
-    };
-    if (typeof httpServer.closeIdleConnections === "function") {
-      httpServer.closeIdleConnections();
+    const servers =
+      params.httpServers && params.httpServers.length > 0
+        ? params.httpServers
+        : [params.httpServer];
+    for (const server of servers) {
+      const httpServer = server as HttpServer & {
+        closeIdleConnections?: () => void;
+      };
+      if (typeof httpServer.closeIdleConnections === "function") {
+        httpServer.closeIdleConnections();
+      }
+      await new Promise<void>((resolve, reject) =>
+        httpServer.close((err) => (err ? reject(err) : resolve())),
+      );
     }
-    await new Promise<void>((resolve, reject) =>
-      params.httpServer.close((err) => (err ? reject(err) : resolve())),
-    );
   };
 }

@@ -1,9 +1,8 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-
-import type { PluginRuntime } from "clawdbot/plugin-sdk";
 import { setMatrixRuntime } from "../runtime.js";
 
-vi.mock("matrix-bot-sdk", () => ({
+vi.mock("@vector-im/matrix-bot-sdk", () => ({
   ConsoleLogger: class {
     trace = vi.fn();
     debug = vi.fn();
@@ -42,7 +41,9 @@ const runtimeStub = {
   channel: {
     text: {
       resolveTextChunkLimit: () => 4000,
+      resolveChunkMode: () => "length",
       chunkMarkdownText: (text: string) => (text ? [text] : []),
+      chunkMarkdownTextWithMode: (text: string) => (text ? [text] : []),
       resolveMarkdownTableMode: () => "code",
       convertMarkdownTables: (text: string) => text,
     },
@@ -58,7 +59,7 @@ const makeClient = () => {
     sendMessage,
     uploadContent,
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
-  } as unknown as import("matrix-bot-sdk").MatrixClient;
+  } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
   return { client, sendMessage, uploadContent };
 };
 

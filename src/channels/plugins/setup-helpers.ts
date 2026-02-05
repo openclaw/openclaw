@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 
 type ChannelSectionBase = {
@@ -6,32 +6,38 @@ type ChannelSectionBase = {
   accounts?: Record<string, Record<string, unknown>>;
 };
 
-function channelHasAccounts(cfg: ClawdbotConfig, channelKey: string): boolean {
+function channelHasAccounts(cfg: OpenClawConfig, channelKey: string): boolean {
   const channels = cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[channelKey] as ChannelSectionBase | undefined;
   return Boolean(base?.accounts && Object.keys(base.accounts).length > 0);
 }
 
 function shouldStoreNameInAccounts(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   channelKey: string;
   accountId: string;
   alwaysUseAccounts?: boolean;
 }): boolean {
-  if (params.alwaysUseAccounts) return true;
-  if (params.accountId !== DEFAULT_ACCOUNT_ID) return true;
+  if (params.alwaysUseAccounts) {
+    return true;
+  }
+  if (params.accountId !== DEFAULT_ACCOUNT_ID) {
+    return true;
+  }
   return channelHasAccounts(params.cfg, params.channelKey);
 }
 
 export function applyAccountNameToChannelSection(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   channelKey: string;
   accountId: string;
   name?: string;
   alwaysUseAccounts?: boolean;
-}): ClawdbotConfig {
+}): OpenClawConfig {
   const trimmed = params.name?.trim();
-  if (!trimmed) return params.cfg;
+  if (!trimmed) {
+    return params.cfg;
+  }
   const accountId = normalizeAccountId(params.accountId);
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const baseConfig = channels?.[params.channelKey];
@@ -54,7 +60,7 @@ export function applyAccountNameToChannelSection(params: {
           name: trimmed,
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
   }
   const baseAccounts: Record<string, Record<string, unknown>> = base?.accounts ?? {};
   const existingAccount = baseAccounts[accountId] ?? {};
@@ -77,19 +83,23 @@ export function applyAccountNameToChannelSection(params: {
         },
       },
     },
-  } as ClawdbotConfig;
+  } as OpenClawConfig;
 }
 
 export function migrateBaseNameToDefaultAccount(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   channelKey: string;
   alwaysUseAccounts?: boolean;
-}): ClawdbotConfig {
-  if (params.alwaysUseAccounts) return params.cfg;
+}): OpenClawConfig {
+  if (params.alwaysUseAccounts) {
+    return params.cfg;
+  }
   const channels = params.cfg.channels as Record<string, unknown> | undefined;
   const base = channels?.[params.channelKey] as ChannelSectionBase | undefined;
   const baseName = base?.name?.trim();
-  if (!baseName) return params.cfg;
+  if (!baseName) {
+    return params.cfg;
+  }
   const accounts: Record<string, Record<string, unknown>> = {
     ...base?.accounts,
   };
@@ -107,5 +117,5 @@ export function migrateBaseNameToDefaultAccount(params: {
         accounts,
       },
     },
-  } as ClawdbotConfig;
+  } as OpenClawConfig;
 }

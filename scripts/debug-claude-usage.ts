@@ -1,8 +1,8 @@
+import { execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 
 type Args = {
   agentId: string;
@@ -12,7 +12,9 @@ type Args = {
 
 const mask = (value: string) => {
   const compact = value.trim();
-  if (!compact) return "missing";
+  if (!compact) {
+    return "missing";
+  }
   const edge = compact.length >= 12 ? 6 : 4;
   return `${compact.slice(0, edge)}…${compact.slice(-edge)}`;
 };
@@ -44,9 +46,13 @@ const parseArgs = (): Args => {
 
 const loadAuthProfiles = (agentId: string) => {
   const stateRoot =
-    process.env.CLAWDBOT_STATE_DIR?.trim() || path.join(os.homedir(), ".clawdbot");
+    process.env.OPENCLAW_STATE_DIR?.trim() ||
+    process.env.CLAWDBOT_STATE_DIR?.trim() ||
+    path.join(os.homedir(), ".openclaw");
   const authPath = path.join(stateRoot, "agents", agentId, "agent", "auth-profiles.json");
-  if (!fs.existsSync(authPath)) throw new Error(`Missing: ${authPath}`);
+  if (!fs.existsSync(authPath)) {
+    throw new Error(`Missing: ${authPath}`);
+  }
   const store = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
     profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
   };
@@ -59,9 +65,13 @@ const pickAnthropicTokens = (store: {
   const profiles = store.profiles ?? {};
   const found: Array<{ profileId: string; token: string }> = [];
   for (const [id, cred] of Object.entries(profiles)) {
-    if (cred?.provider !== "anthropic") continue;
+    if (cred?.provider !== "anthropic") {
+      continue;
+    }
     const token = cred.type === "token" ? cred.token?.trim() : undefined;
-    if (token) found.push({ profileId: id, token });
+    if (token) {
+      found.push({ profileId: id, token });
+    }
   }
   return found;
 };
@@ -73,7 +83,7 @@ const fetchAnthropicOAuthUsage = async (token: string) => {
       Accept: "application/json",
       "anthropic-version": "2023-06-01",
       "anthropic-beta": "oauth-2025-04-20",
-      "User-Agent": "clawdbot-debug",
+      "User-Agent": "openclaw-debug",
     },
   });
   const text = await res.text();
@@ -85,7 +95,9 @@ const readClaudeCliKeychain = (): {
   expiresAt?: number;
   scopes?: string[];
 } | null => {
-  if (process.platform !== "darwin") return null;
+  if (process.platform !== "darwin") {
+    return null;
+  }
   try {
     const raw = execFileSync(
       "security",
@@ -94,11 +106,14 @@ const readClaudeCliKeychain = (): {
     );
     const parsed = JSON.parse(raw.trim()) as Record<string, unknown>;
     const oauth = parsed?.claudeAiOauth as Record<string, unknown> | undefined;
-    if (!oauth || typeof oauth !== "object") return null;
+    if (!oauth || typeof oauth !== "object") {
+      return null;
+    }
     const accessToken = oauth.accessToken;
-    if (typeof accessToken !== "string" || !accessToken.trim()) return null;
-    const expiresAt =
-      typeof oauth.expiresAt === "number" ? oauth.expiresAt : undefined;
+    if (typeof accessToken !== "string" || !accessToken.trim()) {
+      return null;
+    }
+    const expiresAt = typeof oauth.expiresAt === "number" ? oauth.expiresAt : undefined;
     const scopes = Array.isArray(oauth.scopes)
       ? oauth.scopes.filter((v): v is string => typeof v === "string")
       : undefined;
@@ -109,20 +124,28 @@ const readClaudeCliKeychain = (): {
 };
 
 const chromeServiceNameForPath = (cookiePath: string): string => {
-  if (cookiePath.includes("/Arc/")) return "Arc Safe Storage";
-  if (cookiePath.includes("/BraveSoftware/")) return "Brave Safe Storage";
-  if (cookiePath.includes("/Microsoft Edge/")) return "Microsoft Edge Safe Storage";
-  if (cookiePath.includes("/Chromium/")) return "Chromium Safe Storage";
+  if (cookiePath.includes("/Arc/")) {
+    return "Arc Safe Storage";
+  }
+  if (cookiePath.includes("/BraveSoftware/")) {
+    return "Brave Safe Storage";
+  }
+  if (cookiePath.includes("/Microsoft Edge/")) {
+    return "Microsoft Edge Safe Storage";
+  }
+  if (cookiePath.includes("/Chromium/")) {
+    return "Chromium Safe Storage";
+  }
   return "Chrome Safe Storage";
 };
 
 const readKeychainPassword = (service: string): string | null => {
   try {
-    const out = execFileSync(
-      "security",
-      ["find-generic-password", "-w", "-s", service],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 },
-    );
+    const out = execFileSync("security", ["find-generic-password", "-w", "-s", service], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    });
     const pw = out.trim();
     return pw ? pw : null;
   } catch {
@@ -131,12 +154,18 @@ const readKeychainPassword = (service: string): string | null => {
 };
 
 const decryptChromeCookieValue = (encrypted: Buffer, service: string): string | null => {
-  if (encrypted.length < 4) return null;
+  if (encrypted.length < 4) {
+    return null;
+  }
   const prefix = encrypted.subarray(0, 3).toString("utf8");
-  if (prefix !== "v10" && prefix !== "v11") return null;
+  if (prefix !== "v10" && prefix !== "v11") {
+    return null;
+  }
 
   const password = readKeychainPassword(service);
-  if (!password) return null;
+  if (!password) {
+    return null;
+  }
 
   const key = crypto.pbkdf2Sync(password, "saltysalt", 1003, 16, "sha1");
   const iv = Buffer.alloc(16, 0x20);
@@ -171,10 +200,16 @@ const queryChromeCookieDb = (cookieDb: string): string | null => {
       ],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 },
     ).trim();
-    if (!out) return null;
-    if (out.startsWith("sk-ant-")) return out;
+    if (!out) {
+      return null;
+    }
+    if (out.startsWith("sk-ant-")) {
+      return out;
+    }
     const hex = out.replace(/[^0-9A-Fa-f]/g, "");
-    if (!hex) return null;
+    if (!hex) {
+      return null;
+    }
     const buf = Buffer.from(hex, "hex");
     const service = chromeServiceNameForPath(cookieDb);
     const decrypted = decryptChromeCookieValue(buf, service);
@@ -208,7 +243,9 @@ const queryFirefoxCookieDb = (cookieDb: string): string | null => {
 };
 
 const findClaudeSessionKey = (): { sessionKey: string; source: string } | null => {
-  if (process.platform !== "darwin") return null;
+  if (process.platform !== "darwin") {
+    return null;
+  }
 
   const firefoxRoot = path.join(
     os.homedir(),
@@ -220,9 +257,13 @@ const findClaudeSessionKey = (): { sessionKey: string; source: string } | null =
   if (fs.existsSync(firefoxRoot)) {
     for (const entry of fs.readdirSync(firefoxRoot)) {
       const db = path.join(firefoxRoot, entry, "cookies.sqlite");
-      if (!fs.existsSync(db)) continue;
+      if (!fs.existsSync(db)) {
+        continue;
+      }
       const value = queryFirefoxCookieDb(db);
-      if (value) return { sessionKey: value, source: `firefox:${db}` };
+      if (value) {
+        return { sessionKey: value, source: `firefox:${db}` };
+      }
     }
   }
 
@@ -235,15 +276,21 @@ const findClaudeSessionKey = (): { sessionKey: string; source: string } | null =
   ];
 
   for (const root of chromeCandidates) {
-    if (!fs.existsSync(root)) continue;
+    if (!fs.existsSync(root)) {
+      continue;
+    }
     const profiles = fs
       .readdirSync(root)
       .filter((name) => name === "Default" || name.startsWith("Profile "));
     for (const profile of profiles) {
       const db = path.join(root, profile, "Cookies");
-      if (!fs.existsSync(db)) continue;
+      if (!fs.existsSync(db)) {
+        continue;
+      }
       const value = queryChromeCookieDb(db);
-      if (value) return { sessionKey: value, source: `chromium:${db}` };
+      if (value) {
+        return { sessionKey: value, source: `chromium:${db}` };
+      }
     }
   }
 
@@ -315,15 +362,16 @@ const main = async () => {
     process.env.CLAUDE_AI_SESSION_KEY?.trim() ||
     process.env.CLAUDE_WEB_SESSION_KEY?.trim() ||
     findClaudeSessionKey()?.sessionKey;
-  const source =
-    opts.sessionKey
-      ? "--session-key"
-      : process.env.CLAUDE_AI_SESSION_KEY || process.env.CLAUDE_WEB_SESSION_KEY
-        ? "env"
-        : findClaudeSessionKey()?.source ?? "auto";
+  const source = opts.sessionKey
+    ? "--session-key"
+    : process.env.CLAUDE_AI_SESSION_KEY || process.env.CLAUDE_WEB_SESSION_KEY
+      ? "env"
+      : (findClaudeSessionKey()?.source ?? "auto");
 
   if (!sessionKey) {
-    console.log("Claude web: no sessionKey found (try --session-key or export CLAUDE_AI_SESSION_KEY)");
+    console.log(
+      "Claude web: no sessionKey found (try --session-key or export CLAUDE_AI_SESSION_KEY)",
+    );
     return;
   }
 

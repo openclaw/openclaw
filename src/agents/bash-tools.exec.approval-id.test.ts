@@ -21,7 +21,7 @@ describe("exec approvals", () => {
   beforeEach(async () => {
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-test-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
@@ -80,7 +80,7 @@ describe("exec approvals", () => {
 
   it("skips approval when node allowlist is satisfied", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-test-bin-"));
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-bin-"));
     const binDir = path.join(tempDir, "bin");
     await fs.mkdir(binDir, { recursive: true });
     const exeName = process.platform === "win32" ? "tool.cmd" : "tool";
@@ -149,5 +149,36 @@ describe("exec approvals", () => {
     const result = await tool.execute("call3", { command: "echo ok", elevated: true });
     expect(result.details.status).toBe("completed");
     expect(calls).not.toContain("exec.approval.request");
+  });
+
+  it("requires approval for elevated ask when allowlist misses", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const calls: string[] = [];
+    let resolveApproval: (() => void) | undefined;
+    const approvalSeen = new Promise<void>((resolve) => {
+      resolveApproval = resolve;
+    });
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      calls.push(method);
+      if (method === "exec.approval.request") {
+        resolveApproval?.();
+        return { decision: "deny" };
+      }
+      return { ok: true };
+    });
+
+    const { createExecTool } = await import("./bash-tools.exec.js");
+    const tool = createExecTool({
+      ask: "on-miss",
+      security: "allowlist",
+      approvalRunningNoticeMs: 0,
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+
+    const result = await tool.execute("call4", { command: "echo ok", elevated: true });
+    expect(result.details.status).toBe("approval-pending");
+    await approvalSeen;
+    expect(calls).toContain("exec.approval.request");
   });
 });

@@ -25,6 +25,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "thread-reply",
   "search",
   "sticker",
+  "sticker-search",
   "member-info",
   "role-info",
   "emoji-list",
@@ -47,6 +48,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "timeout",
   "kick",
   "ban",
+  "set-presence",
 ] as const;
 
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];

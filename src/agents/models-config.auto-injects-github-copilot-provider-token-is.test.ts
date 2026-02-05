@@ -1,14 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import type { ClawdbotConfig } from "../config/config.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(fn, { prefix: "clawdbot-models-" });
+  return withTempHomeBase(fn, { prefix: "openclaw-models-" });
 }
 
-const _MODELS_CONFIG: ClawdbotConfig = {
+const _MODELS_CONFIG: OpenClawConfig = {
   models: {
     providers: {
       "custom-proxy": {
@@ -61,10 +61,10 @@ describe("models-config", () => {
           }),
         }));
 
-        const { ensureClawdbotModelsJson } = await import("./models-config.js");
+        const { ensureOpenClawModelsJson } = await import("./models-config.js");
 
         const agentDir = path.join(home, "agent-default-base-url");
-        await ensureClawdbotModelsJson({ models: { providers: {} } }, agentDir);
+        await ensureOpenClawModelsJson({ models: { providers: {} } }, agentDir);
 
         const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
         const parsed = JSON.parse(raw) as {
@@ -102,9 +102,9 @@ describe("models-config", () => {
           resolveCopilotApiToken,
         }));
 
-        const { ensureClawdbotModelsJson } = await import("./models-config.js");
+        const { ensureOpenClawModelsJson } = await import("./models-config.js");
 
-        await ensureClawdbotModelsJson({ models: { providers: {} } });
+        await ensureOpenClawModelsJson({ models: { providers: {} } });
 
         expect(resolveCopilotApiToken).toHaveBeenCalledWith(
           expect.objectContaining({ githubToken: "copilot-token" }),

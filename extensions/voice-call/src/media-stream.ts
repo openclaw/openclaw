@@ -9,9 +9,7 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-
 import { WebSocket, WebSocketServer } from "ws";
-
 import type {
   OpenAIRealtimeSTTProvider,
   RealtimeSTTSession,
@@ -23,12 +21,16 @@ import type {
 export interface MediaStreamConfig {
   /** STT provider for transcription */
   sttProvider: OpenAIRealtimeSTTProvider;
+  /** Validate whether to accept a media stream for the given call ID */
+  shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
   /** Callback when transcript is received */
   onTranscript?: (callId: string, transcript: string) => void;
   /** Callback for partial transcripts (streaming UI) */
   onPartialTranscript?: (callId: string, partial: string) => void;
   /** Callback when stream connects */
   onConnect?: (callId: string, streamSid: string) => void;
+  /** Callback when speech starts (barge-in) */
+  onSpeechStart?: (callId: string) => void;
   /** Callback when stream disconnects */
   onDisconnect?: (callId: string) => void;
 }
@@ -43,6 +45,13 @@ interface StreamSession {
   sttSession: RealtimeSTTSession;
 }
 
+type TtsQueueEntry = {
+  playFn: (signal: AbortSignal) => Promise<void>;
+  controller: AbortController;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+};
+
 /**
  * Manages WebSocket connections for Twilio media streams.
  */
@@ -50,6 +59,12 @@ export class MediaStreamHandler {
   private wss: WebSocketServer | null = null;
   private sessions = new Map<string, StreamSession>();
   private config: MediaStreamConfig;
+  /** TTS playback queues per stream (serialize audio to prevent overlap) */
+  private ttsQueues = new Map<string, TtsQueueEntry[]>();
+  /** Whether TTS is currently playing per stream */
+  private ttsPlaying = new Map<string, boolean>();
+  /** Active TTS playback controllers per stream */
+  private ttsActiveControllers = new Map<string, AbortController>();
 
   constructor(config: MediaStreamConfig) {
     this.config = config;
@@ -72,11 +87,9 @@ export class MediaStreamHandler {
   /**
    * Handle new WebSocket connection from Twilio.
    */
-  private async handleConnection(
-    ws: WebSocket,
-    _request: IncomingMessage,
-  ): Promise<void> {
+  private async handleConnection(ws: WebSocket, _request: IncomingMessage): Promise<void> {
     let session: StreamSession | null = null;
+    const streamToken = this.getStreamToken(_request);
 
     ws.on("message", async (data: Buffer) => {
       try {
@@ -88,7 +101,7 @@ export class MediaStreamHandler {
             break;
 
           case "start":
-            session = await this.handleStart(ws, message);
+            session = await this.handleStart(ws, message, streamToken);
             break;
 
           case "media":
@@ -128,13 +141,25 @@ export class MediaStreamHandler {
   private async handleStart(
     ws: WebSocket,
     message: TwilioMediaMessage,
-  ): Promise<StreamSession> {
+    streamToken?: string,
+  ): Promise<StreamSession | null> {
     const streamSid = message.streamSid || "";
     const callSid = message.start?.callSid || "";
 
-    console.log(
-      `[MediaStream] Stream started: ${streamSid} (call: ${callSid})`,
-    );
+    console.log(`[MediaStream] Stream started: ${streamSid} (call: ${callSid})`);
+    if (!callSid) {
+      console.warn("[MediaStream] Missing callSid; closing stream");
+      ws.close(1008, "Missing callSid");
+      return null;
+    }
+    if (
+      this.config.shouldAcceptStream &&
+      !this.config.shouldAcceptStream({ callId: callSid, streamSid, token: streamToken })
+    ) {
+      console.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
+      ws.close(1008, "Unknown call");
+      return null;
+    }
 
     // Create STT session
     const sttSession = this.config.sttProvider.createSession();
@@ -146,6 +171,10 @@ export class MediaStreamHandler {
 
     sttSession.onTranscript((transcript) => {
       this.config.onTranscript?.(callSid, transcript);
+    });
+
+    sttSession.onSpeechStart(() => {
+      this.config.onSpeechStart?.(callSid);
     });
 
     const session: StreamSession = {
@@ -162,10 +191,7 @@ export class MediaStreamHandler {
 
     // Connect to OpenAI STT (non-blocking, log errors but don't fail the call)
     sttSession.connect().catch((err) => {
-      console.warn(
-        `[MediaStream] STT connection failed (TTS still works):`,
-        err.message,
-      );
+      console.warn(`[MediaStream] STT connection failed (TTS still works):`, err.message);
     });
 
     return session;
@@ -177,9 +203,22 @@ export class MediaStreamHandler {
   private handleStop(session: StreamSession): void {
     console.log(`[MediaStream] Stream stopped: ${session.streamSid}`);
 
+    this.clearTtsState(session.streamSid);
     session.sttSession.close();
     this.sessions.delete(session.streamSid);
     this.config.onDisconnect?.(session.callId);
+  }
+
+  private getStreamToken(request: IncomingMessage): string | undefined {
+    if (!request.url || !request.headers.host) {
+      return undefined;
+    }
+    try {
+      const url = new URL(request.url, `http://${request.headers.host}`);
+      return url.searchParams.get("token") ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -229,12 +268,47 @@ export class MediaStreamHandler {
   }
 
   /**
+   * Queue a TTS operation for sequential playback.
+   * Only one TTS operation plays at a time per stream to prevent overlap.
+   */
+  async queueTts(streamSid: string, playFn: (signal: AbortSignal) => Promise<void>): Promise<void> {
+    const queue = this.getTtsQueue(streamSid);
+    let resolveEntry: () => void;
+    let rejectEntry: (error: unknown) => void;
+    const promise = new Promise<void>((resolve, reject) => {
+      resolveEntry = resolve;
+      rejectEntry = reject;
+    });
+
+    queue.push({
+      playFn,
+      controller: new AbortController(),
+      resolve: resolveEntry!,
+      reject: rejectEntry!,
+    });
+
+    if (!this.ttsPlaying.get(streamSid)) {
+      void this.processQueue(streamSid);
+    }
+
+    return promise;
+  }
+
+  /**
+   * Clear TTS queue and interrupt current playback (barge-in).
+   */
+  clearTtsQueue(streamSid: string): void {
+    const queue = this.getTtsQueue(streamSid);
+    queue.length = 0;
+    this.ttsActiveControllers.get(streamSid)?.abort();
+    this.clearAudio(streamSid);
+  }
+
+  /**
    * Get active session by call ID.
    */
   getSessionByCallId(callId: string): StreamSession | undefined {
-    return [...this.sessions.values()].find(
-      (session) => session.callId === callId,
-    );
+    return [...this.sessions.values()].find((session) => session.callId === callId);
   }
 
   /**
@@ -242,10 +316,68 @@ export class MediaStreamHandler {
    */
   closeAll(): void {
     for (const session of this.sessions.values()) {
+      this.clearTtsState(session.streamSid);
       session.sttSession.close();
       session.ws.close();
     }
     this.sessions.clear();
+  }
+
+  private getTtsQueue(streamSid: string): TtsQueueEntry[] {
+    const existing = this.ttsQueues.get(streamSid);
+    if (existing) {
+      return existing;
+    }
+    const queue: TtsQueueEntry[] = [];
+    this.ttsQueues.set(streamSid, queue);
+    return queue;
+  }
+
+  /**
+   * Process the TTS queue for a stream.
+   * Uses iterative approach to avoid stack accumulation from recursion.
+   */
+  private async processQueue(streamSid: string): Promise<void> {
+    this.ttsPlaying.set(streamSid, true);
+
+    while (true) {
+      const queue = this.ttsQueues.get(streamSid);
+      if (!queue || queue.length === 0) {
+        this.ttsPlaying.set(streamSid, false);
+        this.ttsActiveControllers.delete(streamSid);
+        return;
+      }
+
+      const entry = queue.shift()!;
+      this.ttsActiveControllers.set(streamSid, entry.controller);
+
+      try {
+        await entry.playFn(entry.controller.signal);
+        entry.resolve();
+      } catch (error) {
+        if (entry.controller.signal.aborted) {
+          entry.resolve();
+        } else {
+          console.error("[MediaStream] TTS playback error:", error);
+          entry.reject(error);
+        }
+      } finally {
+        if (this.ttsActiveControllers.get(streamSid) === entry.controller) {
+          this.ttsActiveControllers.delete(streamSid);
+        }
+      }
+    }
+  }
+
+  private clearTtsState(streamSid: string): void {
+    const queue = this.ttsQueues.get(streamSid);
+    if (queue) {
+      queue.length = 0;
+    }
+    this.ttsActiveControllers.get(streamSid)?.abort();
+    this.ttsActiveControllers.delete(streamSid);
+    this.ttsPlaying.delete(streamSid);
+    this.ttsQueues.delete(streamSid);
   }
 }
 

@@ -1,27 +1,25 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
+import { ensureOpenClawCliOnPath } from "./path-env.js";
 
-import { ensureClawdbotCliOnPath } from "./path-env.js";
-
-describe("ensureClawdbotCliOnPath", () => {
-  it("prepends the bundled app bin dir when a sibling clawdbot exists", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-path-"));
+describe("ensureOpenClawCliOnPath", () => {
+  it("prepends the bundled app bin dir when a sibling openclaw exists", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-path-"));
     try {
       const appBinDir = path.join(tmp, "AppBin");
       await fs.mkdir(appBinDir, { recursive: true });
-      const cliPath = path.join(appBinDir, "clawdbot");
+      const cliPath = path.join(appBinDir, "openclaw");
       await fs.writeFile(cliPath, "#!/bin/sh\necho ok\n", "utf-8");
       await fs.chmod(cliPath, 0o755);
 
       const originalPath = process.env.PATH;
-      const originalFlag = process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+      const originalFlag = process.env.OPENCLAW_PATH_BOOTSTRAPPED;
       process.env.PATH = "/usr/bin";
-      delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+      delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
       try {
-        ensureClawdbotCliOnPath({
+        ensureOpenClawCliOnPath({
           execPath: cliPath,
           cwd: tmp,
           homeDir: tmp,
@@ -31,8 +29,11 @@ describe("ensureClawdbotCliOnPath", () => {
         expect(updated.split(path.delimiter)[0]).toBe(appBinDir);
       } finally {
         process.env.PATH = originalPath;
-        if (originalFlag === undefined) delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
-        else process.env.CLAWDBOT_PATH_BOOTSTRAPPED = originalFlag;
+        if (originalFlag === undefined) {
+          delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+        } else {
+          process.env.OPENCLAW_PATH_BOOTSTRAPPED = originalFlag;
+        }
       }
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
@@ -41,11 +42,11 @@ describe("ensureClawdbotCliOnPath", () => {
 
   it("is idempotent", () => {
     const originalPath = process.env.PATH;
-    const originalFlag = process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+    const originalFlag = process.env.OPENCLAW_PATH_BOOTSTRAPPED;
     process.env.PATH = "/bin";
-    process.env.CLAWDBOT_PATH_BOOTSTRAPPED = "1";
+    process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
     try {
-      ensureClawdbotCliOnPath({
+      ensureOpenClawCliOnPath({
         execPath: "/tmp/does-not-matter",
         cwd: "/tmp",
         homeDir: "/tmp",
@@ -54,26 +55,29 @@ describe("ensureClawdbotCliOnPath", () => {
       expect(process.env.PATH).toBe("/bin");
     } finally {
       process.env.PATH = originalPath;
-      if (originalFlag === undefined) delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
-      else process.env.CLAWDBOT_PATH_BOOTSTRAPPED = originalFlag;
+      if (originalFlag === undefined) {
+        delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+      } else {
+        process.env.OPENCLAW_PATH_BOOTSTRAPPED = originalFlag;
+      }
     }
   });
 
   it("prepends mise shims when available", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-path-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-path-"));
     const originalPath = process.env.PATH;
-    const originalFlag = process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+    const originalFlag = process.env.OPENCLAW_PATH_BOOTSTRAPPED;
     const originalMiseDataDir = process.env.MISE_DATA_DIR;
     try {
       const appBinDir = path.join(tmp, "AppBin");
       await fs.mkdir(appBinDir, { recursive: true });
-      const appCli = path.join(appBinDir, "clawdbot");
+      const appCli = path.join(appBinDir, "openclaw");
       await fs.writeFile(appCli, "#!/bin/sh\necho ok\n", "utf-8");
       await fs.chmod(appCli, 0o755);
 
       const localBinDir = path.join(tmp, "node_modules", ".bin");
       await fs.mkdir(localBinDir, { recursive: true });
-      const localCli = path.join(localBinDir, "clawdbot");
+      const localCli = path.join(localBinDir, "openclaw");
       await fs.writeFile(localCli, "#!/bin/sh\necho ok\n", "utf-8");
       await fs.chmod(localCli, 0o755);
 
@@ -82,9 +86,9 @@ describe("ensureClawdbotCliOnPath", () => {
       await fs.mkdir(shimsDir, { recursive: true });
       process.env.MISE_DATA_DIR = miseDataDir;
       process.env.PATH = "/usr/bin";
-      delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+      delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
 
-      ensureClawdbotCliOnPath({
+      ensureOpenClawCliOnPath({
         execPath: appCli,
         cwd: tmp,
         homeDir: tmp,
@@ -101,18 +105,24 @@ describe("ensureClawdbotCliOnPath", () => {
       expect(shimsIndex).toBeGreaterThan(localIndex);
     } finally {
       process.env.PATH = originalPath;
-      if (originalFlag === undefined) delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
-      else process.env.CLAWDBOT_PATH_BOOTSTRAPPED = originalFlag;
-      if (originalMiseDataDir === undefined) delete process.env.MISE_DATA_DIR;
-      else process.env.MISE_DATA_DIR = originalMiseDataDir;
+      if (originalFlag === undefined) {
+        delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+      } else {
+        process.env.OPENCLAW_PATH_BOOTSTRAPPED = originalFlag;
+      }
+      if (originalMiseDataDir === undefined) {
+        delete process.env.MISE_DATA_DIR;
+      } else {
+        process.env.MISE_DATA_DIR = originalMiseDataDir;
+      }
       await fs.rm(tmp, { recursive: true, force: true });
     }
   });
 
   it("prepends Linuxbrew dirs when present", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-path-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-path-"));
     const originalPath = process.env.PATH;
-    const originalFlag = process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+    const originalFlag = process.env.OPENCLAW_PATH_BOOTSTRAPPED;
     const originalHomebrewPrefix = process.env.HOMEBREW_PREFIX;
     const originalHomebrewBrewFile = process.env.HOMEBREW_BREW_FILE;
     const originalXdgBinHome = process.env.XDG_BIN_HOME;
@@ -126,12 +136,12 @@ describe("ensureClawdbotCliOnPath", () => {
       await fs.mkdir(linuxbrewSbin, { recursive: true });
 
       process.env.PATH = "/usr/bin";
-      delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+      delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
       delete process.env.HOMEBREW_PREFIX;
       delete process.env.HOMEBREW_BREW_FILE;
       delete process.env.XDG_BIN_HOME;
 
-      ensureClawdbotCliOnPath({
+      ensureOpenClawCliOnPath({
         execPath: path.join(execDir, "node"),
         cwd: tmp,
         homeDir: tmp,
@@ -144,14 +154,26 @@ describe("ensureClawdbotCliOnPath", () => {
       expect(parts[1]).toBe(linuxbrewSbin);
     } finally {
       process.env.PATH = originalPath;
-      if (originalFlag === undefined) delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
-      else process.env.CLAWDBOT_PATH_BOOTSTRAPPED = originalFlag;
-      if (originalHomebrewPrefix === undefined) delete process.env.HOMEBREW_PREFIX;
-      else process.env.HOMEBREW_PREFIX = originalHomebrewPrefix;
-      if (originalHomebrewBrewFile === undefined) delete process.env.HOMEBREW_BREW_FILE;
-      else process.env.HOMEBREW_BREW_FILE = originalHomebrewBrewFile;
-      if (originalXdgBinHome === undefined) delete process.env.XDG_BIN_HOME;
-      else process.env.XDG_BIN_HOME = originalXdgBinHome;
+      if (originalFlag === undefined) {
+        delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+      } else {
+        process.env.OPENCLAW_PATH_BOOTSTRAPPED = originalFlag;
+      }
+      if (originalHomebrewPrefix === undefined) {
+        delete process.env.HOMEBREW_PREFIX;
+      } else {
+        process.env.HOMEBREW_PREFIX = originalHomebrewPrefix;
+      }
+      if (originalHomebrewBrewFile === undefined) {
+        delete process.env.HOMEBREW_BREW_FILE;
+      } else {
+        process.env.HOMEBREW_BREW_FILE = originalHomebrewBrewFile;
+      }
+      if (originalXdgBinHome === undefined) {
+        delete process.env.XDG_BIN_HOME;
+      } else {
+        process.env.XDG_BIN_HOME = originalXdgBinHome;
+      }
       await fs.rm(tmp, { recursive: true, force: true });
     }
   });

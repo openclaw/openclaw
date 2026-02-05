@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-import type { ChannelOutboundAdapter, ChannelPlugin } from "./types.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import type { ChannelOutboundAdapter, ChannelPlugin } from "./types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { loadChannelPlugin } from "./load.js";
 import { loadChannelOutboundAdapter } from "./outbound/load.js";
@@ -13,6 +12,7 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
   providers: [],
   gatewayHandlers: {},
   httpHandlers: [],
+  httpRoutes: [],
   cliRegistrars: [],
   services: [],
   diagnostics: [],

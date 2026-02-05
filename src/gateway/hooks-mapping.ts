@@ -1,12 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-
-import {
-  CONFIG_PATH_CLAWDBOT,
-  type HookMappingConfig,
-  type HooksConfig,
-} from "../config/config.js";
 import type { HookMessageChannel } from "./hooks.js";
+import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
 
 export type HookMappingResolved = {
   id: string;
@@ -19,6 +14,7 @@ export type HookMappingResolved = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
+  allowUnsafeExternalContent?: boolean;
   channel?: HookMessageChannel;
   to?: string;
   model?: string;
@@ -52,6 +48,7 @@ export type HookAction =
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
       deliver?: boolean;
+      allowUnsafeExternalContent?: boolean;
       channel?: HookMessageChannel;
       to?: string;
       model?: string;
@@ -90,6 +87,7 @@ type HookTransformResult = Partial<{
   name: string;
   sessionKey: string;
   deliver: boolean;
+  allowUnsafeExternalContent: boolean;
   channel: HookMessageChannel;
   to: string;
   model: string;
@@ -103,15 +101,32 @@ type HookTransformFn = (
 
 export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
+  const gmailAllowUnsafe = hooks?.gmail?.allowUnsafeExternalContent;
   const mappings: HookMappingConfig[] = [];
-  if (hooks?.mappings) mappings.push(...hooks.mappings);
+  if (hooks?.mappings) {
+    mappings.push(...hooks.mappings);
+  }
   for (const preset of presets) {
     const presetMappings = hookPresetMappings[preset];
-    if (presetMappings) mappings.push(...presetMappings);
+    if (!presetMappings) {
+      continue;
+    }
+    if (preset === "gmail" && typeof gmailAllowUnsafe === "boolean") {
+      mappings.push(
+        ...presetMappings.map((mapping) => ({
+          ...mapping,
+          allowUnsafeExternalContent: gmailAllowUnsafe,
+        })),
+      );
+      continue;
+    }
+    mappings.push(...presetMappings);
   }
-  if (mappings.length === 0) return [];
+  if (mappings.length === 0) {
+    return [];
+  }
 
-  const configDir = path.dirname(CONFIG_PATH_CLAWDBOT);
+  const configDir = path.dirname(CONFIG_PATH);
   const transformsDir = hooks?.transformsDir
     ? resolvePath(configDir, hooks.transformsDir)
     : configDir;
@@ -123,12 +138,18 @@ export async function applyHookMappings(
   mappings: HookMappingResolved[],
   ctx: HookMappingContext,
 ): Promise<HookMappingResult | null> {
-  if (mappings.length === 0) return null;
+  if (mappings.length === 0) {
+    return null;
+  }
   for (const mapping of mappings) {
-    if (!mappingMatches(mapping, ctx)) continue;
+    if (!mappingMatches(mapping, ctx)) {
+      continue;
+    }
 
     const base = buildActionFromMapping(mapping, ctx);
-    if (!base.ok) return base;
+    if (!base.ok) {
+      return base;
+    }
 
     let override: HookTransformResult = null;
     if (mapping.transform) {
@@ -139,9 +160,13 @@ export async function applyHookMappings(
       }
     }
 
-    if (!base.action) return { ok: true, action: null, skipped: true };
+    if (!base.action) {
+      return { ok: true, action: null, skipped: true };
+    }
     const merged = mergeAction(base.action, override, mapping.action);
-    if (!merged.ok) return merged;
+    if (!merged.ok) {
+      return merged;
+    }
     return merged;
   }
   return null;
@@ -175,6 +200,7 @@ function normalizeHookMapping(
     messageTemplate: mapping.messageTemplate,
     textTemplate: mapping.textTemplate,
     deliver: mapping.deliver,
+    allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
     channel: mapping.channel,
     to: mapping.to,
     model: mapping.model,
@@ -186,11 +212,15 @@ function normalizeHookMapping(
 
 function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
   if (mapping.matchPath) {
-    if (mapping.matchPath !== normalizeMatchPath(ctx.path)) return false;
+    if (mapping.matchPath !== normalizeMatchPath(ctx.path)) {
+      return false;
+    }
   }
   if (mapping.matchSource) {
     const source = typeof ctx.payload.source === "string" ? ctx.payload.source : undefined;
-    if (!source || source !== mapping.matchSource) return false;
+    if (!source || source !== mapping.matchSource) {
+      return false;
+    }
   }
   return true;
 }
@@ -220,6 +250,7 @@ function buildActionFromMapping(
       wakeMode: mapping.wakeMode ?? "now",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
       deliver: mapping.deliver,
+      allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
       channel: mapping.channel,
       to: renderOptional(mapping.to, ctx),
       model: renderOptional(mapping.model, ctx),
@@ -237,7 +268,7 @@ function mergeAction(
   if (!override) {
     return validateAction(base);
   }
-  const kind = (override.kind ?? base.kind ?? defaultAction) as "wake" | "agent";
+  const kind = override.kind ?? base.kind ?? defaultAction;
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
@@ -256,6 +287,10 @@ function mergeAction(
     name: override.name ?? baseAgent?.name,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
     deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,
+    allowUnsafeExternalContent:
+      typeof override.allowUnsafeExternalContent === "boolean"
+        ? override.allowUnsafeExternalContent
+        : baseAgent?.allowUnsafeExternalContent,
     channel: override.channel ?? baseAgent?.channel,
     to: override.to ?? baseAgent?.to,
     model: override.model ?? baseAgent?.model,
@@ -279,7 +314,9 @@ function validateAction(action: HookAction): HookMappingResult {
 
 async function loadTransform(transform: HookMappingTransformResolved): Promise<HookTransformFn> {
   const cached = transformCache.get(transform.modulePath);
-  if (cached) return cached;
+  if (cached) {
+    return cached;
+  }
   const url = pathToFileURL(transform.modulePath).href;
   const mod = (await import(url)) as Record<string, unknown>;
   const fn = resolveTransformFn(mod, transform.exportName);
@@ -296,38 +333,60 @@ function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): 
 }
 
 function resolvePath(baseDir: string, target: string): string {
-  if (!target) return baseDir;
-  if (path.isAbsolute(target)) return target;
+  if (!target) {
+    return baseDir;
+  }
+  if (path.isAbsolute(target)) {
+    return target;
+  }
   return path.join(baseDir, target);
 }
 
 function normalizeMatchPath(raw?: string): string | undefined {
-  if (!raw) return undefined;
+  if (!raw) {
+    return undefined;
+  }
   const trimmed = raw.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   return trimmed.replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
 function renderOptional(value: string | undefined, ctx: HookMappingContext) {
-  if (!value) return undefined;
+  if (!value) {
+    return undefined;
+  }
   const rendered = renderTemplate(value, ctx).trim();
   return rendered ? rendered : undefined;
 }
 
 function renderTemplate(template: string, ctx: HookMappingContext) {
-  if (!template) return "";
+  if (!template) {
+    return "";
+  }
   return template.replace(/\{\{\s*([^}]+)\s*\}\}/g, (_, expr: string) => {
     const value = resolveTemplateExpr(expr.trim(), ctx);
-    if (value === undefined || value === null) return "";
-    if (typeof value === "string") return value;
-    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (value === undefined || value === null) {
+      return "";
+    }
+    if (typeof value === "string") {
+      return value;
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
     return JSON.stringify(value);
   });
 }
 
 function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
-  if (expr === "path") return ctx.path;
-  if (expr === "now") return new Date().toISOString();
+  if (expr === "path") {
+    return ctx.path;
+  }
+  if (expr === "now") {
+    return new Date().toISOString();
+  }
   if (expr.startsWith("headers.")) {
     return getByPath(ctx.headers, expr.slice("headers.".length));
   }
@@ -344,7 +403,9 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
 }
 
 function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
-  if (!pathExpr) return undefined;
+  if (!pathExpr) {
+    return undefined;
+  }
   const parts: Array<string | number> = [];
   const re = /([^.[\]]+)|(\[(\d+)\])/g;
   let match = re.exec(pathExpr);
@@ -358,13 +419,19 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
   }
   let current: unknown = input;
   for (const part of parts) {
-    if (current === null || current === undefined) return undefined;
+    if (current === null || current === undefined) {
+      return undefined;
+    }
     if (typeof part === "number") {
-      if (!Array.isArray(current)) return undefined;
+      if (!Array.isArray(current)) {
+        return undefined;
+      }
       current = current[part] as unknown;
       continue;
     }
-    if (typeof current !== "object") return undefined;
+    if (typeof current !== "object") {
+      return undefined;
+    }
     current = (current as Record<string, unknown>)[part];
   }
   return current;

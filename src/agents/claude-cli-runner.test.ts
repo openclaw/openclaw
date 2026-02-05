@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
+import { sleep } from "../utils.js";
 import { runClaudeCliAgent } from "./claude-cli-runner.js";
 
 const runCommandWithTimeoutMock = vi.fn();
@@ -20,8 +20,10 @@ function createDeferred<T>() {
 
 async function waitForCalls(mockFn: { mock: { calls: unknown[][] } }, count: number) {
   for (let i = 0; i < 50; i += 1) {
-    if (mockFn.mock.calls.length >= count) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (mockFn.mock.calls.length >= count) {
+      return;
+    }
+    await sleep(0);
   }
   throw new Error(`Expected ${count} calls, got ${mockFn.mock.calls.length}`);
 }
@@ -45,7 +47,7 @@ describe("runClaudeCliAgent", () => {
     });
 
     await runClaudeCliAgent({
-      sessionId: "clawdbot-session",
+      sessionId: "openclaw-session",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",
@@ -61,7 +63,7 @@ describe("runClaudeCliAgent", () => {
     expect(argv).toContain("hi");
   });
 
-  it("uses provided --session-id when a claude session id is provided", async () => {
+  it("uses --resume when a claude session id is provided", async () => {
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       stdout: JSON.stringify({ message: "ok", session_id: "sid-2" }),
       stderr: "",
@@ -71,7 +73,7 @@ describe("runClaudeCliAgent", () => {
     });
 
     await runClaudeCliAgent({
-      sessionId: "clawdbot-session",
+      sessionId: "openclaw-session",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",
@@ -83,7 +85,7 @@ describe("runClaudeCliAgent", () => {
 
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
     const argv = runCommandWithTimeoutMock.mock.calls[0]?.[0] as string[];
-    expect(argv).toContain("--session-id");
+    expect(argv).toContain("--resume");
     expect(argv).toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
     expect(argv).toContain("hi");
   });

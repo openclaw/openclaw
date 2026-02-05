@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
-
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
-const emptyCfg = {} as ClawdbotConfig;
+const emptyCfg = {} as OpenClawConfig;
 
 describe("buildSlackThreadingToolContext", () => {
   it("uses top-level replyToMode by default", () => {
@@ -11,7 +10,7 @@ describe("buildSlackThreadingToolContext", () => {
       channels: {
         slack: { replyToMode: "first" },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
     const result = buildSlackThreadingToolContext({
       cfg,
       accountId: null,
@@ -28,7 +27,7 @@ describe("buildSlackThreadingToolContext", () => {
           replyToModeByChatType: { direct: "all" },
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
     const result = buildSlackThreadingToolContext({
       cfg,
       accountId: null,
@@ -45,7 +44,7 @@ describe("buildSlackThreadingToolContext", () => {
           replyToModeByChatType: { direct: "all" },
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
     const result = buildSlackThreadingToolContext({
       cfg,
       accountId: null,
@@ -61,7 +60,7 @@ describe("buildSlackThreadingToolContext", () => {
           replyToMode: "first",
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
     const result = buildSlackThreadingToolContext({
       cfg,
       accountId: null,
@@ -78,7 +77,7 @@ describe("buildSlackThreadingToolContext", () => {
           dm: { replyToMode: "all" },
         },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
     const result = buildSlackThreadingToolContext({
       cfg,
       accountId: null,
@@ -92,7 +91,7 @@ describe("buildSlackThreadingToolContext", () => {
       channels: {
         slack: { replyToMode: "off" },
       },
-    } as ClawdbotConfig;
+    } as OpenClawConfig;
     const result = buildSlackThreadingToolContext({
       cfg,
       accountId: null,

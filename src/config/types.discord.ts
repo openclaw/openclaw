@@ -1,3 +1,4 @@
+import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
@@ -8,7 +9,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
-import type { GroupToolPolicyConfig } from "./types.tools.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -28,6 +29,7 @@ export type DiscordGuildChannelConfig = {
   requireMention?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** If specified, only load these skills for this channel. Omit = all skills; empty = no skills. */
   skills?: string[];
   /** If false, disable the bot for this channel. */
@@ -36,6 +38,8 @@ export type DiscordGuildChannelConfig = {
   users?: Array<string | number>;
   /** Optional system prompt snippet for this channel. */
   systemPrompt?: string;
+  /** If false, omit thread starter context for this channel (default: true). */
+  includeThreadStarter?: boolean;
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -45,6 +49,7 @@ export type DiscordGuildEntry = {
   requireMention?: boolean;
   /** Optional tool policy overrides for this guild (used when channel override is missing). */
   tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
   users?: Array<string | number>;
@@ -70,6 +75,26 @@ export type DiscordActionConfig = {
   emojiUploads?: boolean;
   stickerUploads?: boolean;
   channels?: boolean;
+  /** Enable bot presence/activity changes (default: false). */
+  presence?: boolean;
+};
+
+export type DiscordIntentsConfig = {
+  /** Enable Guild Presences privileged intent (requires Portal opt-in). Default: false. */
+  presence?: boolean;
+  /** Enable Guild Members privileged intent (requires Portal opt-in). Default: false. */
+  guildMembers?: boolean;
+};
+
+export type DiscordExecApprovalConfig = {
+  /** Enable exec approval forwarding to Discord DMs. Default: false. */
+  enabled?: boolean;
+  /** Discord user IDs to receive approval prompts. Required if enabled. */
+  approvers?: Array<string | number>;
+  /** Only forward approvals for these agent IDs. Omit = all agents. */
+  agentFilter?: string[];
+  /** Only forward approvals matching these session key patterns (substring or regex). */
+  sessionFilter?: string[];
 };
 
 export type DiscordAccountConfig = {
@@ -97,6 +122,8 @@ export type DiscordAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
+  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
+  chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
@@ -124,6 +151,14 @@ export type DiscordAccountConfig = {
   guilds?: Record<string, DiscordGuildEntry>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Exec approval forwarding configuration. */
+  execApprovals?: DiscordExecApprovalConfig;
+  /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
+  intents?: DiscordIntentsConfig;
+  /** PluralKit identity resolution for proxied messages. */
+  pluralkit?: DiscordPluralKitConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };
 
 export type DiscordConfig = {

@@ -18,11 +18,18 @@ import {
   setAccountEnabledInConfigSection,
   signalOnboardingAdapter,
   SignalConfigSchema,
+  type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type ResolvedSignalAccount,
-} from "clawdbot/plugin-sdk";
-
+} from "openclaw/plugin-sdk";
 import { getSignalRuntime } from "./runtime.js";
+
+const signalMessageActions: ChannelMessageActionAdapter = {
+  listActions: (ctx) => getSignalRuntime().channel.signal.messageActions.listActions(ctx),
+  supportsAction: (ctx) => getSignalRuntime().channel.signal.messageActions.supportsAction?.(ctx),
+  handleAction: async (ctx) =>
+    await getSignalRuntime().channel.signal.messageActions.handleAction(ctx),
+};
 
 const meta = getChatChannelMeta("signal");
 
@@ -42,7 +49,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   capabilities: {
     chatTypes: ["direct", "group"],
     media: true,
+    reactions: true,
   },
+  actions: signalMessageActions,
   streaming: {
     blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
   },
@@ -105,7 +114,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
       const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") return [];
+      if (groupPolicy !== "open") {
+        return [];
+      }
       return [
         `- Signal groups: groupPolicy="open" allows any member to trigger the bot. Set channels.signal.groupPolicy="allowlist" + channels.signal.groupAllowFrom to restrict senders.`,
       ];
@@ -115,7 +126,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     normalizeTarget: normalizeSignalMessagingTarget,
     targetResolver: {
       looksLikeId: looksLikeSignalTargetId,
-      hint: "<E.164|group:ID|signal:group:ID|signal:+E.164>",
+      hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
     },
   },
   setup: {
@@ -197,6 +208,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
+    chunkerMode: "text",
     textChunkLimit: 4000,
     sendText: async ({ cfg, to, text, accountId, deps }) => {
       const send = deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
@@ -241,7 +253,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     collectStatusIssues: (accounts) =>
       accounts.flatMap((account) => {
         const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) return [];
+        if (!lastError) {
+          return [];
+        }
         return [
           {
             channel: "signal",

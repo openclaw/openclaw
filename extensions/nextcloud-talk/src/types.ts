@@ -3,7 +3,7 @@ import type {
   DmConfig,
   DmPolicy,
   GroupPolicy,
-} from "clawdbot/plugin-sdk";
+} from "openclaw/plugin-sdk";
 
 export type NextcloudTalkRoomConfig = {
   requireMention?: boolean;
@@ -62,10 +62,14 @@ export type NextcloudTalkAccountConfig = {
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
+  chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
 };

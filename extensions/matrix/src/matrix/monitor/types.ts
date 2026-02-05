@@ -1,4 +1,4 @@
-import type { EncryptedFile, MessageEventContent } from "matrix-bot-sdk";
+import type { EncryptedFile, MessageEventContent } from "@vector-im/matrix-bot-sdk";
 
 export const EventType = {
   RoomMessage: "m.room.message",
@@ -29,6 +29,7 @@ export type RoomMessageEventContent = MessageEventContent & {
   file?: EncryptedFile;
   info?: {
     mimetype?: string;
+    size?: number;
   };
   "m.relates_to"?: {
     rel_type?: string;

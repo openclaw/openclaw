@@ -3,7 +3,7 @@ import type { NormalizedChatType } from "../channels/chat-type.js";
 export type ReplyMode = "text" | "command";
 export type TypingMode = "never" | "instant" | "thinking" | "message";
 export type SessionScope = "per-sender" | "global";
-export type DmScope = "main" | "per-peer" | "per-channel-peer";
+export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
 export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
@@ -135,6 +135,8 @@ export type DiagnosticsCacheTraceConfig = {
 
 export type DiagnosticsConfig = {
   enabled?: boolean;
+  /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
+  flags?: string[];
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };

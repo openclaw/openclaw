@@ -1,37 +1,51 @@
 import type { BrowserActionPathResult, BrowserActionTargetOk } from "./client-actions-types.js";
-import { fetchBrowserJson } from "./client-fetch.js";
 import type {
   BrowserConsoleMessage,
   BrowserNetworkRequest,
   BrowserPageError,
 } from "./pw-session.js";
+import { fetchBrowserJson } from "./client-fetch.js";
 
 function buildProfileQuery(profile?: string): string {
   return profile ? `?profile=${encodeURIComponent(profile)}` : "";
 }
 
+function withBaseUrl(baseUrl: string | undefined, path: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return path;
+  }
+  return `${trimmed.replace(/\/$/, "")}${path}`;
+}
+
 export async function browserConsoleMessages(
-  baseUrl: string,
+  baseUrl: string | undefined,
   opts: { level?: string; targetId?: string; profile?: string } = {},
 ): Promise<{ ok: true; messages: BrowserConsoleMessage[]; targetId: string }> {
   const q = new URLSearchParams();
-  if (opts.level) q.set("level", opts.level);
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (opts.profile) q.set("profile", opts.profile);
+  if (opts.level) {
+    q.set("level", opts.level);
+  }
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return await fetchBrowserJson<{
     ok: true;
     messages: BrowserConsoleMessage[];
     targetId: string;
-  }>(`${baseUrl}/console${suffix}`, { timeoutMs: 20000 });
+  }>(withBaseUrl(baseUrl, `/console${suffix}`), { timeoutMs: 20000 });
 }
 
 export async function browserPdfSave(
-  baseUrl: string,
+  baseUrl: string | undefined,
   opts: { targetId?: string; profile?: string } = {},
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionPathResult>(`${baseUrl}/pdf${q}`, {
+  return await fetchBrowserJson<BrowserActionPathResult>(withBaseUrl(baseUrl, `/pdf${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId: opts.targetId }),
@@ -40,23 +54,29 @@ export async function browserPdfSave(
 }
 
 export async function browserPageErrors(
-  baseUrl: string,
+  baseUrl: string | undefined,
   opts: { targetId?: string; clear?: boolean; profile?: string } = {},
 ): Promise<{ ok: true; targetId: string; errors: BrowserPageError[] }> {
   const q = new URLSearchParams();
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (typeof opts.clear === "boolean") q.set("clear", String(opts.clear));
-  if (opts.profile) q.set("profile", opts.profile);
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (typeof opts.clear === "boolean") {
+    q.set("clear", String(opts.clear));
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return await fetchBrowserJson<{
     ok: true;
     targetId: string;
     errors: BrowserPageError[];
-  }>(`${baseUrl}/errors${suffix}`, { timeoutMs: 20000 });
+  }>(withBaseUrl(baseUrl, `/errors${suffix}`), { timeoutMs: 20000 });
 }
 
 export async function browserRequests(
-  baseUrl: string,
+  baseUrl: string | undefined,
   opts: {
     targetId?: string;
     filter?: string;
@@ -65,20 +85,28 @@ export async function browserRequests(
   } = {},
 ): Promise<{ ok: true; targetId: string; requests: BrowserNetworkRequest[] }> {
   const q = new URLSearchParams();
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (opts.filter) q.set("filter", opts.filter);
-  if (typeof opts.clear === "boolean") q.set("clear", String(opts.clear));
-  if (opts.profile) q.set("profile", opts.profile);
+  if (opts.targetId) {
+    q.set("targetId", opts.targetId);
+  }
+  if (opts.filter) {
+    q.set("filter", opts.filter);
+  }
+  if (typeof opts.clear === "boolean") {
+    q.set("clear", String(opts.clear));
+  }
+  if (opts.profile) {
+    q.set("profile", opts.profile);
+  }
   const suffix = q.toString() ? `?${q.toString()}` : "";
   return await fetchBrowserJson<{
     ok: true;
     targetId: string;
     requests: BrowserNetworkRequest[];
-  }>(`${baseUrl}/requests${suffix}`, { timeoutMs: 20000 });
+  }>(withBaseUrl(baseUrl, `/requests${suffix}`), { timeoutMs: 20000 });
 }
 
 export async function browserTraceStart(
-  baseUrl: string,
+  baseUrl: string | undefined,
   opts: {
     targetId?: string;
     screenshots?: boolean;
@@ -88,7 +116,7 @@ export async function browserTraceStart(
   } = {},
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/trace/start${q}`, {
+  return await fetchBrowserJson<BrowserActionTargetOk>(withBaseUrl(baseUrl, `/trace/start${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -102,11 +130,11 @@ export async function browserTraceStart(
 }
 
 export async function browserTraceStop(
-  baseUrl: string,
+  baseUrl: string | undefined,
   opts: { targetId?: string; path?: string; profile?: string } = {},
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionPathResult>(`${baseUrl}/trace/stop${q}`, {
+  return await fetchBrowserJson<BrowserActionPathResult>(withBaseUrl(baseUrl, `/trace/stop${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId: opts.targetId, path: opts.path }),
@@ -115,11 +143,11 @@ export async function browserTraceStop(
 }
 
 export async function browserHighlight(
-  baseUrl: string,
+  baseUrl: string | undefined,
   opts: { ref: string; targetId?: string; profile?: string },
 ): Promise<BrowserActionTargetOk> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionTargetOk>(`${baseUrl}/highlight${q}`, {
+  return await fetchBrowserJson<BrowserActionTargetOk>(withBaseUrl(baseUrl, `/highlight${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId: opts.targetId, ref: opts.ref }),
@@ -128,7 +156,7 @@ export async function browserHighlight(
 }
 
 export async function browserResponseBody(
-  baseUrl: string,
+  baseUrl: string | undefined,
   opts: {
     url: string;
     targetId?: string;
@@ -158,7 +186,7 @@ export async function browserResponseBody(
       body: string;
       truncated?: boolean;
     };
-  }>(`${baseUrl}/response/body${q}`, {
+  }>(withBaseUrl(baseUrl, `/response/body${q}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

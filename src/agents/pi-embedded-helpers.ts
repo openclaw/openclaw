@@ -6,6 +6,7 @@ export {
   stripThoughtSignatures,
 } from "./pi-embedded-helpers/bootstrap.js";
 export {
+  BILLING_ERROR_USER_MESSAGE,
   classifyFailoverReason,
   formatRawAssistantErrorForUi,
   formatAssistantErrorText,
@@ -23,12 +24,14 @@ export {
   isFailoverAssistantError,
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,
+  isImageSizeError,
   isOverloadedErrorMessage,
   isRawApiErrorPayload,
   isRateLimitAssistantError,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
   parseImageDimensionError,
+  parseImageSizeError,
 } from "./pi-embedded-helpers/errors.js";
 export { isGoogleModelApi, sanitizeGoogleTurnOrdering } from "./pi-embedded-helpers/google.js";
 

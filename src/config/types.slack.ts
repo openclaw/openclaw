@@ -7,7 +7,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
-import type { GroupToolPolicyConfig } from "./types.tools.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
@@ -33,6 +33,7 @@ export type SlackChannelConfig = {
   requireMention?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
   /** Allowlist of users that can invoke the bot in this channel. */
@@ -59,7 +60,7 @@ export type SlackActionConfig = {
 export type SlackSlashCommandConfig = {
   /** Enable handling for the configured slash command (default: false). */
   enabled?: boolean;
-  /** Slash command name (default: "clawd"). */
+  /** Slash command name (default: "openclaw"). */
   name?: string;
   /** Session key prefix for slash commands (default: "slack:slash"). */
   sessionPrefix?: string;
@@ -116,6 +117,8 @@ export type SlackAccountConfig = {
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   textChunkLimit?: number;
+  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
+  chunkMode?: "length" | "newline";
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
@@ -139,6 +142,8 @@ export type SlackAccountConfig = {
   channels?: Record<string, SlackChannelConfig>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };
 
 export type SlackConfig = {

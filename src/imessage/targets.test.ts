@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
@@ -26,6 +25,27 @@ describe("imessage targets", () => {
   it("normalizes handles", () => {
     expect(normalizeIMessageHandle("Name@Example.com")).toBe("name@example.com");
     expect(normalizeIMessageHandle(" +1 (555) 222-3333 ")).toBe("+15552223333");
+  });
+
+  it("normalizes chat_id prefixes case-insensitively", () => {
+    expect(normalizeIMessageHandle("CHAT_ID:123")).toBe("chat_id:123");
+    expect(normalizeIMessageHandle("Chat_Id:456")).toBe("chat_id:456");
+    expect(normalizeIMessageHandle("chatid:789")).toBe("chat_id:789");
+    expect(normalizeIMessageHandle("CHAT:42")).toBe("chat_id:42");
+  });
+
+  it("normalizes chat_guid prefixes case-insensitively", () => {
+    expect(normalizeIMessageHandle("CHAT_GUID:abc-def")).toBe("chat_guid:abc-def");
+    expect(normalizeIMessageHandle("ChatGuid:XYZ")).toBe("chat_guid:XYZ");
+    expect(normalizeIMessageHandle("GUID:test-guid")).toBe("chat_guid:test-guid");
+  });
+
+  it("normalizes chat_identifier prefixes case-insensitively", () => {
+    expect(normalizeIMessageHandle("CHAT_IDENTIFIER:iMessage;-;chat123")).toBe(
+      "chat_identifier:iMessage;-;chat123",
+    );
+    expect(normalizeIMessageHandle("ChatIdentifier:test")).toBe("chat_identifier:test");
+    expect(normalizeIMessageHandle("CHATIDENT:foo")).toBe("chat_identifier:foo");
   });
 
   it("checks allowFrom against chat_id", () => {

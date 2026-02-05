@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { monitorTelegramProvider } from "./monitor.js";
 
 type MockCtx = {
@@ -35,6 +34,11 @@ const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
   })),
 }));
 
+const { computeBackoff, sleepWithAbort } = vi.hoisted(() => ({
+  computeBackoff: vi.fn(() => 0),
+  sleepWithAbort: vi.fn(async () => undefined),
+}));
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
@@ -49,8 +53,12 @@ vi.mock("./bot.js", () => ({
       const chatId = ctx.message.chat.id;
       const isGroup = ctx.message.chat.type !== "private";
       const text = ctx.message.text ?? ctx.message.caption ?? "";
-      if (isGroup && !text.includes("@mybot")) return;
-      if (!text.trim()) return;
+      if (isGroup && !text.includes("@mybot")) {
+        return;
+      }
+      if (!text.trim()) {
+        return;
+      }
       await api.sendMessage(chatId, `echo:${text}`, { parse_mode: "HTML" });
     };
     return {
@@ -70,6 +78,11 @@ vi.mock("@grammyjs/runner", () => ({
   run: runSpy,
 }));
 
+vi.mock("../infra/backoff.js", () => ({
+  computeBackoff,
+  sleepWithAbort,
+}));
+
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: async (ctx: { Body?: string }) => ({
     text: `echo:${ctx.Body}`,
@@ -84,6 +97,8 @@ describe("monitorTelegramProvider (grammY)", () => {
     });
     initSpy.mockClear();
     runSpy.mockClear();
+    computeBackoff.mockClear();
+    sleepWithAbort.mockClear();
   });
 
   it("processes a DM and sends reply", async () => {
@@ -119,7 +134,11 @@ describe("monitorTelegramProvider (grammY)", () => {
       expect.anything(),
       expect.objectContaining({
         sink: { concurrency: 3 },
-        runner: expect.objectContaining({ silent: true }),
+        runner: expect.objectContaining({
+          silent: true,
+          maxRetryTime: 5 * 60 * 1000,
+          retryInterval: "exponential",
+        }),
       }),
     );
   });
@@ -139,5 +158,33 @@ describe("monitorTelegramProvider (grammY)", () => {
       getFile: vi.fn(async () => ({})),
     });
     expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("retries on recoverable network errors", async () => {
+    const networkError = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+    runSpy
+      .mockImplementationOnce(() => ({
+        task: () => Promise.reject(networkError),
+        stop: vi.fn(),
+      }))
+      .mockImplementationOnce(() => ({
+        task: () => Promise.resolve(),
+        stop: vi.fn(),
+      }));
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces non-recoverable errors", async () => {
+    runSpy.mockImplementationOnce(() => ({
+      task: () => Promise.reject(new Error("bad token")),
+      stop: vi.fn(),
+    }));
+
+    await expect(monitorTelegramProvider({ token: "tok" })).rejects.toThrow("bad token");
   });
 });

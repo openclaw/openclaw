@@ -38,6 +38,8 @@ export interface RealtimeSTTSession {
   onPartial(callback: (partial: string) => void): void;
   /** Set callback for final transcripts */
   onTranscript(callback: (transcript: string) => void): void;
+  /** Set callback when speech starts (VAD) */
+  onSpeechStart(callback: () => void): void;
   /** Close the session */
   close(): void;
   /** Check if session is connected */
@@ -91,6 +93,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
   private pendingTranscript = "";
   private onTranscriptCallback: ((transcript: string) => void) | null = null;
   private onPartialCallback: ((partial: string) => void) | null = null;
+  private onSpeechStartCallback: (() => void) | null = null;
 
   constructor(
     private readonly apiKey: string,
@@ -152,7 +155,9 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
 
       this.ws.on("error", (error) => {
         console.error("[RealtimeSTT] WebSocket error:", error);
-        if (!this.connected) reject(error);
+        if (!this.connected) {
+          reject(error);
+        }
       });
 
       this.ws.on("close", (code, reason) => {
@@ -180,9 +185,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
       return;
     }
 
-    if (
-      this.reconnectAttempts >= OpenAIRealtimeSTTSession.MAX_RECONNECT_ATTEMPTS
-    ) {
+    if (this.reconnectAttempts >= OpenAIRealtimeSTTSession.MAX_RECONNECT_ATTEMPTS) {
       console.error(
         `[RealtimeSTT] Max reconnect attempts (${OpenAIRealtimeSTTSession.MAX_RECONNECT_ATTEMPTS}) reached`,
       );
@@ -190,9 +193,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
     }
 
     this.reconnectAttempts++;
-    const delay =
-      OpenAIRealtimeSTTSession.RECONNECT_DELAY_MS *
-      2 ** (this.reconnectAttempts - 1);
+    const delay = OpenAIRealtimeSTTSession.RECONNECT_DELAY_MS * 2 ** (this.reconnectAttempts - 1);
     console.log(
       `[RealtimeSTT] Reconnecting ${this.reconnectAttempts}/${OpenAIRealtimeSTTSession.MAX_RECONNECT_ATTEMPTS} in ${delay}ms...`,
     );
@@ -243,6 +244,7 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
       case "input_audio_buffer.speech_started":
         console.log("[RealtimeSTT] Speech started");
         this.pendingTranscript = "";
+        this.onSpeechStartCallback?.();
         break;
 
       case "error":
@@ -258,7 +260,9 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
   }
 
   sendAudio(muLawData: Buffer): void {
-    if (!this.connected) return;
+    if (!this.connected) {
+      return;
+    }
     this.sendEvent({
       type: "input_audio_buffer.append",
       audio: muLawData.toString("base64"),
@@ -271,6 +275,10 @@ class OpenAIRealtimeSTTSession implements RealtimeSTTSession {
 
   onTranscript(callback: (transcript: string) => void): void {
     this.onTranscriptCallback = callback;
+  }
+
+  onSpeechStart(callback: () => void): void {
+    this.onSpeechStartCallback = callback;
   }
 
   async waitForTranscript(timeoutMs = 30000): Promise<string> {

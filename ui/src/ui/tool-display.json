@@ -1,7 +1,7 @@
 {
   "version": 1,
   "fallback": {
-    "emoji": "🧩",
+    "icon": "puzzle",
     "detailKeys": [
       "command",
       "path",
@@ -26,37 +26,37 @@
   },
   "tools": {
     "bash": {
-      "emoji": "🛠️",
+      "icon": "wrench",
       "title": "Bash",
       "detailKeys": ["command"]
     },
     "process": {
-      "emoji": "🧰",
+      "icon": "wrench",
       "title": "Process",
       "detailKeys": ["sessionId"]
     },
     "read": {
-      "emoji": "📖",
+      "icon": "fileText",
       "title": "Read",
       "detailKeys": ["path"]
     },
     "write": {
-      "emoji": "✍️",
+      "icon": "edit",
       "title": "Write",
       "detailKeys": ["path"]
     },
     "edit": {
-      "emoji": "📝",
+      "icon": "penLine",
       "title": "Edit",
       "detailKeys": ["path"]
     },
     "attach": {
-      "emoji": "📎",
+      "icon": "paperclip",
       "title": "Attach",
       "detailKeys": ["path", "url", "fileName"]
     },
     "browser": {
-      "emoji": "🌐",
+      "icon": "globe",
       "title": "Browser",
       "actions": {
         "status": { "label": "status" },
@@ -90,12 +90,18 @@
         },
         "act": {
           "label": "act",
-          "detailKeys": ["request.kind", "request.ref", "request.selector", "request.text", "request.value"]
+          "detailKeys": [
+            "request.kind",
+            "request.ref",
+            "request.selector",
+            "request.text",
+            "request.value"
+          ]
         }
       }
     },
     "canvas": {
-      "emoji": "🖼️",
+      "icon": "image",
       "title": "Canvas",
       "actions": {
         "present": { "label": "present", "detailKeys": ["target", "node", "nodeId"] },
@@ -108,7 +114,7 @@
       }
     },
     "nodes": {
-      "emoji": "📱",
+      "icon": "smartphone",
       "title": "Nodes",
       "actions": {
         "status": { "label": "status" },
@@ -117,9 +123,15 @@
         "approve": { "label": "approve", "detailKeys": ["requestId"] },
         "reject": { "label": "reject", "detailKeys": ["requestId"] },
         "notify": { "label": "notify", "detailKeys": ["node", "nodeId", "title", "body"] },
-        "camera_snap": { "label": "camera snap", "detailKeys": ["node", "nodeId", "facing", "deviceId"] },
+        "camera_snap": {
+          "label": "camera snap",
+          "detailKeys": ["node", "nodeId", "facing", "deviceId"]
+        },
         "camera_list": { "label": "camera list", "detailKeys": ["node", "nodeId"] },
-        "camera_clip": { "label": "camera clip", "detailKeys": ["node", "nodeId", "facing", "duration", "durationMs"] },
+        "camera_clip": {
+          "label": "camera clip",
+          "detailKeys": ["node", "nodeId", "facing", "duration", "durationMs"]
+        },
         "screen_record": {
           "label": "screen record",
           "detailKeys": ["node", "nodeId", "duration", "durationMs", "fps", "screenIndex"]
@@ -127,7 +139,7 @@
       }
     },
     "cron": {
-      "emoji": "⏰",
+      "icon": "loader",
       "title": "Cron",
       "actions": {
         "status": { "label": "status" },
@@ -144,7 +156,7 @@
       }
     },
     "gateway": {
-      "emoji": "🔌",
+      "icon": "plug",
       "title": "Gateway",
       "actions": {
         "restart": { "label": "restart", "detailKeys": ["reason", "delayMs"] },
@@ -161,7 +173,7 @@
       }
     },
     "whatsapp_login": {
-      "emoji": "🟢",
+      "icon": "circle",
       "title": "WhatsApp Login",
       "actions": {
         "start": { "label": "start" },
@@ -169,7 +181,7 @@
       }
     },
     "discord": {
-      "emoji": "💬",
+      "icon": "messageSquare",
       "title": "Discord",
       "actions": {
         "react": { "label": "react", "detailKeys": ["channelId", "messageId", "emoji"] },
@@ -204,7 +216,7 @@
       }
     },
     "slack": {
-      "emoji": "💬",
+      "icon": "messageSquare",
       "title": "Slack",
       "actions": {
         "react": { "label": "react", "detailKeys": ["channelId", "messageId", "emoji"] },

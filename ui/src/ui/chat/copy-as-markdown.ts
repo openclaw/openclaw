@@ -1,14 +1,11 @@
 import { html, type TemplateResult } from "lit";
-import { renderEmojiIcon, setEmojiIcon } from "../icons";
+import { icons } from "../icons.ts";
 
 const COPIED_FOR_MS = 1500;
 const ERROR_FOR_MS = 2000;
 const COPY_LABEL = "Copy as markdown";
 const COPIED_LABEL = "Copied";
 const ERROR_LABEL = "Copy failed";
-const COPY_ICON = "📋";
-const COPIED_ICON = "✓";
-const ERROR_ICON = "!";
 
 type CopyButtonOptions = {
   text: () => string;
@@ -16,7 +13,9 @@ type CopyButtonOptions = {
 };
 
 async function copyTextToClipboard(text: string): Promise<boolean> {
-  if (!text) return false;
+  if (!text) {
+    return false;
+  }
 
   try {
     await navigator.clipboard.writeText(text);
@@ -41,18 +40,19 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
       aria-label=${idleLabel}
       @click=${async (e: Event) => {
         const btn = e.currentTarget as HTMLButtonElement | null;
-        const icon = btn?.querySelector(
-          ".chat-copy-btn__icon",
-        ) as HTMLElement | null;
 
-        if (!btn || btn.dataset.copying === "1") return;
+        if (!btn || btn.dataset.copying === "1") {
+          return;
+        }
 
         btn.dataset.copying = "1";
         btn.setAttribute("aria-busy", "true");
         btn.disabled = true;
 
         const copied = await copyTextToClipboard(options.text());
-        if (!btn.isConnected) return;
+        if (!btn.isConnected) {
+          return;
+        }
 
         delete btn.dataset.copying;
         btn.removeAttribute("aria-busy");
@@ -61,30 +61,33 @@ function createCopyButton(options: CopyButtonOptions): TemplateResult {
         if (!copied) {
           btn.dataset.error = "1";
           setButtonLabel(btn, ERROR_LABEL);
-          setEmojiIcon(icon, ERROR_ICON);
 
           window.setTimeout(() => {
-            if (!btn.isConnected) return;
+            if (!btn.isConnected) {
+              return;
+            }
             delete btn.dataset.error;
             setButtonLabel(btn, idleLabel);
-            setEmojiIcon(icon, COPY_ICON);
           }, ERROR_FOR_MS);
           return;
         }
 
         btn.dataset.copied = "1";
         setButtonLabel(btn, COPIED_LABEL);
-        setEmojiIcon(icon, COPIED_ICON);
 
         window.setTimeout(() => {
-          if (!btn.isConnected) return;
+          if (!btn.isConnected) {
+            return;
+          }
           delete btn.dataset.copied;
           setButtonLabel(btn, idleLabel);
-          setEmojiIcon(icon, COPY_ICON);
         }, COPIED_FOR_MS);
       }}
     >
-      ${renderEmojiIcon(COPY_ICON, "chat-copy-btn__icon")}
+      <span class="chat-copy-btn__icon" aria-hidden="true">
+        <span class="chat-copy-btn__icon-copy">${icons.copy}</span>
+        <span class="chat-copy-btn__icon-check">${icons.check}</span>
+      </span>
     </button>
   `;
 }

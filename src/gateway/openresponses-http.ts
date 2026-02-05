@@ -1,42 +1,20 @@
 /**
  * OpenResponses HTTP Handler
  *
- * Implements the OpenResponses `/v1/responses` endpoint for Clawdbot Gateway.
+ * Implements the OpenResponses `/v1/responses` endpoint for OpenClaw Gateway.
  *
  * @see https://www.open-responses.com/
  */
 
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-
+import { randomUUID } from "node:crypto";
+import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
+import type { ImageContent } from "../commands/agent/types.js";
+import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
-import { defaultRuntime } from "../runtime.js";
-import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
-import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
-import {
-  readJsonBodyOrError,
-  sendJson,
-  sendMethodNotAllowed,
-  sendUnauthorized,
-  setSseHeaders,
-  writeDone,
-} from "./http-common.js";
-import {
-  CreateResponseBodySchema,
-  type ContentPart,
-  type CreateResponseBody,
-  type ItemParam,
-  type OutputItem,
-  type ResponseResource,
-  type StreamingEvent,
-  type Usage,
-} from "./open-responses.schema.js";
-import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
-import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
-import type { ImageContent } from "../commands/agent/types.js";
 import {
   DEFAULT_INPUT_FILE_MAX_BYTES,
   DEFAULT_INPUT_FILE_MAX_CHARS,
@@ -55,11 +33,33 @@ import {
   type InputImageLimits,
   type InputImageSource,
 } from "../media/input-files.js";
+import { defaultRuntime } from "../runtime.js";
+import { authorizeGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  readJsonBodyOrError,
+  sendJson,
+  sendMethodNotAllowed,
+  sendUnauthorized,
+  setSseHeaders,
+  writeDone,
+} from "./http-common.js";
+import { getBearerToken, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import {
+  CreateResponseBodySchema,
+  type ContentPart,
+  type CreateResponseBody,
+  type ItemParam,
+  type OutputItem,
+  type ResponseResource,
+  type StreamingEvent,
+  type Usage,
+} from "./open-responses.schema.js";
 
 type OpenResponsesHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
   config?: GatewayHttpResponsesConfig;
+  trustedProxies?: string[];
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
@@ -70,11 +70,17 @@ function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
 }
 
 function extractTextContent(content: string | ContentPart[]): string {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return content;
+  }
   return content
     .map((part) => {
-      if (part.type === "input_text") return part.text;
-      if (part.type === "output_text") return part.text;
+      if (part.type === "input_text") {
+        return part.text;
+      }
+      if (part.type === "output_text") {
+        return part.text;
+      }
       return "";
     })
     .filter(Boolean)
@@ -126,7 +132,9 @@ function applyToolChoice(params: {
   toolChoice: CreateResponseBody["tool_choice"];
 }): { tools: ClientToolDefinition[]; extraSystemPrompt?: string } {
   const { tools, toolChoice } = params;
-  if (!toolChoice) return { tools };
+  if (!toolChoice) {
+    return { tools };
+  }
 
   if (toolChoice === "none") {
     return { tools: [] };
@@ -175,7 +183,9 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
   for (const item of input) {
     if (item.type === "message") {
       const content = extractTextContent(item.content).trim();
-      if (!content) continue;
+      if (!content) {
+        continue;
+      }
 
       if (item.role === "system" || item.role === "developer") {
         systemParts.push(content);
@@ -209,7 +219,9 @@ export function buildAgentPrompt(input: string | ItemParam[]): {
         break;
       }
     }
-    if (currentIndex < 0) currentIndex = conversationEntries.length - 1;
+    if (currentIndex < 0) {
+      currentIndex = conversationEntries.length - 1;
+    }
 
     const currentEntry = conversationEntries[currentIndex]?.entry;
     if (currentEntry) {
@@ -256,7 +268,9 @@ function toUsage(
       }
     | undefined,
 ): Usage {
-  if (!value) return createEmptyUsage();
+  if (!value) {
+    return createEmptyUsage();
+  }
   const input = value.input ?? 0;
   const output = value.output ?? 0;
   const cacheRead = value.cacheRead ?? 0;
@@ -319,7 +333,9 @@ export async function handleOpenResponsesHttpRequest(
   opts: OpenResponsesHttpOptions,
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
-  if (url.pathname !== "/v1/responses") return false;
+  if (url.pathname !== "/v1/responses") {
+    return false;
+  }
 
   if (req.method !== "POST") {
     sendMethodNotAllowed(res);
@@ -331,6 +347,7 @@ export async function handleOpenResponsesHttpRequest(
     auth: opts.auth,
     connectAuth: { token, password: token },
     req,
+    trustedProxies: opts.trustedProxies,
   });
   if (!authResult.ok) {
     sendUnauthorized(res);
@@ -344,7 +361,9 @@ export async function handleOpenResponsesHttpRequest(
       ? limits.maxBodyBytes
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
   const body = await readJsonBodyOrError(req, res, maxBodyBytes);
-  if (body === undefined) return true;
+  if (body === undefined) {
+    return true;
+  }
 
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(body);
@@ -550,7 +569,7 @@ export async function handleOpenResponsesHttpRequest(
               .map((p) => (typeof p.text === "string" ? p.text : ""))
               .filter(Boolean)
               .join("\n\n")
-          : "No response from Clawdbot.";
+          : "No response from OpenClaw.";
 
       const response = createResponseResource({
         id: responseId,
@@ -590,9 +609,15 @@ export async function handleOpenResponsesHttpRequest(
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
 
   const maybeFinalize = () => {
-    if (closed) return;
-    if (!finalizeRequested) return;
-    if (!finalUsage) return;
+    if (closed) {
+      return;
+    }
+    if (!finalizeRequested) {
+      return;
+    }
+    if (!finalUsage) {
+      return;
+    }
     const usage = finalUsage;
 
     closed = true;
@@ -640,7 +665,9 @@ export async function handleOpenResponsesHttpRequest(
   };
 
   const requestFinalize = (status: ResponseResource["status"], text: string) => {
-    if (finalizeRequested) return;
+    if (finalizeRequested) {
+      return;
+    }
     finalizeRequested = { status, text };
     maybeFinalize();
   };
@@ -679,14 +706,20 @@ export async function handleOpenResponsesHttpRequest(
   });
 
   unsubscribe = onAgentEvent((evt) => {
-    if (evt.runId !== responseId) return;
-    if (closed) return;
+    if (evt.runId !== responseId) {
+      return;
+    }
+    if (closed) {
+      return;
+    }
 
     if (evt.stream === "assistant") {
       const delta = evt.data?.delta;
       const text = evt.data?.text;
       const content = typeof delta === "string" ? delta : typeof text === "string" ? text : "";
-      if (!content) return;
+      if (!content) {
+        return;
+      }
 
       sawAssistantDelta = true;
       accumulatedText += content;
@@ -704,7 +737,7 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        const finalText = accumulatedText || "No response from Clawdbot.";
+        const finalText = accumulatedText || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
         requestFinalize(finalStatus, finalText);
       }
@@ -738,7 +771,9 @@ export async function handleOpenResponsesHttpRequest(
       finalUsage = extractUsageFromResult(result);
       maybeFinalize();
 
-      if (closed) return;
+      if (closed) {
+        return;
+      }
 
       // Fallback: if no streaming deltas were received, send the full response
       if (!sawAssistantDelta) {
@@ -829,7 +864,7 @@ export async function handleOpenResponsesHttpRequest(
                 .map((p) => (typeof p.text === "string" ? p.text : ""))
                 .filter(Boolean)
                 .join("\n\n")
-            : "No response from Clawdbot.";
+            : "No response from OpenClaw.";
 
         accumulatedText = content;
         sawAssistantDelta = true;
@@ -843,7 +878,9 @@ export async function handleOpenResponsesHttpRequest(
         });
       }
     } catch (err) {
-      if (closed) return;
+      if (closed) {
+        return;
+      }
 
       finalUsage = finalUsage ?? createEmptyUsage();
       const errorResponse = createResponseResource({

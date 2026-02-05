@@ -2,18 +2,44 @@ type FetchWithPreconnect = typeof fetch & {
   preconnect: (url: string, init?: { credentials?: RequestCredentials }) => void;
 };
 
+type RequestInitWithDuplex = RequestInit & { duplex?: "half" };
+
+function withDuplex(
+  init: RequestInit | undefined,
+  input: RequestInfo | URL,
+): RequestInit | undefined {
+  const hasInitBody = init?.body != null;
+  const hasRequestBody =
+    !hasInitBody &&
+    typeof Request !== "undefined" &&
+    input instanceof Request &&
+    input.body != null;
+  if (!hasInitBody && !hasRequestBody) {
+    return init;
+  }
+  if (init && "duplex" in (init as Record<string, unknown>)) {
+    return init;
+  }
+  return init
+    ? ({ ...init, duplex: "half" as const } as RequestInitWithDuplex)
+    : ({ duplex: "half" as const } as RequestInitWithDuplex);
+}
+
 export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch {
   const wrapped = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const signal = init?.signal;
-    if (!signal) return fetchImpl(input, init);
+    const patchedInit = withDuplex(init, input);
+    const signal = patchedInit?.signal;
+    if (!signal) {
+      return fetchImpl(input, patchedInit);
+    }
     if (typeof AbortSignal !== "undefined" && signal instanceof AbortSignal) {
-      return fetchImpl(input, init);
+      return fetchImpl(input, patchedInit);
     }
     if (typeof AbortController === "undefined") {
-      return fetchImpl(input, init);
+      return fetchImpl(input, patchedInit);
     }
     if (typeof signal.addEventListener !== "function") {
-      return fetchImpl(input, init);
+      return fetchImpl(input, patchedInit);
     }
     const controller = new AbortController();
     const onAbort = () => controller.abort();
@@ -22,7 +48,7 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
     } else {
       signal.addEventListener("abort", onAbort, { once: true });
     }
-    const response = fetchImpl(input, { ...init, signal: controller.signal });
+    const response = fetchImpl(input, { ...patchedInit, signal: controller.signal });
     if (typeof signal.removeEventListener === "function") {
       void response.finally(() => {
         signal.removeEventListener("abort", onAbort);
@@ -42,6 +68,8 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
 
 export function resolveFetch(fetchImpl?: typeof fetch): typeof fetch | undefined {
   const resolved = fetchImpl ?? globalThis.fetch;
-  if (!resolved) return undefined;
+  if (!resolved) {
+    return undefined;
+  }
   return wrapFetchWithAbortSignal(resolved);
 }

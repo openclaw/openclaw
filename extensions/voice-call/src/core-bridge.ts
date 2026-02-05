@@ -1,11 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type { VoiceCallTtsConfig } from "./config.js";
 
 export type CoreConfig = {
   session?: {
     store?: string;
   };
+  messages?: {
+    tts?: VoiceCallTtsConfig;
+  };
+  [key: string]: unknown;
 };
 
 type CoreAgentDeps = {
@@ -45,10 +50,7 @@ type CoreAgentDeps = {
   ensureAgentWorkspace: (params?: { dir: string }) => Promise<void>;
   resolveStorePath: (store?: string, opts?: { agentId?: string }) => string;
   loadSessionStore: (storePath: string) => Record<string, unknown>;
-  saveSessionStore: (
-    storePath: string,
-    store: Record<string, unknown>,
-  ) => Promise<void>;
+  saveSessionStore: (storePath: string, store: Record<string, unknown>) => Promise<void>;
   resolveSessionFilePath: (
     sessionId: string,
     entry: unknown,
@@ -69,20 +71,26 @@ function findPackageRoot(startDir: string, name: string): string | null {
       if (fs.existsSync(pkgPath)) {
         const raw = fs.readFileSync(pkgPath, "utf8");
         const pkg = JSON.parse(raw) as { name?: string };
-        if (pkg.name === name) return dir;
+        if (pkg.name === name) {
+          return dir;
+        }
       }
     } catch {
       // ignore parse errors and keep walking
     }
     const parent = path.dirname(dir);
-    if (parent === dir) return null;
+    if (parent === dir) {
+      return null;
+    }
     dir = parent;
   }
 }
 
-function resolveClawdbotRoot(): string {
-  if (coreRootCache) return coreRootCache;
-  const override = process.env.CLAWDBOT_ROOT?.trim();
+function resolveOpenClawRoot(): string {
+  if (coreRootCache) {
+    return coreRootCache;
+  }
+  const override = process.env.OPENCLAW_ROOT?.trim();
   if (override) {
     coreRootCache = override;
     return override;
@@ -101,89 +109,50 @@ function resolveClawdbotRoot(): string {
   }
 
   for (const start of candidates) {
-    const found = findPackageRoot(start, "clawdbot");
-    if (found) {
-      coreRootCache = found;
-      return found;
+    for (const name of ["openclaw"]) {
+      const found = findPackageRoot(start, name);
+      if (found) {
+        coreRootCache = found;
+        return found;
+      }
     }
   }
 
-  throw new Error(
-    "Unable to resolve Clawdbot root. Set CLAWDBOT_ROOT to the package root.",
-  );
+  throw new Error("Unable to resolve core root. Set OPENCLAW_ROOT to the package root.");
 }
 
-async function importCoreModule<T>(relativePath: string): Promise<T> {
-  const root = resolveClawdbotRoot();
-  const distPath = path.join(root, "dist", relativePath);
+async function importCoreExtensionAPI(): Promise<{
+  resolveAgentDir: CoreAgentDeps["resolveAgentDir"];
+  resolveAgentWorkspaceDir: CoreAgentDeps["resolveAgentWorkspaceDir"];
+  DEFAULT_MODEL: string;
+  DEFAULT_PROVIDER: string;
+  resolveAgentIdentity: CoreAgentDeps["resolveAgentIdentity"];
+  resolveThinkingDefault: CoreAgentDeps["resolveThinkingDefault"];
+  runEmbeddedPiAgent: CoreAgentDeps["runEmbeddedPiAgent"];
+  resolveAgentTimeoutMs: CoreAgentDeps["resolveAgentTimeoutMs"];
+  ensureAgentWorkspace: CoreAgentDeps["ensureAgentWorkspace"];
+  resolveStorePath: CoreAgentDeps["resolveStorePath"];
+  loadSessionStore: CoreAgentDeps["loadSessionStore"];
+  saveSessionStore: CoreAgentDeps["saveSessionStore"];
+  resolveSessionFilePath: CoreAgentDeps["resolveSessionFilePath"];
+}> {
+  // Do not import any other module. You can't touch this or you will be fired.
+  const distPath = path.join(resolveOpenClawRoot(), "dist", "extensionAPI.js");
   if (!fs.existsSync(distPath)) {
     throw new Error(
       `Missing core module at ${distPath}. Run \`pnpm build\` or install the official package.`,
     );
   }
-  return (await import(pathToFileURL(distPath).href)) as T;
+  return await import(pathToFileURL(distPath).href);
 }
 
 export async function loadCoreAgentDeps(): Promise<CoreAgentDeps> {
-  if (coreDepsPromise) return coreDepsPromise;
+  if (coreDepsPromise) {
+    return coreDepsPromise;
+  }
 
   coreDepsPromise = (async () => {
-    const [
-      agentScope,
-      defaults,
-      identity,
-      modelSelection,
-      piEmbedded,
-      timeout,
-      workspace,
-      sessions,
-    ] = await Promise.all([
-      importCoreModule<{
-        resolveAgentDir: CoreAgentDeps["resolveAgentDir"];
-        resolveAgentWorkspaceDir: CoreAgentDeps["resolveAgentWorkspaceDir"];
-      }>("agents/agent-scope.js"),
-      importCoreModule<{
-        DEFAULT_MODEL: string;
-        DEFAULT_PROVIDER: string;
-      }>("agents/defaults.js"),
-      importCoreModule<{
-        resolveAgentIdentity: CoreAgentDeps["resolveAgentIdentity"];
-      }>("agents/identity.js"),
-      importCoreModule<{
-        resolveThinkingDefault: CoreAgentDeps["resolveThinkingDefault"];
-      }>("agents/model-selection.js"),
-      importCoreModule<{
-        runEmbeddedPiAgent: CoreAgentDeps["runEmbeddedPiAgent"];
-      }>("agents/pi-embedded.js"),
-      importCoreModule<{
-        resolveAgentTimeoutMs: CoreAgentDeps["resolveAgentTimeoutMs"];
-      }>("agents/timeout.js"),
-      importCoreModule<{
-        ensureAgentWorkspace: CoreAgentDeps["ensureAgentWorkspace"];
-      }>("agents/workspace.js"),
-      importCoreModule<{
-        resolveStorePath: CoreAgentDeps["resolveStorePath"];
-        loadSessionStore: CoreAgentDeps["loadSessionStore"];
-        saveSessionStore: CoreAgentDeps["saveSessionStore"];
-        resolveSessionFilePath: CoreAgentDeps["resolveSessionFilePath"];
-      }>("config/sessions.js"),
-    ]);
-
-    return {
-      resolveAgentDir: agentScope.resolveAgentDir,
-      resolveAgentWorkspaceDir: agentScope.resolveAgentWorkspaceDir,
-      resolveAgentIdentity: identity.resolveAgentIdentity,
-      resolveThinkingDefault: modelSelection.resolveThinkingDefault,
-      runEmbeddedPiAgent: piEmbedded.runEmbeddedPiAgent,
-      resolveAgentTimeoutMs: timeout.resolveAgentTimeoutMs,
-      ensureAgentWorkspace: workspace.ensureAgentWorkspace,
-      resolveStorePath: sessions.resolveStorePath,
-      loadSessionStore: sessions.loadSessionStore,
-      saveSessionStore: sessions.saveSessionStore,
-      resolveSessionFilePath: sessions.resolveSessionFilePath,
-      DEFAULT_MODEL: defaults.DEFAULT_MODEL,
-      DEFAULT_PROVIDER: defaults.DEFAULT_PROVIDER,
-    };
+    return await importCoreExtensionAPI();
   })();
 
   return coreDepsPromise;

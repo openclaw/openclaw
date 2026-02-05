@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { monitorIMessageProvider } from "./monitor.js";
 
 const requestMock = vi.fn();
@@ -36,7 +35,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  resolveStorePath: vi.fn(() => "/tmp/clawdbot-sessions.json"),
+  resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
   updateLastRoute: (...args: unknown[]) => updateLastRouteMock(...args),
   readSessionUpdatedAt: vi.fn(() => undefined),
   recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
@@ -64,7 +63,9 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 async function waitForSubscribe() {
   for (let i = 0; i < 5; i += 1) {
-    if (requestMock.mock.calls.some((call) => call[0] === "watch.subscribe")) return;
+    if (requestMock.mock.calls.some((call) => call[0] === "watch.subscribe")) {
+      return;
+    }
     await flush();
   }
 }
@@ -80,11 +81,13 @@ beforeEach(() => {
     },
     session: { mainKey: "main" },
     messages: {
-      groupChat: { mentionPatterns: ["@clawd"] },
+      groupChat: { mentionPatterns: ["@openclaw"] },
     },
   };
   requestMock.mockReset().mockImplementation((method: string) => {
-    if (method === "watch.subscribe") return Promise.resolve({ subscription: 1 });
+    if (method === "watch.subscribe") {
+      return Promise.resolve({ subscription: 1 });
+    }
     return Promise.resolve({});
   });
   stopMock.mockReset().mockResolvedValue(undefined);
@@ -219,7 +222,7 @@ describe("monitorIMessageProvider", () => {
           chat_id: 123,
           sender: "+15550001111",
           is_from_me: false,
-          text: "@clawd hello",
+          text: "@openclaw hello",
           is_group: true,
         },
       },
@@ -277,15 +280,12 @@ describe("monitorIMessageProvider", () => {
     expect(ctx.SessionKey).toBe("agent:main:imessage:group:2");
   });
 
-  it("prefixes tool and final replies with responsePrefix", async () => {
+  it("prefixes final replies with responsePrefix", async () => {
     config = {
       ...config,
       messages: { responsePrefix: "PFX" },
     };
-    replyMock.mockImplementation(async (_ctx, opts) => {
-      await opts?.onToolResult?.({ text: "tool update" });
-      return { text: "final reply" };
-    });
+    replyMock.mockResolvedValue({ text: "final reply" });
     const run = monitorIMessageProvider();
     await waitForSubscribe();
 
@@ -307,9 +307,8 @@ describe("monitorIMessageProvider", () => {
     closeResolve?.();
     await run;
 
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(sendMock.mock.calls[0][1]).toBe("PFX tool update");
-    expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][1]).toBe("PFX final reply");
   });
 
   it("defaults to dmPolicy=pairing behavior when allowFrom is empty", async () => {
@@ -368,7 +367,7 @@ describe("monitorIMessageProvider", () => {
           chat_id: 42,
           sender: "+15550002222",
           is_from_me: false,
-          text: "@clawd ping",
+          text: "@openclaw ping",
           is_group: true,
           chat_name: "Lobster Squad",
           participants: ["+1555", "+1556"],
@@ -417,7 +416,7 @@ describe("monitorIMessageProvider", () => {
           chat_id: 202,
           sender: "+15550003333",
           is_from_me: false,
-          text: "@clawd hi",
+          text: "@openclaw hi",
           is_group: true,
         },
       },
@@ -452,7 +451,7 @@ describe("monitorIMessageProvider", () => {
           chat_id: 303,
           sender: "+15550003333",
           is_from_me: false,
-          text: "@clawd hi",
+          text: "@openclaw hi",
           is_group: true,
         },
       },
@@ -478,7 +477,7 @@ describe("monitorIMessageProvider", () => {
           chat_name: "Test Group",
           sender: "+15550001111",
           is_from_me: false,
-          text: "@clawd hi",
+          text: "@openclaw hi",
           is_group: true,
           created_at: "2026-01-17T00:00:00Z",
         },
@@ -493,7 +492,7 @@ describe("monitorIMessageProvider", () => {
     const ctx = replyMock.mock.calls[0]?.[0];
     const body = ctx?.Body ?? "";
     expect(body).toContain("Test Group id:99");
-    expect(body).toContain("+15550001111: @clawd hi");
+    expect(body).toContain("+15550001111: @openclaw hi");
   });
 
   it("includes reply context when imessage reply metadata is present", async () => {

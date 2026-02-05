@@ -1,37 +1,63 @@
-import { describe, expect, it, vi } from "vitest";
-
-import { resolveTelegramFetch } from "./fetch.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 describe("resolveTelegramFetch", () => {
-  it("wraps proxy fetch to normalize foreign abort signals", async () => {
-    let seenSignal: AbortSignal | undefined;
-    const proxyFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      seenSignal = init?.signal as AbortSignal | undefined;
-      return {} as Response;
-    });
+  const originalFetch = globalThis.fetch;
 
-    const fetcher = resolveTelegramFetch(proxyFetch);
-    expect(fetcher).toBeTypeOf("function");
+  const loadModule = async () => {
+    const setDefaultAutoSelectFamily = vi.fn();
+    vi.resetModules();
+    vi.doMock("node:net", () => ({
+      setDefaultAutoSelectFamily,
+    }));
+    const mod = await import("./fetch.js");
+    return { resolveTelegramFetch: mod.resolveTelegramFetch, setDefaultAutoSelectFamily };
+  };
 
-    let abortHandler: (() => void) | null = null;
-    const fakeSignal = {
-      aborted: false,
-      addEventListener: (event: string, handler: () => void) => {
-        if (event === "abort") abortHandler = handler;
-      },
-      removeEventListener: (event: string, handler: () => void) => {
-        if (event === "abort" && abortHandler === handler) abortHandler = null;
-      },
-    } as AbortSignal;
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.clearAllMocks();
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+    } else {
+      delete (globalThis as { fetch?: typeof fetch }).fetch;
+    }
+  });
 
-    const promise = fetcher!("https://example.com", { signal: fakeSignal });
-    expect(proxyFetch).toHaveBeenCalledOnce();
-    expect(seenSignal).toBeInstanceOf(AbortSignal);
-    expect(seenSignal).not.toBe(fakeSignal);
+  it("returns wrapped global fetch when available", async () => {
+    const fetchMock = vi.fn(async () => ({}));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const { resolveTelegramFetch } = await loadModule();
+    const resolved = resolveTelegramFetch();
+    expect(resolved).toBeTypeOf("function");
+  });
 
-    abortHandler?.();
-    expect(seenSignal?.aborted).toBe(true);
+  it("prefers proxy fetch when provided", async () => {
+    const fetchMock = vi.fn(async () => ({}));
+    const { resolveTelegramFetch } = await loadModule();
+    const resolved = resolveTelegramFetch(fetchMock as unknown as typeof fetch);
+    expect(resolved).toBeTypeOf("function");
+  });
 
-    await promise;
+  it("honors env enable override", async () => {
+    vi.stubEnv("OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY", "1");
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    const { resolveTelegramFetch, setDefaultAutoSelectFamily } = await loadModule();
+    resolveTelegramFetch();
+    expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(true);
+  });
+
+  it("uses config override when provided", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    const { resolveTelegramFetch, setDefaultAutoSelectFamily } = await loadModule();
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+    expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(true);
+  });
+
+  it("env disable override wins over config", async () => {
+    vi.stubEnv("OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY", "1");
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    const { resolveTelegramFetch, setDefaultAutoSelectFamily } = await loadModule();
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+    expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(false);
   });
 });

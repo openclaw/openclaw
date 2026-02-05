@@ -1,9 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
-
 import {
   analyzeArgvCommand,
   analyzeShellCommand,
@@ -29,7 +27,7 @@ function makePathEnv(binDir: string): NodeJS.ProcessEnv {
 }
 
 function makeTempDir() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-exec-approvals-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
 }
 
 describe("exec approvals allowlist matching", () => {
@@ -133,6 +131,54 @@ describe("exec approvals shell parsing", () => {
     expect(res.ok).toBe(true);
     expect(res.segments[0]?.argv).toEqual(["/bin/echo", "ok"]);
   });
+
+  it("rejects command substitution inside double quotes", () => {
+    const res = analyzeShellCommand({ command: 'echo "output: $(whoami)"' });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("unsupported shell token: $()");
+  });
+
+  it("rejects backticks inside double quotes", () => {
+    const res = analyzeShellCommand({ command: 'echo "output: `id`"' });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("unsupported shell token: `");
+  });
+
+  it("rejects command substitution outside quotes", () => {
+    const res = analyzeShellCommand({ command: "echo $(whoami)" });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("unsupported shell token: $()");
+  });
+
+  it("allows escaped command substitution inside double quotes", () => {
+    const res = analyzeShellCommand({ command: 'echo "output: \\$(whoami)"' });
+    expect(res.ok).toBe(true);
+    expect(res.segments[0]?.argv[0]).toBe("echo");
+  });
+
+  it("allows command substitution syntax inside single quotes", () => {
+    const res = analyzeShellCommand({ command: "echo 'output: $(whoami)'" });
+    expect(res.ok).toBe(true);
+    expect(res.segments[0]?.argv[0]).toBe("echo");
+  });
+
+  it("rejects windows shell metacharacters", () => {
+    const res = analyzeShellCommand({
+      command: "ping 127.0.0.1 -n 1 & whoami",
+      platform: "win32",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("unsupported windows shell token: &");
+  });
+
+  it("parses windows quoted executables", () => {
+    const res = analyzeShellCommand({
+      command: '"C:\\Program Files\\Tool\\tool.exe" --version',
+      platform: "win32",
+    });
+    expect(res.ok).toBe(true);
+    expect(res.segments[0]?.argv).toEqual(["C:\\Program Files\\Tool\\tool.exe", "--version"]);
+  });
 });
 
 describe("exec approvals shell allowlist (chained commands)", () => {
@@ -186,6 +232,31 @@ describe("exec approvals shell allowlist (chained commands)", () => {
     });
     expect(result.analysisOk).toBe(true);
     expect(result.allowlistSatisfied).toBe(true);
+  });
+
+  it("respects escaped quotes when splitting chains", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/echo" }];
+    const result = evaluateShellAllowlist({
+      command: '/usr/bin/echo "foo\\" && bar"',
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(true);
+  });
+
+  it("rejects windows chain separators for allowlist analysis", () => {
+    const allowlist: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/ping" }];
+    const result = evaluateShellAllowlist({
+      command: "ping 127.0.0.1 -n 1 & whoami",
+      allowlist,
+      safeBins: new Set(),
+      cwd: "/tmp",
+      platform: "win32",
+    });
+    expect(result.analysisOk).toBe(false);
+    expect(result.allowlistSatisfied).toBe(false);
   });
 });
 
@@ -381,7 +452,7 @@ describe("exec approvals wildcard agent", () => {
     const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(dir);
 
     try {
-      const approvalsPath = path.join(dir, ".clawdbot", "exec-approvals.json");
+      const approvalsPath = path.join(dir, ".openclaw", "exec-approvals.json");
       fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
       fs.writeFileSync(
         approvalsPath,

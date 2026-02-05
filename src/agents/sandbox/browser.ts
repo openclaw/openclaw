@@ -1,6 +1,11 @@
+import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
-import { DEFAULT_CLAWD_BROWSER_COLOR } from "../../browser/constants.js";
+import {
+  DEFAULT_BROWSER_EVALUATE_ENABLED,
+  DEFAULT_OPENCLAW_BROWSER_COLOR,
+  DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+} from "../../browser/constants.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { DEFAULT_SANDBOX_BROWSER_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
@@ -12,7 +17,6 @@ import {
 import { updateBrowserRegistry } from "./registry.js";
 import { slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
-import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 
 async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
@@ -23,7 +27,9 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
       const t = setTimeout(() => ctrl.abort(), 1000);
       try {
         const res = await fetch(url, { signal: ctrl.signal });
-        if (res.ok) return true;
+        if (res.ok) {
+          return true;
+        }
       } finally {
         clearTimeout(t);
       }
@@ -39,28 +45,29 @@ function buildSandboxBrowserResolvedConfig(params: {
   controlPort: number;
   cdpPort: number;
   headless: boolean;
+  evaluateEnabled: boolean;
 }): ResolvedBrowserConfig {
-  const controlHost = "127.0.0.1";
-  const controlUrl = `http://${controlHost}:${params.controlPort}`;
   const cdpHost = "127.0.0.1";
   return {
     enabled: true,
-    controlUrl,
-    controlHost,
+    evaluateEnabled: params.evaluateEnabled,
     controlPort: params.controlPort,
     cdpProtocol: "http",
     cdpHost,
     cdpIsLoopback: true,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,
-    color: DEFAULT_CLAWD_BROWSER_COLOR,
+    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
     executablePath: undefined,
     headless: params.headless,
     noSandbox: false,
     attachOnly: true,
-    defaultProfile: "clawd",
+    defaultProfile: DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
     profiles: {
-      clawd: { cdpPort: params.cdpPort, color: DEFAULT_CLAWD_BROWSER_COLOR },
+      [DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]: {
+        cdpPort: params.cdpPort,
+        color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+      },
     },
   };
 }
@@ -69,7 +76,9 @@ async function ensureSandboxBrowserImage(image: string) {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
   });
-  if (result.code === 0) return;
+  if (result.code === 0) {
+    return;
+  }
   throw new Error(
     `Sandbox browser image not found: ${image}. Build it with scripts/sandbox-browser-setup.sh.`,
   );
@@ -80,9 +89,14 @@ export async function ensureSandboxBrowser(params: {
   workspaceDir: string;
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
+  evaluateEnabled?: boolean;
 }): Promise<SandboxBrowserContext | null> {
-  if (!params.cfg.browser.enabled) return null;
-  if (!isToolAllowed(params.cfg.tools, "browser")) return null;
+  if (!params.cfg.browser.enabled) {
+    return null;
+  }
+  if (!isToolAllowed(params.cfg.tools, "browser")) {
+    return null;
+  }
 
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
   const name = `${params.cfg.browser.containerPrefix}${slug}`;
@@ -94,7 +108,7 @@ export async function ensureSandboxBrowser(params: {
       name: containerName,
       cfg: params.cfg.docker,
       scopeKey: params.scopeKey,
-      labels: { "clawdbot.sandboxBrowser": "1" },
+      labels: { "openclaw.sandboxBrowser": "1" },
     });
     const mainMountSuffix =
       params.cfg.workspaceAccess === "ro" && params.workspaceDir === params.agentWorkspaceDir
@@ -112,11 +126,11 @@ export async function ensureSandboxBrowser(params: {
     if (params.cfg.browser.enableNoVnc && !params.cfg.browser.headless) {
       args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);
     }
-    args.push("-e", `CLAWDBOT_BROWSER_HEADLESS=${params.cfg.browser.headless ? "1" : "0"}`);
-    args.push("-e", `CLAWDBOT_BROWSER_ENABLE_NOVNC=${params.cfg.browser.enableNoVnc ? "1" : "0"}`);
-    args.push("-e", `CLAWDBOT_BROWSER_CDP_PORT=${params.cfg.browser.cdpPort}`);
-    args.push("-e", `CLAWDBOT_BROWSER_VNC_PORT=${params.cfg.browser.vncPort}`);
-    args.push("-e", `CLAWDBOT_BROWSER_NOVNC_PORT=${params.cfg.browser.noVncPort}`);
+    args.push("-e", `OPENCLAW_BROWSER_HEADLESS=${params.cfg.browser.headless ? "1" : "0"}`);
+    args.push("-e", `OPENCLAW_BROWSER_ENABLE_NOVNC=${params.cfg.browser.enableNoVnc ? "1" : "0"}`);
+    args.push("-e", `OPENCLAW_BROWSER_CDP_PORT=${params.cfg.browser.cdpPort}`);
+    args.push("-e", `OPENCLAW_BROWSER_VNC_PORT=${params.cfg.browser.vncPort}`);
+    args.push("-e", `OPENCLAW_BROWSER_NOVNC_PORT=${params.cfg.browser.noVncPort}`);
     args.push(params.cfg.browser.image);
     await execDocker(args);
     await execDocker(["start", containerName]);
@@ -135,7 +149,9 @@ export async function ensureSandboxBrowser(params: {
       : null;
 
   const existing = BROWSER_BRIDGES.get(params.scopeKey);
-  const existingProfile = existing ? resolveProfile(existing.bridge.state.resolved, "clawd") : null;
+  const existingProfile = existing
+    ? resolveProfile(existing.bridge.state.resolved, DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME)
+    : null;
   const shouldReuse =
     existing && existing.containerName === containerName && existingProfile?.cdpPort === mappedCdp;
   if (existing && !shouldReuse) {
@@ -144,12 +160,16 @@ export async function ensureSandboxBrowser(params: {
   }
 
   const bridge = (() => {
-    if (shouldReuse && existing) return existing.bridge;
+    if (shouldReuse && existing) {
+      return existing.bridge;
+    }
     return null;
   })();
 
   const ensureBridge = async () => {
-    if (bridge) return bridge;
+    if (bridge) {
+      return bridge;
+    }
 
     const onEnsureAttachTarget = params.cfg.browser.autoStart
       ? async () => {
@@ -174,6 +194,7 @@ export async function ensureSandboxBrowser(params: {
         controlPort: 0,
         cdpPort: mappedCdp,
         headless: params.cfg.browser.headless,
+        evaluateEnabled: params.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED,
       }),
       onEnsureAttachTarget,
     });
@@ -204,7 +225,7 @@ export async function ensureSandboxBrowser(params: {
       : undefined;
 
   return {
-    controlUrl: resolvedBridge.baseUrl,
+    bridgeUrl: resolvedBridge.baseUrl,
     noVncUrl,
     containerName,
   };

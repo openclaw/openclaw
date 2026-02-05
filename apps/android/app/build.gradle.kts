@@ -8,21 +8,21 @@ plugins {
 }
 
 android {
-  namespace = "com.clawdbot.android"
+  namespace = "ai.openclaw.android"
   compileSdk = 36
 
   sourceSets {
     getByName("main") {
-      assets.srcDir(file("../../shared/ClawdbotKit/Sources/ClawdbotKit/Resources"))
+      assets.srcDir(file("../../shared/OpenClawKit/Sources/OpenClawKit/Resources"))
     }
   }
 
   defaultConfig {
-    applicationId = "com.clawdbot.android"
+    applicationId = "ai.openclaw.android"
     minSdk = 31
     targetSdk = 36
-    versionCode = 202601240
-    versionName = "2026.1.24"
+    versionCode = 202602030
+    versionName = "2026.2.4"
   }
 
   buildTypes {
@@ -65,7 +65,7 @@ androidComponents {
         val versionName = output.versionName.orNull ?: "0"
         val buildType = variant.buildType
 
-        val outputFileName = "clawdbot-${versionName}-${buildType}.apk"
+        val outputFileName = "openclaw-${versionName}-${buildType}.apk"
         output.outputFileName = outputFileName
       }
   }

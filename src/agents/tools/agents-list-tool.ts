@@ -1,5 +1,5 @@
 import { Type } from "@sinclair/typebox";
-
+import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import {
   DEFAULT_AGENT_ID,
@@ -7,7 +7,6 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { resolveAgentConfig } from "../agent-scope.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
@@ -19,7 +18,11 @@ type AgentListEntry = {
   configured: boolean;
 };
 
-export function createAgentsListTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
+export function createAgentsListTool(opts?: {
+  agentSessionKey?: string;
+  /** Explicit agent ID override for cron/hook sessions. */
+  requesterAgentIdOverride?: string;
+}): AnyAgentTool {
   return {
     label: "Agents",
     name: "agents_list",
@@ -37,7 +40,9 @@ export function createAgentsListTool(opts?: { agentSessionKey?: string }): AnyAg
             })
           : alias;
       const requesterAgentId = normalizeAgentId(
-        parseAgentSessionKey(requesterInternalKey)?.agentId ?? DEFAULT_AGENT_ID,
+        opts?.requesterAgentIdOverride ??
+          parseAgentSessionKey(requesterInternalKey)?.agentId ??
+          DEFAULT_AGENT_ID,
       );
 
       const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
@@ -53,20 +58,28 @@ export function createAgentsListTool(opts?: { agentSessionKey?: string }): AnyAg
       const configuredNameMap = new Map<string, string>();
       for (const entry of configuredAgents) {
         const name = entry?.name?.trim() ?? "";
-        if (!name) continue;
+        if (!name) {
+          continue;
+        }
         configuredNameMap.set(normalizeAgentId(entry.id), name);
       }
 
       const allowed = new Set<string>();
       allowed.add(requesterAgentId);
       if (allowAny) {
-        for (const id of configuredIds) allowed.add(id);
+        for (const id of configuredIds) {
+          allowed.add(id);
+        }
       } else {
-        for (const id of allowSet) allowed.add(id);
+        for (const id of allowSet) {
+          allowed.add(id);
+        }
       }
 
       const all = Array.from(allowed);
-      const rest = all.filter((id) => id !== requesterAgentId).sort((a, b) => a.localeCompare(b));
+      const rest = all
+        .filter((id) => id !== requesterAgentId)
+        .toSorted((a, b) => a.localeCompare(b));
       const ordered = [requesterAgentId, ...rest];
       const agents: AgentListEntry[] = ordered.map((id) => ({
         id,

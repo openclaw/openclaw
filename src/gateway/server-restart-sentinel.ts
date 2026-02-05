@@ -1,6 +1,6 @@
+import type { CliDeps } from "../cli/deps.js";
 import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
-import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
@@ -16,7 +16,9 @@ import { loadSessionEntry } from "./session-utils.js";
 
 export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   const sentinel = await consumeRestartSentinel();
-  if (!sentinel) return;
+  if (!sentinel) {
+    return;
+  }
   const payload = sentinel.payload;
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
@@ -28,11 +30,16 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
     return;
   }
 
-  const threadMarker = ":thread:";
-  const threadIndex = sessionKey.lastIndexOf(threadMarker);
-  const baseSessionKey = threadIndex === -1 ? sessionKey : sessionKey.slice(0, threadIndex);
+  // Extract topic/thread ID from sessionKey (supports both :topic: and :thread:)
+  // Telegram uses :topic:, other platforms use :thread:
+  const topicIndex = sessionKey.lastIndexOf(":topic:");
+  const threadIndex = sessionKey.lastIndexOf(":thread:");
+  const markerIndex = Math.max(topicIndex, threadIndex);
+  const marker = topicIndex > threadIndex ? ":topic:" : ":thread:";
+
+  const baseSessionKey = markerIndex === -1 ? sessionKey : sessionKey.slice(0, markerIndex);
   const threadIdRaw =
-    threadIndex === -1 ? undefined : sessionKey.slice(threadIndex + threadMarker.length);
+    markerIndex === -1 ? undefined : sessionKey.slice(markerIndex + marker.length);
   const sessionThreadId = threadIdRaw?.trim() || undefined;
 
   const { cfg, entry } = loadSessionEntry(sessionKey);
@@ -42,7 +49,7 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   // Handles race condition where store wasn't flushed before restart
   const sentinelContext = payload.deliveryContext;
   let sessionDeliveryContext = deliveryContextFromSession(entry);
-  if (!sessionDeliveryContext && threadIndex !== -1 && baseSessionKey) {
+  if (!sessionDeliveryContext && markerIndex !== -1 && baseSessionKey) {
     const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
     sessionDeliveryContext = deliveryContextFromSession(baseEntry);
   }
@@ -74,6 +81,7 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
 
   const threadId =
     payload.threadId ??
+    parsedTarget?.threadId ?? // From resolveAnnounceTargetFromKey (extracts :topic:N)
     sessionThreadId ??
     (origin?.threadId != null ? String(origin.threadId) : undefined);
 

@@ -1,22 +1,24 @@
-// Default service labels (for backward compatibility and when no profile specified)
-export const GATEWAY_LAUNCH_AGENT_LABEL = "com.clawdbot.gateway";
-export const GATEWAY_SYSTEMD_SERVICE_NAME = "clawdbot-gateway";
-export const GATEWAY_WINDOWS_TASK_NAME = "Clawdbot Gateway";
-export const GATEWAY_SERVICE_MARKER = "clawdbot";
+// Default service labels (canonical + legacy compatibility)
+export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
+export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
+export const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
+export const GATEWAY_SERVICE_MARKER = "openclaw";
 export const GATEWAY_SERVICE_KIND = "gateway";
-export const NODE_LAUNCH_AGENT_LABEL = "com.clawdbot.node";
-export const NODE_SYSTEMD_SERVICE_NAME = "clawdbot-node";
-export const NODE_WINDOWS_TASK_NAME = "Clawdbot Node";
-export const NODE_SERVICE_MARKER = "clawdbot";
+export const NODE_LAUNCH_AGENT_LABEL = "ai.openclaw.node";
+export const NODE_SYSTEMD_SERVICE_NAME = "openclaw-node";
+export const NODE_WINDOWS_TASK_NAME = "OpenClaw Node";
+export const NODE_SERVICE_MARKER = "openclaw";
 export const NODE_SERVICE_KIND = "node";
 export const NODE_WINDOWS_TASK_SCRIPT_NAME = "node.cmd";
-export const LEGACY_GATEWAY_LAUNCH_AGENT_LABELS = ["com.steipete.clawdbot.gateway"];
+export const LEGACY_GATEWAY_LAUNCH_AGENT_LABELS: string[] = [];
 export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = [];
 export const LEGACY_GATEWAY_WINDOWS_TASK_NAMES: string[] = [];
 
 export function normalizeGatewayProfile(profile?: string): string | null {
   const trimmed = profile?.trim();
-  if (!trimmed || trimmed.toLowerCase() === "default") return null;
+  if (!trimmed || trimmed.toLowerCase() === "default") {
+    return null;
+  }
   return trimmed;
 }
 
@@ -30,19 +32,28 @@ export function resolveGatewayLaunchAgentLabel(profile?: string): string {
   if (!normalized) {
     return GATEWAY_LAUNCH_AGENT_LABEL;
   }
-  return `com.clawdbot.${normalized}`;
+  return `ai.openclaw.${normalized}`;
+}
+
+export function resolveLegacyGatewayLaunchAgentLabels(profile?: string): string[] {
+  void profile;
+  return [];
 }
 
 export function resolveGatewaySystemdServiceName(profile?: string): string {
   const suffix = resolveGatewayProfileSuffix(profile);
-  if (!suffix) return GATEWAY_SYSTEMD_SERVICE_NAME;
-  return `clawdbot-gateway${suffix}`;
+  if (!suffix) {
+    return GATEWAY_SYSTEMD_SERVICE_NAME;
+  }
+  return `openclaw-gateway${suffix}`;
 }
 
 export function resolveGatewayWindowsTaskName(profile?: string): string {
   const normalized = normalizeGatewayProfile(profile);
-  if (!normalized) return GATEWAY_WINDOWS_TASK_NAME;
-  return `Clawdbot Gateway (${normalized})`;
+  if (!normalized) {
+    return GATEWAY_WINDOWS_TASK_NAME;
+  }
+  return `OpenClaw Gateway (${normalized})`;
 }
 
 export function formatGatewayServiceDescription(params?: {
@@ -52,10 +63,16 @@ export function formatGatewayServiceDescription(params?: {
   const profile = normalizeGatewayProfile(params?.profile);
   const version = params?.version?.trim();
   const parts: string[] = [];
-  if (profile) parts.push(`profile: ${profile}`);
-  if (version) parts.push(`v${version}`);
-  if (parts.length === 0) return "Clawdbot Gateway";
-  return `Clawdbot Gateway (${parts.join(", ")})`;
+  if (profile) {
+    parts.push(`profile: ${profile}`);
+  }
+  if (version) {
+    parts.push(`v${version}`);
+  }
+  if (parts.length === 0) {
+    return "OpenClaw Gateway";
+  }
+  return `OpenClaw Gateway (${parts.join(", ")})`;
 }
 
 export function resolveNodeLaunchAgentLabel(): string {
@@ -72,6 +89,8 @@ export function resolveNodeWindowsTaskName(): string {
 
 export function formatNodeServiceDescription(params?: { version?: string }): string {
   const version = params?.version?.trim();
-  if (!version) return "Clawdbot Node Host";
-  return `Clawdbot Node Host (v${version})`;
+  if (!version) {
+    return "OpenClaw Node Host";
+  }
+  return `OpenClaw Node Host (v${version})`;
 }

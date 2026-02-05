@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "./types.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { applyModelDefaults } from "./defaults.js";
-import type { ClawdbotConfig } from "./types.js";
 
 describe("applyModelDefaults", () => {
   it("adds default aliases when models are present", () => {
@@ -8,15 +9,15 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-5": {},
+            "anthropic/claude-opus-4-6": {},
             "openai/gpt-5.2": {},
           },
         },
       },
-    } satisfies ClawdbotConfig;
+    } satisfies OpenClawConfig;
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe("gpt");
   });
 
@@ -29,7 +30,7 @@ describe("applyModelDefaults", () => {
           },
         },
       },
-    } satisfies ClawdbotConfig;
+    } satisfies OpenClawConfig;
 
     const next = applyModelDefaults(cfg);
 
@@ -46,7 +47,7 @@ describe("applyModelDefaults", () => {
           },
         },
       },
-    } satisfies ClawdbotConfig;
+    } satisfies OpenClawConfig;
 
     const next = applyModelDefaults(cfg);
 
@@ -54,5 +55,29 @@ describe("applyModelDefaults", () => {
     expect(next.agents?.defaults?.models?.["google/gemini-3-flash-preview"]?.alias).toBe(
       "gemini-flash",
     );
+  });
+
+  it("fills missing model provider defaults", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            models: [{ id: "gpt-5.2", name: "GPT-5.2" }],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.reasoning).toBe(false);
+    expect(model?.input).toEqual(["text"]);
+    expect(model?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    expect(model?.contextWindow).toBe(DEFAULT_CONTEXT_TOKENS);
+    expect(model?.maxTokens).toBe(8192);
   });
 });

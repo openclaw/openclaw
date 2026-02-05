@@ -32,19 +32,28 @@ jobs:
           node-version: 22.x
           check-latest: true
 
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
+
       - name: Runtime versions
         run: |
           node -v
           npm -v
+          pnpm -v
 
       - name: Capture node path
         run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
-
-      - name: Enable corepack and pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.23.0 --activate
-          pnpm -v
 
       - name: Install dependencies (frozen)
         env:
@@ -63,14 +72,14 @@ jobs:
       matrix:
         include:
           - runtime: node
+            task: tsgo
+            command: pnpm tsgo
+          - runtime: node
             task: lint
-            command: pnpm lint
+            command: pnpm build && pnpm lint
           - runtime: node
             task: test
-            command: pnpm test
-          - runtime: node
-            task: build
-            command: pnpm build
+            command: pnpm canvas:a2ui:bundle && pnpm test
           - runtime: node
             task: protocol
             command: pnpm protocol:check
@@ -79,10 +88,7 @@ jobs:
             command: pnpm format
           - runtime: bun
             task: test
-            command: bunx vitest run
-          - runtime: bun
-            task: build
-            command: bunx tsc -p tsconfig.json
+            command: pnpm canvas:a2ui:bundle && bunx vitest run
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -108,6 +114,20 @@ jobs:
           node-version: 22.x
           check-latest: true
 
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -118,15 +138,10 @@ jobs:
           node -v
           npm -v
           bun -v
+          pnpm -v
 
       - name: Capture node path
         run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
-
-      - name: Enable corepack and pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.23.0 --activate
-          pnpm -v
 
       - name: Install dependencies
         env:
@@ -168,6 +183,9 @@ jobs:
 
   checks-windows:
     runs-on: blacksmith-4vcpu-windows-2025
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      CLAWDBOT_TEST_WORKERS: 1
     defaults:
       run:
         shell: bash
@@ -176,14 +194,11 @@ jobs:
       matrix:
         include:
           - runtime: node
-            task: lint
-            command: pnpm lint
+            task: build & lint
+            command: pnpm build && pnpm lint
           - runtime: node
             task: test
-            command: pnpm test
-          - runtime: node
-            task: build
-            command: pnpm build
+            command: pnpm canvas:a2ui:bundle && pnpm test
           - runtime: node
             task: protocol
             command: pnpm protocol:check
@@ -212,6 +227,20 @@ jobs:
           node-version: 22.x
           check-latest: true
 
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -222,15 +251,10 @@ jobs:
           node -v
           npm -v
           bun -v
+          pnpm -v
 
       - name: Capture node path
         run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
-
-      - name: Enable corepack and pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.23.0 --activate
-          pnpm -v
 
       - name: Install dependencies
         env:
@@ -279,19 +303,28 @@ jobs:
           node-version: 22.x
           check-latest: true
 
+      - name: Setup pnpm (corepack retry)
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
+
       - name: Runtime versions
         run: |
           node -v
           npm -v
+          pnpm -v
 
       - name: Capture node path
         run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
-
-      - name: Enable corepack and pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.23.0 --activate
-          pnpm -v
 
       - name: Install dependencies
         env:
@@ -304,6 +337,8 @@ jobs:
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
       - name: Run ${{ matrix.task }}
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
         run: ${{ matrix.command }}
 
   macos-app:
@@ -590,6 +625,8 @@ jobs:
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.11.1
 
       - name: Install Android SDK packages
         run: |

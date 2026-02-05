@@ -1,14 +1,15 @@
 ---
-summary: "Use Anthropic Claude via API keys or Claude Code CLI auth in Clawdbot"
+summary: "Use Anthropic Claude via API keys or setup-token in OpenClaw"
 read_when:
-  - You want to use Anthropic models in Clawdbot
-  - You want setup-token or Claude Code CLI auth instead of API keys
+  - You want to use Anthropic models in OpenClaw
+  - You want setup-token instead of API keys
+title: "Anthropic"
 ---
+
 # Anthropic (Claude)
 
 Anthropic builds the **Claude** model family and provides access via an API.
-In Clawdbot you can authenticate with an API key or reuse **Claude Code CLI** credentials
-(setup-token or OAuth).
+In OpenClaw you can authenticate with an API key or a **setup-token**.
 
 ## Option A: Anthropic API key
 
@@ -18,11 +19,11 @@ Create your API key in the Anthropic Console.
 ### CLI setup
 
 ```bash
-clawdbot onboard
+openclaw onboard
 # choose: Anthropic API key
 
 # or non-interactive
-clawdbot onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
+openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```
 
 ### Config snippet
@@ -30,37 +31,57 @@ clawdbot onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
 ```json5
 {
   env: { ANTHROPIC_API_KEY: "sk-ant-..." },
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } }
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```
 
 ## Prompt caching (Anthropic API)
 
-Clawdbot does **not** override Anthropic’s default cache TTL unless you set it.
-This is **API-only**; Claude Code CLI OAuth ignores TTL settings.
+OpenClaw supports Anthropic's prompt caching feature. This is **API-only**; subscription auth does not honor cache settings.
 
-To set the TTL per model, use `cacheControlTtl` in the model `params`:
+### Configuration
+
+Use the `cacheRetention` parameter in your model config:
+
+| Value   | Cache Duration | Description                         |
+| ------- | -------------- | ----------------------------------- |
+| `none`  | No caching     | Disable prompt caching              |
+| `short` | 5 minutes      | Default for API Key auth            |
+| `long`  | 1 hour         | Extended cache (requires beta flag) |
 
 ```json5
 {
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-opus-4-5": {
-          params: { cacheControlTtl: "5m" } // or "1h"
-        }
-      }
-    }
-  }
+        "anthropic/claude-opus-4-6": {
+          params: { cacheRetention: "long" },
+        },
+      },
+    },
+  },
 }
 ```
 
-Clawdbot includes the `extended-cache-ttl-2025-04-11` beta flag for Anthropic API
+### Defaults
+
+When using Anthropic API Key authentication, OpenClaw automatically applies `cacheRetention: "short"` (5-minute cache) for all Anthropic models. You can override this by explicitly setting `cacheRetention` in your config.
+
+### Legacy parameter
+
+The older `cacheControlTtl` parameter is still supported for backwards compatibility:
+
+- `"5m"` maps to `short`
+- `"1h"` maps to `long`
+
+We recommend migrating to the new `cacheRetention` parameter.
+
+OpenClaw includes the `extended-cache-ttl-2025-04-11` beta flag for Anthropic API
 requests; keep it if you override provider headers (see [/gateway/configuration](/gateway/configuration)).
 
-## Option B: Claude Code CLI (setup-token or OAuth)
+## Option B: Claude setup-token
 
-**Best for:** using your Claude subscription or existing Claude Code CLI login.
+**Best for:** using your Claude subscription.
 
 ### Where to get a setup-token
 
@@ -70,38 +91,62 @@ Setup-tokens are created by the **Claude Code CLI**, not the Anthropic Console. 
 claude setup-token
 ```
 
-Paste the token into Clawdbot (wizard: **Anthropic token (paste setup-token)**), or run it on the gateway host:
+Paste the token into OpenClaw (wizard: **Anthropic token (paste setup-token)**), or run it on the gateway host:
 
 ```bash
-clawdbot models auth setup-token --provider anthropic
+openclaw models auth setup-token --provider anthropic
 ```
 
 If you generated the token on a different machine, paste it:
 
 ```bash
-clawdbot models auth paste-token --provider anthropic
+openclaw models auth paste-token --provider anthropic
 ```
 
 ### CLI setup
 
 ```bash
-# Reuse Claude Code CLI OAuth credentials if already logged in
-clawdbot onboard --auth-choice claude-cli
+# Paste a setup-token during onboarding
+openclaw onboard --auth-choice setup-token
 ```
 
 ### Config snippet
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } }
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```
 
 ## Notes
 
-- Generate the setup-token with `claude setup-token` and paste it, or run `clawdbot models auth setup-token` on the gateway host.
-- If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token or resync Claude Code CLI OAuth on the gateway host. See [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
-- Clawdbot writes `auth.profiles["anthropic:claude-cli"].mode` as `"oauth"` so the profile
-  accepts both OAuth and setup-token credentials. Older configs using `"token"` are
-  auto-migrated on load.
+- Generate the setup-token with `claude setup-token` and paste it, or run `openclaw models auth setup-token` on the gateway host.
+- If you see “OAuth token refresh failed …” on a Claude subscription, re-auth with a setup-token. See [/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription](/gateway/troubleshooting#oauth-token-refresh-failed-anthropic-claude-subscription).
 - Auth details + reuse rules are in [/concepts/oauth](/concepts/oauth).
+
+## Troubleshooting
+
+**401 errors / token suddenly invalid**
+
+- Claude subscription auth can expire or be revoked. Re-run `claude setup-token`
+  and paste it into the **gateway host**.
+- If the Claude CLI login lives on a different machine, use
+  `openclaw models auth paste-token --provider anthropic` on the gateway host.
+
+**No API key found for provider "anthropic"**
+
+- Auth is **per agent**. New agents don’t inherit the main agent’s keys.
+- Re-run onboarding for that agent, or paste a setup-token / API key on the
+  gateway host, then verify with `openclaw models status`.
+
+**No credentials found for profile `anthropic:default`**
+
+- Run `openclaw models status` to see which auth profile is active.
+- Re-run onboarding, or paste a setup-token / API key for that profile.
+
+**No available auth profile (all in cooldown/unavailable)**
+
+- Check `openclaw models status --json` for `auth.unusableProfiles`.
+- Add another Anthropic profile or wait for cooldown.
+
+More: [/gateway/troubleshooting](/gateway/troubleshooting) and [/help/faq](/help/faq).

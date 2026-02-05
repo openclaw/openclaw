@@ -1,15 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import { formatAssistantErrorText } from "./pi-embedded-helpers.js";
-import { DEFAULT_AGENTS_FILENAME } from "./workspace.js";
+import { BILLING_ERROR_USER_MESSAGE, formatAssistantErrorText } from "./pi-embedded-helpers.js";
 
-const _makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstrapFile => ({
-  name: DEFAULT_AGENTS_FILENAME,
-  path: "/tmp/AGENTS.md",
-  content: "",
-  missing: false,
-  ...overrides,
-});
 describe("formatAssistantErrorText", () => {
   const makeAssistantError = (errorMessage: string): AssistantMessage =>
     ({
@@ -19,6 +11,16 @@ describe("formatAssistantErrorText", () => {
 
   it("returns a friendly message for context overflow", () => {
     const msg = makeAssistantError("request_too_large");
+    expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
+  it("returns context overflow for Anthropic 'Request size exceeds model context window'", () => {
+    // This is the new Anthropic error format that wasn't being detected.
+    // Without the fix, this falls through to the invalidRequest regex and returns
+    // "LLM request rejected: Request size exceeds model context window"
+    // instead of the context overflow message, preventing auto-compaction.
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
+    );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
   it("returns a friendly message for Anthropic role ordering", () => {
@@ -33,6 +35,12 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("returns a recovery hint when tool call input is missing", () => {
+    const msg = makeAssistantError("tool_use.input: Field required");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Session history looks corrupted");
+    expect(result).toContain("/new");
+  });
   it("handles JSON-wrapped role errors", () => {
     const msg = makeAssistantError('{"error":{"message":"400 Incorrect role information"}}');
     const result = formatAssistantErrorText(msg);
@@ -44,5 +52,20 @@ describe("formatAssistantErrorText", () => {
       '{"type":"error","error":{"message":"Something exploded","type":"server_error"}}',
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
+  it("returns a friendly billing message for credit balance errors", () => {
+    const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+  });
+  it("returns a friendly billing message for HTTP 402 errors", () => {
+    const msg = makeAssistantError("HTTP 402 Payment Required");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
+  });
+  it("returns a friendly billing message for insufficient credits", () => {
+    const msg = makeAssistantError("insufficient credits");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
 });

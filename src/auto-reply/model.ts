@@ -11,10 +11,12 @@ export function extractModelDirective(
   rawProfile?: string;
   hasDirective: boolean;
 } {
-  if (!body) return { cleaned: "", hasDirective: false };
+  if (!body) {
+    return { cleaned: "", hasDirective: false };
+  }
 
   const modelMatch = body.match(
-    /(?:^|\s)\/models?(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?/i,
+    /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?/i,
   );
 
   const aliases = (options?.aliases ?? []).map((alias) => alias.trim()).filter(Boolean);

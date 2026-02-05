@@ -1,14 +1,23 @@
 import crypto from "node:crypto";
-
-import { TerminalStates, type CallId, type CallRecord, type OutboundCallOptions } from "../types.js";
 import type { CallMode } from "../config.js";
-import { mapVoiceToPolly } from "../voice-mapping.js";
 import type { CallManagerContext } from "./context.js";
+import {
+  TerminalStates,
+  type CallId,
+  type CallRecord,
+  type OutboundCallOptions,
+} from "../types.js";
+import { mapVoiceToPolly } from "../voice-mapping.js";
 import { getCallByProviderCallId } from "./lookup.js";
-import { generateNotifyTwiml } from "./twiml.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import { clearMaxDurationTimer, clearTranscriptWaiter, rejectTranscriptWaiter, waitForFinalTranscript } from "./timers.js";
+import {
+  clearMaxDurationTimer,
+  clearTranscriptWaiter,
+  rejectTranscriptWaiter,
+  waitForFinalTranscript,
+} from "./timers.js";
+import { generateNotifyTwiml } from "./twiml.js";
 
 export async function initiateCall(
   ctx: CallManagerContext,
@@ -38,8 +47,7 @@ export async function initiateCall(
 
   const callId = crypto.randomUUID();
   const from =
-    ctx.config.fromNumber ||
-    (ctx.provider?.name === "mock" ? "+15550000000" : undefined);
+    ctx.config.fromNumber || (ctx.provider?.name === "mock" ? "+15550000000" : undefined);
   if (!from) {
     return { callId: "", success: false, error: "fromNumber not configured" };
   }
@@ -68,7 +76,7 @@ export async function initiateCall(
     // For notify mode with a message, use inline TwiML with <Say>.
     let inlineTwiml: string | undefined;
     if (mode === "notify" && initialMessage) {
-      const pollyVoice = mapVoiceToPolly(ctx.config.tts.voice);
+      const pollyVoice = mapVoiceToPolly(ctx.config.tts?.openai?.voice);
       inlineTwiml = generateNotifyTwiml(initialMessage, pollyVoice);
       console.log(`[voice-call] Using inline TwiML for notify mode (voice: ${pollyVoice})`);
     }
@@ -110,9 +118,15 @@ export async function speak(
   text: string,
 ): Promise<{ success: boolean; error?: string }> {
   const call = ctx.activeCalls.get(callId);
-  if (!call) return { success: false, error: "Call not found" };
-  if (!ctx.provider || !call.providerCallId) return { success: false, error: "Call not connected" };
-  if (TerminalStates.has(call.state)) return { success: false, error: "Call has ended" };
+  if (!call) {
+    return { success: false, error: "Call not found" };
+  }
+  if (!ctx.provider || !call.providerCallId) {
+    return { success: false, error: "Call not connected" };
+  }
+  if (TerminalStates.has(call.state)) {
+    return { success: false, error: "Call has ended" };
+  }
 
   try {
     transitionState(call, "speaking");
@@ -120,11 +134,12 @@ export async function speak(
 
     addTranscriptEntry(call, "bot", text);
 
+    const voice = ctx.provider?.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
     await ctx.provider.playTts({
       callId,
       providerCallId: call.providerCallId,
       text,
-      voice: ctx.config.tts.voice,
+      voice,
     });
 
     return { success: true };
@@ -187,9 +202,15 @@ export async function continueCall(
   prompt: string,
 ): Promise<{ success: boolean; transcript?: string; error?: string }> {
   const call = ctx.activeCalls.get(callId);
-  if (!call) return { success: false, error: "Call not found" };
-  if (!ctx.provider || !call.providerCallId) return { success: false, error: "Call not connected" };
-  if (TerminalStates.has(call.state)) return { success: false, error: "Call has ended" };
+  if (!call) {
+    return { success: false, error: "Call not found" };
+  }
+  if (!ctx.provider || !call.providerCallId) {
+    return { success: false, error: "Call not connected" };
+  }
+  if (TerminalStates.has(call.state)) {
+    return { success: false, error: "Call has ended" };
+  }
 
   try {
     await speak(ctx, callId, prompt);
@@ -217,9 +238,15 @@ export async function endCall(
   callId: CallId,
 ): Promise<{ success: boolean; error?: string }> {
   const call = ctx.activeCalls.get(callId);
-  if (!call) return { success: false, error: "Call not found" };
-  if (!ctx.provider || !call.providerCallId) return { success: false, error: "Call not connected" };
-  if (TerminalStates.has(call.state)) return { success: true };
+  if (!call) {
+    return { success: false, error: "Call not found" };
+  }
+  if (!ctx.provider || !call.providerCallId) {
+    return { success: false, error: "Call not connected" };
+  }
+  if (TerminalStates.has(call.state)) {
+    return { success: true };
+  }
 
   try {
     await ctx.provider.hangupCall({
@@ -237,11 +264,12 @@ export async function endCall(
     rejectTranscriptWaiter(ctx, callId, "Call ended: hangup-bot");
 
     ctx.activeCalls.delete(callId);
-    if (call.providerCallId) ctx.providerCallIdMap.delete(call.providerCallId);
+    if (call.providerCallId) {
+      ctx.providerCallIdMap.delete(call.providerCallId);
+    }
 
     return { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
-

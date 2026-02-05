@@ -1,13 +1,14 @@
+import type { ChannelOutboundAdapter } from "../types.js";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import { shouldLogVerbose } from "../../../globals.js";
+import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 import { sendPollWhatsApp } from "../../../web/outbound.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../../whatsapp/normalize.js";
-import type { ChannelOutboundAdapter } from "../types.js";
-import { missingTargetError } from "../../../infra/outbound/target-errors.js";
 
 export const whatsappOutbound: ChannelOutboundAdapter = {
   deliveryMode: "gateway",
   chunker: chunkText,
+  chunkerMode: "text",
   textChunkLimit: 4000,
   pollMaxOptions: 12,
   resolveTarget: ({ to, allowFrom, mode }) => {

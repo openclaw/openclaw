@@ -8,8 +8,10 @@ import {
   imessageOnboardingAdapter,
   IMessageConfigSchema,
   listIMessageAccountIds,
+  looksLikeIMessageTargetId,
   migrateBaseNameToDefaultAccount,
   normalizeAccountId,
+  normalizeIMessageMessagingTarget,
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveDefaultIMessageAccountId,
@@ -19,8 +21,7 @@ import {
   setAccountEnabledInConfigSection,
   type ChannelPlugin,
   type ResolvedIMessageAccount,
-} from "clawdbot/plugin-sdk";
-
+} from "openclaw/plugin-sdk";
 import { getIMessageRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("imessage");
@@ -36,10 +37,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   pairing: {
     idLabel: "imessageSenderId",
     notifyApproval: async ({ id }) => {
-      await getIMessageRuntime().channel.imessage.sendMessageIMessage(
-        id,
-        PAIRING_APPROVED_MESSAGE,
-      );
+      await getIMessageRuntime().channel.imessage.sendMessageIMessage(id, PAIRING_APPROVED_MESSAGE);
     },
   },
   capabilities: {
@@ -99,7 +97,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     collectWarnings: ({ account, cfg }) => {
       const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
       const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
-      if (groupPolicy !== "open") return [];
+      if (groupPolicy !== "open") {
+        return [];
+      }
       return [
         `- iMessage groups: groupPolicy="open" allows any member to trigger the bot. Set channels.imessage.groupPolicy="allowlist" + channels.imessage.groupAllowFrom to restrict senders.`,
       ];
@@ -110,14 +110,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     resolveToolPolicy: resolveIMessageGroupToolPolicy,
   },
   messaging: {
+    normalizeTarget: normalizeIMessageMessagingTarget,
     targetResolver: {
-      looksLikeId: (raw) => {
-        const trimmed = raw.trim();
-        if (!trimmed) return false;
-        if (/^(imessage:|chat_id:)/i.test(trimmed)) return true;
-        if (trimmed.includes("@")) return true;
-        return /^\+?\d{3,}$/.test(trimmed);
-      },
+      looksLikeId: looksLikeIMessageTargetId,
       hint: "<handle|chat_id:ID>",
     },
   },
@@ -186,6 +181,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
   outbound: {
     deliveryMode: "direct",
     chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
+    chunkerMode: "text",
     textChunkLimit: 4000,
     sendText: async ({ cfg, to, text, accountId, deps }) => {
       const send = deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
@@ -232,7 +228,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     collectStatusIssues: (accounts) =>
       accounts.flatMap((account) => {
         const lastError = typeof account.lastError === "string" ? account.lastError.trim() : "";
-        if (!lastError) return [];
+        if (!lastError) {
+          return [];
+        }
         return [
           {
             channel: "imessage",

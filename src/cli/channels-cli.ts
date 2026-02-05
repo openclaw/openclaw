@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import { formatCliChannelOptions } from "./channel-options.js";
 import {
   channelsAddCommand,
   channelsCapabilitiesCommand,
@@ -14,6 +13,7 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
+import { formatCliChannelOptions } from "./channel-options.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
 
@@ -35,6 +35,9 @@ const optionNamesAdd = [
   "httpHost",
   "httpPort",
   "webhookPath",
+  "webhookUrl",
+  "audienceType",
+  "audience",
   "useEnv",
   "homeserver",
   "userId",
@@ -73,7 +76,7 @@ export function registerChannelsCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink(
           "/cli/channels",
-          "docs.clawd.bot/cli/channels",
+          "docs.openclaw.ai/cli/channels",
         )}\n`,
     );
 
@@ -168,7 +171,10 @@ export function registerChannelsCli(program: Command) {
     .option("--http-url <url>", "Signal HTTP daemon base URL")
     .option("--http-host <host>", "Signal HTTP host")
     .option("--http-port <port>", "Signal HTTP port")
-    .option("--webhook-path <path>", "BlueBubbles webhook path")
+    .option("--webhook-path <path>", "Webhook path (Google Chat/BlueBubbles)")
+    .option("--webhook-url <url>", "Google Chat webhook URL")
+    .option("--audience-type <type>", "Google Chat audience type (app-url|project-number)")
+    .option("--audience <value>", "Google Chat audience value (app URL or project number)")
     .option("--homeserver <url>", "Matrix homeserver URL")
     .option("--user-id <id>", "Matrix user ID")
     .option("--access-token <token>", "Matrix access token")

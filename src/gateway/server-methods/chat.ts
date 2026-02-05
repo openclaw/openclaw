@@ -1,19 +1,15 @@
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveEffectiveMessagesConfig, resolveIdentityName } from "../../agents/identity.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import {
-  extractShortModelName,
-  type ResponsePrefixContext,
-} from "../../auto-reply/reply/response-prefix-template.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
+import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
@@ -23,6 +19,8 @@ import {
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -39,9 +37,8 @@ import {
   readSessionMessages,
   resolveSessionModelRef,
 } from "../session-utils.js";
-import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 
 type TranscriptAppendResult = {
   ok: boolean;
@@ -56,8 +53,12 @@ function resolveTranscriptPath(params: {
   sessionFile?: string;
 }): string | null {
   const { sessionId, storePath, sessionFile } = params;
-  if (sessionFile) return sessionFile;
-  if (!storePath) return null;
+  if (sessionFile) {
+    return sessionFile;
+  }
+  if (!storePath) {
+    return null;
+  }
   return path.join(path.dirname(storePath), `${sessionId}.jsonl`);
 }
 
@@ -65,7 +66,9 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
   ok: boolean;
   error?: string;
 } {
-  if (fs.existsSync(params.transcriptPath)) return { ok: true };
+  if (fs.existsSync(params.transcriptPath)) {
+    return { ok: true };
+  }
   try {
     fs.mkdirSync(path.dirname(params.transcriptPath), { recursive: true });
     const header = {
@@ -214,7 +217,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       if (configured) {
         thinkingLevel = configured;
       } else {
-        const { provider, model } = resolveSessionModelRef(cfg, entry);
+        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+        const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const catalog = await context.loadGatewayModelCatalog();
         thinkingLevel = resolveThinkingDefault({
           cfg,
@@ -224,11 +228,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         });
       }
     }
+    const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     respond(true, {
       sessionKey,
       sessionId,
       messages: capped,
       thinkingLevel,
+      verboseLevel,
     });
   },
   "chat.abort": ({ params, respond, context }) => {
@@ -338,6 +344,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                 : undefined,
         }))
         .filter((a) => a.content) ?? [];
+    const rawMessage = p.message.trim();
+    if (!rawMessage && normalizedAttachments.length === 0) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "message or attachment required"),
+      );
+      return;
+    }
     let parsedMessage = p.message;
     let parsedImages: ChatImageContent[] = [];
     if (normalizedAttachments.length > 0) {
@@ -421,7 +436,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         startedAtMs: now,
         expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
       });
-
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
@@ -434,9 +448,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
       const clientInfo = client?.connect?.client;
+      // Inject timestamp so agents know the current date/time.
+      // Only BodyForAgent gets the timestamp — Body stays raw for UI display.
+      // See: https://github.com/moltbot/moltbot/issues/3658
+      const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
+
       const ctx: MsgContext = {
         Body: parsedMessage,
-        BodyForAgent: parsedMessage,
+        BodyForAgent: stampedMessage,
         BodyForCommands: commandBody,
         RawBody: parsedMessage,
         CommandBody: commandBody,
@@ -450,26 +469,32 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderId: clientInfo?.id,
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
+        GatewayClientScopes: client?.connect?.scopes,
       };
 
       const agentId = resolveSessionAgentId({
         sessionKey: p.sessionKey,
         config: cfg,
       });
-      let prefixContext: ResponsePrefixContext = {
-        identityName: resolveIdentityName(cfg, agentId),
-      };
+      const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+        cfg,
+        agentId,
+        channel: INTERNAL_MESSAGE_CHANNEL,
+      });
       const finalReplyParts: string[] = [];
       const dispatcher = createReplyDispatcher({
-        responsePrefix: resolveEffectiveMessagesConfig(cfg, agentId).responsePrefix,
-        responsePrefixContextProvider: () => prefixContext,
+        ...prefixOptions,
         onError: (err) => {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
-          if (info.kind !== "final") return;
+          if (info.kind !== "final") {
+            return;
+          }
           const text = payload.text?.trim() ?? "";
-          if (!text) return;
+          if (!text) {
+            return;
+          }
           finalReplyParts.push(text);
         },
       });
@@ -484,15 +509,18 @@ export const chatHandlers: GatewayRequestHandlers = {
           abortSignal: abortController.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
           disableBlockStreaming: true,
-          onAgentRunStart: () => {
+          onAgentRunStart: (runId) => {
             agentRunStarted = true;
+            const connId = typeof client?.connId === "string" ? client.connId : undefined;
+            const wantsToolEvents = hasGatewayClientCap(
+              client?.connect?.caps,
+              GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+            );
+            if (connId && wantsToolEvents) {
+              context.registerToolEventRecipient(runId, connId);
+            }
           },
-          onModelSelected: (ctx) => {
-            prefixContext.provider = ctx.provider;
-            prefixContext.model = extractShortModelName(ctx.model);
-            prefixContext.modelFull = `${ctx.provider}/${ctx.model}`;
-            prefixContext.thinkingLevel = ctx.thinkLevel ?? "off";
-          },
+          onModelSelected,
         },
       })
         .then(() => {

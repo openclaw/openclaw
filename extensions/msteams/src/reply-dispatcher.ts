@@ -1,14 +1,16 @@
 import {
-  createReplyPrefixContext,
+  createReplyPrefixOptions,
   createTypingCallbacks,
   logTypingFailure,
   resolveChannelMediaMaxBytes,
-  type ClawdbotConfig,
+  type OpenClawConfig,
   type MSTeamsReplyStyle,
   type RuntimeEnv,
-} from "clawdbot/plugin-sdk";
+} from "openclaw/plugin-sdk";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
+import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import type { MSTeamsTurnContext } from "./sdk-types.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -19,13 +21,12 @@ import {
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
-import type { MSTeamsMonitorLogger } from "./monitor-types.js";
-import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
 export function createMSTeamsReplyDispatcher(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   agentId: string;
+  accountId?: string;
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
   adapter: MSTeamsAdapter;
@@ -42,7 +43,7 @@ export function createMSTeamsReplyDispatcher(params: {
 }) {
   const core = getMSTeamsRuntime();
   const sendTypingIndicator = async () => {
-    await params.context.sendActivities([{ type: "typing" }]);
+    await params.context.sendActivity({ type: "typing" });
   };
   const typingCallbacks = createTypingCallbacks({
     start: sendTypingIndicator,
@@ -55,51 +56,56 @@ export function createMSTeamsReplyDispatcher(params: {
       });
     },
   });
-  const prefixContext = createReplyPrefixContext({
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg: params.cfg,
     agentId: params.agentId,
+    channel: "msteams",
+    accountId: params.accountId,
   });
+  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "msteams");
 
   const { dispatcher, replyOptions, markDispatchIdle } =
     core.channel.reply.createReplyDispatcherWithTyping({
-      responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      ...prefixOptions,
       humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
       deliver: async (payload) => {
         const tableMode = core.channel.text.resolveMarkdownTableMode({
           cfg: params.cfg,
           channel: "msteams",
-      });
-      const messages = renderReplyPayloadsToMessages([payload], {
-        textChunkLimit: params.textLimit,
-        chunkText: true,
-        mediaMode: "split",
-        tableMode,
-      });
-      const mediaMaxBytes = resolveChannelMediaMaxBytes({
-        cfg: params.cfg,
-        resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
-      });
-      const ids = await sendMSTeamsMessages({
-        replyStyle: params.replyStyle,
-        adapter: params.adapter,
-        appId: params.appId,
-        conversationRef: params.conversationRef,
-        context: params.context,
-        messages,
-        // Enable default retry/backoff for throttling/transient failures.
-        retry: {},
-        onRetry: (event) => {
-          params.log.debug("retrying send", {
-            replyStyle: params.replyStyle,
-            ...event,
-          });
-        },
-        tokenProvider: params.tokenProvider,
-        sharePointSiteId: params.sharePointSiteId,
-        mediaMaxBytes,
-      });
-      if (ids.length > 0) params.onSentMessageIds?.(ids);
+        });
+        const messages = renderReplyPayloadsToMessages([payload], {
+          textChunkLimit: params.textLimit,
+          chunkText: true,
+          mediaMode: "split",
+          tableMode,
+          chunkMode,
+        });
+        const mediaMaxBytes = resolveChannelMediaMaxBytes({
+          cfg: params.cfg,
+          resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
+        });
+        const ids = await sendMSTeamsMessages({
+          replyStyle: params.replyStyle,
+          adapter: params.adapter,
+          appId: params.appId,
+          conversationRef: params.conversationRef,
+          context: params.context,
+          messages,
+          // Enable default retry/backoff for throttling/transient failures.
+          retry: {},
+          onRetry: (event) => {
+            params.log.debug("retrying send", {
+              replyStyle: params.replyStyle,
+              ...event,
+            });
+          },
+          tokenProvider: params.tokenProvider,
+          sharePointSiteId: params.sharePointSiteId,
+          mediaMaxBytes,
+        });
+        if (ids.length > 0) {
+          params.onSentMessageIds?.(ids);
+        }
       },
       onError: (err, info) => {
         const errMsg = formatUnknownError(err);
@@ -120,7 +126,7 @@ export function createMSTeamsReplyDispatcher(params: {
 
   return {
     dispatcher,
-    replyOptions: { ...replyOptions, onModelSelected: prefixContext.onModelSelected },
+    replyOptions: { ...replyOptions, onModelSelected },
     markDispatchIdle,
   };
 }

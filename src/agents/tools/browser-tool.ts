@@ -1,3 +1,13 @@
+import crypto from "node:crypto";
+import {
+  browserAct,
+  browserArmDialog,
+  browserArmFileChooser,
+  browserConsoleMessages,
+  browserNavigate,
+  browserPdfSave,
+  browserScreenshotAction,
+} from "../../browser/client-actions.js";
 import {
   browserCloseTab,
   browserFocusTab,
@@ -9,25 +19,14 @@ import {
   browserStop,
   browserTabs,
 } from "../../browser/client.js";
-import {
-  browserAct,
-  browserArmDialog,
-  browserArmFileChooser,
-  browserConsoleMessages,
-  browserNavigate,
-  browserPdfSave,
-  browserScreenshotAction,
-} from "../../browser/client-actions.js";
-import crypto from "node:crypto";
-
 import { resolveBrowserConfig } from "../../browser/config.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { loadConfig } from "../../config/config.js";
 import { saveMediaBuffer } from "../../media/store.js";
-import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
 import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
+import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
 
 type BrowserProxyFile = {
   path: string;
@@ -55,9 +54,8 @@ function isBrowserNode(node: NodeListNode) {
 
 async function resolveBrowserNodeTarget(params: {
   requestedNode?: string;
-  target?: "sandbox" | "host" | "custom" | "node";
-  controlUrl?: string;
-  defaultControlUrl?: string;
+  target?: "sandbox" | "host" | "node";
+  sandboxBridgeUrl?: string;
 }): Promise<BrowserNodeTarget | null> {
   const cfg = loadConfig();
   const policy = cfg.gateway?.nodes?.browser;
@@ -68,11 +66,12 @@ async function resolveBrowserNodeTarget(params: {
     }
     return null;
   }
-  if (params.defaultControlUrl?.trim() && params.target !== "node" && !params.requestedNode) {
+  if (params.sandboxBridgeUrl?.trim() && params.target !== "node" && !params.requestedNode) {
     return null;
   }
-  if (params.controlUrl?.trim()) return null;
-  if (params.target && params.target !== "node") return null;
+  if (params.target && params.target !== "node") {
+    return null;
+  }
   if (mode === "manual" && params.target !== "node" && !params.requestedNode) {
     return null;
   }
@@ -95,7 +94,7 @@ async function resolveBrowserNodeTarget(params: {
 
   if (params.target === "node") {
     if (browserNodes.length === 1) {
-      const node = browserNodes[0]!;
+      const node = browserNodes[0];
       return { nodeId: node.nodeId, label: node.displayName ?? node.remoteIp ?? node.nodeId };
     }
     throw new Error(
@@ -103,10 +102,12 @@ async function resolveBrowserNodeTarget(params: {
     );
   }
 
-  if (mode === "manual") return null;
+  if (mode === "manual") {
+    return null;
+  }
 
   if (browserNodes.length === 1) {
-    const node = browserNodes[0]!;
+    const node = browserNodes[0];
     return { nodeId: node.nodeId, label: node.displayName ?? node.remoteIp ?? node.nodeId };
   }
   return null;
@@ -125,7 +126,7 @@ async function callBrowserProxy(params: {
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
       ? Math.max(1, Math.floor(params.timeoutMs))
       : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
-  const payload = (await callGatewayTool(
+  const payload = await callGatewayTool<{ payloadJSON?: string; payload?: string }>(
     "node.invoke",
     { timeoutMs: gatewayTimeoutMs },
     {
@@ -141,24 +142,22 @@ async function callBrowserProxy(params: {
       },
       idempotencyKey: crypto.randomUUID(),
     },
-  )) as {
-    ok?: boolean;
-    payload?: BrowserProxyResult;
-    payloadJSON?: string | null;
-  };
+  );
   const parsed =
     payload?.payload ??
     (typeof payload?.payloadJSON === "string" && payload.payloadJSON
       ? (JSON.parse(payload.payloadJSON) as BrowserProxyResult)
       : null);
-  if (!parsed || typeof parsed !== "object") {
+  if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
     throw new Error("browser proxy failed");
   }
   return parsed;
 }
 
 async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
-  if (!files || files.length === 0) return new Map<string, string>();
+  if (!files || files.length === 0) {
+    return new Map<string, string>();
+  }
   const mapping = new Map<string, string>();
   for (const file of files) {
     const buffer = Buffer.from(file.base64, "base64");
@@ -169,7 +168,9 @@ async function persistProxyFiles(files: BrowserProxyFile[] | undefined) {
 }
 
 function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
-  if (!result || typeof result !== "object") return;
+  if (!result || typeof result !== "object") {
+    return;
+  }
   const obj = result as Record<string, unknown>;
   if (typeof obj.path === "string" && mapping.has(obj.path)) {
     obj.path = mapping.get(obj.path);
@@ -187,70 +188,22 @@ function applyProxyPaths(result: unknown, mapping: Map<string, string>) {
 }
 
 function resolveBrowserBaseUrl(params: {
-  target?: "sandbox" | "host" | "custom";
-  controlUrl?: string;
-  defaultControlUrl?: string;
+  target?: "sandbox" | "host";
+  sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
-  allowedControlUrls?: string[];
-  allowedControlHosts?: string[];
-  allowedControlPorts?: number[];
-}) {
+}): string | undefined {
   const cfg = loadConfig();
-  const resolved = resolveBrowserConfig(cfg.browser);
-  const normalizedControlUrl = params.controlUrl?.trim() ?? "";
-  const normalizedDefault = params.defaultControlUrl?.trim() ?? "";
-  const target =
-    params.target ?? (normalizedControlUrl ? "custom" : normalizedDefault ? "sandbox" : "host");
-
-  const assertAllowedControlUrl = (url: string) => {
-    const allowedUrls = params.allowedControlUrls?.map((entry) => entry.trim().replace(/\/$/, ""));
-    const allowedHosts = params.allowedControlHosts?.map((entry) => entry.trim().toLowerCase());
-    const allowedPorts = params.allowedControlPorts;
-    if (!allowedUrls?.length && !allowedHosts?.length && !allowedPorts?.length) {
-      return;
-    }
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      throw new Error(`Invalid browser controlUrl: ${url}`);
-    }
-    const normalizedUrl = parsed.toString().replace(/\/$/, "");
-    if (allowedUrls?.length && !allowedUrls.includes(normalizedUrl)) {
-      throw new Error("Browser controlUrl is not in the allowed URL list.");
-    }
-    if (allowedHosts?.length && !allowedHosts.includes(parsed.hostname)) {
-      throw new Error("Browser controlUrl hostname is not in the allowed host list.");
-    }
-    if (allowedPorts?.length) {
-      const port =
-        parsed.port?.trim() !== "" ? Number(parsed.port) : parsed.protocol === "https:" ? 443 : 80;
-      if (!Number.isFinite(port) || !allowedPorts.includes(port)) {
-        throw new Error("Browser controlUrl port is not in the allowed port list.");
-      }
-    }
-  };
-
-  if (target !== "custom" && params.target && normalizedControlUrl) {
-    throw new Error('controlUrl is only supported with target="custom".');
-  }
-
-  if (target === "custom") {
-    if (!normalizedControlUrl) {
-      throw new Error("Custom browser target requires controlUrl.");
-    }
-    const normalized = normalizedControlUrl.replace(/\/$/, "");
-    assertAllowedControlUrl(normalized);
-    return normalized;
-  }
+  const resolved = resolveBrowserConfig(cfg.browser, cfg);
+  const normalizedSandbox = params.sandboxBridgeUrl?.trim() ?? "";
+  const target = params.target ?? (normalizedSandbox ? "sandbox" : "host");
 
   if (target === "sandbox") {
-    if (!normalizedDefault) {
+    if (!normalizedSandbox) {
       throw new Error(
         'Sandbox browser is unavailable. Enable agents.defaults.sandbox.browser.enabled or use target="host" if allowed.',
       );
     }
-    return normalizedDefault.replace(/\/$/, "");
+    return normalizedSandbox.replace(/\/$/, "");
   }
 
   if (params.allowHostControl === false) {
@@ -258,69 +211,47 @@ function resolveBrowserBaseUrl(params: {
   }
   if (!resolved.enabled) {
     throw new Error(
-      "Browser control is disabled. Set browser.enabled=true in ~/.clawdbot/clawdbot.json.",
+      "Browser control is disabled. Set browser.enabled=true in ~/.openclaw/openclaw.json.",
     );
   }
-  const normalized = resolved.controlUrl.replace(/\/$/, "");
-  assertAllowedControlUrl(normalized);
-  return normalized;
+  return undefined;
 }
 
 export function createBrowserTool(opts?: {
-  defaultControlUrl?: string;
+  sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
-  allowedControlUrls?: string[];
-  allowedControlHosts?: string[];
-  allowedControlPorts?: number[];
 }): AnyAgentTool {
-  const targetDefault = opts?.defaultControlUrl ? "sandbox" : "host";
+  const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
-  const allowlistHint =
-    opts?.allowedControlUrls?.length ||
-    opts?.allowedControlHosts?.length ||
-    opts?.allowedControlPorts?.length
-      ? "Custom targets are restricted by sandbox allowlists."
-      : "Custom targets are unrestricted.";
   return {
     label: "Browser",
     name: "browser",
     description: [
-      "Control the browser via Clawdbot's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
-      'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Use profile="clawd" for the isolated clawd-managed browser.',
+      "Control the browser via OpenClaw's browser control server (status/start/stop/profiles/tabs/open/snapshot/screenshot/actions).",
+      'Profiles: use profile="chrome" for Chrome extension relay takeover (your existing Chrome tabs). Use profile="openclaw" for the isolated openclaw-managed browser.',
       'If the user mentions the Chrome extension / Browser Relay / toolbar button / “attach tab”, ALWAYS use profile="chrome" (do not ask which profile).',
       'When a node-hosted browser proxy is available, the tool may auto-route to it. Pin a node with node=<id|name> or target="node".',
-      "Chrome extension relay needs an attached tab: user must click the Clawdbot Browser Relay toolbar icon on the tab (badge ON). If no tab is connected, ask them to attach it.",
+      "Chrome extension relay needs an attached tab: user must click the OpenClaw Browser Relay toolbar icon on the tab (badge ON). If no tab is connected, ask them to attach it.",
       "When using refs from snapshot (e.g. e12), keep the same tab: prefer passing targetId from the snapshot response into subsequent actions (act/click/type/etc).",
       'For stable, self-resolving refs across calls, use snapshot with refs="aria" (Playwright aria-ref ids). Default refs="role" are role+name-based.',
       "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
-      `target selects browser location (sandbox|host|custom|node). Default: ${targetDefault}.`,
-      "controlUrl implies target=custom (remote control server).",
+      `target selects browser location (sandbox|host|node). Default: ${targetDefault}.`,
       hostHint,
-      allowlistHint,
     ].join(" "),
     parameters: BrowserToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      const controlUrl = readStringParam(params, "controlUrl");
       const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
-      let target = readStringParam(params, "target") as
-        | "sandbox"
-        | "host"
-        | "custom"
-        | "node"
-        | undefined;
+      let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
 
-      if (controlUrl?.trim() && (target === "node" || requestedNode)) {
-        throw new Error('controlUrl is not supported with target="node".');
-      }
-      if (target === "custom" && requestedNode) {
-        throw new Error('node is not supported with target="custom".');
+      if (requestedNode && target && target !== "node") {
+        throw new Error('node is only supported with target="node".');
       }
 
-      if (!target && !controlUrl?.trim() && !requestedNode && profile === "chrome") {
+      if (!target && !requestedNode && profile === "chrome") {
         // Chrome extension relay takeover is a host Chrome feature; prefer host unless explicitly targeting a node.
         target = "host";
       }
@@ -328,21 +259,16 @@ export function createBrowserTool(opts?: {
       const nodeTarget = await resolveBrowserNodeTarget({
         requestedNode: requestedNode ?? undefined,
         target,
-        controlUrl,
-        defaultControlUrl: opts?.defaultControlUrl,
+        sandboxBridgeUrl: opts?.sandboxBridgeUrl,
       });
 
       const resolvedTarget = target === "node" ? undefined : target;
       const baseUrl = nodeTarget
-        ? ""
+        ? undefined
         : resolveBrowserBaseUrl({
             target: resolvedTarget,
-            controlUrl,
-            defaultControlUrl: opts?.defaultControlUrl,
+            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
             allowHostControl: opts?.allowHostControl,
-            allowedControlUrls: opts?.allowedControlUrls,
-            allowedControlHosts: opts?.allowedControlHosts,
-            allowedControlPorts: opts?.allowedControlPorts,
           });
 
       const proxyRequest = nodeTarget
@@ -483,15 +409,18 @@ export function createBrowserTool(opts?: {
                 });
             return jsonResult(result);
           }
-          if (targetId) await browserCloseTab(baseUrl, targetId, { profile });
-          else await browserAct(baseUrl, { kind: "close" }, { profile });
+          if (targetId) {
+            await browserCloseTab(baseUrl, targetId, { profile });
+          } else {
+            await browserAct(baseUrl, { kind: "close" }, { profile });
+          }
           return jsonResult({ ok: true });
         }
         case "snapshot": {
           const snapshotDefaults = loadConfig().browser?.snapshotDefaults;
           const format =
             params.snapshotFormat === "ai" || params.snapshotFormat === "aria"
-              ? (params.snapshotFormat as "ai" | "aria")
+              ? params.snapshotFormat
               : "ai";
           const mode =
             params.mode === "efficient"
@@ -673,7 +602,9 @@ export function createBrowserTool(opts?: {
         }
         case "upload": {
           const paths = Array.isArray(params.paths) ? params.paths.map((p) => String(p)) : [];
-          if (paths.length === 0) throw new Error("paths required");
+          if (paths.length === 0) {
+            throw new Error("paths required");
+          }
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
@@ -773,11 +704,13 @@ export function createBrowserTool(opts?: {
                 : await browserTabs(baseUrl, { profile }).catch(() => []);
               if (!tabs.length) {
                 throw new Error(
-                  "No Chrome tabs are attached via the Clawdbot Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
+                  "No Chrome tabs are attached via the OpenClaw Browser Relay extension. Click the toolbar icon on the tab you want to control (badge ON), then retry.",
+                  { cause: err },
                 );
               }
               throw new Error(
                 `Chrome tab not found (stale targetId?). Run action=tabs profile="chrome" and use one of the returned targetIds.`,
+                { cause: err },
               );
             }
             throw err;

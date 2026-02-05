@@ -1,6 +1,5 @@
-import type { ClawdbotPluginApi } from "clawdbot/plugin-sdk";
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
-
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { createDiagnosticsOtelService } from "./src/service.js";
 
 const plugin = {
@@ -8,7 +7,7 @@ const plugin = {
   name: "Diagnostics OpenTelemetry",
   description: "Export diagnostics events to OpenTelemetry",
   configSchema: emptyPluginConfigSchema(),
-  register(api: ClawdbotPluginApi) {
+  register(api: OpenClawPluginApi) {
     api.registerService(createDiagnosticsOtelService());
   },
 };

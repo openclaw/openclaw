@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import * as tailscale from "./tailscale.js";
 
 const {
@@ -10,7 +9,7 @@ const {
   disableTailscaleServe,
   ensureFunnel,
 } = tailscale;
-const tailscaleBin = expect.stringMatching(/tailscale$/);
+const tailscaleBin = expect.stringMatching(/tailscale$/i);
 
 describe("tailscale helpers", () => {
   afterEach(() => {

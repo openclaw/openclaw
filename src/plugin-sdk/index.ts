@@ -59,13 +59,20 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {
-  ClawdbotPluginApi,
-  ClawdbotPluginService,
-  ClawdbotPluginServiceContext,
+  OpenClawPluginApi,
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
 } from "../plugins/types.js";
+export type {
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "../gateway/server-methods/types.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
+export { normalizePluginHttpPath } from "../plugins/http-path.js";
+export { registerPluginHttpRoute } from "../plugins/http-registry.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-export type { ClawdbotConfig } from "../config/config.js";
+export type { OpenClawConfig } from "../config/config.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export type {
@@ -74,8 +81,14 @@ export type {
   DmConfig,
   GroupPolicy,
   GroupToolPolicyConfig,
+  GroupToolPolicyBySenderConfig,
   MarkdownConfig,
   MarkdownTableMode,
+  GoogleChatAccountConfig,
+  GoogleChatConfig,
+  GoogleChatDmConfig,
+  GoogleChatGroupConfig,
+  GoogleChatActionConfig,
   MSTeamsChannelConfig,
   MSTeamsConfig,
   MSTeamsReplyStyle,
@@ -83,6 +96,7 @@ export type {
 } from "../config/types.js";
 export {
   DiscordConfigSchema,
+  GoogleChatConfigSchema,
   IMessageConfigSchema,
   MSTeamsConfigSchema,
   SignalConfigSchema,
@@ -106,7 +120,9 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { resolveAckReaction } from "../agents/identity.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
+export type { ChunkMode } from "../auto-reply/chunk.js";
 export { SILENT_REPLY_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
+export { resolveToolsBySender } from "../config/group-policy.js";
 export {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
@@ -132,7 +148,7 @@ export {
   shouldAckReactionForWhatsApp,
 } from "../channels/ack-reactions.js";
 export { createTypingCallbacks } from "../channels/typing.js";
-export { createReplyPrefixContext } from "../channels/reply-prefix.js";
+export { createReplyPrefixContext, createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { logAckFailure, logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export type { NormalizedLocation } from "../channels/location.js";
@@ -141,12 +157,14 @@ export { resolveControlCommandGate } from "../channels/command-gating.js";
 export {
   resolveBlueBubblesGroupRequireMention,
   resolveDiscordGroupRequireMention,
+  resolveGoogleChatGroupRequireMention,
   resolveIMessageGroupRequireMention,
   resolveSlackGroupRequireMention,
   resolveTelegramGroupRequireMention,
   resolveWhatsAppGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
   resolveDiscordGroupToolPolicy,
+  resolveGoogleChatGroupToolPolicy,
   resolveIMessageGroupToolPolicy,
   resolveSlackGroupToolPolicy,
   resolveTelegramGroupToolPolicy,
@@ -186,12 +204,6 @@ export {
 } from "../channels/plugins/setup-helpers.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js";
-export {
-  listIMessageAccountIds,
-  resolveDefaultIMessageAccountId,
-  resolveIMessageAccount,
-  type ResolvedIMessageAccount,
-} from "../imessage/accounts.js";
 
 export type {
   ChannelOnboardingAdapter,
@@ -199,7 +211,6 @@ export type {
 } from "../channels/plugins/onboarding-types.js";
 export { addWildcardAllowFrom, promptAccountId } from "../channels/plugins/onboarding/helpers.js";
 export { promptChannelAccessConfig } from "../channels/plugins/onboarding/channel-access.js";
-export { imessageOnboardingAdapter } from "../channels/plugins/onboarding/imessage.js";
 
 export {
   createActionGate,
@@ -253,6 +264,19 @@ export {
 } from "../channels/plugins/normalize/discord.js";
 export { collectDiscordStatusIssues } from "../channels/plugins/status-issues/discord.js";
 
+// Channel: iMessage
+export {
+  listIMessageAccountIds,
+  resolveDefaultIMessageAccountId,
+  resolveIMessageAccount,
+  type ResolvedIMessageAccount,
+} from "../imessage/accounts.js";
+export { imessageOnboardingAdapter } from "../channels/plugins/onboarding/imessage.js";
+export {
+  looksLikeIMessageTargetId,
+  normalizeIMessageMessagingTarget,
+} from "../channels/plugins/normalize/imessage.js";
+
 // Channel: Slack
 export {
   listEnabledSlackAccounts,
@@ -282,6 +306,7 @@ export {
   normalizeTelegramMessagingTarget,
 } from "../channels/plugins/normalize/telegram.js";
 export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
+export { type TelegramProbe } from "../telegram/probe.js";
 
 // Channel: Signal
 export {
@@ -314,6 +339,53 @@ export { collectWhatsAppStatusIssues } from "../channels/plugins/status-issues/w
 
 // Channel: BlueBubbles
 export { collectBlueBubblesStatusIssues } from "../channels/plugins/status-issues/bluebubbles.js";
+
+// Channel: LINE
+export {
+  listLineAccountIds,
+  normalizeAccountId as normalizeLineAccountId,
+  resolveDefaultLineAccountId,
+  resolveLineAccount,
+} from "../line/accounts.js";
+export { LineConfigSchema } from "../line/config-schema.js";
+export type {
+  LineConfig,
+  LineAccountConfig,
+  ResolvedLineAccount,
+  LineChannelData,
+} from "../line/types.js";
+export {
+  createInfoCard,
+  createListCard,
+  createImageCard,
+  createActionCard,
+  createReceiptCard,
+  type CardAction,
+  type ListItem,
+} from "../line/flex-templates.js";
+export {
+  processLineMessage,
+  hasMarkdownToConvert,
+  stripMarkdown,
+} from "../line/markdown-to-line.js";
+export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
+
+// Channel: Feishu
+export {
+  listFeishuAccountIds,
+  resolveDefaultFeishuAccountId,
+  resolveFeishuAccount,
+  type ResolvedFeishuAccount,
+} from "../feishu/accounts.js";
+export {
+  resolveFeishuConfig,
+  resolveFeishuGroupEnabled,
+  resolveFeishuGroupRequireMention,
+} from "../feishu/config.js";
+export { feishuOutbound } from "../channels/plugins/outbound/feishu.js";
+export { normalizeFeishuTarget } from "../channels/plugins/normalize/feishu.js";
+export { probeFeishu, type FeishuProbe } from "../feishu/probe.js";
+export { monitorFeishuProvider } from "../feishu/monitor.js";
 
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";

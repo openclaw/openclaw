@@ -1,5 +1,4 @@
-import type { ChannelOutboundAdapter } from "clawdbot/plugin-sdk";
-
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
@@ -7,6 +6,7 @@ import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 export const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: (text, limit) => getMSTeamsRuntime().channel.text.chunkMarkdownText(text, limit),
+  chunkerMode: "markdown",
   textChunkLimit: 4000,
   pollMaxOptions: 12,
   sendText: async ({ cfg, to, text, deps }) => {

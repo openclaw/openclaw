@@ -1,9 +1,12 @@
 {
-  "name": "@clawdbot/whatsapp",
-  "version": "2026.1.23",
+  "name": "@openclaw/whatsapp",
+  "version": "2026.2.4",
+  "description": "OpenClaw WhatsApp channel plugin",
   "type": "module",
-  "description": "Clawdbot WhatsApp channel plugin",
-  "clawdbot": {
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
     "extensions": [
       "./index.ts"
     ]

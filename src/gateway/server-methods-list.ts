@@ -32,6 +32,9 @@ const BASE_METHODS = [
   "talk.mode",
   "models.list",
   "agents.list",
+  "agents.files.list",
+  "agents.files.get",
+  "agents.files.set",
   "skills.status",
   "skills.bins",
   "skills.install",
@@ -77,6 +80,7 @@ const BASE_METHODS = [
   "agent",
   "agent.identity.get",
   "agent.wait",
+  "browser.request",
   // WebChat WebSocket-native chat methods
   "chat.history",
   "chat.abort",

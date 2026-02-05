@@ -1,6 +1,5 @@
-import type express from "express";
-
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import type { BrowserRequest, BrowserResponse } from "./types.js";
 import { parseBooleanValue } from "../../utils/boolean.js";
 
 /**
@@ -8,7 +7,7 @@ import { parseBooleanValue } from "../../utils/boolean.js";
  * Query string takes precedence over body for consistency with GET routes.
  */
 export function getProfileContext(
-  req: express.Request,
+  req: BrowserRequest,
   ctx: BrowserRouteContext,
 ): ProfileContext | { error: string; status: number } {
   let profileName: string | undefined;
@@ -33,12 +32,14 @@ export function getProfileContext(
   }
 }
 
-export function jsonError(res: express.Response, status: number, message: string) {
+export function jsonError(res: BrowserResponse, status: number, message: string) {
   res.status(status).json({ error: message });
 }
 
 export function toStringOrEmpty(value: unknown) {
-  if (typeof value === "string") return value.trim();
+  if (typeof value === "string") {
+    return value.trim();
+  }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value).trim();
   }
@@ -46,7 +47,9 @@ export function toStringOrEmpty(value: unknown) {
 }
 
 export function toNumber(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
   if (typeof value === "string" && value.trim()) {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : undefined;
@@ -62,7 +65,9 @@ export function toBoolean(value: unknown) {
 }
 
 export function toStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) return undefined;
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
   const strings = value.map((v) => toStringOrEmpty(v)).filter(Boolean);
   return strings.length ? strings : undefined;
 }

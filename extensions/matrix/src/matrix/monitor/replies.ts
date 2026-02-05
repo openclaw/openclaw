@@ -1,8 +1,7 @@
-import type { MatrixClient } from "matrix-bot-sdk";
-
-import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "clawdbot/plugin-sdk";
-import { sendMessageMatrix } from "../send.js";
+import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
+import type { MarkdownTableMode, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
 import { getMatrixRuntime } from "../../runtime.js";
+import { sendMessageMatrix } from "../send.js";
 
 export async function deliverMatrixReplies(params: {
   replies: ReplyPayload[];
@@ -16,10 +15,11 @@ export async function deliverMatrixReplies(params: {
   tableMode?: MarkdownTableMode;
 }): Promise<void> {
   const core = getMatrixRuntime();
+  const cfg = core.config.loadConfig();
   const tableMode =
     params.tableMode ??
     core.channel.text.resolveMarkdownTableMode({
-      cfg: core.config.loadConfig(),
+      cfg,
       channel: "matrix",
       accountId: params.accountId,
     });
@@ -29,6 +29,7 @@ export async function deliverMatrixReplies(params: {
     }
   };
   const chunkLimit = Math.min(params.textLimit, 4000);
+  const chunkMode = core.channel.text.resolveChunkMode(cfg, "matrix", params.accountId);
   let hasReplied = false;
   for (const reply of params.replies) {
     const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
@@ -54,9 +55,15 @@ export async function deliverMatrixReplies(params: {
       Boolean(id) && (params.replyToMode === "all" || !hasReplied);
 
     if (mediaList.length === 0) {
-      for (const chunk of core.channel.text.chunkMarkdownText(text, chunkLimit)) {
+      for (const chunk of core.channel.text.chunkMarkdownTextWithMode(
+        text,
+        chunkLimit,
+        chunkMode,
+      )) {
         const trimmed = chunk.trim();
-        if (!trimmed) continue;
+        if (!trimmed) {
+          continue;
+        }
         await sendMessageMatrix(params.roomId, trimmed, {
           client: params.client,
           replyToId: shouldIncludeReply(replyToId) ? replyToId : undefined,

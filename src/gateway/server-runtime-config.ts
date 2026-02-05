@@ -20,6 +20,7 @@ export type GatewayRuntimeConfig = {
   openResponsesEnabled: boolean;
   openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
   controlUiBasePath: string;
+  controlUiRoot?: string;
   resolvedAuth: ResolvedGatewayAuth;
   authMode: ResolvedGatewayAuth["mode"];
   tailscaleConfig: GatewayTailscaleConfig;
@@ -51,6 +52,11 @@ export async function resolveGatewayRuntimeConfig(params: {
   const openResponsesConfig = params.cfg.gateway?.http?.endpoints?.responses;
   const openResponsesEnabled = params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
   const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
+  const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
+  const controlUiRoot =
+    typeof controlUiRootRaw === "string" && controlUiRootRaw.trim().length > 0
+      ? controlUiRootRaw.trim()
+      : undefined;
   const authBase = params.cfg.gateway?.auth ?? {};
   const authOverrides = params.auth ?? {};
   const authConfig = {
@@ -70,22 +76,27 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleMode,
   });
   const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
+  const hasToken = typeof resolvedAuth.token === "string" && resolvedAuth.token.trim().length > 0;
+  const hasPassword =
+    typeof resolvedAuth.password === "string" && resolvedAuth.password.trim().length > 0;
+  const hasSharedSecret =
+    (authMode === "token" && hasToken) || (authMode === "password" && hasPassword);
   const hooksConfig = resolveHooksConfig(params.cfg);
   const canvasHostEnabled =
-    process.env.CLAWDBOT_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
+    process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
 
   assertGatewayAuthConfigured(resolvedAuth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
-      "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or CLAWDBOT_GATEWAY_PASSWORD)",
+      "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
     );
   }
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
     throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
   }
-  if (!isLoopbackHost(bindHost) && authMode === "none") {
+  if (!isLoopbackHost(bindHost) && !hasSharedSecret) {
     throw new Error(
-      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token or CLAWDBOT_GATEWAY_TOKEN, or pass --token)`,
+      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
     );
   }
 
@@ -98,6 +109,7 @@ export async function resolveGatewayRuntimeConfig(params: {
       ? { ...openResponsesConfig, enabled: openResponsesEnabled }
       : undefined,
     controlUiBasePath,
+    controlUiRoot,
     resolvedAuth,
     authMode,
     tailscaleConfig,

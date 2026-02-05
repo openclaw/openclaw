@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-
 import { authorizeGatewayConnect } from "./auth.js";
 
 describe("gateway auth", () => {
   it("does not throw when req is missing socket", async () => {
     const res = await authorizeGatewayConnect({
-      auth: { mode: "none", allowTailscale: false },
-      connectAuth: null,
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "secret" },
       // Regression: avoid crashing on req.socket.remoteAddress when callers pass a non-IncomingMessage.
       req: {} as never,
     });
@@ -63,40 +62,10 @@ describe("gateway auth", () => {
     expect(res.reason).toBe("password_missing_config");
   });
 
-  it("reports tailscale auth reasons when required", async () => {
-    const reqBase = {
-      socket: { remoteAddress: "100.100.100.100" },
-      headers: { host: "gateway.local" },
-    };
-
-    const missingUser = await authorizeGatewayConnect({
-      auth: { mode: "none", allowTailscale: true },
-      connectAuth: null,
-      req: reqBase as never,
-    });
-    expect(missingUser.ok).toBe(false);
-    expect(missingUser.reason).toBe("tailscale_user_missing");
-
-    const missingProxy = await authorizeGatewayConnect({
-      auth: { mode: "none", allowTailscale: true },
-      connectAuth: null,
-      req: {
-        ...reqBase,
-        headers: {
-          host: "gateway.local",
-          "tailscale-user-login": "peter",
-          "tailscale-user-name": "Peter",
-        },
-      } as never,
-    });
-    expect(missingProxy.ok).toBe(false);
-    expect(missingProxy.reason).toBe("tailscale_proxy_missing");
-  });
-
   it("treats local tailscale serve hostnames as direct", async () => {
     const res = await authorizeGatewayConnect({
-      auth: { mode: "none", allowTailscale: true },
-      connectAuth: null,
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: { token: "secret" },
       req: {
         socket: { remoteAddress: "127.0.0.1" },
         headers: { host: "gateway.tailnet-1234.ts.net:443" },
@@ -104,27 +73,14 @@ describe("gateway auth", () => {
     });
 
     expect(res.ok).toBe(true);
-    expect(res.method).toBe("none");
-  });
-
-  it("does not treat tailscale clients as direct", async () => {
-    const res = await authorizeGatewayConnect({
-      auth: { mode: "none", allowTailscale: true },
-      connectAuth: null,
-      req: {
-        socket: { remoteAddress: "100.64.0.42" },
-        headers: { host: "gateway.tailnet-1234.ts.net" },
-      } as never,
-    });
-
-    expect(res.ok).toBe(false);
-    expect(res.reason).toBe("tailscale_user_missing");
+    expect(res.method).toBe("token");
   });
 
   it("allows tailscale identity to satisfy token mode auth", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: true },
       connectAuth: null,
+      tailscaleWhois: async () => ({ login: "peter", name: "Peter" }),
       req: {
         socket: { remoteAddress: "127.0.0.1" },
         headers: {

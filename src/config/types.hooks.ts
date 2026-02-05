@@ -18,11 +18,14 @@ export type HookMappingConfig = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
+  /** DANGEROUS: Disable external content safety wrapping for this hook. */
+  allowUnsafeExternalContent?: boolean;
   channel?:
     | "last"
     | "whatsapp"
     | "telegram"
     | "discord"
+    | "googlechat"
     | "slack"
     | "signal"
     | "imessage"
@@ -47,6 +50,8 @@ export type HooksGmailConfig = {
   includeBody?: boolean;
   maxBytes?: number;
   renewEveryMinutes?: number;
+  /** DANGEROUS: Disable external content safety wrapping for Gmail hooks. */
+  allowUnsafeExternalContent?: boolean;
   serve?: {
     bind?: string;
     port?: number;

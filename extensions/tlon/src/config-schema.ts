@@ -1,5 +1,5 @@
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk";
 import { z } from "zod";
-import { buildChannelConfigSchema } from "clawdbot/plugin-sdk";
 
 const ShipSchema = z.string().min(1);
 const ChannelNestSchema = z.string().min(1);
@@ -10,7 +10,7 @@ export const TlonChannelRuleSchema = z.object({
 });
 
 export const TlonAuthorizationSchema = z.object({
-  channelRules: z.record(TlonChannelRuleSchema).optional(),
+  channelRules: z.record(z.string(), TlonChannelRuleSchema).optional(),
 });
 
 export const TlonAccountSchema = z.object({
@@ -23,6 +23,7 @@ export const TlonAccountSchema = z.object({
   dmAllowlist: z.array(ShipSchema).optional(),
   autoDiscoverChannels: z.boolean().optional(),
   showModelSignature: z.boolean().optional(),
+  responsePrefix: z.string().optional(),
 });
 
 export const TlonConfigSchema = z.object({
@@ -35,9 +36,10 @@ export const TlonConfigSchema = z.object({
   dmAllowlist: z.array(ShipSchema).optional(),
   autoDiscoverChannels: z.boolean().optional(),
   showModelSignature: z.boolean().optional(),
+  responsePrefix: z.string().optional(),
   authorization: TlonAuthorizationSchema.optional(),
   defaultAuthorizedShips: z.array(ShipSchema).optional(),
-  accounts: z.record(TlonAccountSchema).optional(),
+  accounts: z.record(z.string(), TlonAccountSchema).optional(),
 });
 
 export const tlonChannelConfigSchema = buildChannelConfigSchema(TlonConfigSchema);

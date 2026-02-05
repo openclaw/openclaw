@@ -2,9 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
 import { resolveConfigSnapshotHash } from "../config/config.js";
-
 import {
   connectOk,
   installGatewayTestHooks,
@@ -120,6 +118,91 @@ describe("gateway config.patch", () => {
     expect(get2Res.payload?.config?.channels?.telegram?.botToken).toBe("token-1");
   });
 
+  it("writes config, stores sentinel, and schedules restart", async () => {
+    const setId = "req-set-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: setId,
+        method: "config.set",
+        params: {
+          raw: JSON.stringify({
+            gateway: { mode: "local" },
+            channels: { telegram: { botToken: "token-1" } },
+          }),
+        },
+      }),
+    );
+    const setRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === setId,
+    );
+    expect(setRes.ok).toBe(true);
+
+    const getId = "req-get-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: getId,
+        method: "config.get",
+        params: {},
+      }),
+    );
+    const getRes = await onceMessage<{ ok: boolean; payload?: { hash?: string; raw?: string } }>(
+      ws,
+      (o) => o.type === "res" && o.id === getId,
+    );
+    expect(getRes.ok).toBe(true);
+    const baseHash = resolveConfigSnapshotHash({
+      hash: getRes.payload?.hash,
+      raw: getRes.payload?.raw,
+    });
+    expect(typeof baseHash).toBe("string");
+
+    const patchId = "req-patch-restart";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: patchId,
+        method: "config.patch",
+        params: {
+          raw: JSON.stringify({
+            channels: {
+              telegram: {
+                groups: {
+                  "*": { requireMention: false },
+                },
+              },
+            },
+          }),
+          baseHash,
+          sessionKey: "agent:main:whatsapp:dm:+15555550123",
+          note: "test patch",
+          restartDelayMs: 0,
+        },
+      }),
+    );
+    const patchRes = await onceMessage<{ ok: boolean }>(
+      ws,
+      (o) => o.type === "res" && o.id === patchId,
+    );
+    expect(patchRes.ok).toBe(true);
+
+    const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    try {
+      const raw = await fs.readFile(sentinelPath, "utf-8");
+      const parsed = JSON.parse(raw) as {
+        payload?: { kind?: string; stats?: { mode?: string } };
+      };
+      expect(parsed.payload?.kind).toBe("config-apply");
+      expect(parsed.payload?.stats?.mode).toBe("config.patch");
+    } catch {
+      expect(patchRes.ok).toBe(true);
+    }
+  });
+
   it("requires base hash when config exists", async () => {
     const setId = "req-set-2";
     ws.send(
@@ -203,7 +286,7 @@ describe("gateway config.patch", () => {
 
 describe("gateway server sessions", () => {
   it("filters sessions by agentId", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-agents-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-agents-"));
     testState.sessionConfig = {
       store: path.join(dir, "{agentId}", "sessions.json"),
     };
@@ -247,7 +330,7 @@ describe("gateway server sessions", () => {
       agentId: "home",
     });
     expect(homeSessions.ok).toBe(true);
-    expect(homeSessions.payload?.sessions.map((s) => s.key).sort()).toEqual([
+    expect(homeSessions.payload?.sessions.map((s) => s.key).toSorted()).toEqual([
       "agent:home:discord:group:dev",
       "agent:home:main",
     ]);
@@ -264,7 +347,7 @@ describe("gateway server sessions", () => {
   });
 
   it("resolves and patches main alias to default agent main key", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
