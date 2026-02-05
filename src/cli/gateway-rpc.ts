@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { callGateway } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { withProgress } from "./progress.js";
+import { getCliTimeoutMs } from "../agents/tools/timeout-config.js";
 
 export type GatewayRpcOpts = {
   url?: string;
@@ -26,6 +27,12 @@ export async function callGatewayFromCli(
   extra?: { expectFinal?: boolean; progress?: boolean },
 ) {
   const showProgress = extra?.progress ?? opts.json !== true;
+  
+  // Use CLI timeout config if no explicit timeout provided
+  const timeoutMs = opts.timeout 
+    ? Number(opts.timeout) 
+    : getCliTimeoutMs();
+  
   return await withProgress(
     {
       label: `Gateway ${method}`,
@@ -39,7 +46,7 @@ export async function callGatewayFromCli(
         method,
         params,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
-        timeoutMs: Number(opts.timeout ?? 10_000),
+        timeoutMs,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),

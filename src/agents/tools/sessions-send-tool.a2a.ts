@@ -1,7 +1,12 @@
+import { getToolTimeoutMs } from './timeout-config.js';
 import crypto from "node:crypto";
+import { getToolTimeoutMs } from './timeout-config.js';
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import { getToolTimeoutMs } from './timeout-config.js';
 import { callGateway } from "../../gateway/call.js";
+import { getToolTimeoutMs } from './timeout-config.js';
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getToolTimeoutMs } from './timeout-config.js';
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
@@ -122,7 +127,7 @@ export async function runSessionsSendA2AFlow(params: {
             accountId: announceTarget.accountId,
             idempotencyKey: crypto.randomUUID(),
           },
-          timeoutMs: 10_000,
+          timeoutMs: getToolTimeoutMs('sessions-send-a2a'),
         });
       } catch (err) {
         log.warn("sessions_send announce delivery failed", {

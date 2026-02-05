@@ -1,7 +1,12 @@
+import { getToolTimeoutMs } from './timeout-config.js';
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { getToolTimeoutMs } from './timeout-config.js';
 import { Type } from "@sinclair/typebox";
+import { getToolTimeoutMs } from './timeout-config.js';
 import crypto from "node:crypto";
+import { getToolTimeoutMs } from './timeout-config.js';
 import type { OpenClawConfig } from "../../config/config.js";
+import { getToolTimeoutMs } from './timeout-config.js';
 import {
   type CameraFacing,
   cameraTempPath,
@@ -319,7 +324,7 @@ export function createNodesTool(options?: {
                 ? params.durationMs
                 : typeof params.duration === "string"
                   ? parseDurationMs(params.duration)
-                  : 10_000;
+                  : getToolTimeoutMs('nodes');
             const fps =
               typeof params.fps === "number" && Number.isFinite(params.fps) ? params.fps : 10;
             const screenIndex =

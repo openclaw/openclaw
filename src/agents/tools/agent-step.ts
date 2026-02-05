@@ -1,7 +1,12 @@
+import { getToolTimeoutMs } from './timeout-config.js';
 import crypto from "node:crypto";
+import { getToolTimeoutMs } from './timeout-config.js';
 import { callGateway } from "../../gateway/call.js";
+import { getToolTimeoutMs } from './timeout-config.js';
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { getToolTimeoutMs } from './timeout-config.js';
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import { getToolTimeoutMs } from './timeout-config.js';
 import { extractAssistantText, stripToolMessages } from "./sessions-helpers.js";
 
 export async function readLatestAssistantReply(params: {
@@ -37,7 +42,7 @@ export async function runAgentStep(params: {
       lane: params.lane ?? AGENT_LANE_NESTED,
       extraSystemPrompt: params.extraSystemPrompt,
     },
-    timeoutMs: 10_000,
+    timeoutMs: getToolTimeoutMs('agent-step'),
   });
 
   const stepRunId = typeof response?.runId === "string" && response.runId ? response.runId : "";

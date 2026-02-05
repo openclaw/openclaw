@@ -1,7 +1,12 @@
+import { getToolTimeoutMs } from './timeout-config.js';
 import { Type } from "@sinclair/typebox";
+import { getToolTimeoutMs } from './timeout-config.js';
 import crypto from "node:crypto";
+import { getToolTimeoutMs } from './timeout-config.js';
 import type { AnyAgentTool } from "./common.js";
+import { getToolTimeoutMs } from './timeout-config.js';
 import { loadConfig } from "../../config/config.js";
+import { getToolTimeoutMs } from './timeout-config.js';
 import { callGateway } from "../../gateway/call.js";
 import {
   isSubagentSessionKey,
@@ -82,7 +87,7 @@ export function createSessionsSendTool(opts?: {
         const result = await callGateway<{ sessions: Array<{ key: string }> }>({
           method: "sessions.list",
           params: listParams,
-          timeoutMs: 10_000,
+          timeoutMs: getToolTimeoutMs('sessions-send'),
         });
         return Array.isArray(result?.sessions) ? result.sessions : [];
       };
@@ -137,7 +142,7 @@ export function createSessionsSendTool(opts?: {
           const resolved = await callGateway<{ key: string }>({
             method: "sessions.resolve",
             params: resolveParams,
-            timeoutMs: 10_000,
+            timeoutMs: getToolTimeoutMs('sessions-send'),
           });
           resolvedKey = typeof resolved?.key === "string" ? resolved.key.trim() : "";
         } catch (err) {
@@ -284,7 +289,7 @@ export function createSessionsSendTool(opts?: {
           const response = await callGateway<{ runId: string }>({
             method: "agent",
             params: sendParams,
-            timeoutMs: 10_000,
+            timeoutMs: getToolTimeoutMs('sessions-send'),
           });
           if (typeof response?.runId === "string" && response.runId) {
             runId = response.runId;
@@ -312,7 +317,7 @@ export function createSessionsSendTool(opts?: {
         const response = await callGateway<{ runId: string }>({
           method: "agent",
           params: sendParams,
-          timeoutMs: 10_000,
+          timeoutMs: getToolTimeoutMs('sessions-send'),
         });
         if (typeof response?.runId === "string" && response.runId) {
           runId = response.runId;

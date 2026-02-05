@@ -1,7 +1,12 @@
+import { getToolTimeoutMs } from './timeout-config.js';
 import { Type } from "@sinclair/typebox";
+import { getToolTimeoutMs } from './timeout-config.js';
 import crypto from "node:crypto";
+import { getToolTimeoutMs } from './timeout-config.js';
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import { getToolTimeoutMs } from './timeout-config.js';
 import type { AnyAgentTool } from "./common.js";
+import { getToolTimeoutMs } from './timeout-config.js';
 import { formatThinkingLevels, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
@@ -196,7 +201,7 @@ export function createSessionsSpawnTool(opts?: {
           await callGateway({
             method: "sessions.patch",
             params: { key: childSessionKey, model: resolvedModel },
-            timeoutMs: 10_000,
+            timeoutMs: getToolTimeoutMs('sessions-spawn'),
           });
           modelApplied = true;
         } catch (err) {
@@ -243,7 +248,7 @@ export function createSessionsSpawnTool(opts?: {
             groupChannel: opts?.agentGroupChannel ?? undefined,
             groupSpace: opts?.agentGroupSpace ?? undefined,
           },
-          timeoutMs: 10_000,
+          timeoutMs: getToolTimeoutMs('sessions-spawn'),
         });
         if (typeof response?.runId === "string" && response.runId) {
           childRunId = response.runId;
