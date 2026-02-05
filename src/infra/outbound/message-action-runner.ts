@@ -728,6 +728,9 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       required: !mediaHint && !hasCard,
       allowEmpty: true,
     }) ?? "";
+  if (message.includes("\\n")) {
+    message = message.replaceAll("\\n", "\n");
+  }
 
   const parsed = parseReplyDirectives(message);
   const mergedMediaUrls: string[] = [];
