@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { AnyAgentTool } from "./common.js";
+import { runMemoryIngestionPipeline } from "../../memory/pipeline/ingest.js";
 import { jsonResult } from "./common.js";
 
 const MemoryIngestSchema = Type.Object({
@@ -25,15 +26,22 @@ export function createMemoryIngestTool(): AnyAgentTool {
     name: "memory.ingest",
     description: "Ingest structured content into the memory pipeline.",
     parameters: MemoryIngestSchema,
-    execute: async () =>
-      jsonResult({
-        ok: false,
+    execute: async (_ctx, input) => {
+      const result = await runMemoryIngestionPipeline({
+        source: input?.source,
+        sessionKey: input?.sessionKey,
+        traceId: input?.traceId,
+        items: input?.items,
+      });
+
+      return jsonResult({
+        ok: result.ok,
         tool: "memory.ingest",
-        error: {
-          code: "not_configured",
-          message: "Memory ingestion pipeline is not configured.",
-          retryable: false,
-        },
-      }),
+        runId: result.runId,
+        batchId: result.batchId,
+        warnings: result.warnings,
+        contract: result.contract,
+      });
+    },
   };
 }

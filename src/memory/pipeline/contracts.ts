@@ -1,6 +1,13 @@
 import type { MemoryContentObject, MemoryTemporalMetadata } from "../types.js";
 
-export type MemoryIngestionStage = "normalize" | "extract" | "enrich" | "embed" | "graph" | "index";
+export type MemoryIngestionStage =
+  | "normalize"
+  | "extract"
+  | "enrich"
+  | "embed"
+  | "graph"
+  | "index"
+  | "audit";
 
 export type PipelineEventType =
   | "session.start"
@@ -12,6 +19,7 @@ export type PipelineEventType =
   | "ingest.embed"
   | "ingest.graph"
   | "ingest.index"
+  | "ingest.audit"
   | "query.request"
   | "query.response"
   | "context_pack.request"
