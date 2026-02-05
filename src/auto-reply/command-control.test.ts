@@ -167,6 +167,29 @@ describe("resolveCommandAuthorization", () => {
     expect(otherAuth.senderIsOwner).toBe(false);
     expect(otherAuth.isAuthorizedSender).toBe(false);
   });
+
+  it("uses owner allowlist override from context when configured", () => {
+    const cfg = {
+      channels: { discord: {} },
+    } as OpenClawConfig;
+
+    const ctx = {
+      Provider: "discord",
+      Surface: "discord",
+      From: "discord:123",
+      SenderId: "123",
+      OwnerAllowFrom: ["discord:123"],
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.ownerList).toEqual(["123"]);
+  });
 });
 
 describe("control command parsing", () => {
