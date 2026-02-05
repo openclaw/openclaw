@@ -325,8 +325,8 @@ export class FeishuStreamingSession {
 
     // Queue updates to ensure order
     this.updateQueue = this.updateQueue.then(async () => {
-      // NOTE: Do NOT check this.closed here. Even if closed, we want 
-      // pending updates in the queue to finish to ensure state consistency.
+      // Already-enqueued updates run to completion; new updates are
+      // rejected at function entry once this.closed is true.
       if (!this.state) {
         return;
       }
