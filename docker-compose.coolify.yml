@@ -30,6 +30,10 @@ services:
       - -c
       - |
         mkdir -p /home/node/.openclaw
+        # Clean up any invalid config files
+        rm -f /home/node/.openclaw/openclaw.json
+        rm -rf /home/node/.openclaw/config.yaml
+        # Create fresh config.yaml
         cat > /home/node/.openclaw/config.yaml <<'EOF'
         gateway:
           http:
