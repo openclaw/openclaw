@@ -11,7 +11,6 @@ import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import {
-  BatchSpanProcessor,
   ParentBasedSampler,
   TraceIdRatioBasedSampler,
   type ReadableSpan,
