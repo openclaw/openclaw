@@ -232,6 +232,7 @@
   },
   "packageManager": "pnpm@10.23.0",
   "pnpm": {
+    "autoInstallPeers": false,
     "minimumReleaseAge": 2880,
     "overrides": {
       "fast-xml-parser": "5.3.4",

@@ -1,7 +1,7 @@
 lockfileVersion: '9.0'
 
 settings:
-  autoInstallPeers: true
+  autoInstallPeers: false
   excludeLinksFromLockfile: false
 
 overrides:
@@ -132,9 +132,6 @@ importers:
       node-edge-tts:
         specifier: ^1.2.9
         version: 1.2.9
-      node-llama-cpp:
-        specifier: 3.15.1
-        version: 3.15.1(typescript@5.9.3)
       osc-progress:
         specifier: ^0.3.0
         version: 0.3.0
