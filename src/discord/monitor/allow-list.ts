@@ -167,10 +167,13 @@ export function resolveDiscordOwnerAllowFrom(params: {
   if (!allowList) {
     return undefined;
   }
-  const match = allowListMatches(allowList, {
-    id: params.sender.id,
-    name: params.sender.name,
-    tag: params.sender.tag,
+  const match = resolveDiscordAllowListMatch({
+    allowList,
+    candidate: {
+      id: params.sender.id,
+      name: params.sender.name,
+      tag: params.sender.tag,
+    },
   });
   if (!match.allowed || !match.matchKey || match.matchKey === "*") {
     return undefined;
