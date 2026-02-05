@@ -9,11 +9,11 @@
           - "src/discord/**"
           - "extensions/discord/**"
           - "docs/channels/discord.md"
-"channel: irc":
+"channel: dingtalk":
   - changed-files:
       - any-glob-to-any-file:
-          - "extensions/irc/**"
-          - "docs/channels/irc.md"
+          - "extensions/dingtalk/**"
+          - "docs/channels/dingtalk.md"
 "channel: feishu":
   - changed-files:
       - any-glob-to-any-file:
@@ -31,6 +31,11 @@
           - "src/imessage/**"
           - "extensions/imessage/**"
           - "docs/channels/imessage.md"
+"channel: irc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/irc/**"
+          - "docs/channels/irc.md"
 "channel: line":
   - changed-files:
       - any-glob-to-any-file:
