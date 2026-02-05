@@ -12,4 +12,11 @@ export type ChannelsState = {
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginConnected: boolean | null;
   whatsappBusy: boolean;
+  simplexInviteBusy: boolean;
+  simplexInviteMode: SimplexInviteMode | null;
+  simplexInviteLink: string | null;
+  simplexInviteQrDataUrl: string | null;
+  simplexInviteError: string | null;
 };
+
+export type SimplexInviteMode = "connect" | "address";

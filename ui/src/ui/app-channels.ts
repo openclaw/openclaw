@@ -1,10 +1,12 @@
 import type { OpenClawApp } from "./app.ts";
 import {
+  createSimplexInvite,
   loadChannels,
   logoutWhatsApp,
   startWhatsAppLogin,
   waitWhatsAppLogin,
 } from "./controllers/channels.ts";
+import type { SimplexInviteMode } from "./controllers/channels.types.ts";
 import { loadConfig, saveConfig } from "./controllers/config.ts";
 import type { NostrProfile } from "./types.ts";
 import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
@@ -276,4 +278,8 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
       success: null,
     };
   }
+}
+
+export async function handleSimplexInvite(host: OpenClawApp, mode: SimplexInviteMode) {
+  await createSimplexInvite(host, mode);
 }

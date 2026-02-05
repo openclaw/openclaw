@@ -8,6 +8,7 @@ import type {
   NostrProfile,
   NostrStatus,
   SignalStatus,
+  SimplexStatus,
   SlackStatus,
   TelegramStatus,
   WhatsAppStatus,
@@ -26,6 +27,11 @@ export type ChannelsProps = {
   whatsappQrDataUrl: string | null;
   whatsappConnected: boolean | null;
   whatsappBusy: boolean;
+  simplexInviteBusy: boolean;
+  simplexInviteMode: "connect" | "address" | null;
+  simplexInviteLink: string | null;
+  simplexInviteQrDataUrl: string | null;
+  simplexInviteError: string | null;
   configSchema: unknown;
   configSchemaLoading: boolean;
   configForm: Record<string, unknown> | null;
@@ -38,6 +44,7 @@ export type ChannelsProps = {
   onWhatsAppStart: (force: boolean) => void;
   onWhatsAppWait: () => void;
   onWhatsAppLogout: () => void;
+  onSimplexInvite: (mode: "connect" | "address") => void;
   onConfigPatch: (path: Array<string | number>, value: unknown) => void;
   onConfigSave: () => void;
   onConfigReload: () => void;
@@ -58,5 +65,6 @@ export type ChannelsChannelData = {
   signal?: SignalStatus | null;
   imessage?: IMessageStatus | null;
   nostr?: NostrStatus | null;
+  simplex?: SimplexStatus | null;
   channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null;
 };

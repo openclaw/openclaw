@@ -9,6 +9,7 @@ import type {
   IMessageStatus,
   NostrProfile,
   NostrStatus,
+  SimplexStatus,
   SignalStatus,
   SlackStatus,
   TelegramStatus,
@@ -21,6 +22,7 @@ import { renderIMessageCard } from "./channels.imessage.ts";
 import { renderNostrCard } from "./channels.nostr.ts";
 import { channelEnabled, renderChannelAccountCount } from "./channels.shared.ts";
 import { renderSignalCard } from "./channels.signal.ts";
+import { renderSimplexCard } from "./channels.simplex.ts";
 import { renderSlackCard } from "./channels.slack.ts";
 import { renderTelegramCard } from "./channels.telegram.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./channels.types.ts";
@@ -36,6 +38,7 @@ export function renderChannels(props: ChannelsProps) {
   const signal = (channels?.signal ?? null) as SignalStatus | null;
   const imessage = (channels?.imessage ?? null) as IMessageStatus | null;
   const nostr = (channels?.nostr ?? null) as NostrStatus | null;
+  const simplex = (channels?.simplex ?? null) as SimplexStatus | null;
   const channelOrder = resolveChannelOrder(props.snapshot);
   const orderedChannels = channelOrder
     .map((key, index) => ({
@@ -62,6 +65,7 @@ export function renderChannels(props: ChannelsProps) {
           signal,
           imessage,
           nostr,
+          simplex,
           channelAccounts: props.snapshot?.channelAccounts ?? null,
         }),
       )}
@@ -96,7 +100,17 @@ function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKe
   if (snapshot?.channelOrder?.length) {
     return snapshot.channelOrder;
   }
-  return ["whatsapp", "telegram", "discord", "googlechat", "slack", "signal", "imessage", "nostr"];
+  return [
+    "whatsapp",
+    "telegram",
+    "discord",
+    "googlechat",
+    "slack",
+    "signal",
+    "imessage",
+    "nostr",
+    "simplex",
+  ];
 }
 
 function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
@@ -172,6 +186,13 @@ function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChan
         onEditProfile: () => props.onNostrProfileEdit(accountId, profile),
       });
     }
+    case "simplex":
+      return renderSimplexCard({
+        props,
+        simplex: data.simplex,
+        simplexAccounts: data.channelAccounts?.simplex ?? [],
+        accountCountLabel,
+      });
     default:
       return renderGenericChannelCard(key, props, data.channelAccounts ?? {});
   }

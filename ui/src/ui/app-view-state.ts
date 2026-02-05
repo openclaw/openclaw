@@ -32,8 +32,10 @@ import type {
   StatusSummary,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
+import type { SimplexInviteMode } from "./controllers/channels.types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
+
 
 export type AppViewState = {
   settings: UiSettings;
@@ -116,6 +118,11 @@ export type AppViewState = {
   whatsappLoginQrDataUrl: string | null;
   whatsappLoginConnected: boolean | null;
   whatsappBusy: boolean;
+  simplexInviteBusy: boolean;
+  simplexInviteMode: SimplexInviteMode | null;
+  simplexInviteLink: string | null;
+  simplexInviteQrDataUrl: string | null;
+  simplexInviteError: string | null;
   nostrProfileFormState: NostrProfileFormState | null;
   nostrProfileAccountId: string | null;
   configFormDirty: boolean;
@@ -241,6 +248,7 @@ export type AppViewState = {
   handleNostrProfileSave: () => Promise<void>;
   handleNostrProfileImport: () => Promise<void>;
   handleNostrProfileToggleAdvanced: () => void;
+  handleSimplexInvite: (mode: SimplexInviteMode) => Promise<void>;
   handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
   handleGatewayUrlConfirm: () => void;
   handleGatewayUrlCancel: () => void;
