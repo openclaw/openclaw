@@ -107,6 +107,8 @@ export type CommandsConfig = {
   restart?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;
+  /** Explicit owner allowlist for owner-only tools/commands (channel-native IDs). */
+  ownerAllowFrom?: Array<string | number>;
 };
 
 export type ProviderCommandsConfig = {

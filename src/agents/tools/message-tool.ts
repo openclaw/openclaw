@@ -19,11 +19,22 @@ import { normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listChannelSupportedActions } from "../channel-tools.js";
-import { assertSandboxPath } from "../sandbox-paths.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
+const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
+  "send",
+  "sendWithEffect",
+  "sendAttachment",
+  "reply",
+  "thread-reply",
+  "broadcast",
+]);
+
+function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
+  return EXPLICIT_TARGET_ACTIONS.has(action);
+}
 function buildRoutingSchema() {
   return {
     channel: Type.Optional(Type.String()),
@@ -45,7 +56,11 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
     effect: Type.Optional(
       Type.String({ description: "Alias for effectId (e.g., invisible-ink, balloons)." }),
     ),
-    media: Type.Optional(Type.String()),
+    media: Type.Optional(
+      Type.String({
+        description: "Media URL or local path. data: URLs are not supported here, use buffer.",
+      }),
+    ),
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({
@@ -285,6 +300,7 @@ type MessageToolOptions = {
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
+  requireExplicitTarget?: boolean;
 };
 
 function buildMessageToolSchema(cfg: OpenClawConfig) {
@@ -394,15 +410,18 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
-
-      // Validate file paths against sandbox root to prevent host file access.
-      const sandboxRoot = options?.sandboxRoot;
-      if (sandboxRoot) {
-        for (const key of ["filePath", "path"] as const) {
-          const raw = readStringParam(params, key, { trim: false });
-          if (raw) {
-            await assertSandboxPath({ filePath: raw, cwd: sandboxRoot, root: sandboxRoot });
-          }
+      const requireExplicitTarget = options?.requireExplicitTarget === true;
+      if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
+        const explicitTarget =
+          (typeof params.target === "string" && params.target.trim().length > 0) ||
+          (typeof params.to === "string" && params.to.trim().length > 0) ||
+          (typeof params.channelId === "string" && params.channelId.trim().length > 0) ||
+          (Array.isArray(params.targets) &&
+            params.targets.some((value) => typeof value === "string" && value.trim().length > 0));
+        if (!explicitTarget) {
+          throw new Error(
+            "Explicit message target required for this run. Provide target/targets (and channel when needed).",
+          );
         }
       }
 
@@ -448,6 +467,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         agentId: options?.agentSessionKey
           ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
           : undefined,
+        sandboxRoot: options?.sandboxRoot,
         abortSignal: signal,
       });
 

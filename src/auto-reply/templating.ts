@@ -56,6 +56,8 @@ export type MsgContext = {
   ForwardedFromUsername?: string;
   ForwardedFromTitle?: string;
   ForwardedFromSignature?: string;
+  ForwardedFromChatType?: string;
+  ForwardedFromMessageId?: number;
   ForwardedDate?: number;
   ThreadStarterBody?: string;
   ThreadLabel?: string;

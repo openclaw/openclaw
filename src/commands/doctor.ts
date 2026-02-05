@@ -26,6 +26,7 @@ import {
   maybeRepairAnthropicOAuthProfileId,
   noteAuthProfileHealth,
 } from "./doctor-auth.js";
+import { doctorShellCompletion } from "./doctor-completion.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
 import { checkGatewayHealth } from "./doctor-gateway-health.js";
@@ -258,6 +259,11 @@ export async function doctorCommand(
   }
 
   noteWorkspaceStatus(cfg);
+
+  // Check and fix shell completion
+  await doctorShellCompletion(runtime, prompter, {
+    nonInteractive: options.nonInteractive,
+  });
 
   const { healthOk } = await checkGatewayHealth({
     runtime,

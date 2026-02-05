@@ -1,5 +1,10 @@
+import type { Bot } from "grammy";
+import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramStreamMode, TelegramContext } from "./bot/types.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-// @ts-nocheck
 import {
   findModelInCatalog,
   loadModelCatalog,
@@ -12,9 +17,8 @@ import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../channels/logging.js";
-import { createReplyPrefixContext } from "../channels/reply-prefix.js";
+import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
-import { OpenClawConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { danger, logVerbose } from "../globals.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -38,6 +42,21 @@ async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string)
   }
 }
 
+type ResolveBotTopicsEnabled = (ctx: TelegramContext) => boolean | Promise<boolean>;
+
+type DispatchTelegramMessageParams = {
+  context: TelegramMessageContext;
+  bot: Bot;
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  replyToMode: ReplyToMode;
+  streamMode: TelegramStreamMode;
+  textLimit: number;
+  telegramCfg: TelegramAccountConfig;
+  opts: Pick<TelegramBotOptions, "token">;
+  resolveBotTopicsEnabled: ResolveBotTopicsEnabled;
+};
+
 export const dispatchTelegramMessage = async ({
   context,
   bot,
@@ -49,8 +68,7 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   opts,
   resolveBotTopicsEnabled,
-  // oxlint-disable-next-line typescript/no-explicit-any
-}: any) => {
+}: DispatchTelegramMessageParams) => {
   const {
     ctxPayload,
     primaryCtx,
@@ -157,7 +175,12 @@ export const dispatchTelegramMessage = async ({
     Boolean(draftStream) ||
     (typeof telegramCfg.blockStreaming === "boolean" ? !telegramCfg.blockStreaming : undefined);
 
-  const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    cfg,
+    agentId: route.agentId,
+    channel: "telegram",
+    accountId: route.accountId,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
@@ -168,7 +191,7 @@ export const dispatchTelegramMessage = async ({
   // Handle uncached stickers: get a dedicated vision description before dispatch
   // This ensures we cache a raw description rather than a conversational response
   const sticker = ctxPayload.Sticker;
-  if (sticker?.fileUniqueId && ctxPayload.MediaPath) {
+  if (sticker?.fileId && sticker.fileUniqueId && ctxPayload.MediaPath) {
     const agentDir = resolveAgentDir(cfg, route.agentId);
     const stickerSupportsVision = await resolveStickerVisionSupport(cfg, route.agentId);
     let description = sticker.cachedDescription ?? null;
@@ -202,16 +225,20 @@ export const dispatchTelegramMessage = async ({
       }
 
       // Cache the description for future encounters
-      cacheSticker({
-        fileId: sticker.fileId,
-        fileUniqueId: sticker.fileUniqueId,
-        emoji: sticker.emoji,
-        setName: sticker.setName,
-        description,
-        cachedAt: new Date().toISOString(),
-        receivedFrom: ctxPayload.From,
-      });
-      logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
+      if (sticker.fileId) {
+        cacheSticker({
+          fileId: sticker.fileId,
+          fileUniqueId: sticker.fileUniqueId,
+          emoji: sticker.emoji,
+          setName: sticker.setName,
+          description,
+          cachedAt: new Date().toISOString(),
+          receivedFrom: ctxPayload.From,
+        });
+        logVerbose(`telegram: cached sticker description for ${sticker.fileUniqueId}`);
+      } else {
+        logVerbose(`telegram: skipped sticker cache (missing fileId)`);
+      }
     }
   }
 
@@ -228,8 +255,7 @@ export const dispatchTelegramMessage = async ({
     ctx: ctxPayload,
     cfg,
     dispatcherOptions: {
-      responsePrefix: prefixContext.responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
+      ...prefixOptions,
       deliver: async (payload, info) => {
         if (info.kind === "final") {
           await flushDraft();
@@ -278,9 +304,7 @@ export const dispatchTelegramMessage = async ({
       skillFilter,
       disableBlockStreaming,
       onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
-      onModelSelected: (ctx) => {
-        prefixContext.onModelSelected(ctx);
-      },
+      onModelSelected,
     },
   });
   draftStream?.stop();
