@@ -50,7 +50,13 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.missing.bins).toContain("fakebin");
     expect(skill?.missing.env).toContain("ENV_KEY");
     expect(skill?.missing.config).toContain("browser.enabled");
-    expect(skill?.install[0]?.id).toBe("brew");
+    // On Windows, brew install options are filtered out
+    // On other platforms, brew should be shown
+    if (process.platform === "win32") {
+      expect(skill?.install).toHaveLength(0);
+    } else {
+      expect(skill?.install[0]?.id).toBe("brew");
+    }
   });
   it("respects OS-gated skills", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
