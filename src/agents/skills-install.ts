@@ -8,10 +8,12 @@ import { resolveBrewExecutable } from "../infra/brew.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { CONFIG_DIR, ensureDir, resolveUserPath } from "../utils.js";
+import { scanSkillSecurity, formatSecurityScanResult } from "./skills-security-scanner.js";
 import {
   hasBinary,
   loadWorkspaceSkillEntries,
   resolveSkillsInstallPreferences,
+  resolveSecurityPolicy,
   type SkillEntry,
   type SkillInstallSpec,
   type SkillsInstallPreferences,
@@ -355,6 +357,27 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     };
   }
 
+  // Security scan
+  const policy = resolveSecurityPolicy(params.config);
+  const scanResult = await scanSkillSecurity(entry, policy);
+
+  if (!scanResult.passed) {
+    const formattedScan = formatSecurityScanResult(scanResult);
+    return {
+      ok: false,
+      message: `Security check failed: ${scanResult.riskLevel} risk level detected`,
+      stdout: formattedScan,
+      stderr: `Blocked by security policy: ${policy}`,
+      code: null,
+    };
+  }
+
+  // If there are warnings but it passed, log them to stdout
+  const securityWarning =
+    scanResult.issues.length > 0
+      ? `\nSecurity scan: ${formatSecurityScanResult(scanResult)}\n`
+      : "";
+
   const spec = findInstallSpec(entry, params.installId);
   if (!spec) {
     return {
@@ -482,7 +505,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   return {
     ok: success,
     message: success ? "Installed" : formatInstallFailureMessage(result),
-    stdout: result.stdout.trim(),
+    stdout: securityWarning + result.stdout.trim(),
     stderr: result.stderr.trim(),
     code: result.code,
   };

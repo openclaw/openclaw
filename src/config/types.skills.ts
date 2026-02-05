@@ -20,6 +20,13 @@ export type SkillsLoadConfig = {
 export type SkillsInstallConfig = {
   preferBrew?: boolean;
   nodeManager?: "npm" | "pnpm" | "yarn" | "bun";
+  /**
+   * Security policy for skill installation.
+   * - strict: Block high and critical risk skills
+   * - moderate: Block only critical risk skills (default)
+   * - permissive: Warn only, allow all installations
+   */
+  securityPolicy?: "strict" | "moderate" | "permissive";
 };
 
 export type SkillsConfig = {

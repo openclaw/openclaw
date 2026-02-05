@@ -44,3 +44,13 @@ export function resolveSkillsInstallPreferences(config?: OpenClawConfig): Skills
       : "npm";
   return { preferBrew, nodeManager };
 }
+
+export function resolveSecurityPolicy(
+  config?: OpenClawConfig,
+): "strict" | "moderate" | "permissive" {
+  const policy = config?.skills?.install?.securityPolicy;
+  if (policy === "strict" || policy === "moderate" || policy === "permissive") {
+    return policy;
+  }
+  return "moderate"; // default
+}
