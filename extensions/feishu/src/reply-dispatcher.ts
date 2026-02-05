@@ -7,7 +7,7 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk";
 import type { MentionTarget } from "./mention.js";
-import type { FeishuConfig } from "./types.js";
+import { resolveFeishuAccount } from "./accounts.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendMarkdownCardFeishu } from "./send.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
@@ -36,11 +36,16 @@ export type CreateFeishuReplyDispatcherParams = {
   replyToMessageId?: string;
   /** Mention targets, will be auto-included in replies */
   mentionTargets?: MentionTarget[];
+  /** Account ID for multi-account support */
+  accountId?: string;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
   const core = getFeishuRuntime();
-  const { cfg, agentId, chatId, replyToMessageId, mentionTargets } = params;
+  const { cfg, agentId, chatId, replyToMessageId, mentionTargets, accountId } = params;
+
+  // Resolve account for config access
+  const account = resolveFeishuAccount({ cfg, accountId });
 
   const prefixContext = createReplyPrefixContext({
     cfg,
@@ -56,16 +61,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (!replyToMessageId) {
         return;
       }
-      typingState = await addTypingIndicator({ cfg, messageId: replyToMessageId });
-      params.runtime.log?.(`feishu: added typing indicator reaction`);
+      typingState = await addTypingIndicator({ cfg, messageId: replyToMessageId, accountId });
+      params.runtime.log?.(`feishu[${account.accountId}]: added typing indicator reaction`);
     },
     stop: async () => {
       if (!typingState) {
         return;
       }
-      await removeTypingIndicator({ cfg, state: typingState });
+      await removeTypingIndicator({ cfg, state: typingState, accountId });
       typingState = null;
-      params.runtime.log?.(`feishu: removed typing indicator reaction`);
+      params.runtime.log?.(`feishu[${account.accountId}]: removed typing indicator reaction`);
     },
     onStartError: (err) => {
       logTypingFailure({
@@ -103,15 +108,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
       onReplyStart: typingCallbacks.onReplyStart,
       deliver: async (payload: ReplyPayload) => {
-        params.runtime.log?.(`feishu deliver called: text=${payload.text?.slice(0, 100)}`);
+        params.runtime.log?.(
+          `feishu[${account.accountId}] deliver called: text=${payload.text?.slice(0, 100)}`,
+        );
         const text = payload.text ?? "";
         if (!text.trim()) {
-          params.runtime.log?.(`feishu deliver: empty text, skipping`);
+          params.runtime.log?.(`feishu[${account.accountId}] deliver: empty text, skipping`);
           return;
         }
 
         // Check render mode: auto (default), raw, or card
-        const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
+        const feishuCfg = account.config;
         const renderMode = feishuCfg?.renderMode ?? "auto";
 
         // Determine if we should use card for this message
@@ -123,7 +130,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (useCard) {
           // Card mode: send as interactive card with markdown rendering
           const chunks = core.channel.text.chunkTextWithMode(text, textChunkLimit, chunkMode);
-          params.runtime.log?.(`feishu deliver: sending ${chunks.length} card chunks to ${chatId}`);
+          params.runtime.log?.(
+            `feishu[${account.accountId}] deliver: sending ${chunks.length} card chunks to ${chatId}`,
+          );
           for (const chunk of chunks) {
             await sendMarkdownCardFeishu({
               cfg,
@@ -131,6 +140,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               text: chunk,
               replyToMessageId,
               mentions: isFirstChunk ? mentionTargets : undefined,
+              accountId,
             });
             isFirstChunk = false;
           }
@@ -138,7 +148,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           // Raw mode: send as plain text with table conversion
           const converted = core.channel.text.convertMarkdownTables(text, tableMode);
           const chunks = core.channel.text.chunkTextWithMode(converted, textChunkLimit, chunkMode);
-          params.runtime.log?.(`feishu deliver: sending ${chunks.length} text chunks to ${chatId}`);
+          params.runtime.log?.(
+            `feishu[${account.accountId}] deliver: sending ${chunks.length} text chunks to ${chatId}`,
+          );
           for (const chunk of chunks) {
             await sendMessageFeishu({
               cfg,
@@ -146,13 +158,16 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               text: chunk,
               replyToMessageId,
               mentions: isFirstChunk ? mentionTargets : undefined,
+              accountId,
             });
             isFirstChunk = false;
           }
         }
       },
       onError: (err, info) => {
-        params.runtime.error?.(`feishu ${info.kind} reply failed: ${String(err)}`);
+        params.runtime.error?.(
+          `feishu[${account.accountId}] ${info.kind} reply failed: ${String(err)}`,
+        );
         typingCallbacks.onIdle?.();
       },
       onIdle: typingCallbacks.onIdle,
