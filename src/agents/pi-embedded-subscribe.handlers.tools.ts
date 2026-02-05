@@ -98,7 +98,7 @@ function recordToolExecution(
     timestamp: Date.now(),
     success,
   });
-  
+
   // Trim history to prevent memory leak
   if (ctx.state.toolExecutionHistory.length > LOOP_DETECTION_HISTORY_SIZE) {
     ctx.state.toolExecutionHistory = ctx.state.toolExecutionHistory.slice(
@@ -352,20 +352,18 @@ export function handleToolExecutionEnd(
   const sanitizedResult = sanitizeToolResult(result);
   const meta = ctx.state.toolMetaById.get(toolCallId);
   const args = ctx.state.toolArgsById.get(toolCallId);
-  
+
   // ── LOOP DETECTION: Record execution result ─────────────────────────────
   const isLoopBlocked = meta === "LOOP BLOCKED";
   if (!isLoopBlocked && args !== undefined) {
     // Record this execution in history
     recordToolExecution(ctx, toolName, args, !isToolError);
-    
+
     if (isToolError) {
-      ctx.log.debug(
-        `Tool execution failed: ${toolName} (will count toward loop detection)`,
-      );
+      ctx.log.debug(`Tool execution failed: ${toolName} (will count toward loop detection)`);
     }
   }
-  
+
   ctx.state.toolMetas.push({ toolName, meta });
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolArgsById.delete(toolCallId);
