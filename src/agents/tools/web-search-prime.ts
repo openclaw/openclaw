@@ -100,7 +100,7 @@ async function mcpRequest(params: {
   body: Record<string, unknown>;
   sessionId?: string;
   timeoutMs: number;
-}): Promise<{ json: Record<string, unknown>; sessionId?: string }> {
+}): Promise<{ json: Record<string, unknown> | null; sessionId?: string }> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
@@ -124,6 +124,12 @@ async function mcpRequest(params: {
 
   const sessionId = res.headers.get("Mcp-Session-Id") ?? params.sessionId;
   const contentType = res.headers.get("Content-Type") ?? "";
+
+  // JSON-RPC notifications may return 204/202 with no body.
+  const contentLength = res.headers.get("Content-Length");
+  if (res.status === 204 || res.status === 202 || contentLength === "0") {
+    return { json: null, sessionId: sessionId ?? undefined };
+  }
 
   let json: Record<string, unknown>;
   if (contentType.includes("text/event-stream")) {
@@ -186,8 +192,6 @@ async function ensureMcpSession(params: {
       method: "notifications/initialized",
       params: {},
     },
-  }).catch(() => {
-    // Notifications may return 202/204 with no body; ignore errors.
   });
 
   mcpSessions.set(params.url, { sessionId, createdAt: Date.now() });
