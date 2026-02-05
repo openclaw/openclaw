@@ -724,5 +724,11 @@ async function dispatchInbound(params: {
         pending.runtime.error?.(`[${pending.account.accountId}] SimpleX reply failed: ${String(err)}`);
       },
     },
+    replyOptions: {
+      disableBlockStreaming:
+        typeof pending.account.config.blockStreaming === "boolean"
+          ? !pending.account.config.blockStreaming
+          : undefined,
+    },
   });
 }
