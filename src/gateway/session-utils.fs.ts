@@ -8,7 +8,7 @@ import { stripEnvelope } from "./chat-sanitize.js";
 
 type ArtifactRefLike = {
   id?: string;
-  path?: string;
+  path: string;
   toolName?: string;
 };
 
