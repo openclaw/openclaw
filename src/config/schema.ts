@@ -300,6 +300,11 @@ const FIELD_LABELS: Record<string, string> = {
   "memory.qmd.scope": "QMD Surface Scope",
   "memory.progressive": "Progressive Memory",
   "memory.progressive.enabled": "Enable Progressive Memory",
+  "memory.graphiti": "Graphiti Memory",
+  "memory.graphiti.enabled": "Enable Graphiti",
+  "memory.graphiti.baseUrl": "Graphiti Base URL",
+  "memory.graphiti.apiKey": "Graphiti API Key",
+  "memory.graphiti.timeoutMs": "Graphiti Timeout (ms)",
   "auth.profiles": "Auth Profiles",
   "auth.order": "Auth Profile Order",
   "auth.cooldowns.billingBackoffHours": "Billing Backoff (hours)",
@@ -651,6 +656,12 @@ const FIELD_HELP: Record<string, string> = {
   "memory.qmd.limits.timeoutMs": "Per-query timeout for QMD searches (default: 4000).",
   "memory.qmd.scope":
     "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only).",
+  "memory.graphiti": "Graphiti graph memory backend configuration.",
+  "memory.graphiti.enabled": "Enable Graphiti as a memory search backend (default: false).",
+  "memory.graphiti.baseUrl": "Base URL for the Graphiti service (e.g. http://localhost:8000).",
+  "memory.graphiti.apiKey": "API key for Graphiti authentication.",
+  "memory.graphiti.timeoutMs":
+    "Request timeout in milliseconds for Graphiti calls (default: 10000).",
   "agents.defaults.memorySearch.cache.maxEntries":
     "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":

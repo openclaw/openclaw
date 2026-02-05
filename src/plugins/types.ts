@@ -35,6 +35,17 @@ export type PluginConfigUiHint = {
 
 export type PluginKind = "memory";
 
+export type PluginSearchBackendRegistration = {
+  id: string;
+  pluginId?: string;
+  label?: string;
+  weight?: number; // default 1.0, used in result scoring
+  factory: (ctx: {
+    config: OpenClawConfig;
+    agentId: string;
+  }) => Promise<import("../memory/types.js").MemorySearchManager | null>;
+};
+
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
   | { ok: false; errors: string[] };
@@ -262,6 +273,7 @@ export type OpenClawPluginApi = {
    * Use this for simple state-toggling or status commands that don't need AI reasoning.
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
+  registerSearchBackend: (backend: PluginSearchBackendRegistration) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

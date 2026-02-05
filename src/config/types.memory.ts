@@ -7,11 +7,19 @@ export type MemoryProgressiveConfig = {
   enabled?: boolean;
 };
 
+export type MemoryGraphitiConfig = {
+  enabled?: boolean;
+  baseUrl?: string;
+  apiKey?: string;
+  timeoutMs?: number; // default 10000
+};
+
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
   progressive?: MemoryProgressiveConfig;
+  graphiti?: MemoryGraphitiConfig;
 };
 
 export type MemoryQmdConfig = {

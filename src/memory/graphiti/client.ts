@@ -1,5 +1,6 @@
 import type { MemoryContentObject } from "../types.js";
 import type { GraphitiIngestResponse, GraphitiQueryResponse } from "./adapter.js";
+import { memLog } from "../memory-log.js";
 
 export type GraphitiEpisode = {
   id: string;
@@ -33,6 +34,7 @@ export type GraphitiClientOptions = {
   apiKey?: string;
   fetchFn?: typeof fetch;
   now?: () => Date;
+  timeoutMs?: number;
 };
 
 export type GraphitiEpisodeWarning = {
@@ -93,12 +95,40 @@ export class GraphitiClient {
   private readonly apiKey?: string;
   private readonly fetchFn: typeof fetch;
   private readonly now: () => Date;
+  private readonly timeoutMs: number;
 
   constructor(options: GraphitiClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.apiKey = options.apiKey;
     this.fetchFn = options.fetchFn ?? fetch;
     this.now = options.now ?? (() => new Date());
+    this.timeoutMs = options.timeoutMs ?? 10_000;
+  }
+
+  /** GET /health — lightweight liveness check. */
+  async health(): Promise<{ ok: boolean; message?: string }> {
+    memLog.debug("graphiti health check", { baseUrl: this.baseUrl });
+    try {
+      const response = await this.fetchFn(`${this.baseUrl}/health`, {
+        method: "GET",
+        headers: {
+          ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
+        },
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      if (!response.ok) {
+        const msg = `Graphiti health check failed (${response.status}).`;
+        memLog.debug("graphiti health failed", { status: response.status });
+        return { ok: false, message: msg };
+      }
+      const body = (await response.json()) as { ok?: boolean; message?: string };
+      memLog.debug("graphiti health ok", { body });
+      return { ok: body.ok !== false, message: body.message };
+    } catch (err) {
+      const msg = `Graphiti health check error: ${String(err)}`;
+      memLog.debug("graphiti health error", { error: String(err) });
+      return { ok: false, message: msg };
+    }
   }
 
   async ingestEpisodes(request: GraphitiIngestEpisodesRequest): Promise<GraphitiIngestResponse> {
@@ -110,6 +140,8 @@ export class GraphitiClient {
       return result.episode;
     });
 
+    memLog.debug("graphiti ingestEpisodes", { count: episodes.length, traceId: request.traceId });
+
     const response = await this.fetchFn(`${this.baseUrl}/ingestEpisodes`, {
       method: "POST",
       headers: {
@@ -117,9 +149,11 @@ export class GraphitiClient {
         ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
       },
       body: JSON.stringify({ episodes, traceId: request.traceId, warnings }),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!response.ok) {
+      memLog.debug("graphiti ingestEpisodes failed", { status: response.status });
       return {
         ok: false,
         nodeCount: 0,
@@ -128,10 +162,17 @@ export class GraphitiClient {
       };
     }
 
-    return (await response.json()) as GraphitiIngestResponse;
+    const result = (await response.json()) as GraphitiIngestResponse;
+    memLog.debug("graphiti ingestEpisodes ok", {
+      nodeCount: result.nodeCount,
+      edgeCount: result.edgeCount,
+    });
+    return result;
   }
 
   async queryHybrid(request: GraphitiQueryHybridRequest): Promise<GraphitiQueryHybridResponse> {
+    memLog.debug("graphiti queryHybrid", { query: request.query, limit: request.limit });
+
     const response = await this.fetchFn(`${this.baseUrl}/queryHybrid`, {
       method: "POST",
       headers: {
@@ -139,9 +180,11 @@ export class GraphitiClient {
         ...(this.apiKey ? { authorization: `Bearer ${this.apiKey}` } : {}),
       },
       body: JSON.stringify(request),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!response.ok) {
+      memLog.debug("graphiti queryHybrid failed", { status: response.status });
       return {
         nodes: [],
         edges: [],
@@ -149,6 +192,16 @@ export class GraphitiClient {
       };
     }
 
-    return (await response.json()) as GraphitiQueryHybridResponse;
+    const result = (await response.json()) as GraphitiQueryHybridResponse;
+    memLog.debug("graphiti queryHybrid ok", {
+      nodes: result.nodes.length,
+      episodes: result.episodes?.length ?? 0,
+    });
+    return result;
+  }
+
+  /** No-op for now; satisfies MemorySearchManager.close(). */
+  async close(): Promise<void> {
+    // no-op
   }
 }

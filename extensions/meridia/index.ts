@@ -44,6 +44,19 @@ const meridiaPlugin = {
         closeBackend();
       },
     });
+
+    api.registerSearchBackend({
+      id: "meridia",
+      label: "Meridia Experiential Memory",
+      weight: 0.6,
+      factory: async (ctx) => {
+        const { createBackend } = await import("./src/meridia/db/index.js");
+        const { MeridiaSearchAdapter } = await import("./src/meridia-search-adapter.js");
+        const backend = createBackend({ cfg: ctx.config });
+        if (!backend) return null;
+        return new MeridiaSearchAdapter(backend) as any;
+      },
+    });
   },
 };
 
