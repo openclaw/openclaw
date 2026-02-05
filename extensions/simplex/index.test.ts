@@ -32,6 +32,7 @@ vi.mock("../../src/web/qr-image.js", () => ({
   renderQrPngBase64: qrMocks.renderQrPngBase64,
 }));
 
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 import plugin from "./index.js";
 import { __getLastCommand, __resetMock, __setMockResponse } from "./src/simplex-ws-client.js";
 
@@ -64,7 +65,7 @@ function setupHandler(config: Record<string, unknown> = {}): Handler {
     source: "test",
     config,
     pluginConfig: {},
-    runtime: {} as any,
+    runtime: {} as PluginRuntime,
     logger: noopLogger,
     registerChannel: () => {},
     registerGatewayMethod: (method, handler) => methods.set(method, handler as Handler),

@@ -6,6 +6,7 @@ import {
   resolveSimplexAccount,
 } from "./accounts.js";
 import { SimplexChannelConfigSchema } from "./config-schema.js";
+import { simplexOnboardingAdapter } from "./onboarding.js";
 import { startSimplexMonitor } from "./simplex-monitor.js";
 import { buildSendMessagesCommand, type SimplexComposedMessage } from "./simplex-commands.js";
 import { startSimplexCli } from "./simplex-cli.js";
@@ -182,6 +183,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
     order: 95,
     quickstartAllowFrom: true,
   },
+  onboarding: simplexOnboardingAdapter,
   pairing: {
     idLabel: "simplexContactId",
     normalizeAllowEntry: (entry) => entry.replace(/^simplex:/i, "").replace(/^@/, ""),
