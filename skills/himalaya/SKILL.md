@@ -55,6 +55,18 @@ Himalaya is a CLI email client that lets you manage emails from the terminal usi
 2. A configuration file at `~/.config/himalaya/config.toml`
 3. IMAP/SMTP credentials configured (password stored securely)
 
+## Before Using Himalaya
+
+Before sending or reading emails, always run these checks first:
+
+1. Verify himalaya is working: `himalaya --version`
+2. Check configured accounts: `himalaya account list`
+3. Use the account's email address as the `From:` header in all outgoing emails
+
+> **Tip:** Always use the email address from `himalaya account list` as the `From:` header. Do not guess or hardcode email addresses.
+
+If no accounts are configured, guide the user through setup (see Configuration Setup below).
+
 ## Configuration Setup
 
 Run the interactive wizard to set up an account:
