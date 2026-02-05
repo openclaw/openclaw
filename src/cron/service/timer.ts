@@ -27,7 +27,6 @@ export function armTimer(state: CronServiceState) {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
     });
   }, clampedDelay);
-  state.timer.unref?.();
 }
 
 export async function onTimer(state: CronServiceState) {
