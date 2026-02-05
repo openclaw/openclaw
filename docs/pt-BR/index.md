@@ -29,13 +29,3 @@ OpenClaw conecta apps de conversa (como WhatsApp, Telegram e Discord) a agentes 
     ```
   </Step>
 </Steps>
-
-## Próximos passos
-
-- [Primeiros passos](/start/getting-started)
-- [Assistente de onboarding](/start/wizard)
-- [Canais](/channels/index)
-- [Configuração do Gateway](/gateway/configuration)
-- [Solução de problemas](/gateway/troubleshooting)
-
-> Observação: a tradução completa para pt-BR está em andamento. Enquanto isso, as páginas acima levam para a documentação principal.

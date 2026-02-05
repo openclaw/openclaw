@@ -29,13 +29,3 @@ OpenClaw conecta aplicaciones de mensajería (como WhatsApp, Telegram y Discord)
     ```
   </Step>
 </Steps>
-
-## Próximos pasos
-
-- [Primeros pasos](/start/getting-started)
-- [Asistente de onboarding](/start/wizard)
-- [Canales](/channels/index)
-- [Configuración del Gateway](/gateway/configuration)
-- [Resolución de problemas](/gateway/troubleshooting)
-
-> Nota: la traducción completa al español está en progreso. Mientras tanto, los enlaces anteriores apuntan a la documentación principal.
