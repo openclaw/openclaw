@@ -29,9 +29,10 @@ services:
       CODEX_HOME: /root/.codex
       DOCKER_PROXY_HOST: docker-socket-proxy
     volumes:
-      # Single home directory mount for full persistence
+      # Persist entire home directory for self-installed tool configs
+      # (npm, gh, codex, etc. write to various dotfile locations)
       - ${HOME}/.openclaw/docker-home:/root
-      # OpenClaw config and workspace (symlinked or overlaid)
+      # OpenClaw config takes precedence (mounted after /root)
       - ${OPENCLAW_CONFIG_DIR}:/root/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/root/.openclaw/workspace
       # Cache volumes for faster rebuilds
@@ -46,13 +47,15 @@ services:
     init: true
     restart: unless-stopped
     command:
-      - /bin/sh
-      - -c
-      - |
-        apt-get update -qq && apt-get install -y -qq gh >/dev/null 2>&1
-        npm install -g @openai/codex clawhub >/dev/null 2>&1
-        ln -sf /home/node/.codex /root/.codex
-        exec node dist/index.js gateway --bind ${OPENCLAW_GATEWAY_BIND:-lan} --port 18789
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--bind",
+        "${OPENCLAW_GATEWAY_BIND:-lan}",
+        "--port",
+        "18789",
+      ]
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
@@ -68,9 +71,9 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       CODEX_HOME: /root/.codex
     volumes:
-      # Single home directory mount for full persistence
+      # Persist entire home directory for self-installed tool configs
       - ${HOME}/.openclaw/docker-home:/root
-      # OpenClaw config and workspace
+      # OpenClaw config takes precedence (mounted after /root)
       - ${OPENCLAW_CONFIG_DIR}:/root/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/root/.openclaw/workspace
     stdin_open: true
