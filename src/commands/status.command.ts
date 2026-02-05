@@ -1,21 +1,29 @@
+import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatUsageReportLines, loadProviderUsageSummary } from "../infra/provider-usage.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { runSecurityAudit } from "../security/audit.js";
-import { renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
-import { formatCliCommand } from "../cli/command-format.js";
+import {
+  formatUpdateChannelLabel,
+  normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
+} from "../infra/update-channels.js";
 import {
   resolveMemoryCacheSummary,
   resolveMemoryFtsState,
   resolveMemoryVectorState,
   type Tone,
 } from "../memory/status-format.js";
+import { runSecurityAudit } from "../security/audit.js";
+import { renderTable } from "../terminal/table.js";
+import { theme } from "../terminal/theme.js";
 import { formatHealthChannelLines, type HealthSummary } from "./health.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
+import { statusAllCommand } from "./status-all.js";
+import { formatGatewayAuthUsed } from "./status-all/format.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 import {
   formatAge,
@@ -31,13 +39,6 @@ import {
   formatUpdateOneLiner,
   resolveUpdateAvailability,
 } from "./status.update.js";
-import { formatGatewayAuthUsed } from "./status-all/format.js";
-import { statusAllCommand } from "./status-all.js";
-import {
-  formatUpdateChannelLabel,
-  normalizeUpdateChannel,
-  resolveEffectiveUpdateChannel,
-} from "../infra/update-channels.js";
 
 export async function statusCommand(
   opts: {
@@ -120,6 +121,14 @@ export async function statusCommand(
           }),
       )
     : undefined;
+  const lastHeartbeat =
+    opts.deep && gatewayReachable
+      ? await callGateway<HeartbeatEventPayload | null>({
+          method: "last-heartbeat",
+          params: {},
+          timeoutMs: opts.timeoutMs,
+        }).catch(() => null)
+      : null;
 
   const configChannel = normalizeUpdateChannel(cfg.update?.channel);
   const channelInfo = resolveEffectiveUpdateChannel({
@@ -157,7 +166,7 @@ export async function statusCommand(
           nodeService: nodeDaemon,
           agents: agentStatus,
           securityAudit,
-          ...(health || usage ? { health, usage } : {}),
+          ...(health || usage || lastHeartbeat ? { health, usage, lastHeartbeat } : {}),
         },
         null,
         2,
@@ -275,6 +284,21 @@ export async function statusCommand(
       .filter(Boolean);
     return parts.length > 0 ? parts.join(", ") : "disabled";
   })();
+  const lastHeartbeatValue = (() => {
+    if (!opts.deep) {
+      return null;
+    }
+    if (!gatewayReachable) {
+      return warn("unavailable");
+    }
+    if (!lastHeartbeat) {
+      return muted("none");
+    }
+    const age = formatAge(Date.now() - lastHeartbeat.ts);
+    const channel = lastHeartbeat.channel ?? "unknown";
+    const accountLabel = lastHeartbeat.accountId ? `account ${lastHeartbeat.accountId}` : null;
+    return [lastHeartbeat.status, `${age} ago`, channel, accountLabel].filter(Boolean).join(" · ");
+  })();
 
   const storeLabel =
     summary.sessions.paths.length > 1
@@ -371,6 +395,7 @@ export async function statusCommand(
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
     { Item: "Heartbeat", Value: heartbeatValue },
+    ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
     {
       Item: "Sessions",
       Value: `${summary.sessions.count} active · default ${defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`,

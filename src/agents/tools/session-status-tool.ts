@@ -1,25 +1,9 @@
 import { Type } from "@sinclair/typebox";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
-import {
-  ensureAuthProfileStore,
-  resolveAuthProfileDisplayLabel,
-  resolveAuthProfileOrder,
-} from "../../agents/auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
-import { loadModelCatalog } from "../../agents/model-catalog.js";
-import {
-  buildAllowedModelSet,
-  buildModelAliasIndex,
-  modelKey,
-  normalizeProviderId,
-  resolveDefaultModelForAgent,
-  resolveModelRefFromString,
-} from "../../agents/model-selection.js";
-import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -27,6 +11,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { loadCombinedSessionStoreForGateway } from "../../gateway/session-utils.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -38,7 +23,23 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import type { AnyAgentTool } from "./common.js";
+import { resolveAgentDir } from "../agent-scope.js";
+import {
+  ensureAuthProfileStore,
+  resolveAuthProfileDisplayLabel,
+  resolveAuthProfileOrder,
+} from "../auth-profiles.js";
+import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../model-auth.js";
+import { loadModelCatalog } from "../model-catalog.js";
+import {
+  buildAllowedModelSet,
+  buildModelAliasIndex,
+  modelKey,
+  normalizeProviderId,
+  resolveDefaultModelForAgent,
+  resolveModelRefFromString,
+} from "../model-selection.js";
 import { readStringParam } from "./common.js";
 import {
   shouldResolveSessionIdInput,
@@ -46,7 +47,6 @@ import {
   resolveMainSessionAlias,
   createAgentToAgentPolicy,
 } from "./sessions-helpers.js";
-import { loadCombinedSessionStoreForGateway } from "../../gateway/session-utils.js";
 
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -104,7 +104,7 @@ function resolveModelAuthLabel(params: {
     if (profile.type === "token") {
       return `token ${formatApiKeySnippet(profile.token)}${label ? ` (${label})` : ""}`;
     }
-    return `api-key ${formatApiKeySnippet(profile.key)}${label ? ` (${label})` : ""}`;
+    return `api-key ${formatApiKeySnippet(profile.key ?? "")}${label ? ` (${label})` : ""}`;
   }
 
   const envKey = resolveEnvApiKey(providerKey);

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+let backend: "builtin" | "qmd" = "builtin";
 const stubManager = {
   search: vi.fn(async () => [
     {
@@ -13,7 +14,7 @@ const stubManager = {
   ]),
   readFile: vi.fn(),
   status: () => ({
-    backend: "builtin" as const,
+    backend,
     files: 1,
     chunks: 1,
     dirty: false,
@@ -44,9 +45,12 @@ beforeEach(() => {
 
 describe("memory search citations", () => {
   it("appends source information when citations are enabled", async () => {
+    backend = "builtin";
     const cfg = { memory: { citations: "on" }, agents: { list: [{ id: "main", default: true }] } };
     const tool = createMemorySearchTool({ config: cfg });
-    if (!tool) throw new Error("tool missing");
+    if (!tool) {
+      throw new Error("tool missing");
+    }
     const result = await tool.execute("call_citations_on", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
     expect(details.results[0]?.snippet).toMatch(/Source: MEMORY.md#L5-L7/);
@@ -54,12 +58,66 @@ describe("memory search citations", () => {
   });
 
   it("leaves snippet untouched when citations are off", async () => {
+    backend = "builtin";
     const cfg = { memory: { citations: "off" }, agents: { list: [{ id: "main", default: true }] } };
     const tool = createMemorySearchTool({ config: cfg });
-    if (!tool) throw new Error("tool missing");
+    if (!tool) {
+      throw new Error("tool missing");
+    }
     const result = await tool.execute("call_citations_off", { query: "notes" });
     const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
     expect(details.results[0]?.snippet).not.toMatch(/Source:/);
     expect(details.results[0]?.citation).toBeUndefined();
+  });
+
+  it("clamps decorated snippets to qmd injected budget", async () => {
+    backend = "qmd";
+    const cfg = {
+      memory: { citations: "on", backend: "qmd", qmd: { limits: { maxInjectedChars: 20 } } },
+      agents: { list: [{ id: "main", default: true }] },
+    };
+    const tool = createMemorySearchTool({ config: cfg });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+    const result = await tool.execute("call_citations_qmd", { query: "notes" });
+    const details = result.details as { results: Array<{ snippet: string; citation?: string }> };
+    expect(details.results[0]?.snippet.length).toBeLessThanOrEqual(20);
+  });
+
+  it("honors auto mode for direct chats", async () => {
+    backend = "builtin";
+    const cfg = {
+      memory: { citations: "auto" },
+      agents: { list: [{ id: "main", default: true }] },
+    };
+    const tool = createMemorySearchTool({
+      config: cfg,
+      agentSessionKey: "agent:main:discord:dm:u123",
+    });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+    const result = await tool.execute("auto_mode_direct", { query: "notes" });
+    const details = result.details as { results: Array<{ snippet: string }> };
+    expect(details.results[0]?.snippet).toMatch(/Source:/);
+  });
+
+  it("suppresses citations for auto mode in group chats", async () => {
+    backend = "builtin";
+    const cfg = {
+      memory: { citations: "auto" },
+      agents: { list: [{ id: "main", default: true }] },
+    };
+    const tool = createMemorySearchTool({
+      config: cfg,
+      agentSessionKey: "agent:main:discord:group:c123",
+    });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+    const result = await tool.execute("auto_mode_group", { query: "notes" });
+    const details = result.details as { results: Array<{ snippet: string }> };
+    expect(details.results[0]?.snippet).not.toMatch(/Source:/);
   });
 });

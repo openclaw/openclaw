@@ -1,7 +1,5 @@
-import { readFileSync } from "node:fs";
-
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
-
+import { readFileSync } from "node:fs";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 
 const ROOM_CACHE_TTL_MS = 5 * 60 * 1000;

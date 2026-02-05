@@ -1,7 +1,7 @@
-import { toNumber } from "../format";
-import type { GatewayBrowserClient } from "../gateway";
-import type { CronJob, CronRunLogEntry, CronStatus } from "../types";
-import type { CronFormState } from "../ui-types";
+import type { GatewayBrowserClient } from "../gateway.ts";
+import type { CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
+import type { CronFormState } from "../ui-types.ts";
+import { toNumber } from "../format.ts";
 
 export type CronState = {
   client: GatewayBrowserClient | null;
@@ -17,9 +17,11 @@ export type CronState = {
 };
 
 export async function loadCronStatus(state: CronState) {
-  if (!state.client || !state.connected) return;
+  if (!state.client || !state.connected) {
+    return;
+  }
   try {
-    const res = (await state.client.request("cron.status", {})) as CronStatus;
+    const res = await state.client.request<CronStatus>("cron.status", {});
     state.cronStatus = res;
   } catch (err) {
     state.cronError = String(err);
@@ -27,14 +29,18 @@ export async function loadCronStatus(state: CronState) {
 }
 
 export async function loadCronJobs(state: CronState) {
-  if (!state.client || !state.connected) return;
-  if (state.cronLoading) return;
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (state.cronLoading) {
+    return;
+  }
   state.cronLoading = true;
   state.cronError = null;
   try {
-    const res = (await state.client.request("cron.list", {
+    const res = await state.client.request<{ jobs?: Array<CronJob> }>("cron.list", {
       includeDisabled: true,
-    })) as { jobs?: CronJob[] };
+    });
     state.cronJobs = Array.isArray(res.jobs) ? res.jobs : [];
   } catch (err) {
     state.cronError = String(err);
@@ -46,52 +52,70 @@ export async function loadCronJobs(state: CronState) {
 export function buildCronSchedule(form: CronFormState) {
   if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
-    if (!Number.isFinite(ms)) throw new Error("Invalid run time.");
-    return { kind: "at" as const, atMs: ms };
+    if (!Number.isFinite(ms)) {
+      throw new Error("Invalid run time.");
+    }
+    return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
     const amount = toNumber(form.everyAmount, 0);
-    if (amount <= 0) throw new Error("Invalid interval amount.");
+    if (amount <= 0) {
+      throw new Error("Invalid interval amount.");
+    }
     const unit = form.everyUnit;
     const mult = unit === "minutes" ? 60_000 : unit === "hours" ? 3_600_000 : 86_400_000;
     return { kind: "every" as const, everyMs: amount * mult };
   }
   const expr = form.cronExpr.trim();
-  if (!expr) throw new Error("Cron expression required.");
+  if (!expr) {
+    throw new Error("Cron expression required.");
+  }
   return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined };
 }
 
 export function buildCronPayload(form: CronFormState) {
   if (form.payloadKind === "systemEvent") {
     const text = form.payloadText.trim();
-    if (!text) throw new Error("System event text required.");
+    if (!text) {
+      throw new Error("System event text required.");
+    }
     return { kind: "systemEvent" as const, text };
   }
   const message = form.payloadText.trim();
-  if (!message) throw new Error("Agent message required.");
+  if (!message) {
+    throw new Error("Agent message required.");
+  }
   const payload: {
     kind: "agentTurn";
     message: string;
-    deliver?: boolean;
-    channel?: string;
-    to?: string;
     timeoutSeconds?: number;
   } = { kind: "agentTurn", message };
-  if (form.deliver) payload.deliver = true;
-  if (form.channel) payload.channel = form.channel;
-  if (form.to.trim()) payload.to = form.to.trim();
   const timeoutSeconds = toNumber(form.timeoutSeconds, 0);
-  if (timeoutSeconds > 0) payload.timeoutSeconds = timeoutSeconds;
+  if (timeoutSeconds > 0) {
+    payload.timeoutSeconds = timeoutSeconds;
+  }
   return payload;
 }
 
 export async function addCronJob(state: CronState) {
-  if (!state.client || !state.connected || state.cronBusy) return;
+  if (!state.client || !state.connected || state.cronBusy) {
+    return;
+  }
   state.cronBusy = true;
   state.cronError = null;
   try {
     const schedule = buildCronSchedule(state.cronForm);
     const payload = buildCronPayload(state.cronForm);
+    const delivery =
+      state.cronForm.sessionTarget === "isolated" &&
+      state.cronForm.payloadKind === "agentTurn" &&
+      state.cronForm.deliveryMode
+        ? {
+            mode: state.cronForm.deliveryMode === "announce" ? "announce" : "none",
+            channel: state.cronForm.deliveryChannel.trim() || "last",
+            to: state.cronForm.deliveryTo.trim() || undefined,
+          }
+        : undefined;
     const agentId = state.cronForm.agentId.trim();
     const job = {
       name: state.cronForm.name.trim(),
@@ -102,12 +126,11 @@ export async function addCronJob(state: CronState) {
       sessionTarget: state.cronForm.sessionTarget,
       wakeMode: state.cronForm.wakeMode,
       payload,
-      isolation:
-        state.cronForm.postToMainPrefix.trim() && state.cronForm.sessionTarget === "isolated"
-          ? { postToMainPrefix: state.cronForm.postToMainPrefix.trim() }
-          : undefined,
+      delivery,
     };
-    if (!job.name) throw new Error("Name required.");
+    if (!job.name) {
+      throw new Error("Name required.");
+    }
     await state.client.request("cron.add", job);
     state.cronForm = {
       ...state.cronForm,
@@ -125,7 +148,9 @@ export async function addCronJob(state: CronState) {
 }
 
 export async function toggleCronJob(state: CronState, job: CronJob, enabled: boolean) {
-  if (!state.client || !state.connected || state.cronBusy) return;
+  if (!state.client || !state.connected || state.cronBusy) {
+    return;
+  }
   state.cronBusy = true;
   state.cronError = null;
   try {
@@ -140,7 +165,9 @@ export async function toggleCronJob(state: CronState, job: CronJob, enabled: boo
 }
 
 export async function runCronJob(state: CronState, job: CronJob) {
-  if (!state.client || !state.connected || state.cronBusy) return;
+  if (!state.client || !state.connected || state.cronBusy) {
+    return;
+  }
   state.cronBusy = true;
   state.cronError = null;
   try {
@@ -154,7 +181,9 @@ export async function runCronJob(state: CronState, job: CronJob) {
 }
 
 export async function removeCronJob(state: CronState, job: CronJob) {
-  if (!state.client || !state.connected || state.cronBusy) return;
+  if (!state.client || !state.connected || state.cronBusy) {
+    return;
+  }
   state.cronBusy = true;
   state.cronError = null;
   try {
@@ -173,12 +202,14 @@ export async function removeCronJob(state: CronState, job: CronJob) {
 }
 
 export async function loadCronRuns(state: CronState, jobId: string) {
-  if (!state.client || !state.connected) return;
+  if (!state.client || !state.connected) {
+    return;
+  }
   try {
-    const res = (await state.client.request("cron.runs", {
+    const res = await state.client.request<{ entries?: Array<CronRunLogEntry> }>("cron.runs", {
       id: jobId,
       limit: 50,
-    })) as { entries?: CronRunLogEntry[] };
+    });
     state.cronRunsJobId = jobId;
     state.cronRuns = Array.isArray(res.entries) ? res.entries : [];
   } catch (err) {

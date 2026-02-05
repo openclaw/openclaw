@@ -2,7 +2,6 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,

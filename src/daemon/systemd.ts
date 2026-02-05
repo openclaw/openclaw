@@ -2,15 +2,15 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import type { GatewayServiceRuntime } from "./service-runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
   formatGatewayServiceDescription,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewaySystemdServiceName,
 } from "./constants.js";
-import { parseKeyValueOutput } from "./runtime-parse.js";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
 import { resolveHomeDir } from "./paths.js";
+import { parseKeyValueOutput } from "./runtime-parse.js";
 import {
   enableSystemdUserLinger,
   readSystemdUserLingerStatus,
@@ -387,7 +387,7 @@ async function isSystemctlAvailable(): Promise<boolean> {
   if (res.code === 0) {
     return true;
   }
-  const detail = `${res.stderr || res.stdout}`.toLowerCase();
+  const detail = (res.stderr || res.stdout).toLowerCase();
   return !detail.includes("not found");
 }
 

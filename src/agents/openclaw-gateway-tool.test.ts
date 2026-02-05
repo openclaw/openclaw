@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
@@ -153,5 +152,14 @@ describe("gateway tool", () => {
         sessionKey: "agent:main:whatsapp:dm:+15555550123",
       }),
     );
+    const updateCall = vi
+      .mocked(callGatewayTool)
+      .mock.calls.find((call) => call[0] === "update.run");
+    expect(updateCall).toBeDefined();
+    if (updateCall) {
+      const [, opts, params] = updateCall;
+      expect(opts).toMatchObject({ timeoutMs: 20 * 60_000 });
+      expect(params).toMatchObject({ timeoutMs: 20 * 60_000 });
+    }
   });
 });

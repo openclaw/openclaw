@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
+import type { RuntimeEnv } from "../runtime.js";
+import type { ChannelChoice } from "./onboard-types.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -11,7 +12,6 @@ import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
@@ -24,11 +24,10 @@ import {
 } from "./agents.bindings.js";
 import { createQuietRuntime, requireValidConfig } from "./agents.command-shared.js";
 import { applyAgentConfig, findAgentEntryIndex, listAgentEntries } from "./agents.config.js";
-import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
+import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
 import { setupChannels } from "./onboard-channels.js";
 import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
-import type { ChannelChoice } from "./onboard-types.js";
 
 type AgentsAddOptions = {
   name?: string;

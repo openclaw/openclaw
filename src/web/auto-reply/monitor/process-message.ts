@@ -1,5 +1,12 @@
+import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
+import type { ReplyPayload } from "../../../auto-reply/types.js";
+import type { loadConfig } from "../../../config/config.js";
+import type { getChildLogger } from "../../../logging.js";
+import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import type { WebInboundMsg } from "../types.js";
 import { resolveIdentityNamePrefix } from "../../../agents/identity.js";
 import { resolveChunkMode, resolveTextChunkLimit } from "../../../auto-reply/chunk.js";
+import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
 import {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
@@ -8,30 +15,23 @@ import {
   buildHistoryContextFromEntries,
   type HistoryEntry,
 } from "../../../auto-reply/reply/history.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
-import type { getReplyFromConfig } from "../../../auto-reply/reply.js";
-import type { ReplyPayload } from "../../../auto-reply/types.js";
-import { shouldComputeCommandAuthorized } from "../../../auto-reply/command-detection.js";
 import { finalizeInboundContext } from "../../../auto-reply/reply/inbound-context.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../../../auto-reply/reply/provider-dispatcher.js";
 import { toLocationContext } from "../../../channels/location.js";
-import { createReplyPrefixContext } from "../../../channels/reply-prefix.js";
-import type { loadConfig } from "../../../config/config.js";
+import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
+import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
 import {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   resolveStorePath,
 } from "../../../config/sessions.js";
-import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
-import type { getChildLogger } from "../../../logging.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
-import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import { whatsappInboundLog, whatsappOutboundLog } from "../loggers.js";
-import type { WebInboundMsg } from "../types.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 import { formatGroupMembers } from "./group-members.js";
@@ -255,16 +255,18 @@ export async function processMessage(params: {
     ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
     : undefined;
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
-  const prefixContext = createReplyPrefixContext({
+  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg: params.cfg,
     agentId: params.route.agentId,
+    channel: "whatsapp",
+    accountId: params.route.accountId,
   });
   const isSelfChat =
     params.msg.chatType !== "group" &&
     Boolean(params.msg.selfE164) &&
     normalizeE164(params.msg.from) === normalizeE164(params.msg.selfE164 ?? "");
   const responsePrefix =
-    prefixContext.responsePrefix ??
+    prefixOptions.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
       ? (resolveIdentityNamePrefix(params.cfg, params.route.agentId) ?? "[openclaw]")
       : undefined);
@@ -339,8 +341,8 @@ export async function processMessage(params: {
     cfg: params.cfg,
     replyResolver: params.replyResolver,
     dispatcherOptions: {
+      ...prefixOptions,
       responsePrefix,
-      responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
       onHeartbeatStrip: () => {
         if (!didLogHeartbeatStrip) {
           didLogHeartbeatStrip = true;
@@ -400,7 +402,7 @@ export async function processMessage(params: {
         typeof params.cfg.channels?.whatsapp?.blockStreaming === "boolean"
           ? !params.cfg.channels.whatsapp.blockStreaming
           : undefined,
-      onModelSelected: prefixContext.onModelSelected,
+      onModelSelected,
     },
   });
 

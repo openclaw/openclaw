@@ -1,7 +1,8 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ResolvedMessagingTarget } from "./target-resolver.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { recordSessionMetaFromInbound, resolveStorePath } from "../../config/sessions.js";
 import { parseDiscordTarget } from "../../discord/targets.js";
 import { parseIMessageTarget, normalizeIMessageHandle } from "../../imessage/targets.js";
@@ -11,20 +12,19 @@ import {
   type RoutePeerKind,
 } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
-import { resolveSlackAccount } from "../../slack/accounts.js";
-import { createSlackWebClient } from "../../slack/client.js";
-import { normalizeAllowListLower } from "../../slack/monitor/allow-list.js";
 import {
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
 } from "../../signal/identity.js";
+import { resolveSlackAccount } from "../../slack/accounts.js";
+import { createSlackWebClient } from "../../slack/client.js";
+import { normalizeAllowListLower } from "../../slack/monitor/allow-list.js";
 import { parseSlackTarget } from "../../slack/targets.js";
 import { buildTelegramGroupPeerId } from "../../telegram/bot/helpers.js";
 import { resolveTelegramTargetChatType } from "../../telegram/inline-buttons.js";
 import { parseTelegramTarget } from "../../telegram/targets.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
-import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 export type OutboundSessionRoute = {
   sessionKey: string;
@@ -816,6 +816,61 @@ function resolveTlonSession(
   };
 }
 
+/**
+ * Feishu ID formats:
+ * - oc_xxx: chat_id (group chat)
+ * - ou_xxx: user open_id (DM)
+ * - on_xxx: user union_id (DM)
+ * - cli_xxx: app_id (not a valid send target)
+ */
+function resolveFeishuSession(
+  params: ResolveOutboundSessionRouteParams,
+): OutboundSessionRoute | null {
+  let trimmed = stripProviderPrefix(params.target, "feishu");
+  trimmed = stripProviderPrefix(trimmed, "lark").trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const lower = trimmed.toLowerCase();
+  let isGroup = false;
+
+  if (lower.startsWith("group:") || lower.startsWith("chat:")) {
+    trimmed = trimmed.replace(/^(group|chat):/i, "").trim();
+    isGroup = true;
+  } else if (lower.startsWith("user:") || lower.startsWith("dm:")) {
+    trimmed = trimmed.replace(/^(user|dm):/i, "").trim();
+    isGroup = false;
+  }
+
+  const idLower = trimmed.toLowerCase();
+  if (idLower.startsWith("oc_")) {
+    isGroup = true;
+  } else if (idLower.startsWith("ou_") || idLower.startsWith("on_")) {
+    isGroup = false;
+  }
+
+  const peer: RoutePeer = {
+    kind: isGroup ? "group" : "dm",
+    id: trimmed,
+  };
+  const baseSessionKey = buildBaseSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "feishu",
+    accountId: params.accountId,
+    peer,
+  });
+  return {
+    sessionKey: baseSessionKey,
+    baseSessionKey,
+    peer,
+    chatType: isGroup ? "group" : "direct",
+    from: isGroup ? `feishu:group:${trimmed}` : `feishu:${trimmed}`,
+    to: trimmed,
+  };
+}
+
 function resolveFallbackSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
@@ -890,6 +945,8 @@ export async function resolveOutboundSessionRoute(
       return resolveNostrSession({ ...params, target });
     case "tlon":
       return resolveTlonSession({ ...params, target });
+    case "feishu":
+      return resolveFeishuSession({ ...params, target });
     default:
       return resolveFallbackSession({ ...params, target });
   }

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-
+import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -8,9 +8,8 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
-import { normalizeMainKey } from "../routing/session-key.js";
-import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
 import { callGateway } from "../gateway/call.js";
+import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   type DeliveryContext,
@@ -324,10 +323,10 @@ export function buildSubagentSystemPrompt(params: {
     "",
     "## What You DON'T Do",
     "- NO user conversations (that's main agent's job)",
-    "- NO external messages (email, tweets, etc.) unless explicitly tasked",
+    "- NO external messages (email, tweets, etc.) unless explicitly tasked with a specific recipient/channel",
     "- NO cron jobs or persistent state",
     "- NO pretending to be the main agent",
-    "- NO using the `message` tool directly",
+    "- Only use the `message` tool when explicitly instructed to contact a specific external recipient; otherwise return plain text and let the main agent deliver it",
     "",
     "## Session Context",
     params.label ? `- Label: ${params.label}` : undefined,

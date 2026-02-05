@@ -1,9 +1,9 @@
+import type { OpenClawConfig } from "./types.js";
+import type { ModelDefinitionConfig } from "./types.models.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { parseModelRef } from "../agents/model-selection.js";
-import { resolveTalkApiKey } from "./talk.js";
-import type { OpenClawConfig } from "./types.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
-import type { ModelDefinitionConfig } from "./types.models.js";
+import { resolveTalkApiKey } from "./talk.js";
 
 type WarnState = { warned: boolean };
 
@@ -392,12 +392,12 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
       }
       const current = entry ?? {};
       const params = (current as { params?: Record<string, unknown> }).params ?? {};
-      if (typeof params.cacheControlTtl === "string") {
+      if (typeof params.cacheRetention === "string") {
         continue;
       }
       nextModels[key] = {
         ...(current as Record<string, unknown>),
-        params: { ...params, cacheControlTtl: "1h" },
+        params: { ...params, cacheRetention: "short" },
       };
       modelsMutated = true;
     }
@@ -410,10 +410,10 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
         const entry = nextModels[key];
         const current = entry ?? {};
         const params = (current as { params?: Record<string, unknown> }).params ?? {};
-        if (typeof params.cacheControlTtl !== "string") {
+        if (typeof params.cacheRetention !== "string") {
           nextModels[key] = {
             ...(current as Record<string, unknown>),
-            params: { ...params, cacheControlTtl: "1h" },
+            params: { ...params, cacheRetention: "short" },
           };
           modelsMutated = true;
         }

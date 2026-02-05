@@ -1,12 +1,12 @@
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMemoryBackendConfig } from "./backend-config.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemorySearchManager,
   MemorySyncProgressUpdate,
 } from "./types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveMemoryBackendConfig } from "./backend-config.js";
 
 const log = createSubsystemLogger("memory");
 const QMD_MANAGER_CACHE = new Map<string, MemorySearchManager>();
@@ -177,7 +177,9 @@ class FallbackMemoryManager implements MemorySearchManager {
   }
 
   private async ensureFallback(): Promise<MemorySearchManager | null> {
-    if (this.fallback) return this.fallback;
+    if (this.fallback) {
+      return this.fallback;
+    }
     const fallback = await this.deps.fallbackFactory();
     if (!fallback) {
       log.warn("memory fallback requested but builtin index is unavailable");
@@ -189,5 +191,22 @@ class FallbackMemoryManager implements MemorySearchManager {
 }
 
 function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
-  return `${agentId}:${JSON.stringify(config)}`;
+  return `${agentId}:${stableSerialize(config)}`;
+}
+
+function stableSerialize(value: unknown): string {
+  return JSON.stringify(sortValue(value));
+}
+
+function sortValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => sortValue(entry));
+  }
+  if (value && typeof value === "object") {
+    const sortedEntries = Object.keys(value as Record<string, unknown>)
+      .toSorted((a, b) => a.localeCompare(b))
+      .map((key) => [key, sortValue((value as Record<string, unknown>)[key])]);
+    return Object.fromEntries(sortedEntries);
+  }
+  return value;
 }

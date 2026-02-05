@@ -1,10 +1,10 @@
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
   ensureAuthProfileStore,
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 } from "./store.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
 export async function setAuthProfileOrder(params: {
   agentDir?: string;

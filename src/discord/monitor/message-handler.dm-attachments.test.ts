@@ -10,9 +10,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it, vi, beforeEach } from "vitest";
-
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 
@@ -106,6 +104,13 @@ describe("discord DM attachments", () => {
         discriminator: "0",
         globalName: "Test User",
       } as any,
+      sender: {
+        id: "user-123",
+        name: "testuser",
+        tag: "testuser#0",
+        label: "Test User (testuser#0)",
+        isPluralKit: false,
+      },
       channelInfo: { type: 1 }, // ChannelType.DM = 1
       channelName: undefined,
       isGuildMessage: false,
@@ -197,6 +202,13 @@ describe("discord DM attachments", () => {
         discriminator: "0",
         globalName: "Sender",
       } as any,
+      sender: {
+        id: "user-456",
+        name: "sender",
+        tag: "sender#0",
+        label: "Sender (sender#0)",
+        isPluralKit: false,
+      },
       channelInfo: { type: 1 },
       channelName: undefined,
       isGuildMessage: false,
@@ -296,6 +308,13 @@ describe("discord DM attachments", () => {
         discriminator: "0",
         globalName: "Fail User",
       } as any,
+      sender: {
+        id: "user-fail",
+        name: "failuser",
+        tag: "failuser#0",
+        label: "Fail User (failuser#0)",
+        isPluralKit: false,
+      },
       channelInfo: { type: 1 },
       channelName: undefined,
       isGuildMessage: false,

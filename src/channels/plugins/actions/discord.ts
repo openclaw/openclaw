@@ -1,6 +1,6 @@
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { createActionGate } from "../../../agents/tools/common.js";
 import { listEnabledDiscordAccounts } from "../../../discord/accounts.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { handleDiscordMessageAction } from "./discord/handle-action.js";
 
 export const discordMessageActions: ChannelMessageActionAdapter = {
@@ -87,6 +87,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       actions.add("timeout");
       actions.add("kick");
       actions.add("ban");
+    }
+    if (gate("presence", false)) {
+      actions.add("set-presence");
     }
     return Array.from(actions);
   },

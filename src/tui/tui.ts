@@ -6,6 +6,13 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
+import type {
+  AgentSummary,
+  SessionInfo,
+  SessionScope,
+  TuiOptions,
+  TuiStateAccess,
+} from "./tui-types.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -23,16 +30,9 @@ import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
-import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
-import type {
-  AgentSummary,
-  SessionInfo,
-  SessionScope,
-  TuiOptions,
-  TuiStateAccess,
-} from "./tui-types.js";
+import { buildWaitingStatusMessage, defaultWaitingPhrases } from "./tui-waiting.js";
 
 export { resolveFinalAssistantText } from "./tui-formatters.js";
 export type { TuiOptions } from "./tui-types.js";
@@ -95,6 +95,7 @@ export async function runTui(opts: TuiOptions) {
   let wasDisconnected = false;
   let toolsExpanded = false;
   let showThinking = false;
+  const localRunIds = new Set<string>();
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
@@ -223,6 +224,29 @@ export async function runTui(opts: TuiOptions) {
     set lastCtrlCAt(value) {
       lastCtrlCAt = value;
     },
+  };
+
+  const noteLocalRunId = (runId: string) => {
+    if (!runId) {
+      return;
+    }
+    localRunIds.add(runId);
+    if (localRunIds.size > 200) {
+      const [first] = localRunIds;
+      if (first) {
+        localRunIds.delete(first);
+      }
+    }
+  };
+
+  const forgetLocalRunId = (runId: string) => {
+    localRunIds.delete(runId);
+  };
+
+  const isLocalRunId = (runId: string) => localRunIds.has(runId);
+
+  const clearLocalRunIds = () => {
+    localRunIds.clear();
   };
 
   const client = new GatewayChatClient({
@@ -522,9 +546,16 @@ export async function runTui(opts: TuiOptions) {
     updateFooter,
     updateAutocompleteProvider,
     setActivityStatus,
+    clearLocalRunIds,
   });
-  const { refreshAgents, refreshSessionInfo, loadHistory, setSession, abortActive } =
-    sessionActions;
+  const {
+    refreshAgents,
+    refreshSessionInfo,
+    applySessionInfoFromPatch,
+    loadHistory,
+    setSession,
+    abortActive,
+  } = sessionActions;
 
   const { handleChatEvent, handleAgentEvent } = createEventHandlers({
     chatLog,
@@ -532,6 +563,10 @@ export async function runTui(opts: TuiOptions) {
     state,
     setActivityStatus,
     refreshSessionInfo,
+    loadHistory,
+    isLocalRunId,
+    forgetLocalRunId,
+    clearLocalRunIds,
   });
 
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
@@ -545,12 +580,15 @@ export async function runTui(opts: TuiOptions) {
       openOverlay,
       closeOverlay,
       refreshSessionInfo,
+      applySessionInfoFromPatch,
       loadHistory,
       setSession,
       refreshAgents,
       abortActive,
       setActivityStatus,
       formatSessionKey,
+      noteLocalRunId,
+      forgetLocalRunId,
     });
 
   const { runLocalShellLine } = createLocalShellRunner({
@@ -662,4 +700,10 @@ export async function runTui(opts: TuiOptions) {
   updateFooter();
   tui.start();
   client.start();
+  await new Promise<void>((resolve) => {
+    const finish = () => resolve();
+    process.once("exit", finish);
+    process.once("SIGINT", finish);
+    process.once("SIGTERM", finish);
+  });
 }

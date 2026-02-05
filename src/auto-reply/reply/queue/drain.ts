@@ -1,3 +1,4 @@
+import type { FollowupRun } from "./types.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
   buildCollectPrompt,
@@ -7,7 +8,6 @@ import {
 } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
-import type { FollowupRun } from "./types.js";
 
 export function scheduleFollowupDrain(
   key: string,

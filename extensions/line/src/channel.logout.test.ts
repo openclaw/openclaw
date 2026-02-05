@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 
@@ -26,7 +26,9 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
           ? (lineConfig.accounts?.[accountId] ?? {})
           : lineConfig;
       const hasToken =
+        // oxlint-disable-next-line typescript/no-explicit-any
         Boolean((entry as any).channelAccessToken) || Boolean((entry as any).tokenFile);
+      // oxlint-disable-next-line typescript/no-explicit-any
       const hasSecret = Boolean((entry as any).channelSecret) || Boolean((entry as any).secretFile);
       return { tokenSource: hasToken && hasSecret ? "config" : "none" };
     },

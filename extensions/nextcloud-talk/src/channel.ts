@@ -10,7 +10,7 @@ import {
   type OpenClawConfig,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk";
-
+import type { CoreConfig } from "./types.js";
 import {
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
@@ -24,10 +24,9 @@ import {
   normalizeNextcloudTalkMessagingTarget,
 } from "./normalize.js";
 import { nextcloudTalkOnboardingAdapter } from "./onboarding.js";
+import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import type { CoreConfig } from "./types.js";
-import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 
 const meta = {
   id: "nextcloud-talk",

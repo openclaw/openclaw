@@ -9,14 +9,13 @@ import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "openclaw/plugin-sdk";
-
-import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
+import { tlonChannelConfigSchema } from "./config-schema.js";
+import { monitorTlonProvider } from "./monitor/index.js";
+import { tlonOnboardingAdapter } from "./onboarding.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
+import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { ensureUrbitConnectPatched, Urbit } from "./urbit/http-api.js";
 import { buildMediaText, sendDm, sendGroupMessage } from "./urbit/send.js";
-import { monitorTlonProvider } from "./monitor/index.js";
-import { tlonChannelConfigSchema } from "./config-schema.js";
-import { tlonOnboardingAdapter } from "./onboarding.js";
 
 const TLON_CHANNEL_ID = "tlon" as const;
 
@@ -356,7 +355,7 @@ export const tlonPlugin: ChannelPlugin = {
         } finally {
           await api.delete();
         }
-      } catch (error: any) {
+      } catch (error) {
         return { ok: false, error: error?.message ?? String(error) };
       }
     },

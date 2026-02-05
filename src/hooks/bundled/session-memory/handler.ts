@@ -6,14 +6,14 @@
  */
 
 import fs from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { HookHandler } from "../../hooks.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { resolveHookConfig } from "../../config.js";
-import type { HookHandler } from "../../hooks.js";
 
 /**
  * Read recent messages from session file for slug generation
@@ -38,7 +38,8 @@ async function getRecentSessionContent(
           if ((role === "user" || role === "assistant") && msg.content) {
             // Extract text content
             const text = Array.isArray(msg.content)
-              ? msg.content.find((c: any) => c.type === "text")?.text
+              ? // oxlint-disable-next-line typescript/no-explicit-any
+                msg.content.find((c: any) => c.type === "text")?.text
               : msg.content;
             if (text && !text.startsWith("/")) {
               allMessages.push(`${role}: ${text}`);

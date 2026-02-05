@@ -1,13 +1,11 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, afterEach } from "vitest";
-
-import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
@@ -54,6 +52,7 @@ describe("tool_result_persist hook", () => {
       isError: false,
       content: [{ type: "text", text: "ok" }],
       details: { big: "x".repeat(10_000) },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
 
     const messages = sm
@@ -61,6 +60,7 @@ describe("tool_result_persist hook", () => {
       .filter((e) => e.type === "message")
       .map((e) => (e as { message: AgentMessage }).message);
 
+    // oxlint-disable-next-line typescript/no-explicit-any
     const toolResult = messages.find((m) => (m as any).role === "toolResult") as any;
     expect(toolResult).toBeTruthy();
     expect(toolResult.details).toBeTruthy();
@@ -123,6 +123,7 @@ describe("tool_result_persist hook", () => {
       isError: false,
       content: [{ type: "text", text: "ok" }],
       details: { big: "x".repeat(10_000) },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
 
     const messages = sm
@@ -130,6 +131,7 @@ describe("tool_result_persist hook", () => {
       .filter((e) => e.type === "message")
       .map((e) => (e as { message: AgentMessage }).message);
 
+    // oxlint-disable-next-line typescript/no-explicit-any
     const toolResult = messages.find((m) => (m as any).role === "toolResult") as any;
     expect(toolResult).toBeTruthy();
 

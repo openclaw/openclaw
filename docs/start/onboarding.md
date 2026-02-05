@@ -3,10 +3,11 @@ summary: "First-run onboarding flow for OpenClaw (macOS app)"
 read_when:
   - Designing the macOS onboarding assistant
   - Implementing auth or identity setup
-title: "Onboarding"
+title: "Onboarding (macOS App)"
+sidebarTitle: "macOS app"
 ---
 
-# Onboarding (macOS app)
+# Onboarding (macOS App)
 
 This doc describes the **current** first‑run onboarding flow. The goal is a
 smooth “day 0” experience: pick where the Gateway runs, connect auth, run the
@@ -23,7 +24,11 @@ wizard, and let the agent bootstrap itself.
 7. **Onboarding chat** (dedicated session)
 8. Ready
 
-## 1) Local vs Remote
+## 1) Welcome + security notice
+
+Read the security notice displayed and decide accordingly.
+
+## 2) Local vs Remote
 
 Where does the **Gateway** run?
 
@@ -39,7 +44,7 @@ Gateway auth tip:
 - If you disable auth, any local process can connect; use that only on fully trusted machines.
 - Use a **token** for multi‑machine access or non‑loopback binds.
 
-## 2) Local-only auth (Anthropic OAuth)
+## 3) Local-only auth (Anthropic OAuth)
 
 The macOS app supports Anthropic OAuth (Claude Pro/Max). The flow:
 
@@ -50,12 +55,12 @@ The macOS app supports Anthropic OAuth (Claude Pro/Max). The flow:
 Other providers (OpenAI, custom APIs) are configured via environment variables
 or config files for now.
 
-## 3) Setup Wizard (Gateway‑driven)
+## 4) Setup Wizard (Gateway‑driven)
 
 The app can run the same setup wizard as the CLI. This keeps onboarding in sync
 with Gateway‑side behavior and avoids duplicating logic in SwiftUI.
 
-## 4) Permissions
+## 5) Permissions
 
 Onboarding requests TCC permissions needed for:
 
@@ -65,12 +70,12 @@ Onboarding requests TCC permissions needed for:
 - Microphone / Speech Recognition
 - Automation (AppleScript)
 
-## 5) CLI (optional)
+## 6) CLI (optional)
 
 The app can install the global `openclaw` CLI via npm/pnpm so terminal
 workflows and launchd tasks work out of the box.
 
-## 6) Onboarding chat (dedicated session)
+## 7) Onboarding chat (dedicated session)
 
 After setup, the app opens a dedicated onboarding chat session so the agent can
 introduce itself and guide next steps. This keeps first‑run guidance separate

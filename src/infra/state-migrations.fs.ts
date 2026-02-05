@@ -1,6 +1,5 @@
-import fs from "node:fs";
-
 import JSON5 from "json5";
+import fs from "node:fs";
 
 export type SessionEntryLike = {
   sessionId?: string;

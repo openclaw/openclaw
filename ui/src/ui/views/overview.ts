@@ -1,9 +1,8 @@
 import { html } from "lit";
-
-import type { GatewayHelloOk } from "../gateway";
-import { formatAgo, formatDurationMs } from "../format";
-import { formatNextRun } from "../presenter";
-import type { UiSettings } from "../storage";
+import type { GatewayHelloOk } from "../gateway.ts";
+import type { UiSettings } from "../storage.ts";
+import { formatAgo, formatDurationMs } from "../format.ts";
+import { formatNextRun } from "../presenter.ts";
 
 export type OverviewProps = {
   connected: boolean;
@@ -30,10 +29,14 @@ export function renderOverview(props: OverviewProps) {
   const uptime = snapshot?.uptimeMs ? formatDurationMs(snapshot.uptimeMs) : "n/a";
   const tick = snapshot?.policy?.tickIntervalMs ? `${snapshot.policy.tickIntervalMs}ms` : "n/a";
   const authHint = (() => {
-    if (props.connected || !props.lastError) return null;
+    if (props.connected || !props.lastError) {
+      return null;
+    }
     const lower = props.lastError.toLowerCase();
     const authFailed = lower.includes("unauthorized") || lower.includes("connect failed");
-    if (!authFailed) return null;
+    if (!authFailed) {
+      return null;
+    }
     const hasToken = Boolean(props.settings.token.trim());
     const hasPassword = Boolean(props.password.trim());
     if (!hasToken && !hasPassword) {
@@ -75,9 +78,13 @@ export function renderOverview(props: OverviewProps) {
     `;
   })();
   const insecureContextHint = (() => {
-    if (props.connected || !props.lastError) return null;
+    if (props.connected || !props.lastError) {
+      return null;
+    }
     const isSecureContext = typeof window !== "undefined" ? window.isSecureContext : true;
-    if (isSecureContext !== false) return null;
+    if (isSecureContext) {
+      return null;
+    }
     const lower = props.lastError.toLowerCase();
     if (!lower.includes("secure context") && !lower.includes("device identity required")) {
       return null;

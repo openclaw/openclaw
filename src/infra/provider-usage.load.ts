@@ -1,3 +1,9 @@
+import type {
+  ProviderUsageSnapshot,
+  UsageProviderId,
+  UsageSummary,
+} from "./provider-usage.types.js";
+import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   fetchAntigravityUsage,
@@ -15,12 +21,6 @@ import {
   usageProviders,
   withTimeout,
 } from "./provider-usage.shared.js";
-import type {
-  ProviderUsageSnapshot,
-  UsageProviderId,
-  UsageSummary,
-} from "./provider-usage.types.js";
-import { resolveFetch } from "./fetch.js";
 
 type UsageSummaryOptions = {
   now?: number;

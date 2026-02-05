@@ -456,6 +456,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.textChunkLimit`: outbound text chunk size.
 - `channels.msteams.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains).
+- `channels.msteams.mediaAuthAllowHosts`: allowlist for attaching Authorization headers on media retries (defaults to Graph + Bot Framework hosts).
 - `channels.msteams.requireMention`: require @mention in channels/groups (default true).
 - `channels.msteams.replyStyle`: `thread | top-level` (see [Reply Style](#reply-style-threads-vs-posts)).
 - `channels.msteams.teams.<teamId>.replyStyle`: per-team override.
@@ -518,6 +519,7 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 
 Without Graph permissions, channel messages with images will be received as text-only (the image content is not accessible to the bot).
 By default, OpenClaw only downloads media from Microsoft/Teams hostnames. Override with `channels.msteams.mediaAllowHosts` (use `["*"]` to allow any host).
+Authorization headers are only attached for hosts in `channels.msteams.mediaAuthAllowHosts` (defaults to Graph + Bot Framework hosts). Keep this list strict (avoid multi-tenant suffixes).
 
 ## Sending files in group chats
 

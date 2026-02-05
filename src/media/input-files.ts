@@ -1,10 +1,5 @@
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { logWarn } from "../logger.js";
-import {
-  closeDispatcher,
-  createPinnedDispatcher,
-  resolvePinnedHostname,
-} from "../infra/net/ssrf.js";
-import type { Dispatcher } from "undici";
 
 type CanvasModule = typeof import("@napi-rs/canvas");
 type PdfJsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
@@ -112,10 +107,6 @@ export const DEFAULT_INPUT_PDF_MAX_PAGES = 4;
 export const DEFAULT_INPUT_PDF_MAX_PIXELS = 4_000_000;
 export const DEFAULT_INPUT_PDF_MIN_TEXT_CHARS = 200;
 
-function isRedirectStatus(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
-}
-
 export function normalizeMimeType(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -151,72 +142,39 @@ export async function fetchWithGuard(params: {
   timeoutMs: number;
   maxRedirects: number;
 }): Promise<InputFetchResult> {
-  let currentUrl = params.url;
-  let redirectCount = 0;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), params.timeoutMs);
+  const { response, release } = await fetchWithSsrFGuard({
+    url: params.url,
+    maxRedirects: params.maxRedirects,
+    timeoutMs: params.timeoutMs,
+    init: { headers: { "User-Agent": "OpenClaw-Gateway/1.0" } },
+  });
 
   try {
-    while (true) {
-      const parsedUrl = new URL(currentUrl);
-      if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-        throw new Error(`Invalid URL protocol: ${parsedUrl.protocol}. Only HTTP/HTTPS allowed.`);
-      }
-      const pinned = await resolvePinnedHostname(parsedUrl.hostname);
-      const dispatcher = createPinnedDispatcher(pinned);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
+    }
 
-      try {
-        const response = await fetch(parsedUrl, {
-          signal: controller.signal,
-          headers: { "User-Agent": "OpenClaw-Gateway/1.0" },
-          redirect: "manual",
-          dispatcher,
-        } as RequestInit & { dispatcher: Dispatcher });
-
-        if (isRedirectStatus(response.status)) {
-          const location = response.headers.get("location");
-          if (!location) {
-            throw new Error(`Redirect missing location header (${response.status})`);
-          }
-          redirectCount += 1;
-          if (redirectCount > params.maxRedirects) {
-            throw new Error(`Too many redirects (limit: ${params.maxRedirects})`);
-          }
-          void response.body?.cancel();
-          currentUrl = new URL(location, parsedUrl).toString();
-          continue;
-        }
-
-        if (!response.ok) {
-          throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
-        }
-
-        const contentLength = response.headers.get("content-length");
-        if (contentLength) {
-          const size = parseInt(contentLength, 10);
-          if (size > params.maxBytes) {
-            throw new Error(`Content too large: ${size} bytes (limit: ${params.maxBytes} bytes)`);
-          }
-        }
-
-        const buffer = Buffer.from(await response.arrayBuffer());
-        if (buffer.byteLength > params.maxBytes) {
-          throw new Error(
-            `Content too large: ${buffer.byteLength} bytes (limit: ${params.maxBytes} bytes)`,
-          );
-        }
-
-        const contentType = response.headers.get("content-type") || undefined;
-        const parsed = parseContentType(contentType);
-        const mimeType = parsed.mimeType ?? "application/octet-stream";
-        return { buffer, mimeType, contentType };
-      } finally {
-        await closeDispatcher(dispatcher);
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      const size = parseInt(contentLength, 10);
+      if (size > params.maxBytes) {
+        throw new Error(`Content too large: ${size} bytes (limit: ${params.maxBytes} bytes)`);
       }
     }
+
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength > params.maxBytes) {
+      throw new Error(
+        `Content too large: ${buffer.byteLength} bytes (limit: ${params.maxBytes} bytes)`,
+      );
+    }
+
+    const contentType = response.headers.get("content-type") || undefined;
+    const parsed = parseContentType(contentType);
+    const mimeType = parsed.mimeType ?? "application/octet-stream";
+    return { buffer, mimeType, contentType };
   } finally {
-    clearTimeout(timeoutId);
+    await release();
   }
 }
 

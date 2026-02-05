@@ -1,9 +1,9 @@
 import type { Command } from "commander";
+import type { NodeListNode, NodesRpcOpts } from "./types.js";
 import { callGateway } from "../../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { withProgress } from "../progress.js";
 import { parseNodeList, parsePairingList } from "./format.js";
-import type { NodeListNode, NodesRpcOpts } from "./types.js";
 
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd

@@ -1,11 +1,21 @@
+import type {
+  GatewayAuthChoice,
+  OnboardMode,
+  OnboardOptions,
+  ResetScope,
+} from "../commands/onboard-types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { promptAuthChoiceGrouped } from "../commands/auth-choice-prompt.js";
 import {
   applyAuthChoice,
   resolvePreferredProviderForAuthChoice,
   warnIfModelConfigLooksOff,
 } from "../commands/auth-choice.js";
-import { promptAuthChoiceGrouped } from "../commands/auth-choice-prompt.js";
 import { applyPrimaryModel, promptDefaultModel } from "../commands/model-picker.js";
 import { setupChannels } from "../commands/onboard-channels.js";
 import {
@@ -17,17 +27,9 @@ import {
   probeGatewayReachable,
   summarizeExistingConfig,
 } from "../commands/onboard-helpers.js";
+import { setupInternalHooks } from "../commands/onboard-hooks.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
-import { setupInternalHooks } from "../commands/onboard-hooks.js";
-import type {
-  GatewayAuthChoice,
-  OnboardMode,
-  OnboardOptions,
-  ResetScope,
-} from "../commands/onboard-types.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   DEFAULT_GATEWAY_PORT,
   readConfigFileSnapshot,
@@ -35,14 +37,11 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
 import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
-import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
-import { installCompletion } from "../cli/completion-cli.js";
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
@@ -455,7 +454,7 @@ export async function runOnboardingWizard(
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
 
-  await finalizeOnboardingWizard({
+  const { launchedTui } = await finalizeOnboardingWizard({
     flow,
     opts,
     baseConfig,
@@ -465,16 +464,7 @@ export async function runOnboardingWizard(
     prompter,
     runtime,
   });
-
-  const installShell = await prompter.confirm({
-    message: "Install shell completion script?",
-    initialValue: true,
-  });
-
-  if (installShell) {
-    const shell = process.env.SHELL?.split("/").pop() || "zsh";
-    // We pass 'yes=true' to skip any double-confirmation inside the helper,
-    // as the wizard prompt above serves as confirmation.
-    await installCompletion(shell, true);
+  if (launchedTui) {
+    return;
   }
 }

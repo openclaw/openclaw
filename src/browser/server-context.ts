@@ -1,15 +1,6 @@
 import fs from "node:fs";
-
-import { appendCdpPath, createTargetViaCdp, getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
-import {
-  isChromeCdpReady,
-  isChromeReachable,
-  launchOpenClawChrome,
-  resolveOpenClawUserDataDir,
-  stopOpenClawChrome,
-} from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
-import { resolveProfile } from "./config.js";
+import type { PwAiModule } from "./pw-ai-module.js";
 import type {
   BrowserRouteContext,
   BrowserTab,
@@ -18,11 +9,19 @@ import type {
   ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
+import { appendCdpPath, createTargetViaCdp, getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
+import {
+  isChromeCdpReady,
+  isChromeReachable,
+  launchOpenClawChrome,
+  resolveOpenClawUserDataDir,
+  stopOpenClawChrome,
+} from "./chrome.js";
+import { resolveProfile } from "./config.js";
 import {
   ensureChromeExtensionRelayServer,
   stopChromeExtensionRelayServer,
 } from "./extension-relay.js";
-import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";

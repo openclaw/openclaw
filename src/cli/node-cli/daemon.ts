@@ -1,8 +1,10 @@
+import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
   DEFAULT_NODE_DAEMON_RUNTIME,
   isNodeDaemonRuntime,
 } from "../../commands/node-daemon-runtime.js";
+import { resolveIsNixMode } from "../../config/paths.js";
 import {
   resolveNodeLaunchAgentLabel,
   resolveNodeSystemdServiceName,
@@ -10,10 +12,8 @@ import {
 } from "../../daemon/constants.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
-import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
-import { resolveIsNixMode } from "../../config/paths.js";
+import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
 import { isWSL } from "../../infra/wsl.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";

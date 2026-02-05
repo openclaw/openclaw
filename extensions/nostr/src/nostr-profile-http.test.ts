@@ -2,10 +2,9 @@
  * Tests for Nostr Profile HTTP Handler
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
 import { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
-
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   createNostrProfileHttpHandler,
   type NostrProfileHttpContext,

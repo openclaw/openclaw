@@ -1,5 +1,6 @@
 import type { Guild } from "@buape/carbon";
 import { describe, expect, it, vi } from "vitest";
+import { sleep } from "../utils.js";
 import {
   allowListMatches,
   buildDiscordMediaPayload,
@@ -88,7 +89,7 @@ describe("DiscordMessageListener", () => {
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
       {} as unknown as import("@buape/carbon").Client,
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await sleep(0);
 
     expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
   });
@@ -148,6 +149,16 @@ describe("discord allowlist helpers", () => {
     expect(allowListMatches(allow, { name: "steipete" })).toBe(true);
     expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(true);
     expect(allowListMatches(allow, { name: "other" })).toBe(false);
+  });
+
+  it("matches pk-prefixed allowlist entries", () => {
+    const allow = normalizeDiscordAllowList(["pk:member-123"], ["discord:", "user:", "pk:"]);
+    expect(allow).not.toBeNull();
+    if (!allow) {
+      throw new Error("Expected allow list to be normalized");
+    }
+    expect(allowListMatches(allow, { id: "member-123" })).toBe(true);
+    expect(allowListMatches(allow, { id: "member-999" })).toBe(false);
   });
 });
 

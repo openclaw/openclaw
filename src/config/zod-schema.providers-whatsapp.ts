@@ -1,5 +1,6 @@
 import { z } from "zod";
-
+import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
+import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import {
   BlockStreamingCoalesceSchema,
   DmConfigSchema,
@@ -7,8 +8,6 @@ import {
   GroupPolicySchema,
   MarkdownConfigSchema,
 } from "./zod-schema.core.js";
-import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
-import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
@@ -21,6 +20,7 @@ export const WhatsAppAccountSchema = z
     enabled: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
     messagePrefix: z.string().optional(),
+    responsePrefix: z.string().optional(),
     /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
     authDir: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
@@ -85,6 +85,7 @@ export const WhatsAppConfigSchema = z
     sendReadReceipts: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     messagePrefix: z.string().optional(),
+    responsePrefix: z.string().optional(),
     selfChatMode: z.boolean().optional(),
     allowFrom: z.array(z.string()).optional(),
     groupAllowFrom: z.array(z.string()).optional(),

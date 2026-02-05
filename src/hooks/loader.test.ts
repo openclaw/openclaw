@@ -2,14 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadInternalHooks } from "./loader.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   clearInternalHooks,
   getRegisteredEventKeys,
   triggerInternalHook,
   createInternalHookEvent,
 } from "./internal-hooks.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { loadInternalHooks } from "./loader.js";
 
 describe("loader", () => {
   let tmpDir: string;

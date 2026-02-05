@@ -1,13 +1,16 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
-import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ExecFn } from "./windows-acl.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
+import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import { listChannelPlugins } from "../channels/plugins/index.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { probeGateway } from "../gateway/probe.js";
+import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectExposureMatrixFindings,
@@ -21,14 +24,11 @@ import {
   collectSyncedFolderFindings,
   readConfigSnapshotForAudit,
 } from "./audit-extra.js";
-import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
-import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
 import {
   formatPermissionDetail,
   formatPermissionRemediation,
   inspectPathPermissions,
 } from "./audit-fs.js";
-import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditSeverity = "info" | "warn" | "critical";
 
@@ -826,6 +826,7 @@ async function collectChannelSecurityFindings(params: {
 
       if (!hasAnySenderAllowlist) {
         const providerSetting = (telegramCfg.commands as { nativeSkills?: unknown } | undefined)
+          // oxlint-disable-next-line typescript/no-explicit-any
           ?.nativeSkills as any;
         const skillsEnabled = resolveNativeSkillsEnabled({
           providerId: "telegram",

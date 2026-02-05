@@ -103,8 +103,8 @@ vi.mock("openclaw/plugin-sdk", async () => {
   };
 });
 
-import { createDiagnosticsOtelService } from "./service.js";
 import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
+import { createDiagnosticsOtelService } from "./service.js";
 
 describe("diagnostics-otel service", () => {
   beforeEach(() => {

@@ -1,23 +1,21 @@
+import type { Command } from "commander";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import type { Command } from "commander";
-
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import { setVerbose } from "../globals.js";
-import { withProgress, withProgressTotals } from "./progress.js";
-import { formatErrorMessage, withManager } from "./cli-utils.js";
 import { getMemorySearchManager, type MemorySearchManagerResult } from "../memory/index.js";
 import { listMemoryFiles, normalizeExtraMemoryPaths } from "../memory/internal.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
-import { resolveStateDir } from "../config/paths.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
+import { formatErrorMessage, withManager } from "./cli-utils.js";
+import { withProgress, withProgressTotals } from "./progress.js";
 
 type MemoryCommandOptions = {
   agent?: string;
@@ -321,7 +319,12 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         ) as MemorySourceName[];
         const workspaceDir = status.workspaceDir;
         const scan = workspaceDir
-          ? await scanMemorySources({ workspaceDir, agentId, sources })
+          ? await scanMemorySources({
+              workspaceDir,
+              agentId,
+              sources,
+              extraPaths: status.extraPaths,
+            })
           : undefined;
         allResults.push({ agentId, status, embeddingProbe, indexError, scan });
       },
@@ -360,11 +363,15 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     const storePath = status.dbPath ? shortenHomePath(status.dbPath) : "<unknown>";
     const workspacePath = status.workspaceDir ? shortenHomePath(status.workspaceDir) : "<unknown>";
     const sourceList = status.sources?.length ? status.sources.join(", ") : null;
+    const extraPaths = status.workspaceDir
+      ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
+      : [];
     const lines = [
       `${heading("Memory Search")} ${muted(`(${agentId})`)}`,
       `${label("Provider")} ${info(status.provider)} ${muted(`(requested: ${requestedProvider})`)}`,
       `${label("Model")} ${info(modelLabel)}`,
       sourceList ? `${label("Sources")} ${info(sourceList)}` : null,
+      extraPaths.length ? `${label("Extra paths")} ${info(extraPaths.join(", "))}` : null,
       `${label("Indexed")} ${success(indexedLabel)}`,
       `${label("Dirty")} ${status.dirty ? warn("yes") : muted("no")}`,
       `${label("Store")} ${info(storePath)}`,
@@ -531,12 +538,11 @@ export function registerMemoryCli(program: Command) {
                 const sourceLabels = (status.sources ?? []).map((source) =>
                   formatSourceLabel(source, status.workspaceDir ?? "", agentId),
                 );
+                const extraPaths = status.workspaceDir
+                  ? formatExtraPaths(status.workspaceDir, status.extraPaths ?? [])
+                  : [];
                 const requestedProvider = status.requestedProvider ?? status.provider;
                 const modelLabel = status.model ?? status.provider;
-                const extraPaths = formatExtraPaths(
-                  status.workspaceDir ?? "",
-                  status.extraPaths ?? [],
-                );
                 const lines = [
                   `${heading("Memory Index")} ${muted(`(${agentId})`)}`,
                   `${label("Provider")} ${info(status.provider)} ${muted(

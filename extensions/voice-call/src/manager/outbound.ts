@@ -1,16 +1,14 @@
 import crypto from "node:crypto";
-
+import type { CallMode } from "../config.js";
+import type { CallManagerContext } from "./context.js";
 import {
   TerminalStates,
   type CallId,
   type CallRecord,
   type OutboundCallOptions,
 } from "../types.js";
-import type { CallMode } from "../config.js";
 import { mapVoiceToPolly } from "../voice-mapping.js";
-import type { CallManagerContext } from "./context.js";
 import { getCallByProviderCallId } from "./lookup.js";
-import { generateNotifyTwiml } from "./twiml.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
 import {
@@ -19,6 +17,7 @@ import {
   rejectTranscriptWaiter,
   waitForFinalTranscript,
 } from "./timers.js";
+import { generateNotifyTwiml } from "./twiml.js";
 
 export async function initiateCall(
   ctx: CallManagerContext,

@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
+import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
-import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { ensureSandboxBrowser } from "./browser.js";
@@ -12,7 +12,6 @@ import { ensureSandboxContainer } from "./docker.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
-import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 export async function resolveSandboxContext(params: {

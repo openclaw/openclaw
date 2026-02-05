@@ -1,5 +1,6 @@
+import type { Message } from "@grammyjs/types";
+import type { TelegramContext } from "./bot/types.js";
 import { createDedupeCache } from "../infra/dedupe.js";
-import type { TelegramContext, TelegramMessage } from "./bot/types.js";
 
 const MEDIA_GROUP_TIMEOUT_MS = 500;
 const RECENT_TELEGRAM_UPDATE_TTL_MS = 5 * 60_000;
@@ -7,7 +8,7 @@ const RECENT_TELEGRAM_UPDATE_MAX = 2000;
 
 export type MediaGroupEntry = {
   messages: Array<{
-    msg: TelegramMessage;
+    msg: Message;
     ctx: TelegramContext;
   }>;
   timer: ReturnType<typeof setTimeout>;
@@ -16,12 +17,12 @@ export type MediaGroupEntry = {
 export type TelegramUpdateKeyContext = {
   update?: {
     update_id?: number;
-    message?: TelegramMessage;
-    edited_message?: TelegramMessage;
+    message?: Message;
+    edited_message?: Message;
   };
   update_id?: number;
-  message?: TelegramMessage;
-  callbackQuery?: { id?: string; message?: TelegramMessage };
+  message?: Message;
+  callbackQuery?: { id?: string; message?: Message };
 };
 
 export const resolveTelegramUpdateId = (ctx: TelegramUpdateKeyContext) =>

@@ -1,9 +1,8 @@
 import { html, nothing } from "lit";
-
-import { formatAgo } from "../format";
-import type { SignalStatus } from "../types";
-import type { ChannelsProps } from "./channels.types";
-import { renderChannelConfigSection } from "./channels.config";
+import type { SignalStatus } from "../types.ts";
+import type { ChannelsProps } from "./channels.types.ts";
+import { formatAgo } from "../format.ts";
+import { renderChannelConfigSection } from "./channels.config.ts";
 
 export function renderSignalCard(params: {
   props: ChannelsProps;

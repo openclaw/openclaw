@@ -5,13 +5,13 @@
  * Supports text and media (URL) sending with markdown stripping and chunking.
  */
 
-import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
-import { sendMessageTwitchInternal } from "./send.js";
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   OutboundDeliveryResult,
 } from "./types.js";
+import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
+import { sendMessageTwitchInternal } from "./send.js";
 import { chunkTextForTwitch } from "./utils/markdown.js";
 import { missingTargetError, normalizeTwitchChannel } from "./utils/twitch.js";
 
@@ -64,7 +64,6 @@ export const twitchOutbound: ChannelOutboundAdapter = {
           return { ok: true, to: normalizedTo };
         }
         // Fallback to first allowFrom entry
-        // biome-ignore lint/style/noNonNullAssertion: length > 0 check ensures element exists
         return { ok: true, to: allowList[0] };
       }
 
@@ -74,7 +73,6 @@ export const twitchOutbound: ChannelOutboundAdapter = {
 
     // No target provided, use allowFrom fallback
     if (allowList.length > 0) {
-      // biome-ignore lint/style/noNonNullAssertion: length > 0 check ensures element exists
       return { ok: true, to: allowList[0] };
     }
 

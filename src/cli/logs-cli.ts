@@ -1,5 +1,5 @@
-import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
+import { setTimeout as delay } from "node:timers/promises";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { formatDocsLink } from "../terminal/links.js";

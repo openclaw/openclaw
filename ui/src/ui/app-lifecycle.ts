@@ -1,14 +1,5 @@
-import type { Tab } from "./navigation";
-import { connectGateway } from "./app-gateway";
-import {
-  applySettingsFromUrl,
-  attachThemeListener,
-  detachThemeListener,
-  inferBasePath,
-  syncTabWithLocation,
-  syncThemeWithSettings,
-} from "./app-settings";
-import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll";
+import type { Tab } from "./navigation.ts";
+import { connectGateway } from "./app-gateway.ts";
 import {
   startLogsPolling,
   startNodesPolling,
@@ -16,7 +7,16 @@ import {
   stopNodesPolling,
   startDebugPolling,
   stopDebugPolling,
-} from "./app-polling";
+} from "./app-polling.ts";
+import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import {
+  applySettingsFromUrl,
+  attachThemeListener,
+  detachThemeListener,
+  inferBasePath,
+  syncTabWithLocation,
+  syncThemeWithSettings,
+} from "./app-settings.ts";
 
 type LifecycleHost = {
   basePath: string;
@@ -75,9 +75,7 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
   ) {
     const forcedByTab = changed.has("tab");
     const forcedByLoad =
-      changed.has("chatLoading") &&
-      changed.get("chatLoading") === true &&
-      host.chatLoading === false;
+      changed.has("chatLoading") && changed.get("chatLoading") === true && !host.chatLoading;
     scheduleChatScroll(
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
       forcedByTab || forcedByLoad || !host.chatHasAutoScrolled,

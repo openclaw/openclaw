@@ -1,5 +1,4 @@
 import { createRequire } from "node:module";
-
 import type { OpenClawConfig } from "../config/config.js";
 
 const requireConfig = createRequire(import.meta.url);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { formatZonedTimestamp } from "../../auto-reply/envelope.js";
+import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 
 describe("injectTimestamp", () => {
   beforeEach(() => {
@@ -128,12 +128,14 @@ describe("timestampOptsFromConfig", () => {
           userTimezone: "America/Chicago",
         },
       },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any);
 
     expect(opts.timezone).toBe("America/Chicago");
   });
 
   it("falls back gracefully with empty config", () => {
+    // oxlint-disable-next-line typescript/no-explicit-any
     const opts = timestampOptsFromConfig({} as any);
 
     expect(opts.timezone).toBeDefined(); // resolveUserTimezone provides a default

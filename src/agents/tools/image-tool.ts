@@ -1,11 +1,9 @@
+import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
-import { Type } from "@sinclair/typebox";
-
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
@@ -15,8 +13,8 @@ import { getApiKeyForModel, requireApiKey, resolveEnvApiKey } from "../model-aut
 import { runWithImageModelFallback } from "../model-fallback.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { assertSandboxPath } from "../sandbox-paths.js";
-import type { AnyAgentTool } from "./common.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,

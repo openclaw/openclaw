@@ -11,7 +11,7 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
 
 ## Quick setup (beginner)
 
-1. Create a bot with **@BotFather** and copy the token.
+1. Create a bot with **@BotFather** ([direct link](https://t.me/BotFather)). Confirm the handle is exactly `@BotFather`, then copy the token.
 2. Set the token:
    - Env: `TELEGRAM_BOT_TOKEN=...`
    - Or config: `channels.telegram.botToken: "..."`.
@@ -43,7 +43,7 @@ Minimal config:
 
 ### 1) Create a bot token (BotFather)
 
-1. Open Telegram and chat with **@BotFather**.
+1. Open Telegram and chat with **@BotFather** ([direct link](https://t.me/BotFather)). Confirm the handle is exactly `@BotFather`.
 2. Run `/newbot`, then follow the prompts (name + username ending in `bot`).
 3. Copy the token and store it safely.
 
@@ -395,7 +395,7 @@ Most users want: `groupPolicy: "allowlist"` + `groupAllowFrom` + specific groups
 ## Long-polling vs webhook
 
 - Default: long-polling (no public URL required).
-- Webhook mode: set `channels.telegram.webhookUrl` (optionally `channels.telegram.webhookSecret` + `channels.telegram.webhookPath`).
+- Webhook mode: set `channels.telegram.webhookUrl` and `channels.telegram.webhookSecret` (optionally `channels.telegram.webhookPath`).
   - The local listener binds to `0.0.0.0:8787` and serves `POST /telegram-webhook` by default.
   - If your public URL is different, use a reverse proxy and point `channels.telegram.webhookUrl` at the public endpoint.
 
@@ -732,8 +732,8 @@ Provider options:
 - `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to disabled on Node 22 to avoid Happy Eyeballs timeouts.
 - `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
-- `channels.telegram.webhookUrl`: enable webhook mode.
-- `channels.telegram.webhookSecret`: webhook secret (optional).
+- `channels.telegram.webhookUrl`: enable webhook mode (requires `channels.telegram.webhookSecret`).
+- `channels.telegram.webhookSecret`: webhook secret (required when webhookUrl is set).
 - `channels.telegram.webhookPath`: local webhook path (default `/telegram-webhook`).
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
