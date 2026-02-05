@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
@@ -5,6 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { sanitizeToolResultImages } from "../tool-images.js";
 import { stringEnum } from "../schema/typebox.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 import { imageResultFromFile, jsonResult, type AnyAgentTool, readStringParam } from "./common.js";
@@ -52,7 +54,7 @@ const ComputerToolSchema = Type.Object({
   confirm: Type.Optional(stringEnum(["always", "dangerous", "off"] as const)),
 
   // snapshot
-  overlay: Type.Optional(stringEnum(["none", "grid"] as const)),
+  overlay: Type.Optional(stringEnum(["none", "grid", "dual"] as const)),
 
   // wait
   durationMs: Type.Optional(Type.Number()),
@@ -343,7 +345,7 @@ type UiHitTestResult = {
   helpText?: string;
 };
 
-const DANGEROUS_TOKENS = [
+const DEFAULT_DANGER_TOKENS = [
   "ok",
   "yes",
   "confirm",
@@ -361,25 +363,34 @@ const DANGEROUS_TOKENS = [
   "apply",
 ] as const;
 
-function matchesDangerToken(text: string): boolean {
+function compileDangerMatchers(tokens: readonly string[]): RegExp[] {
+  const out: RegExp[] = [];
+  for (const token of tokens) {
+    const raw = token.trim();
+    if (!raw) {
+      continue;
+    }
+    const safe = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out.push(new RegExp(`(^|[^a-z0-9])${safe}([^a-z0-9]|$)`, "i"));
+  }
+  return out;
+}
+
+const DEFAULT_UI_HIT_MATCHERS = compileDangerMatchers(DEFAULT_DANGER_TOKENS);
+
+function matchesDangerToken(text: string, matchers: RegExp[]): boolean {
   const raw = text.trim();
   if (!raw) {
     return false;
   }
-  for (const token of DANGEROUS_TOKENS) {
-    const re = new RegExp(`(^|[^a-z0-9])${token}([^a-z0-9]|$)`, "i");
-    if (re.test(raw)) {
-      return true;
-    }
-  }
-  return false;
+  return matchers.some((re) => re.test(raw));
 }
 
-function isDangerousUiHit(hit: UiHitTestResult): boolean {
+function isDangerousUiHit(hit: UiHitTestResult, matchers: RegExp[]): boolean {
   const textFields = [hit.name, hit.helpText, hit.automationId].filter(
     (v): v is string => typeof v === "string",
   );
-  if (textFields.some((v) => matchesDangerToken(v))) {
+  if (textFields.some((v) => matchesDangerToken(v, matchers))) {
     return true;
   }
   return false;
@@ -478,6 +489,7 @@ function shouldApproveAction(params: {
   confirm: ComputerConfirmMode;
   rawParams: Record<string, unknown>;
   uiHit?: UiHitTestResult | null;
+  uiHitMatchers?: RegExp[];
 }): boolean {
   const { action, confirm, rawParams } = params;
   if (confirm === "off") {
@@ -492,8 +504,10 @@ function shouldApproveAction(params: {
   if (confirm === "always") {
     return true;
   }
-  if (action === "click" && params.uiHit && isDangerousUiHit(params.uiHit)) {
-    return true;
+  if (action === "click" && params.uiHit && params.uiHitMatchers) {
+    if (isDangerousUiHit(params.uiHit, params.uiHitMatchers)) {
+      return true;
+    }
   }
   return isDangerousAction(action, rawParams);
 }
@@ -1142,10 +1156,48 @@ export function createComputerTool(options?: {
           ? (confirmValue as ComputerConfirmMode)
           : "always";
 
+      const dangerTokensRaw = options?.config?.tools?.computer?.dangerTokens;
+      const dangerTokens = Array.isArray(dangerTokensRaw)
+        ? dangerTokensRaw
+            .filter((t): t is string => typeof t === "string")
+            .map((t) => t.trim())
+            .filter(Boolean)
+        : [];
+      const uiHitMatchers = dangerTokens.length > 0 ? compileDangerMatchers(dangerTokens) : DEFAULT_UI_HIT_MATCHERS;
+
       if (action === "snapshot") {
         const overlayRaw = readStringParam(params, "overlay", { required: false });
-        const overlay = overlayRaw === "none" ? "none" : "grid";
-        const snap = await resolveSnapshot({ overlay });
+        const overlay = overlayRaw === "none" || overlayRaw === "dual" ? overlayRaw : "grid";
+
+        if (overlay === "dual") {
+          const raw = await resolveSnapshot({ overlay: "none" });
+          const grid = await resolveSnapshot({ overlay: "grid" });
+
+          const rawBuf = Buffer.from(raw.base64, "base64");
+          const gridBuf = Buffer.from(grid.base64, "base64");
+
+          const rawSaved = await saveMediaBuffer(rawBuf, "image/png", "computer", 20 * 1024 * 1024);
+          const gridSaved = await saveMediaBuffer(gridBuf, "image/png", "computer", 20 * 1024 * 1024);
+
+          const result: AgentToolResult<unknown> = {
+            content: [
+              { type: "text", text: `MEDIA:${rawSaved.path}` },
+              { type: "image", data: raw.base64, mimeType: "image/png" },
+              { type: "text", text: `MEDIA:${gridSaved.path}` },
+              { type: "image", data: grid.base64, mimeType: "image/png" },
+            ],
+            details: {
+              raw: { path: rawSaved.path, width: raw.width, height: raw.height },
+              grid: { path: gridSaved.path, width: grid.width, height: grid.height },
+              cursorX: raw.cursorX,
+              cursorY: raw.cursorY,
+            },
+          };
+
+          return await sanitizeToolResultImages(result, "computer.snapshot");
+        }
+
+        const snap = await resolveSnapshot({ overlay: overlay === "none" ? "none" : "grid" });
         const buffer = Buffer.from(snap.base64, "base64");
         const saved = await saveMediaBuffer(buffer, "image/png", "computer", 20 * 1024 * 1024);
         return await imageResultFromFile({
@@ -1241,10 +1293,11 @@ export function createComputerTool(options?: {
           confirm,
           rawParams: params,
           uiHit,
+          uiHitMatchers,
         })
       ) {
         let approvalText = formatApprovalCommand(`computer.${action}`, params);
-        if (action === "click" && uiHit && isDangerousUiHit(uiHit)) {
+        if (action === "click" && uiHit && uiHitMatchers && isDangerousUiHit(uiHit, uiHitMatchers)) {
           const label = uiHit.name || uiHit.automationId || uiHit.controlType || "";
           if (label) {
             approvalText += ` target=${JSON.stringify(label.slice(0, 80))}`;

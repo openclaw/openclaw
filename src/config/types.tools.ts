@@ -335,6 +335,8 @@ export type ToolsConfig = {
   computer?: {
     /** Confirmation policy for computer tool actions (default: always). */
     confirm?: "off" | "dangerous" | "always";
+    /** Keywords used to treat UI elements as dangerous (best-effort). */
+    dangerTokens?: string[];
   };
   web?: {
     search?: {

@@ -468,6 +468,7 @@ export const ToolsSchema = z
     computer: z
       .object({
         confirm: z.enum(["off", "dangerous", "always"]).optional(),
+        dangerTokens: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),
