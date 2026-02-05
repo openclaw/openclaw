@@ -129,7 +129,7 @@ describe("telegram stickers", () => {
   );
 
   it(
-    "skips animated and video sticker formats that cannot be downloaded",
+    "passes metadata for animated and video stickers (no file download)",
     async () => {
       const { handler, replySpy, runtimeError } = await createBotHandler();
 
@@ -148,6 +148,8 @@ describe("telegram stickers", () => {
             emoji: "😎",
             set_name: "AnimatedPack",
           },
+          expectedEmoji: "😎",
+          expectedSetName: "AnimatedPack",
         },
         {
           messageId: 102,
@@ -163,6 +165,8 @@ describe("telegram stickers", () => {
             emoji: "🎬",
             set_name: "VideoPack",
           },
+          expectedEmoji: "🎬",
+          expectedSetName: "VideoPack",
         },
       ]) {
         replySpy.mockClear();
@@ -180,8 +184,13 @@ describe("telegram stickers", () => {
           getFile: async () => ({ file_path: scenario.filePath }),
         });
 
+        // Should not attempt to download animated/video stickers
         expect(fetchSpy).not.toHaveBeenCalled();
-        expect(replySpy).not.toHaveBeenCalled();
+        // Should still process the message with metadata-only sticker context
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        expect(replySpy.mock.calls[0][0].Body).toContain("[Sticker");
+        expect(replySpy.mock.calls[0][0].Body).toContain(scenario.expectedEmoji);
+        expect(replySpy.mock.calls[0][0].Body).toContain(scenario.expectedSetName);
         expect(runtimeError).not.toHaveBeenCalled();
         fetchSpy.mockRestore();
       }
