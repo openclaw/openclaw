@@ -1,0 +1,21 @@
+name = "openclaw-marketing"
+main = "src/marketing-worker.ts"
+compatibility_date = "2026-02-05"
+compatibility_flags = ["nodejs_compat"]
+
+[[kv_namespaces]]
+binding = "conversations"
+id = "5ce5d7e500bf4621ad4ea2b57e7a3287"
+
+[[kv_namespaces]]
+binding = "metrics"
+id = "bfcdd1adba2c4c698e066b941bbc5405"
+
+[[kv_namespaces]]
+binding = "attribution"
+id = "26cbe5043cc5469a9c6eb6d9f2fa53a1"
+
+[vars]
+LLM_MODEL = "openai/gpt-4o"
+LLM_FALLBACK = "deepseek/deepseek-chat"
+BASE_URL = "https://openrouter.ai/api/v1"
