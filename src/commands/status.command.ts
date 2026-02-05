@@ -78,6 +78,7 @@ export async function statusCommand(
     summary,
     memory,
     memoryPlugin,
+    workQueue,
   } = scan;
 
   const securityAudit = await withProgress(
@@ -143,6 +144,7 @@ export async function statusCommand(
           updateChannelSource: channelInfo.source,
           memory,
           memoryPlugin,
+          workQueue,
           gateway: {
             mode: gatewayMode,
             url: gatewayConnection.url,
@@ -321,6 +323,16 @@ export async function statusCommand(
     return parts.join(" · ");
   })();
 
+  const workQueueValue = (() => {
+    if (!workQueue) {
+      return muted("unavailable");
+    }
+    if (workQueue.queues === 0) {
+      return muted("no queues");
+    }
+    return `${workQueue.queues} queues · ${workQueue.pending} pending · ${workQueue.inProgress} in progress · ${workQueue.blocked} blocked`;
+  })();
+
   const updateAvailability = resolveUpdateAvailability(update);
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
   const channelLabel = formatUpdateChannelLabel({
@@ -368,6 +380,7 @@ export async function statusCommand(
     { Item: "Node service", Value: nodeDaemonValue },
     { Item: "Agents", Value: agentsValue },
     { Item: "Memory", Value: memoryValue },
+    { Item: "Work queues", Value: workQueueValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
     { Item: "Heartbeat", Value: heartbeatValue },

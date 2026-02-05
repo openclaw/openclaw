@@ -4,6 +4,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { createSlackInteractiveQuestionTool } from "../slack/tools/interactive-question-tool.js";
 import { createSlackRichMessageTool } from "../slack/tools/rich-message-tool.js";
+import { bootstrapWorkQueueForAgent } from "../work-queue/store.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
@@ -27,6 +28,8 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createTreeTool } from "./tools/tree-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
+import { createWorkItemTool } from "./tools/work-item-tool.js";
+import { createWorkQueueTool } from "./tools/work-queue-tool.js";
 
 export function createOpenClawTools(options?: {
   sandboxBrowserBridgeUrl?: string;
@@ -69,6 +72,18 @@ export function createOpenClawTools(options?: {
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
 }): AnyAgentTool[] {
+  const sessionAgentId = resolveSessionAgentId({
+    sessionKey: options?.agentSessionKey,
+    config: options?.config,
+  });
+
+  const autoClaim = process.env.OPENCLAW_WORK_QUEUE_AUTO_CLAIM?.trim() === "1";
+  void bootstrapWorkQueueForAgent({
+    agentId: sessionAgentId,
+    sessionKey: options?.agentSessionKey,
+    autoClaim,
+  }).catch(() => {});
+
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
         config: options?.config,
@@ -88,16 +103,16 @@ export function createOpenClawTools(options?: {
   const slackRichMessageTool = options?.disableMessageTool
     ? null
     : createSlackRichMessageTool({
-    accountId: options?.agentAccountId,
-    currentChannelId: options?.currentChannelId,
-    currentThreadTs: options?.currentThreadTs,
-  });
+        accountId: options?.agentAccountId,
+        currentChannelId: options?.currentChannelId,
+        currentThreadTs: options?.currentThreadTs,
+      });
   const slackInteractiveQuestionTool = options?.disableMessageTool
-      ? null
-      : createSlackInteractiveQuestionTool({
-    accountId: options?.agentAccountId,
-    sessionKey: options?.agentSessionKey,
-  });
+    ? null
+    : createSlackInteractiveQuestionTool({
+        accountId: options?.agentAccountId,
+        sessionKey: options?.agentSessionKey,
+      });
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
@@ -168,6 +183,14 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       config: options?.config,
     }),
+    createWorkQueueTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: options?.config,
+    }),
+    createWorkItemTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: options?.config,
+    }),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
@@ -209,10 +232,7 @@ export function createOpenClawTools(options?: {
       config: options?.config,
       workspaceDir: options?.workspaceDir,
       agentDir: options?.agentDir,
-      agentId: resolveSessionAgentId({
-        sessionKey: options?.agentSessionKey,
-        config: options?.config,
-      }),
+      agentId: sessionAgentId,
       sessionKey: options?.agentSessionKey,
       messageChannel: options?.agentChannel,
       agentAccountId: options?.agentAccountId,

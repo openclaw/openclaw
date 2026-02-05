@@ -10,6 +10,7 @@ import { resolveOsSummary } from "../infra/os-summary.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { getMemorySearchManager } from "../memory/index.js";
 import { runExec } from "../process/exec.js";
+import { getDefaultWorkQueueStore } from "../work-queue/index.js";
 import { buildChannelsTable } from "./status-all/channels.js";
 import { getAgentLocalStatuses } from "./status.agent-local.js";
 import { pickGatewaySelfPresence, resolveGatewayProbeAuth } from "./status.gateway-probe.js";
@@ -24,6 +25,17 @@ type MemoryPluginStatus = {
   enabled: boolean;
   slot: string | null;
   reason?: string;
+};
+
+type WorkQueueSummary = {
+  queues: number;
+  items: number;
+  pending: number;
+  inProgress: number;
+  blocked: number;
+  completed: number;
+  failed: number;
+  cancelled: number;
 };
 
 function resolveMemoryPluginStatus(cfg: ReturnType<typeof loadConfig>): MemoryPluginStatus {
@@ -57,6 +69,7 @@ export type StatusScanResult = {
   summary: Awaited<ReturnType<typeof getStatusSummary>>;
   memory: MemoryStatusSnapshot | null;
   memoryPlugin: MemoryPluginStatus;
+  workQueue: WorkQueueSummary | null;
 };
 
 export async function scanStatus(
@@ -171,6 +184,50 @@ export async function scanStatus(
       })();
       progress.tick();
 
+      progress.setLabel("Checking work queues…");
+      const workQueue = await (async (): Promise<WorkQueueSummary | null> => {
+        try {
+          const store = await getDefaultWorkQueueStore();
+          const queues = await store.listQueues();
+          if (queues.length === 0) {
+            return {
+              queues: 0,
+              items: 0,
+              pending: 0,
+              inProgress: 0,
+              blocked: 0,
+              completed: 0,
+              failed: 0,
+              cancelled: 0,
+            };
+          }
+          const summary: WorkQueueSummary = {
+            queues: queues.length,
+            items: 0,
+            pending: 0,
+            inProgress: 0,
+            blocked: 0,
+            completed: 0,
+            failed: 0,
+            cancelled: 0,
+          };
+          for (const queue of queues) {
+            const stats = await store.getQueueStats(queue.id);
+            summary.items += stats.total;
+            summary.pending += stats.pending;
+            summary.inProgress += stats.inProgress;
+            summary.blocked += stats.blocked;
+            summary.completed += stats.completed;
+            summary.failed += stats.failed;
+            summary.cancelled += stats.cancelled;
+          }
+          return summary;
+        } catch {
+          return null;
+        }
+      })();
+      progress.tick();
+
       progress.setLabel("Reading sessions…");
       const summary = await getStatusSummary();
       progress.tick();
@@ -197,6 +254,7 @@ export async function scanStatus(
         summary,
         memory,
         memoryPlugin,
+        workQueue,
       };
     },
   );

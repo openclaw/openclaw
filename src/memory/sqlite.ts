@@ -7,3 +7,12 @@ export function requireNodeSqlite(): typeof import("node:sqlite") {
   installProcessWarningFilter();
   return require("node:sqlite") as typeof import("node:sqlite");
 }
+
+export function isNodeSqliteAvailable(): boolean {
+  try {
+    require("node:sqlite");
+    return true;
+  } catch {
+    return false;
+  }
+}

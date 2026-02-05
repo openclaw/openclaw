@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_IMAGE="${BASE_IMAGE:-openclaw-sandbox:bookworm-slim}"
 TARGET_IMAGE="${TARGET_IMAGE:-openclaw-sandbox-common:bookworm-slim}"
-PACKAGES="${PACKAGES:-curl wget jq coreutils grep nodejs npm python3 git ca-certificates golang-go rustc cargo unzip pkg-config libasound2-dev build-essential file}"
+PACKAGES="${PACKAGES:-curl wget jq coreutils grep nodejs python3 git ca-certificates golang-go rustc cargo unzip pkg-config libasound2-dev build-essential file}"
 INSTALL_PNPM="${INSTALL_PNPM:-1}"
 INSTALL_BUN="${INSTALL_BUN:-1}"
 BUN_INSTALL_DIR="${BUN_INSTALL_DIR:-/opt/bun}"
@@ -41,7 +41,7 @@ ENV PATH="\${BUN_INSTALL_DIR}/bin:\${BREW_INSTALL_DIR}/bin:\${BREW_INSTALL_DIR}/
 RUN apt-get update \\
   && apt-get install -y --no-install-recommends ${PACKAGES} \\
   && rm -rf /var/lib/apt/lists/*
-RUN if [ "\${INSTALL_PNPM}" = "1" ]; then npm install -g pnpm; fi
+RUN if [ "\${INSTALL_PNPM}" = "1" ]; then corepack enable && corepack prepare pnpm@latest --activate; fi
 RUN if [ "\${INSTALL_BUN}" = "1" ]; then \\
   curl -fsSL https://bun.sh/install | bash; \\
   ln -sf "\${BUN_INSTALL_DIR}/bin/bun" /usr/local/bin/bun; \\
