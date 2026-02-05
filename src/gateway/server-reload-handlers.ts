@@ -1,6 +1,7 @@
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import type { NeuronWavesRunner } from "../neuronwaves/index.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
@@ -19,6 +20,7 @@ import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   heartbeatRunner: HeartbeatRunner;
+  neuronWavesRunner: NeuronWavesRunner;
   cronState: GatewayCronState;
   browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> | null;
 };
@@ -58,6 +60,7 @@ export function createGatewayReloadHandlers(params: {
 
     if (plan.restartHeartbeat) {
       nextState.heartbeatRunner.updateConfig(nextConfig);
+      nextState.neuronWavesRunner.updateConfig(nextConfig);
     }
 
     resetDirectoryCache();

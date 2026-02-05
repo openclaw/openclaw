@@ -41,6 +41,7 @@ import {
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { startNeuronWavesRunner } from "../neuronwaves/index.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
@@ -458,6 +459,7 @@ export async function startGatewayServer(
   });
 
   let heartbeatRunner = startHeartbeatRunner({ cfg: cfgAtStart });
+  let neuronWavesRunner = startNeuronWavesRunner({ cfg: cfgAtStart });
 
   void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
 
@@ -564,12 +566,14 @@ export async function startGatewayServer(
     getState: () => ({
       hooksConfig,
       heartbeatRunner,
+      neuronWavesRunner,
       cronState,
       browserControl,
     }),
     setState: (nextState) => {
       hooksConfig = nextState.hooksConfig;
       heartbeatRunner = nextState.heartbeatRunner;
+      neuronWavesRunner = nextState.neuronWavesRunner;
       cronState = nextState.cronState;
       cron = cronState.cron;
       cronStorePath = cronState.storePath;
@@ -606,6 +610,7 @@ export async function startGatewayServer(
     pluginServices,
     cron,
     heartbeatRunner,
+    neuronWavesRunner,
     nodePresenceTimers,
     broadcast,
     tickInterval,
