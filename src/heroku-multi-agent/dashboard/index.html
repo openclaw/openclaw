@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw Multi-Agent Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    [x-cloak] { display: none !important; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen" x-data="dashboard()" x-init="init()">
+  <!-- Navigation -->
+  <nav class="bg-white border-b border-gray-200">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex justify-between h-16">
+        <div class="flex items-center">
+          <span class="text-xl font-bold text-indigo-600">OpenClaw</span>
+          <span class="ml-2 text-sm text-gray-500">Multi-Agent Platform</span>
+        </div>
+        <div class="flex items-center space-x-4">
+          <span class="text-sm text-gray-600" x-text="customer?.name || 'Loading...'"></span>
+          <button @click="logout()" class="text-sm text-gray-500 hover:text-gray-700">Logout</button>
+        </div>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Tabs -->
+    <div class="border-b border-gray-200 mb-8">
+      <nav class="-mb-px flex space-x-8">
+        <button @click="activeTab = 'overview'"
+                :class="activeTab === 'overview' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                class="whitespace-nowrap pb-4 px-1 border-b-2 font-medium text-sm">
+          Overview
+        </button>
+        <button @click="activeTab = 'agents'"
+                :class="activeTab === 'agents' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                class="whitespace-nowrap pb-4 px-1 border-b-2 font-medium text-sm">
+          Agents
+        </button>
+        <button @click="activeTab = 'presets'"
+                :class="activeTab === 'presets' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                class="whitespace-nowrap pb-4 px-1 border-b-2 font-medium text-sm">
+          Presets
+        </button>
+        <button @click="activeTab = 'analytics'"
+                :class="activeTab === 'analytics' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                class="whitespace-nowrap pb-4 px-1 border-b-2 font-medium text-sm">
+          Analytics
+        </button>
+        <button @click="activeTab = 'settings'"
+                :class="activeTab === 'settings' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'"
+                class="whitespace-nowrap pb-4 px-1 border-b-2 font-medium text-sm">
+          Settings
+        </button>
+      </nav>
+    </div>
+
+    <!-- Overview Tab -->
+    <div x-show="activeTab === 'overview'" x-cloak>
+      <!-- Stats Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        <div class="bg-white rounded-lg shadow p-6">
+          <div class="text-sm font-medium text-gray-500">Total Agents</div>
+          <div class="mt-2 text-3xl font-semibold text-gray-900" x-text="stats.totalAgents"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6">
+          <div class="text-sm font-medium text-gray-500">Running Agents</div>
+          <div class="mt-2 text-3xl font-semibold text-green-600" x-text="stats.runningAgents"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6">
+          <div class="text-sm font-medium text-gray-500">Messages (24h)</div>
+          <div class="mt-2 text-3xl font-semibold text-gray-900" x-text="formatNumber(stats.messages24h)"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-6">
+          <div class="text-sm font-medium text-gray-500">Est. Cost (24h)</div>
+          <div class="mt-2 text-3xl font-semibold text-gray-900" x-text="'$' + stats.cost24h.toFixed(2)"></div>
+        </div>
+      </div>
+
+      <!-- Usage Chart -->
+      <div class="bg-white rounded-lg shadow p-6 mb-8">
+        <h3 class="text-lg font-medium text-gray-900 mb-4">Usage Over Time</h3>
+        <canvas id="usageChart" height="100"></canvas>
+      </div>
+
+      <!-- Recent Activity -->
+      <div class="bg-white rounded-lg shadow">
+        <div class="px-6 py-4 border-b border-gray-200">
+          <h3 class="text-lg font-medium text-gray-900">Recent Activity</h3>
+        </div>
+        <div class="divide-y divide-gray-200">
+          <template x-for="msg in recentMessages" :key="msg.id">
+            <div class="px-6 py-4 flex items-center justify-between">
+              <div class="flex items-center">
+                <span :class="msg.direction === 'inbound' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'"
+                      class="px-2 py-1 text-xs font-medium rounded-full" x-text="msg.direction"></span>
+                <span class="ml-4 text-sm text-gray-600" x-text="msg.contentPreview || '(no preview)'"></span>
+              </div>
+              <div class="text-sm text-gray-400" x-text="formatTime(msg.createdAt)"></div>
+            </div>
+          </template>
+          <div x-show="recentMessages.length === 0" class="px-6 py-8 text-center text-gray-500">
+            No recent activity
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agents Tab -->
+    <div x-show="activeTab === 'agents'" x-cloak>
+      <div class="flex justify-between items-center mb-6">
+        <h2 class="text-xl font-semibold text-gray-900">Your Agents</h2>
+        <button @click="showCreateAgentModal = true"
+                class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">
+          Create Agent
+        </button>
+      </div>
+
+      <!-- Agents Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <template x-for="agent in agents" :key="agent.id">
+          <div class="bg-white rounded-lg shadow hover:shadow-md transition-shadow">
+            <div class="p-6">
+              <div class="flex items-center justify-between mb-4">
+                <h3 class="font-semibold text-gray-900" x-text="agent.name"></h3>
+                <span :class="{
+                  'bg-green-100 text-green-800': agent.status === 'running',
+                  'bg-yellow-100 text-yellow-800': agent.status === 'ready',
+                  'bg-gray-100 text-gray-800': agent.status === 'stopped',
+                  'bg-red-100 text-red-800': agent.status === 'error',
+                  'bg-blue-100 text-blue-800': agent.status === 'created'
+                }" class="px-2 py-1 text-xs font-medium rounded-full" x-text="agent.status"></span>
+              </div>
+              <div class="text-sm text-gray-500 mb-4">
+                <div>Model: <span class="text-gray-700" x-text="agent.model.split('-').slice(0,2).join(' ')"></span></div>
+                <div>Messages: <span class="text-gray-700" x-text="formatNumber(agent.messageCount)"></span></div>
+              </div>
+              <div class="flex space-x-2">
+                <button @click="toggleAgent(agent)"
+                        :class="agent.status === 'running' ? 'bg-red-50 text-red-600 hover:bg-red-100' : 'bg-green-50 text-green-600 hover:bg-green-100'"
+                        class="flex-1 px-3 py-2 text-sm font-medium rounded-lg"
+                        :disabled="agent.status === 'created'"
+                        x-text="agent.status === 'running' ? 'Stop' : 'Start'"></button>
+                <button @click="editAgent(agent)"
+                        class="flex-1 px-3 py-2 text-sm font-medium rounded-lg bg-gray-50 text-gray-600 hover:bg-gray-100">
+                  Configure
+                </button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Presets Tab -->
+    <div x-show="activeTab === 'presets'" x-cloak>
+      <!-- Preset Sub-tabs -->
+      <div class="flex space-x-4 mb-6">
+        <button @click="presetTab = 'souls'"
+                :class="presetTab === 'souls' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'"
+                class="px-4 py-2 rounded-lg text-sm font-medium">
+          🧠 Souls
+        </button>
+        <button @click="presetTab = 'skills'"
+                :class="presetTab === 'skills' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'"
+                class="px-4 py-2 rounded-lg text-sm font-medium">
+          ⚡ Skills
+        </button>
+        <button @click="presetTab = 'templates'"
+                :class="presetTab === 'templates' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-100 text-gray-600'"
+                class="px-4 py-2 rounded-lg text-sm font-medium">
+          📋 Templates
+        </button>
+      </div>
+
+      <!-- Souls List -->
+      <div x-show="presetTab === 'souls'">
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-lg font-medium text-gray-900">Soul Presets</h3>
+          <button @click="showCreateSoulModal = true" class="text-indigo-600 text-sm font-medium hover:text-indigo-700">
+            + Create Soul
+          </button>
+        </div>
+        <div class="bg-white rounded-lg shadow divide-y divide-gray-200">
+          <template x-for="soul in souls" :key="soul.id">
+            <div class="p-4 flex items-center justify-between">
+              <div>
+                <div class="flex items-center">
+                  <span class="text-lg mr-2" x-text="soul.icon || '🧠'"></span>
+                  <span class="font-medium text-gray-900" x-text="soul.name"></span>
+                  <span x-show="soul.isLocked" class="ml-2 text-xs text-gray-400">🔒</span>
+                  <span x-show="soul.isDefault" class="ml-2 px-2 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded">Default</span>
+                </div>
+                <div class="text-sm text-gray-500 mt-1" x-text="soul.description || soul.tone + ' tone'"></div>
+              </div>
+              <div class="flex space-x-2">
+                <button @click="applyPreset('soul', soul.id)"
+                        class="px-3 py-1 text-sm bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100">
+                  Apply
+                </button>
+                <button @click="editSoul(soul)" x-show="!soul.isLocked"
+                        class="px-3 py-1 text-sm bg-gray-50 text-gray-600 rounded hover:bg-gray-100">
+                  Edit
+                </button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Skills List -->
+      <div x-show="presetTab === 'skills'">
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-lg font-medium text-gray-900">Skill Presets</h3>
+          <button @click="showCreateSkillModal = true" class="text-indigo-600 text-sm font-medium hover:text-indigo-700">
+            + Create Skill
+          </button>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <template x-for="skill in skills" :key="skill.id">
+            <div class="bg-white rounded-lg shadow p-4">
+              <div class="flex items-center justify-between mb-2">
+                <div class="flex items-center">
+                  <span class="text-xl mr-2" x-text="skill.icon || '⚡'"></span>
+                  <span class="font-medium text-gray-900" x-text="skill.name"></span>
+                </div>
+                <span x-show="skill.isDefault" class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded">Default</span>
+              </div>
+              <div class="text-sm text-gray-500 mb-3" x-text="skill.description"></div>
+              <div class="flex justify-between items-center">
+                <span class="text-xs text-gray-400" x-text="skill.category"></span>
+                <button @click="applyPreset('skill', skill.id)"
+                        class="px-3 py-1 text-sm bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100">
+                  Apply
+                </button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Templates List -->
+      <div x-show="presetTab === 'templates'">
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-lg font-medium text-gray-900">Agent Templates</h3>
+          <button @click="showCreateTemplateModal = true" class="text-indigo-600 text-sm font-medium hover:text-indigo-700">
+            + Create Template
+          </button>
+        </div>
+        <div class="bg-white rounded-lg shadow divide-y divide-gray-200">
+          <template x-for="template in templates" :key="template.id">
+            <div class="p-4 flex items-center justify-between">
+              <div>
+                <div class="flex items-center">
+                  <span class="text-lg mr-2" x-text="template.icon || '📋'"></span>
+                  <span class="font-medium text-gray-900" x-text="template.name"></span>
+                </div>
+                <div class="text-sm text-gray-500 mt-1" x-text="template.description || template.model"></div>
+              </div>
+              <div class="flex space-x-2">
+                <button @click="applyPreset('template', template.id)"
+                        class="px-3 py-1 text-sm bg-indigo-50 text-indigo-600 rounded hover:bg-indigo-100">
+                  Apply to Agents
+                </button>
+                <button @click="editTemplate(template)"
+                        class="px-3 py-1 text-sm bg-gray-50 text-gray-600 rounded hover:bg-gray-100">
+                  Edit
+                </button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- Analytics Tab -->
+    <div x-show="activeTab === 'analytics'" x-cloak>
+      <div class="flex justify-between items-center mb-6">
+        <h2 class="text-xl font-semibold text-gray-900">Usage Analytics</h2>
+        <select x-model="analyticsPeriod" @change="loadAnalytics()"
+                class="px-4 py-2 border border-gray-300 rounded-lg text-sm">
+          <option value="hour">Last Hour</option>
+          <option value="day">Last 24 Hours</option>
+          <option value="week">Last 7 Days</option>
+          <option value="month">Last 30 Days</option>
+        </select>
+      </div>
+
+      <!-- Summary Stats -->
+      <div class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
+        <div class="bg-white rounded-lg shadow p-4">
+          <div class="text-sm text-gray-500">Messages</div>
+          <div class="text-2xl font-semibold" x-text="formatNumber(analytics.totalMessages)"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-4">
+          <div class="text-sm text-gray-500">Input Tokens</div>
+          <div class="text-2xl font-semibold" x-text="formatNumber(analytics.totalInputTokens)"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-4">
+          <div class="text-sm text-gray-500">Output Tokens</div>
+          <div class="text-2xl font-semibold" x-text="formatNumber(analytics.totalOutputTokens)"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-4">
+          <div class="text-sm text-gray-500">Est. Cost</div>
+          <div class="text-2xl font-semibold" x-text="'$' + analytics.totalCost.toFixed(2)"></div>
+        </div>
+        <div class="bg-white rounded-lg shadow p-4">
+          <div class="text-sm text-gray-500">Error Rate</div>
+          <div class="text-2xl font-semibold" x-text="analytics.errorRate.toFixed(1) + '%'"></div>
+        </div>
+      </div>
+
+      <!-- Per-Agent Stats -->
+      <div class="bg-white rounded-lg shadow">
+        <div class="px-6 py-4 border-b border-gray-200">
+          <h3 class="text-lg font-medium text-gray-900">Usage by Agent</h3>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+              <tr>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Agent</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Messages</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tokens</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Cost</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Avg Response</th>
+                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Errors</th>
+              </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+              <template x-for="agent in agentAnalytics" :key="agent.agentId">
+                <tr>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900" x-text="agent.agentName"></td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="formatNumber(agent.messageCount)"></td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="formatNumber(agent.inputTokens + agent.outputTokens)"></td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="'$' + agent.cost.toFixed(2)"></td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="agent.avgResponseTime ? agent.avgResponseTime.toFixed(0) + 'ms' : '-'"></td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500" x-text="agent.errorRate.toFixed(1) + '%'"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings Tab -->
+    <div x-show="activeTab === 'settings'" x-cloak>
+      <h2 class="text-xl font-semibold text-gray-900 mb-6">Settings</h2>
+
+      <!-- Default Presets -->
+      <div class="bg-white rounded-lg shadow mb-6">
+        <div class="px-6 py-4 border-b border-gray-200">
+          <h3 class="text-lg font-medium text-gray-900">Default Presets for New Agents</h3>
+          <p class="text-sm text-gray-500 mt-1">These presets will be automatically applied to new agents.</p>
+        </div>
+        <div class="p-6 space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Default Template</label>
+            <select x-model="defaults.templateId" @change="saveDefaults()"
+                    class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+              <option value="">None</option>
+              <template x-for="t in templates" :key="t.id">
+                <option :value="t.id" x-text="t.name"></option>
+              </template>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Default Soul</label>
+            <select x-model="defaults.soulId" @change="saveDefaults()"
+                    class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+              <option value="">None</option>
+              <template x-for="s in souls" :key="s.id">
+                <option :value="s.id" x-text="s.name"></option>
+              </template>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Default Skills</label>
+            <div class="grid grid-cols-2 md:grid-cols-3 gap-2">
+              <template x-for="skill in skills" :key="skill.id">
+                <label class="flex items-center space-x-2 p-2 border rounded-lg cursor-pointer hover:bg-gray-50">
+                  <input type="checkbox" :value="skill.id" x-model="defaults.skillIds" @change="saveDefaults()"
+                         class="rounded border-gray-300 text-indigo-600">
+                  <span class="text-sm" x-text="skill.icon + ' ' + skill.name"></span>
+                </label>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Batch Operations -->
+      <div class="bg-white rounded-lg shadow">
+        <div class="px-6 py-4 border-b border-gray-200">
+          <h3 class="text-lg font-medium text-gray-900">Batch Operations</h3>
+          <p class="text-sm text-gray-500 mt-1">Apply changes to multiple agents at once.</p>
+        </div>
+        <div class="p-6">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <button @click="showBatchModal = 'template'"
+                    class="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-indigo-500 hover:bg-indigo-50 text-left">
+              <div class="font-medium text-gray-900">Apply Template</div>
+              <div class="text-sm text-gray-500">Apply a template to existing agents</div>
+            </button>
+            <button @click="showBatchModal = 'soul'"
+                    class="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-indigo-500 hover:bg-indigo-50 text-left">
+              <div class="font-medium text-gray-900">Apply Soul</div>
+              <div class="text-sm text-gray-500">Update system prompt for all agents</div>
+            </button>
+            <button @click="showBatchModal = 'skills'"
+                    class="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-indigo-500 hover:bg-indigo-50 text-left">
+              <div class="font-medium text-gray-900">Manage Skills</div>
+              <div class="text-sm text-gray-500">Add or remove skills from agents</div>
+            </button>
+            <button @click="showBatchModal = 'config'"
+                    class="p-4 border-2 border-dashed border-gray-300 rounded-lg hover:border-indigo-500 hover:bg-indigo-50 text-left">
+              <div class="font-medium text-gray-900">Update Config</div>
+              <div class="text-sm text-gray-500">Change model, tokens, temperature</div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Apply Preset Modal -->
+  <div x-show="showApplyModal" x-cloak class="fixed inset-0 z-50 overflow-y-auto">
+    <div class="flex items-center justify-center min-h-screen px-4">
+      <div class="fixed inset-0 bg-black opacity-30" @click="showApplyModal = false"></div>
+      <div class="relative bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+        <h3 class="text-lg font-medium text-gray-900 mb-4">Apply Preset</h3>
+
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Apply To</label>
+            <select x-model="applyOptions.targetScope" class="w-full px-4 py-2 border border-gray-300 rounded-lg">
+              <option value="existing_agents">All Existing Agents</option>
+              <option value="new_agents">New Agents Only</option>
+              <option value="all_agents">Both New & Existing</option>
+              <option value="selected_agents">Selected Agents</option>
+            </select>
+          </div>
+
+          <div x-show="applyOptions.targetScope === 'selected_agents'">
+            <label class="block text-sm font-medium text-gray-700 mb-2">Select Agents</label>
+            <div class="max-h-40 overflow-y-auto border rounded-lg p-2">
+              <template x-for="agent in agents" :key="agent.id">
+                <label class="flex items-center space-x-2 p-2 hover:bg-gray-50 rounded">
+                  <input type="checkbox" :value="agent.id" x-model="applyOptions.selectedAgentIds"
+                         class="rounded border-gray-300 text-indigo-600">
+                  <span class="text-sm" x-text="agent.name"></span>
+                </label>
+              </template>
+            </div>
+          </div>
+
+          <div class="flex items-center space-x-2">
+            <input type="checkbox" x-model="applyOptions.restartRunning" id="restartRunning"
+                   class="rounded border-gray-300 text-indigo-600">
+            <label for="restartRunning" class="text-sm text-gray-700">Restart running agents to apply changes</label>
+          </div>
+        </div>
+
+        <div class="mt-6 flex justify-end space-x-3">
+          <button @click="showApplyModal = false"
+                  class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200">
+            Cancel
+          </button>
+          <button @click="executeApplyPreset()"
+                  class="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700">
+            Apply
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notifications -->
+  <div class="fixed bottom-4 right-4 z-50 space-y-2">
+    <template x-for="toast in toasts" :key="toast.id">
+      <div :class="{
+        'bg-green-500': toast.type === 'success',
+        'bg-red-500': toast.type === 'error',
+        'bg-blue-500': toast.type === 'info'
+      }" class="text-white px-4 py-3 rounded-lg shadow-lg flex items-center space-x-2">
+        <span x-text="toast.message"></span>
+        <button @click="removeToast(toast.id)" class="ml-2 text-white/80 hover:text-white">&times;</button>
+      </div>
+    </template>
+  </div>
+
+  <script>
+    function dashboard() {
+      return {
+        // State
+        apiKey: localStorage.getItem('apiKey') || '',
+        baseUrl: window.location.origin,
+        activeTab: 'overview',
+        presetTab: 'souls',
+        customer: null,
+
+        // Data
+        agents: [],
+        souls: [],
+        skills: [],
+        templates: [],
+        stats: { totalAgents: 0, runningAgents: 0, messages24h: 0, cost24h: 0 },
+        analytics: { totalMessages: 0, totalInputTokens: 0, totalOutputTokens: 0, totalCost: 0, errorRate: 0 },
+        agentAnalytics: [],
+        recentMessages: [],
+        analyticsPeriod: 'day',
+        defaults: { templateId: '', soulId: '', skillIds: [] },
+
+        // Modals
+        showApplyModal: false,
+        showCreateAgentModal: false,
+        showCreateSoulModal: false,
+        showCreateSkillModal: false,
+        showCreateTemplateModal: false,
+        showBatchModal: null,
+
+        // Apply options
+        applyOptions: {
+          presetType: '',
+          presetId: '',
+          targetScope: 'existing_agents',
+          selectedAgentIds: [],
+          restartRunning: false
+        },
+
+        // Toasts
+        toasts: [],
+        toastId: 0,
+
+        async init() {
+          if (!this.apiKey) {
+            this.apiKey = prompt('Enter your API key:');
+            if (this.apiKey) localStorage.setItem('apiKey', this.apiKey);
+          }
+
+          await this.loadData();
+        },
+
+        async loadData() {
+          try {
+            const [agentsRes, soulsRes, skillsRes, templatesRes, analyticsRes, defaultsRes, messagesRes] = await Promise.all([
+              this.api('GET', '/api/v1/agents'),
+              this.api('GET', '/api/v1/presets/souls'),
+              this.api('GET', '/api/v1/presets/skills'),
+              this.api('GET', '/api/v1/presets/templates'),
+              this.api('GET', '/api/v1/analytics/usage?period=day'),
+              this.api('GET', '/api/v1/settings/defaults'),
+              this.api('GET', '/api/v1/analytics/messages?limit=10')
+            ]);
+
+            this.agents = agentsRes.agents || [];
+            this.souls = soulsRes.souls || [];
+            this.skills = skillsRes.skills || [];
+            this.templates = templatesRes.templates || [];
+            this.analytics = analyticsRes || this.analytics;
+            this.defaults = defaultsRes || this.defaults;
+            this.recentMessages = messagesRes.messages || [];
+
+            // Calculate stats
+            this.stats.totalAgents = this.agents.length;
+            this.stats.runningAgents = this.agents.filter(a => a.status === 'running').length;
+            this.stats.messages24h = this.analytics.totalMessages;
+            this.stats.cost24h = this.analytics.totalCost;
+
+            this.initChart();
+          } catch (error) {
+            console.error('Failed to load data:', error);
+            this.showToast('Failed to load data', 'error');
+          }
+        },
+
+        async api(method, path, body) {
+          const res = await fetch(this.baseUrl + path, {
+            method,
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${this.apiKey}`
+            },
+            body: body ? JSON.stringify(body) : undefined
+          });
+
+          if (!res.ok) {
+            const error = await res.json();
+            throw new Error(error.message || 'API Error');
+          }
+
+          return res.json();
+        },
+
+        async toggleAgent(agent) {
+          try {
+            if (agent.status === 'running') {
+              await this.api('POST', `/api/v1/agents/${agent.id}/stop`);
+              this.showToast('Agent stopped', 'success');
+            } else {
+              await this.api('POST', `/api/v1/agents/${agent.id}/start`);
+              this.showToast('Agent started', 'success');
+            }
+            await this.loadData();
+          } catch (error) {
+            this.showToast(error.message, 'error');
+          }
+        },
+
+        applyPreset(type, id) {
+          this.applyOptions.presetType = type;
+          this.applyOptions.presetId = id;
+          this.applyOptions.targetScope = 'existing_agents';
+          this.applyOptions.selectedAgentIds = [];
+          this.applyOptions.restartRunning = false;
+          this.showApplyModal = true;
+        },
+
+        async executeApplyPreset() {
+          try {
+            await this.api('POST', '/api/v1/batch/apply', this.applyOptions);
+            this.showToast('Preset applied successfully', 'success');
+            this.showApplyModal = false;
+            await this.loadData();
+          } catch (error) {
+            this.showToast(error.message, 'error');
+          }
+        },
+
+        async saveDefaults() {
+          try {
+            await this.api('PUT', '/api/v1/settings/defaults', this.defaults);
+            this.showToast('Defaults saved', 'success');
+          } catch (error) {
+            this.showToast(error.message, 'error');
+          }
+        },
+
+        async loadAnalytics() {
+          try {
+            const [usage, agents] = await Promise.all([
+              this.api('GET', `/api/v1/analytics/usage?period=${this.analyticsPeriod}`),
+              this.api('GET', `/api/v1/analytics/agents?period=${this.analyticsPeriod}`)
+            ]);
+            this.analytics = usage;
+            this.agentAnalytics = agents.agents || [];
+          } catch (error) {
+            this.showToast(error.message, 'error');
+          }
+        },
+
+        initChart() {
+          const ctx = document.getElementById('usageChart');
+          if (!ctx || this._chart) return;
+
+          this._chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: Array.from({length: 24}, (_, i) => `${i}:00`),
+              datasets: [{
+                label: 'Messages',
+                data: Array.from({length: 24}, () => Math.floor(Math.random() * 100)),
+                borderColor: 'rgb(99, 102, 241)',
+                tension: 0.1
+              }]
+            },
+            options: {
+              responsive: true,
+              scales: { y: { beginAtZero: true } }
+            }
+          });
+        },
+
+        editAgent(agent) {
+          // Navigate to agent config
+          this.activeTab = 'agents';
+          // Open config modal (simplified for demo)
+          alert(`Edit agent: ${agent.name}\nID: ${agent.id}`);
+        },
+
+        editSoul(soul) {
+          alert(`Edit soul: ${soul.name}`);
+        },
+
+        editTemplate(template) {
+          alert(`Edit template: ${template.name}`);
+        },
+
+        logout() {
+          localStorage.removeItem('apiKey');
+          this.apiKey = '';
+          location.reload();
+        },
+
+        showToast(message, type = 'info') {
+          const id = ++this.toastId;
+          this.toasts.push({ id, message, type });
+          setTimeout(() => this.removeToast(id), 5000);
+        },
+
+        removeToast(id) {
+          this.toasts = this.toasts.filter(t => t.id !== id);
+        },
+
+        formatNumber(n) {
+          if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+          if (n >= 1000) return (n/1000).toFixed(1) + 'K';
+          return n?.toString() || '0';
+        },
+
+        formatTime(date) {
+          return new Date(date).toLocaleTimeString();
+        }
+      };
+    }
+  </script>
+</body>
+</html>

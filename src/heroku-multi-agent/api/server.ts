@@ -8,6 +8,8 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { initializePool, closePool, healthCheck as dbHealthCheck } from '../db/client.js';
 import { initializeRedis, closeRedis } from '../services/agent-manager.js';
@@ -18,6 +20,13 @@ import { auditMiddleware } from './middleware/audit.js';
 import adminRoutes from './routes/admin.js';
 import agentRoutes from './routes/agents.js';
 import credentialRoutes from './routes/credentials.js';
+import presetRoutes from './routes/presets.js';
+import analyticsRoutes from './routes/analytics.js';
+import batchRoutes from './routes/batch.js';
+import settingsRoutes from './routes/settings.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Environment configuration
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -93,11 +102,40 @@ export function createApp(): Express {
   // Credentials routes (nested under agents)
   app.use('/api/v1/agents', customerAuth, apiRateLimit(), credentialRoutes);
 
+  // Preset routes (skills, souls, templates)
+  app.use('/api/v1/presets', customerAuth, apiRateLimit(), presetRoutes);
+
+  // Agent skills routes (from presets router)
+  app.use('/api/v1', customerAuth, apiRateLimit(), presetRoutes);
+
+  // Analytics routes
+  app.use('/api/v1/analytics', customerAuth, apiRateLimit(), analyticsRoutes);
+
+  // Batch operations routes
+  app.use('/api/v1/batch', customerAuth, apiRateLimit(), batchRoutes);
+
+  // Settings routes
+  app.use('/api/v1/settings', customerAuth, apiRateLimit(), settingsRoutes);
+
   // Telegram webhook endpoint (special handling)
   app.post('/api/v1/webhook/telegram/:botId', async (req, res) => {
     // Telegram webhook handling will be implemented in worker
     // This endpoint just acknowledges receipt
     res.status(200).json({ ok: true });
+  });
+
+  // Serve dashboard static files
+  const dashboardPath = path.join(__dirname, '..', 'dashboard');
+  app.use('/dashboard', express.static(dashboardPath));
+
+  // Dashboard fallback route
+  app.get('/dashboard/*', (_req, res) => {
+    res.sendFile(path.join(dashboardPath, 'index.html'));
+  });
+
+  // Redirect root to dashboard
+  app.get('/', (_req, res) => {
+    res.redirect('/dashboard');
   });
 
   // 404 handler
