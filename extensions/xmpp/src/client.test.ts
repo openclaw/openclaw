@@ -410,6 +410,25 @@ describe("XmppClient - Message Parsing", () => {
       expect(() => validate("not-a-url")).toThrow(/Invalid URL format/);
       expect(() => validate("javascript:alert(1)")).toThrow();
     });
+
+    it("should block IPv4-mapped IPv6 addresses (SSRF bypass)", () => {
+      const client = new XmppClient({
+        jid: "test@example.com",
+        password: "password",
+        server: "example.com",
+      });
+      const validate = (client as unknown as XmppClientPrivate).validateUploadUrl.bind(client);
+
+      // IPv4-mapped IPv6 localhost
+      expect(() => validate("http://[::ffff:127.0.0.1]/")).toThrow(/IPv4-mapped IPv6/);
+      // IPv4-mapped private IPs
+      expect(() => validate("http://[::ffff:10.0.0.1]/")).toThrow(/IPv4-mapped IPv6/);
+      expect(() => validate("http://[::ffff:192.168.1.1]/")).toThrow(/IPv4-mapped IPv6/);
+      // IPv4-mapped AWS metadata
+      expect(() => validate("http://[::ffff:169.254.169.254]/")).toThrow(/IPv4-mapped IPv6/);
+      // Hex notation
+      expect(() => validate("http://[::ffff:c0a8:101]/")).toThrow(/IPv4-mapped IPv6/);
+    });
   });
 
   describe("validateContentType (blocked media types)", () => {

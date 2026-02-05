@@ -635,6 +635,14 @@ export class XmppClient {
         throw new Error(`Private/internal URL not allowed: ${hostname}`);
       }
 
+      // IPv4-mapped IPv6 addresses (::ffff:x.x.x.x format)
+      // These can bypass IPv4 checks, e.g., [::ffff:127.0.0.1] → [::ffff:7f00:1]
+      if (hostname.includes("::ffff:")) {
+        throw new Error(
+          `IPv4-mapped IPv6 addresses not allowed (potential SSRF bypass): ${hostname}`,
+        );
+      }
+
       // Private IPv4 ranges
       if (
         hostname.startsWith("10.") || // 10.0.0.0/8

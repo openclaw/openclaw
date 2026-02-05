@@ -1,5 +1,11 @@
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "openclaw/plugin-sdk";
-import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk";
+import {
+  createActionGate,
+  jsonResult,
+  readStringParam,
+  normalizeAccountId,
+  DEFAULT_ACCOUNT_ID,
+} from "openclaw/plugin-sdk";
 import type { CoreConfig } from "./types.js";
 import { XmppClient, isGroupJid, getBareJid } from "./client.js";
 
@@ -61,9 +67,10 @@ export const xmppMessageActions: ChannelMessageActionAdapter = {
       if (!clientsRegistry) {
         throw new Error("XMPP client registry not initialized");
       }
-      const client = clientsRegistry.get(accountId ?? "default");
+      const normalizedAccountId = normalizeAccountId(accountId) || DEFAULT_ACCOUNT_ID;
+      const client = clientsRegistry.get(normalizedAccountId);
       if (!client) {
-        throw new Error(`XMPP client not connected for account "${accountId ?? "default"}"`);
+        throw new Error(`XMPP client not connected for account "${normalizedAccountId}"`);
       }
 
       // Parse target
