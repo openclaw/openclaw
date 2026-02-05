@@ -975,12 +975,29 @@ public static class MouseInput {
   }
 
   public static void Click(string button, int clicks) {
+    Click(button, clicks, 60, 25);
+  }
+
+  public static void Click(string button, int clicks, int intervalMs, int jitterMs) {
     int count = clicks < 1 ? 1 : clicks;
     uint down = ResolveDownFlag(button);
     uint up = ResolveUpFlag(button);
+
+    int baseInterval = intervalMs < 0 ? 0 : intervalMs;
+    int jitter = jitterMs < 0 ? 0 : jitterMs;
+    var rng = new Random();
+
     for (int i = 0; i < count; i++) {
       InputApi.Send(new InputApi.INPUT[] { InputApi.MakeMouse(0, 0, 0, down), InputApi.MakeMouse(0, 0, 0, up) });
-      System.Threading.Thread.Sleep(60);
+      if (i < count - 1) {
+        int ms = baseInterval;
+        if (jitter > 0) {
+          ms += rng.Next(-jitter, jitter + 1);
+        }
+        if (ms > 0) {
+          System.Threading.Thread.Sleep(ms);
+        }
+      }
     }
   }
 
@@ -1059,7 +1076,6 @@ function Resolve-Key([string]$keyToken) {
   return @{ vk = [UInt16]$vk; extended = $extended }
 }
 
-switch ('${action}') {
 function Smooth-MoveTo([int]$x2, [int]$y2, [int]$steps, [int]$stepDelay) {
   if ($steps -lt 1) { $steps = 1 }
   if ($steps -gt 200) { $steps = 200 }
@@ -1076,11 +1092,13 @@ function Smooth-MoveTo([int]$x2, [int]$y2, [int]$steps, [int]$stepDelay) {
     return
   }
 
-  $dx = ($x2 - $x1) / [double]$steps
-  $dy = ($y2 - $y1) / [double]$steps
+  $dx = ($x2 - $x1)
+  $dy = ($y2 - $y1)
   for ($i = 1; $i -le $steps; $i++) {
-    $nx = [int][Math]::Round($x1 + ($dx * $i))
-    $ny = [int][Math]::Round($y1 + ($dy * $i))
+    $t = $i / [double]$steps
+    $e = ($t * $t) * (3.0 - (2.0 * $t))
+    $nx = [int][Math]::Round($x1 + ($dx * $e))
+    $ny = [int][Math]::Round($y1 + ($dy * $e))
     [MouseInput]::MoveTo($nx, $ny)
     if ($stepDelay -gt 0) { Start-Sleep -Milliseconds $stepDelay }
   }
@@ -1162,11 +1180,13 @@ switch ('${action}') {
     if ($steps -eq 1) {
       [MouseInput]::MoveTo($x2, $y2)
     } else {
-      $dx = ($x2 - $x1) / [double]$steps
-      $dy = ($y2 - $y1) / [double]$steps
+      $dx = ($x2 - $x1)
+      $dy = ($y2 - $y1)
       for ($i = 1; $i -le $steps; $i++) {
-        $nx = [int][Math]::Round($x1 + ($dx * $i))
-        $ny = [int][Math]::Round($y1 + ($dy * $i))
+        $t = $i / [double]$steps
+        $e = ($t * $t) * (3.0 - (2.0 * $t))
+        $nx = [int][Math]::Round($x1 + ($dx * $e))
+        $ny = [int][Math]::Round($y1 + ($dy * $e))
         [MouseInput]::MoveTo($nx, $ny)
         if ($stepDelay -gt 0) { Start-Sleep -Milliseconds $stepDelay }
       }
