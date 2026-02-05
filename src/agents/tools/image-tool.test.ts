@@ -53,7 +53,7 @@ describe("image tool implicit imageModel config", () => {
     };
     expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
       primary: "minimax/MiniMax-VL-01",
-      fallbacks: ["openai/gpt-5-mini", "anthropic/claude-opus-4-5"],
+      fallbacks: ["openai/gpt-5-mini", "anthropic/claude-opus-4-6"],
     });
     expect(createImageTool({ config: cfg, agentDir })).not.toBeNull();
   });

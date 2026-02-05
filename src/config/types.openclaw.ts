@@ -13,7 +13,6 @@ import type {
 } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type { MemoryConfig } from "./types.memory.js";
-import type { MemoryConfig } from "./types.memory.js";
 import type {
   AudioConfig,
   BroadcastConfig,
