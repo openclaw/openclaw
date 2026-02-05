@@ -56,7 +56,11 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
     effect: Type.Optional(
       Type.String({ description: "Alias for effectId (e.g., invisible-ink, balloons)." }),
     ),
-    media: Type.Optional(Type.String()),
+    media: Type.Optional(
+      Type.String({
+        description: "Media URL or local path. data: URLs are not supported here, use buffer.",
+      }),
+    ),
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({

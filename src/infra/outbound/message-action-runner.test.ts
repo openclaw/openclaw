@@ -579,7 +579,7 @@ describe("runMessageAction sandboxed media validation", () => {
         params: {
           channel: "slack",
           target: "#C12345678",
-          message: "Hello\\nMEDIA: ./data/note.ogg",
+          message: "Hello\nMEDIA: ./data/note.ogg",
         },
         sandboxRoot: sandboxDir,
         dryRun: true,
