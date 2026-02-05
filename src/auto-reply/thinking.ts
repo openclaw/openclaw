@@ -40,7 +40,11 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (!raw) {
     return undefined;
   }
-  const key = raw.toLowerCase();
+  const key = raw.trim().toLowerCase();
+  const collapsed = key.replace(/[\s_-]+/g, "");
+  if (collapsed === "xhigh" || collapsed === "extrahigh") {
+    return "xhigh";
+  }
   if (["off"].includes(key)) {
     return "off";
   }
@@ -60,9 +64,6 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
     ["high", "ultra", "ultrathink", "think-hard", "thinkhardest", "highest", "max"].includes(key)
   ) {
     return "high";
-  }
-  if (["xhigh", "x-high", "x_high"].includes(key)) {
-    return "xhigh";
   }
   if (["think"].includes(key)) {
     return "minimal";

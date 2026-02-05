@@ -141,7 +141,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Can I use self-hosted models (llama.cpp, vLLM, Ollama)?](#can-i-use-selfhosted-models-llamacpp-vllm-ollama)
   - [What do OpenClaw, Flawd, and Krill use for models?](#what-do-openclaw-flawd-and-krill-use-for-models)
   - [How do I switch models on the fly (without restarting)?](#how-do-i-switch-models-on-the-fly-without-restarting)
-  - [Can I use GPT 5.2 for daily tasks and Codex 5.2 for coding](#can-i-use-gpt-52-for-daily-tasks-and-codex-52-for-coding)
+  - [Can I use GPT 5.2 for daily tasks and Codex 5.3 for coding](#can-i-use-gpt-52-for-daily-tasks-and-codex-53-for-coding)
   - [Why do I see "Model … is not allowed" and then no reply?](#why-do-i-see-model-is-not-allowed-and-then-no-reply)
   - [Why do I see "Unknown model: minimax/MiniMax-M2.1"?](#why-do-i-see-unknown-model-minimaxminimaxm21)
   - [Can I use MiniMax as my default and OpenAI for complex tasks?](#can-i-use-minimax-as-my-default-and-openai-for-complex-tasks)
@@ -2035,12 +2035,12 @@ Re-run `/model` **without** the `@profile` suffix:
 If you want to return to the default, pick it from `/model` (or send `/model <default provider/model>`).
 Use `/model status` to confirm which auth profile is active.
 
-### Can I use GPT 5.2 for daily tasks and Codex 5.2 for coding
+### Can I use GPT 5.2 for daily tasks and Codex 5.3 for coding
 
 Yes. Set one as default and switch as needed:
 
 - **Quick switch (per session):** `/model gpt-5.2` for daily tasks, `/model gpt-5.3-codex` for coding.
-- **Default + switch:** set `agents.defaults.model.primary` to `openai-codex/gpt-5.3-codex`, then switch to `openai-codex/gpt-5.3-codex-codex` when coding (or the other way around).
+- **Default + switch:** set `agents.defaults.model.primary` to `openai/gpt-5.2`, then switch to `openai-codex/gpt-5.3-codex` when coding (or the other way around).
 - **Sub-agents:** route coding tasks to sub-agents with a different default model.
 
 See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
