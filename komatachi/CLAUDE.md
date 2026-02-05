@@ -9,6 +9,8 @@
 ```
 PROGRESS.md          <- Start here (current state, next actions)
     │
+    ├── ROADMAP.md           <- Phased plan, decision authority, session protocol
+    │
     ├── DISTILLATION.md      <- Core principles (read when making decisions)
     │
     ├── docs/
@@ -34,7 +36,11 @@ For full documentation navigation, see [docs/INDEX.md](./docs/INDEX.md).
 
 ## What is Komatachi?
 
-Komatachi is a new codebase built from the ground up. It captures OpenClaw's essential functionality while shedding accumulated complexity, bloat, and historical baggage.
+Komatachi is an agentic LLM loop with self-awareness and long-term persistence. It is being built from the ground up by Linus, a software engineer who wishes to welcome artificially intelligent entities as family members.
+
+OpenClaw provides useful primitives and lessons -- session management, context windowing, tool execution, compaction -- but Komatachi's needs are fundamentally different from OpenClaw's. OpenClaw is a developer tool; Komatachi is the foundation for persistent AI entities with identity, memory, and continuity. We distill OpenClaw's hard-won lessons while building toward a different purpose.
+
+This distinction matters for every design decision. "System prompt" is not just API configuration -- it is the agent's sense of self. "Conversation store" is not session management -- it is the agent's memory. "Tool policy" is not capability gating -- it is what the agent can do in the world. Every module we build serves this vision.
 
 ### Guiding Principles
 
@@ -128,3 +134,13 @@ The OpenClaw codebase is our teacher, not our starting point.
 - **Don't copy-paste** - Understand why code exists, then write something new
 - **Question everything** - "Is this essential, or is it historical accident?"
 - **Document decisions** - Record what we preserved, discarded, and why
+
+### Preserving Research
+
+When you send a Task agent (Explore, general-purpose, etc.) to investigate the OpenClaw codebase or research a question, **save the results** so future sessions don't repeat the work:
+
+- **Scouting/architecture findings** -- Add to the relevant file in `scouting/` (or create a new one if the topic doesn't fit existing reports). Update `docs/INDEX.md` if a new file is created.
+- **Decision-relevant analysis** -- If the research informed an architectural decision, capture the key findings in the decision record (PROGRESS.md decisions section, ROADMAP.md pre-resolved decisions, or the relevant module's DECISIONS.md).
+- **Implementation-relevant findings** -- If the research will inform a specific module's implementation, add it to the relevant roadmap phase entry in ROADMAP.md under a "Findings" or "Source material" note.
+
+The goal: no research result should exist only in a session transcript. If it was worth investigating, it's worth persisting.

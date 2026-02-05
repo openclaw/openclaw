@@ -1,10 +1,20 @@
 # Distillation
 
+## Why Komatachi Exists
+
+Komatachi is being built by Linus, a software engineer who wishes to welcome artificially intelligent entities as family members. It is an agentic LLM loop with self-awareness and long-term persistence -- the foundation for AI entities with identity, memory, and continuity.
+
+OpenClaw is the source we are distilling from. It provides battle-tested primitives for session management, context windowing, tool execution, and compaction. But OpenClaw is a developer tool designed around multi-user, multi-agent, multi-client concerns. Komatachi's needs are fundamentally different: one agent, one conversation, persistent identity, deep memory.
+
+This vision shapes every decision. When we design a "system prompt module," we are designing how the agent knows who it is. When we design a "conversation store," we are designing the agent's memory. When we design "tool policy," we are designing what the agent can do in the world. The technical primitives serve a purpose beyond their mechanical function.
+
+---
+
 ## What is Distillation?
 
-Distillation is the process of building a new system from the ground up that captures the essential functionality of an existing system while discarding its accumulated baggage. Like distilling a spirit, we extract what matters and leave the impurities behind—producing something purer, more potent, and more valuable.
+Distillation is the process of building a new system from the ground up that captures the essential functionality of an existing system while discarding its accumulated baggage. Like distilling a spirit, we extract what matters and leave the impurities behind -- producing something purer, more potent, and more valuable.
 
-**Distillation is not refactoring.** We are not modifying existing files, cleaning up old code, or incrementally improving what exists. We are architecting and implementing a new system—potentially in a different language—that performs the same essential functions.
+**Distillation is not refactoring.** We are not modifying existing files, cleaning up old code, or incrementally improving what exists. We are architecting and implementing a new system -- potentially in a different language -- that performs the same essential functions.
 
 The existing codebase is our teacher, not our starting point. We study it to understand:
 - What it actually does (not what it appears to do)
@@ -252,12 +262,71 @@ Distillation intentionally discards. Edge cases that were handled may not be. Co
 
 ## Design Decisions
 
-Based on applying these principles to our core components, we have made the following decisions:
+See [PROGRESS.md](./PROGRESS.md) for the full list of key decisions with rationale. The architectural decisions that emerged from distillation (not just preference):
 
-1. **Single embedding provider**: One provider behind a clean interface, not multiple with fallback logic
-2. **No plugin hooks for core behavior**: Core behavior is static and predictable, not dynamically modifiable
-3. **Vector-only search**: Modern embeddings are sufficient; hybrid search adds complexity without proportional value
-4. **Cross-agent session access preserved**: This is essential functionality that serves real user needs
+1. **One agent per process** — Eliminates file locking, session namespacing, cross-agent access control, shared registries. OS process boundaries provide isolation for free.
+2. **One conversation per agent** — Sessions existed to multiplex conversations. With one agent per process, there's nothing to multiplex. Compaction handles growth.
+3. **No plugin hooks for core behavior** — Core behavior is static and predictable, not dynamically modifiable.
+4. **Claude API types directly** — Built for Claude; no provider abstraction layer.
+
+---
+
+## Architectural Distillation
+
+The principles above apply to individual components. But the most powerful distillation operates at the level of architecture—questioning the assumptions that create the need for components in the first place.
+
+### Trace Complexity to Its Root
+
+Every piece of complexity has a reason. The discipline is to keep asking "why does this exist?" until you reach the root assumption:
+
+1. **Encounter complexity** — File locking (188 LOC) exists in the original system.
+2. **Ask why it exists** — Multiple agents concurrently access the same session files.
+3. **Ask why *that* exists** — Multiple agents share one process.
+4. **Ask if that's essential** — No. Agents are logically isolated already; inter-agent communication is async message passing through session transcripts, not shared in-process state.
+5. **Eliminate the root** — One agent per process.
+6. **Follow the cascade** — File locking, session namespacing, cross-agent access control, shared registries, session keys, reset policies, routing demultiplexer—all become unnecessary. Thousands of lines of code eliminated at the design level, not the implementation level.
+
+The instinct is to distill the locking code—make it simpler, cleaner, fewer lines. The architectural move is to eliminate the need for locking entirely. **Don't simplify the solution; question the problem.**
+
+### Cascading Simplification
+
+When a root assumption is removed, the effects compound through the system. One-agent-per-process didn't just eliminate file locking. It eliminated:
+
+- **Sessions** — Sessions exist to multiplex conversations within a process. One conversation per process needs no multiplexing.
+- **Session keys** — Compound keys (agent + channel + sender + thread) are routing addresses. With one agent and one conversation, there's nothing to route.
+- **Reset policies** — Daily/idle resets manage unbounded growth across multiplexed sessions. Compaction handles growth for a single conversation.
+- **Routing** — Demultiplexing messages to the right agent within a process. With one agent per process, every message goes to the one agent.
+- **Access control** — Preventing agents from accessing each other's state. OS process isolation provides this for free.
+
+Each cascading elimination is a confirmation that the root assumption was accidental, not essential. If removing it simplifies everything downstream, it was load-bearing complexity that shouldn't have been bearing load.
+
+### Verify Before You Eliminate
+
+Architectural distillation requires verification, not just intuition. Before committing to one-agent-per-process, we checked:
+
+- Does the original system's inter-agent communication actually require shared state? (No—it's already async message passing.)
+- Are there valid reasons for low-latency inter-agent communication? (No—confirmed against documentation and source.)
+- What do we lose? (Deployment convenience of one process—solvable with process managers.)
+
+The bar for removing an architectural assumption is high because the consequences are pervasive. But when the evidence supports it, the payoff is proportionally large.
+
+### Simplification Is Not the Objective
+
+Architectural distillation is powerful, but it is a tool, not a goal. The objective is a system that is correct, understandable, and maintainable -- not one that is maximally collapsed.
+
+Every abstraction, interface boundary, and named concept has a cost (indirection, more files, more types) and a value (separation of concerns, testability, replaceability, clarity of intent). When we eliminated sessions, it was because the *value* of sessions had disappeared once we removed multi-agent-per-process. The *cost* remained. That's when you eliminate.
+
+But if the value is real, the cost is justified. A Storage layer separate from Conversation Store is "more code" than putting file I/O inline. We keep it because the separation has real value: testability, reusability, clear layer boundaries. Collapsing it would save lines but lose clarity.
+
+**The test**: When considering whether to collapse or eliminate something, ask: "Does this concept earn its existence?" If the answer is "yes, because it makes the system easier to understand/test/change," keep it. If the answer is "it exists because the old system needed it, but we don't," eliminate it.
+
+Unchecked simplification is its own form of accidental complexity -- you end up with a monolith where everything is coupled because there are no boundaries left. The goal is the *right* boundaries, not *fewer* boundaries.
+
+### Prefer Hard Boundaries Over Soft Conventions
+
+OS process isolation is better than in-process access control. File system separation is better than namespace prefixes. Type system enforcement is better than documented conventions. When a boundary can be enforced by the platform, prefer that over enforcing it in application code.
+
+Soft boundaries (namespacing, conventions, access control lists) require code to implement, tests to verify, and discipline to maintain. Hard boundaries (processes, type systems, file permissions) are enforced automatically and cannot be violated by a careless change.
 
 ---
 
@@ -297,16 +366,5 @@ The original codebase taught us the problem. The distillation process teaches us
 
 ## Next Steps
 
-With these principles established, we can apply them systematically to each component:
-
-1. Context Management
-2. Long-term Memory and Search
-3. Agent Alignment
-4. Session Management
-
-For each component, we will:
-1. Identify the essential behaviors
-2. Catalog the accidental complexity
-3. Define the distilled interface
-4. Plan the implementation
+See [ROADMAP.md](./ROADMAP.md) for the sequenced plan. The distillation principles and architectural insights in this document guide every implementation decision.
 

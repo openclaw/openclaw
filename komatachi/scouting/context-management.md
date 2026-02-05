@@ -12,6 +12,36 @@ The Context Management component handles how AI/LLM conversation context is mana
 
 The component integrates with the Pi coding agent framework and provides extensions that hook into the agent session lifecycle to automatically manage context size.
 
+## File Index
+
+Key source files organized by distillation target. Cross-references to ROADMAP.md phases.
+See detailed table below for complete listing with line counts and test files.
+
+### Compaction (-> already distilled: src/compaction/)
+src/agents/compaction.ts                - Core compaction: token estimation, chunking, multi-stage summarization
+src/agents/pi-embedded-runner/compact.ts - Session compaction orchestration: when/how to trigger compaction
+src/agents/pi-extensions/compaction-safeguard.ts - Compaction safeguard: tool failure extraction, file ops tracking
+
+### Context window management (-> Phase 2.1: Context Window)
+src/agents/context.ts                   - Context window token limits lookup from model registry
+src/agents/context-window-guard.ts      - Validate message fits within context window; guard against overflow
+src/agents/pi-embedded-runner/history.ts - DM history turn limiting (max turns, per-session config)
+src/auto-reply/reply/history.ts         - Group chat history management with LRU eviction
+
+### Context pruning (-> Phase 2.1: Context Window, pruning policy)
+src/agents/pi-extensions/context-pruning/pruner.ts - Core pruning: soft trim (head/tail preservation) and hard clear
+src/agents/pi-extensions/context-pruning/settings.ts - Pruning configuration: TTL, ratios, tool patterns, thresholds
+src/agents/pi-extensions/context-pruning/tools.ts - Tool matching predicates for selective pruning
+src/agents/pi-extensions/context-pruning/runtime.ts - Session-scoped pruning state registry (WeakMap-based)
+src/agents/pi-extensions/context-pruning/extension.ts - Pi extension wiring for pruning events
+
+### Error classification (reference)
+src/agents/pi-embedded-helpers/errors.ts - Error classification: context overflow, rate limit, billing, auth
+src/agents/pi-extensions/compaction-safeguard-runtime.ts - Runtime state for compaction safeguard
+
+### Out of scope (extension wiring)
+src/agents/pi-extensions/context-pruning.ts - Module entry point (re-export only)
+
 ## Source Files
 
 | File | Lines | Description |

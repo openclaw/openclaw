@@ -12,6 +12,40 @@ The agent alignment component in OpenClaw manages how agents behave, what tools 
 6. **Skills Configuration** - Manages skill eligibility, invocation policies, and frontmatter parsing for agent capabilities
 7. **Persona Management** - Supports SOUL.md for agent persona/tone, with a hook mechanism (soul-evil) for persona variants
 
+## File Index
+
+Key source files organized by distillation target. Cross-references to ROADMAP.md phases.
+See detailed table below for complete listing with line counts and test files.
+
+### System prompt (-> Phase 3.1: System Prompt)
+src/agents/system-prompt.ts             - Core prompt builder: 20+ sections (tooling, skills, memory, messaging, sandbox, etc.)
+src/agents/system-prompt-params.ts      - System prompt parameter building helpers
+src/agents/pi-embedded-runner/system-prompt.ts - Embedded runner system prompt wrapper
+
+### Tool policy (-> Phase 3.2: Tool Policy)
+src/agents/tool-policy.ts               - Tool profile resolution (minimal/coding/messaging/full) and policy expansion
+src/config/types.tools.ts               - Tool configuration types: policy, exec, media understanding
+
+### Workspace bootstrap (-> Phase 3.3: Workspace Bootstrap)
+src/agents/workspace.ts                 - Bootstrap file management: AGENTS.md, SOUL.md, IDENTITY.md, TOOLS.md, USER.md
+src/agents/pi-embedded-helpers/bootstrap.ts - Bootstrap context file building and truncation for prompt injection
+src/config/types.agent-defaults.ts      - Agent defaults config types (model, heartbeat, sandbox, compaction)
+src/config/zod-schema.agent-defaults.ts - Zod validation schema for agent defaults
+src/config/types.agents.ts              - Agent config types (name, model, capabilities)
+
+### Security (reference)
+src/security/external-content.ts        - Untrusted content handling: prompt injection detection, safe wrapping
+
+### Skills (out of scope - dropped per "no plugin hooks" decision)
+src/agents/skills/config.ts             - Skill eligibility and config resolution
+src/agents/skills/frontmatter.ts        - Skill frontmatter parsing and metadata resolution
+src/agents/skills/types.ts              - Skill type definitions
+
+### Plugin system (out of scope - dropped entirely)
+src/plugins/types.ts                    - Plugin type definitions: hook types, handler maps
+src/plugins/hooks.ts                    - Plugin hook runner: priority ordering, error handling
+src/hooks/soul-evil.ts                  - SOUL_EVIL.md persona swap hook
+
 ## Source Files with Line Counts
 
 | File | Lines | Description |

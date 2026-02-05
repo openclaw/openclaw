@@ -15,6 +15,53 @@ Key capabilities:
 - **Memory tools** exposed to agents (`memory_search`, `memory_get`)
 - **CLI interface** for status, indexing, and manual search
 
+## File Index
+
+Key source files organized by distillation target. Cross-references to ROADMAP.md phases.
+See detailed tables below for complete listings with line counts and test files.
+
+### Embeddings (-> already distilled: src/embeddings/)
+src/memory/embeddings.ts                - Embedding provider factory and abstraction layer
+src/memory/embeddings-openai.ts         - OpenAI embedding provider implementation
+src/memory/embeddings-gemini.ts         - Gemini embedding provider implementation
+src/memory/batch-openai.ts              - OpenAI batch embedding API with polling/timeout
+src/memory/batch-gemini.ts              - Gemini batch embedding API integration
+
+### Storage schema (-> deferred, but reference for future Phase 1.1)
+src/memory/memory-schema.ts             - SQLite schema: files, chunks, chunks_vec, chunks_fts, cache tables
+src/memory/sqlite-vec.ts                - SQLite-vec extension loader for native vector operations
+src/memory/sqlite.ts                    - Node sqlite require wrapper
+
+### Search (-> deferred: vector search)
+src/memory/manager-search.ts            - Vector similarity and keyword search implementations
+src/memory/hybrid.ts                    - Hybrid search: merge vector + BM25 scores with deduplication
+src/memory/internal.ts                  - File utilities, text chunking, hashing, cosine similarity
+
+### File sync (-> deferred: file watching/indexing)
+src/memory/sync-memory-files.ts         - Memory file synchronization: detect changes, reindex
+src/memory/sync-session-files.ts        - Session transcript to memory file sync
+src/memory/session-files.ts             - Session file parsing and building
+
+### Manager (-> deferred: orchestrator)
+src/memory/manager.ts                   - Main MemoryIndexManager: orchestrates indexing, search, caching, watching
+src/memory/manager-cache-key.ts         - Cache key computation for manager instances
+
+### Agent integration (reference)
+src/agents/memory-search.ts             - Memory search config resolution and merging for agents
+src/agents/tools/memory-tool.ts         - Agent tools: memory_search, memory_get
+
+### CLI (out of scope)
+src/cli/memory-cli.ts                   - CLI commands: memory status, index, search
+
+### Peripheral
+src/memory/status-format.ts             - Status display formatting helpers
+src/memory/provider-key.ts              - Embedding provider key fingerprinting
+src/memory/headers-fingerprint.ts       - Header name normalization for caching
+src/memory/search-manager.ts            - Factory for getting memory search manager
+src/memory/node-llama.ts                - Node-llama-cpp dynamic import (local embeddings)
+src/memory/index.ts                     - Module re-exports
+src/memory/openai-batch.ts              - Deprecated alias re-export
+
 ## Source Files
 
 ### Core Memory Module (`src/memory/`)

@@ -11,6 +11,7 @@ These are the essential documents for understanding and contributing to Komatach
 | Document | Purpose | When to Read |
 |----------|---------|--------------|
 | [PROGRESS.md](../PROGRESS.md) | Current state, completed work, next steps | **Start here** - read first in every session |
+| [ROADMAP.md](../ROADMAP.md) | Phased plan, decision authority, session protocol | When picking next work item or making decisions |
 | [DISTILLATION.md](../DISTILLATION.md) | Principles and process for distillation | When making design decisions |
 | [CLAUDE.md](../CLAUDE.md) | Project context and conventions | When starting work on Komatachi |
 
@@ -35,6 +36,7 @@ Reference material for specific technical topics:
 
 | Guide | Purpose |
 |-------|---------|
+| [integration-trace.md](./integration-trace.md) | Full integration verification: component interfaces, turn traces, dependency graph, identified gaps |
 | [testing-strategy.md](./testing-strategy.md) | Layer-based testing approach; when to mock vs use real deps |
 | [rust-porting.md](./rust-porting.md) | Lessons from Rust portability validation; patterns for future Rust migration |
 
@@ -57,11 +59,13 @@ Each distilled module has its own DECISIONS.md:
 komatachi/
 ├── CLAUDE.md              # Entry point for AI assistants
 ├── PROGRESS.md            # Source of truth for project state
+├── ROADMAP.md             # Phased plan and decision framework
 ├── DISTILLATION.md        # Core principles
 ├── docs/
-│   ├── INDEX.md           # This file
-│   ├── testing-strategy.md # Layer-based testing approach
-│   └── rust-porting.md    # Rust migration guide
+│   ├── INDEX.md              # This file
+│   ├── integration-trace.md  # Component integration verification
+│   ├── testing-strategy.md   # Layer-based testing approach
+│   └── rust-porting.md       # Rust migration guide
 ├── scouting/              # OpenClaw analysis
 │   ├── context-management.md
 │   ├── long-term-memory-search.md

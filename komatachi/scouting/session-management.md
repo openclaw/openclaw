@@ -13,6 +13,50 @@ The session management component is responsible for managing conversational agen
 - **Session Configuration**: Zod schema validation for session config, reset policies by type/channel, send policies, DM scope settings
 - **Session Identifiers/IDs**: Agent-prefixed session keys (`agent:main:...`), session UUIDs, group/channel key resolution
 
+## File Index
+
+Key source files organized by distillation target. Cross-references to ROADMAP.md phases.
+See detailed tables below for complete listings including line counts and test files.
+
+### Storage primitives (-> Phase 1.1: Storage)
+src/config/sessions/store.ts            - Session CRUD: load, save, atomic update with file locking and caching
+src/config/sessions/transcript.ts       - JSONL transcript: append messages, read full/range, integrity checks
+src/config/sessions/paths.ts            - Deterministic file path resolution from session/agent IDs
+src/agents/session-write-lock.ts        - Advisory file locking: acquire, release, stale lock detection, process cleanup
+
+### Session lifecycle (-> Phase 1.2: Session Store, Phase 1.3: Session State)
+src/config/sessions/types.ts            - SessionEntry type definition; entry merge/normalization utilities
+src/config/sessions/reset.ts            - Reset policies (daily/idle timeout); freshness evaluation logic
+src/config/sessions/metadata.ts         - Derive session origin (channel, platform) and group metadata
+src/config/sessions/main-session.ts     - Resolve the "main" session key for a given agent
+src/config/sessions/session-key.ts      - Derive session key from routing context (sender, channel, thread)
+src/auto-reply/reply/session.ts         - Session state initialization when an inbound message arrives
+src/auto-reply/reply/session-updates.ts - Prepend system events, manage skill snapshots, trigger compaction
+src/agents/session-transcript-repair.ts - Repair broken tool-use/tool-result pairing in transcripts
+src/agents/session-slug.ts              - Generate human-readable session slugs from content
+
+### Routing (-> Phase 4: Routing Stub)
+src/routing/session-key.ts              - Build agent-prefixed session keys; normalize; resolve peer DM keys
+src/config/sessions/group.ts            - Resolve group/channel session keys; build display names
+src/sessions/session-key-utils.ts       - Parse session key format (extract agent, channel, sender)
+
+### Configuration (reference)
+src/config/zod-schema.session.ts        - Zod validation schema for session configuration
+src/sessions/send-policy.ts             - Resolve who can send messages to a session
+src/sessions/model-overrides.ts         - Apply model overrides to session entries
+src/auto-reply/reply/session-reset-model.ts - Parse model override from reset command
+
+### Out of scope (multi-agent, platform-specific, UI)
+src/agents/tools/session-status-tool.ts - Agent tool: display session status (multi-agent)
+src/agents/tools/sessions-send-tool.ts  - Agent tool: send to other sessions (multi-agent)
+src/agents/tools/sessions-spawn-tool.ts - Agent tool: spawn sub-agent sessions (multi-agent)
+src/agents/tools/sessions-list-tool.ts  - Agent tool: list sessions (multi-agent)
+src/agents/tools/sessions-history-tool.ts - Agent tool: retrieve session history (multi-agent)
+src/agents/tools/sessions-send-tool.a2a.ts - Agent-to-agent session sending (cross-agent)
+src/web/session.ts                      - Web platform session management
+src/tui/tui-session-actions.ts          - Terminal UI session actions
+src/commands/sessions.ts                - CLI sessions command
+
 ## Source Files
 
 ### Core Session Store and Types (`src/config/sessions/`)

@@ -6,9 +6,9 @@
 
 | Aspect | State |
 |--------|-------|
-| **Phase** | Embeddings validated; continuing memory sub-modules |
-| **Last completed** | Embeddings module (47 tests passing) |
-| **Next action** | Distill next memory sub-module (storage or search) |
+| **Phase** | Decision resolution complete. Ready for Phase 1 implementation. |
+| **Last completed** | Per-module decision resolution (20 pre-resolved decisions in ROADMAP.md) |
+| **Next action** | Begin Phase 1.1 -- Storage module implementation |
 | **Blockers** | None |
 
 ### What Exists Now
@@ -17,13 +17,11 @@
 - [x] Trial distillation: `src/compaction/` (44 tests)
 - [x] Embeddings sub-module: `src/embeddings/` (47 tests)
 - [x] Key architectural decisions (TypeScript+Rust, minimal viable agent, no gateway)
+- [x] Phased roadmap with autonomous execution framework (ROADMAP.md)
+- [x] Per-module decision resolution (20 pre-resolved decisions)
 
-### Current Focus: Memory Sub-modules
-Long-term Memory & Search is being distilled as sub-modules rather than monolithically. Embeddings is complete. Remaining sub-modules:
-- Storage/Schema (~128 lines) - SQLite schema, vector extension
-- Hybrid search (~293 lines) - Vector + BM25 merging
-- File sync (~337 lines) - Memory and session file synchronization
-- Manager (~2,232 lines) - Orchestrator (distill last)
+### Current Focus: Phase 1 Implementation
+All decision points have been resolved. The roadmap (ROADMAP.md) contains 20 pre-resolved decisions covering every phase. Claude can now execute the distillation cycle autonomously, following the session protocol. Next: Phase 1.1 -- Storage module.
 
 ---
 
@@ -169,6 +167,9 @@ Files created:
 6. **CLI + Backend architecture** - The CLI is a thin client handling user interaction and display. The backend handles agent logic, LLM calls, compaction, memory, etc. This separation keeps the core framework interface-agnostic—it could serve a CLI, web client, or be embedded as a library.
 7. **Backend-first, gateway-deferred** - Start with a single-process backend. Design session storage and tool execution so they *could* support multi-agent later, but don't build it until needed. If/when we need multi-agent communication, prefer local-first IPC (ZeroMQ, Unix sockets) over web-oriented tech (WebSocket, HTTP). Note: ZeroMQ supports broker-less patterns (direct peer-to-peer)—a central broker may not be required at all.
 8. **Validate before advancing** - Write tests for each distilled component before moving to the next. Unvalidated foundations are risky; tests often reveal design issues early. This implements "Phase 4: Validate" from DISTILLATION.md.
+9. **One agent per process** - Each agent runs in its own OS process. No shared in-process state between agents. Inter-agent communication, when needed, is explicit message passing (IPC), not shared memory. This eliminates file locking, cross-agent access control, session namespacing, and shared registries. OpenClaw's own agent-to-agent communication is already asynchronous message passing through session transcripts -- separate processes makes the existing logical isolation physical. OS process boundaries provide security isolation, failure isolation, and a natural scaling model (separate processes can become separate machines).
+10. **One conversation per agent, no sessions** - There are no "sessions." Each agent has one conversation that persists indefinitely, compacted as needed. OpenClaw's session concept (daily resets, idle timeouts, compound session keys) exists to multiplex many conversations in one process. With one-agent-per-process, that multiplexing is unnecessary. Want a separate conversation? Start another agent.
+11. **Claude API message types** - Komatachi is built for Claude. Transcript messages use Claude's API format directly. No provider-agnostic abstraction.
 
 ---
 
@@ -201,23 +202,84 @@ Traced cross-agent communication in OpenClaw. The gateway is a WebSocket-based J
 
 ## Next Steps
 
-1. ~~**Write compaction tests**~~ - Done (44 tests passing)
+See [ROADMAP.md](./ROADMAP.md) for the full sequenced plan. Summary:
 
-2. ~~**Distill embeddings sub-module**~~ - Done (47 tests passing)
-
-3. **Continue memory sub-modules** (next)
-   - Storage/Schema - SQLite tables for chunks, embeddings, cache
-   - Hybrid search - Vector similarity + BM25 merging
-   - File sync - Memory file watching and indexing
-   - Manager - Final orchestrator (depends on above)
-
-4. **Integration checkpoint** - After memory is complete, verify compaction + embeddings + storage compose toward minimal viable agent
+- [ ] **Phase 1**: Storage & Conversation Foundation (Storage, Conversation Store)
+- [ ] **Phase 2**: Context Pipeline (Context Window with History Management folded in)
+- [ ] **Phase 3**: Agent Identity (System Prompt with identity loading, Tool Registry)
+- [ ] **Phase 4**: Agent Loop (main execution loop wiring everything together)
+- [ ] **Phase 5**: Integration Validation (end-to-end pipeline test)
 
 ---
 
+### 9. Distillation Roadmap (Complete)
+
+Established a phased roadmap and autonomous execution framework:
+
+- 5 phases covering Storage, Context, Agent Alignment, Routing, and Integration
+- Decision authority boundaries (what Claude decides vs. what needs discussion)
+- Session protocol for autonomous execution
+- 7 pre-resolved architectural decisions (file-based storage, single-session, single-agent, etc.)
+- Explicit deferral list with reasoning (vector search, file sync, memory manager, cross-agent access, multi-session, gateway)
+
+Key scope decisions:
+- File-based storage (JSON/JSONL) instead of SQLite -- matches OpenClaw's session layer; SQLite only needed for deferred vector search
+- Single-session and single-agent assumptions -- interfaces designed for multi, implementations start simple
+- History Management folded into Context Window -- separate module unnecessary with modern context sizes
+- Agent Alignment is thin -- plugin/extension machinery dropped per existing decisions
+
+Files created:
+- `ROADMAP.md` - Full roadmap, decision framework, and session protocol
+
+### 10. Per-Module Decision Resolution (Complete)
+
+Walked through every roadmap phase and pre-resolved all decision points. Total: 20 pre-resolved decisions in ROADMAP.md. Key decisions made during this phase:
+
+- **Komatachi's purpose recorded** -- Not a developer tool; an agentic LLM loop for persistent AI entities with identity, memory, and continuity. Recorded in CLAUDE.md, DISTILLATION.md, and ROADMAP.md.
+- **Phase 3 restructured** -- Renamed from "Agent Alignment" to "Agent Identity." Workspace Bootstrap (3.3) eliminated. Two modules remain: System Prompt (with identity file loading) and Tool Registry.
+- **Identity files are user-editable markdown** -- SOUL.md, IDENTITY.md, USER.md, MEMORY.md, AGENTS.md, TOOLS.md. No template initialization; human creates them.
+- **No project detection** -- Coding-assistant concern, deferred.
+- **Tool registry is flat** -- Array of definitions, no profiles or permissions.
+- **System prompt is a simple function** -- Section builders in order, string interpolation, no registry or template engine.
+- **@anthropic-ai/sdk directly** -- No provider abstraction (OpenClaw uses pi-ai wrapper; Komatachi doesn't need it).
+- **Non-streaming initially** -- Complete response before processing.
+
+Files updated:
+- `ROADMAP.md` - 20 pre-resolved decisions, restructured Phase 3, detailed Phase 4-5
+- `PROGRESS.md` - This file
+- `CLAUDE.md` - Komatachi vision context
+- `DISTILLATION.md` - "Why Komatachi Exists" section added
+
+### 11. Integration Verification (Complete)
+
+Traced how every component composes into the minimal viable agent loop before starting implementation. Created `docs/integration-trace.md` with:
+
+- Abstract interfaces for all 7 components (Storage, Conversation Store, Context Window, System Prompt, Tool Registry, Compaction, Agent Loop)
+- Three full turn traces: normal message, tool use with dispatch loop, compaction triggered
+- Dependency graph
+- 7 interface gaps identified and resolved
+
+**Interface gaps found and incorporated into roadmap**:
+1. Conversation Store needs `replaceTranscript()` for compaction -- added to Phase 1.2 spec
+2. Token estimation should be injected into Context Window, not imported from compaction -- updated Phase 2.1 spec
+3. Compaction's Message type doesn't match Claude API format -- flagged for Phase 4.1
+4. FileOperations not tracked by any module -- pass empty for now, noted in Phase 4.1
+5. Conversation Store needs explicit in-memory state management -- added to Phase 1.2 spec
+6. Need `estimateStringTokens()` for system prompt token counting -- noted in Phase 2.1
+7. Storage `readAllJsonl` must handle partial trailing lines from crashes -- added to Phase 1.1 spec
+
+**Verification result**: Yes, the interfaces compose into a working persistent agent loop. All gaps are solvable within planned module boundaries.
+
+Files created:
+- `docs/integration-trace.md` - Full integration verification
+
+Files updated:
+- `ROADMAP.md` - Phase 1.1, 1.2, 2.1, 4.1 specs updated with gap resolutions
+- `docs/INDEX.md` - Added integration-trace.md
+
 ## Open Questions
 
-None currently. Cross-agent session access question resolved—deferred until requirements demand it (see decisions #4 and #7).
+None currently.
 
 ---
 
@@ -227,13 +289,16 @@ None currently. Cross-agent session access question resolved—deferred until re
 komatachi/
 ├── CLAUDE.md           # Project context (includes document map)
 ├── PROGRESS.md         # This file - update as work progresses
+├── ROADMAP.md          # Phased plan, decision authority, session protocol
 ├── DISTILLATION.md     # Principles and process
 ├── package.json        # Dependencies (vitest, typescript)
 ├── tsconfig.json       # TypeScript config
 ├── vitest.config.ts    # Test runner config
 ├── docs/               # Supplementary documentation
-│   ├── INDEX.md        # Central navigation hub
-│   └── rust-porting.md # Rust migration guide (from validation)
+│   ├── INDEX.md              # Central navigation hub
+│   ├── integration-trace.md  # Component integration verification
+│   ├── testing-strategy.md   # Layer-based testing approach
+│   └── rust-porting.md       # Rust migration guide (from validation)
 ├── scouting/           # Analysis of OpenClaw components
 │   ├── context-management.md
 │   ├── long-term-memory-search.md
