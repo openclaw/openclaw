@@ -606,36 +606,12 @@ export const registerTelegramHandlers = ({
       const msg = ctx.message;
       if (!msg?.migrate_to_chat_id) {
         return;
+        
       }
       if (shouldSkipUpdate(ctx)) {
         return;
       }
-      // fast native /aff status (no model)
-const t = (msg.text ?? "").trim();
-if (t === "/aff" || t === "/aff status") {
-const ws =
-cfg?.agents?.defaults?.workspace ??
-process.env.OPENCLAW_WORKSPACE ??
-"/home/node/.openclaw/workspace";
-const statePath = path.join(ws, "affection", "state.json");
-try {
-const state = JSON.parse(await fs.promises.readFile(statePath, "utf8"));
-const out =
-`Affection (V3b — skill/state)\n\n` +
-`- label: ${state.label} | aff: ${state.aff}\n` +
-`- closeness: ${Number(state.closeness).toFixed(3)}\n` +
-`- trust: ${Number(state.trust).toFixed(3)}\n` +
-`- reliabilityTrust: ${Number(state.reliabilityTrust).toFixed(3)}\n` +
-`- irritation: ${Number(state.irritation).toFixed(3)}\n` +
-`- cooldown: ${state.cooldownUntil ? state.cooldownUntil : "none"}\n` +
-`- today affGain: ${state.today?.affGain ?? 0}/12\n` +
-`- lastMessageAt: ${state.lastMessageAt}`;
-await ctx.reply(out);
-} catch (e: any) {
-await ctx.reply(`/aff status failed: ${String(e?.message ?? e)}`);
-}
-return;
-}
+      
 
       const oldChatId = String(msg.chat.id);
       const newChatId = String(msg.migrate_to_chat_id);
@@ -683,6 +659,33 @@ return;
       const msg = ctx.message;
       if (!msg) {
         return;
+        // fast native /aff status (no model)
+const t = (msg.text ?? "").trim();
+const base = t.split(/\s+/)[0].split("@")[0];
+if (base === "/aff") {
+const ws =
+cfg?.agents?.defaults?.workspace ??
+process.env.OPENCLAW_WORKSPACE ??
+"/home/node/.openclaw/workspace";
+const statePath = path.join(ws, "affection", "state.json");
+try {
+const state = JSON.parse(await fs.promises.readFile(statePath, "utf8"));
+const out =
+`Affection (V3b — skill/state)\n\n` +
+`- label: ${state.label} | aff: ${state.aff}\n` +
+`- closeness: ${Number(state.closeness).toFixed(3)}\n` +
+`- trust: ${Number(state.trust).toFixed(3)}\n` +
+`- reliabilityTrust: ${Number(state.reliabilityTrust).toFixed(3)}\n` +
+`- irritation: ${Number(state.irritation).toFixed(3)}\n` +
+`- cooldown: ${state.cooldownUntil ? state.cooldownUntil : "none"}\n` +
+`- today affGain: ${state.today?.affGain ?? 0}/12\n` +
+`- lastMessageAt: ${state.lastMessageAt}`;
+await ctx.reply(out);
+} catch (e: any) {
+await ctx.reply(`/aff status failed: ${String(e?.message ?? e)}`);
+}
+return;
+}
       }
       // openVB3: aff auto-touch for Boss (Telegram)
 // Deterministic + non-blocking: keeps affection/lastMessageAt fresh without involving the model.
