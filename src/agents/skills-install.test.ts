@@ -143,9 +143,9 @@ describe("entryEscapesTarget", () => {
     expect(entryEscapesTarget("/tmp/other/file", target)).toBe(true);
   });
 
-  it("handles backslash path separators (normalized to forward slash)", () => {
-    // Backslashes are normalized to forward slashes before resolution,
-    // so traversal attempts using backslash work on all platforms.
+  it("rejects backslash-separated traversal paths (normalized to /)", () => {
+    // Backslashes are normalized to forward slashes before validation
+    // because some zip tools use `\` as separator even on POSIX
     expect(entryEscapesTarget("..\\etc\\passwd", target)).toBe(true);
     expect(entryEscapesTarget("foo\\..\\..\\etc\\shadow", target)).toBe(true);
   });

@@ -157,22 +157,28 @@ export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInsta
   await fs.mkdir(installRoot, { recursive: true });
 
   // Validate archive entries to prevent path traversal (Zip Slip / CWE-22)
-  const listArgv = assetName.endsWith(".zip")
-    ? ["unzip", "-Z1", archivePath]
-    : ["tar", "tf", archivePath];
-  const listResult = await runCommandWithTimeout(listArgv, { timeoutMs: 60_000 });
-  if (listResult.code === 0) {
-    const resolvedRoot = path.resolve(installRoot);
-    const entries = listResult.stdout
-      .split("\n")
-      .map((e) => e.trim())
-      .filter(Boolean);
-    for (const entry of entries) {
-      const resolved = path.resolve(installRoot, entry);
-      if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep)) {
-        return { ok: false, error: `Archive entry escapes target directory: ${entry}` };
+  try {
+    const listArgv = assetName.endsWith(".zip")
+      ? ["unzip", "-Z1", archivePath]
+      : ["tar", "tf", archivePath];
+    const listResult = await runCommandWithTimeout(listArgv, { timeoutMs: 60_000 });
+    if (listResult.code === 0) {
+      const resolvedRoot = path.resolve(installRoot);
+      const entries = listResult.stdout
+        .split("\n")
+        .map((e) => e.trim())
+        .filter(Boolean);
+      for (const entry of entries) {
+        // Normalize backslashes: some zip tools use `\` as separator even on POSIX
+        const normalized = entry.replaceAll("\\", "/");
+        const resolved = path.resolve(installRoot, normalized);
+        if (resolved !== resolvedRoot && !resolved.startsWith(resolvedRoot + path.sep)) {
+          return { ok: false, error: `Archive entry escapes target directory: ${entry}` };
+        }
       }
     }
+  } catch {
+    // If listing fails (e.g. tool not available), let extraction proceed
   }
 
   if (assetName.endsWith(".zip")) {

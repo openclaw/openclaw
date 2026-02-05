@@ -254,7 +254,9 @@ async function downloadFile(
 
 /** Check whether an archive entry path would escape the target directory. */
 export function entryEscapesTarget(entryPath: string, targetDir: string): boolean {
-  const resolved = path.resolve(targetDir, entryPath);
+  // Normalize backslashes: some zip implementations use `\` as separator even on POSIX
+  const normalized = entryPath.replaceAll("\\", "/");
+  const resolved = path.resolve(targetDir, normalized);
   const resolvedTarget = path.resolve(targetDir);
   return resolved !== resolvedTarget && !resolved.startsWith(resolvedTarget + path.sep);
 }
