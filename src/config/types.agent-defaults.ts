@@ -299,6 +299,10 @@ export type AgentCompactionConfig = {
   maxHistoryShare?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
+  /** Timeout in ms for compaction summarization (default: 120000). */
+  timeoutMs?: number;
+  /** Model override for compaction (e.g. "anthropic/claude-haiku-4-5-20251001"). */
+  model?: string;
 };
 
 export type AgentCompactionMemoryFlushConfig = {
