@@ -16,6 +16,34 @@ export type SessionFileEntry = {
   content: string;
 };
 
+type ArtifactRef = {
+  id: string;
+  summary?: string;
+  toolName?: string;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function extractArtifactRef(details: unknown): ArtifactRef | null {
+  if (!isRecord(details)) {
+    return null;
+  }
+  const ref = details.artifactRef;
+  if (!isRecord(ref)) {
+    return null;
+  }
+  if (typeof ref.id !== "string" || ref.id.length === 0) {
+    return null;
+  }
+  return {
+    id: ref.id,
+    summary: typeof ref.summary === "string" ? ref.summary : undefined,
+    toolName: typeof ref.toolName === "string" ? ref.toolName : undefined,
+  };
+}
+
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
   const dir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
@@ -98,16 +126,28 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       if (!message || typeof message.role !== "string") {
         continue;
       }
-      if (message.role !== "user" && message.role !== "assistant") {
+      if (message.role === "user" || message.role === "assistant") {
+        const text = extractSessionText(message.content);
+        if (!text) {
+          continue;
+        }
+        const safe = redactSensitiveText(text, { mode: "tools" });
+        const label = message.role === "user" ? "User" : "Assistant";
+        collected.push(`${label}: ${safe}`);
         continue;
       }
-      const text = extractSessionText(message.content);
-      if (!text) {
-        continue;
+      if (message.role === "toolResult") {
+        const ref = extractArtifactRef((message as { details?: unknown }).details);
+        if (!ref) {
+          continue;
+        }
+        const summary = ref.summary?.trim() ? ref.summary.trim() : "artifact";
+        const safe = redactSensitiveText(summary, { mode: "tools" });
+        const toolName =
+          ref.toolName?.trim() || (message as { toolName?: string }).toolName?.trim();
+        const label = toolName ? `ToolResult (${toolName})` : "ToolResult";
+        collected.push(`${label}: ${safe} [artifact:${ref.id}]`);
       }
-      const safe = redactSensitiveText(text, { mode: "tools" });
-      const label = message.role === "user" ? "User" : "Assistant";
-      collected.push(`${label}: ${safe}`);
     }
     const content = collected.join("\n");
     return {
