@@ -124,29 +124,20 @@ describe("TurnExecutor", () => {
   });
 
   describe("execute", () => {
-    it("should emit lifecycle.start event", async () => {
+    it("should not emit lifecycle events (lifecycle managed by kernel)", async () => {
       const request = createMockRequest();
       const context = createMockContext();
 
       await executor.execute(context, request, emitter);
 
       const events = emitter.getEmittedEvents();
-      const startEvent = events.find((e) => e.kind === "lifecycle.start");
-      expect(startEvent).toBeDefined();
-      expect(startEvent?.data.prompt).toBe("Hello, world!");
-      expect(startEvent?.data.agentId).toBe("test-agent");
-    });
-
-    it("should emit lifecycle.end event on success", async () => {
-      const request = createMockRequest();
-      const context = createMockContext();
-
-      await executor.execute(context, request, emitter);
-
-      const events = emitter.getEmittedEvents();
-      const endEvent = events.find((e) => e.kind === "lifecycle.end");
-      expect(endEvent).toBeDefined();
-      expect(endEvent?.data.success).toBe(true);
+      const lifecycleEvents = events.filter(
+        (e) =>
+          e.kind === "lifecycle.start" ||
+          e.kind === "lifecycle.end" ||
+          e.kind === "lifecycle.error",
+      );
+      expect(lifecycleEvents).toHaveLength(0);
     });
 
     it("should return TurnOutcome with reply", async () => {
@@ -175,58 +166,25 @@ describe("TurnExecutor", () => {
       expect(outcome.usage.durationMs).toBeGreaterThanOrEqual(0);
     });
 
-    it("should use provided runId", async () => {
+    it("should use provided runId for internal state", async () => {
       const request = createMockRequest({ runId: "custom-run-id" });
       const context = createMockContext();
 
-      await executor.execute(context, request, emitter);
-
-      const events = emitter.getEmittedEvents();
-      const startEvent = events.find((e) => e.kind === "lifecycle.start");
-      expect(startEvent?.runId).toBe("custom-run-id");
-    });
-
-    it("should generate runId if not provided", async () => {
-      const request = createMockRequest({ runId: undefined });
-      const context = createMockContext();
-
-      await executor.execute(context, request, emitter);
-
-      const events = emitter.getEmittedEvents();
-      const startEvent = events.find((e) => e.kind === "lifecycle.start");
-      expect(startEvent?.runId).toBeDefined();
-      expect(startEvent?.runId.length).toBeGreaterThan(0);
+      const outcome = await executor.execute(context, request, emitter);
+      expect(outcome).toBeDefined();
     });
   });
 
   describe("event emission", () => {
-    it("should emit events in correct order", async () => {
+    it("should not emit lifecycle events (managed by kernel)", async () => {
       const request = createMockRequest();
       const context = createMockContext();
 
       await executor.execute(context, request, emitter);
 
       const events = emitter.getEmittedEvents();
-      const eventKinds = events.map((e) => e.kind);
-
-      // First event should be lifecycle.start
-      expect(eventKinds[0]).toBe("lifecycle.start");
-      // Last event should be lifecycle.end
-      expect(eventKinds[eventKinds.length - 1]).toBe("lifecycle.end");
-    });
-
-    it("should call event subscribers", async () => {
-      const listener = vi.fn();
-      emitter.subscribe(listener);
-
-      const request = createMockRequest();
-      const context = createMockContext();
-
-      await executor.execute(context, request, emitter);
-
-      expect(listener).toHaveBeenCalled();
-      const calls = listener.mock.calls;
-      expect(calls.length).toBeGreaterThanOrEqual(2); // At least start and end
+      const lifecycleKinds = events.map((e) => e.kind).filter((k) => k.startsWith("lifecycle."));
+      expect(lifecycleKinds).toHaveLength(0);
     });
   });
 
@@ -277,7 +235,7 @@ describe("TurnExecutor", () => {
       expect(outcome).toBeDefined();
     });
 
-    it("should emit lifecycle.error event when runtime throws", async () => {
+    it("should re-throw when runtime throws (lifecycle error handled by kernel)", async () => {
       const failingRuntime = vi.fn(async () => {
         throw new Error("Runtime failure");
       }) as unknown as RunEmbeddedPiAgentFn;
@@ -289,17 +247,9 @@ describe("TurnExecutor", () => {
       const request = createMockRequest();
       const context = createMockContext();
 
-      const outcome = await failingExecutor.execute(context, request, emitter);
-
-      // Should return error outcome instead of throwing
-      expect(outcome.reply).toContain("Error:");
-      expect(outcome.reply).toContain("Runtime failure");
-
-      // Should emit error event
-      const events = emitter.getEmittedEvents();
-      const errorEvent = events.find((e) => e.kind === "lifecycle.error");
-      expect(errorEvent).toBeDefined();
-      expect(errorEvent?.data.error).toContain("Runtime failure");
+      await expect(failingExecutor.execute(context, request, emitter)).rejects.toThrow(
+        "Runtime failure",
+      );
     });
   });
 
@@ -347,15 +297,17 @@ describe("TurnExecutor", () => {
   });
 
   describe("session context", () => {
-    it("should include sessionKey in lifecycle events", async () => {
+    it("should pass sessionKey through to runtime adapter", async () => {
       const request = createMockRequest({ sessionKey: "session:test:key" });
-      const context = createMockContext();
+      const context = createMockContext({ kind: "pi" });
 
       await executor.execute(context, request, emitter);
 
-      const events = emitter.getEmittedEvents();
-      const startEvent = events.find((e) => e.kind === "lifecycle.start");
-      expect(startEvent?.data.sessionKey).toBe("session:test:key");
+      expect(vi.mocked(mockPiRuntime)).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "session:test:key",
+        }),
+      );
     });
   });
 
@@ -461,7 +413,7 @@ describe("TurnExecutor", () => {
       expect(outcome.usage.outputTokens).toBeGreaterThan(0);
     });
 
-    it("should map error from result meta", async () => {
+    it("should map embedded error from result meta into outcome", async () => {
       const runtimeWithError = vi.fn(async (params: unknown) => ({
         payloads: [{ text: "Error occurred" }],
         meta: {
@@ -487,11 +439,11 @@ describe("TurnExecutor", () => {
 
       const outcome = await errorExecutor.execute(context, request, emitter);
 
-      // The error should still complete (not throw), but lifecycle.end success should be false
+      // Embedded errors are carried in the outcome, not thrown
       expect(outcome).toBeDefined();
-      const events = emitter.getEmittedEvents();
-      const endEvent = events.find((e) => e.kind === "lifecycle.end");
-      expect(endEvent?.data.success).toBe(false);
+      expect(outcome.embeddedError).toBeDefined();
+      expect(outcome.embeddedError?.kind).toBe("context_overflow");
+      expect(outcome.embeddedError?.message).toBe("Context window exceeded");
     });
   });
 });

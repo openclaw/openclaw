@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import type { ExecutionRequest, ExecutionResult } from "../../execution/types.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -29,6 +30,8 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { useNewExecutionLayer } from "../../execution/feature-flag.js";
+import { createDefaultExecutionKernel } from "../../execution/kernel.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { logPerformanceOutlier, getPerformanceThresholds } from "../../logging/enhanced-events.js";
@@ -86,6 +89,21 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
+  // Feature flag gate: use new ExecutionKernel path when enabled.
+  // Falls back to old path for Claude SDK sessions since the kernel
+  // doesn't yet have a real Claude SDK adapter.
+  if (useNewExecutionLayer(params.followupRun.run.config, "autoReply")) {
+    const runtimeKind = resolveSessionRuntimeKind(
+      params.followupRun.run.config,
+      params.followupRun.run.agentId,
+      params.sessionKey,
+    );
+    // Claude SDK runtime not yet wired in the kernel — use old path for it
+    if (runtimeKind !== "claude") {
+      return runAgentTurnWithKernel(params);
+    }
+  }
+
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
@@ -813,5 +831,535 @@ export async function runAgentTurnWithFallback(params: {
     didLogHeartbeatStrip,
     autoCompactionCompleted,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// New Kernel-based execution path (Phase 7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Execute an agent turn via the ExecutionKernel.
+ *
+ * Wraps kernel.execute() inside runWithModelFallback. The kernel handles
+ * runtime selection, execution, and state persistence. Callback normalization
+ * stays here to preserve auto-reply behavior.
+ */
+async function runAgentTurnWithKernel(
+  params: Parameters<typeof runAgentTurnWithFallback>[0],
+): Promise<AgentRunLoopResult> {
+  let didLogHeartbeatStrip = false;
+  let autoCompactionCompleted = false;
+  const directlySentBlockKeys = new Set<string>();
+
+  const runId = params.opts?.runId ?? crypto.randomUUID();
+  const turnStartTime = Date.now();
+  params.opts?.onAgentRunStart?.(runId);
+  if (params.sessionKey) {
+    registerAgentRunContext(runId, {
+      sessionKey: params.sessionKey,
+      verboseLevel: params.resolvedVerboseLevel,
+      isHeartbeat: params.isHeartbeat,
+    });
+  }
+
+  // Shared streaming text normalizer (same logic as old path)
+  const allowPartialStream = !(
+    params.followupRun.run.reasoningLevel === "stream" && params.opts?.onReasoningStream
+  );
+  const normalizeStreamText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+    if (!allowPartialStream) {
+      return { skip: true };
+    }
+    let text = payload.text;
+    if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+      const stripped = stripHeartbeatToken(text, { mode: "message" });
+      if (stripped.didStrip && !didLogHeartbeatStrip) {
+        didLogHeartbeatStrip = true;
+        logVerbose("Stripped stray HEARTBEAT_OK token from reply");
+      }
+      if (stripped.shouldSkip && (payload.mediaUrls?.length ?? 0) === 0) {
+        return { skip: true };
+      }
+      text = stripped.text;
+    }
+    if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+      return { skip: true };
+    }
+    if (!text) {
+      return { skip: true };
+    }
+    const sanitized = sanitizeUserFacingText(text);
+    const withoutCompaction = stripCompactionHandoffText(sanitized);
+    if (!withoutCompaction.trim()) {
+      return { skip: true };
+    }
+    const reasoningStripped = stripReasoningTagsFromText(withoutCompaction, {
+      mode: "strict",
+      trim: "both",
+    });
+    if (!reasoningStripped.trim()) {
+      return { skip: true };
+    }
+    return { text: reasoningStripped, skip: false };
+  };
+
+  // Resolve threading context once (used in request hints)
+  const threadingCtx = buildThreadingToolContext({
+    sessionCtx: params.sessionCtx,
+    config: params.followupRun.run.config,
+    hasRepliedRef: params.opts?.hasRepliedRef,
+  });
+  const blockReplyPipeline = params.blockReplyPipeline;
+  const onToolResult = params.opts?.onToolResult;
+  const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
+
+  // Create kernel once, reuse across fallback attempts
+  const kernel = createDefaultExecutionKernel();
+
+  let didResetAfterCompactionFailure = false;
+
+  try {
+    const fallbackResult = await runWithModelFallback({
+      cfg: params.followupRun.run.config,
+      provider: params.followupRun.run.provider,
+      model: params.followupRun.run.model,
+      agentDir: params.followupRun.run.agentDir,
+      fallbacksOverride: resolveAgentModelFallbacksOverride(
+        params.followupRun.run.config,
+        resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
+      ),
+      runtimeKind: resolveSessionRuntimeKind(
+        params.followupRun.run.config,
+        params.followupRun.run.agentId,
+        params.sessionKey,
+      ),
+      run: async (provider, model) => {
+        // Notify model selection complete (same as old path)
+        params.opts?.onModelSelected?.({
+          provider,
+          model,
+          thinkLevel: params.followupRun.run.thinkLevel,
+        });
+
+        const authProfileId =
+          provider === params.followupRun.run.provider
+            ? params.followupRun.run.authProfileId
+            : undefined;
+
+        // Resolve tool result format
+        const toolResultFormat = (() => {
+          const channel = resolveMessageChannel(
+            params.sessionCtx.Surface,
+            params.sessionCtx.Provider,
+          );
+          if (!channel) {
+            return "markdown";
+          }
+          return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
+        })();
+
+        // Build ExecutionRequest
+        const request: ExecutionRequest = {
+          agentId: params.followupRun.run.agentId,
+          sessionId: params.followupRun.run.sessionId,
+          sessionKey: params.sessionKey,
+          runId,
+          workspaceDir: params.followupRun.run.workspaceDir,
+          agentDir: params.followupRun.run.agentDir,
+          config: params.followupRun.run.config,
+          prompt: params.commandBody,
+          images: params.opts?.images,
+          extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+          timeoutMs: params.followupRun.run.timeoutMs,
+          spawnedBy: undefined, // auto-reply doesn't pass spawnedBy
+
+          // Provider/model override for this fallback attempt
+          providerOverride: provider,
+          modelOverride: model,
+          sessionFile: params.followupRun.run.sessionFile,
+
+          // Suppress partial streaming when reasoning-level is "stream"
+          suppressPartialStream: !allowPartialStream,
+
+          // Message context
+          messageContext: {
+            channel: params.sessionCtx.Surface?.trim().toLowerCase(),
+            provider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
+            senderId: params.sessionCtx.SenderId?.trim() || undefined,
+            senderName: params.sessionCtx.SenderName?.trim() || undefined,
+            senderUsername: params.sessionCtx.SenderUsername?.trim() || undefined,
+            senderE164: params.sessionCtx.SenderE164?.trim() || undefined,
+            groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
+            groupChannel:
+              params.sessionCtx.GroupChannel?.trim() ?? params.sessionCtx.GroupSubject?.trim(),
+            groupSpace: params.sessionCtx.GroupSpace?.trim() ?? undefined,
+            threadId: params.sessionCtx.MessageThreadId ?? undefined,
+            accountId: params.sessionCtx.AccountId,
+          },
+
+          // Block streaming config
+          blockReplyBreak: params.resolvedBlockStreamingBreak,
+          blockReplyChunking: params.blockReplyChunking,
+          shouldEmitToolResult: params.shouldEmitToolResult,
+          shouldEmitToolOutput: params.shouldEmitToolOutput,
+
+          // Runtime hints (Pi-specific params)
+          runtimeHints: {
+            thinkLevel: params.followupRun.run.thinkLevel,
+            verboseLevel: params.followupRun.run.verboseLevel,
+            reasoningLevel: params.followupRun.run.reasoningLevel,
+            authProfileId,
+            authProfileIdSource: authProfileId
+              ? params.followupRun.run.authProfileIdSource
+              : undefined,
+            enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
+            ownerNumbers: params.followupRun.run.ownerNumbers,
+            skillsSnapshot: params.followupRun.run.skillsSnapshot,
+            execOverrides: params.followupRun.run.execOverrides,
+            bashElevated: params.followupRun.run.bashElevated,
+            toolResultFormat,
+            messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
+            messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
+            hasRepliedRef: threadingCtx.hasRepliedRef ?? params.opts?.hasRepliedRef,
+            // Threading context from buildThreadingToolContext
+            currentChannelId: threadingCtx.currentChannelId,
+            currentThreadTs: threadingCtx.currentThreadTs,
+            replyToMode: threadingCtx.replyToMode,
+          },
+
+          // --- Callbacks ---
+          onPartialReply: allowPartialStream
+            ? async (payload) => {
+                const { text, skip } = normalizeStreamText(payload);
+                if (skip || !text) {
+                  return;
+                }
+                await params.typingSignals.signalTextDelta(text);
+                if (params.opts?.onPartialReply) {
+                  await params.opts.onPartialReply({
+                    text,
+                    mediaUrls: payload.mediaUrls,
+                  });
+                }
+              }
+            : undefined,
+          onAssistantMessageStart: async () => {
+            await params.typingSignals.signalMessageStart();
+          },
+          onReasoningStream:
+            params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
+              ? async (payload) => {
+                  await params.typingSignals.signalReasoningDelta();
+                  await params.opts?.onReasoningStream?.({
+                    text: payload.text,
+                    mediaUrls: payload.mediaUrls,
+                  });
+                }
+              : undefined,
+          onBlockReply: params.opts?.onBlockReply
+            ? async (payload) => {
+                const { text, skip } = normalizeStreamText(payload);
+                const hasPayloadMedia = (payload.mediaUrls?.length ?? 0) > 0;
+                if (skip && !hasPayloadMedia) {
+                  return;
+                }
+
+                const taggedPayload = applyReplyTagsToPayload(
+                  {
+                    text,
+                    mediaUrls: payload.mediaUrls,
+                    mediaUrl: payload.mediaUrls?.[0],
+                    replyToId: payload.replyToId,
+                    replyToTag: payload.replyToTag,
+                    replyToCurrent: payload.replyToCurrent,
+                  },
+                  currentMessageId,
+                );
+                if (!isRenderablePayload(taggedPayload) && !payload.audioAsVoice) {
+                  return;
+                }
+
+                const parsed = parseReplyDirectives(taggedPayload.text ?? "", {
+                  currentMessageId,
+                  silentToken: SILENT_REPLY_TOKEN,
+                });
+                const cleaned = parsed.text || undefined;
+                const hasRenderableMedia =
+                  Boolean(taggedPayload.mediaUrl) || (taggedPayload.mediaUrls?.length ?? 0) > 0;
+                if (
+                  !cleaned &&
+                  !hasRenderableMedia &&
+                  !payload.audioAsVoice &&
+                  !parsed.audioAsVoice
+                ) {
+                  return;
+                }
+                if (parsed.isSilent && !hasRenderableMedia) {
+                  return;
+                }
+
+                const blockPayload: ReplyPayload = params.applyReplyToMode({
+                  ...taggedPayload,
+                  text: cleaned,
+                  audioAsVoice: Boolean(parsed.audioAsVoice || payload.audioAsVoice),
+                  replyToId: taggedPayload.replyToId ?? parsed.replyToId,
+                  replyToTag: taggedPayload.replyToTag || parsed.replyToTag,
+                  replyToCurrent: taggedPayload.replyToCurrent || parsed.replyToCurrent,
+                });
+
+                void params.typingSignals
+                  .signalTextDelta(cleaned ?? taggedPayload.text)
+                  .catch((err) => {
+                    logVerbose(`block reply typing signal failed: ${String(err)}`);
+                  });
+
+                if (params.blockStreamingEnabled && params.blockReplyPipeline) {
+                  params.blockReplyPipeline.enqueue(blockPayload);
+                } else if (params.blockStreamingEnabled) {
+                  directlySentBlockKeys.add(createBlockReplyPayloadKey(blockPayload));
+                  await params.opts?.onBlockReply?.(blockPayload);
+                }
+              }
+            : undefined,
+          onBlockReplyFlush:
+            params.blockStreamingEnabled && blockReplyPipeline
+              ? async () => {
+                  await blockReplyPipeline.flush({ force: true });
+                }
+              : undefined,
+          onAgentEvent: async (evt) => {
+            if (evt.stream === "tool") {
+              const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+              if (phase === "start" || phase === "update") {
+                await params.typingSignals.signalToolStart();
+              }
+            }
+            if (evt.stream === "compaction") {
+              const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
+              const willRetry = Boolean(evt.data.willRetry);
+              if (phase === "end" && !willRetry) {
+                autoCompactionCompleted = true;
+              }
+            }
+          },
+          onToolResult: onToolResult
+            ? (payload) => {
+                const task = (async () => {
+                  const { text, skip } = normalizeStreamText(payload);
+                  if (skip && !payload.mediaUrls) return;
+                  await params.typingSignals.signalTextDelta(text);
+                  await onToolResult({
+                    text,
+                    mediaUrls: payload.mediaUrls,
+                  });
+                })()
+                  .catch((err) => {
+                    logVerbose(`tool result delivery failed: ${String(err)}`);
+                  })
+                  .finally(() => {
+                    params.pendingToolTasks.delete(task);
+                  });
+                params.pendingToolTasks.add(task);
+              }
+            : undefined,
+        };
+
+        // Execute via kernel
+        const result = await kernel.execute(request);
+
+        // Map ExecutionResult → EmbeddedPiRunResult for compatibility
+        return mapExecutionResultToLegacy(result);
+      },
+    });
+
+    const runResult = fallbackResult.result;
+    const fallbackProvider = fallbackResult.provider;
+    const fallbackModel = fallbackResult.model;
+
+    // Log performance outlier if agent turn took too long
+    const turnDurationMs = Date.now() - turnStartTime;
+    const thresholds = getPerformanceThresholds();
+    if (turnDurationMs > thresholds.agentTurn) {
+      const agentId = params.followupRun.run.agentId;
+      logPerformanceOutlier({
+        operation: "agent_turn",
+        name: `${agentId}:${params.sessionKey || "unknown"}`,
+        durationMs: turnDurationMs,
+        threshold: thresholds.agentTurn,
+        metadata: {
+          agentId,
+          sessionKey: params.sessionKey,
+          model: fallbackModel,
+          provider: fallbackProvider,
+        },
+      });
+    }
+
+    // Error recovery from embedded errors (same logic as old path)
+    const embeddedError = runResult.meta?.error;
+    if (
+      embeddedError &&
+      isContextOverflowError(embeddedError.message) &&
+      !didResetAfterCompactionFailure &&
+      (await params.resetSessionAfterCompactionFailure(embeddedError.message))
+    ) {
+      return {
+        kind: "final",
+        payload: {
+          text: "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 4000 or higher in your config.",
+        },
+      };
+    }
+    if (embeddedError?.kind === "role_ordering") {
+      const didReset = await params.resetSessionAfterRoleOrderingConflict(embeddedError.message);
+      if (didReset) {
+        return {
+          kind: "final",
+          payload: {
+            text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
+          },
+        };
+      }
+    }
+
+    return {
+      kind: "success",
+      runResult,
+      fallbackProvider,
+      fallbackModel,
+      didLogHeartbeatStrip,
+      autoCompactionCompleted,
+      directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
+    };
+  } catch (err) {
+    // Error recovery (same as old path)
+    const message = err instanceof Error ? err.message : String(err);
+    const isContextOverflow = isLikelyContextOverflowError(message);
+    const isCompactionFailure = isCompactionFailureError(message);
+    const isSessionCorruption = /function call turn comes immediately after/i.test(message);
+    const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
+
+    if (
+      isCompactionFailure &&
+      !didResetAfterCompactionFailure &&
+      (await params.resetSessionAfterCompactionFailure(message))
+    ) {
+      didResetAfterCompactionFailure = true;
+      return {
+        kind: "final",
+        payload: {
+          text: "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again.\n\nTo prevent this, increase your compaction buffer by setting `agents.defaults.compaction.reserveTokensFloor` to 4000 or higher in your config.",
+        },
+      };
+    }
+    if (isRoleOrderingError) {
+      const didReset = await params.resetSessionAfterRoleOrderingConflict(message);
+      if (didReset) {
+        return {
+          kind: "final",
+          payload: {
+            text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
+          },
+        };
+      }
+    }
+    if (isSessionCorruption && params.sessionKey && params.activeSessionStore && params.storePath) {
+      const sessionKey = params.sessionKey;
+      const corruptedSessionId = params.getActiveSessionEntry()?.sessionId;
+      defaultRuntime.error(
+        `Session history corrupted (Gemini function call ordering). Resetting session: ${params.sessionKey}`,
+      );
+      try {
+        if (corruptedSessionId) {
+          const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
+          try {
+            fs.unlinkSync(transcriptPath);
+          } catch {
+            // Ignore if file doesn't exist
+          }
+        }
+        delete params.activeSessionStore[sessionKey];
+        await updateSessionStore(params.storePath, (store) => {
+          delete store[sessionKey];
+        });
+      } catch (cleanupErr) {
+        defaultRuntime.error(
+          `Failed to reset corrupted session ${params.sessionKey}: ${String(cleanupErr)}`,
+        );
+      }
+      return {
+        kind: "final",
+        payload: {
+          text: "⚠️ Session history was corrupted. I've reset the conversation - please try again!",
+        },
+      };
+    }
+
+    defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+    const trimmedMessage = message.replace(/\.\s*$/, "");
+    const fallbackText = isContextOverflow
+      ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+      : isRoleOrderingError
+        ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
+        : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+
+    return {
+      kind: "final",
+      payload: { text: fallbackText },
+    };
+  }
+}
+
+/**
+ * Map ExecutionResult to legacy EmbeddedPiRunResult format.
+ * Extended from the CLI migration version to include auto-reply specific fields.
+ */
+function mapExecutionResultToLegacy(
+  result: ExecutionResult,
+): Awaited<ReturnType<typeof runEmbeddedPiAgent>> {
+  return {
+    payloads: result.payloads.map((p) => ({
+      text: p.text,
+      mediaUrl: p.mediaUrl,
+      mediaUrls: p.mediaUrls,
+      replyToId: p.replyToId,
+      isError: p.isError,
+    })),
+    meta: {
+      durationMs: result.usage.durationMs,
+      aborted: result.aborted,
+      agentMeta: {
+        sessionId: "",
+        provider: result.runtime.provider ?? "",
+        model: result.runtime.model ?? "",
+        claudeSessionId: result.claudeSdkSessionId,
+        usage: {
+          input: result.usage.inputTokens,
+          output: result.usage.outputTokens,
+          cacheRead: result.usage.cacheReadTokens,
+          cacheWrite: result.usage.cacheWriteTokens,
+          total: result.usage.inputTokens + result.usage.outputTokens,
+        },
+      },
+      systemPromptReport: result.systemPromptReport as Awaited<
+        ReturnType<typeof runEmbeddedPiAgent>
+      >["meta"]["systemPromptReport"],
+      error: result.embeddedError
+        ? {
+            kind: result.embeddedError.kind as
+              | "context_overflow"
+              | "compaction_failure"
+              | "role_ordering"
+              | "image_size",
+            message: result.embeddedError.message,
+          }
+        : undefined,
+    },
+    didSendViaMessagingTool: result.didSendViaMessagingTool,
+    messagingToolSentTexts: result.messagingToolSentTexts,
+    messagingToolSentTargets: result.messagingToolSentTargets as Awaited<
+      ReturnType<typeof runEmbeddedPiAgent>
+    >["messagingToolSentTargets"],
   };
 }

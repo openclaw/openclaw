@@ -456,6 +456,13 @@ export class DefaultExecutionKernel implements ExecutionKernel {
       events,
       toolCalls: outcome.toolCalls,
       didSendViaMessagingTool: outcome.didSendViaMessagingTool,
+      // Extended metadata
+      embeddedError: outcome.embeddedError,
+      systemPromptReport: outcome.systemPromptReport,
+      messagingToolSentTexts: outcome.messagingToolSentTexts,
+      messagingToolSentTargets: outcome.messagingToolSentTargets,
+      cliSessionId: outcome.cliSessionId,
+      claudeSdkSessionId: outcome.claudeSdkSessionId,
     };
   }
 

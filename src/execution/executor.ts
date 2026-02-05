@@ -25,14 +25,7 @@ import type {
   UsageMetrics,
 } from "./types.js";
 import { logVerbose } from "../globals.js";
-import {
-  createLifecycleStartEvent,
-  createLifecycleEndEvent,
-  createLifecycleErrorEvent,
-  createToolStartEvent,
-  createToolEndEvent,
-  createAssistantPartialEvent,
-} from "./events.js";
+import { createToolStartEvent, createToolEndEvent, createAssistantPartialEvent } from "./events.js";
 import {
   normalizeText,
   normalizeStreamingText,
@@ -212,6 +205,12 @@ export interface RuntimeAdapterResult {
     message: string;
     kind?: string;
   };
+  /** System prompt diagnostic report. */
+  systemPromptReport?: unknown;
+  /** Texts sent via messaging tools during the run. */
+  messagingToolSentTexts?: string[];
+  /** Messaging tool send targets during the run. */
+  messagingToolSentTargets?: unknown[];
 }
 
 // ---------------------------------------------------------------------------
@@ -250,14 +249,8 @@ export class DefaultTurnExecutor implements TurnExecutor {
     const runId = request.runId ?? crypto.randomUUID();
     const state = this.createInitialState(runId);
 
-    // Emit lifecycle start
-    await emitter.emit(
-      createLifecycleStartEvent(runId, {
-        prompt: request.prompt,
-        agentId: request.agentId,
-        sessionKey: request.sessionKey,
-      }),
-    );
+    // Note: lifecycle events (start/end/error) are managed by the kernel layer.
+    // The executor only handles adapter-level events (partial, tool, block).
 
     try {
       // Create runtime adapter based on context
@@ -275,7 +268,7 @@ export class DefaultTurnExecutor implements TurnExecutor {
         onToolStart: (name, id, params) => this.handleToolStart(state, name, id, params, emitter),
         onToolEnd: (name, id, success, result, error) =>
           this.handleToolEnd(state, name, id, success, result, error, emitter),
-        onAssistantMessageStart: () => this.handleAssistantMessageStart(state, emitter),
+        onAssistantMessageStart: () => this.handleAssistantMessageStart(state, request, emitter),
       });
 
       // Update state from result
@@ -283,31 +276,12 @@ export class DefaultTurnExecutor implements TurnExecutor {
       this.updateUsageFromResult(state, result);
 
       // Build final outcome
-      const outcome = this.buildOutcome(state, result, context);
-
-      // Emit lifecycle end
-      await emitter.emit(
-        createLifecycleEndEvent(runId, {
-          success: !result.error,
-          durationMs: Date.now() - state.startTime,
-        }),
-      );
-
-      return outcome;
+      return this.buildOutcome(state, result, context);
     } catch (err) {
       state.error = err instanceof Error ? err : new Error(String(err));
 
-      // Emit lifecycle error
-      await emitter.emit(
-        createLifecycleErrorEvent(runId, {
-          error: state.error.message,
-          kind: "runtime_error",
-          retryable: false,
-        }),
-      );
-
-      // Return error outcome
-      return this.buildErrorOutcome(state, context);
+      // Re-throw so the kernel can handle lifecycle error emission
+      throw err;
     }
   }
 
@@ -373,11 +347,13 @@ export class DefaultTurnExecutor implements TurnExecutor {
         // Resolve the Pi runtime function (injected or dynamic import)
         const runPiAgent = this.piRuntimeFn ?? (await this.importPiRuntime());
 
+        const hints = request.runtimeHints;
+
         // Map RuntimeAdapterParams to RunEmbeddedPiAgentParams
         const piParams: RunEmbeddedPiAgentParams = {
           sessionId: request.sessionId,
           sessionKey: request.sessionKey,
-          sessionFile: this.resolveSessionFile(request),
+          sessionFile: request.sessionFile ?? this.resolveSessionFile(request),
           workspaceDir: request.workspaceDir,
           agentDir: request.agentDir,
           config: request.config,
@@ -405,12 +381,37 @@ export class DefaultTurnExecutor implements TurnExecutor {
                   mediaUrl: undefined,
                   mediaUrls: payload.mediaUrls,
                   replyToId: payload.replyToId,
+                  replyToTag: payload.replyToTag,
+                  replyToCurrent: payload.replyToCurrent,
+                  audioAsVoice: payload.audioAsVoice,
                 })
             : undefined,
+          // Block streaming config
+          onBlockReplyFlush: request.onBlockReplyFlush,
+          blockReplyBreak: request.blockReplyBreak,
+          blockReplyChunking: request.blockReplyChunking,
+          shouldEmitToolResult: request.shouldEmitToolResult,
+          shouldEmitToolOutput: request.shouldEmitToolOutput,
+          // Reasoning and tool result callbacks
+          onReasoningStream: request.onReasoningStream
+            ? (payload) =>
+                request.onReasoningStream?.({
+                  text: payload.text,
+                  mediaUrls: payload.mediaUrls,
+                })
+            : undefined,
+          onToolResult: request.onToolResult
+            ? (payload) =>
+                request.onToolResult?.({
+                  text: payload.text,
+                  mediaUrls: payload.mediaUrls,
+                })
+            : undefined,
+          onAgentEvent: request.onAgentEvent ? (evt) => request.onAgentEvent?.(evt) : undefined,
           // Message context from request
           messageChannel: request.messageContext?.channel,
-          messageProvider: request.messageContext?.provider,
-          messageTo: undefined, // Not directly mapped
+          messageProvider: hints?.messageProvider ?? request.messageContext?.provider,
+          messageTo: hints?.messageTo,
           messageThreadId: request.messageContext?.threadId,
           groupId: request.messageContext?.groupId,
           groupChannel: request.messageContext?.groupChannel,
@@ -421,6 +422,23 @@ export class DefaultTurnExecutor implements TurnExecutor {
           senderUsername: request.messageContext?.senderUsername,
           senderE164: request.messageContext?.senderE164,
           extraSystemPrompt: request.extraSystemPrompt,
+          // Runtime hints (Pi-specific)
+          thinkLevel: hints?.thinkLevel,
+          verboseLevel: hints?.verboseLevel,
+          reasoningLevel: hints?.reasoningLevel,
+          authProfileId: hints?.authProfileId,
+          authProfileIdSource: hints?.authProfileIdSource,
+          enforceFinalTag: hints?.enforceFinalTag,
+          ownerNumbers: hints?.ownerNumbers,
+          skillsSnapshot: hints?.skillsSnapshot as RunEmbeddedPiAgentParams["skillsSnapshot"],
+          execOverrides: hints?.execOverrides as RunEmbeddedPiAgentParams["execOverrides"],
+          bashElevated: hints?.bashElevated as RunEmbeddedPiAgentParams["bashElevated"],
+          toolResultFormat: hints?.toolResultFormat as RunEmbeddedPiAgentParams["toolResultFormat"],
+          // Threading context
+          currentChannelId: hints?.currentChannelId,
+          currentThreadTs: hints?.currentThreadTs,
+          replyToMode: hints?.replyToMode,
+          hasRepliedRef: hints?.hasRepliedRef,
         };
 
         // Execute Pi runtime
@@ -525,6 +543,7 @@ export class DefaultTurnExecutor implements TurnExecutor {
       mediaUrl: p.mediaUrl,
       mediaUrls: p.mediaUrls,
       replyToId: p.replyToId,
+      isError: p.isError,
     }));
 
     // Extract usage from meta
@@ -544,6 +563,10 @@ export class DefaultTurnExecutor implements TurnExecutor {
       error: result.meta.error
         ? { message: result.meta.error.message, kind: result.meta.error.kind }
         : undefined,
+      // Extended metadata for auto-reply
+      systemPromptReport: result.meta.systemPromptReport,
+      messagingToolSentTexts: result.messagingToolSentTexts,
+      messagingToolSentTargets: result.messagingToolSentTargets,
     };
   }
 
@@ -586,10 +609,10 @@ export class DefaultTurnExecutor implements TurnExecutor {
     // Emit partial event
     emitter.emitSync(createAssistantPartialEvent(state.runId, { text }));
 
-    // Invoke request callback if provided
+    // Invoke request callback with full payload (normalized text)
     if (request.onPartialReply) {
       try {
-        await request.onPartialReply(text);
+        await request.onPartialReply({ ...payload, text });
       } catch (err) {
         this.logger?.error?.(
           `[TurnExecutor] onPartialReply callback failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -601,7 +624,7 @@ export class DefaultTurnExecutor implements TurnExecutor {
   private async handleBlockReply(
     state: TurnExecutionState,
     payload: ReplyPayload,
-    _request: ExecutionRequest,
+    request: ExecutionRequest,
     _emitter: EventRouter,
   ): Promise<void> {
     const { text, skip } = normalizeStreamingText(payload.text, this.normalizationOptions);
@@ -619,8 +642,16 @@ export class DefaultTurnExecutor implements TurnExecutor {
     };
     state.blockReplies.push(normalizedPayload);
 
-    // Note: Block reply events are not emitted separately
-    // They are part of the assistant.complete event
+    // Forward to request callback if provided
+    if (request.onBlockReply) {
+      try {
+        await request.onBlockReply(normalizedPayload);
+      } catch (err) {
+        this.logger?.error?.(
+          `[TurnExecutor] onBlockReply callback failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   private async handleToolStart(
@@ -695,10 +726,19 @@ export class DefaultTurnExecutor implements TurnExecutor {
 
   private async handleAssistantMessageStart(
     _state: TurnExecutionState,
+    request: ExecutionRequest,
     _emitter: EventRouter,
   ): Promise<void> {
-    // Signal that assistant message has started
-    // Used for typing indicators
+    // Forward to request callback if provided (typing indicators)
+    if (request.onAssistantMessageStart) {
+      try {
+        await request.onAssistantMessageStart();
+      } catch (err) {
+        this.logger?.error?.(
+          `[TurnExecutor] onAssistantMessageStart callback failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -743,22 +783,15 @@ export class DefaultTurnExecutor implements TurnExecutor {
       usage: state.usage,
       fallbackUsed: state.fallbackUsed,
       didSendViaMessagingTool: state.didSendViaMessagingTool,
-    };
-  }
-
-  private buildErrorOutcome(state: TurnExecutionState, _context: RuntimeContext): TurnOutcome {
-    const errorMessage = state.error?.message ?? "Unknown error";
-
-    return {
-      reply: `Error: ${errorMessage}`,
-      payloads: [{ text: `Error: ${errorMessage}` }],
-      toolCalls: state.toolCalls,
-      usage: {
-        ...state.usage,
-        durationMs: Date.now() - state.startTime,
-      },
-      fallbackUsed: state.fallbackUsed,
-      didSendViaMessagingTool: false,
+      // Extended metadata
+      embeddedError: result.error
+        ? { kind: result.error.kind ?? "unknown", message: result.error.message }
+        : undefined,
+      systemPromptReport: result.systemPromptReport,
+      messagingToolSentTexts: result.messagingToolSentTexts,
+      messagingToolSentTargets: result.messagingToolSentTargets,
+      cliSessionId: result.cliSessionId,
+      claudeSdkSessionId: result.claudeSdkSessionId,
     };
   }
 }

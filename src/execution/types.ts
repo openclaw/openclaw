@@ -54,8 +54,42 @@ export interface ExecutionEvent {
 
 /**
  * Callback invoked with partial text during streaming.
+ * Receives the full ReplyPayload for richer streaming (text + media).
  */
-export type OnPartialReplyCallback = (text: string) => void | Promise<void>;
+export type OnPartialReplyCallback = (payload: ReplyPayload) => void | Promise<void>;
+
+/**
+ * Callback invoked with a complete block reply (Pi runtime block streaming).
+ */
+export type OnBlockReplyCallback = (payload: ReplyPayload) => void | Promise<void>;
+
+/**
+ * Callback invoked to flush buffered block replies (e.g. before tool execution).
+ */
+export type OnBlockReplyFlushCallback = () => void | Promise<void>;
+
+/**
+ * Callback invoked with reasoning/thinking stream deltas.
+ */
+export type OnReasoningStreamCallback = (payload: ReplyPayload) => void | Promise<void>;
+
+/**
+ * Callback invoked with tool result payloads for delivery.
+ */
+export type OnToolResultCallback = (payload: ReplyPayload) => void | Promise<void>;
+
+/**
+ * Callback invoked when a new assistant message starts.
+ */
+export type OnAssistantMessageStartCallback = () => void | Promise<void>;
+
+/**
+ * Callback invoked for raw agent events (tool phases, compaction, etc.).
+ */
+export type OnAgentEventCallback = (evt: {
+  stream: string;
+  data: Record<string, unknown>;
+}) => void | Promise<void>;
 
 /**
  * Callback invoked when a tool execution starts.
@@ -166,12 +200,80 @@ export interface ExecutionRequest {
 
   /** Called with partial text during streaming. */
   onPartialReply?: OnPartialReplyCallback;
+  /** Called with complete block replies (Pi block streaming). */
+  onBlockReply?: OnBlockReplyCallback;
+  /** Called to flush buffered block replies before tool execution. */
+  onBlockReplyFlush?: OnBlockReplyFlushCallback;
+  /** Called with reasoning/thinking stream deltas. */
+  onReasoningStream?: OnReasoningStreamCallback;
+  /** Called with tool result payloads for delivery. */
+  onToolResult?: OnToolResultCallback;
+  /** Called when a new assistant message starts. */
+  onAssistantMessageStart?: OnAssistantMessageStartCallback;
+  /** Called for raw agent events (tool phases, compaction, etc.). */
+  onAgentEvent?: OnAgentEventCallback;
   /** Called when a tool execution starts. */
   onToolStart?: OnToolStartCallback;
   /** Called when a tool execution completes. */
   onToolEnd?: OnToolEndCallback;
   /** Called for each execution event. */
   onEvent?: OnExecutionEventCallback;
+
+  // --- Block streaming config ---
+
+  /** Block reply break mode ("text_end" or "message_end"). */
+  blockReplyBreak?: "text_end" | "message_end";
+  /** Block reply chunking configuration. */
+  blockReplyChunking?: {
+    minChars: number;
+    maxChars: number;
+    breakPreference: "paragraph" | "newline" | "sentence";
+    flushOnParagraph?: boolean;
+  };
+  /** Whether tool results should be emitted. */
+  shouldEmitToolResult?: () => boolean;
+  /** Whether tool output should be emitted. */
+  shouldEmitToolOutput?: () => boolean;
+  /** Suppress partial streaming (e.g. when reasoning-level = stream). */
+  suppressPartialStream?: boolean;
+
+  // --- Runtime overrides (for model fallback) ---
+
+  /** Override the resolved provider (used by model fallback). */
+  providerOverride?: string;
+  /** Override the resolved model (used by model fallback). */
+  modelOverride?: string;
+  /** Explicit session file path (overrides default resolution). */
+  sessionFile?: string;
+
+  // --- Runtime hints (Pi-specific params) ---
+
+  /**
+   * Typed bag for runtime-specific parameters.
+   * These are passed through to the Pi/SDK runtime without interpretation by the kernel.
+   */
+  runtimeHints?: {
+    thinkLevel?: import("../auto-reply/thinking.js").ThinkLevel;
+    verboseLevel?: import("../auto-reply/thinking.js").VerboseLevel;
+    reasoningLevel?: import("../auto-reply/thinking.js").ReasoningLevel;
+    authProfileId?: string;
+    authProfileIdSource?: "auto" | "user";
+    enforceFinalTag?: boolean;
+    ownerNumbers?: string[];
+    skillsSnapshot?: unknown;
+    execOverrides?: unknown;
+    bashElevated?: unknown;
+    toolResultFormat?: string;
+    messageTo?: string;
+    messageProvider?: string;
+    hasRepliedRef?: { value: boolean };
+    /** Current channel ID for auto-threading (Slack). */
+    currentChannelId?: string;
+    /** Current thread timestamp for auto-threading (Slack). */
+    currentThreadTs?: string;
+    /** Reply-to mode for Slack auto-threading. */
+    replyToMode?: "off" | "first" | "all";
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -271,6 +373,21 @@ export interface TurnOutcome {
   fallbackUsed: boolean;
   /** Whether the agent sent via messaging tool. */
   didSendViaMessagingTool: boolean;
+
+  // --- Extended metadata (auto-reply, diagnostics) ---
+
+  /** Embedded error from the runtime (not a thrown exception). */
+  embeddedError?: { kind: string; message: string };
+  /** System prompt diagnostic report. */
+  systemPromptReport?: unknown;
+  /** Texts sent via messaging tools during the run. */
+  messagingToolSentTexts?: string[];
+  /** Messaging tool send targets during the run. */
+  messagingToolSentTargets?: unknown[];
+  /** CLI session ID for CLI runtimes. */
+  cliSessionId?: string;
+  /** Claude SDK session ID for native resume. */
+  claudeSdkSessionId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +513,21 @@ export interface ExecutionResult {
   toolCalls: ToolCallSummary[];
   /** Whether the agent sent via messaging tool. */
   didSendViaMessagingTool: boolean;
+
+  // --- Extended metadata (auto-reply, diagnostics) ---
+
+  /** Embedded error from the runtime (not a thrown exception). */
+  embeddedError?: { kind: string; message: string };
+  /** System prompt diagnostic report. */
+  systemPromptReport?: unknown;
+  /** Texts sent via messaging tools during the run. */
+  messagingToolSentTexts?: string[];
+  /** Messaging tool send targets during the run. */
+  messagingToolSentTargets?: unknown[];
+  /** CLI session ID for CLI runtimes. */
+  cliSessionId?: string;
+  /** Claude SDK session ID for native resume. */
+  claudeSdkSessionId?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -17,6 +17,12 @@ export type {
   Unsubscribe,
   // Callback types
   OnPartialReplyCallback,
+  OnBlockReplyCallback,
+  OnBlockReplyFlushCallback,
+  OnReasoningStreamCallback,
+  OnToolResultCallback,
+  OnAssistantMessageStartCallback,
+  OnAgentEventCallback,
   OnToolStartCallback,
   OnToolEndCallback,
   OnExecutionEventCallback,

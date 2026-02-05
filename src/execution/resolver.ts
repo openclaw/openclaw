@@ -95,8 +95,10 @@ export class DefaultRuntimeResolver implements RuntimeResolver {
     const config = request.config;
     const agentId = normalizeAgentId(request.agentId);
 
-    // Step 1: Resolve provider and model first (needed for CLI detection)
-    const { provider, model } = this.resolveProviderAndModel(config, agentId);
+    // Step 1: Resolve provider and model (overrides take precedence for model fallback)
+    const resolved = this.resolveProviderAndModel(config, agentId);
+    const provider = request.providerOverride ?? resolved.provider;
+    const model = request.modelOverride ?? resolved.model;
 
     // Step 2: Resolve runtime kind (may depend on provider for CLI detection)
     const kind = this.resolveRuntimeKind(config, agentId, provider, request);
