@@ -17,9 +17,6 @@ RUN pnpm install --frozen-lockfile --config.auto-install-peers=false
 # Source code kopiëren
 COPY . .
 
-# ✅ Skip alle build commando's die falen
-RUN pnpm ui:install
-
 # Build the TypeScript source code
 RUN pnpm build
 
