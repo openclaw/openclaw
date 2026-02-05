@@ -239,14 +239,30 @@ describe("model-capabilities", () => {
     it("has entries for major providers", () => {
       const providers = new Set(
         Object.keys(MODEL_CAPABILITIES_REGISTRY).map((id) => {
-          if (id.startsWith("claude")) return "anthropic";
-          if (id.startsWith("gpt") || id.startsWith("o1") || id.startsWith("o3")) return "openai";
-          if (id.startsWith("gemini")) return "google";
-          if (id.startsWith("llama") || id.startsWith("mixtral")) return "groq";
-          if (id.startsWith("mistral") || id.startsWith("codestral")) return "mistral";
-          if (id.startsWith("deepseek")) return "deepseek";
-          if (id.startsWith("grok")) return "xai";
-          if (id.startsWith("command")) return "cohere";
+          if (id.startsWith("claude")) {
+            return "anthropic";
+          }
+          if (id.startsWith("gpt") || id.startsWith("o1") || id.startsWith("o3")) {
+            return "openai";
+          }
+          if (id.startsWith("gemini")) {
+            return "google";
+          }
+          if (id.startsWith("llama") || id.startsWith("mixtral")) {
+            return "groq";
+          }
+          if (id.startsWith("mistral") || id.startsWith("codestral")) {
+            return "mistral";
+          }
+          if (id.startsWith("deepseek")) {
+            return "deepseek";
+          }
+          if (id.startsWith("grok")) {
+            return "xai";
+          }
+          if (id.startsWith("command")) {
+            return "cohere";
+          }
           return "other";
         }),
       );

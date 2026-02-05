@@ -3,7 +3,7 @@
  * Handles thread creation, subscriptions, and message routing.
  */
 
-import { getChatDbClient, REDIS_KEYS, toJsonb, fromJsonb } from "../db/client.js";
+import { getChatDbClient } from "../db/client.js";
 
 export type ThreadNotificationLevel = "all" | "mentions" | "none";
 

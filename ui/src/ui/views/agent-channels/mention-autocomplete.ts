@@ -59,14 +59,22 @@ export function filterMentionOptions(agents: MentionOption[], query: string): Me
   // Sort by relevance
   agentMatches.sort((a, b) => {
     // Exact match first
-    if (a.displayName.toLowerCase() === lowerQuery) return -1;
-    if (b.displayName.toLowerCase() === lowerQuery) return 1;
+    if (a.displayName.toLowerCase() === lowerQuery) {
+      return -1;
+    }
+    if (b.displayName.toLowerCase() === lowerQuery) {
+      return 1;
+    }
 
     // Starts with query
     const aStarts = a.displayName.toLowerCase().startsWith(lowerQuery);
     const bStarts = b.displayName.toLowerCase().startsWith(lowerQuery);
-    if (aStarts && !bStarts) return -1;
-    if (bStarts && !aStarts) return 1;
+    if (aStarts && !bStarts) {
+      return -1;
+    }
+    if (bStarts && !aStarts) {
+      return 1;
+    }
 
     // Online before offline
     const statusOrder = { active: 0, busy: 1, away: 2, offline: 3, undefined: 4 };

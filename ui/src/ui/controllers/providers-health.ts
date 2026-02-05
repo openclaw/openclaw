@@ -241,7 +241,9 @@ export async function loadProvidersHealth(host: ProvidersHealthHost): Promise<vo
     const rawModels = (modelsRes as { models?: RawModel[] }).models ?? [];
     for (const m of rawModels) {
       const provider = String(m.provider ?? "").toLowerCase();
-      if (!provider) continue;
+      if (!provider) {
+        continue;
+      }
       const key = `${provider}/${m.id}`;
       const list = modelsByProvider.get(provider) ?? [];
       list.push({
@@ -276,7 +278,9 @@ export async function loadProvidersHealth(host: ProvidersHealthHost): Promise<vo
 }
 
 export async function saveModelSelection(host: ProvidersHealthHost): Promise<void> {
-  if (!host.client || !host.providersConfigHash) return;
+  if (!host.client || !host.providersConfigHash) {
+    return;
+  }
   host.providersModelsSaving = true;
   try {
     const models: Record<string, object> = {};

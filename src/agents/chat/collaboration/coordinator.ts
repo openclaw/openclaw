@@ -11,8 +11,6 @@ import type {
   AgentResponse,
   HandoffRequest,
 } from "./types.js";
-import { parseMentions, matchPatternMentions } from "../routing/mention-parser.js";
-import { resolveTargetAgents, type RoutingContext } from "../routing/router.js";
 import {
   getActiveSession,
   emitExpertActivated,
@@ -194,7 +192,7 @@ function coordinateWithRules(
   const rules = config.routingRules ?? [];
 
   // Sort rules by priority
-  const sortedRules = [...rules].sort((a, b) => b.priority - a.priority);
+  const sortedRules = [...rules].toSorted((a, b) => b.priority - a.priority);
 
   // Find matching rule
   for (const rule of sortedRules) {
@@ -271,7 +269,7 @@ function detectTopics(
   }
 
   // Sort by confidence
-  return results.sort((a, b) => b.confidence - a.confidence);
+  return results.toSorted((a, b) => b.confidence - a.confidence);
 }
 
 /**

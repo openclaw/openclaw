@@ -31,7 +31,9 @@ vi.mock("../db/client.js", () => ({
   getChatDbClient: () => mockDbClient,
   toJsonb: (v: unknown) => JSON.stringify(v),
   fromJsonb: <T>(v: string | null): T | null => {
-    if (v == null) return null;
+    if (v == null) {
+      return null;
+    }
     try {
       return JSON.parse(v) as T;
     } catch {
@@ -185,7 +187,7 @@ describe("session-manager", () => {
 
       await pauseSession("collab_123");
 
-      expect(events.some((e: any) => e.type === "session.paused")).toBe(true);
+      expect(events.some((e) => (e as { type: string }).type === "session.paused")).toBe(true);
     });
   });
 
@@ -216,7 +218,7 @@ describe("session-manager", () => {
 
       await completeSession("collab_123", { summary: "Done" });
 
-      expect(events.some((e: any) => e.type === "session.completed")).toBe(true);
+      expect(events.some((e) => (e as { type: string }).type === "session.completed")).toBe(true);
     });
   });
 
@@ -249,7 +251,7 @@ describe("session-manager", () => {
 
       await addParticipant("collab_123", "agent3");
 
-      expect(events.some((e: any) => e.type === "participant.joined")).toBe(true);
+      expect(events.some((e) => (e as { type: string }).type === "participant.joined")).toBe(true);
     });
   });
 
@@ -269,7 +271,7 @@ describe("session-manager", () => {
 
       await removeParticipant("collab_123", "agent2");
 
-      expect(events.some((e: any) => e.type === "participant.left")).toBe(true);
+      expect(events.some((e) => (e as { type: string }).type === "participant.left")).toBe(true);
     });
   });
 
@@ -377,8 +379,8 @@ describe("session-manager", () => {
       emitRoundStarted("collab_123", 1, ["agent1", "agent2"]);
 
       expect(events).toHaveLength(1);
-      expect((events[0] as any).type).toBe("round.started");
-      expect((events[0] as any).roundNumber).toBe(1);
+      expect((events[0] as { type: string }).type).toBe("round.started");
+      expect((events[0] as { roundNumber: number }).roundNumber).toBe(1);
     });
 
     it("emitRoundCompleted should emit round.completed event", () => {
@@ -389,7 +391,7 @@ describe("session-manager", () => {
         { agentId: "agent1", content: "Response 1", timestamp: Date.now() },
       ]);
 
-      expect((events[0] as any).type).toBe("round.completed");
+      expect((events[0] as { type: string }).type).toBe("round.completed");
     });
 
     it("emitExpertActivated should emit expert.activated event", () => {
@@ -398,8 +400,8 @@ describe("session-manager", () => {
 
       emitExpertActivated("collab_123", "agent1", "code");
 
-      expect((events[0] as any).type).toBe("expert.activated");
-      expect((events[0] as any).topic).toBe("code");
+      expect((events[0] as { type: string }).type).toBe("expert.activated");
+      expect((events[0] as { topic: string }).topic).toBe("code");
     });
 
     it("emitHandoffRequested should emit handoff.requested event", () => {
@@ -408,9 +410,9 @@ describe("session-manager", () => {
 
       emitHandoffRequested("collab_123", "agent1", "agent2", "Need specialist");
 
-      expect((events[0] as any).type).toBe("handoff.requested");
-      expect((events[0] as any).fromAgent).toBe("agent1");
-      expect((events[0] as any).toAgent).toBe("agent2");
+      expect((events[0] as { type: string }).type).toBe("handoff.requested");
+      expect((events[0] as { fromAgent: string }).fromAgent).toBe("agent1");
+      expect((events[0] as { toAgent: string }).toAgent).toBe("agent2");
     });
 
     it("emitHandoffAccepted should emit handoff.accepted event", () => {
@@ -419,7 +421,7 @@ describe("session-manager", () => {
 
       emitHandoffAccepted("collab_123", "agent2");
 
-      expect((events[0] as any).type).toBe("handoff.accepted");
+      expect((events[0] as { type: string }).type).toBe("handoff.accepted");
     });
   });
 

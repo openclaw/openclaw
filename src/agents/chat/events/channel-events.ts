@@ -5,7 +5,6 @@
 
 import type { CollaborationEvent } from "../collaboration/types.js";
 import type { AgentPresence } from "../presence/manager.js";
-import type { TypingIndicator } from "../presence/typing.js";
 import type { AgentChannelThread } from "../threads/manager.js";
 import type { AgentChannel, AgentChannelMember } from "../types/channels.js";
 import type { ChannelMessage } from "../types/messages.js";

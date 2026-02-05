@@ -7,8 +7,6 @@ import {
   getDatabase,
   isDatabaseConnected,
   type LlmUsageInsert,
-  type UsageAggregation,
-  type UsageQueryFilter,
 } from "../../infra/database/index.js";
 import { calculateCost } from "./registry.js";
 

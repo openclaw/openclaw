@@ -1,11 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { CollaborationSession, AgentResponse } from "./types.js";
 import {
   coordinateMessage,
   getNextInChain,
   checkConsensus,
   aggregateResponses,
-  type CoordinatorDecision,
 } from "./coordinator.js";
 
 // Mock session-manager (coordinateMessage does not use it directly, but requestHandoff does)
@@ -35,7 +34,9 @@ vi.mock("../db/client.js", () => ({
   }),
   toJsonb: (v: unknown) => JSON.stringify(v),
   fromJsonb: <T>(v: string | null): T | null => {
-    if (v == null) return null;
+    if (v == null) {
+      return null;
+    }
     try {
       return JSON.parse(v) as T;
     } catch {
@@ -146,6 +147,7 @@ describe("coordinator", () => {
     });
 
     it("should return unknown_mode for unrecognized modes", async () => {
+      // oxlint-disable-next-line typescript/no-explicit-any
       const session = makeSession({ mode: "unknown" as any });
 
       const decision = await coordinateMessage(session, "Hello", "user1");

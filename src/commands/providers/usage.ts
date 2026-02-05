@@ -7,7 +7,7 @@ import { cacheGet, cacheSet, CACHE_KEYS, CACHE_TTL } from "../../infra/cache/ind
 import { isRedisConnected } from "../../infra/cache/redis.js";
 import { isDatabaseConnected } from "../../infra/database/index.js";
 import { calculateCost, getProviderById } from "./registry.js";
-import { getUsageTotals, queryUsage, recordUsage } from "./usage-store.js";
+import { queryUsage, recordUsage } from "./usage-store.js";
 
 /**
  * Track a model usage event.

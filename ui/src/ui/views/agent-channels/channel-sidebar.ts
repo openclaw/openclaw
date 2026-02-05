@@ -86,8 +86,12 @@ export function groupChannelsByType(channels: ChannelListItem[]): ChannelGroup[]
   for (const group of groups) {
     group.channels.sort((a, b) => {
       // Unread first
-      if (a.unreadCount > 0 && b.unreadCount === 0) return -1;
-      if (b.unreadCount > 0 && a.unreadCount === 0) return 1;
+      if (a.unreadCount > 0 && b.unreadCount === 0) {
+        return -1;
+      }
+      if (b.unreadCount > 0 && a.unreadCount === 0) {
+        return 1;
+      }
 
       // Then by last message
       const aTime = a.lastMessageAt ?? 0;

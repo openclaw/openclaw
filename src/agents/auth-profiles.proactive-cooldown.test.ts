@@ -4,7 +4,6 @@ import {
   getProfileCooldownRemainingMs,
   getProfileHealthStatus,
   isProfileApproachingCooldown,
-  isProfileInCooldown,
 } from "./auth-profiles/usage.js";
 
 describe("proactive cooldown detection", () => {

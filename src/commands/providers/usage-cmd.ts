@@ -8,7 +8,6 @@ import type { UsagePeriod } from "./types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { renderTable, type TableColumn } from "../../terminal/table.js";
 import { theme, isRich } from "../../terminal/theme.js";
-import { getProviderById } from "./registry.js";
 import { formatUsageForDisplay, getUsage, isUsageTrackingAvailable } from "./usage.js";
 
 export type ProvidersUsageOptions = {

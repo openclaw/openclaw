@@ -238,7 +238,7 @@ export {
 } from "./commands/registry.js";
 
 // Core commands are auto-registered when imported
-export {} from "./commands/core.js";
+import "./commands/core.js";
 
 // Permissions
 export type { PermissionCheckResult } from "./permissions.js";

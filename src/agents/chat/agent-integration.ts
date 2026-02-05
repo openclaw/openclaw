@@ -18,7 +18,7 @@ import { emitNewMessage } from "./events/channel-events.js";
 import { updatePresence, heartbeat, setOffline, type AgentStatus } from "./presence/manager.js";
 import { startTyping, stopTyping, onMessageSent } from "./presence/typing.js";
 import { resolveTargetAgents, type RoutingContext } from "./routing/router.js";
-import { getChannel, addMember, getMember, listChannels } from "./store/channel-store.js";
+import { getChannel, addMember, listChannels } from "./store/channel-store.js";
 import { createMessage, getRecentMessages } from "./store/message-store.js";
 
 export type AgentConfig = {

@@ -53,7 +53,9 @@ vi.mock("../db/client.js", () => ({
   },
   toJsonb: (v: unknown) => JSON.stringify(v),
   fromJsonb: <T>(v: string | null): T | null => {
-    if (v == null) return null;
+    if (v == null) {
+      return null;
+    }
     try {
       return JSON.parse(v) as T;
     } catch {

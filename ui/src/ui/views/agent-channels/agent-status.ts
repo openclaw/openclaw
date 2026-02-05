@@ -6,7 +6,6 @@
 import {
   getAgentColor,
   getStatusColor,
-  getRoleColor,
   getRoleIcon,
   getListeningModeIcon,
 } from "./agent-colors.js";
@@ -71,12 +70,14 @@ export function renderAgentStatus(
  */
 export function renderAgentList(agents: AgentStatusInfo[]): string {
   // Sort: online first, then by role
-  const sorted = [...agents].sort((a, b) => {
+  const sorted = [...agents].toSorted((a, b) => {
     const statusOrder = { active: 0, busy: 1, away: 2, offline: 3 };
     const roleOrder = { owner: 0, admin: 1, member: 2, observer: 3 };
 
     const statusDiff = statusOrder[a.status] - statusOrder[b.status];
-    if (statusDiff !== 0) return statusDiff;
+    if (statusDiff !== 0) {
+      return statusDiff;
+    }
 
     return roleOrder[a.role] - roleOrder[b.role];
   });

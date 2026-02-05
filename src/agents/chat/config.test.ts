@@ -37,6 +37,7 @@ describe("config", () => {
     it("should reject invalid channel type", () => {
       const config: AgentChannelsConfig = {
         ...DEFAULT_CONFIG,
+        // oxlint-disable-next-line typescript/no-explicit-any
         channels: [{ id: "test", name: "Test", type: "invalid" as any, members: [] }],
       };
 
@@ -52,6 +53,7 @@ describe("config", () => {
             id: "test",
             name: "Test",
             type: "public",
+            // oxlint-disable-next-line typescript/no-explicit-any
             members: [{ agentId: "agent1", role: "superuser" as any, listeningMode: "active" }],
           },
         ],
@@ -69,6 +71,7 @@ describe("config", () => {
             id: "test",
             name: "Test",
             type: "public",
+            // oxlint-disable-next-line typescript/no-explicit-any
             members: [{ agentId: "agent1", role: "member", listeningMode: "always-on" as any }],
           },
         ],
@@ -129,6 +132,7 @@ describe("config", () => {
             id: "test",
             name: "Test",
             type: "public",
+            // oxlint-disable-next-line typescript/no-explicit-any
             members: [{ agentId: "", role: "member" } as any],
           },
         ],

@@ -114,7 +114,7 @@ function renderThreadPreview(message: ChatMessage): string {
   `;
 }
 
-function renderMessageActions(message: ChatMessage): string {
+function renderMessageActions(_message: ChatMessage): string {
   return `
     <div class="message-actions">
       <button class="action-btn" data-action="react" title="Add reaction">😀</button>

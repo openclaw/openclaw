@@ -249,7 +249,7 @@ export async function getMessages(query: MessageQuery): Promise<ChannelMessage[]
   );
 
   // Return in chronological order
-  return rows.map(rowToMessage).reverse();
+  return rows.map(rowToMessage).toReversed();
 }
 
 export async function getRecentMessages(channelId: string, limit = 50): Promise<ChannelMessage[]> {

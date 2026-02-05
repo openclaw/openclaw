@@ -114,7 +114,7 @@ export async function loadHealth(state: HealthState) {
   state.healthLoading = true;
   state.healthError = null;
   try {
-    const raw = (await state.client.request("health", {})) as RawHealthResponse | undefined;
+    const raw = await state.client.request<RawHealthResponse | undefined>("health", {});
     if (!raw) {
       return;
     }

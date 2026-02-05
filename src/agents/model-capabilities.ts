@@ -476,7 +476,7 @@ export function filterByCapability(
 ): ModelCatalogEntry[] {
   return catalog.filter((entry) => {
     const caps = getModelCapabilitiesFromCatalog(entry);
-    return caps[capability] === true;
+    return caps[capability];
   });
 }
 
@@ -540,11 +540,21 @@ export function getModelsByCostTier(
 export function getCapabilityTags(entry: ModelCatalogEntry): string[] {
   const caps = getModelCapabilitiesFromCatalog(entry);
   const tags: string[] = [];
-  if (caps.coding) tags.push("coding");
-  if (caps.reasoning) tags.push("reasoning");
-  if (caps.vision) tags.push("vision");
-  if (caps.fast) tags.push("fast");
-  if (caps.creative) tags.push("creative");
+  if (caps.coding) {
+    tags.push("coding");
+  }
+  if (caps.reasoning) {
+    tags.push("reasoning");
+  }
+  if (caps.vision) {
+    tags.push("vision");
+  }
+  if (caps.fast) {
+    tags.push("fast");
+  }
+  if (caps.creative) {
+    tags.push("creative");
+  }
   return tags;
 }
 

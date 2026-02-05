@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveModelForTaskType } from "../agents/model-selection.js";
 import { classifyTask } from "../agents/task-classifier.js";

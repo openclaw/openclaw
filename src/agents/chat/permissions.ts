@@ -3,12 +3,7 @@
  * Provides fine-grained access control for channel operations.
  */
 
-import type {
-  AgentChannel,
-  AgentChannelMember,
-  AgentChannelMemberRole,
-  ChannelPermission,
-} from "./types/channels.js";
+import type { AgentChannel, AgentChannelMemberRole, ChannelPermission } from "./types/channels.js";
 import { ROLE_PERMISSIONS, hasChannelPermission } from "./types/channels.js";
 
 export type PermissionCheckResult = {

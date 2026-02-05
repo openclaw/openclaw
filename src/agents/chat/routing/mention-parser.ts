@@ -138,7 +138,7 @@ function stripMentions(text: string, mentions: ParsedMention[]): string {
 
   // Remove mentions in reverse order to preserve indices
   let result = text;
-  const sorted = [...mentions].sort((a, b) => b.startIndex - a.startIndex);
+  const sorted = [...mentions].toSorted((a, b) => b.startIndex - a.startIndex);
 
   for (const mention of sorted) {
     const before = result.slice(0, mention.startIndex);

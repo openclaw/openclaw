@@ -69,9 +69,9 @@ describe("mergeWhatsAppConfig", () => {
   });
 
   it("preserves other channel configs", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     const cfg = {
       channels: { whatsapp: { sendReadReceipts: true }, telegram: { botToken: "abc" } },
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     const result = mergeWhatsAppConfig(cfg, { sendReadReceipts: false });
     expect(result.channels?.telegram).toEqual({ botToken: "abc" });

@@ -5,7 +5,7 @@
 
 import type { AuthProfileStore, AuthProfileCredential } from "../../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { AuthSource, ProviderStatus, TokenValidity } from "./types.js";
+import type { ProviderStatus, TokenValidity } from "./types.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../../agents/auth-profiles.js";
 import {
   getCustomProviderApiKey,

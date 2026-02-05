@@ -36,7 +36,6 @@ describe("listBoundAccountIds", () => {
   });
 
   it("returns sorted unique account IDs for matching channel", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     const cfg = {
       bindings: [
         { agentId: "main", match: { channel: "telegram", accountId: "zulu" } },
@@ -44,25 +43,25 @@ describe("listBoundAccountIds", () => {
         { agentId: "bot2", match: { channel: "telegram", accountId: "alpha" } },
         { agentId: "main", match: { channel: "discord", accountId: "other" } },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     const result = listBoundAccountIds(cfg, "telegram");
     expect(result).toEqual(["alpha", "zulu"]);
   });
 
   it("skips wildcard '*' accountIds", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     const cfg = {
       bindings: [
         { agentId: "main", match: { channel: "telegram", accountId: "*" } },
         { agentId: "main", match: { channel: "telegram", accountId: "real" } },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     const result = listBoundAccountIds(cfg, "telegram");
     expect(result).toEqual(["real"]);
   });
 
   it("skips invalid/null bindings", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     const cfg = {
       bindings: [
         null,
@@ -71,6 +70,7 @@ describe("listBoundAccountIds", () => {
         { agentId: "main", match: null },
         { agentId: "main", match: { channel: "telegram", accountId: "valid" } },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     const result = listBoundAccountIds(cfg, "telegram");
     expect(result).toEqual(["valid"]);
@@ -85,18 +85,18 @@ describe("resolveDefaultAgentBoundAccountId", () => {
   });
 
   it("returns account for default agent matching channel", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     const cfg = {
       bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "mybot" } }],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     const result = resolveDefaultAgentBoundAccountId(cfg, "telegram");
     expect(result).toBe("mybot");
   });
 
   it("returns null when no binding matches", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     const cfg = {
       bindings: [{ agentId: "main", match: { channel: "discord", accountId: "bot1" } }],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     expect(resolveDefaultAgentBoundAccountId(cfg, "telegram")).toBeNull();
   });
@@ -104,13 +104,13 @@ describe("resolveDefaultAgentBoundAccountId", () => {
 
 describe("buildChannelAccountBindings", () => {
   it("builds nested map from bindings", () => {
-    // oxlint-disable-next-line typescript/no-explicit-any
     const cfg = {
       bindings: [
         { agentId: "main", match: { channel: "telegram", accountId: "bot1" } },
         { agentId: "main", match: { channel: "telegram", accountId: "bot2" } },
         { agentId: "helper", match: { channel: "discord", accountId: "disc1" } },
       ],
+      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
 
     const map = buildChannelAccountBindings(cfg);

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { IPlatformAdapter } from "./types.js";
+import type { ExternalPlatform, IPlatformAdapter } from "./types.js";
 import {
   registerAdapter,
   getAdapter,
@@ -23,7 +23,9 @@ vi.mock("../db/client.js", () => ({
   getChatDbClient: () => mockDbClient,
   toJsonb: (v: unknown) => JSON.stringify(v),
   fromJsonb: <T>(v: string | null): T | null => {
-    if (v == null) return null;
+    if (v == null) {
+      return null;
+    }
     try {
       return JSON.parse(v) as T;
     } catch {
@@ -38,7 +40,7 @@ vi.mock("../store/message-store.js", () => ({
 
 describe("sync-manager", () => {
   const createMockAdapter = (platform = "slack"): IPlatformAdapter => ({
-    platform: platform as any,
+    platform: platform as ExternalPlatform,
     connect: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
     isConnected: vi.fn().mockReturnValue(true),
@@ -59,7 +61,7 @@ describe("sync-manager", () => {
       const adapter = createMockAdapter("discord");
 
       registerAdapter(adapter);
-      const retrieved = getAdapter("discord" as any);
+      const retrieved = getAdapter("discord" as ExternalPlatform);
 
       expect(retrieved).toBe(adapter);
     });
@@ -69,7 +71,7 @@ describe("sync-manager", () => {
     it("should create a new channel binding", async () => {
       const binding = await createBinding({
         agentChannelId: "chan_456",
-        platform: "slack" as any,
+        platform: "slack" as ExternalPlatform,
         externalAccountId: "workspace_1",
         externalChannelId: "C123456",
       });
@@ -88,7 +90,7 @@ describe("sync-manager", () => {
     it("should use default sync options", async () => {
       const binding = await createBinding({
         agentChannelId: "chan_456",
-        platform: "slack" as any,
+        platform: "slack" as ExternalPlatform,
         externalAccountId: "workspace_1",
         externalChannelId: "C123456",
       });
@@ -100,7 +102,7 @@ describe("sync-manager", () => {
     it("should merge custom sync options", async () => {
       const binding = await createBinding({
         agentChannelId: "chan_456",
-        platform: "slack" as any,
+        platform: "slack" as ExternalPlatform,
         externalAccountId: "workspace_1",
         externalChannelId: "C123456",
         syncOptions: { syncThreads: true },
@@ -200,7 +202,7 @@ describe("sync-manager", () => {
         },
       ]);
 
-      const bindings = await getBindingsForExternal("slack" as any, "C123");
+      const bindings = await getBindingsForExternal("slack" as ExternalPlatform, "C123");
 
       expect(bindings).toHaveLength(1);
       expect(bindings[0].externalChannelId).toBe("C123");
