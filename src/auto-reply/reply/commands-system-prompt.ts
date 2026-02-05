@@ -34,22 +34,23 @@ export async function resolveCommandsSystemPromptBundle(
     sessionKey: params.sessionKey,
     sessionId: params.sessionEntry?.sessionId,
   });
+  const sandboxRuntime = resolveSandboxRuntimeStatus({
+    cfg: params.cfg,
+    sessionKey: params.ctx.SessionKey ?? params.sessionKey,
+  });
   const skillsSnapshot = (() => {
     try {
       return buildWorkspaceSkillSnapshot(workspaceDir, {
         config: params.cfg,
         eligibility: { remote: getRemoteSkillEligibility() },
         snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
+        scopeToWorkspace: sandboxRuntime.sandboxed,
       });
     } catch {
       return { prompt: "", skills: [], resolvedSkills: [] };
     }
   })();
   const skillsPrompt = skillsSnapshot.prompt ?? "";
-  const sandboxRuntime = resolveSandboxRuntimeStatus({
-    cfg: params.cfg,
-    sessionKey: params.ctx.SessionKey ?? params.sessionKey,
-  });
   const tools = (() => {
     try {
       return createOpenClawCodingTools({

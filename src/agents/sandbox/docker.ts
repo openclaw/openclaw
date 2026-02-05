@@ -551,6 +551,25 @@ export async function ensureSandboxContainer(params: {
     });
   } else if (!running) {
     await execDocker(["start", containerName]);
+  } else {
+    // Container was already running – verify the workspace bind mount is still
+    // valid. When the host directory backing the mount is deleted while the
+    // container is running, any `docker exec` against it fails with an OCI
+    // "mount namespace" error. Detect this and recreate the container.
+    const probe = await execDocker(["exec", containerName, "true"], { allowFailure: true });
+    if (probe.code !== 0 && probe.stderr.includes("mount namespace")) {
+      defaultRuntime.log(`Sandbox mount stale for ${containerName}; recreating.`);
+      await execDocker(["rm", "-f", containerName], { allowFailure: true });
+      await createSandboxContainer({
+        name: containerName,
+        cfg: params.cfg.docker,
+        workspaceDir: params.workspaceDir,
+        workspaceAccess: params.cfg.workspaceAccess,
+        agentWorkspaceDir: params.agentWorkspaceDir,
+        scopeKey,
+        configHash: expectedHash,
+      });
+    }
   }
   await updateRegistry({
     containerName,

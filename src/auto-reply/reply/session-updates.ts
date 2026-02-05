@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { resolveUserTimezone } from "../../agents/date-time.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -155,6 +156,10 @@ export async function ensureSkillSnapshot(params: {
     skillFilter,
   } = params;
 
+  // Sandboxed agents should only see workspace skills — managed/bundled skill
+  // paths are outside the sandbox root and would be blocked by path assertions.
+  const sandboxed = sessionKey ? resolveSandboxRuntimeStatus({ cfg, sessionKey }).sandboxed : false;
+
   let nextEntry = sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
   const remoteEligibility = getRemoteSkillEligibility();
@@ -176,6 +181,7 @@ export async function ensureSkillSnapshot(params: {
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,
+            scopeToWorkspace: sandboxed,
           })
         : current.skillsSnapshot;
     nextEntry = {
@@ -200,6 +206,7 @@ export async function ensureSkillSnapshot(params: {
         skillFilter,
         eligibility: { remote: remoteEligibility },
         snapshotVersion,
+        scopeToWorkspace: sandboxed,
       })
     : (nextEntry?.skillsSnapshot ??
       (isFirstTurnInSession
@@ -209,6 +216,7 @@ export async function ensureSkillSnapshot(params: {
             skillFilter,
             eligibility: { remote: remoteEligibility },
             snapshotVersion,
+            scopeToWorkspace: sandboxed,
           })));
   if (
     skillsSnapshot &&
