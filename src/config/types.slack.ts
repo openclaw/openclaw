@@ -122,6 +122,17 @@ export type SlackAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /**
+   * Enable Slack native text streaming (Agents & AI Apps).
+   *
+   * When true, replies are streamed word-by-word into a single updating
+   * message using `chat.startStream` / `chat.appendStream` / `chat.stopStream`.
+   * Requires the Agents & AI Apps feature enabled in Slack app settings and
+   * the `assistant:write` scope.
+   *
+   * Falls back to normal delivery on error or when the message is not in a thread.
+   */
+  streaming?: boolean;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;
