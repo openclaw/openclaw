@@ -21,6 +21,7 @@ AUTO_DETECT_SIGNING=1
 GATEWAY_WAIT_SECONDS="${OPENCLAW_GATEWAY_WAIT_SECONDS:-0}"
 LAUNCHAGENT_DISABLE_MARKER="${HOME}/.openclaw/disable-launchagent"
 ATTACH_ONLY=1
+CLI_ONLY=0
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -84,13 +85,15 @@ for arg in "$@"; do
     --sign) SIGN=1; AUTO_DETECT_SIGNING=0 ;;
     --attach-only) ATTACH_ONLY=1 ;;
     --no-attach-only) ATTACH_ONLY=0 ;;
+    --cli-only) CLI_ONLY=1 ;;
     --help|-h)
-      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only]"
+      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign] [--attach-only|--no-attach-only] [--cli-only]"
       log "  --wait    Wait for other restart to complete instead of exiting"
       log "  --no-sign Force no code signing (fastest for development)"
       log "  --sign    Force code signing (will fail if no signing key available)"
       log "  --attach-only    Launch app with --attach-only (skip launchd install)"
       log "  --no-attach-only Launch app without attach-only override"
+      log "  --cli-only       Skip Swift build; run CLI gateway only (no macOS app)"
       log ""
       log "Env:"
       log "  OPENCLAW_GATEWAY_WAIT_SECONDS=0  Wait time before gateway port check (unsigned only)"
@@ -122,6 +125,9 @@ if [[ "$NO_SIGN" -eq 1 ]]; then
 fi
 if [[ "$ATTACH_ONLY" -eq 1 ]]; then
   log "==> Using --attach-only (skip launchd install)"
+fi
+if [[ "$CLI_ONLY" -eq 1 ]]; then
+  log "==> Using --cli-only (skip Swift build, run CLI gateway only)"
 fi
 
 acquire_lock
@@ -155,6 +161,40 @@ stop_launch_agent
 
 # Bundle Gateway-hosted Canvas A2UI assets.
 run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bundle"
+
+# CLI-only mode: skip Swift build, just start CLI gateway
+if [[ "$CLI_ONLY" -eq 1 ]]; then
+  run_step "build TypeScript" bash -lc "cd '${ROOT_DIR}' && pnpm build"
+  run_step "start CLI gateway" bash -lc "cd '${ROOT_DIR}' && pkill -9 -f 'openclaw.*gateway' 2>/dev/null || true; nohup pnpm openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &"
+  sleep 3
+  GATEWAY_PORT="$(
+    node -e '
+      const fs = require("node:fs");
+      const path = require("node:path");
+      try {
+        const raw = fs.readFileSync(path.join(process.env.HOME, ".openclaw", "openclaw.json"), "utf8");
+        const cfg = JSON.parse(raw);
+        const port = cfg && cfg.gateway && typeof cfg.gateway.port === "number" ? cfg.gateway.port : 18789;
+        process.stdout.write(String(port));
+      } catch {
+        process.stdout.write("18789");
+      }
+    '
+  )"
+  if lsof -iTCP:"${GATEWAY_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+    log "OK: CLI gateway is running on port ${GATEWAY_PORT}."
+    log "==> Log: /tmp/openclaw-gateway.log"
+  else
+    log "==> Waiting for gateway to start..."
+    sleep 5
+    if lsof -iTCP:"${GATEWAY_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+      log "OK: CLI gateway is running on port ${GATEWAY_PORT}."
+    else
+      fail "Gateway failed to start. Check /tmp/openclaw-gateway.log"
+    fi
+  fi
+  exit 0
+fi
 
 # 2) Rebuild into the same path the packager consumes (.build).
 run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
