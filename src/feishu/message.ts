@@ -302,6 +302,12 @@ export async function processFeishuMessage(
     MediaType: media?.contentType,
     MediaUrl: media?.path,
     WasMentioned: isGroup ? wasMentioned : undefined,
+    // DM session isolation: when enabled, each sender gets their own session
+    // Include accountId to avoid collisions across multiple Feishu accounts
+    SessionKey:
+      !isGroup && feishuCfg.dmSessionIsolation
+        ? `agent:main:feishu:${accountId}:dm:${senderId}`
+        : undefined,
   };
 
   const agentId = resolveSessionAgentId({ config: cfg });

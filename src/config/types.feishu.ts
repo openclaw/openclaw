@@ -64,6 +64,12 @@ export type FeishuAccountConfig = {
   dmHistoryLimit?: number;
   /** Per-DM config overrides keyed by user open_id. */
   dms?: Record<string, DmConfig>;
+  /**
+   * Enable per-sender session isolation for DMs.
+   * When true, each DM sender gets their own session (separate conversation history).
+   * When false (default), all DMs share the same "main" session.
+   */
+  dmSessionIsolation?: boolean;
   /** Per-group config keyed by chat_id (oc_xxx). */
   groups?: Record<string, FeishuGroupConfig>;
   /** Outbound text chunk size (chars). Default: 2000. */
