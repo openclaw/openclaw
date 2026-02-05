@@ -66,13 +66,11 @@ export class ReplyChainEnforcer {
       // User spoke -> Disarm immediately (It's the user's turn now)
       if (this.states.has(evt.sessionKey)) {
         this.setState(evt.sessionKey, "disarmed", "User message");
-        this.logger.debug("Chain DISARMED by user message", { key: evt.sessionKey });
       }
     } else if (evt.source === "agent") {
       const text = evt.text?.trim();
       if (text === SILENT_REPLY_TOKEN || text === "NO_REPLY" || text === "HEARTBEAT_OK") {
         this.setState(evt.sessionKey, "disarmed", "Agent sign-off");
-        this.logger.debug("Chain DISARMED by explicit sign-off", { key: evt.sessionKey });
       } else {
         // Agent replied -> Reset timer AND ensure it is ARMED.
         // We want to track "time since last agent token".
