@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Onboarding: add Moonshot (.cn) auth choice and keep the China base URL when preserving defaults. (#7180) Thanks @waynelwz.
 - Docs: clarify tmux send-keys for TUI by splitting text and Enter. (#7737) Thanks @Wangnov.
 - Docs: mirror the landing page revamp for zh-CN (features, quickstart, docs directory, network model, credits). (#8994) Thanks @joshp123.
+- Docs: strengthen secure DM mode guidance for multi-user inboxes with an explicit warning and example. (#9377) Thanks @Shrinija17.
 - Messages: add per-channel and per-account responsePrefix overrides across channels. (#9001) Thanks @mudrii.
 - Cron: add announce delivery mode for isolated jobs (CLI + Control UI) and delivery mode config.
 - Cron: default isolated jobs to announce delivery; accept ISO 8601 `schedule.at` in tool inputs.
