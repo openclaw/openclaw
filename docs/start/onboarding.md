@@ -64,16 +64,17 @@ Onboarding requests TCC permissions needed for:
 - Speech Recognition
 - Camera
 - Location
-  </Step>
-  <Step title="CLI">
+
+</Step>
+<Step title="CLI">
   <Info>This step is optional</Info>
   The app can install the global `openclaw` CLI via npm/pnpm so terminal
   workflows and launchd tasks work out of the box.
-  </Step>
-  <Step title="Onboarding Chat (dedicated session)">
+</Step>
+<Step title="Onboarding Chat (dedicated session)">
   After setup, the app opens a dedicated onboarding chat session so the agent can
   introduce itself and guide next steps. This keeps first‑run guidance separate
   from your normal conversation. See [Bootstrapping](/start/bootstrapping) for
   what happens on the gateway host during the first agent run.
-  </Step>
-  </Steps>
+</Step>
+</Steps>
