@@ -68,23 +68,10 @@ export type ExtractedTag = {
 };
 
 export type ExtractionResult = {
+  category?: MemoryCategory;
   entities: ExtractedEntity[];
   relationships: ExtractedRelationship[];
   tags: ExtractedTag[];
-};
-
-// ============================================================================
-// Auto-Capture Types
-// ============================================================================
-
-export type CaptureItem = {
-  text: string;
-  category: MemoryCategory;
-  importance: number;
-};
-
-export type CaptureDecision = {
-  memories: CaptureItem[];
 };
 
 // ============================================================================

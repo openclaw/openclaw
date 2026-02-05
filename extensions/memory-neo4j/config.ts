@@ -19,6 +19,11 @@ export type MemoryNeo4jConfig = {
     model: string;
     baseUrl?: string;
   };
+  extraction?: {
+    apiKey?: string;
+    model: string;
+    baseUrl: string;
+  };
   autoCapture: boolean;
   autoRecall: boolean;
   coreMemory: {
@@ -101,16 +106,26 @@ function resolveEnvVars(value: string): string {
 }
 
 /**
- * Resolve extraction config from environment variables.
- * Returns enabled: false if OPENROUTER_API_KEY is not set.
+ * Resolve extraction config from plugin config with env var fallback.
+ * Enabled when an API key is available (cloud) or a baseUrl is explicitly
+ * configured (Ollama / local LLMs that don't need a key).
  */
-export function resolveExtractionConfig(): ExtractionConfig {
-  const apiKey = process.env.OPENROUTER_API_KEY ?? "";
+export function resolveExtractionConfig(
+  cfgExtraction?: MemoryNeo4jConfig["extraction"],
+): ExtractionConfig {
+  const apiKey = cfgExtraction?.apiKey ?? process.env.OPENROUTER_API_KEY ?? "";
+  const model =
+    cfgExtraction?.model ?? process.env.EXTRACTION_MODEL ?? "google/gemini-2.0-flash-001";
+  const baseUrl =
+    cfgExtraction?.baseUrl ?? process.env.EXTRACTION_BASE_URL ?? "https://openrouter.ai/api/v1";
+  // Enabled when an API key is set (cloud provider) or baseUrl was explicitly
+  // configured in the plugin config (Ollama / local — no key needed).
+  const enabled = apiKey.length > 0 || cfgExtraction?.baseUrl != null;
   return {
-    enabled: apiKey.length > 0,
+    enabled,
     apiKey,
-    model: process.env.EXTRACTION_MODEL ?? "google/gemini-2.0-flash-001",
-    baseUrl: process.env.EXTRACTION_BASE_URL ?? "https://openrouter.ai/api/v1",
+    model,
+    baseUrl,
     temperature: 0.0,
     maxRetries: 2,
   };
@@ -136,7 +151,7 @@ export const memoryNeo4jConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "neo4j", "autoCapture", "autoRecall", "coreMemory"],
+      ["embedding", "neo4j", "autoCapture", "autoRecall", "coreMemory", "extraction"],
       "memory-neo4j config",
     );
 
@@ -205,6 +220,26 @@ export const memoryNeo4jConfigSchema = {
         ? coreMemoryRaw.refreshAtContextPercent
         : undefined;
 
+    // Parse extraction section (optional — falls back to env vars in resolveExtractionConfig)
+    const extractionRaw = cfg.extraction as Record<string, unknown> | undefined;
+    assertAllowedKeys(extractionRaw ?? {}, ["apiKey", "model", "baseUrl"], "extraction config");
+    let extraction: MemoryNeo4jConfig["extraction"];
+    if (extractionRaw) {
+      const exApiKey =
+        typeof extractionRaw.apiKey === "string" ? resolveEnvVars(extractionRaw.apiKey) : undefined;
+      const exModel = typeof extractionRaw.model === "string" ? extractionRaw.model : undefined;
+      const exBaseUrl =
+        typeof extractionRaw.baseUrl === "string" ? extractionRaw.baseUrl : undefined;
+      // Only include if at least one field was provided
+      if (exApiKey || exModel || exBaseUrl) {
+        extraction = {
+          apiKey: exApiKey,
+          model: exModel ?? (process.env.EXTRACTION_MODEL || "google/gemini-2.0-flash-001"),
+          baseUrl: exBaseUrl ?? (process.env.EXTRACTION_BASE_URL || "https://openrouter.ai/api/v1"),
+        };
+      }
+    }
+
     return {
       neo4j: {
         uri: neo4jRaw.uri,
@@ -217,6 +252,7 @@ export const memoryNeo4jConfigSchema = {
         model: embeddingModel,
         baseUrl,
       },
+      extraction,
       autoCapture: cfg.autoCapture !== false,
       autoRecall: cfg.autoRecall !== false,
       coreMemory: {

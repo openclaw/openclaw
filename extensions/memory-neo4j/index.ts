@@ -24,7 +24,7 @@ import {
   vectorDimsForModel,
 } from "./config.js";
 import { Embeddings } from "./embeddings.js";
-import { evaluateAutoCapture, extractUserMessages, runSleepCycle } from "./extractor.js";
+import { extractUserMessages, runSleepCycle } from "./extractor.js";
 import { Neo4jMemoryClient } from "./neo4j-client.js";
 import { hybridSearch } from "./search.js";
 
@@ -43,7 +43,7 @@ const memoryNeo4jPlugin = {
   register(api: OpenClawPluginApi) {
     // Parse configuration
     const cfg = memoryNeo4jConfigSchema.parse(api.pluginConfig);
-    const extractionConfig = resolveExtractionConfig();
+    const extractionConfig = resolveExtractionConfig(cfg.extraction);
     const vectorDim = vectorDimsForModel(cfg.embedding.model);
 
     // Create shared resources
@@ -494,8 +494,8 @@ const memoryNeo4jPlugin = {
               );
               console.log("  Phase 3: Core Promotion   — Regular memories above threshold → core");
               console.log("  Phase 4: Core Demotion    — Core memories below threshold → regular");
-              console.log("  Phase 5: Decay & Pruning  — Remove stale low-importance memories");
-              console.log("  Phase 6: Extraction       — Form entity relationships");
+              console.log("  Phase 5: Extraction       — Extract entities and categorize");
+              console.log("  Phase 6: Decay & Pruning  — Remove stale low-importance memories");
               console.log("  Phase 7: Orphan Cleanup   — Remove disconnected nodes\n");
 
               try {
@@ -522,8 +522,8 @@ const memoryNeo4jPlugin = {
                       pareto: "Phase 2: Pareto Scoring",
                       promotion: "Phase 3: Core Promotion",
                       demotion: "Phase 4: Core Demotion",
-                      decay: "Phase 5: Decay & Pruning",
-                      extraction: "Phase 6: Extraction",
+                      extraction: "Phase 5: Extraction",
+                      decay: "Phase 6: Decay & Pruning",
                       cleanup: "Phase 7: Orphan Cleanup",
                     };
                     console.log(`\n▶ ${phaseNames[phase]}`);
@@ -818,7 +818,19 @@ const memoryNeo4jPlugin = {
       });
     }
 
-    // Auto-capture: LLM-based decision on what to store from conversations
+    // Auto-capture: attention-gated memory pipeline modeled on human memory.
+    //
+    // Phase 1 — Attention gating (real-time):
+    //   Lightweight heuristic filter rejects obvious noise (greetings, short
+    //   acks, system markup, code dumps) without any LLM call.
+    //
+    // Phase 2 — Short-term retention:
+    //   Everything that passes the gate is embedded, deduped, and stored as
+    //   regular memory with extractionStatus "pending".
+    //
+    // Phase 3 — Sleep consolidation (deferred to `openclaw memory neo4j sleep`):
+    //   The sleep cycle handles entity extraction, categorization, Pareto
+    //   scoring, promotion/demotion, and decay — mirroring hippocampal replay.
     api.logger.debug?.(
       `memory-neo4j: autoCapture=${cfg.autoCapture}, extraction.enabled=${extractionConfig.enabled}`,
     );
@@ -837,71 +849,24 @@ const memoryNeo4jPlugin = {
         const sessionKey = ctx.sessionKey;
 
         try {
-          if (extractionConfig.enabled) {
-            // LLM-based auto-capture (Decision Q8)
-            const userMessages = extractUserMessages(event.messages);
-            if (userMessages.length === 0) {
-              return;
-            }
+          const userMessages = extractUserMessages(event.messages);
+          if (userMessages.length === 0) {
+            return;
+          }
 
-            const items = await evaluateAutoCapture(userMessages, extractionConfig);
-            if (items.length === 0) {
-              return;
-            }
+          // Phase 1: Attention gating — fast heuristic filter
+          const retained = userMessages.filter((text) => passesAttentionGate(text));
+          if (retained.length === 0) {
+            return;
+          }
 
-            let stored = 0;
-            for (const item of items) {
-              try {
-                const vector = await embeddings.embed(item.text);
-
-                // Check for duplicates
-                const existing = await db.findSimilar(vector, 0.95, 1);
-                if (existing.length > 0) {
-                  continue;
-                }
-
-                const memoryId = randomUUID();
-                await db.storeMemory({
-                  id: memoryId,
-                  text: item.text,
-                  embedding: vector,
-                  importance: item.importance,
-                  category: item.category,
-                  source: "auto-capture",
-                  extractionStatus: "pending",
-                  agentId,
-                  sessionKey,
-                });
-
-                // Extraction deferred to sleep cycle (like human memory consolidation)
-                stored++;
-              } catch (err) {
-                api.logger.debug?.(`memory-neo4j: auto-capture item failed: ${String(err)}`);
-              }
-            }
-
-            if (stored > 0) {
-              api.logger.info(`memory-neo4j: auto-captured ${stored} memories (LLM-based)`);
-            }
-          } else {
-            // Fallback: rule-based capture (no extraction API key)
-            const userMessages = extractUserMessages(event.messages);
-            if (userMessages.length === 0) {
-              return;
-            }
-
-            const toCapture = userMessages.filter(
-              (text) => text.length >= 10 && text.length <= 500 && shouldCaptureRuleBased(text),
-            );
-            if (toCapture.length === 0) {
-              return;
-            }
-
-            let stored = 0;
-            for (const text of toCapture.slice(0, 3)) {
-              const category = detectCategory(text);
+          // Phase 2: Short-term retention — embed, dedup, store
+          let stored = 0;
+          for (const text of retained) {
+            try {
               const vector = await embeddings.embed(text);
 
+              // Quick dedup (same content already stored)
               const existing = await db.findSimilar(vector, 0.95, 1);
               if (existing.length > 0) {
                 continue;
@@ -911,19 +876,21 @@ const memoryNeo4jPlugin = {
                 id: randomUUID(),
                 text,
                 embedding: vector,
-                importance: 0.7,
-                category,
+                importance: 0.5, // neutral — sleep cycle scores via Pareto
+                category: "other", // sleep cycle will categorize
                 source: "auto-capture",
-                extractionStatus: "skipped",
+                extractionStatus: extractionConfig.enabled ? "pending" : "skipped",
                 agentId,
                 sessionKey,
               });
               stored++;
+            } catch (err) {
+              api.logger.debug?.(`memory-neo4j: auto-capture item failed: ${String(err)}`);
             }
+          }
 
-            if (stored > 0) {
-              api.logger.info(`memory-neo4j: auto-captured ${stored} memories (rule-based)`);
-            }
+          if (stored > 0) {
+            api.logger.info(`memory-neo4j: auto-captured ${stored} memories (attention-gated)`);
           }
         } catch (err) {
           api.logger.warn(`memory-neo4j: auto-capture failed: ${String(err)}`);
@@ -960,52 +927,57 @@ const memoryNeo4jPlugin = {
 };
 
 // ============================================================================
-// Rule-based capture filter (fallback when no extraction API key)
+// Attention gate — lightweight heuristic filter (phase 1 of memory pipeline)
+//
+// Rejects obvious noise without any LLM call, analogous to how the brain's
+// sensory gating filters out irrelevant stimuli before they enter working
+// memory. Everything that passes gets stored; the sleep cycle decides what
+// matters.
 // ============================================================================
 
-const MEMORY_TRIGGERS = [
-  /remember|zapamatuj|pamatuj/i,
-  /prefer|radši|nechci|preferuji/i,
-  /decided|rozhodli|budeme používat/i,
-  /\+\d{10,}/,
-  /[\w.-]+@[\w.-]+\.\w+/,
-  /my\s+\w+\s+is|is\s+my/i,
-  /i (like|prefer|hate|love|want|need)/i,
-  /always|never|important/i,
+const NOISE_PATTERNS = [
+  // Greetings / acknowledgments
+  /^(hi|hey|hello|yo|sup|ok|okay|sure|thanks|thank you|thx|ty|yep|yup|nope|no|yes|yeah|cool|nice|great|got it|sounds good|perfect|alright|fine|noted|ack|kk|k)\s*[.!?]*$/i,
+  // Single-word or near-empty
+  /^\S{0,3}$/,
+  // Pure emoji
+  /^[\p{Emoji}\s]+$/u,
+  // System/XML markup
+  /^<[a-z-]+>[\s\S]*<\/[a-z-]+>$/i,
 ];
 
-function shouldCaptureRuleBased(text: string): boolean {
-  if (text.includes("<relevant-memories>")) {
+/** Maximum message length — code dumps, logs, etc. are not memories. */
+const MAX_CAPTURE_CHARS = 2000;
+
+/** Minimum message length — too short to be meaningful. */
+const MIN_CAPTURE_CHARS = 10;
+
+function passesAttentionGate(text: string): boolean {
+  const trimmed = text.trim();
+
+  // Length bounds
+  if (trimmed.length < MIN_CAPTURE_CHARS || trimmed.length > MAX_CAPTURE_CHARS) {
     return false;
   }
-  if (text.startsWith("<") && text.includes("</")) {
+
+  // Injected context from the memory system itself
+  if (trimmed.includes("<relevant-memories>") || trimmed.includes("<core-memory-refresh>")) {
     return false;
   }
-  if (text.includes("**") && text.includes("\n-")) {
+
+  // Noise patterns
+  if (NOISE_PATTERNS.some((r) => r.test(trimmed))) {
     return false;
   }
-  const emojiCount = (text.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
+
+  // Excessive emoji (likely reaction, not substance)
+  const emojiCount = (trimmed.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
   if (emojiCount > 3) {
     return false;
   }
-  return MEMORY_TRIGGERS.some((r) => r.test(text));
-}
 
-function detectCategory(text: string): MemoryCategory {
-  const lower = text.toLowerCase();
-  if (/prefer|radši|like|love|hate|want/i.test(lower)) {
-    return "preference";
-  }
-  if (/decided|rozhodli|will use|budeme/i.test(lower)) {
-    return "decision";
-  }
-  if (/\+\d{10,}|@[\w.-]+\.\w+|is called|jmenuje se/i.test(lower)) {
-    return "entity";
-  }
-  if (/is|are|has|have|je|má|jsou/i.test(lower)) {
-    return "fact";
-  }
-  return "other";
+  // Passes gate — retain for short-term storage
+  return true;
 }
 
 // ============================================================================

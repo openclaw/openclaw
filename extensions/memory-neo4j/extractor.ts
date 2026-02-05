@@ -1,19 +1,19 @@
 /**
- * LLM-based entity extraction and auto-capture decision for memory-neo4j.
+ * LLM-based entity extraction and sleep cycle for memory-neo4j.
  *
- * Uses Gemini Flash via OpenRouter for:
- * 1. Entity extraction: Extract entities and relationships from stored memories
- * 2. Auto-capture decision: Decide what's worth remembering from conversations
+ * Extraction uses a configurable OpenAI-compatible LLM (OpenRouter, Ollama, etc.) to:
+ * - Extract entities, relationships, and tags from stored memories
+ * - Classify memories into categories (preference, fact, decision, etc.)
  *
- * Both run as background fire-and-forget operations with graceful degradation.
+ * Runs as background fire-and-forget operations with graceful degradation.
  */
 
 import { randomUUID } from "node:crypto";
 import type { ExtractionConfig } from "./config.js";
 import type { Embeddings } from "./embeddings.js";
 import type { Neo4jMemoryClient } from "./neo4j-client.js";
-import type { CaptureItem, EntityType, ExtractionResult, MemoryCategory } from "./schema.js";
-import { ALLOWED_RELATIONSHIP_TYPES, ENTITY_TYPES } from "./schema.js";
+import type { EntityType, ExtractionResult, MemoryCategory } from "./schema.js";
+import { ALLOWED_RELATIONSHIP_TYPES, ENTITY_TYPES, MEMORY_CATEGORIES } from "./schema.js";
 
 // ============================================================================
 // Types
@@ -31,12 +31,13 @@ type Logger = {
 // ============================================================================
 
 const ENTITY_EXTRACTION_PROMPT = `You are an entity extraction system for a personal memory store.
-Extract entities and relationships from this memory text.
+Extract entities and relationships from this memory text, and classify the memory.
 
 Memory: "{text}"
 
 Return JSON:
 {
+  "category": "preference|fact|decision|entity|other",
   "entities": [
     {"name": "tarun", "type": "person", "aliases": ["boss"], "description": "brief description"}
   ],
@@ -55,49 +56,8 @@ Rules:
 - Confidence: 0.0-1.0
 - Only extract what's explicitly stated or strongly implied
 - Return empty arrays if nothing to extract
-- Keep entity descriptions brief (1 sentence max)`;
-
-// ============================================================================
-// Auto-Capture Decision Prompt
-// ============================================================================
-
-const AUTO_CAPTURE_PROMPT = `You are an AI memory curator. Given these user messages from a conversation, identify information worth storing as long-term memories.
-
-Only extract:
-- Personal preferences and opinions ("I prefer dark mode", "I like TypeScript")
-- Important facts about people, places, organizations
-- Decisions made ("We decided to use Neo4j", "Going with plan A")
-- Contact information (emails, phone numbers, usernames)
-- Important events or dates
-- Technical decisions and configurations
-
-Do NOT extract:
-- General questions or instructions to the AI
-- Routine greetings or acknowledgments
-- Information that is too vague or contextual
-- Information already in system prompts or documentation
-
-Categories:
-- "core": Foundational identity info that should ALWAYS be remembered (user's name, role, company, key relationships, critical preferences that define who they are). Use sparingly - only for truly foundational facts.
-- "preference": User preferences and opinions
-- "fact": Facts about people, places, things
-- "decision": Decisions made
-- "entity": Entity-focused memories
-- "other": Miscellaneous
-
-Messages:
-"""
-{messages}
-"""
-
-Return JSON:
-{
-  "memories": [
-    {"text": "concise memory text", "category": "core|preference|fact|decision|entity|other", "importance": 0.7}
-  ]
-}
-
-If nothing is worth remembering, return: {"memories": []}`;
+- Keep entity descriptions brief (1 sentence max)
+- Category: "preference" for opinions/preferences, "fact" for factual info, "decision" for choices made, "entity" for entity-focused, "other" for miscellaneous`;
 
 // ============================================================================
 // OpenRouter API Client
@@ -180,8 +140,13 @@ function validateExtractionResult(raw: Record<string, unknown>): ExtractionResul
   const tags = Array.isArray(raw.tags) ? raw.tags : [];
 
   const validEntityTypes = new Set<string>(ENTITY_TYPES);
+  const validCategories = new Set<string>(MEMORY_CATEGORIES);
+  const rawCategory = typeof raw.category === "string" ? raw.category : undefined;
+  const category =
+    rawCategory && validCategories.has(rawCategory) ? (rawCategory as MemoryCategory) : undefined;
 
   return {
+    category,
     entities: entities
       .filter(
         (e: unknown): e is Record<string, unknown> =>
@@ -332,10 +297,16 @@ export async function runBackgroundExtraction(
       }
     }
 
+    // Update category if the LLM classified it (only overwrites 'other')
+    if (result.category) {
+      await db.updateMemoryCategory(memoryId, result.category);
+    }
+
     await db.updateExtractionStatus(memoryId, "complete");
     logger.info(
       `memory-neo4j: extraction complete for ${memoryId.slice(0, 8)} — ` +
-        `${result.entities.length} entities, ${result.relationships.length} rels, ${result.tags.length} tags`,
+        `${result.entities.length} entities, ${result.relationships.length} rels, ${result.tags.length} tags` +
+        (result.category ? `, category=${result.category}` : ""),
     );
   } catch (err) {
     logger.warn(`memory-neo4j: extraction failed for ${memoryId.slice(0, 8)}: ${String(err)}`);
@@ -528,12 +499,13 @@ export async function runSleepCycle(
   // Phase 2: Pareto Scoring & Threshold Calculation
   // --------------------------------------------------------------------------
   let paretoThreshold = 0;
+  let allScores: Awaited<ReturnType<typeof db.calculateAllEffectiveScores>> = [];
   if (!abortSignal?.aborted) {
     onPhaseStart?.("pareto");
     logger.info("memory-neo4j: [sleep] Phase 2: Pareto Scoring");
 
     try {
-      const allScores = await db.calculateAllEffectiveScores(agentId);
+      allScores = await db.calculateAllEffectiveScores(agentId);
       result.pareto.totalMemories = allScores.length;
       result.pareto.coreMemories = allScores.filter((s) => s.category === "core").length;
       result.pareto.regularMemories = allScores.filter((s) => s.category !== "core").length;
@@ -560,18 +532,19 @@ export async function runSleepCycle(
   }
 
   // --------------------------------------------------------------------------
-  // Phase 3: Core Promotion (regular memories above threshold)
+  // Phase 3: Core Promotion (using pre-computed scores from Phase 2)
   // --------------------------------------------------------------------------
   if (!abortSignal?.aborted && paretoThreshold > 0) {
     onPhaseStart?.("promotion");
     logger.info("memory-neo4j: [sleep] Phase 3: Core Promotion");
 
     try {
-      const candidates = await db.findPromotionCandidates({
-        paretoThreshold,
-        minAgeDays: promotionMinAgeDays,
-        agentId,
-      });
+      const candidates = allScores.filter(
+        (s) =>
+          s.category !== "core" &&
+          s.effectiveScore >= paretoThreshold &&
+          s.ageDays >= promotionMinAgeDays,
+      );
       result.promotion.candidatesFound = candidates.length;
 
       if (candidates.length > 0) {
@@ -594,17 +567,16 @@ export async function runSleepCycle(
   }
 
   // --------------------------------------------------------------------------
-  // Phase 4: Core Demotion (core memories fallen below threshold)
+  // Phase 4: Core Demotion (using pre-computed scores from Phase 2)
   // --------------------------------------------------------------------------
   if (!abortSignal?.aborted && paretoThreshold > 0) {
     onPhaseStart?.("demotion");
     logger.info("memory-neo4j: [sleep] Phase 4: Core Demotion");
 
     try {
-      const candidates = await db.findDemotionCandidates({
-        paretoThreshold,
-        agentId,
-      });
+      const candidates = allScores.filter(
+        (s) => s.category === "core" && s.effectiveScore < paretoThreshold,
+      );
       result.demotion.candidatesFound = candidates.length;
 
       if (candidates.length > 0) {
@@ -627,40 +599,13 @@ export async function runSleepCycle(
   }
 
   // --------------------------------------------------------------------------
-  // Phase 5: Decay & Pruning
+  // Phase 5: Entity Extraction (moved before decay so new memories get
+  // extracted before pruning can remove them)
   // --------------------------------------------------------------------------
-  if (!abortSignal?.aborted) {
-    onPhaseStart?.("decay");
-    logger.info("memory-neo4j: [sleep] Phase 5: Decay & Pruning");
-
-    try {
-      const decayed = await db.findDecayedMemories({
-        retentionThreshold: decayRetentionThreshold,
-        baseHalfLifeDays: decayBaseHalfLifeDays,
-        importanceMultiplier: decayImportanceMultiplier,
-        agentId,
-      });
-
-      if (decayed.length > 0) {
-        const ids = decayed.map((m) => m.id);
-        result.decay.memoriesPruned = await db.pruneMemories(ids);
-        onProgress?.("decay", `Pruned ${result.decay.memoriesPruned} decayed memories`);
-      }
-
-      logger.info(
-        `memory-neo4j: [sleep] Phase 5 complete — ${result.decay.memoriesPruned} memories pruned`,
-      );
-    } catch (err) {
-      logger.warn(`memory-neo4j: [sleep] Phase 5 error: ${String(err)}`);
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // Phase 6: Entity Extraction
-  // --------------------------------------------------------------------------
+  const EXTRACTION_CONCURRENCY = 3;
   if (!abortSignal?.aborted && config.enabled) {
     onPhaseStart?.("extraction");
-    logger.info("memory-neo4j: [sleep] Phase 6: Entity Extraction");
+    logger.info("memory-neo4j: [sleep] Phase 5: Entity Extraction");
 
     try {
       // Get initial count
@@ -677,24 +622,32 @@ export async function runSleepCycle(
             break;
           }
 
-          for (const memory of pending) {
-            if (abortSignal?.aborted) {
-              break;
+          // Process in parallel chunks of EXTRACTION_CONCURRENCY
+          for (
+            let i = 0;
+            i < pending.length && !abortSignal?.aborted;
+            i += EXTRACTION_CONCURRENCY
+          ) {
+            const chunk = pending.slice(i, i + EXTRACTION_CONCURRENCY);
+            const outcomes = await Promise.allSettled(
+              chunk.map((memory) =>
+                runBackgroundExtraction(memory.id, memory.text, db, embeddings, config, logger),
+              ),
+            );
+
+            for (const outcome of outcomes) {
+              result.extraction.processed++;
+              if (outcome.status === "fulfilled") {
+                result.extraction.succeeded++;
+              } else {
+                result.extraction.failed++;
+              }
             }
 
-            try {
-              await runBackgroundExtraction(memory.id, memory.text, db, embeddings, config, logger);
-              result.extraction.succeeded++;
-            } catch (err) {
-              logger.warn(
-                `memory-neo4j: extraction failed for ${memory.id.slice(0, 8)}: ${String(err)}`,
-              );
-              result.extraction.failed++;
-            }
-
-            result.extraction.processed++;
-
-            if (result.extraction.processed % 10 === 0) {
+            if (
+              result.extraction.processed % 10 === 0 ||
+              i + EXTRACTION_CONCURRENCY >= pending.length
+            ) {
               onProgress?.(
                 "extraction",
                 `${result.extraction.processed}/${result.extraction.total} processed`,
@@ -710,13 +663,43 @@ export async function runSleepCycle(
       }
 
       logger.info(
-        `memory-neo4j: [sleep] Phase 6 complete — ${result.extraction.succeeded} extracted, ${result.extraction.failed} failed`,
+        `memory-neo4j: [sleep] Phase 5 complete — ${result.extraction.succeeded} extracted, ${result.extraction.failed} failed`,
+      );
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 5 error: ${String(err)}`);
+    }
+  } else if (!config.enabled) {
+    logger.info("memory-neo4j: [sleep] Phase 5 skipped — extraction not enabled");
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 6: Decay & Pruning (after extraction so freshly extracted memories
+  // aren't pruned before they build entity connections)
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted) {
+    onPhaseStart?.("decay");
+    logger.info("memory-neo4j: [sleep] Phase 6: Decay & Pruning");
+
+    try {
+      const decayed = await db.findDecayedMemories({
+        retentionThreshold: decayRetentionThreshold,
+        baseHalfLifeDays: decayBaseHalfLifeDays,
+        importanceMultiplier: decayImportanceMultiplier,
+        agentId,
+      });
+
+      if (decayed.length > 0) {
+        const ids = decayed.map((m) => m.id);
+        result.decay.memoriesPruned = await db.pruneMemories(ids);
+        onProgress?.("decay", `Pruned ${result.decay.memoriesPruned} decayed memories`);
+      }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 6 complete — ${result.decay.memoriesPruned} memories pruned`,
       );
     } catch (err) {
       logger.warn(`memory-neo4j: [sleep] Phase 6 error: ${String(err)}`);
     }
-  } else if (!config.enabled) {
-    logger.info("memory-neo4j: [sleep] Phase 6 skipped — extraction not enabled");
   }
 
   // --------------------------------------------------------------------------
@@ -760,69 +743,6 @@ export async function runSleepCycle(
   );
 
   return result;
-}
-
-// ============================================================================
-// Auto-Capture Decision
-// ============================================================================
-
-/**
- * Evaluate user messages and decide what's worth storing as long-term memory.
- * Returns a list of memory items to store, or empty if nothing worth keeping.
- */
-export async function evaluateAutoCapture(
-  userMessages: string[],
-  config: ExtractionConfig,
-): Promise<CaptureItem[]> {
-  if (!config.enabled || userMessages.length === 0) {
-    return [];
-  }
-
-  const combined = userMessages.join("\n\n");
-  if (combined.length < 10) {
-    return [];
-  }
-
-  const prompt = AUTO_CAPTURE_PROMPT.replace("{messages}", combined);
-
-  try {
-    const content = await callOpenRouter(config, prompt);
-    if (!content) {
-      return [];
-    }
-
-    const parsed = JSON.parse(content) as Record<string, unknown>;
-    return validateCaptureDecision(parsed);
-  } catch {
-    // Silently fail — auto-capture is best-effort
-    return [];
-  }
-}
-
-/**
- * Validate and sanitize the auto-capture LLM output.
- */
-function validateCaptureDecision(raw: Record<string, unknown>): CaptureItem[] {
-  const memories = Array.isArray(raw.memories) ? raw.memories : [];
-
-  const validCategories = new Set<string>(["preference", "fact", "decision", "entity", "other"]);
-
-  return memories
-    .filter(
-      (m: unknown): m is Record<string, unknown> =>
-        m !== null &&
-        typeof m === "object" &&
-        typeof (m as Record<string, unknown>).text === "string" &&
-        (m as Record<string, unknown>).text !== "",
-    )
-    .map((m) => ({
-      text: String(m.text).slice(0, 2000), // cap length
-      category: validCategories.has(String(m.category))
-        ? (String(m.category) as MemoryCategory)
-        : "other",
-      importance: typeof m.importance === "number" ? Math.min(1, Math.max(0, m.importance)) : 0.7,
-    }))
-    .slice(0, 5); // Max 5 captures per conversation
 }
 
 // ============================================================================

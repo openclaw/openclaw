@@ -812,6 +812,25 @@ export class Neo4jMemoryClient {
   }
 
   /**
+   * Update a memory's category. Only updates if current category is 'other'
+   * (auto-assigned) to avoid overriding user-explicit categorization.
+   */
+  async updateMemoryCategory(id: string, category: string): Promise<void> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      await session.run(
+        `MATCH (m:Memory {id: $id})
+         WHERE m.category = 'other'
+         SET m.category = $category, m.updatedAt = $now`,
+        { id, category, now: new Date().toISOString() },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
    * Update the extraction status of a Memory node.
    */
   async updateExtractionStatus(id: string, status: ExtractionStatus): Promise<void> {
@@ -900,10 +919,11 @@ export class Neo4jMemoryClient {
    * Find clusters of near-duplicate memories by vector similarity.
    * Returns groups where each group contains memories that are duplicates of each other.
    *
-   * Algorithm:
-   * 1. For each memory, find others with similarity >= threshold
-   * 2. Group into clusters (transitive closure)
-   * 3. Return clusters with 2+ members
+   * Algorithm (O(N log N) via HNSW index, replaces O(N²) Cartesian product):
+   * 1. Fetch all memory IDs and metadata
+   * 2. For each memory, query the vector index for nearest neighbors above threshold
+   * 3. Build clusters via union-find (transitive closure)
+   * 4. Return clusters with 2+ members
    */
   async findDuplicateClusters(
     threshold: number = 0.95,
@@ -912,24 +932,29 @@ export class Neo4jMemoryClient {
     await this.ensureInitialized();
     const session = this.driver!.session();
     try {
-      // Find all pairs of similar memories
-      const agentFilter = agentId ? "WHERE m1.agentId = $agentId AND m2.agentId = $agentId" : "";
-      const result = await session.run(
-        `MATCH (m1:Memory), (m2:Memory)
-         ${agentFilter}
-         WHERE m1.id < m2.id
-           AND vector.similarity.cosine(m1.embedding, m2.embedding) >= $threshold
-         RETURN m1.id AS id1, m1.text AS text1, m1.importance AS imp1,
-                m2.id AS id2, m2.text AS text2, m2.importance AS imp2,
-                vector.similarity.cosine(m1.embedding, m2.embedding) AS similarity
-         ORDER BY similarity DESC
-         LIMIT 500`,
-        { threshold, agentId },
+      // Step 1: Fetch all memory metadata (no embeddings — lightweight)
+      const agentFilter = agentId ? "WHERE m.agentId = $agentId" : "";
+      const allResult = await session.run(
+        `MATCH (m:Memory) ${agentFilter}
+         RETURN m.id AS id, m.text AS text, m.importance AS importance`,
+        agentId ? { agentId } : {},
       );
 
-      // Build clusters using union-find
-      const parent = new Map<string, string>();
       const memoryData = new Map<string, { text: string; importance: number }>();
+      for (const r of allResult.records) {
+        memoryData.set(r.get("id") as string, {
+          text: r.get("text") as string,
+          importance: r.get("importance") as number,
+        });
+      }
+
+      if (memoryData.size < 2) {
+        return [];
+      }
+
+      // Step 2: For each memory, find near-duplicates via HNSW vector index
+      // Each query is O(log N) vs O(N) for brute-force, total O(N log N)
+      const parent = new Map<string, string>();
 
       const find = (x: string): string => {
         if (!parent.has(x)) {
@@ -949,23 +974,37 @@ export class Neo4jMemoryClient {
         }
       };
 
-      for (const record of result.records) {
-        const id1 = record.get("id1") as string;
-        const id2 = record.get("id2") as string;
-        union(id1, id2);
-        memoryData.set(id1, {
-          text: record.get("text1") as string,
-          importance: record.get("imp1") as number,
-        });
-        memoryData.set(id2, {
-          text: record.get("text2") as string,
-          importance: record.get("imp2") as number,
-        });
+      let pairsFound = 0;
+      for (const id of memoryData.keys()) {
+        const similar = await session.run(
+          `MATCH (src:Memory {id: $id})
+           CALL db.index.vector.queryNodes('memory_embedding_index', $k, src.embedding)
+           YIELD node, score
+           WHERE node.id <> $id AND score >= $threshold
+           RETURN node.id AS matchId`,
+          { id, k: neo4j.int(10), threshold },
+        );
+
+        for (const r of similar.records) {
+          const matchId = r.get("matchId") as string;
+          if (memoryData.has(matchId)) {
+            union(id, matchId);
+            pairsFound++;
+          }
+        }
+
+        // Early exit if we've found many pairs (safety bound)
+        if (pairsFound > 500) {
+          break;
+        }
       }
 
-      // Group by root
+      // Step 3: Group by root
       const clusters = new Map<string, string[]>();
       for (const id of memoryData.keys()) {
+        if (!parent.has(id)) {
+          continue;
+        }
         const root = find(id);
         if (!clusters.has(root)) {
           clusters.set(root, []);
@@ -1159,8 +1198,7 @@ export class Neo4jMemoryClient {
     try {
       const result = await session.run(
         `MATCH (e:Entity)
-         WHERE NOT EXISTS { MATCH (:Memory)-[:MENTIONS]->(e) }
-            OR e.mentionCount <= 0
+         WHERE coalesce(e.mentionCount, 0) <= 0
          RETURN e.id AS id, e.name AS name, e.type AS type
          LIMIT $limit`,
         { limit: neo4j.int(limit) },
@@ -1261,23 +1299,34 @@ export class Neo4jMemoryClient {
    * This gives core memories a slight disadvantage (they need strong retrieval
    * patterns to stay in top 20%), creating healthy churn.
    */
-  async calculateAllEffectiveScores(
-    agentId?: string,
-  ): Promise<Array<{ id: string; category: string; effectiveScore: number }>> {
+  async calculateAllEffectiveScores(agentId?: string): Promise<
+    Array<{
+      id: string;
+      text: string;
+      category: string;
+      importance: number;
+      retrievalCount: number;
+      ageDays: number;
+      effectiveScore: number;
+    }>
+  > {
     await this.ensureInitialized();
     const session = this.driver!.session();
     try {
-      const agentFilter = agentId ? "WHERE m.agentId = $agentId" : "";
+      const agentFilter = agentId
+        ? "WHERE m.agentId = $agentId AND m.createdAt IS NOT NULL"
+        : "WHERE m.createdAt IS NOT NULL";
       const result = await session.run(
         `MATCH (m:Memory)
          ${agentFilter}
          WITH m,
               coalesce(m.retrievalCount, 0) AS retrievalCount,
+              duration.between(datetime(m.createdAt), datetime()).days AS ageDays,
               CASE
                 WHEN m.lastRetrievedAt IS NULL THEN null
                 ELSE duration.between(datetime(m.lastRetrievedAt), datetime()).days
               END AS daysSinceRetrieval
-         WITH m, retrievalCount, daysSinceRetrieval,
+         WITH m, retrievalCount, ageDays, daysSinceRetrieval,
               // Effective score: importance × freq_boost × recency
               // This is used for global ranking (promotion/demotion threshold)
               m.importance * (1 + log(1 + retrievalCount) * 0.3) *
@@ -1285,14 +1334,19 @@ export class Neo4jMemoryClient {
                   WHEN daysSinceRetrieval IS NULL THEN 0.1
                   ELSE 2.0 ^ (-1.0 * daysSinceRetrieval / 14.0)
                 END AS effectiveScore
-         RETURN m.id AS id, m.category AS category, effectiveScore
+         RETURN m.id AS id, m.text AS text, m.category AS category,
+                m.importance AS importance, retrievalCount, ageDays, effectiveScore
          ORDER BY effectiveScore DESC`,
         agentId ? { agentId } : {},
       );
 
       return result.records.map((r) => ({
         id: r.get("id") as string,
+        text: r.get("text") as string,
         category: r.get("category") as string,
+        importance: r.get("importance") as number,
+        retrievalCount: r.get("retrievalCount") as number,
+        ageDays: r.get("ageDays") as number,
         effectiveScore: r.get("effectiveScore") as number,
       }));
     } finally {

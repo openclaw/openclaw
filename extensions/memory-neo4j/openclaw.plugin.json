@@ -43,6 +43,22 @@
     "autoRecall": {
       "label": "Auto-Recall",
       "help": "Automatically inject relevant memories into context"
+    },
+    "extraction.apiKey": {
+      "label": "Extraction API Key",
+      "sensitive": true,
+      "placeholder": "sk-or-v1-...",
+      "help": "API key for extraction LLM (not needed for Ollama/local models)"
+    },
+    "extraction.model": {
+      "label": "Extraction Model",
+      "placeholder": "google/gemini-2.0-flash-001",
+      "help": "Model for entity extraction (e.g., google/gemini-2.0-flash-001 for OpenRouter, llama3.1:8b for Ollama)"
+    },
+    "extraction.baseUrl": {
+      "label": "Extraction Base URL",
+      "placeholder": "https://openrouter.ai/api/v1",
+      "help": "Base URL for extraction API (e.g., https://openrouter.ai/api/v1 or http://localhost:11434/v1 for Ollama)"
     }
   },
   "configSchema": {
@@ -92,6 +108,21 @@
       },
       "autoRecall": {
         "type": "boolean"
+      },
+      "extraction": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "baseUrl": {
+            "type": "string"
+          }
+        }
       }
     },
     "required": ["neo4j"]
