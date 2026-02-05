@@ -104,9 +104,9 @@ export async function createSimplexInvite(state: ChannelsState, mode: SimplexInv
   state.simplexInviteQrDataUrl = null;
   state.simplexInviteError = null;
   try {
-    const res = (await state.client.request("simplex.invite.create", {
+    const res = await state.client.request("simplex.invite.create", {
       mode,
-    })) as { link?: string | null; qrDataUrl?: string | null };
+    });
     const link = typeof res?.link === "string" ? res.link.trim() : "";
     const qrDataUrl =
       typeof res?.qrDataUrl === "string" && res.qrDataUrl.trim() ? res.qrDataUrl.trim() : null;

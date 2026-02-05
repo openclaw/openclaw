@@ -1,4 +1,4 @@
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { ErrorCodes, errorShape } from "../../src/gateway/protocol/index.js";
 import { renderQrPngBase64 } from "../../src/web/qr-image.js";
@@ -117,7 +117,7 @@ const plugin = {
         return;
       }
 
-      const cfg = api.config as OpenClawConfig;
+      const cfg = api.config;
       const rawAccountId = typeof params?.accountId === "string" ? params.accountId.trim() : "";
       const accountId = rawAccountId || resolveDefaultSimplexAccountId(cfg);
       const account = resolveSimplexAccount({ cfg, accountId });

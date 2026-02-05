@@ -129,7 +129,21 @@ export class SimplexWsClient {
   }
 
   private handleMessage(raw: WebSocket.RawData): void {
-    const text = typeof raw === "string" ? raw : raw.toString("utf8");
+    let text: string | null = null;
+    if (typeof raw === "string") {
+      text = raw;
+    } else if (raw instanceof Buffer) {
+      text = raw.toString("utf8");
+    } else if (raw instanceof ArrayBuffer) {
+      text = Buffer.from(raw).toString("utf8");
+    } else if (Array.isArray(raw)) {
+      text = Buffer.concat(raw).toString("utf8");
+    }
+
+    if (!text) {
+      this.logger?.warn?.("SimpleX WS message had unsupported payload type");
+      return;
+    }
     let parsed: SimplexWsResponse;
     try {
       parsed = JSON.parse(text) as SimplexWsResponse;

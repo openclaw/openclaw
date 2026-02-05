@@ -31,12 +31,12 @@ export function resolveDefaultSimplexAccountId(cfg: OpenClawConfig): string {
 }
 
 function mergeConnection(
-  base?: SimplexConnectionConfig,
-  account?: SimplexConnectionConfig,
+  base: SimplexConnectionConfig = {},
+  account: SimplexConnectionConfig = {},
 ): SimplexConnectionConfig {
   return {
-    ...(base ?? {}),
-    ...(account ?? {}),
+    ...base,
+    ...account,
   };
 }
 

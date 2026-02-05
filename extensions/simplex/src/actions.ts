@@ -325,7 +325,7 @@ export const simplexMessageActions: ChannelMessageActionAdapter = {
         try {
           profile = JSON.parse(rawProfile) as Record<string, unknown>;
         } catch (err) {
-          throw new Error(`Invalid profile JSON: ${String(err)}`);
+          throw new Error(`Invalid profile JSON: ${String(err)}`, { cause: err });
         }
         const cmd = buildUpdateGroupProfileCommand({
           groupId: normalizeSimplexGroupRef(target),
