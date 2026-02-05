@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
-describe("onboard (non-interactive): Vercel AI Gateway", () => {
-  it("stores the API key and configures the default model", async () => {
+describe("onboard (non-interactive): OpenAI API key", () => {
+  it("stores OPENAI_API_KEY and configures the OpenAI default model", async () => {
     const prev = {
       home: process.env.HOME,
       stateDir: process.env.OPENCLAW_STATE_DIR,
@@ -24,7 +25,7 @@ describe("onboard (non-interactive): Vercel AI Gateway", () => {
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-gateway-"));
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-openai-"));
     process.env.HOME = tempHome;
     process.env.OPENCLAW_STATE_DIR = tempHome;
     process.env.OPENCLAW_CONFIG_PATH = path.join(tempHome, "openclaw.json");
@@ -45,8 +46,8 @@ describe("onboard (non-interactive): Vercel AI Gateway", () => {
       await runNonInteractiveOnboarding(
         {
           nonInteractive: true,
-          authChoice: "ai-gateway-api-key",
-          aiGatewayApiKey: "gateway-test-key",
+          authChoice: "openai-api-key",
+          openaiApiKey: "sk-openai-test",
           skipHealth: true,
           skipChannels: true,
           skipSkills: true,
@@ -57,26 +58,9 @@ describe("onboard (non-interactive): Vercel AI Gateway", () => {
 
       const { CONFIG_PATH } = await import("../config/config.js");
       const cfg = JSON.parse(await fs.readFile(CONFIG_PATH, "utf8")) as {
-        auth?: {
-          profiles?: Record<string, { provider?: string; mode?: string }>;
-        };
         agents?: { defaults?: { model?: { primary?: string } } };
       };
-
-      expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.provider).toBe("vercel-ai-gateway");
-      expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.mode).toBe("api_key");
-      expect(cfg.agents?.defaults?.model?.primary).toBe(
-        "vercel-ai-gateway/anthropic/claude-opus-4.6",
-      );
-
-      const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
-      const store = ensureAuthProfileStore();
-      const profile = store.profiles["vercel-ai-gateway:default"];
-      expect(profile?.type).toBe("api_key");
-      if (profile?.type === "api_key") {
-        expect(profile.provider).toBe("vercel-ai-gateway");
-        expect(profile.key).toBe("gateway-test-key");
-      }
+      expect(cfg.agents?.defaults?.model?.primary).toBe(OPENAI_DEFAULT_MODEL);
     } finally {
       await fs.rm(tempHome, { recursive: true, force: true });
       process.env.HOME = prev.home;
