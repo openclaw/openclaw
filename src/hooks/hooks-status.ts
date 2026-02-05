@@ -33,6 +33,7 @@ export type HookStatusEntry = {
   always: boolean;
   disabled: boolean;
   eligible: boolean;
+  requirementsMet: boolean;
   managedByPlugin: boolean;
   requirements: {
     bins: string[];
@@ -170,14 +171,15 @@ function buildHookStatus(
         os: missingOs,
       };
 
-  const eligible =
-    !disabled &&
-    (always ||
-      (missing.bins.length === 0 &&
-        missing.anyBins.length === 0 &&
-        missing.env.length === 0 &&
-        missing.config.length === 0 &&
-        missing.os.length === 0));
+  const requirementsMet =
+    always ||
+    (missing.bins.length === 0 &&
+      missing.anyBins.length === 0 &&
+      missing.env.length === 0 &&
+      missing.config.length === 0 &&
+      missing.os.length === 0);
+
+  const eligible = !disabled && requirementsMet;
 
   return {
     name: entry.hook.name,
@@ -194,6 +196,7 @@ function buildHookStatus(
     always,
     disabled,
     eligible,
+    requirementsMet,
     managedByPlugin,
     requirements: {
       bins: requiredBins,
