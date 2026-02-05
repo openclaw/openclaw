@@ -18,6 +18,7 @@ import {
   applyMoonshotConfigCn,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
+  applyPuterConfig,
   applySyntheticConfig,
   applyVeniceConfig,
   applyVercelAiGatewayConfig,
@@ -31,11 +32,13 @@ import {
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setPuterApiKey,
   setSyntheticApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
+  PUTER_DEFAULT_MODEL_ID,
 } from "../../onboard-auth.js";
 import { applyOpenAIConfig } from "../../openai-model-default.js";
 import { resolveNonInteractiveApiKey } from "../api-keys.js";
@@ -259,6 +262,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpenrouterConfig(nextConfig);
+  }
+
+  if (authChoice === "puter-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "puter",
+      cfg: baseConfig,
+      flagValue: opts.puterApiKey,
+      flagName: "--puter-api-key",
+      envVar: "PUTER_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setPuterApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "puter:default",
+      provider: "puter",
+      mode: "api_key",
+    });
+    return applyPuterConfig(nextConfig, PUTER_DEFAULT_MODEL_ID);
   }
 
   if (authChoice === "ai-gateway-api-key") {
@@ -496,6 +522,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   if (
     authChoice === "oauth" ||
     authChoice === "chutes" ||
+    authChoice === "puter-web" ||
     authChoice === "openai-codex" ||
     authChoice === "qwen-portal" ||
     authChoice === "minimax-portal"

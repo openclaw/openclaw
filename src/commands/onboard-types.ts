@@ -12,6 +12,8 @@ export type AuthChoice =
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
+  | "puter-web"
+  | "puter-api-key"
   | "ai-gateway-api-key"
   | "cloudflare-ai-gateway-api-key"
   | "moonshot-api-key"
@@ -66,6 +68,7 @@ export type OnboardOptions = {
   anthropicApiKey?: string;
   openaiApiKey?: string;
   openrouterApiKey?: string;
+  puterApiKey?: string;
   aiGatewayApiKey?: string;
   cloudflareAiGatewayAccountId?: string;
   cloudflareAiGatewayGatewayId?: string;

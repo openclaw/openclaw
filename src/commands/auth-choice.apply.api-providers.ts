@@ -1,3 +1,5 @@
+import http from "node:http";
+import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
@@ -25,6 +27,8 @@ import {
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
+  applyPuterConfig,
+  applyPuterProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyVeniceConfig,
@@ -38,6 +42,7 @@ import {
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  PUTER_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
@@ -48,6 +53,7 @@ import {
   setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setPuterApiKey,
   setSyntheticApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
@@ -55,7 +61,268 @@ import {
   setZaiApiKey,
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
+import { openUrl } from "./onboard-helpers.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
+
+const PUTER_MODELS_ENDPOINT = "https://api.puter.com/puterai/chat/models";
+const PUTER_MODEL_PICKER_DEFAULT = "__default__";
+const PUTER_MODEL_PICKER_MANUAL = "__manual__";
+const PUTER_WEB_ORIGIN = "https://puter.com";
+const PUTER_AUTH_TIMEOUT_MS = 120_000;
+
+function normalizePuterModelIds(models: string[]): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const model of models) {
+    const trimmed = model.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function extractPuterModelId(entry: unknown): string | null {
+  if (typeof entry === "string") {
+    return entry.trim() || null;
+  }
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const record = entry as Record<string, unknown>;
+  const candidateKeys = ["id", "model", "name"];
+  for (const key of candidateKeys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+async function getPuterAuthToken(params: {
+  prompter: WizardPrompter;
+  guiOrigin?: string;
+}): Promise<string | undefined> {
+  const guiOrigin = params.guiOrigin?.trim() || PUTER_WEB_ORIGIN;
+  return await new Promise((resolve) => {
+    let finished = false;
+    let timeout: NodeJS.Timeout | undefined;
+    const finish = (token?: string) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (server.listening) {
+        server.close(() => resolve(token));
+      } else {
+        resolve(token);
+      }
+    };
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authentication Successful - Puter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #404C71;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            border-radius: 16px;
+            padding: 48px;
+            text-align: center;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            max-width: 420px;
+            margin: 20px;
+        }
+        .checkmark {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, #00c853 0%, #00e676 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+            animation: scaleIn 0.5s ease-out;
+        }
+        .checkmark svg {
+            width: 40px;
+            height: 40px;
+            stroke: white;
+            stroke-width: 3;
+            fill: none;
+            animation: drawCheck 0.6s ease-out 0.3s forwards;
+            stroke-dasharray: 50;
+            stroke-dashoffset: 50;
+        }
+        @keyframes scaleIn {
+            0% { transform: scale(0); }
+            50% { transform: scale(1.2); }
+            100% { transform: scale(1); }
+        }
+        @keyframes drawCheck {
+            to { stroke-dashoffset: 0; }
+        }
+        h1 {
+            color: #1a1a2e;
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        p {
+            color: #64748b;
+            font-size: 16px;
+            line-height: 1.6;
+        }
+        .puter-logo {
+            margin-top: 32px;
+            opacity: 0.6;
+            font-size: 14px;
+            color: #94a3b8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="checkmark">
+            <svg viewBox="0 0 24 24">
+                <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+        </div>
+        <h1>Authentication Successful</h1>
+        <p>You're all set! You may now close this window and return to your terminal.</p>
+        <div class="puter-logo">Powered by Puter</div>
+    </div>
+</body>
+</html>`);
+
+      const url = new URL(req.url ?? "/", "http://localhost/");
+      const token = url.searchParams.get("token")?.trim() || undefined;
+      finish(token);
+    });
+
+    server.listen(0, "127.0.0.1", async () => {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        server.close(() => finish(undefined));
+        return;
+      }
+      timeout = setTimeout(() => {
+        server.close(() => finish(undefined));
+      }, PUTER_AUTH_TIMEOUT_MS);
+
+      const redirectUrl = `http://localhost:${address.port}`;
+      const authUrl = `${guiOrigin}/?action=authme&redirectURL=${encodeURIComponent(redirectUrl)}`;
+      const opened = await openUrl(authUrl);
+      if (!opened) {
+        await params.prompter.note(
+          ["Open this URL to complete Puter login:", authUrl].join("\n"),
+          "Puter web login",
+        );
+      }
+    });
+  });
+}
+
+async function fetchPuterModelIds(apiKey?: string): Promise<string[]> {
+  const headers: Record<string, string> = {};
+  if (apiKey?.trim()) {
+    headers.Authorization = `Bearer ${apiKey.trim()}`;
+  }
+  try {
+    const response = await fetch(PUTER_MODELS_ENDPOINT, {
+      headers,
+      signal: AbortSignal.timeout(7000),
+    });
+    if (!response.ok) {
+      return [];
+    }
+    const payload = (await response.json()) as unknown;
+    let entries: unknown[] = [];
+    if (Array.isArray(payload)) {
+      entries = payload;
+    } else if (payload && typeof payload === "object") {
+      const record = payload as Record<string, unknown>;
+      if (Array.isArray(record.data)) {
+        entries = record.data;
+      } else if (Array.isArray(record.models)) {
+        entries = record.models;
+      }
+    }
+    const ids = entries
+      .map((entry) => extractPuterModelId(entry))
+      .filter((value): value is string => Boolean(value));
+    return normalizePuterModelIds(ids);
+  } catch {
+    return [];
+  }
+}
+
+async function resolvePuterModelId(params: {
+  apiKey?: string;
+  prompter: WizardPrompter;
+}): Promise<string> {
+  const progress = params.prompter.progress("Fetching Puter models…");
+  const models = await fetchPuterModelIds(params.apiKey);
+  progress.stop();
+
+  if (models.length === 0) {
+    return PUTER_DEFAULT_MODEL_ID;
+  }
+
+  const filtered = models.filter((model) => model !== PUTER_DEFAULT_MODEL_ID);
+  const options: WizardSelectOption[] = [
+    {
+      value: PUTER_MODEL_PICKER_DEFAULT,
+      label: `Default (${PUTER_DEFAULT_MODEL_ID})`,
+    },
+    {
+      value: PUTER_MODEL_PICKER_MANUAL,
+      label: "Enter model manually",
+    },
+    ...filtered.map((model) => ({ value: model, label: model })),
+  ];
+
+  const selection = await params.prompter.select({
+    message: "Select Puter model",
+    options,
+    initialValue: PUTER_MODEL_PICKER_DEFAULT,
+  });
+
+  if (selection === PUTER_MODEL_PICKER_DEFAULT) {
+    return PUTER_DEFAULT_MODEL_ID;
+  }
+  if (selection === PUTER_MODEL_PICKER_MANUAL) {
+    const manual = await params.prompter.text({
+      message: "Puter model id",
+      initialValue: PUTER_DEFAULT_MODEL_ID,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    return manual.trim() || PUTER_DEFAULT_MODEL_ID;
+  }
+  return selection.trim() || PUTER_DEFAULT_MODEL_ID;
+}
 
 export async function applyAuthChoiceApiProviders(
   params: ApplyAuthChoiceParams,
@@ -176,6 +443,79 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyOpenrouterConfig,
         applyProviderConfig: applyOpenrouterProviderConfig,
         noteDefault: OPENROUTER_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "puter-api-key" || authChoice === "puter-web") {
+    let hasCredential = false;
+    let resolvedApiKey: string | undefined;
+
+    if (authChoice === "puter-web") {
+      const token = await getPuterAuthToken({ prompter: params.prompter });
+      if (token) {
+        resolvedApiKey = token;
+        await setPuterApiKey(token, params.agentDir);
+        hasCredential = true;
+      } else {
+        await params.prompter.note(
+          "Puter web login did not return a token. Falling back to API key entry.",
+          "Puter web login",
+        );
+      }
+    }
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "puter") {
+      resolvedApiKey = normalizeApiKeyInput(params.opts.token);
+      await setPuterApiKey(resolvedApiKey, params.agentDir);
+      hasCredential = true;
+    }
+
+    const envKey = resolveEnvApiKey("puter");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing PUTER_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setPuterApiKey(envKey.apiKey, params.agentDir);
+        resolvedApiKey = envKey.apiKey;
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter API key from https://puter.com/?action=copyauth",
+        validate: validateApiKeyInput,
+      });
+      resolvedApiKey = normalizeApiKeyInput(String(key));
+      await setPuterApiKey(resolvedApiKey, params.agentDir);
+    }
+
+    const modelId = await resolvePuterModelId({
+      apiKey: resolvedApiKey,
+      prompter: params.prompter,
+    });
+    const modelRef = `puter/${modelId}`;
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "puter:default",
+      provider: "puter",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: modelRef,
+        applyDefaultConfig: (config) => applyPuterConfig(config, modelId),
+        applyProviderConfig: (config) => applyPuterProviderConfig(config, modelId),
+        noteDefault: modelRef,
         noteAgentModel,
         prompter: params.prompter,
       });

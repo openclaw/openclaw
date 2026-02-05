@@ -75,6 +75,18 @@ export async function setMoonshotApiKey(key: string, agentDir?: string) {
   });
 }
 
+export async function setPuterApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "puter:default",
+    credential: {
+      type: "api_key",
+      provider: "puter",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setKimiCodingApiKey(key: string, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
