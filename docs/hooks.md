@@ -237,6 +237,9 @@ Triggered during session lifecycle when session persistence is enabled and a val
 - **`session:start`**: When a new persisted session begins (user-initiated or auto-recovery; non-persisted flows do not fire this hook)
 - **`session:end`**: When a persisted session is terminated (auto-recovery resets only; requires persisted session entry)
 - **`session:reset`**: Emitted after `session:end` during resets to provide transition context (auto-recovery resets only; requires persisted session entry)
+- **`session:compact:before`**: Right before compaction summarizes history
+- **`session:compact:after`**: After compaction completes with summary metadata
+- **`session:prune`**: When context pruning trims tool output from the in-memory context
 
 Context includes:
 
@@ -253,6 +256,9 @@ Lifecycle patterns:
 - **`agent:bootstrap`**: Before workspace bootstrap files are injected (hooks may mutate `context.bootstrapFiles`)
 - **`agent:reply`**: After each agent turn completes with user input or assistant output
 - **`agent:flush`**: When memory flush starts (before the flush operation runs)
+- **`agent:thinking:start`**, **`agent:thinking:end`**: Model call start and end
+- **`agent:response:start`**, **`agent:response:end`**: Response generation start and end
+- **`agent:tool:start`**, **`agent:tool:end`**: Tool execution start and end
 
 Context for `agent:reply` includes:
 
@@ -274,6 +280,8 @@ Context for `agent:flush` includes:
 Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
+- **`gateway:shutdown`**: When the gateway begins shutting down
+- **`gateway:pre-restart`**: Before a gateway restart is initiated
 
 ### Tool Result Hooks (Plugin API)
 
