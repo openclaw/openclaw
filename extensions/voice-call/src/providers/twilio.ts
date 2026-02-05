@@ -573,23 +573,38 @@ export class TwilioProvider implements VoiceCallProvider {
       // Prefer streaming TTS for lower latency
       if (ttsProvider.streamForTelephony) {
         let remainder = Buffer.alloc(0);
+        let audioSent = false;
 
-        for await (const chunk of ttsProvider.streamForTelephony(text)) {
-          if (signal.aborted) {
-            break;
-          }
-
-          // Accumulate audio and send in paced chunks
-          remainder = remainder.length > 0 ? Buffer.concat([remainder, chunk]) : chunk;
-
-          while (remainder.length >= CHUNK_SIZE) {
+        try {
+          for await (const chunk of ttsProvider.streamForTelephony(text)) {
             if (signal.aborted) {
               break;
             }
-            handler.sendAudio(streamSid, remainder.subarray(0, CHUNK_SIZE));
-            remainder = remainder.subarray(CHUNK_SIZE);
-            await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
+
+            // Accumulate audio and send in paced chunks
+            remainder = remainder.length > 0 ? Buffer.concat([remainder, chunk]) : chunk;
+
+            while (remainder.length >= CHUNK_SIZE) {
+              if (signal.aborted) {
+                break;
+              }
+              handler.sendAudio(streamSid, remainder.subarray(0, CHUNK_SIZE));
+              audioSent = true;
+              remainder = remainder.subarray(CHUNK_SIZE);
+              await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
+            }
           }
+        } catch (err) {
+          if (audioSent) {
+            // Partial audio already sent — do not fall back to <Say> which would
+            // replay the entire text, causing a jarring double-response.
+            console.warn(
+              `[voice-call] Streaming TTS failed after partial audio sent; suppressing fallback:`,
+              err instanceof Error ? err.message : err,
+            );
+            return;
+          }
+          throw err;
         }
 
         // Send any remaining audio
