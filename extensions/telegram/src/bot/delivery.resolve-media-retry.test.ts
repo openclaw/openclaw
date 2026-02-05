@@ -80,6 +80,7 @@ function makeCtx(
       file_unique_id: "u5",
       width: 200,
       height: 200,
+      mime_type: "image/gif",
       ...(opts?.file_name && { file_name: opts.file_name }),
     };
   }
@@ -286,7 +287,7 @@ describe("resolveMedia getFile retry", () => {
     );
   });
 
-  it("returns null for sticker when getFile exhausts retries", async () => {
+  it("returns metadata-only for sticker when getFile exhausts retries", async () => {
     const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
 
     const ctx = makeCtx("sticker", getFile);
@@ -295,7 +296,40 @@ describe("resolveMedia getFile retry", () => {
     const result = await promise;
 
     expect(getFile).toHaveBeenCalledTimes(3);
-    expect(result).toBeNull();
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "",
+        placeholder: "<media:sticker>",
+        stickerMetadata: expect.objectContaining({
+          fileId: "stk1",
+          fileUniqueId: "ustk1",
+        }),
+      }),
+    );
+  });
+
+  it("returns metadata-only for animation when getFile exhausts retries", async () => {
+    const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
+
+    const ctx = makeCtx("animation", getFile, { file_name: 'party"<clip>.gif' });
+    const promise = resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
+    const result = await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(3);
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "",
+        placeholder: "<media:gif>",
+        animationMetadata: expect.objectContaining({
+          fileName: 'party"<clip>.gif',
+          fileId: "an1",
+          fileUniqueId: "u5",
+          mimeType: "image/gif",
+          duration: 3,
+        }),
+      }),
+    );
   });
 
   it("uses caller-provided fetch impl for file downloads", async () => {
@@ -441,6 +475,43 @@ describe("resolveMedia original filename preservation", () => {
       "presentation.mp4",
     );
     expect(result).not.toBeNull();
+  });
+
+  it("passes animation.file_name to saveMediaBuffer and returns animation metadata", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "animations/file_7.gif" });
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("gif-data"),
+      contentType: "image/gif",
+      fileName: "file_7.gif",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/celebration---uuid.gif",
+      contentType: "image/gif",
+    });
+
+    const ctx = makeCtx("animation", getFile, { file_name: "celebration.gif" });
+    const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      "image/gif",
+      "inbound",
+      MAX_MEDIA_BYTES,
+      "celebration.gif",
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "/tmp/celebration---uuid.gif",
+        placeholder: "<media:gif>",
+        animationMetadata: expect.objectContaining({
+          fileName: "celebration.gif",
+          fileId: "an1",
+          fileUniqueId: "u5",
+          mimeType: "image/gif",
+          duration: 3,
+        }),
+      }),
+    );
   });
 
   it("falls back to fetched.fileName when telegram file_name is absent", async () => {

@@ -129,7 +129,7 @@ describe("telegram stickers", () => {
   );
 
   it(
-    "skips animated and video sticker formats that cannot be downloaded",
+    "passes metadata for animated and video stickers (no file download)",
     async () => {
       const { handler, replySpy, runtimeError } = await createBotHandler();
 
@@ -148,6 +148,8 @@ describe("telegram stickers", () => {
             emoji: "😎",
             set_name: "AnimatedPack",
           },
+          expectedEmoji: "😎",
+          expectedSetName: "AnimatedPack",
         },
         {
           messageId: 102,
@@ -163,6 +165,8 @@ describe("telegram stickers", () => {
             emoji: "🎬",
             set_name: "VideoPack",
           },
+          expectedEmoji: "🎬",
+          expectedSetName: "VideoPack",
         },
       ]) {
         replySpy.mockClear();
@@ -180,11 +184,63 @@ describe("telegram stickers", () => {
           getFile: async () => ({ file_path: scenario.filePath }),
         });
 
+        // Should not attempt to download animated/video stickers
         expect(fetchSpy).not.toHaveBeenCalled();
-        expect(replySpy).not.toHaveBeenCalled();
+        // Should still process the message with metadata-only sticker context
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        expect(replySpy.mock.calls[0][0].Body).toContain("[Sticker");
+        expect(replySpy.mock.calls[0][0].Body).toContain(scenario.expectedEmoji);
+        expect(replySpy.mock.calls[0][0].Body).toContain(scenario.expectedSetName);
         expect(runtimeError).not.toHaveBeenCalled();
         fetchSpy.mockRestore();
       }
+    },
+    STICKER_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "includes animation metadata in context and sanitizes GIF placeholder labels",
+    async () => {
+      const { handler, replySpy, runtimeError } = await createBotHandler();
+      const fetchSpy = mockTelegramFileDownload({
+        contentType: "image/gif",
+        bytes: new Uint8Array([0x47, 0x49, 0x46, 0x38]), // GIF8 header
+      });
+
+      await handler({
+        message: {
+          message_id: 104,
+          chat: { id: 1234, type: "private" },
+          animation: {
+            file_id: "animation_file_id_123",
+            file_unique_id: "animation_unique_123",
+            width: 320,
+            height: 240,
+            duration: 7,
+            mime_type: "image/gif",
+            file_name: 'party"\n<clip>.gif',
+          },
+          date: 1736380800,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "animations/party.gif" }),
+      });
+
+      expect(runtimeError).not.toHaveBeenCalled();
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.telegram.org/file/bottok/animations/party.gif",
+        expect.objectContaining({ redirect: "manual" }),
+      );
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.Body).toContain('<media:gif "party_ _clip_.gif">');
+      expect(payload.Animation?.fileName).toBe('party"\n<clip>.gif');
+      expect(payload.Animation?.fileId).toBe("animation_file_id_123");
+      expect(payload.Animation?.fileUniqueId).toBe("animation_unique_123");
+      expect(payload.Animation?.mimeType).toBe("image/gif");
+      expect(payload.Animation?.duration).toBe(7);
+
+      fetchSpy.mockRestore();
     },
     STICKER_TEST_TIMEOUT_MS,
   );

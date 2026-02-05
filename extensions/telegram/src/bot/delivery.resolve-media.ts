@@ -147,6 +147,49 @@ async function downloadAndSaveTelegramFile(params: {
   );
 }
 
+function buildStickerMetadata(
+  sticker: NonNullable<TelegramContext["message"]["sticker"]>,
+): StickerMetadata {
+  const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
+  return {
+    emoji: sticker.emoji ?? cached?.emoji ?? undefined,
+    setName: sticker.set_name ?? cached?.setName ?? undefined,
+    fileId: sticker.file_id ?? cached?.fileId ?? undefined,
+    fileUniqueId: sticker.file_unique_id,
+    cachedDescription: cached?.description,
+  };
+}
+
+function buildMetadataOnlyStickerResult(stickerMetadata: StickerMetadata) {
+  return {
+    path: "",
+    contentType: undefined,
+    placeholder: "<media:sticker>",
+    stickerMetadata,
+  };
+}
+
+function buildAnimationMetadata(
+  animation: NonNullable<TelegramContext["message"]["animation"]>,
+): AnimationMetadata {
+  return {
+    fileName: animation.file_name ?? undefined,
+    fileId: animation.file_id ?? undefined,
+    fileUniqueId: animation.file_unique_id,
+    mimeType: animation.mime_type ?? undefined,
+    duration: animation.duration ?? undefined,
+  };
+}
+
+function buildMetadataOnlyAnimationResult(animationMetadata: AnimationMetadata) {
+  return {
+    path: "",
+    contentType: animationMetadata.mimeType,
+    placeholder: "<media:gif>",
+    animationMetadata,
+  };
+}
+
 async function resolveStickerMedia(params: {
   msg: TelegramContext["message"];
   ctx: TelegramContext;
@@ -168,38 +211,28 @@ async function resolveStickerMedia(params: {
     return undefined;
   }
   const sticker = msg.sticker;
+  const stickerMetadata = buildStickerMetadata(sticker);
   // For animated (TGS) and video (WEBM) stickers, return metadata-only (no image download)
   // so the agent still receives emoji/setName context instead of silently dropping the message.
   if (sticker.is_animated || sticker.is_video) {
     logVerbose("telegram: animated/video sticker - returning metadata-only (no media download)");
-    const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
-    return {
-      path: "",
-      contentType: undefined,
-      placeholder: "<media:sticker>",
-      stickerMetadata: {
-        emoji: sticker.emoji ?? cached?.emoji ?? undefined,
-        setName: sticker.set_name ?? cached?.setName ?? undefined,
-        fileId: sticker.file_id ?? cached?.fileId ?? undefined,
-        fileUniqueId: sticker.file_unique_id,
-        cachedDescription: cached?.description,
-      },
-    };
+    return buildMetadataOnlyStickerResult(stickerMetadata);
   }
   if (!sticker.file_id) {
-    return null;
+    logVerbose("telegram: sticker missing file_id - returning metadata-only");
+    return buildMetadataOnlyStickerResult(stickerMetadata);
   }
 
   try {
     const file = await resolveTelegramFileWithRetry(ctx);
     if (!file?.file_path) {
-      logVerbose("telegram: getFile returned no file_path for sticker");
-      return null;
+      logVerbose("telegram: getFile returned no file_path for sticker; returning metadata-only");
+      return buildMetadataOnlyStickerResult(stickerMetadata);
     }
     const resolvedTransport = resolveOptionalTelegramTransport(transport);
     if (!resolvedTransport) {
-      logVerbose("telegram: fetch not available for sticker download");
-      return null;
+      logVerbose("telegram: fetch not available for sticker download; returning metadata-only");
+      return buildMetadataOnlyStickerResult(stickerMetadata);
     }
     const saved = await downloadAndSaveTelegramFile({
       filePath: file.file_path,
@@ -228,13 +261,7 @@ async function resolveStickerMedia(params: {
         path: saved.path,
         contentType: saved.contentType,
         placeholder: "<media:sticker>",
-        stickerMetadata: {
-          emoji,
-          setName,
-          fileId,
-          fileUniqueId: sticker.file_unique_id,
-          cachedDescription: cached.description,
-        },
+        stickerMetadata: { ...stickerMetadata, emoji, setName, fileId },
       };
     }
 
@@ -243,16 +270,11 @@ async function resolveStickerMedia(params: {
       path: saved.path,
       contentType: saved.contentType,
       placeholder: "<media:sticker>",
-      stickerMetadata: {
-        emoji: sticker.emoji ?? undefined,
-        setName: sticker.set_name ?? undefined,
-        fileId: sticker.file_id,
-        fileUniqueId: sticker.file_unique_id,
-      },
+      stickerMetadata,
     };
   } catch (err) {
-    logVerbose(`telegram: failed to process sticker: ${String(err)}`);
-    return null;
+    logVerbose(`telegram: failed to process sticker; returning metadata-only: ${String(err)}`);
+    return buildMetadataOnlyStickerResult(stickerMetadata);
   }
 }
 
@@ -283,44 +305,42 @@ export async function resolveMedia(
   // Handle animations (GIFs) separately to extract metadata
   if (msg.animation) {
     const anim = msg.animation;
+    const animationMetadata = buildAnimationMetadata(anim);
     if (!anim.file_id) {
-      return null;
+      logVerbose("telegram: animation missing file_id - returning metadata-only");
+      return buildMetadataOnlyAnimationResult(animationMetadata);
     }
 
     try {
       const file = await resolveTelegramFileWithRetry(ctx);
       if (!file?.file_path) {
-        logVerbose("telegram: getFile returned no file_path for animation");
-        return null;
+        logVerbose(
+          "telegram: getFile returned no file_path for animation; returning metadata-only",
+        );
+        return buildMetadataOnlyAnimationResult(animationMetadata);
       }
-      const fetchImpl = proxyFetch ?? globalThis.fetch;
-      if (!fetchImpl) {
-        logVerbose("telegram: fetch not available for animation download");
-        return null;
+      const resolvedTransport = resolveOptionalTelegramTransport(transport);
+      if (!resolvedTransport) {
+        logVerbose("telegram: fetch not available for animation download; returning metadata-only");
+        return buildMetadataOnlyAnimationResult(animationMetadata);
       }
       const saved = await downloadAndSaveTelegramFile({
         filePath: file.file_path,
         token,
-        fetchImpl,
+        transport: resolvedTransport,
         maxBytes,
         telegramFileName: anim.file_name ?? undefined,
       });
 
       return {
         path: saved.path,
-        contentType: saved.contentType,
+        contentType: saved.contentType ?? animationMetadata.mimeType,
         placeholder: "<media:gif>",
-        animationMetadata: {
-          fileName: anim.file_name ?? undefined,
-          fileId: anim.file_id,
-          fileUniqueId: anim.file_unique_id,
-          mimeType: anim.mime_type ?? undefined,
-          duration: anim.duration ?? undefined,
-        },
+        animationMetadata,
       };
     } catch (err) {
-      logVerbose(`telegram: failed to process animation: ${String(err)}`);
-      return null;
+      logVerbose(`telegram: failed to process animation; returning metadata-only: ${String(err)}`);
+      return buildMetadataOnlyAnimationResult(animationMetadata);
     }
   }
 
