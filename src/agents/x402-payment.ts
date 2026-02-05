@@ -119,14 +119,11 @@ function normalizePrivateKey(value: string | undefined): string | null {
   return PRIVATE_KEY_REGEX.test(normalized) ? normalized : null;
 }
 
-function normalizeBaseUrl(value?: string): { baseUrl: string; routerUrl: string } {
-  const raw = value?.trim() || `${DEFAULT_ROUTER_ORIGIN}/v1`;
+function normalizeRouterUrl(value?: string): string {
+  const raw = value?.trim() || DEFAULT_ROUTER_ORIGIN;
   const withProtocol = raw.startsWith("http") ? raw : `https://${raw}`;
-  const baseUrl = withProtocol.endsWith("/v1")
-    ? withProtocol
-    : `${withProtocol.replace(/\/+$/, "")}/v1`;
-  const routerUrl = baseUrl.replace(/\/v1\/?$/, "");
-  return { baseUrl, routerUrl };
+  // Bare origin — no /v1 suffix; callers add paths as needed
+  return withProtocol.replace(/\/+$/, "").replace(/\/v1\/?$/, "");
 }
 
 function resolvePluginConfig(cfg?: MoltbotConfig): { permitCapUsd: number; network: string } {
@@ -388,10 +385,6 @@ async function resolvePermit(params: {
   return fresh;
 }
 
-function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
-  return Boolean(value && typeof value === "object" && Symbol.asyncIterator in value);
-}
-
 function wrapStreamFnWithFetch(streamFn: StreamFn, fetchImpl: typeof fetch): StreamFn {
   return (model, context, options) => {
     // pi-ai does not expose per-request hooks; override global fetch during the stream.
@@ -403,39 +396,39 @@ function wrapStreamFnWithFetch(streamFn: StreamFn, fetchImpl: typeof fetch): Str
     };
 
     const result = streamFn(model, context, options);
-    if (isAsyncIterable(result)) {
-      const iterator = (async function* () {
+
+    // The stream object from pi-ai has both async iterable interface AND a .result() method.
+    // We need to preserve the .result() method while ensuring fetch is restored after iteration.
+    // Wrap the async iterator but keep all other properties/methods from the original stream.
+    if (result && typeof result === "object" && Symbol.asyncIterator in result) {
+      const originalIterator = (result as AsyncIterable<unknown>)[Symbol.asyncIterator].bind(
+        result,
+      );
+      const wrappedIterator = async function* () {
         try {
-          for await (const chunk of result) {
+          const iter = originalIterator();
+          for await (const chunk of { [Symbol.asyncIterator]: () => iter }) {
             yield chunk;
           }
         } finally {
           restore();
         }
-      })();
-      return iterator as unknown as ReturnType<StreamFn>;
-    }
+      };
 
-    if (result && typeof (result as Promise<unknown>).then === "function") {
-      return (async () => {
-        try {
-          const awaited = await (result as Promise<unknown>);
-          if (isAsyncIterable(awaited)) {
-            return (async function* () {
-              try {
-                for await (const chunk of awaited) {
-                  yield chunk;
-                }
-              } finally {
-                restore();
-              }
-            })();
+      // Create a proxy that preserves all properties/methods but overrides the iterator
+      return new Proxy(result, {
+        get(target, prop) {
+          if (prop === Symbol.asyncIterator) {
+            return wrappedIterator;
           }
-          return awaited;
-        } finally {
-          if (!isAsyncIterable(result)) restore();
-        }
-      })() as ReturnType<StreamFn>;
+          const value = (target as unknown as Record<string | symbol, unknown>)[prop];
+          // Bind methods to the original target
+          if (typeof value === "function") {
+            return (value as (...args: unknown[]) => unknown).bind(target);
+          }
+          return value;
+        },
+      }) as ReturnType<StreamFn>;
     }
 
     restore();
@@ -456,7 +449,7 @@ export function maybeWrapStreamFnWithX402Payment(params: {
   if (!privateKey) return params.streamFn;
 
   const providerConfig = params.config?.models?.providers?.[X402_PROVIDER_ID];
-  const { baseUrl, routerUrl } = normalizeBaseUrl(providerConfig?.baseUrl);
+  const routerUrl = normalizeRouterUrl(providerConfig?.baseUrl);
   const { permitCapUsd, network } = resolvePluginConfig(params.config);
   const permitCap = resolvePermitCapUnits(permitCapUsd);
 
@@ -487,7 +480,6 @@ export function maybeWrapStreamFnWithX402Payment(params: {
       }
       return String(input);
     })();
-
     let parsed: URL | null = null;
     try {
       parsed = new URL(url);
@@ -506,10 +498,16 @@ export function maybeWrapStreamFnWithX402Payment(params: {
     const isModelsPath = pathname.endsWith("/v1/models") || pathname.endsWith("/models");
     const isRouterRequest =
       (routerOrigin && parsed ? parsed.origin === routerOrigin : false) ||
-      (!parsed && url.startsWith(baseUrl));
+      (!parsed && url.startsWith(routerUrl));
 
     if (!isRouterRequest || isConfigPath || isModelsPath) {
       return baseFetch(input, init);
+    }
+
+    // OpenAI-compatible providers omit /v1 prefix; rewrite for the router
+    if (parsed && pathname === "/chat/completions") {
+      parsed.pathname = "/v1/chat/completions";
+      input = parsed.toString();
     }
 
     let routerConfig: RouterConfig;
@@ -525,6 +523,9 @@ export function maybeWrapStreamFnWithX402Payment(params: {
 
     const sendWithPermit = async (permit: CachedPermit): Promise<Response> => {
       const headers = new Headers(init?.headers ?? {});
+      // Remove standard auth headers - x402 uses payment signature for auth
+      headers.delete("x-api-key");
+      headers.delete("authorization");
       const headerName = routerConfig.paymentHeader || DEFAULT_PAYMENT_HEADER;
       headers.set(headerName, permit.paymentSig);
       return baseFetch(input, { ...init, headers });

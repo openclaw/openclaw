@@ -4,11 +4,13 @@ const PROVIDER_ID = "x402";
 const PROVIDER_LABEL = "Daydreams Router (x402)";
 const PLUGIN_ID = "daydreams-x402-auth";
 
-const DEFAULT_ROUTER_URL = "https://ai.xgate.run/v1";
+const DEFAULT_ROUTER_URL = "https://ai.xgate.run";
 const DEFAULT_NETWORK = "eip155:8453";
 const DEFAULT_PERMIT_CAP_USD = 10;
-const DEFAULT_MODEL_ID = "anthropic/opus-4.5";
+const DEFAULT_MODEL_ID = "moonshot:kimi-k2.5";
 const DEFAULT_MODEL_REF = `x402/${DEFAULT_MODEL_ID}`;
+const ANTHROPIC_MODEL_ID = "anthropic:claude-opus-4-5";
+const ANTHROPIC_MODEL_REF = `x402/${ANTHROPIC_MODEL_ID}`;
 const DEFAULT_AUTO_REF = "x402/auto";
 
 const PRIVATE_KEY_REGEX = /^0x[0-9a-fA-F]{64}$/;
@@ -19,12 +21,11 @@ function normalizePrivateKey(value: string): string | null {
   return PRIVATE_KEY_REGEX.test(normalized) ? normalized : null;
 }
 
-function normalizeRouterUrl(value: string): { routerUrl: string; baseUrl: string } {
+function normalizeRouterUrl(value: string): string {
   const raw = value.trim() || DEFAULT_ROUTER_URL;
   const withProtocol = raw.startsWith("http") ? raw : `https://${raw}`;
-  const routerUrl = withProtocol.replace(/\/+$/, "");
-  const baseUrl = routerUrl.endsWith("/v1") ? routerUrl : `${routerUrl}/v1`;
-  return { routerUrl: routerUrl.replace(/\/v1\/?$/, ""), baseUrl };
+  // Store the bare origin — SDKs and the payment wrapper add paths as needed
+  return withProtocol.replace(/\/+$/, "").replace(/\/v1\/?$/, "");
 }
 
 function normalizePermitCap(value: string): number | null {
@@ -85,7 +86,7 @@ const x402Plugin = {
                 }
               },
             });
-            const { routerUrl, baseUrl } = normalizeRouterUrl(String(routerInput));
+            const routerUrl = normalizeRouterUrl(String(routerInput));
 
             const capInput = await ctx.prompter.text({
               message: "Permit cap (USD)",
@@ -137,13 +138,23 @@ const x402Plugin = {
                 models: {
                   providers: {
                     [PROVIDER_ID]: {
-                      baseUrl,
+                      baseUrl: routerUrl,
                       apiKey: "x402-wallet",
                       api: "anthropic-messages",
                       authHeader: false,
                       models: [
                         {
                           id: DEFAULT_MODEL_ID,
+                          name: "Moonshot Kimi K2.5",
+                          api: "openai-completions",
+                          reasoning: false,
+                          input: ["text", "image"],
+                          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                          contextWindow: 262144,
+                          maxTokens: 8192,
+                        },
+                        {
+                          id: ANTHROPIC_MODEL_ID,
                           name: "Anthropic Opus 4.5",
                           reasoning: false,
                           input: ["text", "image"],
@@ -159,7 +170,8 @@ const x402Plugin = {
                   defaults: {
                     models: {
                       [DEFAULT_AUTO_REF]: {},
-                      [DEFAULT_MODEL_REF]: { alias: "Opus" },
+                      [DEFAULT_MODEL_REF]: { alias: "Kimi" },
+                      [ANTHROPIC_MODEL_REF]: { alias: "Opus" },
                     },
                   },
                 },
