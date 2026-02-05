@@ -144,7 +144,10 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
 
 const formatSchedule = (schedule: CronSchedule) => {
   if (schedule.kind === "at") {
-    return `at ${formatIsoMinute(schedule.at)}`;
+    // Handle legacy atMs format (numeric timestamp) and missing at field
+    const atMs = (schedule as { atMs?: number }).atMs;
+    const atValue = schedule.at ?? (typeof atMs === "number" ? new Date(atMs).toISOString() : null);
+    return `at ${atValue ? formatIsoMinute(atValue) : "-"}`;
   }
   if (schedule.kind === "every") {
     return `every ${formatDuration(schedule.everyMs)}`;

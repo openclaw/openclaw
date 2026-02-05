@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import type { CronJob } from "../cron/types.js";
 
 const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
   if (method === "cron.status") {
@@ -463,5 +464,53 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.message).toBe("Updated message");
     expect(patch?.patch?.delivery?.mode).toBe("announce");
     expect(patch?.patch?.delivery?.bestEffort).toBe(false);
+  });
+});
+
+describe("printCronList", () => {
+  it("handles legacy jobs with atMs instead of at in schedule", async () => {
+    const { printCronList } = await import("./cron-cli/shared.js");
+    const { defaultRuntime } = await import("../runtime.js");
+
+    // Mock a job with legacy atMs format (as reported in issue #9649)
+    const legacyJob = {
+      id: "9a867b4d-3aee-4682-9078-3a84e228c804",
+      agentId: "main",
+      name: "Recordatorio: revisar pago",
+      enabled: true,
+      createdAtMs: 1770300537733,
+      updatedAtMs: 1770300537733,
+      // This is the legacy format: atMs instead of at
+      schedule: { kind: "at", atMs: 1770307680000 } as unknown as CronJob["schedule"],
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "Reminder text" },
+      state: { nextRunAtMs: 1770307680000 },
+    } as CronJob;
+
+    // This should NOT throw an error
+    expect(() => printCronList([legacyJob], defaultRuntime)).not.toThrow();
+  });
+
+  it("handles jobs with undefined at in at-type schedule", async () => {
+    const { printCronList } = await import("./cron-cli/shared.js");
+    const { defaultRuntime } = await import("../runtime.js");
+
+    // Mock a job with kind: "at" but missing the at field entirely
+    const malformedJob = {
+      id: "test-job-id",
+      name: "Test Job",
+      enabled: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "at" } as unknown as CronJob["schedule"],
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "Test" },
+      state: {},
+    } as CronJob;
+
+    // This should NOT throw an error
+    expect(() => printCronList([malformedJob], defaultRuntime)).not.toThrow();
   });
 });
