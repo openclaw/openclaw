@@ -295,10 +295,14 @@ export function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean)
   }
 
   const detail = probe.error ? ` - ${probe.error}` : "";
+  const timeoutHint =
+    probe.error && /timeout/i.test(probe.error) && !/channel:\s*\w+/.test(probe.error)
+      ? " (health check may be blocked by a slow channel; try disabling channels to isolate)"
+      : "";
   if (probe.connectLatencyMs != null) {
     const latency =
       typeof probe.connectLatencyMs === "number" ? `${probe.connectLatencyMs}ms` : "unknown";
-    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${colorize(rich, theme.error, "RPC: failed")}${detail}`;
+    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${colorize(rich, theme.error, "RPC: failed")}${detail}${timeoutHint}`;
   }
 
   return `${colorize(rich, theme.error, "Connect: failed")}${detail}`;

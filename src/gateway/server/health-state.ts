@@ -12,6 +12,9 @@ let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
+/** Channel currently being probed during health refresh (for timeout diagnostics). */
+let currentChannelBeingProbed: string | null = null;
+
 export function buildGatewaySnapshot(): Snapshot {
   const cfg = loadConfig();
   const defaultAgentId = resolveDefaultAgentId(cfg);
@@ -41,6 +44,20 @@ export function buildGatewaySnapshot(): Snapshot {
 
 export function getHealthCache(): HealthSummary | null {
   return healthCache;
+}
+
+/** True when a health refresh is in progress (e.g. post-connect or maintenance). */
+export function isHealthRefreshInProgress(): boolean {
+  return healthRefresh !== null;
+}
+
+/** Channel ID currently being probed, if any. Used for timeout diagnostics. */
+export function getCurrentChannelBeingProbed(): string | null {
+  return currentChannelBeingProbed;
+}
+
+export function setCurrentChannelBeingProbed(channelId: string | null): void {
+  currentChannelBeingProbed = channelId;
 }
 
 export function getHealthVersion(): number {
