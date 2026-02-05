@@ -111,6 +111,11 @@ cfg.agents.defaults.models = {
   'openrouter/anthropic/claude-haiku-4.5': {}
 };
 
+// Enable brain -> muscle -> brain reply pipeline (disabled by default in OpenClaw).
+// Brain stays as the configured primary model; muscle defaults to model fallbacks unless overridden.
+cfg.agents.defaults.replyPipeline = cfg.agents.defaults.replyPipeline || {};
+cfg.agents.defaults.replyPipeline.enabled = true;
+
 fs.mkdirSync(require('path').dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2));
 console.log('[entrypoint] Config written');
