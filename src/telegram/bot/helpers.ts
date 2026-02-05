@@ -262,11 +262,7 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   if (!body) {
     return null;
   }
-  // Quotes without reply_to_message lack sender context; return null to avoid mislabeling.
-  if (!reply) {
-    return null;
-  }
-  const sender = buildSenderName(reply);
+  const sender = reply ? buildSenderName(reply) : undefined;
   const senderLabel = sender ?? "unknown sender";
 
   // Extract forward context from reply target if present (issue #9619)
