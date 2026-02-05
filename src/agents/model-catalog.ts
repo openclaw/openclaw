@@ -1,5 +1,6 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { injectModelCatalogEntries } from "./model-injections.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
 export type ModelCatalogEntry = {
@@ -94,6 +95,9 @@ export async function loadModelCatalog(params?: {
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
+
+      // Add a few explicit "known good" models that upstream may not have shipped yet.
+      models.splice(0, models.length, ...injectModelCatalogEntries(models));
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.

@@ -6,6 +6,7 @@ vi.mock("../pi-model-discovery.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
+import { discoverModels } from "../pi-model-discovery.js";
 import { buildInlineProviderModels, resolveModel } from "./model.js";
 
 const makeModel = (id: string) => ({
@@ -126,5 +127,44 @@ describe("resolveModel", () => {
     expect(result.model?.baseUrl).toBe("http://localhost:9000");
     expect(result.model?.provider).toBe("custom");
     expect(result.model?.id).toBe("missing-model");
+  });
+
+  it("resolves injected models by cloning a known base model", () => {
+    const baseModel = {
+      ...makeModel("claude-opus-4-5"),
+      id: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      provider: "anthropic",
+      api: "anthropic-messages" as const,
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"] as const,
+      contextWindow: 200000,
+      maxTokens: 64000,
+    };
+
+    const find = vi.fn((provider: string, modelId: string) => {
+      if (provider === "anthropic" && modelId === "claude-opus-4-5") {
+        return baseModel;
+      }
+      return null;
+    });
+
+    vi.mocked(discoverModels).mockReturnValue({ find } as never);
+
+    const result = resolveModel("anthropic", "claude-opus-4-6", "/tmp/agent");
+    expect(find).toHaveBeenCalledWith("anthropic", "claude-opus-4-6");
+    expect(find).toHaveBeenCalledWith("anthropic", "claude-opus-4-5");
+    expect(result.model).toMatchObject({
+      id: "claude-opus-4-6",
+      name: "Claude Opus 4.6",
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 200000,
+      maxTokens: 64000,
+    });
   });
 });

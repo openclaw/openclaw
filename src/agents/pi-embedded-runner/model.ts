@@ -4,6 +4,7 @@ import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { normalizeModelCompat } from "../model-compat.js";
+import { resolveInjectedModelFromRegistry } from "../model-injections.js";
 import { normalizeProviderId } from "../model-selection.js";
 import {
   discoverAuthStorage,
@@ -71,6 +72,19 @@ export function resolveModel(
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
   if (!model) {
+    const injected = resolveInjectedModelFromRegistry({
+      provider,
+      modelId,
+      find: (p, id) => modelRegistry.find(p, id) as Model<Api> | null,
+    });
+    if (injected) {
+      return {
+        model: normalizeModelCompat(injected),
+        authStorage,
+        modelRegistry,
+      };
+    }
+
     const providers = cfg?.models?.providers ?? {};
     const inlineModels = buildInlineProviderModels(providers);
     const normalizedProvider = normalizeProviderId(provider);

@@ -84,4 +84,47 @@ describe("loadModelCatalog", () => {
     expect(result).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("injects known models that upstream may not have shipped yet", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [
+                {
+                  id: "claude-opus-4-5",
+                  name: "Claude Opus 4.5",
+                  provider: "anthropic",
+                  contextWindow: 200000,
+                  reasoning: true,
+                  input: ["text", "image"],
+                },
+              ];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(result).toEqual([
+      {
+        id: "claude-opus-4-5",
+        name: "Claude Opus 4.5",
+        provider: "anthropic",
+        contextWindow: 200000,
+        reasoning: true,
+        input: ["text", "image"],
+      },
+      {
+        id: "claude-opus-4-6",
+        name: "Claude Opus 4.6",
+        provider: "anthropic",
+        contextWindow: 200000,
+        reasoning: true,
+        input: ["text", "image"],
+      },
+    ]);
+  });
 });
