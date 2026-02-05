@@ -66,7 +66,6 @@ describe("startHeartbeatRunner", () => {
     // Without the fix, setTimeout would overflow to 1ms and fire immediately.
     // With the fix, timeouts are chained: first fires at ~24.8 days (skipped because
     // not yet due), second fires at remaining ~5.2 days (total 30 days, runs).
-    const intervalMs = 720 * 60 * 60_000; // 720h in ms
     const runner = startHeartbeatRunner({
       cfg: {
         agents: { defaults: { heartbeat: { every: "720h" } } },
