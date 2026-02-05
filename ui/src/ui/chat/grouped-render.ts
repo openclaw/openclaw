@@ -256,6 +256,7 @@ function renderGroupedMessage(
     canCopyMarkdown ? "has-copy" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
+    directionClass ? "chat-bubble--rtl" : ""
   ]
     .filter(Boolean)
     .join(" ");

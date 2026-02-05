@@ -8,8 +8,8 @@
   gap: 12px;
   align-items: flex-start;
   margin-bottom: 16px;
-  margin-left: 4px;
-  margin-right: 16px;
+  margin-inline-start: 4px;
+  margin-inline-end: 16px;
 }
 
 /* User messages on right */
@@ -112,14 +112,25 @@ img.chat-avatar {
   word-wrap: break-word;
 }
 
+/* RTL Bubble Support */
+.chat-bubble.chat-bubble--rtl {
+  text-align: right;
+  direction: rtl;
+}
+
 .chat-bubble.has-copy {
-  padding-right: 36px;
+  padding-inline-end: 36px;
+}
+
+.chat-bubble.has-copy.chat-bubble--rtl {
+  padding-inline-end: 14px; /* Reset original padding */
+  padding-inline-start: 36px; /* Add padding for button on the left */
 }
 
 .chat-copy-btn {
   position: absolute;
   top: 6px;
-  right: 8px;
+  inset-inline-end: 8px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--muted);
@@ -224,6 +235,14 @@ img.chat-avatar {
 
 .chat-bubble:hover {
   background: var(--bg-hover);
+}
+
+/* RTL Copy Button Adjustment */
+.chat-bubble--rtl .chat-copy-btn {
+  right: auto;
+  left: 8px; /* Move to left side for RTL bubbles */
+  inset-inline-end: auto; /* Reset logical property override if needed */
+  inset-inline-start: 8px;
 }
 
 /* User bubbles have different styling */
