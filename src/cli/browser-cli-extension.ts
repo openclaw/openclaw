@@ -12,26 +12,23 @@ import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 
-function bundledExtensionRootDir() {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-
-  // `here` is the directory containing this file.
-  // - In source runs/tests, it's typically `<packageRoot>/src/cli`.
-  // - In transpiled builds, it's typically `<packageRoot>/dist/cli`.
-  // - In bundled builds, it may be `<packageRoot>/dist`.
-  // The bundled extension lives at `<packageRoot>/assets/chrome-extension`.
-  //
-  // Prefer the most common layouts first and fall back if needed.
-  const candidates = [
-    path.resolve(here, "../assets/chrome-extension"),
-    path.resolve(here, "../../assets/chrome-extension"),
-  ];
-  for (const candidate of candidates) {
+export function resolveBundledExtensionRootDir(
+  here = path.dirname(fileURLToPath(import.meta.url)),
+) {
+  let current = here;
+  while (true) {
+    const candidate = path.join(current, "assets", "chrome-extension");
     if (hasManifest(candidate)) {
       return candidate;
     }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
   }
-  return candidates[0];
+
+  return path.resolve(here, "../../assets/chrome-extension");
 }
 
 function installedExtensionRootDir() {
@@ -46,7 +43,7 @@ export async function installChromeExtension(opts?: {
   stateDir?: string;
   sourceDir?: string;
 }): Promise<{ path: string }> {
-  const src = opts?.sourceDir ?? bundledExtensionRootDir();
+  const src = opts?.sourceDir ?? resolveBundledExtensionRootDir();
   if (!hasManifest(src)) {
     throw new Error("Bundled Chrome extension is missing. Reinstall OpenClaw and try again.");
   }
