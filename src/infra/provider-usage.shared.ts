@@ -55,6 +55,12 @@ export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T):
         timeout = setTimeout(() => resolve(fallback), ms);
       }),
     ]);
+  } catch (e) {
+    // Catch AbortError from fetch timeouts and return fallback instead of crashing
+    if (e instanceof Error && e.name === 'AbortError') {
+      return fallback;
+    }
+    throw e;
   } finally {
     if (timeout) {
       clearTimeout(timeout);
