@@ -10,6 +10,7 @@ labels: enhancement
 Describe the problem you are trying to solve or the opportunity you see.
 
 ## Proposed solution
+
 What would you like OpenClaw to do?
 
 ## Alternatives considered
