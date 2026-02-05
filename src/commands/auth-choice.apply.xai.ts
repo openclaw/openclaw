@@ -36,7 +36,7 @@ export async function applyAuthChoiceXAI(
   let hasCredential = false;
   const optsKey = params.opts?.xaiApiKey?.trim();
   if (optsKey) {
-    await setXaiApiKey(normalizeApiKeyInput(optsKey), params.agentDir);
+    setXaiApiKey(normalizeApiKeyInput(optsKey), params.agentDir);
     hasCredential = true;
   }
 
@@ -48,7 +48,7 @@ export async function applyAuthChoiceXAI(
         initialValue: true,
       });
       if (useExisting) {
-        await setXaiApiKey(envKey.apiKey, params.agentDir);
+        setXaiApiKey(envKey.apiKey, params.agentDir);
         hasCredential = true;
       }
     }
@@ -59,7 +59,7 @@ export async function applyAuthChoiceXAI(
       message: "Enter xAI API key",
       validate: validateApiKeyInput,
     });
-    await setXaiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    setXaiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
   }
 
   nextConfig = applyAuthProfileConfig(nextConfig, {

@@ -13,11 +13,14 @@ import {
   applyOpenrouterProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
+  applyXaiConfig,
+  applyXaiProviderConfig,
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   OPENROUTER_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
+  XAI_DEFAULT_MODEL_REF,
   setMinimaxApiKey,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
@@ -386,6 +389,65 @@ describe("applyXiaomiConfig", () => {
       "custom-model",
       "mimo-v2-flash",
     ]);
+  });
+});
+
+describe("applyXaiConfig", () => {
+  it("adds xAI provider with correct settings", () => {
+    const cfg = applyXaiConfig({});
+    expect(cfg.models?.providers?.xai).toMatchObject({
+      baseUrl: "https://api.x.ai/v1",
+      api: "openai-completions",
+    });
+    expect(cfg.agents?.defaults?.model?.primary).toBe(XAI_DEFAULT_MODEL_REF);
+  });
+
+  it("preserves existing model fallbacks", () => {
+    const cfg = applyXaiConfig({
+      agents: {
+        defaults: {
+          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
+        },
+      },
+    });
+    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+  });
+});
+
+describe("applyXaiProviderConfig", () => {
+  it("adds model alias", () => {
+    const cfg = applyXaiProviderConfig({});
+    expect(cfg.agents?.defaults?.models?.[XAI_DEFAULT_MODEL_REF]?.alias).toBe("Grok");
+  });
+
+  it("merges xAI models and keeps existing provider overrides", () => {
+    const cfg = applyXaiProviderConfig({
+      models: {
+        providers: {
+          xai: {
+            baseUrl: "https://old.example.com",
+            apiKey: "old-key",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1000,
+                maxTokens: 100,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
+    expect(cfg.models?.providers?.xai?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual(["custom-model", "grok-4"]);
   });
 });
 
