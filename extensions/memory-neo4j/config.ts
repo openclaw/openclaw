@@ -63,7 +63,7 @@ export const MEMORY_CATEGORIES = [
 
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 
-const EMBEDDING_DIMENSIONS: Record<string, number> = {
+export const EMBEDDING_DIMENSIONS: Record<string, number> = {
   // OpenAI models
   "text-embedding-3-small": 1536,
   "text-embedding-3-large": 3072,
@@ -75,7 +75,7 @@ const EMBEDDING_DIMENSIONS: Record<string, number> = {
 };
 
 // Default dimension for unknown models (Ollama models vary)
-const DEFAULT_EMBEDDING_DIMS = 1024;
+export const DEFAULT_EMBEDDING_DIMS = 1024;
 
 export function vectorDimsForModel(model: string): number {
   // Check exact match first
@@ -88,7 +88,8 @@ export function vectorDimsForModel(model: string): number {
       return dims;
     }
   }
-  // Return default for unknown models
+  // Return default for unknown models — callers should warn when this path is taken,
+  // as the default 1024 dimensions may not match the actual model's output.
   return DEFAULT_EMBEDDING_DIMS;
 }
 
@@ -164,6 +165,20 @@ export const memoryNeo4jConfigSchema = {
     if (typeof neo4jRaw.uri !== "string" || !neo4jRaw.uri) {
       throw new Error("neo4j.uri is required");
     }
+    // Validate URI scheme — must be a valid Neo4j connection protocol
+    const VALID_NEO4J_SCHEMES = [
+      "bolt://",
+      "bolt+s://",
+      "bolt+ssc://",
+      "neo4j://",
+      "neo4j+s://",
+      "neo4j+ssc://",
+    ];
+    if (!VALID_NEO4J_SCHEMES.some((scheme) => neo4jRaw.uri.startsWith(scheme))) {
+      throw new Error(
+        `neo4j.uri must start with a valid scheme (${VALID_NEO4J_SCHEMES.join(", ")}), got: "${neo4jRaw.uri}"`,
+      );
+    }
 
     const neo4jPassword =
       typeof neo4jRaw.password === "string" ? resolveEnvVars(neo4jRaw.password) : "";
@@ -212,7 +227,19 @@ export const memoryNeo4jConfigSchema = {
     const coreMemoryEnabled = coreMemoryRaw?.enabled !== false; // enabled by default
     const coreMemoryMaxEntries =
       typeof coreMemoryRaw?.maxEntries === "number" ? coreMemoryRaw.maxEntries : 50;
-    // refreshAtContextPercent: number between 0-100, or undefined to disable
+    if (coreMemoryMaxEntries <= 0) {
+      throw new Error(`coreMemory.maxEntries must be greater than 0, got: ${coreMemoryMaxEntries}`);
+    }
+    // refreshAtContextPercent: number between 1-99 to be effective, or undefined to disable.
+    // Values at 0 or below are ignored (disables refresh). Values above 100 are invalid.
+    if (
+      typeof coreMemoryRaw?.refreshAtContextPercent === "number" &&
+      coreMemoryRaw.refreshAtContextPercent > 100
+    ) {
+      throw new Error(
+        `coreMemory.refreshAtContextPercent must be between 1 and 100, got: ${coreMemoryRaw.refreshAtContextPercent}`,
+      );
+    }
     const refreshAtContextPercent =
       typeof coreMemoryRaw?.refreshAtContextPercent === "number" &&
       coreMemoryRaw.refreshAtContextPercent > 0 &&

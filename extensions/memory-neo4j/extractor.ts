@@ -63,6 +63,9 @@ Rules:
 // OpenRouter API Client
 // ============================================================================
 
+// Timeout for LLM and embedding fetch calls to prevent hanging indefinitely
+const FETCH_TIMEOUT_MS = 30_000;
+
 async function callOpenRouter(config: ExtractionConfig, prompt: string): Promise<string | null> {
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
     try {
@@ -78,6 +81,7 @@ async function callOpenRouter(config: ExtractionConfig, prompt: string): Promise
           temperature: config.temperature,
           response_format: { type: "json_object" },
         }),
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -104,30 +108,68 @@ async function callOpenRouter(config: ExtractionConfig, prompt: string): Promise
 // Entity Extraction
 // ============================================================================
 
+/** Max retries for transient extraction failures before marking permanently failed */
+const MAX_EXTRACTION_RETRIES = 3;
+
+/**
+ * Check if an error is transient (network/timeout) vs permanent (JSON parse, etc.)
+ */
+function isTransientError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    err.name === "AbortError" ||
+    err.name === "TimeoutError" ||
+    msg.includes("timeout") ||
+    msg.includes("econnrefused") ||
+    msg.includes("econnreset") ||
+    msg.includes("enotfound") ||
+    msg.includes("network") ||
+    msg.includes("fetch failed") ||
+    msg.includes("socket hang up") ||
+    msg.includes("api error 429") ||
+    msg.includes("api error 502") ||
+    msg.includes("api error 503") ||
+    msg.includes("api error 504")
+  );
+}
+
 /**
  * Extract entities and relationships from a memory text using LLM.
+ *
+ * Returns { result, transientFailure }:
+ * - result is the ExtractionResult or null if extraction returned nothing useful
+ * - transientFailure is true if the failure was due to a network/timeout issue
+ *   (caller should retry later) vs a permanent failure (bad JSON, etc.)
  */
 export async function extractEntities(
   text: string,
   config: ExtractionConfig,
-): Promise<ExtractionResult | null> {
+): Promise<{ result: ExtractionResult | null; transientFailure: boolean }> {
   if (!config.enabled) {
-    return null;
+    return { result: null, transientFailure: false };
   }
 
   const prompt = ENTITY_EXTRACTION_PROMPT.replace("{text}", text);
 
+  let content: string | null;
   try {
-    const content = await callOpenRouter(config, prompt);
-    if (!content) {
-      return null;
-    }
+    content = await callOpenRouter(config, prompt);
+  } catch (err) {
+    // Network/timeout errors are transient — caller should retry
+    return { result: null, transientFailure: isTransientError(err) };
+  }
 
+  if (!content) {
+    return { result: null, transientFailure: false };
+  }
+
+  try {
     const parsed = JSON.parse(content) as Record<string, unknown>;
-    return validateExtractionResult(parsed);
+    return { result: validateExtractionResult(parsed), transientFailure: false };
   } catch {
-    // Will be handled by caller; don't throw for parse errors
-    return null;
+    // JSON parse failure is permanent — LLM returned malformed output
+    return { result: null, transientFailure: false };
   }
 }
 
@@ -213,7 +255,11 @@ function validateExtractionResult(raw: Record<string, unknown>): ExtractionResul
  * 3. Create MENTIONS relationships from Memory → Entity
  * 4. Create inter-Entity relationships (WORKS_AT, KNOWS, etc.)
  * 5. Tag the memory
- * 6. Update extractionStatus to "complete" or "failed"
+ * 6. Update extractionStatus to "complete", "pending" (transient retry), or "failed"
+ *
+ * Transient failures (network/timeout) leave status as "pending" with an incremented
+ * retry counter. After MAX_EXTRACTION_RETRIES transient failures, the memory is
+ * permanently marked "failed". Permanent failures (malformed JSON) are immediately "failed".
  */
 export async function runBackgroundExtraction(
   memoryId: string,
@@ -222,6 +268,7 @@ export async function runBackgroundExtraction(
   embeddings: Embeddings,
   config: ExtractionConfig,
   logger: Logger,
+  currentRetries: number = 0,
 ): Promise<void> {
   if (!config.enabled) {
     await db.updateExtractionStatus(memoryId, "skipped").catch(() => {});
@@ -229,10 +276,28 @@ export async function runBackgroundExtraction(
   }
 
   try {
-    const result = await extractEntities(text, config);
+    const { result, transientFailure } = await extractEntities(text, config);
 
     if (!result) {
-      await db.updateExtractionStatus(memoryId, "failed");
+      if (transientFailure) {
+        // Transient failure (network/timeout) — leave as pending for retry
+        const retries = currentRetries + 1;
+        if (retries >= MAX_EXTRACTION_RETRIES) {
+          logger.warn(
+            `memory-neo4j: extraction permanently failed for ${memoryId.slice(0, 8)} after ${retries} transient retries`,
+          );
+          await db.updateExtractionStatus(memoryId, "failed", { incrementRetries: true });
+        } else {
+          logger.info(
+            `memory-neo4j: extraction transient failure for ${memoryId.slice(0, 8)}, will retry (${retries}/${MAX_EXTRACTION_RETRIES})`,
+          );
+          // Keep status as "pending" but increment retry counter
+          await db.updateExtractionStatus(memoryId, "pending", { incrementRetries: true });
+        }
+      } else {
+        // Permanent failure (JSON parse, empty response, etc.)
+        await db.updateExtractionStatus(memoryId, "failed");
+      }
       return;
     }
 
@@ -309,8 +374,21 @@ export async function runBackgroundExtraction(
         (result.category ? `, category=${result.category}` : ""),
     );
   } catch (err) {
-    logger.warn(`memory-neo4j: extraction failed for ${memoryId.slice(0, 8)}: ${String(err)}`);
-    await db.updateExtractionStatus(memoryId, "failed").catch(() => {});
+    // Unexpected error during graph operations — treat as transient if retry budget remains
+    const isTransient = isTransientError(err);
+    if (isTransient && currentRetries + 1 < MAX_EXTRACTION_RETRIES) {
+      logger.warn(
+        `memory-neo4j: extraction transient error for ${memoryId.slice(0, 8)}, will retry: ${String(err)}`,
+      );
+      await db
+        .updateExtractionStatus(memoryId, "pending", { incrementRetries: true })
+        .catch(() => {});
+    } else {
+      logger.warn(`memory-neo4j: extraction failed for ${memoryId.slice(0, 8)}: ${String(err)}`);
+      await db
+        .updateExtractionStatus(memoryId, "failed", { incrementRetries: true })
+        .catch(() => {});
+    }
   }
 }
 
@@ -533,6 +611,14 @@ export async function runSleepCycle(
 
   // --------------------------------------------------------------------------
   // Phase 3: Core Promotion (using pre-computed scores from Phase 2)
+  //
+  // Design note on staleness: The effective scores and Pareto threshold were
+  // computed in Phase 2 and may be slightly stale by the time Phases 3/4 run.
+  // This is acceptable because: (a) the sleep cycle is a background maintenance
+  // task that runs infrequently (not concurrent with itself), (b) the scoring
+  // formula is deterministic based on stored properties that change slowly, and
+  // (c) promotion/demotion are reversible in the next cycle. The alternative
+  // (re-querying scores per phase) adds latency without meaningful accuracy gain.
   // --------------------------------------------------------------------------
   if (!abortSignal?.aborted && paretoThreshold > 0) {
     onPhaseStart?.("promotion");
@@ -631,7 +717,15 @@ export async function runSleepCycle(
             const chunk = pending.slice(i, i + EXTRACTION_CONCURRENCY);
             const outcomes = await Promise.allSettled(
               chunk.map((memory) =>
-                runBackgroundExtraction(memory.id, memory.text, db, embeddings, config, logger),
+                runBackgroundExtraction(
+                  memory.id,
+                  memory.text,
+                  db,
+                  embeddings,
+                  config,
+                  logger,
+                  memory.extractionRetries,
+                ),
               ),
             );
 

@@ -211,32 +211,36 @@ export class Neo4jMemoryClient {
 
   async storeMemory(input: StoreMemoryInput): Promise<string> {
     await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      const now = new Date().toISOString();
-      const result = await session.run(
-        `CREATE (m:Memory {
-          id: $id, text: $text, embedding: $embedding,
-          importance: $importance, category: $category,
-          source: $source, extractionStatus: $extractionStatus,
-          agentId: $agentId, sessionKey: $sessionKey,
-          createdAt: $createdAt, updatedAt: $updatedAt,
-          retrievalCount: $retrievalCount, lastRetrievedAt: $lastRetrievedAt
-        })
-        RETURN m.id AS id`,
-        {
-          ...input,
-          sessionKey: input.sessionKey ?? null,
-          createdAt: now,
-          updatedAt: now,
-          retrievalCount: 0,
-          lastRetrievedAt: null,
-        },
-      );
-      return result.records[0].get("id") as string;
-    } finally {
-      await session.close();
-    }
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        const now = new Date().toISOString();
+        const result = await session.run(
+          `CREATE (m:Memory {
+            id: $id, text: $text, embedding: $embedding,
+            importance: $importance, category: $category,
+            source: $source, extractionStatus: $extractionStatus,
+            agentId: $agentId, sessionKey: $sessionKey,
+            createdAt: $createdAt, updatedAt: $updatedAt,
+            retrievalCount: $retrievalCount, lastRetrievedAt: $lastRetrievedAt,
+            extractionRetries: $extractionRetries
+          })
+          RETURN m.id AS id`,
+          {
+            ...input,
+            sessionKey: input.sessionKey ?? null,
+            createdAt: now,
+            updatedAt: now,
+            retrievalCount: 0,
+            lastRetrievedAt: null,
+            extractionRetries: 0,
+          },
+        );
+        return result.records[0].get("id") as string;
+      } finally {
+        await session.close();
+      }
+    });
   }
 
   async deleteMemory(id: string): Promise<boolean> {
@@ -247,29 +251,32 @@ export class Neo4jMemoryClient {
       throw new Error(`Invalid memory ID format: ${id}`);
     }
 
-    const session = this.driver!.session();
-    try {
-      // First, decrement mentionCount on connected entities
-      await session.run(
-        `MATCH (m:Memory {id: $id})-[:MENTIONS]->(e:Entity)
-         SET e.mentionCount = e.mentionCount - 1`,
-        { id },
-      );
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        // Decrement mentionCount on connected entities (floor at 0 to prevent
+        // negative counts from parallel deletes racing on the same entity)
+        await session.run(
+          `MATCH (m:Memory {id: $id})-[:MENTIONS]->(e:Entity)
+           SET e.mentionCount = CASE WHEN e.mentionCount > 0 THEN e.mentionCount - 1 ELSE 0 END`,
+          { id },
+        );
 
-      // Then delete the memory with all its relationships
-      const result = await session.run(
-        `MATCH (m:Memory {id: $id})
-         DETACH DELETE m
-         RETURN count(*) AS deleted`,
-        { id },
-      );
+        // Then delete the memory with all its relationships
+        const result = await session.run(
+          `MATCH (m:Memory {id: $id})
+           DETACH DELETE m
+           RETURN count(*) AS deleted`,
+          { id },
+        );
 
-      const deleted =
-        result.records.length > 0 ? (result.records[0].get("deleted") as number) > 0 : false;
-      return deleted;
-    } finally {
-      await session.close();
-    }
+        const deleted =
+          result.records.length > 0 ? (result.records[0].get("deleted") as number) > 0 : false;
+        return deleted;
+      } finally {
+        await session.close();
+      }
+    });
   }
 
   async countMemories(agentId?: string): Promise<number> {
@@ -371,39 +378,43 @@ export class Neo4jMemoryClient {
     agentId?: string,
   ): Promise<SearchSignalResult[]> {
     await this.ensureInitialized();
-    const session = this.driver!.session();
     try {
-      const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
-      const result = await session.run(
-        `CALL db.index.vector.queryNodes('memory_embedding_index', $limit, $embedding)
-         YIELD node, score
-         WHERE score >= $minScore ${agentFilter}
-         RETURN node.id AS id, node.text AS text, node.category AS category,
-                node.importance AS importance, node.createdAt AS createdAt,
-                score AS similarity
-         ORDER BY score DESC`,
-        {
-          embedding,
-          limit: neo4j.int(Math.floor(limit)),
-          minScore,
-          ...(agentId ? { agentId } : {}),
-        },
-      );
+      return await this.retryOnTransient(async () => {
+        const session = this.driver!.session();
+        try {
+          const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
+          const result = await session.run(
+            `CALL db.index.vector.queryNodes('memory_embedding_index', $limit, $embedding)
+             YIELD node, score
+             WHERE score >= $minScore ${agentFilter}
+             RETURN node.id AS id, node.text AS text, node.category AS category,
+                    node.importance AS importance, node.createdAt AS createdAt,
+                    score AS similarity
+             ORDER BY score DESC`,
+            {
+              embedding,
+              limit: neo4j.int(Math.floor(limit)),
+              minScore,
+              ...(agentId ? { agentId } : {}),
+            },
+          );
 
-      return result.records.map((r) => ({
-        id: r.get("id") as string,
-        text: r.get("text") as string,
-        category: r.get("category") as string,
-        importance: r.get("importance") as number,
-        createdAt: String(r.get("createdAt") ?? ""),
-        score: r.get("similarity") as number,
-      }));
+          return result.records.map((r) => ({
+            id: r.get("id") as string,
+            text: r.get("text") as string,
+            category: r.get("category") as string,
+            importance: r.get("importance") as number,
+            createdAt: String(r.get("createdAt") ?? ""),
+            score: r.get("similarity") as number,
+          }));
+        } finally {
+          await session.close();
+        }
+      });
     } catch (err) {
-      // Graceful degradation: return empty if vector index isn't ready
+      // Graceful degradation: return empty if vector index isn't ready or all retries exhausted
       this.logger.warn(`memory-neo4j: vector search failed: ${String(err)}`);
       return [];
-    } finally {
-      await session.close();
     }
   }
 
@@ -413,49 +424,58 @@ export class Neo4jMemoryClient {
    */
   async bm25Search(query: string, limit: number, agentId?: string): Promise<SearchSignalResult[]> {
     await this.ensureInitialized();
-    const session = this.driver!.session();
+    const escaped = escapeLucene(query);
+    if (!escaped.trim()) {
+      return [];
+    }
+
     try {
-      const escaped = escapeLucene(query);
-      if (!escaped.trim()) {
-        return [];
-      }
+      return await this.retryOnTransient(async () => {
+        const session = this.driver!.session();
+        try {
+          const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
+          const result = await session.run(
+            `CALL db.index.fulltext.queryNodes('memory_fulltext_index', $query)
+             YIELD node, score
+             WHERE true ${agentFilter}
+             RETURN node.id AS id, node.text AS text, node.category AS category,
+                    node.importance AS importance, node.createdAt AS createdAt,
+                    score AS bm25Score
+             ORDER BY score DESC
+             LIMIT $limit`,
+            {
+              query: escaped,
+              limit: neo4j.int(Math.floor(limit)),
+              ...(agentId ? { agentId } : {}),
+            },
+          );
 
-      const agentFilter = agentId ? "AND node.agentId = $agentId" : "";
-      const result = await session.run(
-        `CALL db.index.fulltext.queryNodes('memory_fulltext_index', $query)
-         YIELD node, score
-         WHERE true ${agentFilter}
-         RETURN node.id AS id, node.text AS text, node.category AS category,
-                node.importance AS importance, node.createdAt AS createdAt,
-                score AS bm25Score
-         ORDER BY score DESC
-         LIMIT $limit`,
-        { query: escaped, limit: neo4j.int(Math.floor(limit)), ...(agentId ? { agentId } : {}) },
-      );
+          // Normalize BM25 scores to 0-1 range (divide by max)
+          const records = result.records.map((r) => ({
+            id: r.get("id") as string,
+            text: r.get("text") as string,
+            category: r.get("category") as string,
+            importance: r.get("importance") as number,
+            createdAt: String(r.get("createdAt") ?? ""),
+            rawScore: r.get("bm25Score") as number,
+          }));
 
-      // Normalize BM25 scores to 0-1 range (divide by max)
-      const records = result.records.map((r) => ({
-        id: r.get("id") as string,
-        text: r.get("text") as string,
-        category: r.get("category") as string,
-        importance: r.get("importance") as number,
-        createdAt: String(r.get("createdAt") ?? ""),
-        rawScore: r.get("bm25Score") as number,
-      }));
-
-      if (records.length === 0) {
-        return [];
-      }
-      const maxScore = records[0].rawScore || 1;
-      return records.map((r) => ({
-        ...r,
-        score: r.rawScore / maxScore,
-      }));
+          if (records.length === 0) {
+            return [];
+          }
+          const maxScore = records[0].rawScore || 1;
+          return records.map((r) => ({
+            ...r,
+            score: r.rawScore / maxScore,
+          }));
+        } finally {
+          await session.close();
+        }
+      });
     } catch (err) {
+      // Graceful degradation: return empty if all retries exhausted
       this.logger.warn(`memory-neo4j: BM25 search failed: ${String(err)}`);
       return [];
-    } finally {
-      await session.close();
     }
   }
 
@@ -475,89 +495,94 @@ export class Neo4jMemoryClient {
     agentId?: string,
   ): Promise<SearchSignalResult[]> {
     await this.ensureInitialized();
-    const session = this.driver!.session();
+    const escaped = escapeLucene(query);
+    if (!escaped.trim()) {
+      return [];
+    }
+
     try {
-      const escaped = escapeLucene(query);
-      if (!escaped.trim()) {
-        return [];
-      }
+      return await this.retryOnTransient(async () => {
+        const session = this.driver!.session();
+        try {
+          // Step 1: Find matching entities
+          const entityResult = await session.run(
+            `CALL db.index.fulltext.queryNodes('entity_fulltext_index', $query)
+             YIELD node, score
+             WHERE score >= 0.5
+             RETURN node.id AS entityId, node.name AS name, score
+             ORDER BY score DESC
+             LIMIT 5`,
+            { query: escaped },
+          );
 
-      // Step 1: Find matching entities
-      const entityResult = await session.run(
-        `CALL db.index.fulltext.queryNodes('entity_fulltext_index', $query)
-         YIELD node, score
-         WHERE score >= 0.5
-         RETURN node.id AS entityId, node.name AS name, score
-         ORDER BY score DESC
-         LIMIT 5`,
-        { query: escaped },
-      );
+          const entityIds = entityResult.records.map((r) => r.get("entityId") as string);
+          if (entityIds.length === 0) {
+            return [];
+          }
 
-      const entityIds = entityResult.records.map((r) => r.get("entityId") as string);
-      if (entityIds.length === 0) {
-        return [];
-      }
+          // Step 2 + 3: Direct mentions + 1-hop spreading activation
+          const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+          const result = await session.run(
+            `UNWIND $entityIds AS eid
+             // Direct: Entity ← MENTIONS ← Memory
+             OPTIONAL MATCH (e:Entity {id: eid})<-[rm:MENTIONS]-(m:Memory)
+             WHERE m IS NOT NULL ${agentFilter}
+             WITH m, coalesce(rm.confidence, 1.0) AS directScore
+             WHERE m IS NOT NULL
 
-      // Step 2 + 3: Direct mentions + 1-hop spreading activation
-      const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
-      const result = await session.run(
-        `UNWIND $entityIds AS eid
-         // Direct: Entity ← MENTIONS ← Memory
-         OPTIONAL MATCH (e:Entity {id: eid})<-[rm:MENTIONS]-(m:Memory)
-         WHERE m IS NOT NULL ${agentFilter}
-         WITH m, coalesce(rm.confidence, 1.0) AS directScore
-         WHERE m IS NOT NULL
+             RETURN m.id AS id, m.text AS text, m.category AS category,
+                    m.importance AS importance, m.createdAt AS createdAt,
+                    max(directScore) AS graphScore
 
-         RETURN m.id AS id, m.text AS text, m.category AS category,
-                m.importance AS importance, m.createdAt AS createdAt,
-                max(directScore) AS graphScore
+             UNION
 
-         UNION
+             UNWIND $entityIds AS eid
+             // 1-hop: Entity → relationship → Entity ← MENTIONS ← Memory
+             OPTIONAL MATCH (e:Entity {id: eid})-[r1:RELATED_TO|KNOWS|WORKS_AT|LIVES_AT|MARRIED_TO|PREFERS|DECIDED]-(e2:Entity)
+             WHERE coalesce(r1.confidence, 0.7) >= $firingThreshold
+             OPTIONAL MATCH (e2)<-[rm:MENTIONS]-(m:Memory)
+             WHERE m IS NOT NULL ${agentFilter}
+             WITH m, coalesce(r1.confidence, 0.7) * coalesce(rm.confidence, 1.0) AS hopScore
+             WHERE m IS NOT NULL
 
-         UNWIND $entityIds AS eid
-         // 1-hop: Entity → relationship → Entity ← MENTIONS ← Memory
-         OPTIONAL MATCH (e:Entity {id: eid})-[r1:RELATED_TO|KNOWS|WORKS_AT|LIVES_AT|MARRIED_TO|PREFERS|DECIDED]-(e2:Entity)
-         WHERE coalesce(r1.confidence, 0.7) >= $firingThreshold
-         OPTIONAL MATCH (e2)<-[rm:MENTIONS]-(m:Memory)
-         WHERE m IS NOT NULL ${agentFilter}
-         WITH m, coalesce(r1.confidence, 0.7) * coalesce(rm.confidence, 1.0) AS hopScore
-         WHERE m IS NOT NULL
+             RETURN m.id AS id, m.text AS text, m.category AS category,
+                    m.importance AS importance, m.createdAt AS createdAt,
+                    max(hopScore) AS graphScore`,
+            { entityIds, firingThreshold, ...(agentId ? { agentId } : {}) },
+          );
 
-         RETURN m.id AS id, m.text AS text, m.category AS category,
-                m.importance AS importance, m.createdAt AS createdAt,
-                max(hopScore) AS graphScore`,
-        { entityIds, firingThreshold, ...(agentId ? { agentId } : {}) },
-      );
+          // Deduplicate by id, keeping highest score
+          const byId = new Map<string, SearchSignalResult>();
+          for (const record of result.records) {
+            const id = record.get("id") as string;
+            if (!id) {
+              continue;
+            }
+            const score = record.get("graphScore") as number;
+            const existing = byId.get(id);
+            if (!existing || score > existing.score) {
+              byId.set(id, {
+                id,
+                text: record.get("text") as string,
+                category: record.get("category") as string,
+                importance: record.get("importance") as number,
+                createdAt: String(record.get("createdAt") ?? ""),
+                score,
+              });
+            }
+          }
 
-      // Deduplicate by id, keeping highest score
-      const byId = new Map<string, SearchSignalResult>();
-      for (const record of result.records) {
-        const id = record.get("id") as string;
-        if (!id) {
-          continue;
+          return Array.from(byId.values())
+            .toSorted((a, b) => b.score - a.score)
+            .slice(0, limit);
+        } finally {
+          await session.close();
         }
-        const score = record.get("graphScore") as number;
-        const existing = byId.get(id);
-        if (!existing || score > existing.score) {
-          byId.set(id, {
-            id,
-            text: record.get("text") as string,
-            category: record.get("category") as string,
-            importance: record.get("importance") as number,
-            createdAt: String(record.get("createdAt") ?? ""),
-            score,
-          });
-        }
-      }
-
-      return Array.from(byId.values())
-        .toSorted((a, b) => b.score - a.score)
-        .slice(0, limit);
+      });
     } catch (err) {
+      // Graceful degradation: return empty if all retries exhausted
       this.logger.warn(`memory-neo4j: graph search failed: ${String(err)}`);
       return [];
-    } finally {
-      await session.close();
     }
   }
 
@@ -570,28 +595,32 @@ export class Neo4jMemoryClient {
     limit: number = 1,
   ): Promise<Array<{ id: string; text: string; score: number }>> {
     await this.ensureInitialized();
-    const session = this.driver!.session();
     try {
-      const result = await session.run(
-        `CALL db.index.vector.queryNodes('memory_embedding_index', $limit, $embedding)
-         YIELD node, score
-         WHERE score >= $threshold
-         RETURN node.id AS id, node.text AS text, score AS similarity
-         ORDER BY score DESC`,
-        { embedding, limit: neo4j.int(limit), threshold },
-      );
+      return await this.retryOnTransient(async () => {
+        const session = this.driver!.session();
+        try {
+          const result = await session.run(
+            `CALL db.index.vector.queryNodes('memory_embedding_index', $limit, $embedding)
+             YIELD node, score
+             WHERE score >= $threshold
+             RETURN node.id AS id, node.text AS text, score AS similarity
+             ORDER BY score DESC`,
+            { embedding, limit: neo4j.int(limit), threshold },
+          );
 
-      return result.records.map((r) => ({
-        id: r.get("id") as string,
-        text: r.get("text") as string,
-        score: r.get("similarity") as number,
-      }));
+          return result.records.map((r) => ({
+            id: r.get("id") as string,
+            text: r.get("text") as string,
+            score: r.get("similarity") as number,
+          }));
+        } finally {
+          await session.close();
+        }
+      });
     } catch (err) {
-      // If vector index isn't ready, return no duplicates (allow store)
+      // If vector index isn't ready or all retries exhausted, return no duplicates (allow store)
       this.logger.debug?.(`memory-neo4j: similarity check failed: ${String(err)}`);
       return [];
-    } finally {
-      await session.close();
     }
   }
 
@@ -609,18 +638,20 @@ export class Neo4jMemoryClient {
     }
 
     await this.ensureInitialized();
-    const session = this.driver!.session();
-    try {
-      await session.run(
-        `UNWIND $ids AS memId
-         MATCH (m:Memory {id: memId})
-         SET m.retrievalCount = coalesce(m.retrievalCount, 0) + 1,
-             m.lastRetrievedAt = $now`,
-        { ids: memoryIds, now: new Date().toISOString() },
-      );
-    } finally {
-      await session.close();
-    }
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        await session.run(
+          `UNWIND $ids AS memId
+           MATCH (m:Memory {id: memId})
+           SET m.retrievalCount = coalesce(m.retrievalCount, 0) + 1,
+               m.lastRetrievedAt = $now`,
+          { ids: memoryIds, now: new Date().toISOString() },
+        );
+      } finally {
+        await session.close();
+      }
+    });
   }
 
   /**
@@ -832,16 +863,42 @@ export class Neo4jMemoryClient {
 
   /**
    * Update the extraction status of a Memory node.
+   * Optionally increments the extractionRetries counter (for transient failure tracking).
    */
-  async updateExtractionStatus(id: string, status: ExtractionStatus): Promise<void> {
+  async updateExtractionStatus(
+    id: string,
+    status: ExtractionStatus,
+    options?: { incrementRetries?: boolean },
+  ): Promise<void> {
     await this.ensureInitialized();
     const session = this.driver!.session();
     try {
+      const retryClause = options?.incrementRetries
+        ? ", m.extractionRetries = coalesce(m.extractionRetries, 0) + 1"
+        : "";
       await session.run(
         `MATCH (m:Memory {id: $id})
-         SET m.extractionStatus = $status, m.updatedAt = $now`,
+         SET m.extractionStatus = $status, m.updatedAt = $now${retryClause}`,
         { id, status, now: new Date().toISOString() },
       );
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Get the current extraction retry count for a memory.
+   */
+  async getExtractionRetries(id: string): Promise<number> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(
+        `MATCH (m:Memory {id: $id})
+         RETURN coalesce(m.extractionRetries, 0) AS retries`,
+        { id },
+      );
+      return (result.records[0]?.get("retries") as number) ?? 0;
     } finally {
       await session.close();
     }
@@ -854,7 +911,7 @@ export class Neo4jMemoryClient {
   async listPendingExtractions(
     limit: number = 100,
     agentId?: string,
-  ): Promise<Array<{ id: string; text: string; agentId: string }>> {
+  ): Promise<Array<{ id: string; text: string; agentId: string; extractionRetries: number }>> {
     await this.ensureInitialized();
     const session = this.driver!.session();
     try {
@@ -862,7 +919,8 @@ export class Neo4jMemoryClient {
       const result = await session.run(
         `MATCH (m:Memory)
          WHERE m.extractionStatus = 'pending' ${agentFilter}
-         RETURN m.id AS id, m.text AS text, m.agentId AS agentId
+         RETURN m.id AS id, m.text AS text, m.agentId AS agentId,
+                coalesce(m.extractionRetries, 0) AS extractionRetries
          ORDER BY m.createdAt ASC
          LIMIT $limit`,
         { limit: neo4j.int(limit), agentId },
@@ -871,6 +929,7 @@ export class Neo4jMemoryClient {
         id: r.get("id") as string,
         text: r.get("text") as string,
         agentId: r.get("agentId") as string,
+        extractionRetries: r.get("extractionRetries") as number,
       }));
     } finally {
       await session.close();
@@ -976,14 +1035,17 @@ export class Neo4jMemoryClient {
 
       let pairsFound = 0;
       for (const id of memoryData.keys()) {
-        const similar = await session.run(
-          `MATCH (src:Memory {id: $id})
-           CALL db.index.vector.queryNodes('memory_embedding_index', $k, src.embedding)
-           YIELD node, score
-           WHERE node.id <> $id AND score >= $threshold
-           RETURN node.id AS matchId`,
-          { id, k: neo4j.int(10), threshold },
-        );
+        // Retry individual vector queries on transient errors
+        const similar = await this.retryOnTransient(async () => {
+          return session.run(
+            `MATCH (src:Memory {id: $id})
+             CALL db.index.vector.queryNodes('memory_embedding_index', $k, src.embedding)
+             YIELD node, score
+             WHERE node.id <> $id AND score >= $threshold
+             RETURN node.id AS matchId`,
+            { id, k: neo4j.int(10), threshold },
+          );
+        });
 
         for (const r of similar.records) {
           const matchId = r.get("matchId") as string;
@@ -1045,30 +1107,56 @@ export class Neo4jMemoryClient {
     const survivorId = memoryIds[survivorIdx];
     const toDelete = memoryIds.filter((_, i) => i !== survivorIdx);
 
-    const session = this.driver!.session();
-    try {
-      // Transfer MENTIONS relationships from deleted memories to survivor
-      await session.run(
-        `UNWIND $toDelete AS deadId
-         MATCH (dead:Memory {id: deadId})-[r:MENTIONS]->(e:Entity)
-         MATCH (survivor:Memory {id: $survivorId})
-         MERGE (survivor)-[:MENTIONS]->(e)
-         DELETE r`,
-        { toDelete, survivorId },
-      );
+    return this.retryOnTransient(async () => {
+      const session = this.driver!.session();
+      try {
+        // Optimistic lock: verify all cluster members still exist before merging.
+        // New memories added or deleted between findDuplicateClusters() and this
+        // call could invalidate the cluster. Skip if any member is missing.
+        const verifyResult = await session.run(
+          `UNWIND $ids AS memId
+           OPTIONAL MATCH (m:Memory {id: memId})
+           RETURN memId, m IS NOT NULL AS exists`,
+          { ids: memoryIds },
+        );
 
-      // Delete the duplicate memories
-      await session.run(
-        `UNWIND $toDelete AS deadId
-         MATCH (m:Memory {id: deadId})
-         DETACH DELETE m`,
-        { toDelete },
-      );
+        const missingIds: string[] = [];
+        for (const r of verifyResult.records) {
+          if (!r.get("exists")) {
+            missingIds.push(r.get("memId") as string);
+          }
+        }
 
-      return { survivorId, deletedCount: toDelete.length };
-    } finally {
-      await session.close();
-    }
+        if (missingIds.length > 0) {
+          this.logger.warn(
+            `memory-neo4j: skipping cluster merge — ${missingIds.length} member(s) no longer exist: ${missingIds.join(", ")}`,
+          );
+          return { survivorId, deletedCount: 0 };
+        }
+
+        // Transfer MENTIONS relationships from deleted memories to survivor
+        await session.run(
+          `UNWIND $toDelete AS deadId
+           MATCH (dead:Memory {id: deadId})-[r:MENTIONS]->(e:Entity)
+           MATCH (survivor:Memory {id: $survivorId})
+           MERGE (survivor)-[:MENTIONS]->(e)
+           DELETE r`,
+          { toDelete, survivorId },
+        );
+
+        // Delete the duplicate memories
+        await session.run(
+          `UNWIND $toDelete AS deadId
+           MATCH (m:Memory {id: deadId})
+           DETACH DELETE m`,
+          { toDelete },
+        );
+
+        return { survivorId, deletedCount: toDelete.length };
+      } finally {
+        await session.close();
+      }
+    });
   }
 
   // --------------------------------------------------------------------------
@@ -1160,11 +1248,12 @@ export class Neo4jMemoryClient {
     await this.ensureInitialized();
     const session = this.driver!.session();
     try {
-      // Decrement mention counts on connected entities
+      // Decrement mention counts on connected entities (floor at 0 to prevent
+      // negative counts from parallel prune/delete operations racing on the same entity)
       await session.run(
         `UNWIND $ids AS memId
          MATCH (m:Memory {id: memId})-[:MENTIONS]->(e:Entity)
-         SET e.mentionCount = e.mentionCount - 1`,
+         SET e.mentionCount = CASE WHEN e.mentionCount > 0 THEN e.mentionCount - 1 ELSE 0 END`,
         { ids: memoryIds },
       );
 
@@ -1581,7 +1670,7 @@ export class Neo4jMemoryClient {
   // --------------------------------------------------------------------------
 
   /**
-   * Retry an operation on transient Neo4j errors (deadlocks, etc.)
+   * Retry an operation on transient Neo4j errors (deadlocks, connection blips, etc.)
    * with exponential backoff. Adapted from ontology project.
    */
   private async retryOnTransient<T>(
@@ -1595,14 +1684,24 @@ export class Neo4jMemoryClient {
         return await fn();
       } catch (err) {
         lastError = err;
-        // Check for Neo4j transient errors
+        // Check for Neo4j transient errors (deadlocks, connection blips, service unavailable)
+        const errCode =
+          err instanceof Error
+            ? ((err as unknown as Record<string, unknown>).code as string | undefined)
+            : undefined;
         const isTransient =
           err instanceof Error &&
           (err.message.includes("DeadlockDetected") ||
             err.message.includes("TransientError") ||
+            err.message.includes("ServiceUnavailable") ||
+            err.message.includes("SessionExpired") ||
+            err.message.includes("ConnectionRefused") ||
+            err.message.includes("connection terminated") ||
             (err.constructor.name === "Neo4jError" &&
-              (err as unknown as Record<string, unknown>).code ===
-                "Neo.TransientError.Transaction.DeadlockDetected"));
+              typeof errCode === "string" &&
+              (errCode.startsWith("Neo.TransientError.") ||
+                errCode === "ServiceUnavailable" ||
+                errCode === "SessionExpired")));
 
         if (!isTransient || attempt >= maxAttempts - 1) {
           throw err;

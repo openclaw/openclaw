@@ -77,14 +77,15 @@ describe("mid-session core memory refresh", () => {
       expect(config.coreMemory.refreshAtContextPercent).toBeUndefined();
     });
 
-    it("should reject refreshAtContextPercent over 100", async () => {
+    it("should throw for refreshAtContextPercent over 100", async () => {
       const { memoryNeo4jConfigSchema } = await import("./config.js");
-      const config = memoryNeo4jConfigSchema.parse({
-        neo4j: { uri: "bolt://localhost:7687", user: "neo4j", password: "test" },
-        embedding: { provider: "ollama" },
-        coreMemory: { refreshAtContextPercent: 150 },
-      });
-      expect(config.coreMemory.refreshAtContextPercent).toBeUndefined();
+      expect(() =>
+        memoryNeo4jConfigSchema.parse({
+          neo4j: { uri: "bolt://localhost:7687", user: "neo4j", password: "test" },
+          embedding: { provider: "ollama" },
+          coreMemory: { refreshAtContextPercent: 150 },
+        }),
+      ).toThrow("coreMemory.refreshAtContextPercent must be between 1 and 100");
     });
 
     it("should default to undefined when not specified", async () => {

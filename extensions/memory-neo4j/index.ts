@@ -18,6 +18,8 @@ import { randomUUID } from "node:crypto";
 import { stringEnum } from "openclaw/plugin-sdk";
 import type { MemoryCategory, MemorySource } from "./schema.js";
 import {
+  DEFAULT_EMBEDDING_DIMS,
+  EMBEDDING_DIMENSIONS,
   MEMORY_CATEGORIES,
   memoryNeo4jConfigSchema,
   resolveExtractionConfig,
@@ -46,6 +48,25 @@ const memoryNeo4jPlugin = {
     const extractionConfig = resolveExtractionConfig(cfg.extraction);
     const vectorDim = vectorDimsForModel(cfg.embedding.model);
 
+    // Warn on empty neo4j password (may be valid for some setups, but usually a misconfiguration)
+    if (!cfg.neo4j.password) {
+      api.logger.warn(
+        "memory-neo4j: neo4j.password is empty — this may be intentional for passwordless setups, but verify your configuration",
+      );
+    }
+
+    // Warn when using default embedding dimensions for an unknown model
+    const isKnownModel =
+      cfg.embedding.model in EMBEDDING_DIMENSIONS ||
+      Object.keys(EMBEDDING_DIMENSIONS).some((known) => cfg.embedding.model.startsWith(known));
+    if (!isKnownModel) {
+      api.logger.warn(
+        `memory-neo4j: unknown embedding model "${cfg.embedding.model}" — using default ${DEFAULT_EMBEDDING_DIMS} dimensions. ` +
+          `If your model outputs a different dimension, vector operations will fail. ` +
+          `Known models: ${Object.keys(EMBEDDING_DIMENSIONS).join(", ")}`,
+      );
+    }
+
     // Create shared resources
     const db = new Neo4jMemoryClient(
       cfg.neo4j.uri,
@@ -59,6 +80,7 @@ const memoryNeo4jPlugin = {
       cfg.embedding.model,
       cfg.embedding.provider,
       cfg.embedding.baseUrl,
+      api.logger,
     );
 
     api.logger.debug?.(
@@ -499,23 +521,68 @@ const memoryNeo4jPlugin = {
               console.log("  Phase 7: Orphan Cleanup   — Remove disconnected nodes\n");
 
               try {
+                // Validate sleep cycle CLI parameters before running
+                const batchSize = opts.batchSize ? parseInt(opts.batchSize, 10) : undefined;
+                const delay = opts.delay ? parseInt(opts.delay, 10) : undefined;
+                const decayHalfLife = opts.decayHalfLife
+                  ? parseInt(opts.decayHalfLife, 10)
+                  : undefined;
+                const decayThreshold = opts.decayThreshold
+                  ? parseFloat(opts.decayThreshold)
+                  : undefined;
+                const pareto = opts.pareto ? parseFloat(opts.pareto) : undefined;
+                const promotionMinAge = opts.promotionMinAge
+                  ? parseInt(opts.promotionMinAge, 10)
+                  : undefined;
+
+                if (batchSize != null && (Number.isNaN(batchSize) || batchSize <= 0)) {
+                  console.error("Error: --batch-size must be greater than 0");
+                  process.exitCode = 1;
+                  return;
+                }
+                if (delay != null && (Number.isNaN(delay) || delay < 0)) {
+                  console.error("Error: --delay must be >= 0");
+                  process.exitCode = 1;
+                  return;
+                }
+                if (decayHalfLife != null && (Number.isNaN(decayHalfLife) || decayHalfLife <= 0)) {
+                  console.error("Error: --decay-half-life must be greater than 0");
+                  process.exitCode = 1;
+                  return;
+                }
+                if (
+                  decayThreshold != null &&
+                  (Number.isNaN(decayThreshold) || decayThreshold < 0 || decayThreshold > 1)
+                ) {
+                  console.error("Error: --decay-threshold must be between 0 and 1");
+                  process.exitCode = 1;
+                  return;
+                }
+                if (pareto != null && (Number.isNaN(pareto) || pareto < 0 || pareto > 1)) {
+                  console.error("Error: --pareto must be between 0 and 1");
+                  process.exitCode = 1;
+                  return;
+                }
+                if (
+                  promotionMinAge != null &&
+                  (Number.isNaN(promotionMinAge) || promotionMinAge < 0)
+                ) {
+                  console.error("Error: --promotion-min-age must be >= 0");
+                  process.exitCode = 1;
+                  return;
+                }
+
                 await db.ensureInitialized();
 
                 const result = await runSleepCycle(db, embeddings, extractionConfig, api.logger, {
                   agentId: opts.agent,
                   dedupThreshold: opts.dedupThreshold ? parseFloat(opts.dedupThreshold) : undefined,
-                  paretoPercentile: opts.pareto ? parseFloat(opts.pareto) : undefined,
-                  promotionMinAgeDays: opts.promotionMinAge
-                    ? parseInt(opts.promotionMinAge, 10)
-                    : undefined,
-                  decayRetentionThreshold: opts.decayThreshold
-                    ? parseFloat(opts.decayThreshold)
-                    : undefined,
-                  decayBaseHalfLifeDays: opts.decayHalfLife
-                    ? parseInt(opts.decayHalfLife, 10)
-                    : undefined,
-                  extractionBatchSize: opts.batchSize ? parseInt(opts.batchSize, 10) : undefined,
-                  extractionDelayMs: opts.delay ? parseInt(opts.delay, 10) : undefined,
+                  paretoPercentile: pareto,
+                  promotionMinAgeDays: promotionMinAge,
+                  decayRetentionThreshold: decayThreshold,
+                  decayBaseHalfLifeDays: decayHalfLife,
+                  extractionBatchSize: batchSize,
+                  extractionDelayMs: delay,
                   onPhaseStart: (phase) => {
                     const phaseNames = {
                       dedup: "Phase 1: Deduplication",
@@ -611,18 +678,63 @@ const memoryNeo4jPlugin = {
     const midSessionRefreshAt = new Map<string, number>();
     const MIN_TOKENS_SINCE_REFRESH = 10_000; // Only refresh if context grew by 10k+ tokens
 
+    // Track session timestamps for TTL-based cleanup. Without this, bootstrappedSessions
+    // and midSessionRefreshAt leak entries for sessions that ended without an explicit
+    // after_compaction event (e.g., normal session end on long-running gateways).
+    const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+    const sessionLastSeen = new Map<string, number>();
+    let lastTtlSweep = Date.now();
+
+    /** Evict stale entries from session tracking maps older than SESSION_TTL_MS. */
+    function pruneStaleSessionEntries(): void {
+      const now = Date.now();
+      // Only sweep at most once per 5 minutes to avoid overhead
+      if (now - lastTtlSweep < 5 * 60 * 1000) {
+        return;
+      }
+      lastTtlSweep = now;
+
+      const cutoff = now - SESSION_TTL_MS;
+      for (const [key, ts] of sessionLastSeen) {
+        if (ts < cutoff) {
+          bootstrappedSessions.delete(key);
+          midSessionRefreshAt.delete(key);
+          sessionLastSeen.delete(key);
+        }
+      }
+    }
+
+    /** Mark a session as recently active for TTL tracking. */
+    function touchSession(sessionKey: string): void {
+      sessionLastSeen.set(sessionKey, Date.now());
+      pruneStaleSessionEntries();
+    }
+
     // After compaction: clear bootstrap flag and mid-session refresh tracking
     if (cfg.coreMemory.enabled) {
       api.on("after_compaction", async (_event, ctx) => {
         if (ctx.sessionKey) {
           bootstrappedSessions.delete(ctx.sessionKey);
           midSessionRefreshAt.delete(ctx.sessionKey);
+          sessionLastSeen.delete(ctx.sessionKey);
           api.logger.info?.(
             `memory-neo4j: cleared bootstrap/refresh flags for session ${ctx.sessionKey} after compaction`,
           );
         }
       });
     }
+
+    // Session end: clean up tracking entries for completed sessions.
+    // The sessionId from session_end may match sessionKey in some implementations;
+    // this provides best-effort cleanup alongside the TTL-based sweep above.
+    api.on("session_end", async (_event, ctx) => {
+      const key = ctx.sessionId;
+      if (key) {
+        bootstrappedSessions.delete(key);
+        midSessionRefreshAt.delete(key);
+        sessionLastSeen.delete(key);
+      }
+    });
 
     // Mid-session core memory refresh: re-inject core memories when context grows past threshold
     // This counters the "lost in the middle" phenomenon by placing core memories closer to end of context
@@ -666,6 +778,7 @@ const memoryNeo4jPlugin = {
 
           // Record this refresh
           midSessionRefreshAt.set(sessionKey, event.estimatedUsedTokens);
+          touchSession(sessionKey);
 
           const content = coreMemories.map((m) => `- ${m.text}`).join("\n");
           api.logger.info?.(
@@ -769,6 +882,7 @@ const memoryNeo4jPlugin = {
           if (coreMemories.length === 0) {
             if (sessionKey) {
               bootstrappedSessions.add(sessionKey);
+              touchSession(sessionKey);
             }
             api.logger.debug?.(
               `memory-neo4j: no core memories found for agent=${agentId}, marking session as bootstrapped`,
@@ -805,6 +919,7 @@ const memoryNeo4jPlugin = {
 
           if (sessionKey) {
             bootstrappedSessions.add(sessionKey);
+            touchSession(sessionKey);
           }
           // Log at info level when actually injecting, debug for skips
           api.logger.info?.(
