@@ -29,10 +29,14 @@ services:
       CODEX_HOME: /root/.codex
       DOCKER_PROXY_HOST: docker-socket-proxy
     volumes:
-      # Persist entire home directory for self-installed tool configs
-      # (npm, gh, codex, etc. write to various dotfile locations)
-      - ${HOME}/.openclaw/docker-home:/root
-      # OpenClaw config takes precedence (mounted after /root)
+      # Mount strategy (order matters):
+      # 1. /root from host - persists tool configs (npm, gh, codex dotfiles)
+      # 2. /root/.openclaw overlay - OpenClaw config takes precedence
+      # 3. /root/.openclaw/workspace overlay - workspace directory
+      # This layering lets tools write anywhere in /root while OpenClaw
+      # config remains authoritative. Safe because .openclaw is explicitly
+      # mounted after /root, so its contents always win.
+      - ${OPENCLAW_DOCKER_HOME:-$HOME/.openclaw/docker-home}:/root
       - ${OPENCLAW_CONFIG_DIR}:/root/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/root/.openclaw/workspace
       # Cache volumes for faster rebuilds
@@ -71,9 +75,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       CODEX_HOME: /root/.codex
     volumes:
-      # Persist entire home directory for self-installed tool configs
-      - ${HOME}/.openclaw/docker-home:/root
-      # OpenClaw config takes precedence (mounted after /root)
+      # Mount strategy: see openclaw-gateway comments for explanation
+      - ${OPENCLAW_DOCKER_HOME:-$HOME/.openclaw/docker-home}:/root
       - ${OPENCLAW_CONFIG_DIR}:/root/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/root/.openclaw/workspace
     stdin_open: true
