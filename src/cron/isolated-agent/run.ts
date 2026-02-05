@@ -35,7 +35,6 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import {
-  formatXHighModelHint,
   normalizeThinkLevel,
   normalizeVerboseLevel,
   supportsXHighThinking,
