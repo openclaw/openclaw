@@ -25,7 +25,11 @@ import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bo
 import { RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
-import { buildTelegramGroupPeerId, resolveTelegramForumThreadId } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  buildTelegramParentPeer,
+  resolveTelegramForumThreadId,
+} from "./bot/helpers.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
@@ -149,6 +153,11 @@ export const registerTelegramHandlers = ({
     const peerId = params.isGroup
       ? buildTelegramGroupPeerId(params.chatId, resolvedThreadId)
       : String(params.chatId);
+    const parentPeer = buildTelegramParentPeer({
+      isGroup: params.isGroup,
+      resolvedThreadId,
+      chatId: params.chatId,
+    });
     const route = resolveAgentRoute({
       cfg,
       channel: "telegram",
@@ -157,6 +166,7 @@ export const registerTelegramHandlers = ({
         kind: params.isGroup ? "group" : "dm",
         id: peerId,
       },
+      parentPeer,
     });
     const baseSessionKey = route.sessionKey;
     const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
