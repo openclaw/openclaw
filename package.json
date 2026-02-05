@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.2.3",
+  "version": "2026.2.4",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "keywords": [],
   "license": "MIT",
