@@ -310,7 +310,7 @@ export class ConvosSDKClient {
    * List messages in a conversation
    */
   async listMessages(conversationId: string, limit?: number): Promise<MessageInfo[]> {
-    const conversation = await this.agent.conversations.getById(conversationId);
+    const conversation = await this.agent.client.conversations.getConversationById(conversationId);
     if (!conversation) {
       return [];
     }
@@ -343,7 +343,7 @@ export class ConvosSDKClient {
       console.log(`[convos-sdk] Sending message to ${conversationId.slice(0, 8)}...`);
     }
 
-    const conversation = await this.agent.conversations.getById(conversationId);
+    const conversation = await this.agent.client.conversations.getConversationById(conversationId);
     if (!conversation) {
       throw new Error(`Conversation not found: ${conversationId}`);
     }
@@ -368,7 +368,7 @@ export class ConvosSDKClient {
       );
     }
 
-    const conversation = await this.agent.conversations.getById(conversationId);
+    const conversation = await this.agent.client.conversations.getConversationById(conversationId);
     if (!conversation) {
       throw new Error(`Conversation not found: ${conversationId}`);
     }
