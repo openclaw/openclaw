@@ -92,7 +92,9 @@ async function* streamElevenLabsTelephony(
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        break;
+      }
       if (value && value.length > 0) {
         yield Buffer.from(value);
       }
@@ -133,7 +135,7 @@ export function createTelephonyTtsProvider(params: {
 
     // Streaming TTS: stream audio chunks as they arrive from the TTS provider
     ...(canStreamElevenLabs && {
-      streamForTelephony: (text: string) => streamElevenLabsTelephony(text, ttsConfig!),
+      streamForTelephony: (text: string) => streamElevenLabsTelephony(text, ttsConfig),
     }),
   };
 }

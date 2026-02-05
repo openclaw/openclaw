@@ -575,13 +575,17 @@ export class TwilioProvider implements VoiceCallProvider {
         let remainder = Buffer.alloc(0);
 
         for await (const chunk of ttsProvider.streamForTelephony(text)) {
-          if (signal.aborted) break;
+          if (signal.aborted) {
+            break;
+          }
 
           // Accumulate audio and send in paced chunks
           remainder = remainder.length > 0 ? Buffer.concat([remainder, chunk]) : chunk;
 
           while (remainder.length >= CHUNK_SIZE) {
-            if (signal.aborted) break;
+            if (signal.aborted) {
+              break;
+            }
             handler.sendAudio(streamSid, remainder.subarray(0, CHUNK_SIZE));
             remainder = remainder.subarray(CHUNK_SIZE);
             await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
@@ -596,10 +600,14 @@ export class TwilioProvider implements VoiceCallProvider {
         // Fallback: generate full audio buffer, then chunk and send
         const muLawAudio = await ttsProvider.synthesizeForTelephony(text);
         for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
-          if (signal.aborted) break;
+          if (signal.aborted) {
+            break;
+          }
           handler.sendAudio(streamSid, chunk);
           await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
-          if (signal.aborted) break;
+          if (signal.aborted) {
+            break;
+          }
         }
       }
 
