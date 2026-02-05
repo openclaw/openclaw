@@ -723,20 +723,52 @@
       "destination": "/plugin"
     },
     {
-      "source": "/install/railway",
-      "destination": "/railway"
+      "source": "/railway",
+      "destination": "/install/railway"
     },
     {
-      "source": "/install/northflank",
-      "destination": "/northflank"
+      "source": "/northflank",
+      "destination": "/install/northflank"
     },
     {
-      "source": "/install/northflank/",
-      "destination": "/northflank"
+      "source": "/render",
+      "destination": "/install/render"
     },
     {
       "source": "/gcp",
-      "destination": "/platforms/gcp"
+      "destination": "/install/gcp"
+    },
+    {
+      "source": "/platforms/fly",
+      "destination": "/install/fly"
+    },
+    {
+      "source": "/platforms/hetzner",
+      "destination": "/install/hetzner"
+    },
+    {
+      "source": "/platforms/gcp",
+      "destination": "/install/gcp"
+    },
+    {
+      "source": "/platforms/macos-vm",
+      "destination": "/install/macos-vm"
+    },
+    {
+      "source": "/platforms/exe-dev",
+      "destination": "/install/exe-dev"
+    },
+    {
+      "source": "/platforms/railway",
+      "destination": "/install/railway"
+    },
+    {
+      "source": "/platforms/render",
+      "destination": "/install/render"
+    },
+    {
+      "source": "/platforms/northflank",
+      "destination": "/install/northflank"
     }
   ],
   "navigation": {
@@ -749,35 +781,14 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["index", "concepts/features", "start/showcase", "start/lore"]
+                "pages": ["index", "concepts/features", "start/showcase"]
               },
               {
-                "group": "First run",
-                "pages": [
-                  "start/getting-started",
-                  {
-                    "group": "Onboarding",
-                    "pages": [
-                      {
-                        "group": "CLI onboarding",
-                        "pages": [
-                          "start/wizard",
-                          "start/wizard-cli-reference",
-                          "start/wizard-cli-automation"
-                        ]
-                      },
-                      {
-                        "group": "macOS onboarding",
-                        "pages": ["start/onboarding"]
-                      }
-                    ]
-                  },
-                  "start/bootstrapping",
-                  "start/pairing"
-                ]
+                "group": "First steps",
+                "pages": ["start/getting-started", "start/wizard", "start/onboarding"]
               },
               {
-                "group": "Use cases",
+                "group": "Guides",
                 "pages": ["start/openclaw"]
               }
             ]
@@ -802,6 +813,19 @@
               {
                 "group": "Maintenance",
                 "pages": ["install/updating", "install/migrating", "install/uninstall"]
+              },
+              {
+                "group": "Hosting and deployment",
+                "pages": [
+                  "install/fly",
+                  "install/hetzner",
+                  "install/gcp",
+                  "install/macos-vm",
+                  "install/exe-dev",
+                  "install/railway",
+                  "install/render",
+                  "install/northflank"
+                ]
               },
               {
                 "group": "Advanced",
@@ -839,6 +863,7 @@
               {
                 "group": "Configuration",
                 "pages": [
+                  "start/pairing",
                   "concepts/group-messages",
                   "concepts/groups",
                   "broadcast-groups",
@@ -861,6 +886,7 @@
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/agent-workspace",
+                  "start/bootstrapping",
                   "concepts/oauth"
                 ]
               },
@@ -992,6 +1018,45 @@
             ]
           },
           {
+            "tab": "Platforms",
+            "groups": [
+              {
+                "group": "Platforms overview",
+                "pages": [
+                  "platforms/index",
+                  "platforms/macos",
+                  "platforms/linux",
+                  "platforms/windows",
+                  "platforms/android",
+                  "platforms/ios"
+                ]
+              },
+              {
+                "group": "macOS companion app",
+                "pages": [
+                  "platforms/mac/dev-setup",
+                  "platforms/mac/menu-bar",
+                  "platforms/mac/voicewake",
+                  "platforms/mac/voice-overlay",
+                  "platforms/mac/webchat",
+                  "platforms/mac/canvas",
+                  "platforms/mac/child-process",
+                  "platforms/mac/health",
+                  "platforms/mac/icon",
+                  "platforms/mac/logging",
+                  "platforms/mac/permissions",
+                  "platforms/mac/remote",
+                  "platforms/mac/signing",
+                  "platforms/mac/release",
+                  "platforms/mac/bundled-gateway",
+                  "platforms/mac/xpc",
+                  "platforms/mac/skills",
+                  "platforms/mac/peekaboo"
+                ]
+              }
+            ]
+          },
+          {
             "tab": "Gateway & Ops",
             "groups": [
               {
@@ -1045,20 +1110,8 @@
                 ]
               },
               {
-                "group": "Remote access and deployment",
-                "pages": [
-                  "gateway/remote",
-                  "gateway/remote-gateway-readme",
-                  "gateway/tailscale",
-                  "platforms/fly",
-                  "platforms/hetzner",
-                  "platforms/gcp",
-                  "platforms/macos-vm",
-                  "platforms/exe-dev",
-                  "railway",
-                  "render",
-                  "northflank"
-                ]
+                "group": "Remote access",
+                "pages": ["gateway/remote", "gateway/remote-gateway-readme", "gateway/tailscale"]
               },
               {
                 "group": "Security",
@@ -1067,45 +1120,6 @@
               {
                 "group": "Web interfaces",
                 "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "tui"]
-              }
-            ]
-          },
-          {
-            "tab": "Platforms",
-            "groups": [
-              {
-                "group": "Platforms overview",
-                "pages": [
-                  "platforms/index",
-                  "platforms/macos",
-                  "platforms/linux",
-                  "platforms/windows",
-                  "platforms/android",
-                  "platforms/ios"
-                ]
-              },
-              {
-                "group": "macOS companion app",
-                "pages": [
-                  "platforms/mac/dev-setup",
-                  "platforms/mac/menu-bar",
-                  "platforms/mac/voicewake",
-                  "platforms/mac/voice-overlay",
-                  "platforms/mac/webchat",
-                  "platforms/mac/canvas",
-                  "platforms/mac/child-process",
-                  "platforms/mac/health",
-                  "platforms/mac/icon",
-                  "platforms/mac/logging",
-                  "platforms/mac/permissions",
-                  "platforms/mac/remote",
-                  "platforms/mac/signing",
-                  "platforms/mac/release",
-                  "platforms/mac/bundled-gateway",
-                  "platforms/mac/xpc",
-                  "platforms/mac/skills",
-                  "platforms/mac/peekaboo"
-                ]
               }
             ]
           },
@@ -1174,6 +1188,7 @@
               {
                 "group": "Technical reference",
                 "pages": [
+                  "reference/wizard",
                   "concepts/typebox",
                   "concepts/markdown-formatting",
                   "concepts/typing-indicators",
@@ -1198,6 +1213,10 @@
               {
                 "group": "Help",
                 "pages": ["help/index", "help/troubleshooting", "help/faq"]
+              },
+              {
+                "group": "Community",
+                "pages": ["start/lore"]
               },
               {
                 "group": "Environment and debugging",
@@ -1229,26 +1248,18 @@
             "groups": [
               {
                 "group": "概览",
-                "pages": [
-                  "zh-CN/index",
-                  "zh-CN/concepts/features",
-                  "zh-CN/start/showcase",
-                  "zh-CN/start/lore"
-                ]
+                "pages": ["zh-CN/index", "zh-CN/concepts/features", "zh-CN/start/showcase"]
               },
               {
-                "group": "首次运行",
+                "group": "第一步",
                 "pages": [
                   "zh-CN/start/getting-started",
-                  {
-                    "group": "新手引导",
-                    "pages": ["zh-CN/start/wizard", "zh-CN/start/onboarding"]
-                  },
-                  "zh-CN/start/pairing"
+                  "zh-CN/start/wizard",
+                  "zh-CN/start/onboarding"
                 ]
               },
               {
-                "group": "使用场景",
+                "group": "指南",
                 "pages": ["zh-CN/start/openclaw"]
               }
             ]
@@ -1276,6 +1287,19 @@
                   "zh-CN/install/updating",
                   "zh-CN/install/migrating",
                   "zh-CN/install/uninstall"
+                ]
+              },
+              {
+                "group": "托管与部署",
+                "pages": [
+                  "zh-CN/install/fly",
+                  "zh-CN/install/hetzner",
+                  "zh-CN/install/gcp",
+                  "zh-CN/install/macos-vm",
+                  "zh-CN/install/exe-dev",
+                  "zh-CN/install/railway",
+                  "zh-CN/install/render",
+                  "zh-CN/install/northflank"
                 ]
               },
               {
@@ -1314,6 +1338,7 @@
               {
                 "group": "配置",
                 "pages": [
+                  "zh-CN/start/pairing",
                   "zh-CN/concepts/group-messages",
                   "zh-CN/concepts/groups",
                   "zh-CN/broadcast-groups",
@@ -1475,6 +1500,45 @@
             ]
           },
           {
+            "tab": "平台",
+            "groups": [
+              {
+                "group": "平台概览",
+                "pages": [
+                  "zh-CN/platforms/index",
+                  "zh-CN/platforms/macos",
+                  "zh-CN/platforms/linux",
+                  "zh-CN/platforms/windows",
+                  "zh-CN/platforms/android",
+                  "zh-CN/platforms/ios"
+                ]
+              },
+              {
+                "group": "macOS 配套应用",
+                "pages": [
+                  "zh-CN/platforms/mac/dev-setup",
+                  "zh-CN/platforms/mac/menu-bar",
+                  "zh-CN/platforms/mac/voicewake",
+                  "zh-CN/platforms/mac/voice-overlay",
+                  "zh-CN/platforms/mac/webchat",
+                  "zh-CN/platforms/mac/canvas",
+                  "zh-CN/platforms/mac/child-process",
+                  "zh-CN/platforms/mac/health",
+                  "zh-CN/platforms/mac/icon",
+                  "zh-CN/platforms/mac/logging",
+                  "zh-CN/platforms/mac/permissions",
+                  "zh-CN/platforms/mac/remote",
+                  "zh-CN/platforms/mac/signing",
+                  "zh-CN/platforms/mac/release",
+                  "zh-CN/platforms/mac/bundled-gateway",
+                  "zh-CN/platforms/mac/xpc",
+                  "zh-CN/platforms/mac/skills",
+                  "zh-CN/platforms/mac/peekaboo"
+                ]
+              }
+            ]
+          },
+          {
             "tab": "网关与运维",
             "groups": [
               {
@@ -1528,19 +1592,11 @@
                 ]
               },
               {
-                "group": "远程访问与部署",
+                "group": "远程访问",
                 "pages": [
                   "zh-CN/gateway/remote",
                   "zh-CN/gateway/remote-gateway-readme",
-                  "zh-CN/gateway/tailscale",
-                  "zh-CN/platforms/fly",
-                  "zh-CN/platforms/hetzner",
-                  "zh-CN/platforms/gcp",
-                  "zh-CN/platforms/macos-vm",
-                  "zh-CN/platforms/exe-dev",
-                  "zh-CN/railway",
-                  "zh-CN/render",
-                  "zh-CN/northflank"
+                  "zh-CN/gateway/tailscale"
                 ]
               },
               {
@@ -1555,45 +1611,6 @@
                   "zh-CN/web/dashboard",
                   "zh-CN/web/webchat",
                   "zh-CN/tui"
-                ]
-              }
-            ]
-          },
-          {
-            "tab": "平台",
-            "groups": [
-              {
-                "group": "平台概览",
-                "pages": [
-                  "zh-CN/platforms/index",
-                  "zh-CN/platforms/macos",
-                  "zh-CN/platforms/linux",
-                  "zh-CN/platforms/windows",
-                  "zh-CN/platforms/android",
-                  "zh-CN/platforms/ios"
-                ]
-              },
-              {
-                "group": "macOS 配套应用",
-                "pages": [
-                  "zh-CN/platforms/mac/dev-setup",
-                  "zh-CN/platforms/mac/menu-bar",
-                  "zh-CN/platforms/mac/voicewake",
-                  "zh-CN/platforms/mac/voice-overlay",
-                  "zh-CN/platforms/mac/webchat",
-                  "zh-CN/platforms/mac/canvas",
-                  "zh-CN/platforms/mac/child-process",
-                  "zh-CN/platforms/mac/health",
-                  "zh-CN/platforms/mac/icon",
-                  "zh-CN/platforms/mac/logging",
-                  "zh-CN/platforms/mac/permissions",
-                  "zh-CN/platforms/mac/remote",
-                  "zh-CN/platforms/mac/signing",
-                  "zh-CN/platforms/mac/release",
-                  "zh-CN/platforms/mac/bundled-gateway",
-                  "zh-CN/platforms/mac/xpc",
-                  "zh-CN/platforms/mac/skills",
-                  "zh-CN/platforms/mac/peekaboo"
                 ]
               }
             ]
@@ -1687,6 +1704,10 @@
               {
                 "group": "帮助",
                 "pages": ["zh-CN/help/index", "zh-CN/help/troubleshooting", "zh-CN/help/faq"]
+              },
+              {
+                "group": "社区",
+                "pages": ["zh-CN/start/lore"]
               },
               {
                 "group": "环境与调试",
