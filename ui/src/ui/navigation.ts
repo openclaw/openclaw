@@ -16,12 +16,13 @@ export const TAB_GROUPS = [
       "voice",
     ],
   },
-  { label: "Agent", tabs: ["agents", "skills", "nodes"] },
+  { label: "Agent", tabs: ["agents", "hierarchy", "skills", "nodes"] },
   { label: "Settings", tabs: ["config", "security", "debug", "logs"] },
 ] as const;
 
 export type Tab =
   | "agents"
+  | "hierarchy"
   | "overview"
   | "channels"
   | "instances"
@@ -41,6 +42,7 @@ export type Tab =
 
 const TAB_PATHS: Record<Tab, string> = {
   agents: "/agents",
+  hierarchy: "/hierarchy",
   overview: "/overview",
   channels: "/channels",
   instances: "/instances",
@@ -144,6 +146,8 @@ export function iconForTab(tab: Tab): IconName {
   switch (tab) {
     case "agents":
       return "folder";
+    case "hierarchy":
+      return "gitBranch";
     case "chat":
       return "messageSquare";
     case "overview":
@@ -185,6 +189,8 @@ export function titleForTab(tab: Tab) {
   switch (tab) {
     case "agents":
       return "Agents";
+    case "hierarchy":
+      return "Hierarchy";
     case "overview":
       return "Overview";
     case "channels":
@@ -226,6 +232,8 @@ export function subtitleForTab(tab: Tab) {
   switch (tab) {
     case "agents":
       return "Manage agent workspaces, tools, and identities.";
+    case "hierarchy":
+      return "Visualize agent-subagent spawn relationships.";
     case "overview":
       return "Gateway status, entry points, and a fast health read.";
     case "channels":

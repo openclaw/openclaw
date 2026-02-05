@@ -1,6 +1,6 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
-import { onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { runSubagentAnnounceFlow, type SubagentRunOutcome } from "./subagent-announce.js";
 import {
@@ -311,6 +311,21 @@ export function registerSubagentRun(params: {
   });
   ensureListener();
   persistSubagentRuns();
+
+  // Emit spawn event for real-time hierarchy tracking
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "lifecycle",
+    sessionKey: params.childSessionKey,
+    data: {
+      phase: "spawn",
+      parentSessionKey: params.requesterSessionKey,
+      childSessionKey: params.childSessionKey,
+      label: params.label,
+      task: params.task,
+      createdAt: now,
+    },
+  });
   if (archiveAfterMs) {
     startSweeper();
   }
@@ -422,6 +437,10 @@ export function listSubagentRunsForRequester(requesterSessionKey: string): Subag
     return [];
   }
   return [...subagentRuns.values()].filter((entry) => entry.requesterSessionKey === key);
+}
+
+export function listAllSubagentRuns(): SubagentRunRecord[] {
+  return [...subagentRuns.values()];
 }
 
 export function initSubagentRegistry() {

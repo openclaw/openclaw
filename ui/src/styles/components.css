@@ -2312,3 +2312,172 @@
   align-items: center;
   gap: 8px;
 }
+
+/* ===========================================
+   Agent Hierarchy Tab
+   =========================================== */
+
+.hierarchy-chart-container {
+  width: 100%;
+  min-height: 400px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  padding: 16px;
+}
+
+.hierarchy-stats {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.hierarchy-stat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.hierarchy-stat-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.hierarchy-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hierarchy-node {
+  display: flex;
+  flex-direction: column;
+}
+
+.hierarchy-node-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out);
+  text-align: left;
+  width: 100%;
+}
+
+.hierarchy-node-header:hover {
+  border-color: var(--node-border, var(--border-strong));
+  box-shadow: var(--shadow-sm);
+}
+
+.hierarchy-node-indicator {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.hierarchy-node-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.hierarchy-node-label {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hierarchy-node-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.hierarchy-node-status {
+  padding: 2px 8px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+}
+
+.hierarchy-node-task {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 300px;
+}
+
+.hierarchy-node-time {
+  opacity: 0.7;
+}
+
+.hierarchy-node-expand {
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 4px;
+}
+
+/* Real-time hierarchy animations */
+@keyframes hierarchy-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.8;
+  }
+}
+
+@keyframes hierarchy-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+  }
+  50% {
+    box-shadow: 0 0 8px 2px rgba(59, 130, 246, 0.4);
+  }
+}
+
+.hierarchy-node-indicator[data-status="running"] {
+  animation: hierarchy-pulse 1.5s ease-in-out infinite;
+}
+
+.hierarchy-node-header[data-status="running"] {
+  animation: hierarchy-glow 2s ease-in-out infinite;
+}
+
+.hierarchy-node[data-just-updated="true"] .hierarchy-node-header {
+  animation: hierarchy-flash 0.5s ease-out;
+}
+
+@keyframes hierarchy-flash {
+  0% {
+    background: var(--accent);
+  }
+  100% {
+    background: var(--card);
+  }
+}

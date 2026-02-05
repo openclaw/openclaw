@@ -206,8 +206,14 @@ export class OpenClawApp extends LitElement {
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsError: string | null = null;
   @state() agentsSelectedId: string | null = null;
-  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" =
-    "overview";
+  @state() agentsPanel:
+    | "overview"
+    | "files"
+    | "tools"
+    | "skills"
+    | "channels"
+    | "cron"
+    | "hierarchy" = "overview";
   @state() agentFilesLoading = false;
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
@@ -228,6 +234,10 @@ export class OpenClawApp extends LitElement {
   @state() agentResourcesData:
     | import("./controllers/agent-resources.ts").AgentResourcesResult
     | null = null;
+
+  @state() agentHierarchyLoading = false;
+  @state() agentHierarchyError: string | null = null;
+  @state() agentHierarchyData: import("./types.ts").AgentHierarchyResult | null = null;
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
@@ -285,6 +295,11 @@ export class OpenClawApp extends LitElement {
   @state() usageStatus: unknown = null;
   @state() usageCost: unknown = null;
   @state() usagePeriod: "24h" | "7d" | "30d" | "all" = "7d";
+
+  // System info (overview)
+  @state() systemInfo: import("./controllers/system-info.ts").SystemInfoResult | null = null;
+  @state() systemInfoLoading = false;
+  @state() systemInfoError: string | null = null;
 
   // Health monitor tab
   @state() healthLoading = false;

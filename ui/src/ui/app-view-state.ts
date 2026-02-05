@@ -15,6 +15,7 @@ import type {
   SecurityAuditReport,
 } from "./controllers/security.ts";
 import type { SkillMessage } from "./controllers/skills.ts";
+import type { SystemInfoResult } from "./controllers/system-info.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
@@ -24,6 +25,7 @@ import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
+  AgentHierarchyResult,
   ChannelsStatusSnapshot,
   ConfigSnapshot,
   CronJob,
@@ -122,7 +124,7 @@ export type AppViewState = {
   agentsList: AgentsListResult | null;
   agentsError: string | null;
   agentsSelectedId: string | null;
-  agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+  agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" | "hierarchy";
   agentFilesLoading: boolean;
   agentFilesError: string | null;
   agentFilesList: AgentsFilesListResult | null;
@@ -140,6 +142,9 @@ export type AppViewState = {
   agentResourcesLoading: boolean;
   agentResourcesError: string | null;
   agentResourcesData: AgentResourcesResult | null;
+  agentHierarchyLoading: boolean;
+  agentHierarchyError: string | null;
+  agentHierarchyData: AgentHierarchyResult | null;
   sessionsLoading: boolean;
   sessionsResult: SessionsListResult | null;
   sessionsError: string | null;
@@ -204,6 +209,9 @@ export type AppViewState = {
   usageStatus: unknown;
   usageCost: unknown;
   usagePeriod: "24h" | "7d" | "30d" | "all";
+  systemInfo: SystemInfoResult | null;
+  systemInfoLoading: boolean;
+  systemInfoError: string | null;
   healthLoading: boolean;
   healthError: string | null;
   healthData: HealthData | null;

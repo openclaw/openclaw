@@ -53,6 +53,7 @@ import { createAgentEventHandler } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
+import { initHierarchyEventBroadcaster } from "./server-hierarchy-events.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
@@ -470,6 +471,9 @@ export async function startGatewayServer(
       clearAgentRunContext,
     }),
   );
+
+  // Initialize hierarchy event broadcaster for real-time agent tracking
+  initHierarchyEventBroadcaster(broadcast);
 
   const heartbeatUnsub = onHeartbeatEvent((evt) => {
     broadcast("heartbeat", evt, { dropIfSlow: true });

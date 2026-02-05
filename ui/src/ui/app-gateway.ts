@@ -4,7 +4,13 @@ import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
-import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } from "./types.ts";
+import type {
+  AgentHierarchyResult,
+  AgentsListResult,
+  PresenceEntry,
+  HealthSnapshot,
+  StatusSummary,
+} from "./types.ts";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import {
   applySettings,
@@ -47,6 +53,7 @@ type GatewayHost = {
   agentsLoading: boolean;
   agentsList: AgentsListResult | null;
   agentsError: string | null;
+  agentHierarchyData: AgentHierarchyResult | null;
   debugHealth: HealthSnapshot | null;
   assistantName: string;
   assistantAvatar: string | null;
@@ -257,6 +264,20 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     if (resolved) {
       host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
     }
+  }
+
+  // Real-time hierarchy updates
+  if (evt.event === "hierarchy") {
+    const payload = evt.payload as
+      | {
+          type?: string;
+          snapshot?: AgentHierarchyResult;
+        }
+      | undefined;
+    if (payload?.snapshot) {
+      host.agentHierarchyData = payload.snapshot;
+    }
+    return;
   }
 }
 

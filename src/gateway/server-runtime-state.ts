@@ -22,7 +22,7 @@ import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 
-export async function createGatewayRuntimeState(params: {
+export interface GatewayRuntimeStateParams {
   cfg: import("../config/config.js").OpenClawConfig;
   bindHost: string;
   port: number;
@@ -44,7 +44,9 @@ export async function createGatewayRuntimeState(params: {
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
-}): Promise<{
+}
+
+export interface GatewayRuntimeStateResult {
   canvasHost: CanvasHostHandler | null;
   httpServer: HttpServer;
   httpServers: HttpServer[];
@@ -71,7 +73,11 @@ export async function createGatewayRuntimeState(params: {
     sessionKey?: string,
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-}> {
+}
+
+export async function createGatewayRuntimeState(
+  params: GatewayRuntimeStateParams,
+): Promise<GatewayRuntimeStateResult> {
   let canvasHost: CanvasHostHandler | null = null;
   if (params.canvasHostEnabled) {
     try {

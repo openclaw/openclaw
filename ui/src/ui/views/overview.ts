@@ -1,4 +1,5 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
+import type { SystemInfoResult } from "../controllers/system-info.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import type { UiSettings } from "../storage.ts";
 import { formatAgo, formatDurationMs } from "../format.ts";
@@ -15,6 +16,7 @@ export type OverviewProps = {
   cronEnabled: boolean | null;
   cronNext: number | null;
   lastChannelsRefresh: number | null;
+  systemInfo: SystemInfoResult | null;
   onSettingsChange: (next: UiSettings) => void;
   onPasswordChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
@@ -218,6 +220,68 @@ export function renderOverview(props: OverviewProps) {
         }
       </div>
     </section>
+
+    ${
+      props.systemInfo
+        ? html`
+            <section class="card" style="margin-top: 18px;">
+              <div class="card-title">System Info</div>
+              <div class="card-sub">Gateway runtime infrastructure and configuration.</div>
+              <div class="stat-grid" style="margin-top: 16px;">
+                <div class="stat">
+                  <div class="stat-label">Version</div>
+                  <div class="stat-value">${props.systemInfo.version}</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">PID</div>
+                  <div class="stat-value mono">${props.systemInfo.pid}</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Host</div>
+                  <div class="stat-value">${props.systemInfo.host}</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Model</div>
+                  <div class="stat-value mono" style="font-size: 0.85em;">${props.systemInfo.model}</div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Storage</div>
+                  <div class="stat-value ${props.systemInfo.storage.backend === "postgresql" ? "ok" : props.systemInfo.storage.backend === "sqlite" ? "warn" : ""}">
+                    ${props.systemInfo.storage.backend}
+                  </div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Cache</div>
+                  <div class="stat-value ${props.systemInfo.cache.backend === "redis" ? "ok" : ""}">
+                    ${props.systemInfo.cache.backend}${props.systemInfo.cache.host ? html` <span class="muted" style="font-size: 0.85em;">(${props.systemInfo.cache.host}:${props.systemInfo.cache.port})</span>` : nothing}
+                  </div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Runtime</div>
+                  <div class="stat-value mono" style="font-size: 0.85em;">
+                    ${props.systemInfo.platform}/${props.systemInfo.arch} · Node ${props.systemInfo.nodeVersion}
+                  </div>
+                </div>
+                <div class="stat">
+                  <div class="stat-label">Browser</div>
+                  <div class="stat-value">
+                    ${props.systemInfo.browserProfiles != null ? html`${props.systemInfo.browserProfiles} profile${props.systemInfo.browserProfiles !== 1 ? "s" : ""}` : "Disabled"}
+                  </div>
+                </div>
+              </div>
+              ${
+                props.systemInfo.logFile
+                  ? html`
+                      <div class="muted" style="margin-top: 10px; font-size: 0.85em;">
+                        Log: <span class="mono">${props.systemInfo.logFile}</span>
+                      </div>
+                    `
+                  : nothing
+              }
+            </section>
+          `
+        : nothing
+    }
 
     <section class="grid grid-cols-3" style="margin-top: 18px;">
       <div class="card stat-card">

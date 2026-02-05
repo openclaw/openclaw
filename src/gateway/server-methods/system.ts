@@ -1,12 +1,83 @@
+import os from "node:os";
 import type { GatewayRequestHandlers } from "./types.js";
+import { resolveConfiguredModelRef } from "../../agents/model-selection.js";
+import { getBrowserControlState } from "../../browser/control-service.js";
+import { loadConfig } from "../../config/config.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import { getRedisConfig } from "../../infra/cache/redis.js";
+import { getCacheBackend } from "../../infra/cache/unified-cache.js";
+import { getSqlitePath } from "../../infra/database/sqlite-client.js";
+import { getStorageBackend } from "../../infra/database/unified-store.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
+import { getResolvedLoggerSettings } from "../../logging.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 
 export const systemHandlers: GatewayRequestHandlers = {
+  "system.info": ({ respond }) => {
+    const cfg = loadConfig();
+    const version = process.env.OPENCLAW_VERSION ?? process.env.npm_package_version ?? "dev";
+    const hostname = os.hostname();
+
+    // Model
+    const modelRef = resolveConfiguredModelRef({
+      cfg,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-sonnet-4-5-20250929",
+    });
+    const model = modelRef.provider ? `${modelRef.provider}/${modelRef.model}` : modelRef.model;
+
+    // Storage backend
+    const storageBackend = getStorageBackend();
+    const storageDetails =
+      storageBackend === "sqlite"
+        ? getSqlitePath()
+        : storageBackend === "postgresql"
+          ? process.env.DATABASE_URL
+            ? "configured"
+            : "default"
+          : undefined;
+
+    // Cache backend
+    const cacheBackend = getCacheBackend();
+    const redisConfig = cacheBackend === "redis" ? getRedisConfig() : null;
+
+    // Browser service
+    const browserState = getBrowserControlState();
+    const browserProfiles = browserState
+      ? Object.keys(browserState.resolved.profiles).length
+      : null;
+
+    // Log file
+    const logSettings = getResolvedLoggerSettings();
+
+    respond(
+      true,
+      {
+        pid: process.pid,
+        version,
+        host: hostname,
+        nodeVersion: process.version,
+        platform: process.platform,
+        arch: process.arch,
+        storage: {
+          backend: storageBackend,
+          details: storageDetails,
+        },
+        cache: {
+          backend: cacheBackend,
+          host: redisConfig?.host,
+          port: redisConfig?.port,
+        },
+        model,
+        browserProfiles,
+        logFile: logSettings.file,
+      },
+      undefined,
+    );
+  },
   "last-heartbeat": ({ respond }) => {
     respond(true, getLastHeartbeatEvent(), undefined);
   },

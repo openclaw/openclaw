@@ -7,6 +7,7 @@ import {
   stopDebugPolling,
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import { loadAgentHierarchy, type AgentHierarchyState } from "./controllers/agent-hierarchy.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents } from "./controllers/agents.ts";
@@ -30,6 +31,7 @@ import {
 } from "./controllers/providers-health.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
+import { loadSystemInfo, type SystemInfoState } from "./controllers/system-info.ts";
 import { loadUsage, loadUsageCost, type UsageState } from "./controllers/usage.ts";
 import { loadVoiceStatus, type VoiceState } from "./controllers/voice.ts";
 import {
@@ -205,6 +207,9 @@ export async function refreshActiveTab(host: SettingsHost) {
   }
   if (host.tab === "skills") {
     await loadSkills(host as unknown as OpenClawApp);
+  }
+  if (host.tab === "hierarchy") {
+    await loadAgentHierarchy(host as unknown as AgentHierarchyState);
   }
   if (host.tab === "agents") {
     const app = host as unknown as OpenClawApp;
@@ -449,6 +454,7 @@ export async function loadOverview(host: SettingsHost) {
     loadSessions(host as unknown as OpenClawApp),
     loadCronStatus(host as unknown as OpenClawApp),
     loadDebug(host as unknown as OpenClawApp),
+    loadSystemInfo(host as unknown as SystemInfoState),
   ]);
 }
 

@@ -5,6 +5,7 @@ import type {
   AgentsFilesListResult,
   AgentsListResult,
   AgentIdentityResult,
+  AgentHierarchyResult,
   ChannelAccountSnapshot,
   ChannelsStatusSnapshot,
   CronJob,
@@ -26,8 +27,16 @@ import {
   formatCronState,
   formatNextRun,
 } from "../presenter.ts";
+import { renderAgentsHierarchy } from "./agents-hierarchy.ts";
 
-export type AgentsPanel = "overview" | "files" | "tools" | "skills" | "channels" | "cron";
+export type AgentsPanel =
+  | "overview"
+  | "files"
+  | "tools"
+  | "skills"
+  | "channels"
+  | "cron"
+  | "hierarchy";
 
 export type AgentsProps = {
   loading: boolean;
@@ -63,6 +72,9 @@ export type AgentsProps = {
   agentSkillsAgentId: string | null;
   agentResourcesData: AgentResourcesResult | null;
   agentResourcesLoading: boolean;
+  agentHierarchyLoading: boolean;
+  agentHierarchyError: string | null;
+  agentHierarchyData: AgentHierarchyResult | null;
   skillsFilter: string;
   onRefresh: () => void;
   onSelectAgent: (agentId: string) => void;
@@ -85,6 +97,8 @@ export type AgentsProps = {
   onAgentSkillToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   onAgentSkillsClear: (agentId: string) => void;
   onAgentSkillsDisableAll: (agentId: string) => void;
+  onHierarchyRefresh: () => void;
+  onHierarchyNodeClick?: (sessionKey: string) => void;
 };
 
 const TOOL_SECTIONS = [
@@ -752,6 +766,17 @@ export function renderAgents(props: AgentsProps) {
                     })
                   : nothing
               }
+              ${
+                props.activePanel === "hierarchy"
+                  ? renderAgentsHierarchy({
+                      loading: props.agentHierarchyLoading,
+                      error: props.agentHierarchyError,
+                      data: props.agentHierarchyData,
+                      onRefresh: props.onHierarchyRefresh,
+                      onNodeClick: props.onHierarchyNodeClick,
+                    })
+                  : nothing
+              }
             `
         }
       </section>
@@ -795,6 +820,7 @@ function renderAgentTabs(active: AgentsPanel, onSelect: (panel: AgentsPanel) => 
     { id: "skills", label: "Skills" },
     { id: "channels", label: "Channels" },
     { id: "cron", label: "Cron Jobs" },
+    { id: "hierarchy", label: "Hierarchy" },
   ];
   return html`
     <div class="agent-tabs">

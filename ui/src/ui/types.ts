@@ -563,3 +563,19 @@ export type LogEntry = {
   message?: string | null;
   meta?: Record<string, unknown> | null;
 };
+
+export type AgentHierarchyNode = {
+  sessionKey: string;
+  runId?: string;
+  label?: string;
+  task?: string;
+  status: "running" | "completed" | "error" | "pending";
+  startedAt?: number;
+  endedAt?: number;
+  children: AgentHierarchyNode[];
+};
+
+export type AgentHierarchyResult = {
+  roots: AgentHierarchyNode[];
+  updatedAt: number;
+};

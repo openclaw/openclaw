@@ -5,6 +5,7 @@ import { ChatHost, refreshChatAvatar } from "./app-chat.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
 import { OpenClawApp } from "./app.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
+import { loadAgentHierarchy, type AgentHierarchyState } from "./controllers/agent-hierarchy.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentResources } from "./controllers/agent-resources.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
@@ -83,6 +84,7 @@ import {
 import { icons } from "./icons.ts";
 import { TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import { ConfigUiHints } from "./types.ts";
+import { renderAgentsHierarchy } from "./views/agents-hierarchy.ts";
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -261,6 +263,7 @@ export function renderApp(state: AppViewState) {
                 cronEnabled: state.cronStatus?.enabled ?? null,
                 cronNext,
                 lastChannelsRefresh: state.channelsLastSuccess,
+                systemInfo: state.systemInfo,
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
@@ -537,6 +540,9 @@ export function renderApp(state: AppViewState) {
                 agentSkillsAgentId: state.agentSkillsAgentId,
                 agentResourcesData: state.agentResourcesData,
                 agentResourcesLoading: state.agentResourcesLoading,
+                agentHierarchyLoading: state.agentHierarchyLoading,
+                agentHierarchyError: state.agentHierarchyError,
+                agentHierarchyData: state.agentHierarchyData,
                 skillsFilter: state.skillsFilter,
                 onRefresh: async () => {
                   await loadAgents(state);
@@ -590,6 +596,9 @@ export function renderApp(state: AppViewState) {
                   }
                   if (panel === "cron") {
                     void state.loadCron();
+                  }
+                  if (panel === "hierarchy") {
+                    void loadAgentHierarchy(state as unknown as AgentHierarchyState);
                   }
                 },
                 onLoadFiles: (agentId) => {
@@ -929,6 +938,29 @@ export function renderApp(state: AppViewState) {
                     ? { primary, fallbacks: normalized }
                     : { fallbacks: normalized };
                   updateConfigFormValue(configState, basePath, next);
+                },
+                onHierarchyRefresh: () => {
+                  void loadAgentHierarchy(state as unknown as AgentHierarchyState);
+                },
+                onHierarchyNodeClick: (sessionKey) => {
+                  // Could navigate to session or show details
+                  console.log("Hierarchy node clicked:", sessionKey);
+                },
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "hierarchy"
+            ? renderAgentsHierarchy({
+                loading: state.agentHierarchyLoading,
+                error: state.agentHierarchyError,
+                data: state.agentHierarchyData,
+                onRefresh: () => {
+                  void loadAgentHierarchy(state as unknown as AgentHierarchyState);
+                },
+                onNodeClick: (sessionKey) => {
+                  console.log("Hierarchy node clicked:", sessionKey);
                 },
               })
             : nothing
