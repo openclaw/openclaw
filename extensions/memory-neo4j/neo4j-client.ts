@@ -1666,6 +1666,144 @@ export class Neo4jMemoryClient {
   }
 
   // --------------------------------------------------------------------------
+  // Reindex: re-embed all Memory and Entity nodes
+  // --------------------------------------------------------------------------
+
+  /**
+   * Re-embed all Memory and Entity nodes with a new embedding model.
+   *
+   * Steps:
+   * 1. Drop old vector indexes (dimensions may have changed)
+   * 2. Fetch all Memory nodes and re-embed their text
+   * 3. Fetch all Entity nodes and re-embed their name
+   * 4. Recreate vector indexes with current dimensions
+   *
+   * Used after changing the embedding model/provider in config.
+   */
+  async reindex(
+    embedFn: (texts: string[]) => Promise<number[][]>,
+    options?: {
+      batchSize?: number;
+      onProgress?: (phase: string, done: number, total: number) => void;
+    },
+  ): Promise<{ memories: number; entities: number }> {
+    const batchSize = options?.batchSize ?? 50;
+    const progress = options?.onProgress ?? (() => {});
+
+    await this.ensureInitialized();
+
+    // Step 1: Drop old vector indexes
+    progress("drop-indexes", 0, 2);
+    const dropSession = this.driver!.session();
+    try {
+      await this.runSafe(dropSession, "DROP INDEX memory_embedding_index IF EXISTS");
+      await this.runSafe(dropSession, "DROP INDEX entity_embedding_index IF EXISTS");
+    } finally {
+      await dropSession.close();
+    }
+    progress("drop-indexes", 2, 2);
+
+    // Step 2: Fetch and re-embed memories
+    const fetchSession = this.driver!.session();
+    let memories: Array<{ id: string; text: string }>;
+    try {
+      const result = await fetchSession.run(
+        "MATCH (m:Memory) RETURN m.id AS id, m.text AS text ORDER BY m.createdAt ASC",
+      );
+      memories = result.records.map((r) => ({
+        id: r.get("id") as string,
+        text: r.get("text") as string,
+      }));
+    } finally {
+      await fetchSession.close();
+    }
+    progress("memories", 0, memories.length);
+
+    for (let i = 0; i < memories.length; i += batchSize) {
+      const batch = memories.slice(i, i + batchSize);
+      const vectors = await embedFn(batch.map((m) => m.text));
+
+      const session = this.driver!.session();
+      try {
+        for (let j = 0; j < batch.length; j++) {
+          if (vectors[j] && vectors[j].length > 0) {
+            await session.run("MATCH (m:Memory {id: $id}) SET m.embedding = $embedding", {
+              id: batch[j].id,
+              embedding: vectors[j],
+            });
+          }
+        }
+      } finally {
+        await session.close();
+      }
+      progress("memories", Math.min(i + batchSize, memories.length), memories.length);
+    }
+
+    // Step 3: Fetch and re-embed entities
+    const entitySession = this.driver!.session();
+    let entities: Array<{ id: string; name: string }>;
+    try {
+      const result = await entitySession.run("MATCH (e:Entity) RETURN e.id AS id, e.name AS name");
+      entities = result.records.map((r) => ({
+        id: r.get("id") as string,
+        name: r.get("name") as string,
+      }));
+    } finally {
+      await entitySession.close();
+    }
+    progress("entities", 0, entities.length);
+
+    for (let i = 0; i < entities.length; i += batchSize) {
+      const batch = entities.slice(i, i + batchSize);
+      const vectors = await embedFn(batch.map((e) => e.name));
+
+      const session = this.driver!.session();
+      try {
+        for (let j = 0; j < batch.length; j++) {
+          if (vectors[j] && vectors[j].length > 0) {
+            await session.run("MATCH (e:Entity {id: $id}) SET e.embedding = $embedding", {
+              id: batch[j].id,
+              embedding: vectors[j],
+            });
+          }
+        }
+      } finally {
+        await session.close();
+      }
+      progress("entities", Math.min(i + batchSize, entities.length), entities.length);
+    }
+
+    // Step 4: Recreate vector indexes with current dimensions
+    progress("create-indexes", 0, 2);
+    const indexSession = this.driver!.session();
+    try {
+      await this.runSafe(
+        indexSession,
+        `CREATE VECTOR INDEX memory_embedding_index IF NOT EXISTS
+         FOR (m:Memory) ON m.embedding
+         OPTIONS {indexConfig: {
+           \`vector.dimensions\`: ${this.dimensions},
+           \`vector.similarity_function\`: 'cosine'
+         }}`,
+      );
+      await this.runSafe(
+        indexSession,
+        `CREATE VECTOR INDEX entity_embedding_index IF NOT EXISTS
+         FOR (e:Entity) ON e.embedding
+         OPTIONS {indexConfig: {
+           \`vector.dimensions\`: ${this.dimensions},
+           \`vector.similarity_function\`: 'cosine'
+         }}`,
+      );
+    } finally {
+      await indexSession.close();
+    }
+    progress("create-indexes", 2, 2);
+
+    return { memories: memories.length, entities: entities.length };
+  }
+
+  // --------------------------------------------------------------------------
   // Retry Logic
   // --------------------------------------------------------------------------
 

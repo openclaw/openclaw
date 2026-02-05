@@ -659,6 +659,57 @@ const memoryNeo4jPlugin = {
               process.exitCode = 1;
             }
           });
+
+        memory
+          .command("index")
+          .description(
+            "Re-embed all memories and entities — use after changing embedding model/provider",
+          )
+          .option("--batch-size <n>", "Embedding batch size (default: 50)")
+          .action(async (opts: { batchSize?: string }) => {
+            const batchSize = opts.batchSize ? parseInt(opts.batchSize, 10) : 50;
+            if (Number.isNaN(batchSize) || batchSize <= 0) {
+              console.error("Error: --batch-size must be greater than 0");
+              process.exitCode = 1;
+              return;
+            }
+
+            console.log("\nMemory Neo4j — Reindex Embeddings");
+            console.log("═════════════════════════════════════════════════════════════");
+            console.log(`Model:      ${cfg.embedding.provider}/${cfg.embedding.model}`);
+            console.log(`Dimensions: ${vectorDim}`);
+            console.log(`Batch size: ${batchSize}\n`);
+
+            try {
+              const startedAt = Date.now();
+              const result = await db.reindex((texts) => embeddings.embedBatch(texts), {
+                batchSize,
+                onProgress: (phase, done, total) => {
+                  if (phase === "drop-indexes" && done === 0) {
+                    console.log("▶ Dropping old vector indexes…");
+                  } else if (phase === "memories") {
+                    console.log(`   Memories: ${done}/${total}`);
+                  } else if (phase === "entities") {
+                    console.log(`   Entities: ${done}/${total}`);
+                  } else if (phase === "create-indexes" && done === 0) {
+                    console.log("▶ Recreating vector indexes…");
+                  }
+                },
+              });
+
+              const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+              console.log("\n═════════════════════════════════════════════════════════════");
+              console.log(
+                `✅ Reindex complete in ${elapsed}s — ${result.memories} memories, ${result.entities} entities`,
+              );
+              console.log("");
+            } catch (err) {
+              console.error(
+                `\n❌ Reindex failed: ${err instanceof Error ? err.message : String(err)}`,
+              );
+              process.exitCode = 1;
+            }
+          });
       },
       { commands: [] }, // Adds subcommands to existing "memory" command, no conflict
     );
