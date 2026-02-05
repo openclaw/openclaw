@@ -1,0 +1,49 @@
+/* OpenClaw Design System - CSS Custom Properties */
+:root {
+  /* Backgrounds */
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --bg-card: #1c2128;
+
+  /* Borders */
+  --border: #30363d;
+  --border-muted: #21262d;
+
+  /* Text */
+  --text-primary: #c9d1d9;
+  --text-secondary: #8b949e;
+  --text-muted: #484f58;
+
+  /* Accent Colors */
+  --accent: #58a6ff;
+  --accent-hover: #4c9aed;
+
+  /* Status Colors */
+  --success: #3fb950;
+  --warning: #d29922;
+  --error: #f85149;
+  --purple: #a371f7;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Layout */
+  --header-height: 48px;
+  --sidebar-width: 240px;
+  --context-panel-width: 300px;
+
+  /* Border radius */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* Transitions */
+  --transition-fast: 0.15s ease;
+}

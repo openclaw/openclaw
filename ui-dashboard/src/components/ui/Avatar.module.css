@@ -1,0 +1,45 @@
+.avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+  color: white;
+  flex-shrink: 0;
+}
+
+/* Variants */
+.user {
+  background: var(--purple);
+}
+
+.lead {
+  background: linear-gradient(135deg, var(--accent), var(--purple));
+}
+
+.worker {
+  background: var(--success);
+}
+
+.idle {
+  background: var(--text-muted);
+}
+
+/* Sizes */
+.sm {
+  width: 24px;
+  height: 24px;
+  font-size: 10px;
+}
+
+.md {
+  width: 28px;
+  height: 28px;
+  font-size: 12px;
+}
+
+.lg {
+  width: 36px;
+  height: 36px;
+  font-size: 14px;
+}

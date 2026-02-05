@@ -1,0 +1,20 @@
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+.hoverable {
+  cursor: pointer;
+  transition: border-color var(--transition-fast);
+}
+
+.hoverable:hover {
+  border-color: var(--accent);
+}
+
+.hoverable:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent);
+}

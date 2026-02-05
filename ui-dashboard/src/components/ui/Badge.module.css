@@ -1,0 +1,33 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.success {
+  background: rgba(63, 185, 80, 0.2);
+  color: var(--success);
+}
+
+.warning {
+  background: rgba(210, 153, 34, 0.2);
+  color: var(--warning);
+}
+
+.error {
+  background: rgba(248, 81, 73, 0.2);
+  color: var(--error);
+}
+
+.purple {
+  background: rgba(163, 113, 247, 0.2);
+  color: var(--purple);
+}
+
+.muted {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
