@@ -99,6 +99,24 @@ export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?
   return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
 }
 
+/**
+ * Build parentPeer for forum topic binding inheritance.
+ * When a message comes from a forum topic, the peer ID includes the topic suffix
+ * (e.g., `-1001234567890:topic:99`). To allow bindings configured for the base
+ * group ID to match, we provide the parent group as `parentPeer` so the routing
+ * layer can fall back to it when the exact peer doesn't match.
+ */
+export function buildTelegramParentPeer(params: {
+  isGroup: boolean;
+  resolvedThreadId?: number;
+  chatId: number | string;
+}): { kind: "group"; id: string } | undefined {
+  if (!params.isGroup || params.resolvedThreadId == null) {
+    return undefined;
+  }
+  return { kind: "group", id: String(params.chatId) };
+}
+
 export function buildSenderName(msg: Message) {
   const name =
     [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ").trim() ||
