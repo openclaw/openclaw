@@ -84,8 +84,11 @@ export class ConvosSDKClient {
       env: options.env ?? "production",
     });
 
-    const convos = ConvosMiddleware.create(agent, { privateKey: user.key, env: options.env ?? "production" });
+    const resolvedEnv = options.env ?? "production";
+    const convos = ConvosMiddleware.create(agent, { privateKey: user.key, env: resolvedEnv });
     agent.use(convos.middleware());
+
+    console.log(`[convos-sdk] XMTP env: ${resolvedEnv}, inboxId: ${agent.client.inboxId}`);
 
     const client = new ConvosSDKClient(agent, convos, user.key, debug);
 
@@ -214,9 +217,10 @@ export class ConvosSDKClient {
     // Create invite (automatically manages metadata)
     const invite = await convosGroup.createInvite({ name });
 
-    if (this.debug) {
-      console.log(`[convos-sdk] Created invite: ${invite.url}`);
-    }
+    // Always log invite details for diagnostics
+    console.log(`[convos-sdk] Created invite: url=${invite.url}`);
+    console.log(`[convos-sdk] Invite slug length: ${invite.slug.length}`);
+    console.log(`[convos-sdk] Agent inboxId: ${this.agent.client.inboxId}`);
 
     return {
       conversationId: group.id,
