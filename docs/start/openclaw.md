@@ -26,25 +26,8 @@ Start conservative:
 
 ## Prerequisites
 
-- Node **22+**
-- OpenClaw available on PATH (recommended: global install)
+- OpenClaw installed and onboarded — see [Getting Started](/start/getting-started) if you haven't done this yet
 - A second phone number (SIM/eSIM/prepaid) for the assistant
-
-```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
-```
-
-From source (development):
-
-```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
-pnpm install
-pnpm ui:build # auto-installs UI deps on first run
-pnpm build
-pnpm link --global
-```
 
 ## The two-phone setup (recommended)
 
