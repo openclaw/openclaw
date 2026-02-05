@@ -3,10 +3,11 @@ summary: "First-run onboarding flow for OpenClaw (macOS app)"
 read_when:
   - Designing the macOS onboarding assistant
   - Implementing auth or identity setup
-title: "Onboarding"
+title: "Onboarding (macOS App)"
+sidebarTitle: "macOS app"
 ---
 
-# Onboarding (macOS app)
+# Onboarding (macOS App)
 
 This doc describes the **current** first‑run onboarding flow. The goal is a
 smooth “day 0” experience: pick where the Gateway runs, connect auth, run the

@@ -6,6 +6,7 @@ title: "Docs directory"
 ---
 
 <Note>
+This page is a curated index. If you are new, start with [Getting Started](/start/getting-started).
 For a complete map of the docs, see [Docs hubs](/start/hubs).
 </Note>
 

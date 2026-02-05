@@ -102,6 +102,8 @@ openclaw onboard --install-daemon
 
 Tip: if you don’t have a global install yet, run repo commands via `pnpm openclaw ...`.
 
+For deeper development workflows, see [Setup](/start/setup).
+
 ### 4) Other install options
 
 - Docker: [Docker](/install/docker)
