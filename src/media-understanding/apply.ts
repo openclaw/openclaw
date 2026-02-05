@@ -377,8 +377,24 @@ async function extractFileBlocks(params: {
     const textSample = decodeTextSample(bufferResult?.buffer);
     const textLike = Boolean(utf16Charset) || looksLikeUtf8Text(bufferResult?.buffer);
     const guessedDelimited = textLike ? guessDelimitedMime(textSample) : undefined;
-    const textHint =
-      forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined);
+    // BUG FIX: Preserve application/pdf MIME type instead of overriding to text/plain.
+    //
+    // Problem: PDF files often have highly printable ASCII content in their first 4KB
+    // (headers, metadata, font names like "Helvetica", object definitions). This causes
+    // looksLikeUtf8Text() to return true (>95% printable, >30% word-like chars), which
+    // then sets textHint to "text/plain", overriding the correct "application/pdf" MIME.
+    // As a result, extractFileContentFromSource() treats the PDF as plain text instead
+    // of calling extractPdfContent(), outputting raw binary garbage to the model.
+    //
+    // Reproduction: Send a PDF resume via WhatsApp group chat with @mention. The PDF
+    // will be inlined as <file mime="text/plain">%PDF-1.7...</file> instead of being
+    // properly extracted via pdfjs-dist.
+    //
+    // Fix: Skip text-detection override when the original MIME is application/pdf.
+    const isPdfMime = normalizedRawMime === "application/pdf";
+    const textHint = isPdfMime
+      ? undefined
+      : (forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined));
     const mimeType = sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
     // Log when MIME type is overridden from non-text to text for auditability
     if (textHint && rawMime && !rawMime.startsWith("text/")) {
