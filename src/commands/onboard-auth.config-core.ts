@@ -192,10 +192,18 @@ export function applyOrqProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   > as { apiKey?: string };
   const resolvedApiKey = typeof existingApiKey === "string" ? existingApiKey : undefined;
   const normalizedApiKey = resolvedApiKey?.trim();
+  const resolvedBaseUrl =
+    typeof existingProvider?.baseUrl === "string" && existingProvider.baseUrl.trim()
+      ? existingProvider.baseUrl
+      : ORQ_BASE_URL;
+  const resolvedApi =
+    typeof existingProvider?.api === "string" && existingProvider.api.trim()
+      ? existingProvider.api
+      : "openai-completions";
   providers.orq = {
     ...existingProviderRest,
-    baseUrl: ORQ_BASE_URL,
-    api: "openai-completions",
+    baseUrl: resolvedBaseUrl,
+    api: resolvedApi,
     ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : defaultModels,
   };
