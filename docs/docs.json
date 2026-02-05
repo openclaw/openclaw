@@ -699,6 +699,18 @@
       "destination": "/start/wizard"
     },
     {
+      "source": "/start/wizard-cli-flow",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
+      "source": "/start/wizard-cli-auth",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
+      "source": "/start/wizard-cli-outputs",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
       "source": "/start/faq",
       "destination": "/help/faq"
     },
@@ -745,8 +757,22 @@
                   "start/getting-started",
                   {
                     "group": "Onboarding",
-                    "pages": ["start/wizard", "start/onboarding", "start/bootstrapping"]
+                    "pages": [
+                      {
+                        "group": "CLI onboarding",
+                        "pages": [
+                          "start/wizard",
+                          "start/wizard-cli-reference",
+                          "start/wizard-cli-automation"
+                        ]
+                      },
+                      {
+                        "group": "macOS onboarding",
+                        "pages": ["start/onboarding"]
+                      }
+                    ]
                   },
+                  "start/bootstrapping",
                   "start/pairing"
                 ]
               },
