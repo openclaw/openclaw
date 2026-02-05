@@ -219,6 +219,14 @@ function resolveCodingFallbackCandidates(params: {
     addRaw(raw, true);
   }
 
+  // Auto-populate fallbacks from allowlist when none are explicitly configured.
+  if (codingFallbacks.length === 0) {
+    const allowlistKeys = Object.keys(params.cfg?.agents?.defaults?.models ?? {});
+    for (const raw of allowlistKeys) {
+      addRaw(raw, false);
+    }
+  }
+
   return candidates;
 }
 
@@ -288,6 +296,14 @@ function resolveImageFallbackCandidates(params: {
 
   for (const raw of imageFallbacks) {
     addRaw(raw, true);
+  }
+
+  // Auto-populate fallbacks from allowlist when none are explicitly configured.
+  if (imageFallbacks.length === 0) {
+    const allowlistKeys = Object.keys(params.cfg?.agents?.defaults?.models ?? {});
+    for (const raw of allowlistKeys) {
+      addRaw(raw, false);
+    }
   }
 
   return candidates;
@@ -362,6 +378,21 @@ function resolveFallbackCandidates(params: {
     addCandidate(resolved.ref, true);
   }
 
+  // Auto-populate fallbacks from allowlist when none are explicitly configured.
+  if (params.fallbacksOverride === undefined && modelFallbacks.length === 0) {
+    const allowlistKeys = Object.keys(params.cfg?.agents?.defaults?.models ?? {});
+    for (const raw of allowlistKeys) {
+      const resolved = resolveModelRefFromString({
+        raw: String(raw ?? ""),
+        defaultProvider,
+        aliasIndex,
+      });
+      if (resolved) {
+        addCandidate(resolved.ref, false);
+      }
+    }
+  }
+
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
     addCandidate({ provider: primary.provider, model: primary.model }, false);
   }
@@ -390,7 +421,7 @@ export async function runWithModelFallback<T>(params: {
   model: string;
   attempts: FallbackAttempt[];
 }> {
-  const candidates = resolveFallbackCandidates({
+  let candidates = resolveFallbackCandidates({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
@@ -399,6 +430,33 @@ export async function runWithModelFallback<T>(params: {
   const authStore = params.cfg
     ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
     : null;
+
+  // Sort non-primary candidates by provider health so healthy providers are tried first.
+  if (authStore && candidates.length > 2) {
+    const [primary, ...tail] = candidates;
+
+    const healthScore = (c: ModelCandidate): number => {
+      const profileIds = resolveAuthProfileOrder({
+        cfg: params.cfg,
+        store: authStore,
+        provider: c.provider,
+      });
+      if (profileIds.length === 0) {
+        return 1; // unknown provider — neutral priority
+      }
+      if (profileIds.every((id) => isProfileInCooldown(authStore, id))) {
+        return 3;
+      }
+      if (profileIds.some((id) => isProfileApproachingCooldown(authStore, id))) {
+        return 2;
+      }
+      return 0; // healthy
+    };
+
+    tail.sort((a, b) => healthScore(a) - healthScore(b));
+    candidates = [primary, ...tail];
+  }
+
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 

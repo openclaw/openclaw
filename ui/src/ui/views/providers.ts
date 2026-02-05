@@ -843,21 +843,31 @@ function renderModelsSection(entry: ProviderHealthEntry, props: ProvidersProps) 
             ? html`
                 <div class="muted" style="font-size: 12px">No models match this filter.</div>
               `
-            : filteredModels.map((model) => renderModelRow(model, props, allowlistEmpty))
+            : filteredModels.map((model) =>
+                renderModelRow(model, props, allowlistEmpty, entry.healthStatus),
+              )
         }
       </div>
     </div>
   `;
 }
 
-function renderModelRow(model: ProviderModelEntry, props: ProvidersProps, allowlistEmpty: boolean) {
+function renderModelRow(
+  model: ProviderModelEntry,
+  props: ProvidersProps,
+  allowlistEmpty: boolean,
+  providerHealth?: string,
+) {
   const isAllowed = allowlistEmpty || props.modelAllowlist.has(model.key);
   const isPrimary = props.primaryModel === model.key;
   const hasVision = model.input?.includes("image");
+  const isProviderUnavailable =
+    providerHealth === "cooldown" || providerHealth === "disabled" || providerHealth === "expired";
 
   return html`
     <div
-      style="display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 6px; background: var(--bg-elevated);"
+      style="display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 6px; background: var(--bg-elevated);${isProviderUnavailable ? " opacity: 0.5;" : ""}"
+      title=${isProviderUnavailable ? `Provider is ${providerHealth}` : ""}
     >
       <label
         style="display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; cursor: pointer;"
@@ -874,6 +884,23 @@ function renderModelRow(model: ProviderModelEntry, props: ProvidersProps, allowl
         >
           ${model.name}
         </span>
+        ${
+          isProviderUnavailable
+            ? html`
+                <span
+                  class="chip"
+                  style="
+                    font-size: 10px;
+                    background: color-mix(in srgb, var(--danger) 12%, transparent);
+                    color: var(--danger);
+                    border-color: color-mix(in srgb, var(--danger) 25%, transparent);
+                  "
+                >
+                  unavailable
+                </span>
+              `
+            : nothing
+        }
       </label>
       <div
         style="display: flex; align-items: center; gap: 4px; flex-shrink: 0;"

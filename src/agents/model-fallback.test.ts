@@ -541,4 +541,225 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
   });
+
+  it("auto-populates fallbacks from allowlist when no explicit fallbacks configured", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            // no fallbacks
+          },
+          models: {
+            "openai/gpt-4.1-mini": { enabled: true },
+            "anthropic/claude-haiku-3-5": { enabled: true },
+            "google/gemini-2.5-flash": { enabled: true },
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      calls.push({ provider, model });
+      if (provider === "google" && model === "gemini-2.5-flash") {
+        return "ok";
+      }
+      throw Object.assign(new Error("auth error"), { status: 401 });
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    // Primary first, then allowlist models (primary deduplicated), then configured primary appended
+    expect(calls.some((c) => c.provider === "anthropic" && c.model === "claude-haiku-3-5")).toBe(
+      true,
+    );
+    expect(calls.some((c) => c.provider === "google" && c.model === "gemini-2.5-flash")).toBe(true);
+  });
+
+  it("does not auto-populate from allowlist when explicit fallbacks exist", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+          models: {
+            "openai/gpt-4.1-mini": { enabled: true },
+            "anthropic/claude-haiku-3-5": { enabled: true },
+            "google/gemini-2.5-flash": { enabled: true },
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      calls.push({ provider, model });
+      if (provider === "anthropic" && model === "claude-haiku-3-5") {
+        return "ok";
+      }
+      throw Object.assign(new Error("auth error"), { status: 401 });
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    // Should NOT have tried google model since explicit fallbacks are configured
+    expect(calls.every((c) => c.provider !== "google")).toBe(true);
+  });
+
+  it("does not auto-populate from allowlist when fallbacksOverride is empty array", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+          },
+          models: {
+            "openai/gpt-4.1-mini": { enabled: true },
+            "anthropic/claude-haiku-3-5": { enabled: true },
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        fallbacksOverride: [],
+        run: async (provider, model) => {
+          calls.push({ provider, model });
+          throw new Error("fail");
+        },
+      }),
+    ).rejects.toThrow("fail");
+
+    // Only primary should have been tried — fallbacksOverride=[] disables everything
+    expect(calls).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
+  });
+
+  it("health-aware ordering prioritizes healthy providers over cooldown ones", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+    const cooldownProvider = `cooldown-sort-${crypto.randomUUID()}`;
+    const healthyProvider = `healthy-sort-${crypto.randomUUID()}`;
+    const cooldownProfileId = `${cooldownProvider}:default`;
+    const healthyProfileId = `${healthyProvider}:default`;
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [cooldownProfileId]: {
+          type: "api_key",
+          provider: cooldownProvider,
+          key: "test-key-1",
+        },
+        [healthyProfileId]: {
+          type: "api_key",
+          provider: healthyProvider,
+          key: "test-key-2",
+        },
+      },
+      usageStats: {
+        [cooldownProfileId]: {
+          cooldownUntil: Date.now() + 60_000,
+        },
+      },
+    };
+
+    saveAuthProfileStore(store, tempDir);
+
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+          },
+          models: {
+            "openai/gpt-4.1-mini": { enabled: true },
+            // cooldown provider listed first in allowlist
+            [`${cooldownProvider}/m1`]: { enabled: true },
+            // healthy provider listed second
+            [`${healthyProvider}/m2`]: { enabled: true },
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      calls.push({ provider, model });
+      if (provider === healthyProvider) {
+        return "ok";
+      }
+      throw Object.assign(new Error("auth error"), { status: 401 });
+    });
+
+    try {
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        agentDir: tempDir,
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      // Healthy provider should be tried before the cooldown one (health-aware sorting)
+      const healthyIdx = calls.findIndex((c) => c.provider === healthyProvider);
+      const cooldownIdx = calls.findIndex((c) => c.provider === cooldownProvider);
+      // cooldown provider may be skipped entirely or tried after healthy
+      if (cooldownIdx >= 0) {
+        expect(healthyIdx).toBeLessThan(cooldownIdx);
+      }
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not produce extra candidates with empty allowlist", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            // no fallbacks, no models allowlist
+          },
+        },
+      },
+    });
+
+    const calls: Array<{ provider: string; model: string }> = [];
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run: async (provider, model) => {
+          calls.push({ provider, model });
+          throw new Error("fail");
+        },
+      }),
+    ).rejects.toThrow("fail");
+
+    // Only the primary (and configured primary appended, which is same = deduplicated)
+    expect(calls).toEqual([{ provider: "openai", model: "gpt-4.1-mini" }]);
+  });
 });
