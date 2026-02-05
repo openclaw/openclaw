@@ -17,6 +17,8 @@ const COMPUTER_TOOL_ACTIONS = [
   "release",
   "reset_focus",
   "hover",
+  "find",
+  "click_text",
   "move",
   "click",
   "dblclick",
@@ -70,6 +72,14 @@ const ComputerToolSchema = Type.Object({
   // reset_focus
   escCount: Type.Optional(Type.Number()),
 
+  // UI automation text search
+  text: Type.Optional(Type.String()),
+  match: Type.Optional(stringEnum(["contains", "exact", "prefix"] as const)),
+  caseSensitive: Type.Optional(Type.Boolean()),
+  controlType: Type.Optional(Type.String()),
+  maxResults: Type.Optional(Type.Number()),
+  resultIndex: Type.Optional(Type.Number()),
+
   // Common action params
   x: Type.Optional(Type.Number()),
   y: Type.Optional(Type.Number()),
@@ -86,7 +96,6 @@ const ComputerToolSchema = Type.Object({
   deltaY: Type.Optional(Type.Number()),
 
   // type/hotkey/press
-  text: Type.Optional(Type.String()),
   key: Type.Optional(Type.String()),
   ctrl: Type.Optional(Type.Boolean()),
   alt: Type.Optional(Type.Boolean()),
@@ -377,6 +386,17 @@ type UiHitTestResult = {
   helpText?: string;
 };
 
+type UiTextMatch = UiHitTestResult & {
+  x?: number;
+  y?: number;
+  bounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+};
+
 const DEFAULT_DANGER_TOKENS = [
   "ok",
   "yes",
@@ -494,6 +514,140 @@ if (-not $obj) {
   };
 }
 
+async function resolveUiTextMatches(params: {
+  text: string;
+  match?: "contains" | "exact" | "prefix";
+  caseSensitive?: boolean;
+  controlType?: string;
+  maxResults?: number;
+}): Promise<UiTextMatch[]> {
+  const payload = Buffer.from(JSON.stringify(params), "utf-8").toString("base64");
+  const script = `
+$ErrorActionPreference = 'Stop'
+
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName WindowsBase
+
+function Get-Args() {
+  $raw = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}'))
+  return ($raw | ConvertFrom-Json)
+}
+
+$args = Get-Args
+$text = [string]$args.text
+if (-not $text) { throw 'text required' }
+
+$mode = 'contains'
+if ($args.PSObject.Properties.Name -contains 'match') { $mode = [string]$args.match }
+
+$caseSensitive = $false
+if ($args.PSObject.Properties.Name -contains 'caseSensitive') { $caseSensitive = [bool]$args.caseSensitive }
+
+$controlType = $null
+if ($args.PSObject.Properties.Name -contains 'controlType') { $controlType = [string]$args.controlType }
+
+$maxResults = 5
+if ($args.PSObject.Properties.Name -contains 'maxResults') { $maxResults = [int]$args.maxResults }
+if ($maxResults -lt 1) { $maxResults = 1 }
+if ($maxResults -gt 25) { $maxResults = 25 }
+
+$needle = $text
+if (-not $caseSensitive) { $needle = $needle.ToLowerInvariant() }
+
+function Matches([string]$value) {
+  if (-not $value) { return $false }
+  $v = $value
+  if (-not $caseSensitive) { $v = $v.ToLowerInvariant() }
+  switch ($mode) {
+    'exact' { return $v -eq $needle }
+    'prefix' { return $v.StartsWith($needle) }
+    default { return $v.Contains($needle) }
+  }
+}
+
+function Match-ControlType([string]$ct) {
+  if (-not $controlType) { return $true }
+  if (-not $ct) { return $false }
+  $wanted = $controlType.ToLowerInvariant()
+  if ($wanted.StartsWith('controltype.')) { $wanted = $wanted.Substring(12) }
+  $ctLower = $ct.ToLowerInvariant()
+  return $ctLower.EndsWith($wanted)
+}
+
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+$all = $root.FindAll([System.Windows.Automation.TreeScope]::Subtree, [System.Windows.Automation.Condition]::TrueCondition)
+$results = @()
+
+foreach ($el in $all) {
+  $current = $el.Current
+  $ct = $null
+  try { $ct = $current.ControlType.ProgrammaticName } catch { $ct = $null }
+  if (-not (Match-ControlType $ct)) { continue }
+
+  $name = $current.Name
+  $automationId = $current.AutomationId
+  $helpText = $current.HelpText
+  if (-not (Matches $name) -and -not (Matches $automationId) -and -not (Matches $helpText)) { continue }
+
+  $rect = $current.BoundingRectangle
+  $width = [double]$rect.Width
+  $height = [double]$rect.Height
+
+  $x = $null
+  $y = $null
+  if ($width -gt 1 -and $height -gt 1) {
+    $x = [int][Math]::Round($rect.X + ($width / 2.0))
+    $y = [int][Math]::Round($rect.Y + ($height / 2.0))
+  }
+
+  $results += @{ 
+    name = $name
+    automationId = $automationId
+    helpText = $helpText
+    controlType = $ct
+    x = $x
+    y = $y
+    bounds = @{ x = $rect.X; y = $rect.Y; width = $width; height = $height }
+  }
+  if ($results.Count -ge $maxResults) { break }
+}
+
+$results | ConvertTo-Json -Compress | Write-Output
+`;
+
+  const res = await runPowerShellJson<unknown>({ script, timeoutMs: 10_000 });
+  if (!Array.isArray(res)) {
+    return [];
+  }
+  const matches: UiTextMatch[] = [];
+  for (const entry of res) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const rec = entry as Record<string, unknown>;
+    const boundsRec = rec.bounds && typeof rec.bounds === "object" ? (rec.bounds as Record<string, unknown>) : null;
+    matches.push({
+      name: typeof rec.name === "string" ? rec.name : undefined,
+      automationId: typeof rec.automationId === "string" ? rec.automationId : undefined,
+      helpText: typeof rec.helpText === "string" ? rec.helpText : undefined,
+      controlType: typeof rec.controlType === "string" ? rec.controlType : undefined,
+      x: typeof rec.x === "number" && Number.isFinite(rec.x) ? rec.x : undefined,
+      y: typeof rec.y === "number" && Number.isFinite(rec.y) ? rec.y : undefined,
+      bounds:
+        boundsRec && typeof boundsRec.x === "number" && typeof boundsRec.y === "number"
+          ? {
+              x: Number(boundsRec.x),
+              y: Number(boundsRec.y),
+              width: typeof boundsRec.width === "number" ? Number(boundsRec.width) : 0,
+              height: typeof boundsRec.height === "number" ? Number(boundsRec.height) : 0,
+            }
+          : undefined,
+    });
+  }
+  return matches;
+}
+
 function isDangerousAction(action: ComputerToolAction, params: Record<string, unknown>): boolean {
   if (
     action === "hotkey" ||
@@ -514,7 +668,7 @@ function isDangerousAction(action: ComputerToolAction, params: Record<string, un
   if (action === "drag") {
     return true;
   }
-  if (action === "click") {
+  if (action === "click" || action === "click_text") {
     const button = typeof params.button === "string" ? params.button.trim().toLowerCase() : "left";
     const clicks = typeof params.clicks === "number" && Number.isFinite(params.clicks) ? params.clicks : 1;
     return button !== "left" || clicks > 1;
@@ -536,7 +690,13 @@ function shouldApproveAction(params: {
   if (confirm === "off") {
     return false;
   }
-  if (action === "snapshot" || action === "wait" || action === "release" || action === "reset_focus") {
+  if (
+    action === "snapshot" ||
+    action === "wait" ||
+    action === "release" ||
+    action === "reset_focus" ||
+    action === "find"
+  ) {
     return false;
   }
   if (action.startsWith("teach_")) {
@@ -545,7 +705,7 @@ function shouldApproveAction(params: {
   if (confirm === "always") {
     return true;
   }
-  if (action === "click" && params.uiHit && params.uiHitMatchers) {
+  if ((action === "click" || action === "click_text") && params.uiHit && params.uiHitMatchers) {
     if (isDangerousUiHit(params.uiHit, params.uiHitMatchers)) {
       return true;
     }
@@ -563,6 +723,12 @@ function formatApprovalCommand(action: string, params: Record<string, unknown>):
     "clicks",
     "deltaY",
     "text",
+    "match",
+    "caseSensitive",
+    "controlType",
+    "maxResults",
+    "resultIndex",
+    "escCount",
     "key",
     "ctrl",
     "alt",
@@ -1703,7 +1869,72 @@ export function createComputerTool(options?: {
       }
 
       let uiHit: UiHitTestResult | null = null;
-      if (confirm === "dangerous" && action === "click") {
+      let approvalParams: Record<string, unknown> = params;
+      let clickTextTarget: UiTextMatch | null = null;
+      let clickTextMeta:
+        | {
+            text: string;
+            match: "contains" | "exact" | "prefix";
+            caseSensitive: boolean;
+            controlType?: string;
+            maxResults: number;
+            resultIndex: number;
+          }
+        | null = null;
+
+      if (action === "find" || action === "click_text") {
+        const text = readStringParam(params, "text", { required: true });
+        const matchRaw = readStringParam(params, "match", { required: false });
+        const match = matchRaw === "exact" || matchRaw === "prefix" ? matchRaw : "contains";
+        const caseSensitive = typeof params.caseSensitive === "boolean" ? params.caseSensitive : false;
+        const controlType = readStringParam(params, "controlType", { required: false });
+        const maxResults = Math.min(25, readPositiveInt(params, "maxResults", 5));
+
+        const matches = await resolveUiTextMatches({
+          text,
+          match,
+          caseSensitive,
+          controlType: controlType || undefined,
+          maxResults,
+        });
+
+        if (action === "find") {
+          return jsonResult({ matches });
+        }
+
+        if (matches.length === 0) {
+          throw new Error(`no UI element matches text: ${text}`);
+        }
+
+        const resultIndex = readNonNegativeInt(params, "resultIndex", 0);
+        if (resultIndex >= matches.length) {
+          throw new Error(`resultIndex ${resultIndex} out of range (matches: ${matches.length})`);
+        }
+
+        const target = matches[resultIndex];
+        if (typeof target?.x !== "number" || typeof target?.y !== "number") {
+          throw new Error("matched UI element has no bounds");
+        }
+
+        clickTextTarget = target;
+        clickTextMeta = {
+          text,
+          match,
+          caseSensitive,
+          controlType: controlType || undefined,
+          maxResults,
+          resultIndex,
+        };
+        uiHit = {
+          name: target.name ?? text,
+          automationId: target.automationId,
+          helpText: target.helpText,
+          controlType: target.controlType,
+        };
+        approvalParams = { ...params, x: target.x, y: target.y };
+      }
+
+      if (confirm === "dangerous" && action === "click" && !uiHit) {
         const buttonRaw = readStringParam(params, "button", { required: false });
         const button = buttonRaw === "right" || buttonRaw === "middle" ? buttonRaw : "left";
         const clicks = readPositiveInt(params, "clicks", 1);
@@ -1718,16 +1949,18 @@ export function createComputerTool(options?: {
         shouldApproveAction({
           action,
           confirm,
-          rawParams: params,
+          rawParams: approvalParams,
           uiHit,
           uiHitMatchers,
         })
       ) {
-        let approvalText = formatApprovalCommand(`computer.${action}`, params);
-        if (action === "click" && uiHit && uiHitMatchers && isDangerousUiHit(uiHit, uiHitMatchers)) {
-          const label = uiHit.name || uiHit.automationId || uiHit.controlType || "";
-          if (label) {
-            approvalText += ` target=${JSON.stringify(label.slice(0, 80))}`;
+        let approvalText = formatApprovalCommand(`computer.${action}`, approvalParams);
+        if ((action === "click" || action === "click_text") && uiHit && uiHitMatchers) {
+          if (isDangerousUiHit(uiHit, uiHitMatchers)) {
+            const label = uiHit.name || uiHit.automationId || uiHit.controlType || "";
+            if (label) {
+              approvalText += ` target=${JSON.stringify(label.slice(0, 80))}`;
+            }
           }
         }
         await ensureApproval({
@@ -1759,6 +1992,57 @@ export function createComputerTool(options?: {
           });
         }
         return jsonResult({ ok: true });
+      }
+
+      if (action === "click_text") {
+        if (!clickTextTarget || !clickTextMeta) {
+          throw new Error("click_text requires a text match");
+        }
+        const x = clickTextTarget.x ?? 0;
+        const y = clickTextTarget.y ?? 0;
+        const buttonRaw = readStringParam(params, "button", { required: false });
+        const button = buttonRaw === "right" || buttonRaw === "middle" ? buttonRaw : "left";
+        const clicks = readPositiveInt(params, "clicks", 1);
+        const steps = readPositiveInt(params, "steps", 8);
+        const stepDelayMs = readPositiveInt(params, "stepDelayMs", 5);
+        const jitterPx = readNonNegativeInt(params, "jitterPx", 1);
+        await runInputAction({
+          action: "click",
+          args: { x, y, button, clicks, steps, stepDelayMs, jitterPx, delayMs },
+        });
+        if (agentDir) {
+          await recordTeachStep({
+            agentDir,
+            sessionKey,
+            action: "click_text",
+            stepParams: {
+              text: clickTextMeta.text,
+              match: clickTextMeta.match,
+              caseSensitive: clickTextMeta.caseSensitive,
+              controlType: clickTextMeta.controlType,
+              resultIndex: clickTextMeta.resultIndex,
+              maxResults: clickTextMeta.maxResults,
+              x,
+              y,
+              button,
+              clicks,
+              steps,
+              stepDelayMs,
+              jitterPx,
+              delayMs,
+            },
+          });
+        }
+        return jsonResult({
+          ok: true,
+          target: {
+            name: clickTextTarget.name,
+            automationId: clickTextTarget.automationId,
+            controlType: clickTextTarget.controlType,
+            x,
+            y,
+          },
+        });
       }
 
       if (action === "click") {

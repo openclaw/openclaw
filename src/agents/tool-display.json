@@ -127,6 +127,8 @@
         "release": { "label": "release" },
         "reset_focus": { "label": "reset focus", "detailKeys": ["escCount"] },
         "hover": { "label": "hover", "detailKeys": ["x", "y", "durationMs", "steps", "stepDelayMs", "jitterPx"] },
+        "find": { "label": "find", "detailKeys": ["text", "match", "controlType", "maxResults"] },
+        "click_text": { "label": "click text", "detailKeys": ["text", "match", "controlType", "resultIndex", "steps", "stepDelayMs", "jitterPx"] },
         "move": { "label": "move", "detailKeys": ["x", "y", "steps", "stepDelayMs", "jitterPx"] },
         "click": { "label": "click", "detailKeys": ["x", "y", "button", "clicks", "steps", "stepDelayMs", "jitterPx"] },
         "dblclick": { "label": "dblclick", "detailKeys": ["x", "y"] },
