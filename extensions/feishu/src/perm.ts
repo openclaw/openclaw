@@ -1,6 +1,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import type { FeishuConfig } from "./types.js";
+import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
 import { resolveToolsConfig } from "./tools-config.js";
@@ -118,19 +118,25 @@ async function removeMember(
 // ============ Tool Registration ============
 
 export function registerFeishuPermTools(api: OpenClawPluginApi) {
-  const feishuCfg = api.config?.channels?.feishu as FeishuConfig | undefined;
-  if (!feishuCfg?.appId || !feishuCfg?.appSecret) {
-    api.logger.debug?.("feishu_perm: Feishu credentials not configured, skipping perm tools");
+  if (!api.config) {
+    api.logger.debug?.("feishu_perm: No config available, skipping perm tools");
     return;
   }
 
-  const toolsCfg = resolveToolsConfig(feishuCfg.tools);
+  const accounts = listEnabledFeishuAccounts(api.config);
+  if (accounts.length === 0) {
+    api.logger.debug?.("feishu_perm: No Feishu accounts configured, skipping perm tools");
+    return;
+  }
+
+  const firstAccount = accounts[0];
+  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
   if (!toolsCfg.perm) {
     api.logger.debug?.("feishu_perm: perm tool disabled in config (default: false)");
     return;
   }
 
-  const getClient = () => createFeishuClient(feishuCfg);
+  const getClient = () => createFeishuClient(firstAccount);
 
   api.registerTool(
     {

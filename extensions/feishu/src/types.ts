@@ -1,8 +1,14 @@
-import type { FeishuConfigSchema, FeishuGroupSchema, z } from "./config-schema.js";
+import type {
+  FeishuConfigSchema,
+  FeishuGroupSchema,
+  FeishuAccountConfigSchema,
+  z,
+} from "./config-schema.js";
 import type { MentionTarget } from "./mention.js";
 
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
 export type FeishuGroupConfig = z.infer<typeof FeishuGroupSchema>;
+export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
 
 export type FeishuDomain = "feishu" | "lark" | (string & {});
 export type FeishuConnectionMode = "websocket" | "webhook";
@@ -11,8 +17,14 @@ export type ResolvedFeishuAccount = {
   accountId: string;
   enabled: boolean;
   configured: boolean;
+  name?: string;
   appId?: string;
+  appSecret?: string;
+  encryptKey?: string;
+  verificationToken?: string;
   domain: FeishuDomain;
+  /** Merged config (top-level defaults + account-specific overrides) */
+  config: FeishuConfig;
 };
 
 export type FeishuIdType = "open_id" | "user_id" | "union_id" | "chat_id";

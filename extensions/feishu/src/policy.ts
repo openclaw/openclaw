@@ -58,7 +58,6 @@ export function resolveFeishuGroupConfig(params: {
 
 export function resolveFeishuGroupToolPolicy(
   params: ChannelGroupContext,
-  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- type resolution issue with plugin-sdk
 ): GroupToolPolicyConfig | undefined {
   const cfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
   if (!cfg) {
