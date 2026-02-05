@@ -66,6 +66,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.89
+      '@openclaw/core-memories':
+        specifier: workspace:*
+        version: link:packages/core-memories
       '@sinclair/typebox':
         specifier: 0.34.47
         version: 0.34.47

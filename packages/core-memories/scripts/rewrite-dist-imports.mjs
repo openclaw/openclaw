@@ -16,6 +16,10 @@ const replacements = [
   // Most important entrypoints
   { from: 'from "./index"', to: 'from "./index.js"' },
   { from: 'from "./session-continuation"', to: 'from "./session-continuation.js"' },
+  {
+    from: 'from "./session-continuation-integration"',
+    to: 'from "./session-continuation-integration.js"',
+  },
   { from: 'from "./integration"', to: 'from "./integration.js"' },
 ];
 
