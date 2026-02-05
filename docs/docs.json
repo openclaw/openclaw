@@ -745,7 +745,7 @@
                   "start/getting-started",
                   {
                     "group": "Onboarding",
-                    "pages": ["start/wizard", "start/onboarding"]
+                    "pages": ["start/wizard", "start/onboarding", "start/bootstrapping"]
                   },
                   "start/pairing"
                 ]
