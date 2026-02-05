@@ -20,6 +20,9 @@ COPY . .
 # Build the TypeScript source code
 RUN pnpm build
 
+# Build Control UI assets (served by /ui)
+RUN pnpm --filter openclaw-control-ui run build
+
 # Install Playwright and Chromium browser
 ENV PLAYWRIGHT_BROWSERS_PATH=/data/playwright-browsers
 RUN pnpm add -w playwright && pnpm exec playwright install chromium
