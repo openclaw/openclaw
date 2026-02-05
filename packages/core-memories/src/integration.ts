@@ -48,7 +48,14 @@ export async function heartbeatMaintenance(): Promise<MaintenanceResult> {
   const cm = await getCoreMemories();
 
   // 1. Run compression (Flash → Warm)
+  const flashBefore = cm.getFlashEntries().length;
+  const warmBefore = cm.getWarmEntries().length;
+
   await cm.runCompression();
+
+  const flashAfter = cm.getFlashEntries().length;
+  const warmAfter = cm.getWarmEntries().length;
+  const compressed = warmAfter > warmBefore || flashAfter < flashBefore;
 
   // 2. Get pending MEMORY.md proposals
   const pending = cm.getPendingMemoryMdProposals();
@@ -62,7 +69,7 @@ export async function heartbeatMaintenance(): Promise<MaintenanceResult> {
   console.log(`   📊 Status: ${context.flash.length} flash, ${context.warm.length} warm entries`);
 
   return {
-    compressed: true,
+    compressed,
     pendingMemoryMdUpdates: pending.length,
     totalTokens: context.totalTokens,
   };

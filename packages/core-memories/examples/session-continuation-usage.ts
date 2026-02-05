@@ -7,7 +7,7 @@
 /* eslint-disable no-unused-vars */
 
 import { CoreMemories, FlashEntry } from "../src/index";
-import { onSessionStart, heartbeatSessionCheck } from "../src/session-continuation-integration.js";
+import { onSessionStart, heartbeatSessionCheck } from "../src/session-continuation-integration";
 
 // ============================================================================
 // EXAMPLE 1: On Gateway/Session Start

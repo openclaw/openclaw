@@ -5,6 +5,7 @@
 
 import fs from "node:fs";
 import http from "node:http";
+import https from "node:https";
 import path from "node:path";
 
 // Default configuration
@@ -506,11 +507,14 @@ Output only valid JSON:`;
 
         const endpoint = CONFIG?.engines?.local?.endpoint ?? "http://localhost:11434";
         const url = new URL(endpoint);
+        const isHttps = url.protocol === "https:";
+        const request = isHttps ? https.request : http.request;
+        const defaultPort = isHttps ? 443 : 80;
 
-        const req = http.request(
+        const req = request(
           {
             hostname: url.hostname,
-            port: url.port ? Number(url.port) : 80,
+            port: url.port ? Number(url.port) : defaultPort,
             path: `${url.pathname.replace(/\/$/, "")}/api/generate`,
             method: "POST",
             headers: {
