@@ -196,6 +196,15 @@ export function MessageComposer({
             rows={1}
             disabled={disabled}
             placeholder={placeholder}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            inputMode="text"
+            data-form-type="other"
+            data-lpignore="true"
+            data-1p-ignore="true"
+            data-ms-editor="false"
             className={cn(
               "w-full resize-none rounded-xl border border-input bg-background px-4 py-3 text-sm",
               "placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",

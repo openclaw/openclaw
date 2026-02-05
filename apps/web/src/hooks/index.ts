@@ -45,3 +45,9 @@ export {
   ONBOARDING_COMPLETED_AT_KEY,
   type UseOnboardingCheckResult,
 } from "./useOnboardingCheck";
+export {
+  useConnectionManager,
+  type ConnectionStatus,
+  type ConnectionStatusMap,
+  type OAuthConnectOptions,
+} from "./useConnectionManager";

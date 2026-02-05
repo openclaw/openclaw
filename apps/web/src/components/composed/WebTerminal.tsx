@@ -212,9 +212,17 @@ export const WebTerminal = React.forwardRef<WebTerminalRef, WebTerminalProps>(
           <div className="p-4 text-sm text-muted-foreground">
             <div className="font-medium text-foreground">Terminal renderer unavailable</div>
             <div className="mt-1">
-              Install <code className="font-mono">@xterm/xterm</code> addons to enable the terminal view.
+              Failed to load terminal libraries. This is usually a Vite cache issue.
             </div>
-            <div className="mt-2 font-mono text-xs">{loadError}</div>
+            <div className="mt-2">
+              <strong>Solution:</strong>
+              <ol className="list-decimal list-inside mt-1 space-y-1">
+                <li>Stop the dev server (Ctrl+C)</li>
+                <li>Clear browser cache (Cmd+Shift+R or Ctrl+Shift+R)</li>
+                <li>Run: <code className="font-mono bg-muted px-1">cd apps/web && pnpm dev</code></li>
+              </ol>
+            </div>
+            <div className="mt-3 font-mono text-xs text-destructive">{loadError}</div>
           </div>
         ) : (
           <div

@@ -32,7 +32,7 @@ const sizeClasses: Record<AgentAvatarSize, string> = {
 const statusColors: Record<AgentAvatarStatus, string> = {
   active: "bg-green-500",
   ready: "bg-green-500",
-  busy: "bg-yellow-500",
+  busy: "bg-green-500",
   paused: "bg-orange-500",
   offline: "bg-muted-foreground/50",
 };
@@ -45,12 +45,22 @@ const statusDotSizes: Record<AgentAvatarSize, string> = {
   xl: "h-4 w-4 ring-[3px]",
 };
 
-const borderRadii: Record<AgentAvatarSize, string> = {
-  xs: "rounded-md",
-  sm: "rounded-lg",
-  md: "rounded-xl",
-  lg: "rounded-2xl",
-  xl: "rounded-2xl",
+// Ring sizes for the prominent outer ring
+const ringPadding: Record<AgentAvatarSize, string> = {
+  xs: "p-0.5",
+  sm: "p-1",
+  md: "p-1.5",
+  lg: "p-2",
+  xl: "p-3",
+};
+
+// Ring thickness for different states
+const ringThickness: Record<AgentAvatarSize, string> = {
+  xs: "ring-2",
+  sm: "ring-2",
+  md: "ring-[3px]",
+  lg: "ring-4",
+  xl: "ring-[5px]",
 };
 
 /**
@@ -97,38 +107,63 @@ export const AgentAvatar = React.memo(function AgentAvatar({
   const [imageError, setImageError] = React.useState(false);
   const showImage = avatarUrl && !imageError;
 
+  // Determine if we should show the prominent animated ring
+  const isBusy = status === "busy" || status === "active";
+
   return (
     <div className={cn("relative inline-flex shrink-0", className)}>
+      {/* Outer prominent ring container */}
       <div
         className={cn(
-          "flex items-center justify-center font-medium overflow-hidden",
-          sizeClasses[size],
-          borderRadii[size],
-          !showImage && getColorFromName(name)
+          "relative rounded-full transition-all duration-300",
+          ringPadding[size],
+          // Prominent ring styles
+          isBusy && [
+            "ring-green-500/60 bg-green-500/10",
+            ringThickness[size],
+            "animate-[spin_3s_linear_infinite]",
+          ],
+          !isBusy && showStatus && status && [
+            "ring-muted/30",
+            "ring-2",
+          ]
         )}
       >
-        {showImage ? (
-          <img
-            src={avatarUrl}
-            alt={name}
-            className="h-full w-full object-cover"
-            onError={() => setImageError(true)}
+        {/* Avatar circle */}
+        <div
+          className={cn(
+            "flex items-center justify-center font-medium overflow-hidden rounded-full",
+            sizeClasses[size],
+            !showImage && getColorFromName(name),
+            // Add subtle pulse for busy state
+            isBusy && "ring-2 ring-green-500 ring-offset-2 ring-offset-background"
+          )}
+        >
+          {showImage ? (
+            <img
+              src={avatarUrl}
+              alt={name}
+              className="h-full w-full object-cover"
+              onError={() => setImageError(true)}
+            />
+          ) : (
+            getInitials(name)
+          )}
+        </div>
+
+        {/* Status dot indicator */}
+        {showStatus && status && (
+          <span
+            className={cn(
+              "absolute -bottom-0.5 -right-0.5 rounded-full ring-background",
+              statusDotSizes[size],
+              statusColors[status],
+              status === "active" && "animate-pulse"
+            )}
+            aria-label={`Status: ${status}`}
           />
-        ) : (
-          getInitials(name)
         )}
       </div>
-      {showStatus && status && (
-        <span
-          className={cn(
-            "absolute -bottom-0.5 -right-0.5 rounded-full ring-card",
-            statusDotSizes[size],
-            statusColors[status],
-            status === "active" && "animate-pulse"
-          )}
-          aria-label={`Status: ${status}`}
-        />
-      )}
     </div>
   );
 });
