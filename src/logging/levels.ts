@@ -16,14 +16,15 @@ export function normalizeLogLevel(level?: string, fallback: LogLevel = "info") {
 }
 
 export function levelToMinLevel(level: LogLevel): number {
-  // tslog level ordering: fatal=0, error=1, warn=2, info=3, debug=4, trace=5
+  // Matches tslog v4 level IDs: higher number = more severe.
+  // tslog logs messages with logLevelId >= minLevel.
   const map: Record<LogLevel, number> = {
-    fatal: 0,
-    error: 1,
-    warn: 2,
+    trace: 1,
+    debug: 2,
     info: 3,
-    debug: 4,
-    trace: 5,
+    warn: 4,
+    error: 5,
+    fatal: 6,
     silent: Number.POSITIVE_INFINITY,
   };
   return map[level];

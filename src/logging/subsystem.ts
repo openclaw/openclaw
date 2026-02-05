@@ -30,7 +30,7 @@ function shouldLogToConsole(level: LogLevel, settings: { level: LogLevel }): boo
   }
   const current = levelToMinLevel(level);
   const min = levelToMinLevel(settings.level);
-  return current <= min;
+  return current >= min;
 }
 
 type ChalkInstance = InstanceType<typeof Chalk>;
