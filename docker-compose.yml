@@ -70,6 +70,8 @@ services:
     container_name: openclaw-sandbox
     image: openclaw-sandbox:latest
     restart: always
+    environment:
+      - CHROME_FLAGS="--remote-allow-origins=* --disable-gpu --disable-software-rasterizer --use-gl=swiftshader --disable-dev-shm-usage"
     tmpfs:
       - /tmp
     ports:
@@ -78,6 +80,7 @@ services:
     shm_size: "4gb" # 浏览器非常吃缓存，建议加大
     networks:
       - proxy
+
     deploy:
       resources:
         limits:
@@ -104,6 +107,9 @@ services:
 networks:
   proxy:
     external: true
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: 1400 # 将 MTU 降至 1400 试试
 
 volumes:
   openclaw-data:
