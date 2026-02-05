@@ -292,12 +292,18 @@ export const convosPlugin: ChannelPlugin<ResolvedConvosAccount> = {
 
       log?.info(`[${account.accountId}] Convos provider started`);
 
-      // Cleanup on abort
-      abortSignal?.addEventListener("abort", () => {
-        stopClient(account.accountId, log);
+      // Block until abort signal fires (gateway expects startAccount to stay
+      // alive for the channel's lifetime; returning early marks it stopped).
+      await new Promise<void>((resolve) => {
+        const onAbort = () => {
+          stopClient(account.accountId, log).finally(resolve);
+        };
+        if (abortSignal?.aborted) {
+          onAbort();
+          return;
+        }
+        abortSignal?.addEventListener("abort", onAbort, { once: true });
       });
-
-      return { client };
     },
     stopAccount: async (ctx) => {
       const { account, log } = ctx;
