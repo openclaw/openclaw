@@ -223,11 +223,13 @@ export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
   meta?: string;
+  /** When true, omit emoji for accessibility (screenreader-friendly output). */
+  plainText?: boolean;
 }): ToolDisplay {
   const name = normalizeToolName(params.name);
   const key = name.toLowerCase();
   const spec = TOOL_MAP[key];
-  const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
+  const emoji = params.plainText ? "" : (spec?.emoji ?? FALLBACK.emoji ?? "🧩");
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
   const actionRaw =

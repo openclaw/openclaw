@@ -15,10 +15,14 @@ type ToolResult = {
   details?: Record<string, unknown>;
 };
 
+export interface ToolExecutionOptions {
+  plainText?: boolean;
+}
+
 const PREVIEW_LINES = 12;
 
-function formatArgs(toolName: string, args: unknown): string {
-  const display = resolveToolDisplay({ name: toolName, args });
+function formatArgs(toolName: string, args: unknown, plainText?: boolean): string {
+  const display = resolveToolDisplay({ name: toolName, args, plainText });
   const detail = formatToolDetail(display);
   if (detail) {
     return detail;
@@ -62,11 +66,13 @@ export class ToolExecutionComponent extends Container {
   private expanded = false;
   private isError = false;
   private isPartial = true;
+  private plainText?: boolean;
 
-  constructor(toolName: string, args: unknown) {
+  constructor(toolName: string, args: unknown, options?: ToolExecutionOptions) {
     super();
     this.toolName = toolName;
     this.args = args;
+    this.plainText = options?.plainText;
     this.box = new Box(1, 1, (line) => theme.toolPendingBg(line));
     this.header = new Text("", 0, 0);
     this.argsLine = new Text("", 0, 0);
@@ -115,11 +121,13 @@ export class ToolExecutionComponent extends Container {
     const display = resolveToolDisplay({
       name: this.toolName,
       args: this.args,
+      plainText: this.plainText,
     });
-    const title = `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`;
+    const emojiPrefix = display.emoji ? `${display.emoji} ` : "";
+    const title = `${emojiPrefix}${display.label}${this.isPartial ? " (running)" : ""}`;
     this.header.setText(theme.toolTitle(theme.bold(title)));
 
-    const argLine = formatArgs(this.toolName, this.args);
+    const argLine = formatArgs(this.toolName, this.args, this.plainText);
     this.argsLine.setText(argLine ? theme.dim(argLine) : theme.dim(" "));
 
     const raw = extractText(this.result);

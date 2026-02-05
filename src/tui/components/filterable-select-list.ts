@@ -19,6 +19,8 @@ export interface FilterableSelectItem extends SelectItem {
 
 export interface FilterableSelectListTheme extends SelectListTheme {
   filterLabel: (text: string) => string;
+  /** Separator character for plain text mode (accessibility). Defaults to unicode box-drawing. */
+  separator?: string;
 }
 
 /**
@@ -68,8 +70,9 @@ export class FilterableSelectList implements Component {
     const inputText = inputLines[0] ?? "";
     lines.push(filterLabel + inputText);
 
-    // Separator
-    lines.push(chalk.dim("─".repeat(Math.max(0, width))));
+    // Separator (use plain dash for accessibility when specified)
+    const sep = this.theme.separator ?? "─";
+    lines.push(chalk.dim(sep.repeat(Math.max(0, width))));
 
     // Select list
     const listLines = this.selectList.render(width);

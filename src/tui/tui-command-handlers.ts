@@ -1,5 +1,6 @@
 import type { Component, TUI } from "@mariozechner/pi-tui";
 import { randomUUID } from "node:crypto";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
@@ -25,6 +26,7 @@ import {
 import { formatStatusSummary } from "./tui-status-summary.js";
 
 type CommandHandlerContext = {
+  config: OpenClawConfig;
   client: GatewayChatClient;
   chatLog: ChatLog;
   tui: TUI;
@@ -47,6 +49,7 @@ type CommandHandlerContext = {
 
 export function createCommandHandlers(context: CommandHandlerContext) {
   const {
+    config,
     client,
     chatLog,
     tui,
@@ -66,6 +69,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     noteLocalRunId,
     forgetLocalRunId,
   } = context;
+  const plainTextMode = config.ui?.accessibility?.plainText;
 
   const setAgent = async (id: string) => {
     state.currentAgentId = normalizeAgentId(id);
@@ -178,7 +182,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             .join(" "),
         };
       });
-      const selector = createFilterableSelectList(items, 9);
+      const selector = createFilterableSelectList(items, 9, { plainText: plainTextMode });
       selector.onSelect = (item) => {
         void (async () => {
           closeOverlay();

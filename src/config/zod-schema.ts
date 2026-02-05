@@ -236,6 +236,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        accessibility: z
+          .object({
+            plainText: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

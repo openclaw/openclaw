@@ -74,6 +74,10 @@ export type OpenClawConfig = {
       /** Assistant avatar (emoji, short text, or image URL/data URI). */
       avatar?: string;
     };
+    accessibility?: {
+      /** When true, replace emojis and unicode symbols with plain text for screenreader compatibility. */
+      plainText?: boolean;
+    };
   };
   skills?: SkillsConfig;
   plugins?: PluginsConfig;

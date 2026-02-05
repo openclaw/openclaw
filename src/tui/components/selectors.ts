@@ -16,8 +16,15 @@ export function createSearchableSelectList(items: SelectItem[], maxVisible = 7) 
   return new SearchableSelectList(items, maxVisible, searchableSelectListTheme);
 }
 
-export function createFilterableSelectList(items: FilterableSelectItem[], maxVisible = 7) {
-  return new FilterableSelectList(items, maxVisible, filterableSelectListTheme);
+export function createFilterableSelectList(
+  items: FilterableSelectItem[],
+  maxVisible = 7,
+  options?: { plainText?: boolean },
+) {
+  const theme = options?.plainText
+    ? { ...filterableSelectListTheme, separator: "-" }
+    : filterableSelectListTheme;
+  return new FilterableSelectList(items, maxVisible, theme);
 }
 
 export function createSettingsList(

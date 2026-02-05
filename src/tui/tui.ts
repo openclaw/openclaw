@@ -259,7 +259,7 @@ export async function runTui(opts: TuiOptions) {
   const header = new Text("", 1, 0);
   const statusContainer = new Container();
   const footer = new Text("", 1, 0);
-  const chatLog = new ChatLog();
+  const chatLog = new ChatLog({ plainText: config.ui?.accessibility?.plainText });
   const editor = new CustomEditor(tui, editorTheme);
   const root = new Container();
   root.addChild(header);
@@ -571,6 +571,7 @@ export async function runTui(opts: TuiOptions) {
 
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
     createCommandHandlers({
+      config,
       client,
       chatLog,
       tui,

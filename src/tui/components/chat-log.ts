@@ -4,10 +4,20 @@ import { AssistantMessageComponent } from "./assistant-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
+export interface ChatLogOptions {
+  plainText?: boolean;
+}
+
 export class ChatLog extends Container {
   private toolById = new Map<string, ToolExecutionComponent>();
   private streamingRuns = new Map<string, AssistantMessageComponent>();
   private toolsExpanded = false;
+  private plainText?: boolean;
+
+  constructor(options?: ChatLogOptions) {
+    super();
+    this.plainText = options?.plainText;
+  }
 
   clearAll() {
     this.clear();
@@ -62,7 +72,7 @@ export class ChatLog extends Container {
       existing.setArgs(args);
       return existing;
     }
-    const component = new ToolExecutionComponent(toolName, args);
+    const component = new ToolExecutionComponent(toolName, args, { plainText: this.plainText });
     component.setExpanded(this.toolsExpanded);
     this.toolById.set(toolCallId, component);
     this.addChild(component);
