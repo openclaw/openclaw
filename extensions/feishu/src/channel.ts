@@ -55,10 +55,10 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
   capabilities: {
     chatTypes: ["direct", "group"],
     media: true,
-    reactions: false,
+    reactions: true,
     threads: false,
     polls: false,
-    nativeCommands: false,
+    nativeCommands: true,
     blockStreaming: true,
   },
   reload: { configPrefixes: ["channels.feishu"] },

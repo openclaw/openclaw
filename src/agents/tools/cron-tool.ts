@@ -1,6 +1,8 @@
 import { Type } from "@sinclair/typebox";
+import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
@@ -153,6 +155,72 @@ async function buildReminderContextLines(params: {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stripThreadSuffixFromSessionKey(sessionKey: string): string {
+  const normalized = sessionKey.toLowerCase();
+  const idx = normalized.lastIndexOf(":thread:");
+  if (idx <= 0) {
+    return sessionKey;
+  }
+  const parent = sessionKey.slice(0, idx).trim();
+  return parent ? parent : sessionKey;
+}
+
+function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
+  const rawSessionKey = agentSessionKey?.trim();
+  if (!rawSessionKey) {
+    return null;
+  }
+  const parsed = parseAgentSessionKey(stripThreadSuffixFromSessionKey(rawSessionKey));
+  if (!parsed || !parsed.rest) {
+    return null;
+  }
+  const parts = parsed.rest.split(":").filter(Boolean);
+  if (parts.length === 0) {
+    return null;
+  }
+  const head = parts[0]?.trim().toLowerCase();
+  if (!head || head === "main" || head === "subagent" || head === "acp") {
+    return null;
+  }
+
+  // buildAgentPeerSessionKey encodes peers as:
+  // - dm:<peerId>
+  // - <channel>:dm:<peerId>
+  // - <channel>:<accountId>:dm:<peerId>
+  // - <channel>:group:<peerId>
+  // - <channel>:channel:<peerId>
+  // Threaded sessions append :thread:<id>, which we strip so delivery targets the parent peer.
+  // NOTE: Telegram forum topics encode as <chatId>:topic:<topicId> and should be preserved.
+  const markerIndex = parts.findIndex(
+    (part) => part === "dm" || part === "group" || part === "channel",
+  );
+  if (markerIndex === -1) {
+    return null;
+  }
+  const peerId = parts
+    .slice(markerIndex + 1)
+    .join(":")
+    .trim();
+  if (!peerId) {
+    return null;
+  }
+
+  let channel: CronMessageChannel | undefined;
+  if (markerIndex >= 1) {
+    channel = parts[0]?.trim().toLowerCase() as CronMessageChannel;
+  }
+
+  const delivery: CronDelivery = { mode: "announce", to: peerId };
+  if (channel) {
+    delivery.channel = channel;
+  }
+  return delivery;
+}
+
 export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   return {
     label: "Cron",
@@ -243,6 +311,35 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               (job as { agentId?: string }).agentId = agentId;
             }
           }
+
+          // [Fix Issue 3] Infer delivery target from session key for isolated jobs if not provided
+          if (
+            opts?.agentSessionKey &&
+            job &&
+            typeof job === "object" &&
+            "payload" in job &&
+            (job as { payload?: { kind?: string } }).payload?.kind === "agentTurn"
+          ) {
+            const deliveryValue = (job as { delivery?: unknown }).delivery;
+            const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
+            const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
+            const mode = modeRaw.trim().toLowerCase();
+            const hasTarget =
+              (typeof delivery?.channel === "string" && delivery.channel.trim()) ||
+              (typeof delivery?.to === "string" && delivery.to.trim());
+            const shouldInfer =
+              (deliveryValue == null || delivery) && mode !== "none" && !hasTarget;
+            if (shouldInfer) {
+              const inferred = inferDeliveryFromSessionKey(opts.agentSessionKey);
+              if (inferred) {
+                (job as { delivery?: unknown }).delivery = {
+                  ...delivery,
+                  ...inferred,
+                } satisfies CronDelivery;
+              }
+            }
+          }
+
           const contextMessages =
             typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
               ? params.contextMessages
