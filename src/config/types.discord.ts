@@ -126,6 +126,8 @@ export type DiscordAccountConfig = {
   chunkMode?: "length" | "newline";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
+  /** Show tool execution feedback messages in channel (e.g. "Searching the web..."). */
+  toolFeedback?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /**

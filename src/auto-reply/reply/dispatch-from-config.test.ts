@@ -244,6 +244,65 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("provides onToolStatus when toolFeedback is enabled", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts: GetReplyOptions | undefined,
+      _cfg: OpenClawConfig,
+    ) => {
+      expect(opts?.onToolStatus).toBeDefined();
+      // Simulate tool start
+      await opts?.onToolStatus?.({ toolName: "web_search", toolCallId: "call-1" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: { toolFeedback: true },
+      replyResolver,
+    });
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "*Searching the web*" }),
+    );
+  });
+
+  it("does not provide onToolStatus when toolFeedback is disabled", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    const cfg = {} as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      ChatType: "direct",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts: GetReplyOptions | undefined,
+      _cfg: OpenClawConfig,
+    ) => {
+      expect(opts?.onToolStatus).toBeUndefined();
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+  });
+
   it("fast-aborts without calling the reply resolver", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({
       handled: true,

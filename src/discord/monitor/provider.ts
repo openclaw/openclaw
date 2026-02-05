@@ -29,12 +29,14 @@ import { normalizeDiscordToken } from "../token.js";
 import { createExecApprovalButton, DiscordExecApprovalHandler } from "./exec-approvals.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
 import {
+  DiscordMessageEditListener,
   DiscordMessageListener,
   DiscordPresenceListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
   registerDiscordListener,
 } from "./listeners.js";
+import { createDiscordMessageEditHandler } from "./message-edit-handler.js";
 import { createDiscordMessageHandler } from "./message-handler.js";
 import {
   createDiscordCommandArgFallbackButton,
@@ -553,6 +555,27 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   });
 
   registerDiscordListener(client.listeners, new DiscordMessageListener(messageHandler, logger));
+
+  const editHandler = createDiscordMessageEditHandler({
+    cfg,
+    discordConfig: discordCfg,
+    accountId: account.accountId,
+    token,
+    runtime,
+    botUserId,
+    guildHistories,
+    historyLimit,
+    mediaMaxBytes,
+    textLimit,
+    replyToMode,
+    dmEnabled,
+    groupDmEnabled,
+    groupDmChannels,
+    allowFrom,
+    guildEntries,
+  });
+  registerDiscordListener(client.listeners, new DiscordMessageEditListener(editHandler, logger));
+
   registerDiscordListener(
     client.listeners,
     new DiscordReactionListener({

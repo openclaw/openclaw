@@ -839,10 +839,9 @@ async function dispatchDiscordCommandInteraction(params: {
     },
     replyOptions: {
       skillFilter: channelConfig?.skills,
+      // 🦀 Claw's patch: Enable block streaming by default for Discord.
       disableBlockStreaming:
-        typeof discordConfig?.blockStreaming === "boolean"
-          ? !discordConfig.blockStreaming
-          : undefined,
+        typeof discordConfig?.blockStreaming === "boolean" ? !discordConfig.blockStreaming : false,
       onModelSelected,
     },
   });

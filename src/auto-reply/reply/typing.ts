@@ -84,8 +84,18 @@ export function createTypingController(params: {
       if (!typingTimer) {
         return;
       }
-      log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`);
-      cleanup();
+      // If the run is still active (e.g. extended model thinking), keep typing alive.
+      // During long thinking phases (10+ min), no streaming events arrive to refresh
+      // the TTL, so we re-extend it until the run completes.
+      if (!runComplete) {
+        log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); run still active, extending`);
+        refreshTypingTtl();
+        return;
+      }
+      log?.(`typing TTL reached (${formatTypingTtl(typingTtlMs)}); pausing typing indicator`);
+      clearInterval(typingTimer);
+      typingTimer = undefined;
+      started = false;
     }, typingTtlMs);
   };
 
@@ -93,6 +103,12 @@ export function createTypingController(params: {
 
   const triggerTyping = async () => {
     if (sealed) {
+      return;
+    }
+    // Don't send another typing signal after the run has completed. Prevents the
+    // "typing briefly after message sent" issue caused by the interval firing one
+    // last time between delivery and cleanup.
+    if (runComplete) {
       return;
     }
     await onReplyStart?.();
@@ -168,6 +184,13 @@ export function createTypingController(params: {
 
   const markRunComplete = () => {
     runComplete = true;
+    // Immediately stop the typing interval when the run completes. This eliminates
+    // the race window where a stale typing signal could fire between the run
+    // completing and the dispatcher going idle.
+    if (typingTimer) {
+      clearInterval(typingTimer);
+      typingTimer = undefined;
+    }
     maybeStopOnIdle();
   };
 

@@ -25,6 +25,23 @@ import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
 
+/** Check if context contains audio attachments that will require transcription. */
+function hasAudioAttachment(ctx: MsgContext): boolean {
+  const normalizeType = (value: string): string => value.split(";")[0]?.trim().toLowerCase();
+  const types: string[] = [];
+  if (typeof ctx.MediaType === "string" && ctx.MediaType) {
+    types.push(normalizeType(ctx.MediaType));
+  }
+  if (Array.isArray(ctx.MediaTypes)) {
+    for (const type of ctx.MediaTypes) {
+      if (typeof type === "string" && type) {
+        types.push(normalizeType(type));
+      }
+    }
+  }
+  return types.some((type) => type === "audio" || type.startsWith("audio/"));
+}
+
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
     if (!Array.isArray(list)) {
@@ -114,6 +131,12 @@ export async function getReplyFromConfig(
   opts?.onTypingController?.(typing);
 
   const finalized = finalizeInboundContext(ctx);
+
+  // Start typing loop early if audio is detected - transcription can take >10 seconds
+  // and Discord clears typing indicator after 10 seconds without refresh.
+  if (hasAudioAttachment(ctx)) {
+    await typing.startTypingLoop();
+  }
 
   if (!isFastTestEnv) {
     await applyMediaUnderstanding({

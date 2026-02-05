@@ -342,6 +342,13 @@ export async function runAgentTurnWithFallback(params: {
                 if (phase === "start" || phase === "update") {
                   await params.typingSignals.signalToolStart();
                 }
+                // Send tool status feedback to the channel when enabled.
+                if (phase === "start" && params.opts?.onToolStatus) {
+                  const toolName = typeof evt.data.name === "string" ? evt.data.name : "";
+                  const toolCallId =
+                    typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : "";
+                  void params.opts.onToolStatus({ toolName, toolCallId });
+                }
               }
               // Track auto-compaction completion
               if (evt.stream === "compaction") {

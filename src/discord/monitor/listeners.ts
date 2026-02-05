@@ -4,6 +4,7 @@ import {
   MessageCreateListener,
   MessageReactionAddListener,
   MessageReactionRemoveListener,
+  MessageUpdateListener,
   PresenceUpdateListener,
 } from "@buape/carbon";
 import { danger } from "../../globals.js";
@@ -81,6 +82,40 @@ export class DiscordMessageListener extends MessageCreateListener {
       .catch((err) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));
+      })
+      .finally(() => {
+        logSlowDiscordListener({
+          logger: this.logger,
+          listener: this.constructor.name,
+          event: this.type,
+          durationMs: Date.now() - startedAt,
+        });
+      });
+  }
+}
+
+export type DiscordMessageUpdateEvent = Parameters<MessageUpdateListener["handle"]>[0];
+
+export type DiscordMessageEditHandler = (
+  data: DiscordMessageUpdateEvent,
+  client: Client,
+) => Promise<void>;
+
+export class DiscordMessageEditListener extends MessageUpdateListener {
+  constructor(
+    private handler: DiscordMessageEditHandler,
+    private logger?: Logger,
+  ) {
+    super();
+  }
+
+  async handle(data: DiscordMessageUpdateEvent, client: Client) {
+    const startedAt = Date.now();
+    const task = Promise.resolve(this.handler(data, client));
+    void task
+      .catch((err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord edit handler failed: ${String(err)}`));
       })
       .finally(() => {
         logSlowDiscordListener({
