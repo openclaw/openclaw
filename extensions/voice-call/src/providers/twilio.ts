@@ -578,13 +578,30 @@ export class TwilioProvider implements VoiceCallProvider {
     const ttsProvider = this.ttsProvider;
 
     await handler.queueTts(streamSid, async (signal) => {
+      let totalBytesSent = 0;
+
       // Prefer streaming TTS for lower latency
       if (ttsProvider.streamForTelephony) {
+        console.log(`[voice-call] Using streaming TTS for stream ${streamSid}`);
         let remainder = Buffer.alloc(0);
         let audioSent = false;
+        let abortListenerAttached = false;
+        const onAbort = () => {
+          console.log(`[voice-call] Streaming TTS aborted for stream ${streamSid}`);
+        };
+
+        if (signal.aborted) {
+          onAbort();
+        } else {
+          signal.addEventListener("abort", onAbort, { once: true });
+          abortListenerAttached = true;
+        }
 
         try {
           for await (const chunk of ttsProvider.streamForTelephony(text, signal)) {
+            if (chunk.length > 0) {
+              console.log(`[voice-call] Streaming TTS chunk received: ${chunk.length} bytes`);
+            }
             if (signal.aborted) {
               break;
             }
@@ -597,6 +614,7 @@ export class TwilioProvider implements VoiceCallProvider {
                 break;
               }
               handler.sendAudio(streamSid, remainder.subarray(0, CHUNK_SIZE));
+              totalBytesSent += CHUNK_SIZE;
               audioSent = true;
               remainder = remainder.subarray(CHUNK_SIZE);
               await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
@@ -610,16 +628,25 @@ export class TwilioProvider implements VoiceCallProvider {
               `[voice-call] Streaming TTS failed after partial audio sent; suppressing fallback:`,
               err instanceof Error ? err.message : err,
             );
+            console.log(
+              `[voice-call] TTS bytes sent to Twilio for stream ${streamSid}: ${totalBytesSent}`,
+            );
             return;
           }
           throw err;
+        } finally {
+          if (abortListenerAttached) {
+            signal.removeEventListener("abort", onAbort);
+          }
         }
 
         // Send any remaining audio
         if (!signal.aborted && remainder.length > 0) {
           handler.sendAudio(streamSid, remainder);
+          totalBytesSent += remainder.length;
         }
       } else {
+        console.log(`[voice-call] Using buffered TTS for stream ${streamSid}`);
         // Fallback: generate full audio buffer, then chunk and send
         const muLawAudio = await ttsProvider.synthesizeForTelephony(text);
         for (const chunk of chunkAudio(muLawAudio, CHUNK_SIZE)) {
@@ -627,6 +654,7 @@ export class TwilioProvider implements VoiceCallProvider {
             break;
           }
           handler.sendAudio(streamSid, chunk);
+          totalBytesSent += chunk.length;
           await new Promise((resolve) => setTimeout(resolve, CHUNK_DELAY_MS));
           if (signal.aborted) {
             break;
@@ -635,6 +663,9 @@ export class TwilioProvider implements VoiceCallProvider {
       }
 
       if (!signal.aborted) {
+        console.log(
+          `[voice-call] TTS bytes sent to Twilio for stream ${streamSid}: ${totalBytesSent}`,
+        );
         handler.sendMark(streamSid, `tts-${Date.now()}`);
       }
     });
