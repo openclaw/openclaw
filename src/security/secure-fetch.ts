@@ -8,20 +8,30 @@
  */
 import process from "node:process";
 
-const PROXY_URL = process.env.PROXY_URL || "http://host.docker.internal:8080";
+// In secure mode, PROXY_URL must be set (fail fast if not)
+const PROXY_URL = process.env.PROXY_URL;
+if (process.env.OPENCLAW_SECURE_MODE === "1" && !PROXY_URL) {
+  throw new Error("PROXY_URL environment variable is required in secure mode");
+}
 
 // Store the original fetch
 const originalFetch = globalThis.fetch;
 
 /**
- * Checks if a URL should bypass the proxy (local requests).
+ * Checks if a URL should bypass the proxy.
+ * Only bypass for true loopback addresses, NOT host.docker.internal
+ * (which would allow container to access host services without allowlist).
  */
 function shouldBypassProxy(url: string): boolean {
-  return (
-    url.startsWith("http://localhost") ||
-    url.startsWith("http://127.0.0.1") ||
-    url.startsWith("http://host.docker.internal")
-  );
+  // Only bypass for actual loopback - container talking to itself
+  if (url.startsWith("http://localhost") || url.startsWith("http://127.0.0.1")) {
+    return true;
+  }
+  // Also bypass requests TO the proxy itself to avoid infinite loop
+  if (PROXY_URL && url.startsWith(PROXY_URL)) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -92,7 +102,8 @@ async function secureFetch(input: RequestInfo | URL, init?: RequestInit): Promis
   headers.set("X-Target-URL", targetUrl);
 
   // Route through proxy, preserving all request details
-  return originalFetch(PROXY_URL, {
+  // PROXY_URL is guaranteed to be set in secure mode (we throw at startup if not)
+  return originalFetch(PROXY_URL!, {
     method,
     headers,
     body,

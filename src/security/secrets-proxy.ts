@@ -191,6 +191,14 @@ export async function startSecretsProxy(opts: SecretsProxyOptions): Promise<http
         return;
       }
 
+      // Reject URLs with userinfo to prevent credential injection
+      if (parsedUrl.username || parsedUrl.password) {
+        logger.warn(`Blocked request with userinfo in URL: ${parsedUrl.hostname}`);
+        res.statusCode = 400;
+        res.end("URL userinfo not allowed");
+        return;
+      }
+
       if (!isDomainAllowed(targetUrl, allowedDomains)) {
         logger.warn(`Blocked request to unauthorized domain: ${parsedUrl.hostname}`);
         res.statusCode = 403;
