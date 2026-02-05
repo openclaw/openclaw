@@ -35,6 +35,11 @@ describe("normalizeThinkLevel", () => {
     expect(normalizeThinkLevel("extra high")).toBe("xhigh");
   });
 
+  it("accepts extra-high aliases as xhigh", () => {
+    expect(normalizeThinkLevel("extra-high")).toBe("xhigh");
+    expect(normalizeThinkLevel("extra high")).toBe("xhigh");
+  });
+
   it("accepts on as low", () => {
     expect(normalizeThinkLevel("on")).toBe("low");
   });
