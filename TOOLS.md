@@ -144,4 +144,44 @@ git push origin main
 
 ---
 
-*Last updated: 2026-01-30*
+### Google Cloud SDK
+
+**Path**: `C:\Users\jini9\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd`
+**Version**: 554.0.0
+**On User PATH**: Yes
+
+```bash
+# Refresh PATH in current session
+$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')
+
+# Verify
+gcloud --version
+
+# Auth login (opens browser)
+gcloud auth login
+
+# Set project
+gcloud config set project <PROJECT_ID>
+
+# Enable Sheets API
+gcloud services enable sheets.googleapis.com
+
+# Create service account
+gcloud iam service-accounts create maibeauty-crm --display-name="MAIBEAUTY CRM"
+```
+
+---
+
+### Discord 노티 규칙
+- **절대 금지**: `#일반` 채널(1466615738512179394)에 메시지 전송 금지 (보안 위험)
+- **DM 전용**: 지니님 DM 채널(1466624220632059934)으로만 전송
+- **민감 정보 제거**: 규정 문서 번호, 내부 시스템명, 제어기 정보 등 비공개 정보 포함 금지
+
+### Obsidian 볼트
+- **경로:** `C:\Users\jini9\OneDrive\Documents\JINI_SYNC`
+- **구조:** PARA 기반 (00.DAILY, 01.PROJECT, 02.AREA, 03.RESOURCES, 04.ARCHIVE)
+- **기타 폴더:** AI, chatGPT, DAILY, TEMPLATES, 05.DEBUGGING, skills
+- **CLI:** obsidian-cli 미지원 (Windows) → 직접 파일 읽기/쓰기로 연동
+- **동기화:** OneDrive
+
+*Last updated: 2026-02-05*
