@@ -75,7 +75,7 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
     return;
   }
   if (
-    host.tab === "chat" &&
+    (host.tab === "chat" || host.tab === "chatloop") &&
     (changed.has("chatMessages") ||
       changed.has("chatToolMessages") ||
       changed.has("chatStream") ||

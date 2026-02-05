@@ -225,7 +225,7 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadConfig(host as unknown as OpenClawApp);
     await loadExecApprovals(host as unknown as OpenClawApp);
   }
-  if (host.tab === "chat") {
+  if (host.tab === "chat" || host.tab === "chatloop") {
     await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
     scheduleChatScroll(
       host as unknown as Parameters<typeof scheduleChatScroll>[0],
@@ -372,7 +372,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   const currentPath = normalizePath(window.location.pathname);
   const url = new URL(window.location.href);
 
-  if (tab === "chat" && host.sessionKey) {
+  if ((tab === "chat" || tab === "chatloop") && host.sessionKey) {
     url.searchParams.set("session", host.sessionKey);
   } else {
     url.searchParams.delete("session");
