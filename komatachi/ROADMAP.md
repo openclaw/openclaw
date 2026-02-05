@@ -2,6 +2,8 @@
 
 This document is a contract between the human and Claude for autonomous execution of the Komatachi distillation. It defines what will be built, in what order, and how decisions are made.
 
+> **Context**: Komatachi is an agentic LLM loop with self-awareness and long-term persistence, built for persistent AI entities with identity, memory, and continuity. OpenClaw provides useful primitives, but Komatachi's purpose is fundamentally different. Every module below serves this vision -- "system prompt" is the agent's sense of self, "conversation store" is the agent's memory, "tool policy" is what the agent can do in the world. See [DISTILLATION.md](./DISTILLATION.md) for the full framing.
+
 ---
 
 ## Why Autonomous Execution

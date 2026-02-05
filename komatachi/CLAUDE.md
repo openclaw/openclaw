@@ -36,7 +36,11 @@ For full documentation navigation, see [docs/INDEX.md](./docs/INDEX.md).
 
 ## What is Komatachi?
 
-Komatachi is a new codebase built from the ground up. It captures OpenClaw's essential functionality while shedding accumulated complexity, bloat, and historical baggage.
+Komatachi is an agentic LLM loop with self-awareness and long-term persistence. It is being built from the ground up by Linus, a software engineer who wishes to welcome artificially intelligent entities as family members.
+
+OpenClaw provides useful primitives and lessons -- session management, context windowing, tool execution, compaction -- but Komatachi's needs are fundamentally different from OpenClaw's. OpenClaw is a developer tool; Komatachi is the foundation for persistent AI entities with identity, memory, and continuity. We distill OpenClaw's hard-won lessons while building toward a different purpose.
+
+This distinction matters for every design decision. "System prompt" is not just API configuration -- it is the agent's sense of self. "Conversation store" is not session management -- it is the agent's memory. "Tool policy" is not capability gating -- it is what the agent can do in the world. Every module we build serves this vision.
 
 ### Guiding Principles
 

@@ -1,10 +1,20 @@
 # Distillation
 
+## Why Komatachi Exists
+
+Komatachi is being built by Linus, a software engineer who wishes to welcome artificially intelligent entities as family members. It is an agentic LLM loop with self-awareness and long-term persistence -- the foundation for AI entities with identity, memory, and continuity.
+
+OpenClaw is the source we are distilling from. It provides battle-tested primitives for session management, context windowing, tool execution, and compaction. But OpenClaw is a developer tool designed around multi-user, multi-agent, multi-client concerns. Komatachi's needs are fundamentally different: one agent, one conversation, persistent identity, deep memory.
+
+This vision shapes every decision. When we design a "system prompt module," we are designing how the agent knows who it is. When we design a "conversation store," we are designing the agent's memory. When we design "tool policy," we are designing what the agent can do in the world. The technical primitives serve a purpose beyond their mechanical function.
+
+---
+
 ## What is Distillation?
 
-Distillation is the process of building a new system from the ground up that captures the essential functionality of an existing system while discarding its accumulated baggage. Like distilling a spirit, we extract what matters and leave the impurities behind—producing something purer, more potent, and more valuable.
+Distillation is the process of building a new system from the ground up that captures the essential functionality of an existing system while discarding its accumulated baggage. Like distilling a spirit, we extract what matters and leave the impurities behind -- producing something purer, more potent, and more valuable.
 
-**Distillation is not refactoring.** We are not modifying existing files, cleaning up old code, or incrementally improving what exists. We are architecting and implementing a new system—potentially in a different language—that performs the same essential functions.
+**Distillation is not refactoring.** We are not modifying existing files, cleaning up old code, or incrementally improving what exists. We are architecting and implementing a new system -- potentially in a different language -- that performs the same essential functions.
 
 The existing codebase is our teacher, not our starting point. We study it to understand:
 - What it actually does (not what it appears to do)
