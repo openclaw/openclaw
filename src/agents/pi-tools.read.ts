@@ -1,7 +1,7 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs";
+import path from "node:path";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { detectMime } from "../media/mime.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -280,7 +280,8 @@ function wrapJsonValidation(tool: AnyAgentTool, root: string): AnyAgentTool {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const result = await tool.execute(toolCallId, args, signal, onUpdate);
-      const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+      const record =
+        args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
       const filePath = record?.path ?? record?.file_path;
       if (typeof filePath === "string" && filePath.endsWith(".json")) {
         // Resolve relative paths against root (same as write tool)
@@ -297,7 +298,10 @@ function wrapJsonValidation(tool: AnyAgentTool, root: string): AnyAgentTool {
 
 export function createSandboxedWriteTool(root: string) {
   const base = createWriteTool(root) as unknown as AnyAgentTool;
-  return wrapSandboxPathGuard(wrapJsonValidation(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write), root), root);
+  return wrapSandboxPathGuard(
+    wrapJsonValidation(wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write), root),
+    root,
+  );
 }
 
 export function createSandboxedEditTool(root: string) {
