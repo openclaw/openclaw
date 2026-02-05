@@ -1,30 +1,29 @@
 import { describe, expect, it } from "vitest";
-
 import { resolveTelegramAutoSelectFamilyDecision } from "./network-config.js";
 
 describe("resolveTelegramAutoSelectFamilyDecision", () => {
   it("prefers env enable over env disable", () => {
     const decision = resolveTelegramAutoSelectFamilyDecision({
       env: {
-        CLAWDBOT_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY: "1",
-        CLAWDBOT_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY: "1",
+        OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY: "1",
+        OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY: "1",
       },
       nodeMajor: 22,
     });
     expect(decision).toEqual({
       value: true,
-      source: "env:CLAWDBOT_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY",
+      source: "env:OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY",
     });
   });
 
   it("uses env disable when set", () => {
     const decision = resolveTelegramAutoSelectFamilyDecision({
-      env: { CLAWDBOT_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY: "1" },
+      env: { OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY: "1" },
       nodeMajor: 22,
     });
     expect(decision).toEqual({
       value: false,
-      source: "env:CLAWDBOT_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY",
+      source: "env:OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY",
     });
   });
 

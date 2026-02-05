@@ -1,14 +1,18 @@
-import { LitElement, html, nothing } from "lit";
+import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
-
-import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
-import { resolveInjectedAssistantIdentity } from "./assistant-identity";
-import { loadSettings, type UiSettings } from "./storage";
-import { renderApp } from "./app-render";
-import type { Tab } from "./navigation";
-import type { ResolvedTheme, ThemeMode } from "./theme";
+import type { EventLogEntry } from "./app-events.ts";
+import type { AppViewState } from "./app-view-state.ts";
+import type { DevicePairingList } from "./controllers/devices.ts";
+import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
+import type { SkillMessage } from "./controllers/skills.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
+import type { Tab } from "./navigation.ts";
+import type { ResolvedTheme, ThemeMode } from "./theme.ts";
 import type {
   AgentsListResult,
+  AgentsFilesListResult,
+  AgentIdentityResult,
   ConfigSnapshot,
   ConfigUiHints,
   CronJob,
@@ -23,46 +27,8 @@ import type {
   SkillStatusReport,
   StatusSummary,
   NostrProfile,
-} from "./types";
-import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types";
-import type { EventLogEntry } from "./app-events";
-import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults";
-import type {
-  ExecApprovalsFile,
-  ExecApprovalsSnapshot,
-} from "./controllers/exec-approvals";
-import type { DevicePairingList } from "./controllers/devices";
-import type { ExecApprovalRequest } from "./controllers/exec-approval";
-import {
-  resetToolStream as resetToolStreamInternal,
-  type ToolStreamEntry,
-} from "./app-tool-stream";
-import {
-  exportLogs as exportLogsInternal,
-  handleChatScroll as handleChatScrollInternal,
-  handleLogsScroll as handleLogsScrollInternal,
-  resetChatScroll as resetChatScrollInternal,
-} from "./app-scroll";
-import { connectGateway as connectGatewayInternal } from "./app-gateway";
-import {
-  handleConnected,
-  handleDisconnected,
-  handleFirstUpdated,
-  handleUpdated,
-} from "./app-lifecycle";
-import {
-  applySettings as applySettingsInternal,
-  loadCron as loadCronInternal,
-  loadOverview as loadOverviewInternal,
-  setTab as setTabInternal,
-  setTheme as setThemeInternal,
-  onPopState as onPopStateInternal,
-} from "./app-settings";
-import {
-  handleAbortChat as handleAbortChatInternal,
-  handleSendChat as handleSendChatInternal,
-  removeQueuedMessage as removeQueuedMessageInternal,
-} from "./app-chat";
+} from "./types.ts";
+import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -75,32 +41,70 @@ import {
   handleWhatsAppLogout as handleWhatsAppLogoutInternal,
   handleWhatsAppStart as handleWhatsAppStartInternal,
   handleWhatsAppWait as handleWhatsAppWaitInternal,
-} from "./app-channels";
-import type { NostrProfileFormState } from "./views/channels.nostr-profile-form";
-import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity";
-
+} from "./app-channels.ts";
+import {
+  handleAbortChat as handleAbortChatInternal,
+  handleSendChat as handleSendChatInternal,
+  removeQueuedMessage as removeQueuedMessageInternal,
+} from "./app-chat.ts";
+import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
+import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
+import {
+  handleConnected,
+  handleDisconnected,
+  handleFirstUpdated,
+  handleUpdated,
+} from "./app-lifecycle.ts";
+import { renderApp } from "./app-render.ts";
+import {
+  exportLogs as exportLogsInternal,
+  handleChatScroll as handleChatScrollInternal,
+  handleLogsScroll as handleLogsScrollInternal,
+  resetChatScroll as resetChatScrollInternal,
+  scheduleChatScroll as scheduleChatScrollInternal,
+} from "./app-scroll.ts";
+import {
+  applySettings as applySettingsInternal,
+  loadCron as loadCronInternal,
+  loadOverview as loadOverviewInternal,
+  setTab as setTabInternal,
+  setTheme as setThemeInternal,
+  onPopState as onPopStateInternal,
+} from "./app-settings.ts";
+import {
+  resetToolStream as resetToolStreamInternal,
+  type ToolStreamEntry,
+} from "./app-tool-stream.ts";
+import { resolveInjectedAssistantIdentity } from "./assistant-identity.ts";
+import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { loadSettings, type UiSettings } from "./storage.ts";
+import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 // Import i18n components
-import '../i18n/LocaleSelector.ts';
+import "../i18n/LocaleSelector.ts";
 
 declare global {
   interface Window {
-    __CLAWDBOT_CONTROL_UI_BASE_PATH__?: string;
+    __OPENCLAW_CONTROL_UI_BASE_PATH__?: string;
   }
 }
 
 const injectedAssistantIdentity = resolveInjectedAssistantIdentity();
 
 function resolveOnboardingMode(): boolean {
-  if (!window.location.search) return false;
+  if (!window.location.search) {
+    return false;
+  }
   const params = new URLSearchParams(window.location.search);
   const raw = params.get("onboarding");
-  if (!raw) return false;
+  if (!raw) {
+    return false;
+  }
   const normalized = raw.trim().toLowerCase();
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-@customElement("moltbot-app")
-export class MoltbotApp extends LitElement {
+@customElement("openclaw-app")
+export class OpenClawApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
   @state() password = "";
   @state() tab: Tab = "chat";
@@ -128,7 +132,7 @@ export class MoltbotApp extends LitElement {
   @state() chatStream: string | null = null;
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
-  @state() compactionStatus: import("./app-tool-stream").CompactionStatus | null = null;
+  @state() compactionStatus: import("./app-tool-stream.ts").CompactionStatus | null = null;
   @state() chatAvatarUrl: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
@@ -167,7 +171,7 @@ export class MoltbotApp extends LitElement {
   @state() updateRunning = false;
   @state() applySessionKey = this.settings.lastActiveSessionKey;
   @state() configSnapshot: ConfigSnapshot | null = null;
-  @state() configSchema: unknown | null = null;
+  @state() configSchema: unknown = null;
   @state() configSchemaVersion: string | null = null;
   @state() configSchemaLoading = false;
   @state() configUiHints: ConfigUiHints = {};
@@ -198,6 +202,23 @@ export class MoltbotApp extends LitElement {
   @state() agentsLoading = false;
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsError: string | null = null;
+  @state() agentsSelectedId: string | null = null;
+  @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" =
+    "overview";
+  @state() agentFilesLoading = false;
+  @state() agentFilesError: string | null = null;
+  @state() agentFilesList: AgentsFilesListResult | null = null;
+  @state() agentFileContents: Record<string, string> = {};
+  @state() agentFileDrafts: Record<string, string> = {};
+  @state() agentFileActive: string | null = null;
+  @state() agentFileSaving = false;
+  @state() agentIdentityLoading = false;
+  @state() agentIdentityError: string | null = null;
+  @state() agentIdentityById: Record<string, AgentIdentityResult> = {};
+  @state() agentSkillsLoading = false;
+  @state() agentSkillsError: string | null = null;
+  @state() agentSkillsReport: SkillStatusReport | null = null;
+  @state() agentSkillsAgentId: string | null = null;
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
@@ -228,7 +249,7 @@ export class MoltbotApp extends LitElement {
   @state() debugStatus: StatusSummary | null = null;
   @state() debugHealth: HealthSnapshot | null = null;
   @state() debugModels: unknown[] = [];
-  @state() debugHeartbeat: unknown | null = null;
+  @state() debugHeartbeat: unknown = null;
   @state() debugCallMethod = "";
   @state() debugCallParams = "{}";
   @state() debugCallResult: string | null = null;
@@ -255,18 +276,17 @@ export class MoltbotApp extends LitElement {
   private chatScrollTimeout: number | null = null;
   private chatHasAutoScrolled = false;
   private chatUserNearBottom = true;
+  @state() chatNewMessagesBelow = false;
   private nodesPollInterval: number | null = null;
   private logsPollInterval: number | null = null;
   private debugPollInterval: number | null = null;
   private logsScrollFrame: number | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
-  refreshSessionsAfterChat = false;
+  refreshSessionsAfterChat = new Set<string>();
   basePath = "";
   private popStateHandler = () =>
-    onPopStateInternal(
-      this as unknown as Parameters<typeof onPopStateInternal>[0],
-    );
+    onPopStateInternal(this as unknown as Parameters<typeof onPopStateInternal>[0]);
   private themeMedia: MediaQueryList | null = null;
   private themeMediaHandler: ((event: MediaQueryListEvent) => void) | null = null;
   private topbarObserver: ResizeObserver | null = null;
@@ -290,16 +310,11 @@ export class MoltbotApp extends LitElement {
   }
 
   protected updated(changed: Map<PropertyKey, unknown>) {
-    handleUpdated(
-      this as unknown as Parameters<typeof handleUpdated>[0],
-      changed,
-    );
+    handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
   }
 
   connect() {
-    connectGatewayInternal(
-      this as unknown as Parameters<typeof connectGatewayInternal>[0],
-    );
+    connectGatewayInternal(this as unknown as Parameters<typeof connectGatewayInternal>[0]);
   }
 
   handleChatScroll(event: Event) {
@@ -321,14 +336,18 @@ export class MoltbotApp extends LitElement {
   }
 
   resetToolStream() {
-    resetToolStreamInternal(
-      this as unknown as Parameters<typeof resetToolStreamInternal>[0],
-    );
+    resetToolStreamInternal(this as unknown as Parameters<typeof resetToolStreamInternal>[0]);
   }
 
   resetChatScroll() {
-    resetChatScrollInternal(
-      this as unknown as Parameters<typeof resetChatScrollInternal>[0],
+    resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
+  }
+
+  scrollToBottom() {
+    resetChatScrollInternal(this as unknown as Parameters<typeof resetChatScrollInternal>[0]);
+    scheduleChatScrollInternal(
+      this as unknown as Parameters<typeof scheduleChatScrollInternal>[0],
+      true,
     );
   }
 
@@ -337,10 +356,7 @@ export class MoltbotApp extends LitElement {
   }
 
   applySettings(next: UiSettings) {
-    applySettingsInternal(
-      this as unknown as Parameters<typeof applySettingsInternal>[0],
-      next,
-    );
+    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], next);
   }
 
   setTab(next: Tab) {
@@ -348,29 +364,19 @@ export class MoltbotApp extends LitElement {
   }
 
   setTheme(next: ThemeMode, context?: Parameters<typeof setThemeInternal>[2]) {
-    setThemeInternal(
-      this as unknown as Parameters<typeof setThemeInternal>[0],
-      next,
-      context,
-    );
+    setThemeInternal(this as unknown as Parameters<typeof setThemeInternal>[0], next, context);
   }
 
   async loadOverview() {
-    await loadOverviewInternal(
-      this as unknown as Parameters<typeof loadOverviewInternal>[0],
-    );
+    await loadOverviewInternal(this as unknown as Parameters<typeof loadOverviewInternal>[0]);
   }
 
   async loadCron() {
-    await loadCronInternal(
-      this as unknown as Parameters<typeof loadCronInternal>[0],
-    );
+    await loadCronInternal(this as unknown as Parameters<typeof loadCronInternal>[0]);
   }
 
   async handleAbortChat() {
-    await handleAbortChatInternal(
-      this as unknown as Parameters<typeof handleAbortChatInternal>[0],
-    );
+    await handleAbortChatInternal(this as unknown as Parameters<typeof handleAbortChatInternal>[0]);
   }
 
   removeQueuedMessage(id: string) {
@@ -437,7 +443,9 @@ export class MoltbotApp extends LitElement {
 
   async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
     const active = this.execApprovalQueue[0];
-    if (!active || !this.client || this.execApprovalBusy) return;
+    if (!active || !this.client || this.execApprovalBusy) {
+      return;
+    }
     this.execApprovalBusy = true;
     this.execApprovalError = null;
     try {
@@ -455,12 +463,14 @@ export class MoltbotApp extends LitElement {
 
   handleGatewayUrlConfirm() {
     const nextGatewayUrl = this.pendingGatewayUrl;
-    if (!nextGatewayUrl) return;
+    if (!nextGatewayUrl) {
+      return;
+    }
     this.pendingGatewayUrl = null;
-    applySettingsInternal(
-      this as unknown as Parameters<typeof applySettingsInternal>[0],
-      { ...this.settings, gatewayUrl: nextGatewayUrl },
-    );
+    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
+      ...this.settings,
+      gatewayUrl: nextGatewayUrl,
+    });
     this.connect();
   }
 
@@ -486,7 +496,9 @@ export class MoltbotApp extends LitElement {
       window.clearTimeout(this.sidebarCloseTimer);
     }
     this.sidebarCloseTimer = window.setTimeout(() => {
-      if (this.sidebarOpen) return;
+      if (this.sidebarOpen) {
+        return;
+      }
       this.sidebarContent = null;
       this.sidebarError = null;
       this.sidebarCloseTimer = null;
@@ -500,6 +512,6 @@ export class MoltbotApp extends LitElement {
   }
 
   render() {
-    return renderApp(this);
+    return renderApp(this as unknown as AppViewState);
   }
 }

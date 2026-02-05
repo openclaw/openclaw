@@ -1,6 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
-
 import {
   estimateMessagesTokens,
   pruneHistoryForContextShare,
@@ -128,8 +127,8 @@ describe("pruneHistoryForContextShare", () => {
     const allIds = [
       ...pruned.droppedMessagesList.map((m) => m.timestamp),
       ...pruned.messages.map((m) => m.timestamp),
-    ].sort((a, b) => a - b);
-    const originalIds = messages.map((m) => m.timestamp).sort((a, b) => a - b);
+    ].toSorted((a, b) => a - b);
+    const originalIds = messages.map((m) => m.timestamp).toSorted((a, b) => a - b);
     expect(allIds).toEqual(originalIds);
   });
 

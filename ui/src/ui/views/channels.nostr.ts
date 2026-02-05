@@ -1,21 +1,20 @@
 import { html, nothing } from "lit";
-
-import { formatAgo } from "../format";
-import { t } from "../../i18n/i18n";
 import type { ChannelAccountSnapshot, NostrStatus } from "../types";
 import type { ChannelsProps } from "./channels.types";
+import { t } from "../../i18n/i18n";
+import { formatAgo } from "../format";
 import { renderChannelConfigSection } from "./channels.config";
 import {
   renderNostrProfileForm,
   type NostrProfileFormState,
   type NostrProfileFormCallbacks,
-} from "./channels.nostr-profile-form";
+} from "./channels.nostr-profile-form.ts";
 
 /**
  * Truncate a pubkey for display (shows first and last 8 chars)
  */
 function truncatePubkey(pubkey: string | null | undefined): string {
-  if (!pubkey) return t('common.n_a');
+  if (!pubkey) return t("common.n_a");
   if (pubkey.length <= 20) return pubkey;
   return `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
 }
@@ -45,8 +44,7 @@ export function renderNostrCard(params: {
   const summaryConfigured = nostr?.configured ?? primaryAccount?.configured ?? false;
   const summaryRunning = nostr?.running ?? primaryAccount?.running ?? false;
   const summaryPublicKey =
-    nostr?.publicKey ??
-    (primaryAccount as { publicKey?: string } | undefined)?.publicKey;
+    nostr?.publicKey ?? (primaryAccount as { publicKey?: string } | undefined)?.publicKey;
   const summaryLastStartAt = nostr?.lastStartAt ?? primaryAccount?.lastStartAt ?? null;
   const summaryLastError = nostr?.lastError ?? primaryAccount?.lastError ?? null;
   const hasMultipleAccounts = nostrAccounts.length > 1;
@@ -65,26 +63,28 @@ export function renderNostrCard(params: {
         </div>
         <div class="status-list account-card-status">
           <div>
-            <span class="label">${t('telegram.status.running')}</span>
-            <span>${account.running ? t('common.yes') : t('common.no')}</span>
+            <span class="label">${t("telegram.status.running")}</span>
+            <span>${account.running ? t("common.yes") : t("common.no")}</span>
           </div>
           <div>
-            <span class="label">${t('telegram.status.configured')}</span>
-            <span>${account.configured ? t('common.yes') : t('common.no')}</span>
+            <span class="label">${t("telegram.status.configured")}</span>
+            <span>${account.configured ? t("common.yes") : t("common.no")}</span>
           </div>
           <div>
-            <span class="label">${t('nostr.status.public_key')}</span>
+            <span class="label">${t("nostr.status.public_key")}</span>
             <span class="monospace" title="${publicKey ?? ""}">${truncatePubkey(publicKey)}</span>
           </div>
           <div>
-            <span class="label">${t('nostr.status.last_inbound')}</span>
-            <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : t('common.n_a')}</span>
+            <span class="label">${t("nostr.status.last_inbound")}</span>
+            <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : t("common.n_a")}</span>
           </div>
-          ${account.lastError
-            ? html`
+          ${
+            account.lastError
+              ? html`
                 <div class="account-card-error">${account.lastError}</div>
               `
-            : nothing}
+              : nothing
+          }
         </div>
       </div>
     `;
@@ -101,41 +101,47 @@ export function renderNostrCard(params: {
     }
 
     const profile =
-      (primaryAccount as
-        | {
-            profile?: {
-              name?: string;
-              displayName?: string;
-              about?: string;
-              picture?: string;
-              nip05?: string;
-            };
-          }
-        | undefined)?.profile ?? nostr?.profile;
+      (
+        primaryAccount as
+          | {
+              profile?: {
+                name?: string;
+                displayName?: string;
+                about?: string;
+                picture?: string;
+                nip05?: string;
+              };
+            }
+          | undefined
+      )?.profile ?? nostr?.profile;
     const { name, displayName, about, picture, nip05 } = profile ?? {};
     const hasAnyProfileData = name || displayName || about || picture || nip05;
 
     return html`
       <div style="margin-top: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <div style="font-weight: 500;">${t('nostr.profile.title')}</div>
-          ${summaryConfigured
-            ? html`
+          <div style="font-weight: 500;">${t("nostr.profile.title")}</div>
+          ${
+            summaryConfigured
+              ? html`
                 <button
                   class="btn btn-sm"
                   @click=${onEditProfile}
                   style="font-size: 12px; padding: 4px 8px;"
                 >
-                  ${t('nostr.profile.edit_button')}
+                  ${t("nostr.profile.edit_button")}
                 </button>
               `
-            : nothing}
+              : nothing
+          }
         </div>
-        ${hasAnyProfileData
-          ? html`
+        ${
+          hasAnyProfileData
+            ? html`
               <div class="status-list">
-                ${picture
-                  ? html`
+                ${
+                  picture
+                    ? html`
                       <div style="margin-bottom: 8px;">
                         <img
                           src=${picture}
@@ -147,71 +153,81 @@ export function renderNostrCard(params: {
                         />
                       </div>
                     `
-                  : nothing}
-                ${name ? html`<div><span class="label">${t('nostr.profile.name')}</span><span>${name}</span></div>` : nothing}
-                ${displayName
-                  ? html`<div><span class="label">${t('nostr.profile.display_name')}</span><span>${displayName}</span></div>`
-                  : nothing}
-                ${about
-                  ? html`<div><span class="label">${t('nostr.profile.about')}</span><span style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">${about}</span></div>`
-                  : nothing}
-                ${nip05 ? html`<div><span class="label">${t('nostr.profile.nip05')}</span><span>${nip05}</span></div>` : nothing}
+                    : nothing
+                }
+                ${name ? html`<div><span class="label">${t("nostr.profile.name")}</span><span>${name}</span></div>` : nothing}
+                ${
+                  displayName
+                    ? html`<div><span class="label">${t("nostr.profile.display_name")}</span><span>${displayName}</span></div>`
+                    : nothing
+                }
+                ${
+                  about
+                    ? html`<div><span class="label">${t("nostr.profile.about")}</span><span style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">${about}</span></div>`
+                    : nothing
+                }
+                ${nip05 ? html`<div><span class="label">${t("nostr.profile.nip05")}</span><span>${nip05}</span></div>` : nothing}
               </div>
             `
-          : html`
+            : html`
               <div style="color: var(--text-muted); font-size: 13px;">
-                ${t('nostr.profile.not_set')}
+                ${t("nostr.profile.not_set")}
               </div>
-            `}
+            `
+        }
       </div>
     `;
   };
 
   return html`
     <div class="card">
-      <div class="card-title">${t('nostr.card_title')}</div>
-      <div class="card-sub">${t('nostr.card_subtitle')}</div>
+      <div class="card-title">${t("nostr.card_title")}</div>
+      <div class="card-sub">${t("nostr.card_subtitle")}</div>
       ${accountCountLabel}
 
-      ${hasMultipleAccounts
-        ? html`
+      ${
+        hasMultipleAccounts
+          ? html`
             <div class="account-card-list">
               ${nostrAccounts.map((account) => renderAccountCard(account))}
             </div>
           `
-        : html`
+          : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
-                <span class="label">${t('nostr.status.configured')}</span>
-                <span>${summaryConfigured ? t('common.yes') : t('common.no')}</span>
+                <span class="label">${t("nostr.status.configured")}</span>
+                <span>${summaryConfigured ? t("common.yes") : t("common.no")}</span>
               </div>
               <div>
-                <span class="label">${t('nostr.status.running')}</span>
-                <span>${summaryRunning ? t('common.yes') : t('common.no')}</span>
+                <span class="label">${t("nostr.status.running")}</span>
+                <span>${summaryRunning ? t("common.yes") : t("common.no")}</span>
               </div>
               <div>
-                <span class="label">${t('nostr.status.public_key')}</span>
+                <span class="label">${t("nostr.status.public_key")}</span>
                 <span class="monospace" title="${summaryPublicKey ?? ""}"
                   >${truncatePubkey(summaryPublicKey)}</span
                 >
               </div>
               <div>
-                <span class="label">${t('nostr.status.last_start')}</span>
-                <span>${summaryLastStartAt ? formatAgo(summaryLastStartAt) : t('common.n_a')}</span>
+                <span class="label">${t("nostr.status.last_start")}</span>
+                <span>${summaryLastStartAt ? formatAgo(summaryLastStartAt) : t("common.n_a")}</span>
               </div>
             </div>
-          `}
+          `
+      }
 
-      ${summaryLastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${summaryLastError}</div>`
-        : nothing}
+      ${
+        summaryLastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">${summaryLastError}</div>`
+          : nothing
+      }
 
       ${renderProfileSection()}
 
       ${renderChannelConfigSection({ channelId: "nostr", props })}
 
       <div class="row" style="margin-top: 12px;">
-        <button class="btn" @click=${() => props.onRefresh(false)}>${t('nostr.button.refresh')}</button>
+        <button class="btn" @click=${() => props.onRefresh(false)}>${t("nostr.button.refresh")}</button>
       </div>
     </div>
   `;

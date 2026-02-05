@@ -1,9 +1,9 @@
 import type { Command } from "commander";
+import type { NodeListNode, NodesRpcOpts } from "./types.js";
 import { callGateway } from "../../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { withProgress } from "../progress.js";
 import { parseNodeList, parsePairingList } from "./format.js";
-import type { NodeListNode, NodesRpcOpts } from "./types.js";
 
 export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
@@ -57,14 +57,16 @@ function normalizeNodeKey(value: string) {
 
 export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
   const q = String(query ?? "").trim();
-  if (!q) throw new Error("node required");
+  if (!q) {
+    throw new Error("node required");
+  }
 
   let nodes: NodeListNode[] = [];
   try {
-    const res = (await callGatewayCli("node.list", opts, {})) as unknown;
+    const res = await callGatewayCli("node.list", opts, {});
     nodes = parseNodeList(res);
   } catch {
-    const res = (await callGatewayCli("node.pair.list", opts, {})) as unknown;
+    const res = await callGatewayCli("node.pair.list", opts, {});
     const { paired } = parsePairingList(res);
     nodes = paired.map((n) => ({
       nodeId: n.nodeId,
@@ -77,15 +79,25 @@ export async function resolveNodeId(opts: NodesRpcOpts, query: string) {
 
   const qNorm = normalizeNodeKey(q);
   const matches = nodes.filter((n) => {
-    if (n.nodeId === q) return true;
-    if (typeof n.remoteIp === "string" && n.remoteIp === q) return true;
+    if (n.nodeId === q) {
+      return true;
+    }
+    if (typeof n.remoteIp === "string" && n.remoteIp === q) {
+      return true;
+    }
     const name = typeof n.displayName === "string" ? n.displayName : "";
-    if (name && normalizeNodeKey(name) === qNorm) return true;
-    if (q.length >= 6 && n.nodeId.startsWith(q)) return true;
+    if (name && normalizeNodeKey(name) === qNorm) {
+      return true;
+    }
+    if (q.length >= 6 && n.nodeId.startsWith(q)) {
+      return true;
+    }
     return false;
   });
 
-  if (matches.length === 1) return matches[0].nodeId;
+  if (matches.length === 1) {
+    return matches[0].nodeId;
+  }
   if (matches.length === 0) {
     const known = nodes
       .map((n) => n.displayName || n.remoteIp || n.nodeId)

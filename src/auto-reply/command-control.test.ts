@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-import type { MoltbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { MsgContext } from "./templating.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
@@ -8,7 +8,6 @@ import { hasControlCommand, hasInlineCommandTokens } from "./command-detection.j
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
-import type { MsgContext } from "./templating.js";
 
 beforeEach(() => {
   setActivePluginRegistry(createTestRegistry([]));
@@ -22,7 +21,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back from empty SenderId to SenderE164", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+123"] } },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -45,7 +44,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back from whitespace SenderId to SenderE164", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+123"] } },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -68,7 +67,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back to From when SenderId and SenderE164 are whitespace", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+999"] } },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -91,7 +90,7 @@ describe("resolveCommandAuthorization", () => {
   it("falls back from un-normalizable SenderId to SenderE164", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+123"] } },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -114,7 +113,7 @@ describe("resolveCommandAuthorization", () => {
   it("prefers SenderE164 when SenderId does not match allowFrom", () => {
     const cfg = {
       channels: { whatsapp: { allowFrom: ["+41796666864"] } },
-    } as MoltbotConfig;
+    } as OpenClawConfig;
 
     const ctx = {
       Provider: "whatsapp",
@@ -132,6 +131,64 @@ describe("resolveCommandAuthorization", () => {
 
     expect(auth.senderId).toBe("+41796666864");
     expect(auth.isAuthorizedSender).toBe(true);
+  });
+
+  it("uses explicit owner allowlist when allowFrom is wildcard", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["whatsapp:+15551234567"] },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+
+    const ownerCtx = {
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      From: "whatsapp:+15551234567",
+      SenderE164: "+15551234567",
+    } as MsgContext;
+    const ownerAuth = resolveCommandAuthorization({
+      ctx: ownerCtx,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(ownerAuth.senderIsOwner).toBe(true);
+    expect(ownerAuth.isAuthorizedSender).toBe(true);
+
+    const otherCtx = {
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      From: "whatsapp:+19995551234",
+      SenderE164: "+19995551234",
+    } as MsgContext;
+    const otherAuth = resolveCommandAuthorization({
+      ctx: otherCtx,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(otherAuth.senderIsOwner).toBe(false);
+    expect(otherAuth.isAuthorizedSender).toBe(false);
+  });
+
+  it("uses owner allowlist override from context when configured", () => {
+    const cfg = {
+      channels: { discord: {} },
+    } as OpenClawConfig;
+
+    const ctx = {
+      Provider: "discord",
+      Surface: "discord",
+      From: "discord:123",
+      SenderId: "123",
+      OwnerAllowFrom: ["discord:123"],
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.ownerList).toEqual(["123"]);
   });
 });
 
@@ -214,12 +271,12 @@ describe("control command parsing", () => {
   it("ignores telegram commands addressed to other bots", () => {
     expect(
       hasControlCommand("/help@otherbot", undefined, {
-        botUsername: "moltbot",
+        botUsername: "openclaw",
       }),
     ).toBe(false);
     expect(
-      hasControlCommand("/help@moltbot", undefined, {
-        botUsername: "moltbot",
+      hasControlCommand("/help@openclaw", undefined, {
+        botUsername: "openclaw",
       }),
     ).toBe(true);
   });

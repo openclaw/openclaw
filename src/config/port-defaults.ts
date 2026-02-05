@@ -36,6 +36,8 @@ export function deriveDefaultBrowserCdpPortRange(browserControlPort: number): Po
     start + (DEFAULT_BROWSER_CDP_PORT_RANGE_END - DEFAULT_BROWSER_CDP_PORT_RANGE_START),
     DEFAULT_BROWSER_CDP_PORT_RANGE_END,
   );
-  if (end < start) return { start, end: start };
+  if (end < start) {
+    return { start, end: start };
+  }
   return { start, end };
 }

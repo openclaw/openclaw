@@ -48,7 +48,7 @@ export async function sendLineReplyChunks(
       if (hasQuickReplies && remaining.length === 0 && replyMessages.length > 0) {
         const lastIndex = replyMessages.length - 1;
         replyMessages[lastIndex] = params.createTextMessageWithQuickReplies(
-          replyBatch[lastIndex]!,
+          replyBatch[lastIndex],
           params.quickReplies!,
         );
       }
@@ -63,12 +63,12 @@ export async function sendLineReplyChunks(
         if (isLastChunk && hasQuickReplies) {
           await params.pushTextMessageWithQuickReplies(
             params.to,
-            remaining[i]!,
+            remaining[i],
             params.quickReplies!,
             { accountId: params.accountId },
           );
         } else {
-          await params.pushMessageLine(params.to, remaining[i]!, {
+          await params.pushMessageLine(params.to, remaining[i], {
             accountId: params.accountId,
           });
         }
@@ -86,12 +86,12 @@ export async function sendLineReplyChunks(
     if (isLastChunk && hasQuickReplies) {
       await params.pushTextMessageWithQuickReplies(
         params.to,
-        params.chunks[i]!,
+        params.chunks[i],
         params.quickReplies!,
         { accountId: params.accountId },
       );
     } else {
-      await params.pushMessageLine(params.to, params.chunks[i]!, {
+      await params.pushMessageLine(params.to, params.chunks[i], {
         accountId: params.accountId,
       });
     }

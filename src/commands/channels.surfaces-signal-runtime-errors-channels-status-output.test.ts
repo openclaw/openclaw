@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { RuntimeEnv } from "../runtime.js";
+import { signalPlugin } from "../../extensions/signal/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createIMessageTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { signalPlugin } from "../../extensions/signal/src/channel.js";
 
 const configMocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -40,7 +39,7 @@ const runtime: RuntimeEnv = {
 };
 
 const _baseSnapshot = {
-  path: "/tmp/moltbot.json",
+  path: "/tmp/openclaw.json",
   exists: true,
   raw: "{}",
   parsed: {},

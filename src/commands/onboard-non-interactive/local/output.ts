@@ -18,7 +18,9 @@ export function logNonInteractiveOnboardingJson(params: {
   skipSkills?: boolean;
   skipHealth?: boolean;
 }) {
-  if (!params.opts.json) return;
+  if (!params.opts.json) {
+    return;
+  }
   params.runtime.log(
     JSON.stringify(
       {

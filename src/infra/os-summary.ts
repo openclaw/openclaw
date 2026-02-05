@@ -23,8 +23,12 @@ export function resolveOsSummary(): OsSummary {
   const release = os.release();
   const arch = os.arch();
   const label = (() => {
-    if (platform === "darwin") return `macos ${macosVersion()} (${arch})`;
-    if (platform === "win32") return `windows ${release} (${arch})`;
+    if (platform === "darwin") {
+      return `macos ${macosVersion()} (${arch})`;
+    }
+    if (platform === "win32") {
+      return `windows ${release} (${arch})`;
+    }
     return `${platform} ${release} (${arch})`;
   })();
   return { platform, arch, release, label };

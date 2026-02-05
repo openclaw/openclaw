@@ -1,20 +1,26 @@
+import type { ChannelOutboundAdapter } from "../types.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
 import { sendMessageTelegram } from "../../../telegram/send.js";
-import type { ChannelOutboundAdapter } from "../types.js";
 
 function parseReplyToMessageId(replyToId?: string | null) {
-  if (!replyToId) return undefined;
+  if (!replyToId) {
+    return undefined;
+  }
   const parsed = Number.parseInt(replyToId, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function parseThreadId(threadId?: string | number | null) {
-  if (threadId == null) return undefined;
+  if (threadId == null) {
+    return undefined;
+  }
   if (typeof threadId === "number") {
     return Number.isFinite(threadId) ? Math.trunc(threadId) : undefined;
   }
   const trimmed = threadId.trim();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const parsed = Number.parseInt(trimmed, 10);
   return Number.isFinite(parsed) ? parsed : undefined;
 }

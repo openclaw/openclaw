@@ -1,22 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveMoltbotPackageRoot } from "../infra/moltbot-root.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { note } from "../terminal/note.js";
 
 export async function maybeRepairUiProtocolFreshness(
   _runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
-  const root = await resolveMoltbotPackageRoot({
+  const root = await resolveOpenClawPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
     cwd: process.cwd(),
   });
 
-  if (!root) return;
+  if (!root) {
+    return;
+  }
 
   const schemaPath = path.join(root, "src/gateway/protocol/schema.ts");
   const uiIndexPath = path.join(root, "dist/control-ui/index.html");
@@ -67,7 +69,9 @@ export async function maybeRepairUiProtocolFreshness(
       return;
     }
 
-    if (!schemaStats || !uiStats) return;
+    if (!schemaStats || !uiStats) {
+      return;
+    }
 
     if (schemaStats.mtime > uiStats.mtime) {
       const uiMtimeIso = uiStats.mtime.toISOString();

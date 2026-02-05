@@ -1,10 +1,9 @@
 import { html, nothing } from "lit";
-
-import { formatAgo } from "../format";
-import { t } from "../../i18n/i18n";
-import type { ChannelAccountSnapshot, TelegramStatus } from "../types";
-import type { ChannelsProps } from "./channels.types";
-import { renderChannelConfigSection } from "./channels.config";
+import type { ChannelAccountSnapshot, TelegramStatus } from "../types.ts";
+import type { ChannelsProps } from "./channels.types.ts";
+import { t } from "../../i18n/i18n.js";
+import { formatAgo } from "../format.ts";
+import { renderChannelConfigSection } from "./channels.config.ts";
 
 export function renderTelegramCard(params: {
   props: ChannelsProps;
@@ -40,13 +39,15 @@ export function renderTelegramCard(params: {
             <span class="label">Last inbound</span>
             <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : "n/a"}</span>
           </div>
-          ${account.lastError
-            ? html`
+          ${
+            account.lastError
+              ? html`
                 <div class="account-card-error">
                   ${account.lastError}
                 </div>
               `
-            : nothing}
+              : nothing
+          }
         </div>
       </div>
     `;
@@ -54,59 +55,65 @@ export function renderTelegramCard(params: {
 
   return html`
     <div class="card">
-      <div class="card-title">${t('telegram.card_title')}</div>
-      <div class="card-sub">${t('telegram.card_subtitle')}</div>
+      <div class="card-title">${t("telegram.card_title")}</div>
+      <div class="card-sub">${t("telegram.card_subtitle")}</div>
       ${accountCountLabel}
 
-      ${hasMultipleAccounts
-        ? html`
+      ${
+        hasMultipleAccounts
+          ? html`
             <div class="account-card-list">
               ${telegramAccounts.map((account) => renderAccountCard(account))}
             </div>
           `
-        : html`
+          : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
-                <span class="label">${t('telegram.status.configured')}</span>
-                <span>${telegram?.configured ? t('common.yes') : t('common.no')}</span>
+                <span class="label">${t("telegram.status.configured")}</span>
+                <span>${telegram?.configured ? t("common.yes") : t("common.no")}</span>
               </div>
               <div>
-                <span class="label">${t('telegram.status.running')}</span>
-                <span>${telegram?.running ? t('common.yes') : t('common.no')}</span>
+                <span class="label">${t("telegram.status.running")}</span>
+                <span>${telegram?.running ? t("common.yes") : t("common.no")}</span>
               </div>
               <div>
-                <span class="label">${t('telegram.status.mode')}</span>
-                <span>${telegram?.mode ?? t('common.n_a')}</span>
+                <span class="label">${t("telegram.status.mode")}</span>
+                <span>${telegram?.mode ?? t("common.n_a")}</span>
               </div>
               <div>
-                <span class="label">${t('telegram.status.last_start')}</span>
-                <span>${telegram?.lastStartAt ? formatAgo(telegram.lastStartAt) : t('common.n_a')}</span>
+                <span class="label">${t("telegram.status.last_start")}</span>
+                <span>${telegram?.lastStartAt ? formatAgo(telegram.lastStartAt) : t("common.n_a")}</span>
               </div>
               <div>
-                <span class="label">${t('telegram.status.last_probe')}</span>
-                <span>${telegram?.lastProbeAt ? formatAgo(telegram.lastProbeAt) : t('common.n_a')}</span>
+                <span class="label">${t("telegram.status.last_probe")}</span>
+                <span>${telegram?.lastProbeAt ? formatAgo(telegram.lastProbeAt) : t("common.n_a")}</span>
               </div>
             </div>
-          `}
+          `
+      }
 
-      ${telegram?.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">
+      ${
+        telegram?.lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">
             ${telegram.lastError}
           </div>`
-        : nothing}
+          : nothing
+      }
 
-      ${telegram?.probe
-        ? html`<div class="callout" style="margin-top: 12px;">
-            ${t('telegram.button.probe')} ${telegram.probe.ok ? "ok" : "failed"} ·
+      ${
+        telegram?.probe
+          ? html`<div class="callout" style="margin-top: 12px;">
+            ${t("telegram.button.probe")} ${telegram.probe.ok ? "ok" : "failed"} ·
             ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
           </div>`
-        : nothing}
+          : nothing
+      }
 
       ${renderChannelConfigSection({ channelId: "telegram", props })}
 
       <div class="row" style="margin-top: 12px;">
         <button class="btn" @click=${() => props.onRefresh(true)}>
-          ${t('telegram.button.probe')}
+          ${t("telegram.button.probe")}
         </button>
       </div>
     </div>

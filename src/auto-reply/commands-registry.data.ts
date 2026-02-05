@@ -8,6 +8,10 @@ import type {
   CommandCategory,
   CommandScope,
 } from "./commands-registry.types.js";
+import { listChannelDocks } from "../channels/dock.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
+import { listThinkingLevels } from "./thinking.js";
 
 type DefineChatCommandInput = {
   key: string;
@@ -67,9 +71,13 @@ function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliase
   const existing = new Set(command.textAliases.map((alias) => alias.trim().toLowerCase()));
   for (const alias of aliases) {
     const trimmed = alias.trim();
-    if (!trimmed) continue;
+    if (!trimmed) {
+      continue;
+    }
     const lowered = trimmed.toLowerCase();
-    if (existing.has(lowered)) continue;
+    if (existing.has(lowered)) {
+      continue;
+    }
     existing.add(lowered);
     command.textAliases.push(trimmed);
   }

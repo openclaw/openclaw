@@ -115,8 +115,8 @@ const hoisted = vi.hoisted(() => {
 
   const startGatewayConfigReloader = vi.fn(
     (opts: { onHotReload: typeof onHotReload; onRestart: typeof onRestart }) => {
-      onHotReload = opts.onHotReload as typeof onHotReload;
-      onRestart = opts.onRestart as typeof onRestart;
+      onHotReload = opts.onHotReload;
+      onRestart = opts.onRestart;
       return { stop: reloaderStop };
     },
   );
@@ -172,22 +172,22 @@ describe("gateway hot reload", () => {
   let prevSkipGmail: string | undefined;
 
   beforeEach(() => {
-    prevSkipChannels = process.env.CLAWDBOT_SKIP_CHANNELS;
-    prevSkipGmail = process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
-    process.env.CLAWDBOT_SKIP_CHANNELS = "0";
-    delete process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
+    prevSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
+    prevSkipGmail = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+    process.env.OPENCLAW_SKIP_CHANNELS = "0";
+    delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
   });
 
   afterEach(() => {
     if (prevSkipChannels === undefined) {
-      delete process.env.CLAWDBOT_SKIP_CHANNELS;
+      delete process.env.OPENCLAW_SKIP_CHANNELS;
     } else {
-      process.env.CLAWDBOT_SKIP_CHANNELS = prevSkipChannels;
+      process.env.OPENCLAW_SKIP_CHANNELS = prevSkipChannels;
     }
     if (prevSkipGmail === undefined) {
-      delete process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
+      delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     } else {
-      process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prevSkipGmail;
+      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = prevSkipGmail;
     }
   });
 

@@ -1,10 +1,9 @@
 import { html } from "lit";
-
-import type { GatewayHelloOk } from "../gateway";
-import { formatAgo, formatDurationMs } from "../format";
-import { formatNextRun } from "../presenter";
-import type { UiSettings } from "../storage";
+import type { GatewayHelloOk } from "../gateway.ts";
+import type { UiSettings } from "../storage.ts";
 import { t } from "../../i18n/i18n";
+import { formatAgo, formatDurationMs } from "../format.ts";
+import { formatNextRun } from "../presenter.ts";
 
 export type OverviewProps = {
   connected: boolean;
@@ -29,28 +28,30 @@ export function renderOverview(props: OverviewProps) {
     | { uptimeMs?: number; policy?: { tickIntervalMs?: number } }
     | undefined;
   const uptime = snapshot?.uptimeMs ? formatDurationMs(snapshot.uptimeMs) : "n/a";
-  const tick = snapshot?.policy?.tickIntervalMs
-    ? `${snapshot.policy.tickIntervalMs}ms`
-    : "n/a";
+  const tick = snapshot?.policy?.tickIntervalMs ? `${snapshot.policy.tickIntervalMs}ms` : "n/a";
   const authHint = (() => {
-    if (props.connected || !props.lastError) return null;
+    if (props.connected || !props.lastError) {
+      return null;
+    }
     const lower = props.lastError.toLowerCase();
     const authFailed = lower.includes("unauthorized") || lower.includes("connect failed");
-    if (!authFailed) return null;
+    if (!authFailed) {
+      return null;
+    }
     const hasToken = Boolean(props.settings.token.trim());
     const hasPassword = Boolean(props.password.trim());
     if (!hasToken && !hasPassword) {
       return html`
-        <div class="muted" style="margin-top: 8px;">
+        <div class="muted" style="margin-top: 8px">
           This gateway requires auth. Add a token or password, then click Connect.
-          <div style="margin-top: 6px;">
-            <span class="mono">moltbot dashboard --no-open</span> → tokenized URL<br />
-            <span class="mono">moltbot doctor --generate-gateway-token</span> → set token
+          <div style="margin-top: 6px">
+            <span class="mono">openclaw dashboard --no-open</span> → tokenized URL<br />
+            <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
           </div>
-          <div style="margin-top: 6px;">
+          <div style="margin-top: 6px">
             <a
               class="session-link"
-              href="https://docs.molt.bot/web/dashboard"
+              href="https://docs.openclaw.ai/web/dashboard"
               target="_blank"
               rel="noreferrer"
               title="Control UI auth docs (opens in new tab)"
@@ -61,14 +62,13 @@ export function renderOverview(props: OverviewProps) {
       `;
     }
     return html`
-      <div class="muted" style="margin-top: 8px;">
+      <div class="muted" style="margin-top: 8px">
         Auth failed. Re-copy a tokenized URL with
-        <span class="mono">moltbot dashboard --no-open</span>, or update the token,
-        then click Connect.
-        <div style="margin-top: 6px;">
+        <span class="mono">openclaw dashboard --no-open</span>, or update the token, then click Connect.
+        <div style="margin-top: 6px">
           <a
             class="session-link"
-            href="https://docs.molt.bot/web/dashboard"
+            href="https://docs.openclaw.ai/web/dashboard"
             target="_blank"
             rel="noreferrer"
             title="Control UI auth docs (opens in new tab)"
@@ -79,25 +79,29 @@ export function renderOverview(props: OverviewProps) {
     `;
   })();
   const insecureContextHint = (() => {
-    if (props.connected || !props.lastError) return null;
+    if (props.connected || !props.lastError) {
+      return null;
+    }
     const isSecureContext = typeof window !== "undefined" ? window.isSecureContext : true;
-    if (isSecureContext !== false) return null;
+    if (isSecureContext) {
+      return null;
+    }
     const lower = props.lastError.toLowerCase();
     if (!lower.includes("secure context") && !lower.includes("device identity required")) {
       return null;
     }
     return html`
-      <div class="muted" style="margin-top: 8px;">
-        This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or
-        open <span class="mono">http://127.0.0.1:18789</span> on the gateway host.
-        <div style="margin-top: 6px;">
+      <div class="muted" style="margin-top: 8px">
+        This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open
+        <span class="mono">http://127.0.0.1:18789</span> on the gateway host.
+        <div style="margin-top: 6px">
           If you must stay on HTTP, set
           <span class="mono">gateway.controlUi.allowInsecureAuth: true</span> (token-only).
         </div>
-        <div style="margin-top: 6px;">
+        <div style="margin-top: 6px">
           <a
             class="session-link"
-            href="https://docs.molt.bot/gateway/tailscale"
+            href="https://docs.openclaw.ai/gateway/tailscale"
             target="_blank"
             rel="noreferrer"
             title="Tailscale Serve docs (opens in new tab)"
@@ -106,7 +110,7 @@ export function renderOverview(props: OverviewProps) {
           <span class="muted"> · </span>
           <a
             class="session-link"
-            href="https://docs.molt.bot/web/control-ui#insecure-http"
+            href="https://docs.openclaw.ai/web/control-ui#insecure-http"
             target="_blank"
             rel="noreferrer"
             title="Insecure HTTP docs (opens in new tab)"
@@ -142,7 +146,7 @@ export function renderOverview(props: OverviewProps) {
                 const v = (e.target as HTMLInputElement).value;
                 props.onSettingsChange({ ...props.settings, token: v });
               }}
-              placeholder="CLAWDBOT_GATEWAY_TOKEN"
+              placeholder="OPENCLAW_GATEWAY_TOKEN"
             />
           </label>
           <label class="field">
@@ -196,21 +200,23 @@ export function renderOverview(props: OverviewProps) {
           <div class="stat">
             <div class="stat-label">${t("overview.last_channels_refresh")}</div>
             <div class="stat-value">
-              ${props.lastChannelsRefresh
-                ? formatAgo(props.lastChannelsRefresh)
-                : t("common.n_a")}
+              ${props.lastChannelsRefresh ? formatAgo(props.lastChannelsRefresh) : t("common.n_a")}
             </div>
           </div>
         </div>
-        ${props.lastError
-          ? html`<div class="callout danger" style="margin-top: 14px;">
+        ${
+          props.lastError
+            ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
               ${authHint ?? ""}
               ${insecureContextHint ?? ""}
             </div>`
-          : html`<div class="callout" style="margin-top: 14px;">
-              Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.
-            </div>`}
+            : html`
+                <div class="callout" style="margin-top: 14px">
+                  Use Channels to link WhatsApp, Telegram, Discord, Signal, or iMessage.
+                </div>
+              `
+        }
       </div>
     </section>
 
@@ -228,11 +234,13 @@ export function renderOverview(props: OverviewProps) {
       <div class="card stat-card">
         <div class="stat-label">${t("overview.cron")}</div>
         <div class="stat-value">
-          ${props.cronEnabled == null
-            ? t("common.n_a")
-            : props.cronEnabled
-              ? t("common.enabled")
-              : t("common.disabled")}
+          ${
+            props.cronEnabled == null
+              ? t("common.n_a")
+              : props.cronEnabled
+                ? t("common.enabled")
+                : t("common.disabled")
+          }
         </div>
         <div class="muted">${t("overview.cron_next_wake", { nextRun: formatNextRun(props.cronNext) })}</div>
       </div>
