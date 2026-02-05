@@ -209,6 +209,33 @@ export async function runMemoryFlushIfNeeded(params: {
       if (typeof nextCount === "number") {
         memoryFlushCompactionCount = nextCount;
       }
+
+      // Lifecycle hook: Session Compaction
+      // Emit after compaction completes during memory flush
+      if (params.sessionKey) {
+        try {
+          const context: Record<string, unknown> = {
+            sessionId: params.followupRun.run.sessionId,
+            trigger: "memory_flush",
+          };
+          if (typeof nextCount === "number") {
+            context.compactionCount = nextCount;
+          }
+          if (activeSessionEntry?.totalTokens !== undefined) {
+            context.contextTokensUsed = activeSessionEntry.totalTokens;
+          }
+          const hookEvent = createInternalHookEvent(
+            "session",
+            "compaction",
+            params.sessionKey,
+            context,
+          );
+          await triggerInternalHook(hookEvent);
+          flushHookMessages.push(...hookEvent.messages);
+        } catch (err) {
+          defaultRuntime.error(`session:compaction hook failed: ${String(err)}`);
+        }
+      }
     }
     if (params.storePath && params.sessionKey) {
       try {

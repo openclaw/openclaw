@@ -776,6 +776,29 @@ export async function runReplyAgent(params: {
         sessionKey,
         storePath,
       });
+
+      // Lifecycle hook: Session Compaction
+      // Emit after auto-compaction completes during an agent turn
+      if (sessionKey) {
+        try {
+          const context: Record<string, unknown> = {
+            sessionId: followupRun.run.sessionId,
+            trigger: "auto_compaction",
+          };
+          if (typeof count === "number") {
+            context.compactionCount = count;
+          }
+          if (activeSessionEntry?.totalTokens !== undefined) {
+            context.contextTokensUsed = activeSessionEntry.totalTokens;
+          }
+          const hookEvent = createInternalHookEvent("session", "compaction", sessionKey, context);
+          await triggerInternalHook(hookEvent);
+          finalPayloads = prependHookMessagesToArray(hookEvent.messages, finalPayloads);
+        } catch (err) {
+          defaultRuntime.error(`session:compaction hook failed: ${String(err)}`);
+        }
+      }
+
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
         compactionHint = `🧹 Auto-compaction complete${suffix}.`;

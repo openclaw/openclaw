@@ -273,6 +273,19 @@ Triggered during session lifecycle when session persistence is enabled (requires
 - **Daily reset**: `session:end` → `session:reset` fire when session expires based on daily reset hour → `session:start` fires during the agent turn
 - **Auto-recovery reset** (compaction failure, role-ordering conflict): `session:end` → `session:reset` fire during the reset if a persisted session entry exists → `session:start` fires when the agent turn runs
 
+**Session maintenance events**:
+
+- **`session:compaction`**: After session history is compacted to fit within context limits (fires after compaction completes)
+
+**Context for `session:compaction` includes**:
+
+- `sessionId`: Current session ID
+- `trigger`: What triggered the compaction - `"auto_compaction"` (inline compaction during agent turn) or `"memory_flush"` (compaction during memory flush operation)
+- `compactionCount` (optional): Updated compaction count after increment
+- `contextTokensUsed` (optional): Total tokens in session before compaction
+
+**Note:** This event fires whenever compaction actually occurs. In contrast, `agent:flush` fires when memory flush **starts** (before it runs), regardless of whether compaction happens during the flush.
+
 ### Agent Events
 
 Triggered during agent execution when session persistence is enabled (requires a valid `sessionKey`):
