@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -62,6 +63,7 @@ export type RunMessageActionParams = {
   deps?: OutboundSendDeps;
   sessionKey?: string;
   agentId?: string;
+  sandboxRoot?: string;
   dryRun?: boolean;
   abortSignal?: AbortSignal;
 };
@@ -324,6 +326,53 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
     base64: payload,
     contentType: params.contentType ?? mime,
   };
+}
+
+async function normalizeSandboxMediaParams(params: {
+  args: Record<string, unknown>;
+  sandboxRoot?: string;
+}): Promise<void> {
+  const sandboxRoot = params.sandboxRoot?.trim();
+  const mediaKeys: Array<"media" | "path" | "filePath"> = ["media", "path", "filePath"];
+  for (const key of mediaKeys) {
+    const raw = readStringParam(params.args, key, { trim: false });
+    if (!raw) {
+      continue;
+    }
+    assertMediaNotDataUrl(raw);
+    if (!sandboxRoot) {
+      continue;
+    }
+    const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
+    if (normalized !== raw) {
+      params.args[key] = normalized;
+    }
+  }
+}
+
+async function normalizeSandboxMediaList(params: {
+  values: string[];
+  sandboxRoot?: string;
+}): Promise<string[]> {
+  const sandboxRoot = params.sandboxRoot?.trim();
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of params.values) {
+    const raw = value?.trim();
+    if (!raw) {
+      continue;
+    }
+    assertMediaNotDataUrl(raw);
+    const resolved = sandboxRoot
+      ? await resolveSandboxedMediaSource({ media: raw, sandboxRoot })
+      : raw;
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    normalized.push(resolved);
+  }
+  return normalized;
 }
 
 async function hydrateSetGroupIconParams(params: {
@@ -699,6 +748,14 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     pushMedia(url);
   }
   pushMedia(parsed.mediaUrl);
+
+  const normalizedMediaUrls = await normalizeSandboxMediaList({
+    values: mergedMediaUrls,
+    sandboxRoot: input.sandboxRoot,
+  });
+  mergedMediaUrls.length = 0;
+  mergedMediaUrls.push(...normalizedMediaUrls);
+
   message = parsed.text;
   params.message = message;
   if (!params.replyTo && parsed.replyToId) {
@@ -966,6 +1023,11 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+
+  await normalizeSandboxMediaParams({
+    args: params,
+    sandboxRoot: input.sandboxRoot,
+  });
 
   await hydrateSendAttachmentParams({
     cfg,
