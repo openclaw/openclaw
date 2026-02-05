@@ -284,9 +284,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // -----------------------------------------------------------------------
   // Finalize the stream if one was started
   // -----------------------------------------------------------------------
-  if (streamSession && !streamSession.stopped) {
+  const finalStream = streamSession as SlackStreamSession | null;
+  if (finalStream && !finalStream.stopped) {
     try {
-      await stopSlackStream({ session: streamSession });
+      await stopSlackStream({ session: finalStream });
     } catch (err) {
       runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
     }
