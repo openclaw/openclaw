@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+
 import type { Message } from "@grammyjs/types";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramContext } from "./bot/types.js";
