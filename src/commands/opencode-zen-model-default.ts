@@ -1,8 +1,11 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentModelListConfig } from "../config/types.js";
 
-export const OPENCODE_ZEN_DEFAULT_MODEL = "opencode/claude-opus-4-5";
-const LEGACY_OPENCODE_ZEN_DEFAULT_MODEL = "opencode-zen/claude-opus-4-5";
+export const OPENCODE_ZEN_DEFAULT_MODEL = "opencode/claude-opus-4-6";
+const LEGACY_OPENCODE_ZEN_DEFAULT_MODELS = new Set([
+  "opencode/claude-opus-4-5",
+  "opencode-zen/claude-opus-4-5",
+]);
 
 function resolvePrimaryModel(model?: AgentModelListConfig | string): string | undefined {
   if (typeof model === "string") {
@@ -20,7 +23,9 @@ export function applyOpencodeZenModelDefault(cfg: OpenClawConfig): {
 } {
   const current = resolvePrimaryModel(cfg.agents?.defaults?.model)?.trim();
   const normalizedCurrent =
-    current === LEGACY_OPENCODE_ZEN_DEFAULT_MODEL ? OPENCODE_ZEN_DEFAULT_MODEL : current;
+    current && LEGACY_OPENCODE_ZEN_DEFAULT_MODELS.has(current)
+      ? OPENCODE_ZEN_DEFAULT_MODEL
+      : current;
   if (normalizedCurrent === OPENCODE_ZEN_DEFAULT_MODEL) {
     return { next: cfg, changed: false };
   }
