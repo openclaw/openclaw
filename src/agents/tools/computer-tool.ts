@@ -14,6 +14,7 @@ import { imageResultFromFile, jsonResult, type AnyAgentTool, readStringParam } f
 const COMPUTER_TOOL_ACTIONS = [
   "snapshot",
   "wait",
+  "release",
   "hover",
   "move",
   "click",
@@ -532,7 +533,7 @@ function shouldApproveAction(params: {
   if (confirm === "off") {
     return false;
   }
-  if (action === "snapshot" || action === "wait") {
+  if (action === "snapshot" || action === "wait" || action === "release") {
     return false;
   }
   if (action.startsWith("teach_")) {
@@ -1425,6 +1426,27 @@ switch ('${action}') {
     [Keyboard]::KeyUp([UInt16]$resolved.vk, [bool]$resolved.extended)
     Sleep-IfNeeded
   }
+  'release' {
+    # Mouse buttons
+    [MouseInput]::ButtonUp('left')
+    [MouseInput]::ButtonUp('right')
+    [MouseInput]::ButtonUp('middle')
+
+    # Modifiers / common stuck keys
+    [Keyboard]::KeyUp(0x10, $false) # SHIFT
+    [Keyboard]::KeyUp(0xA0, $false) # LSHIFT
+    [Keyboard]::KeyUp(0xA1, $false) # RSHIFT
+    [Keyboard]::KeyUp(0x11, $false) # CTRL
+    [Keyboard]::KeyUp(0xA2, $false) # LCTRL
+    [Keyboard]::KeyUp(0xA3, $true)  # RCTRL
+    [Keyboard]::KeyUp(0x12, $false) # ALT
+    [Keyboard]::KeyUp(0xA4, $false) # LALT
+    [Keyboard]::KeyUp(0xA5, $true)  # RALT
+    [Keyboard]::KeyUp(0x5B, $false) # LWIN
+    [Keyboard]::KeyUp(0x5C, $false) # RWIN
+
+    Sleep-IfNeeded
+  }
   'hotkey' {
     $keyToken = [string]$args.key
     if (-not $keyToken) { throw 'key required' }
@@ -1563,6 +1585,11 @@ export function createComputerTool(options?: {
           });
         }
         return jsonResult({ ok: true, waitedMs: durationMs });
+      }
+
+      if (action === "release") {
+        await runInputAction({ action: "release", args: {} });
+        return jsonResult({ ok: true });
       }
 
       if (action === "hover") {

@@ -124,6 +124,7 @@
       "actions": {
         "snapshot": { "label": "snapshot" },
         "wait": { "label": "wait", "detailKeys": ["durationMs"] },
+        "release": { "label": "release" },
         "hover": { "label": "hover", "detailKeys": ["x", "y", "durationMs", "steps", "stepDelayMs", "jitterPx"] },
         "move": { "label": "move", "detailKeys": ["x", "y", "steps", "stepDelayMs", "jitterPx"] },
         "click": { "label": "click", "detailKeys": ["x", "y", "button", "clicks", "steps", "stepDelayMs", "jitterPx"] },
