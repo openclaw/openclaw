@@ -124,34 +124,6 @@
 - Never commit or publish real phone numbers, videos, or live configuration values. Use obviously fake placeholders in docs, tests, and examples.
 - Release flow: always read `docs/reference/RELEASING.md` and `docs/platforms/mac/release.md` before any release work; do not ask routine questions once those docs answer them.
 
-## Google Chat Webhook
-
-The GChat webhook (`src/googlechat/run-webhook.ts`) bridges Google Chat messages to Clawdbot.
-
-### Configuration
-- **Port**: 18793 (exposed via Tailscale Funnel)
-- **Timeout**: 10 minutes (600s) - allows for complex AI tasks
-- **Retries**: 2 automatic retries with 3s delay for transient failures
-
-### Retry Logic
-The webhook automatically retries on these transient errors:
-- `rate_limit` - Anthropic API rate limiting
-- `overloaded` - API overload
-- `timeout` / `ETIMEDOUT` - Network timeouts
-
-Non-retryable errors (auth failures, invalid requests) fail immediately.
-
-### Logs
-```bash
-tail -f /tmp/googlechat-webhook.log
-```
-
-### Restart
-```bash
-pkill -f "run-webhook.ts"
-nohup npx tsx src/googlechat/run-webhook.ts >> /tmp/googlechat-webhook.log 2>&1 &
-```
-
 ## Troubleshooting
 
 - Rebrand/migration issues or legacy config/service warnings: run `openclaw doctor` (see `docs/gateway/doctor.md`).
