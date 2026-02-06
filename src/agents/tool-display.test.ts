@@ -53,3 +53,37 @@ describe("tool display details", () => {
     expect(detail).toContain("tools true");
   });
 });
+
+describe("resolveToolDisplay file_path fallback", () => {
+  it("uses file_path when path is absent for read tools", () => {
+    const display = resolveToolDisplay({
+      name: "read",
+      args: { file_path: "/tmp/foo.txt" },
+    });
+    expect(display.detail).toContain("/tmp/foo.txt");
+  });
+
+  it("uses file_path with offset and limit for read tools", () => {
+    const display = resolveToolDisplay({
+      name: "read",
+      args: { file_path: "/tmp/bar.ts", offset: 10, limit: 20 },
+    });
+    expect(display.detail).toBe("/tmp/bar.ts:10-30");
+  });
+
+  it("uses file_path when path is absent for write tools", () => {
+    const display = resolveToolDisplay({
+      name: "write",
+      args: { file_path: "/tmp/out.txt", content: "hello" },
+    });
+    expect(display.detail).toContain("/tmp/out.txt");
+  });
+
+  it("prefers path over file_path", () => {
+    const display = resolveToolDisplay({
+      name: "read",
+      args: { path: "/preferred.txt", file_path: "/fallback.txt" },
+    });
+    expect(display.detail).toContain("/preferred.txt");
+  });
+});
