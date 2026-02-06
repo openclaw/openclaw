@@ -8,6 +8,7 @@
 export type SegmentKind =
   | "media-note"
   | "media-hint"
+  | "warroom-briefing"
   | "thread-starter"
   | "system-event"
   | "abort-hint"

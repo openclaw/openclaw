@@ -45,6 +45,7 @@ import { routeReply } from "./route-reply.js";
 import { buildSystemEventsBlock, ensureSkillSnapshot } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 import { buildUntrustedContextBlock } from "./untrusted-context.js";
+import { buildWarroomBriefing } from "./warroom-briefing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
@@ -253,10 +254,14 @@ export async function runPreparedReply(
     ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
     : undefined;
 
+  // Warroom briefing (cached, ~5 min TTL)
+  const warroomBriefing = await buildWarroomBriefing(workspaceDir);
+
   // Build segments in canonical order
   const contextSegments: ContextSegment[] = [
     ...(mediaNote ? [{ kind: "media-note" as const, content: mediaNote }] : []),
     ...(mediaReplyHint ? [{ kind: "media-hint" as const, content: mediaReplyHint }] : []),
+    ...(warroomBriefing ? [{ kind: "warroom-briefing" as const, content: warroomBriefing }] : []),
     ...(threadStarterNote ? [{ kind: "thread-starter" as const, content: threadStarterNote }] : []),
     ...(systemEventsBlock ? [{ kind: "system-event" as const, content: systemEventsBlock }] : []),
     ...(hintParts.abortHint ? [{ kind: "abort-hint" as const, content: hintParts.abortHint }] : []),
