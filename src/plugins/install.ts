@@ -10,6 +10,7 @@ import {
   resolvePackedRootDir,
 } from "../infra/archive.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
 type PluginInstallLogger = {
@@ -67,6 +68,22 @@ function validatePluginId(pluginId: string): string | null {
     return "invalid plugin name: path separators not allowed";
   }
   return null;
+}
+
+function isPathInside(basePath: string, candidatePath: string): boolean {
+  const base = path.resolve(basePath);
+  const candidate = path.resolve(candidatePath);
+  const rel = path.relative(base, candidate);
+  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
+}
+
+function extensionUsesSkippedScannerPath(entry: string): boolean {
+  const segments = entry.split(/[\\/]+/).filter(Boolean);
+  return segments.some(
+    (segment) =>
+      segment === "node_modules" ||
+      (segment.startsWith(".") && segment !== "." && segment !== ".."),
+  );
 }
 
 async function ensureOpenClawExtensions(manifest: PackageManifest) {
@@ -161,6 +178,46 @@ async function installPluginFromPackageDir(params: {
     };
   }
 
+  const packageDir = path.resolve(params.packageDir);
+  const forcedScanEntries: string[] = [];
+  for (const entry of extensions) {
+    const resolvedEntry = path.resolve(packageDir, entry);
+    if (!isPathInside(packageDir, resolvedEntry)) {
+      logger.warn?.(`extension entry escapes plugin directory and will not be scanned: ${entry}`);
+      continue;
+    }
+    if (extensionUsesSkippedScannerPath(entry)) {
+      logger.warn?.(
+        `extension entry is in a hidden/node_modules path and will receive targeted scan coverage: ${entry}`,
+      );
+    }
+    forcedScanEntries.push(resolvedEntry);
+  }
+
+  // Scan plugin source for dangerous code patterns (warn-only; never blocks install)
+  try {
+    const scanSummary = await scanDirectoryWithSummary(params.packageDir, {
+      includeFiles: forcedScanEntries,
+    });
+    if (scanSummary.critical > 0) {
+      const criticalDetails = scanSummary.findings
+        .filter((f) => f.severity === "critical")
+        .map((f) => `${f.message} (${f.file}:${f.line})`)
+        .join("; ");
+      logger.warn?.(
+        `WARNING: Plugin "${pluginId}" contains dangerous code patterns: ${criticalDetails}`,
+      );
+    } else if (scanSummary.warn > 0) {
+      logger.warn?.(
+        `Plugin "${pluginId}" has ${scanSummary.warn} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
+      );
+    }
+  } catch (err) {
+    logger.warn?.(
+      `Plugin "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
+    );
+  }
+
   const extensionsDir = params.extensionsDir
     ? resolveUserPath(params.extensionsDir)
     : path.join(CONFIG_DIR, "extensions");
@@ -208,6 +265,10 @@ async function installPluginFromPackageDir(params: {
 
   for (const entry of extensions) {
     const resolvedEntry = path.resolve(targetDir, entry);
+    if (!isPathInside(targetDir, resolvedEntry)) {
+      logger.warn?.(`extension entry escapes plugin directory: ${entry}`);
+      continue;
+    }
     if (!(await fileExists(resolvedEntry))) {
       logger.warn?.(`extension entry not found: ${entry}`);
     }

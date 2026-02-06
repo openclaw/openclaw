@@ -17,6 +17,8 @@ Ollama is a local LLM runtime that makes it easy to run open-source models on yo
 2. Pull a model:
 
 ```bash
+ollama pull gpt-oss:20b
+# or
 ollama pull llama3.3
 # or
 ollama pull qwen2.5-coder:32b
@@ -40,7 +42,7 @@ openclaw config set models.providers.ollama.apiKey "ollama-local"
 {
   agents: {
     defaults: {
-      model: { primary: "ollama/llama3.3" },
+      model: { primary: "ollama/gpt-oss:20b" },
     },
   },
 }
@@ -105,8 +107,8 @@ Use explicit config when:
         api: "openai-completions",
         models: [
           {
-            id: "llama3.3",
-            name: "Llama 3.3",
+            id: "gpt-oss:20b",
+            name: "GPT-OSS 20B",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -148,8 +150,8 @@ Once configured, all your Ollama models are available:
   agents: {
     defaults: {
       model: {
-        primary: "ollama/llama3.3",
-        fallback: ["ollama/qwen2.5-coder:32b"],
+        primary: "ollama/gpt-oss:20b",
+        fallbacks: ["ollama/llama3.3", "ollama/qwen2.5-coder:32b"],
       },
     },
   },
@@ -169,6 +171,48 @@ ollama pull deepseek-r1:32b
 ### Model Costs
 
 Ollama is free and runs locally, so all model costs are set to $0.
+
+### Streaming Configuration
+
+Due to a [known issue](https://github.com/badlogic/pi-mono/issues/1205) in the underlying SDK with Ollama's response format, **streaming is disabled by default** for Ollama models. This prevents corrupted responses when using tool-capable models.
+
+When streaming is disabled, responses are delivered all at once (non-streaming mode), which avoids the issue where interleaved content/reasoning deltas cause garbled output.
+
+#### Re-enable Streaming (Advanced)
+
+If you want to re-enable streaming for Ollama (may cause issues with tool-capable models):
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "ollama/gpt-oss:20b": {
+          streaming: true,
+        },
+      },
+    },
+  },
+}
+```
+
+#### Disable Streaming for Other Providers
+
+You can also disable streaming for any provider if needed:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-4": {
+          streaming: false,
+        },
+      },
+    },
+  },
+}
+```
 
 ### Context windows
 
@@ -201,7 +245,8 @@ To add models:
 
 ```bash
 ollama list  # See what's installed
-ollama pull llama3.3  # Pull a model
+ollama pull gpt-oss:20b  # Pull a tool-capable model
+ollama pull llama3.3     # Or another model
 ```
 
 ### Connection refused
@@ -215,6 +260,15 @@ ps aux | grep ollama
 # Or restart Ollama
 ollama serve
 ```
+
+### Corrupted responses or tool names in output
+
+If you see garbled responses containing tool names (like `sessions_send`, `memory_get`) or fragmented text when using Ollama models, this is due to an upstream SDK issue with streaming responses. **This is fixed by default** in the latest OpenClaw version by disabling streaming for Ollama models.
+
+If you manually enabled streaming and experience this issue:
+
+1. Remove the `streaming: true` configuration from your Ollama model entries, or
+2. Explicitly set `streaming: false` for Ollama models (see [Streaming Configuration](#streaming-configuration))
 
 ## See Also
 

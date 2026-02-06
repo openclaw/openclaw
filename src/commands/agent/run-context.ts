@@ -42,5 +42,14 @@ export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext 
     merged.currentThreadTs = String(opts.threadId);
   }
 
+  // Populate currentChannelId from the outbound target so that
+  // resolveTelegramAutoThreadId can match the originating chat.
+  if (!merged.currentChannelId && opts.to) {
+    const trimmedTo = opts.to.trim();
+    if (trimmedTo) {
+      merged.currentChannelId = trimmedTo;
+    }
+  }
+
   return merged;
 }

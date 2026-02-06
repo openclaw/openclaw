@@ -213,7 +213,7 @@ export async function resolveApiKeyForProvider(params: {
     const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
     if (hasCodex) {
       throw new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.2 (ChatGPT OAuth) or set OPENAI_API_KEY for openai/gpt-5.2.',
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.3-codex (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.1-codex.',
       );
     }
   }
@@ -302,6 +302,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     mistral: "MISTRAL_API_KEY",
     opencode: "OPENCODE_API_KEY",
     qianfan: "QIANFAN_API_KEY",
+    ollama: "OLLAMA_API_KEY",
   };
   const envVar = envMap[normalized];
   if (!envVar) {

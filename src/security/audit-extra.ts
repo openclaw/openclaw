@@ -5,15 +5,17 @@ import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import type { ExecFn } from "./windows-acl.js";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
 import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
+import { loadWorkspaceSkillEntries } from "../agents/skills.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import { createConfigIO } from "../config/config.js";
 import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "../config/includes.js";
@@ -26,6 +28,7 @@ import {
   inspectPathPermissions,
   safeStat,
 } from "./audit-fs.js";
+import { scanDirectoryWithSummary, type SkillScanFinding } from "./skill-scanner.js";
 
 export type SecurityAuditFinding = {
   checkId: string;
@@ -312,10 +315,12 @@ function isClaudeModel(id: string): boolean {
 }
 
 function isClaude45OrHigher(id: string): boolean {
-  // Match claude-*-4-5, claude-*-45, claude-*4.5, or opus-4-5/opus-45 variants
+  // Match claude-*-4-5+, claude-*-45+, claude-*4.5+, or future 5.x+ majors.
   // Examples that should match:
-  //   claude-opus-4-5, claude-opus-45, claude-4.5, venice/claude-opus-45
-  return /\bclaude-[^\s/]*?(?:-4-?5\b|4\.5\b)/i.test(id);
+  //   claude-opus-4-5, claude-opus-4-6, claude-opus-45, claude-4.6, claude-sonnet-5
+  return /\bclaude-[^\s/]*?(?:-4-?(?:[5-9]|[1-9]\d)\b|4\.(?:[5-9]|[1-9]\d)\b|-[5-9](?:\b|[.-]))/i.test(
+    id,
+  );
 }
 
 export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
@@ -1061,4 +1066,240 @@ export async function readConfigSnapshotForAudit(params: {
     env: params.env,
     configPath: params.configPath,
   }).readConfigFileSnapshot();
+}
+
+function isPathInside(basePath: string, candidatePath: string): boolean {
+  const base = path.resolve(basePath);
+  const candidate = path.resolve(candidatePath);
+  const rel = path.relative(base, candidate);
+  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
+}
+
+function extensionUsesSkippedScannerPath(entry: string): boolean {
+  const segments = entry.split(/[\\/]+/).filter(Boolean);
+  return segments.some(
+    (segment) =>
+      segment === "node_modules" ||
+      (segment.startsWith(".") && segment !== "." && segment !== ".."),
+  );
+}
+
+async function readPluginManifestExtensions(pluginPath: string): Promise<string[]> {
+  const manifestPath = path.join(pluginPath, "package.json");
+  const raw = await fs.readFile(manifestPath, "utf-8").catch(() => "");
+  if (!raw.trim()) {
+    return [];
+  }
+
+  const parsed = JSON.parse(raw) as Partial<
+    Record<typeof MANIFEST_KEY, { extensions?: unknown }>
+  > | null;
+  const extensions = parsed?.[MANIFEST_KEY]?.extensions;
+  if (!Array.isArray(extensions)) {
+    return [];
+  }
+  return extensions.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+}
+
+function listWorkspaceDirs(cfg: OpenClawConfig): string[] {
+  const dirs = new Set<string>();
+  const list = cfg.agents?.list;
+  if (Array.isArray(list)) {
+    for (const entry of list) {
+      if (entry && typeof entry === "object" && typeof entry.id === "string") {
+        dirs.add(resolveAgentWorkspaceDir(cfg, entry.id));
+      }
+    }
+  }
+  dirs.add(resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
+  return [...dirs];
+}
+
+function formatCodeSafetyDetails(findings: SkillScanFinding[], rootDir: string): string {
+  return findings
+    .map((finding) => {
+      const relPath = path.relative(rootDir, finding.file);
+      const filePath =
+        relPath && relPath !== "." && !relPath.startsWith("..")
+          ? relPath
+          : path.basename(finding.file);
+      const normalizedPath = filePath.replaceAll("\\", "/");
+      return `  - [${finding.ruleId}] ${finding.message} (${normalizedPath}:${finding.line})`;
+    })
+    .join("\n");
+}
+
+export async function collectPluginsCodeSafetyFindings(params: {
+  stateDir: string;
+}): Promise<SecurityAuditFinding[]> {
+  const findings: SecurityAuditFinding[] = [];
+  const extensionsDir = path.join(params.stateDir, "extensions");
+  const st = await safeStat(extensionsDir);
+  if (!st.ok || !st.isDir) {
+    return findings;
+  }
+
+  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err) => {
+    findings.push({
+      checkId: "plugins.code_safety.scan_failed",
+      severity: "warn",
+      title: "Plugin extensions directory scan failed",
+      detail: `Static code scan could not list extensions directory: ${String(err)}`,
+      remediation:
+        "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
+    });
+    return [];
+  });
+  const pluginDirs = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+
+  for (const pluginName of pluginDirs) {
+    const pluginPath = path.join(extensionsDir, pluginName);
+    const extensionEntries = await readPluginManifestExtensions(pluginPath).catch(() => []);
+    const forcedScanEntries: string[] = [];
+    const escapedEntries: string[] = [];
+
+    for (const entry of extensionEntries) {
+      const resolvedEntry = path.resolve(pluginPath, entry);
+      if (!isPathInside(pluginPath, resolvedEntry)) {
+        escapedEntries.push(entry);
+        continue;
+      }
+      if (extensionUsesSkippedScannerPath(entry)) {
+        findings.push({
+          checkId: "plugins.code_safety.entry_path",
+          severity: "warn",
+          title: `Plugin "${pluginName}" entry path is hidden or node_modules`,
+          detail: `Extension entry "${entry}" points to a hidden or node_modules path. Deep code scan will cover this entry explicitly, but review this path choice carefully.`,
+          remediation: "Prefer extension entrypoints under normal source paths like dist/ or src/.",
+        });
+      }
+      forcedScanEntries.push(resolvedEntry);
+    }
+
+    if (escapedEntries.length > 0) {
+      findings.push({
+        checkId: "plugins.code_safety.entry_escape",
+        severity: "critical",
+        title: `Plugin "${pluginName}" has extension entry path traversal`,
+        detail: `Found extension entries that escape the plugin directory:\n${escapedEntries.map((entry) => `  - ${entry}`).join("\n")}`,
+        remediation:
+          "Update the plugin manifest so all openclaw.extensions entries stay inside the plugin directory.",
+      });
+    }
+
+    const summary = await scanDirectoryWithSummary(pluginPath, {
+      includeFiles: forcedScanEntries,
+    }).catch((err) => {
+      findings.push({
+        checkId: "plugins.code_safety.scan_failed",
+        severity: "warn",
+        title: `Plugin "${pluginName}" code scan failed`,
+        detail: `Static code scan could not complete: ${String(err)}`,
+        remediation:
+          "Check file permissions and plugin layout, then rerun `openclaw security audit --deep`.",
+      });
+      return null;
+    });
+    if (!summary) {
+      continue;
+    }
+
+    if (summary.critical > 0) {
+      const criticalFindings = summary.findings.filter((f) => f.severity === "critical");
+      const details = formatCodeSafetyDetails(criticalFindings, pluginPath);
+
+      findings.push({
+        checkId: "plugins.code_safety",
+        severity: "critical",
+        title: `Plugin "${pluginName}" contains dangerous code patterns`,
+        detail: `Found ${summary.critical} critical issue(s) in ${summary.scannedFiles} scanned file(s):\n${details}`,
+        remediation:
+          "Review the plugin source code carefully before use. If untrusted, remove the plugin from your OpenClaw extensions state directory.",
+      });
+    } else if (summary.warn > 0) {
+      const warnFindings = summary.findings.filter((f) => f.severity === "warn");
+      const details = formatCodeSafetyDetails(warnFindings, pluginPath);
+
+      findings.push({
+        checkId: "plugins.code_safety",
+        severity: "warn",
+        title: `Plugin "${pluginName}" contains suspicious code patterns`,
+        detail: `Found ${summary.warn} warning(s) in ${summary.scannedFiles} scanned file(s):\n${details}`,
+        remediation: `Review the flagged code to ensure it is intentional and safe.`,
+      });
+    }
+  }
+
+  return findings;
+}
+
+export async function collectInstalledSkillsCodeSafetyFindings(params: {
+  cfg: OpenClawConfig;
+  stateDir: string;
+}): Promise<SecurityAuditFinding[]> {
+  const findings: SecurityAuditFinding[] = [];
+  const pluginExtensionsDir = path.join(params.stateDir, "extensions");
+  const scannedSkillDirs = new Set<string>();
+  const workspaceDirs = listWorkspaceDirs(params.cfg);
+
+  for (const workspaceDir of workspaceDirs) {
+    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
+    for (const entry of entries) {
+      if (entry.skill.source === "openclaw-bundled") {
+        continue;
+      }
+
+      const skillDir = path.resolve(entry.skill.baseDir);
+      if (isPathInside(pluginExtensionsDir, skillDir)) {
+        // Plugin code is already covered by plugins.code_safety checks.
+        continue;
+      }
+      if (scannedSkillDirs.has(skillDir)) {
+        continue;
+      }
+      scannedSkillDirs.add(skillDir);
+
+      const skillName = entry.skill.name;
+      const summary = await scanDirectoryWithSummary(skillDir).catch((err) => {
+        findings.push({
+          checkId: "skills.code_safety.scan_failed",
+          severity: "warn",
+          title: `Skill "${skillName}" code scan failed`,
+          detail: `Static code scan could not complete for ${skillDir}: ${String(err)}`,
+          remediation:
+            "Check file permissions and skill layout, then rerun `openclaw security audit --deep`.",
+        });
+        return null;
+      });
+      if (!summary) {
+        continue;
+      }
+
+      if (summary.critical > 0) {
+        const criticalFindings = summary.findings.filter(
+          (finding) => finding.severity === "critical",
+        );
+        const details = formatCodeSafetyDetails(criticalFindings, skillDir);
+        findings.push({
+          checkId: "skills.code_safety",
+          severity: "critical",
+          title: `Skill "${skillName}" contains dangerous code patterns`,
+          detail: `Found ${summary.critical} critical issue(s) in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
+          remediation: `Review the skill source code before use. If untrusted, remove "${skillDir}".`,
+        });
+      } else if (summary.warn > 0) {
+        const warnFindings = summary.findings.filter((finding) => finding.severity === "warn");
+        const details = formatCodeSafetyDetails(warnFindings, skillDir);
+        findings.push({
+          checkId: "skills.code_safety",
+          severity: "warn",
+          title: `Skill "${skillName}" contains suspicious code patterns`,
+          detail: `Found ${summary.warn} warning(s) in ${summary.scannedFiles} scanned file(s) under ${skillDir}:\n${details}`,
+          remediation: "Review flagged lines to ensure the behavior is intentional and safe.",
+        });
+      }
+    }
+  }
+
+  return findings;
 }

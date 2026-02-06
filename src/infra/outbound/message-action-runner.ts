@@ -20,6 +20,7 @@ import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import { extensionForMime } from "../../media/mime.js";
 import { parseSlackTarget } from "../../slack/targets.js";
+import { parseTelegramTarget } from "../../telegram/targets.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -239,6 +240,35 @@ function resolveSlackAutoThreadId(params: {
     return undefined;
   }
   if (context.replyToMode === "first" && context.hasRepliedRef?.value) {
+    return undefined;
+  }
+  return context.currentThreadTs;
+}
+
+/**
+ * Auto-inject Telegram forum topic thread ID when the message tool targets
+ * the same chat the session originated from.  Mirrors the Slack auto-threading
+ * pattern so media, buttons, and other tool-sent messages land in the correct
+ * topic instead of the General Topic.
+ *
+ * Unlike Slack, we do not gate on `replyToMode` here: Telegram forum topics
+ * are persistent sub-channels (not ephemeral reply threads), so auto-injection
+ * should always apply when the target chat matches.
+ */
+function resolveTelegramAutoThreadId(params: {
+  to: string;
+  toolContext?: ChannelThreadingToolContext;
+}): string | undefined {
+  const context = params.toolContext;
+  if (!context?.currentThreadTs || !context.currentChannelId) {
+    return undefined;
+  }
+  // Use parseTelegramTarget to extract canonical chatId from both sides,
+  // mirroring how Slack uses parseSlackTarget. This handles format variations
+  // like `telegram:group:123:topic:456` vs `telegram:123`.
+  const parsedTo = parseTelegramTarget(params.to);
+  const parsedChannel = parseTelegramTarget(context.currentChannelId);
+  if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
     return undefined;
   }
   return context.currentThreadTs;
@@ -792,6 +822,17 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     channel === "slack" && !replyToId && !threadId
       ? resolveSlackAutoThreadId({ to, toolContext: input.toolContext })
       : undefined;
+  // Telegram forum topic auto-threading: inject threadId so media/buttons land in the correct topic.
+  const telegramAutoThreadId =
+    channel === "telegram" && !threadId
+      ? resolveTelegramAutoThreadId({ to, toolContext: input.toolContext })
+      : undefined;
+  const resolvedThreadId = threadId ?? slackAutoThreadId ?? telegramAutoThreadId;
+  // Write auto-resolved threadId back into params so downstream dispatch
+  // (plugin `readStringParam(params, "threadId")`) picks it up.
+  if (resolvedThreadId && !params.threadId) {
+    params.threadId = resolvedThreadId;
+  }
   const outboundRoute =
     agentId && !dryRun
       ? await resolveOutboundSessionRoute({
@@ -802,7 +843,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
           target: to,
           resolvedTarget,
           replyToId,
-          threadId: threadId ?? slackAutoThreadId,
+          threadId: resolvedThreadId,
         })
       : null;
   if (outboundRoute && agentId && !dryRun) {

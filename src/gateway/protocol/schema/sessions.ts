@@ -101,3 +101,19 @@ export const SessionsCompactParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const SessionsUsageParamsSchema = Type.Object(
+  {
+    /** Specific session key to analyze; if omitted returns all sessions. */
+    key: Type.Optional(NonEmptyString),
+    /** Start date for range filter (YYYY-MM-DD). */
+    startDate: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),
+    /** End date for range filter (YYYY-MM-DD). */
+    endDate: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),
+    /** Maximum sessions to return (default 50). */
+    limit: Type.Optional(Type.Integer({ minimum: 1 })),
+    /** Include context weight breakdown (systemPromptReport). */
+    includeContextWeight: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);

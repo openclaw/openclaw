@@ -339,6 +339,14 @@
       "destination": "/start/getting-started"
     },
     {
+      "source": "/quickstart",
+      "destination": "/start/getting-started"
+    },
+    {
+      "source": "/start/quickstart",
+      "destination": "/start/getting-started"
+    },
+    {
       "source": "/gmail-pubsub",
       "destination": "/automation/gmail-pubsub"
     },
@@ -695,6 +703,18 @@
       "destination": "/start/wizard"
     },
     {
+      "source": "/start/wizard-cli-flow",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
+      "source": "/start/wizard-cli-auth",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
+      "source": "/start/wizard-cli-outputs",
+      "destination": "/start/wizard-cli-reference"
+    },
+    {
       "source": "/start/faq",
       "destination": "/help/faq"
     },
@@ -707,20 +727,52 @@
       "destination": "/plugin"
     },
     {
-      "source": "/install/railway",
-      "destination": "/railway"
+      "source": "/railway",
+      "destination": "/install/railway"
     },
     {
-      "source": "/install/northflank",
-      "destination": "/northflank"
+      "source": "/northflank",
+      "destination": "/install/northflank"
     },
     {
-      "source": "/install/northflank/",
-      "destination": "/northflank"
+      "source": "/render",
+      "destination": "/install/render"
     },
     {
       "source": "/gcp",
-      "destination": "/platforms/gcp"
+      "destination": "/install/gcp"
+    },
+    {
+      "source": "/platforms/fly",
+      "destination": "/install/fly"
+    },
+    {
+      "source": "/platforms/hetzner",
+      "destination": "/install/hetzner"
+    },
+    {
+      "source": "/platforms/gcp",
+      "destination": "/install/gcp"
+    },
+    {
+      "source": "/platforms/macos-vm",
+      "destination": "/install/macos-vm"
+    },
+    {
+      "source": "/platforms/exe-dev",
+      "destination": "/install/exe-dev"
+    },
+    {
+      "source": "/platforms/railway",
+      "destination": "/install/railway"
+    },
+    {
+      "source": "/platforms/render",
+      "destination": "/install/render"
+    },
+    {
+      "source": "/platforms/northflank",
+      "destination": "/install/northflank"
     }
   ],
   "navigation": {
@@ -733,46 +785,55 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["index", "concepts/features", "start/showcase", "start/lore"]
+                "pages": ["index", "concepts/features", "start/showcase"]
               },
               {
-                "group": "Installation",
+                "group": "First steps",
+                "pages": ["start/getting-started", "start/wizard", "start/onboarding"]
+              },
+              {
+                "group": "Guides",
+                "pages": ["start/openclaw"]
+              }
+            ]
+          },
+          {
+            "tab": "Install",
+            "groups": [
+              {
+                "group": "Install overview",
+                "pages": ["install/index", "install/installer"]
+              },
+              {
+                "group": "Install methods",
                 "pages": [
-                  "install/index",
-                  "install/installer",
+                  "install/node",
                   "install/docker",
-                  "install/bun",
                   "install/nix",
                   "install/ansible",
-                  "install/development-channels",
-                  "install/updating",
-                  "install/uninstall"
+                  "install/bun"
                 ]
               },
               {
-                "group": "Setup",
+                "group": "Maintenance",
+                "pages": ["install/updating", "install/migrating", "install/uninstall"]
+              },
+              {
+                "group": "Hosting and deployment",
                 "pages": [
-                  "start/getting-started",
-                  "start/quickstart",
-                  "start/wizard",
-                  "start/setup",
-                  "start/onboarding",
-                  "start/pairing",
-                  "start/openclaw",
-                  "start/hubs",
-                  "start/docs-directory"
+                  "install/fly",
+                  "install/hetzner",
+                  "install/gcp",
+                  "install/macos-vm",
+                  "install/exe-dev",
+                  "install/railway",
+                  "install/render",
+                  "install/northflank"
                 ]
               },
               {
-                "group": "Platforms",
-                "pages": [
-                  "platforms/index",
-                  "platforms/macos",
-                  "platforms/linux",
-                  "platforms/windows",
-                  "platforms/android",
-                  "platforms/ios"
-                ]
+                "group": "Advanced",
+                "pages": ["install/development-channels"]
               }
             ]
           },
@@ -806,6 +867,7 @@
               {
                 "group": "Configuration",
                 "pages": [
+                  "start/pairing",
                   "concepts/group-messages",
                   "concepts/groups",
                   "broadcast-groups",
@@ -828,6 +890,7 @@
                   "concepts/system-prompt",
                   "concepts/context",
                   "concepts/agent-workspace",
+                  "start/bootstrapping",
                   "concepts/oauth"
                 ]
               },
@@ -960,7 +1023,46 @@
             ]
           },
           {
-            "tab": "Infrastructure",
+            "tab": "Platforms",
+            "groups": [
+              {
+                "group": "Platforms overview",
+                "pages": [
+                  "platforms/index",
+                  "platforms/macos",
+                  "platforms/linux",
+                  "platforms/windows",
+                  "platforms/android",
+                  "platforms/ios"
+                ]
+              },
+              {
+                "group": "macOS companion app",
+                "pages": [
+                  "platforms/mac/dev-setup",
+                  "platforms/mac/menu-bar",
+                  "platforms/mac/voicewake",
+                  "platforms/mac/voice-overlay",
+                  "platforms/mac/webchat",
+                  "platforms/mac/canvas",
+                  "platforms/mac/child-process",
+                  "platforms/mac/health",
+                  "platforms/mac/icon",
+                  "platforms/mac/logging",
+                  "platforms/mac/permissions",
+                  "platforms/mac/remote",
+                  "platforms/mac/signing",
+                  "platforms/mac/release",
+                  "platforms/mac/bundled-gateway",
+                  "platforms/mac/xpc",
+                  "platforms/mac/skills",
+                  "platforms/mac/peekaboo"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "Gateway & Ops",
             "groups": [
               {
                 "group": "Gateway",
@@ -1013,20 +1115,8 @@
                 ]
               },
               {
-                "group": "Remote access and deployment",
-                "pages": [
-                  "gateway/remote",
-                  "gateway/remote-gateway-readme",
-                  "gateway/tailscale",
-                  "platforms/fly",
-                  "platforms/hetzner",
-                  "platforms/gcp",
-                  "platforms/macos-vm",
-                  "platforms/exe-dev",
-                  "railway",
-                  "render",
-                  "northflank"
-                ]
+                "group": "Remote access",
+                "pages": ["gateway/remote", "gateway/remote-gateway-readme", "gateway/tailscale"]
               },
               {
                 "group": "Security",
@@ -1035,29 +1125,6 @@
               {
                 "group": "Web interfaces",
                 "pages": ["web/index", "web/control-ui", "web/dashboard", "web/webchat", "tui"]
-              },
-              {
-                "group": "macOS companion app",
-                "pages": [
-                  "platforms/mac/dev-setup",
-                  "platforms/mac/menu-bar",
-                  "platforms/mac/voicewake",
-                  "platforms/mac/voice-overlay",
-                  "platforms/mac/webchat",
-                  "platforms/mac/canvas",
-                  "platforms/mac/child-process",
-                  "platforms/mac/health",
-                  "platforms/mac/icon",
-                  "platforms/mac/logging",
-                  "platforms/mac/permissions",
-                  "platforms/mac/remote",
-                  "platforms/mac/signing",
-                  "platforms/mac/release",
-                  "platforms/mac/bundled-gateway",
-                  "platforms/mac/xpc",
-                  "platforms/mac/skills",
-                  "platforms/mac/peekaboo"
-                ]
               }
             ]
           },
@@ -1126,6 +1193,7 @@
               {
                 "group": "Technical reference",
                 "pages": [
+                  "reference/wizard",
                   "concepts/typebox",
                   "concepts/markdown-formatting",
                   "concepts/typing-indicators",
@@ -1152,6 +1220,10 @@
                 "pages": ["help/index", "help/troubleshooting", "help/faq"]
               },
               {
+                "group": "Community",
+                "pages": ["start/lore"]
+              },
+              {
                 "group": "Environment and debugging",
                 "pages": [
                   "environment",
@@ -1160,6 +1232,14 @@
                   "scripts",
                   "reference/session-management-compaction"
                 ]
+              },
+              {
+                "group": "Developer workflows",
+                "pages": ["start/setup", "help/submitting-a-pr", "help/submitting-an-issue"]
+              },
+              {
+                "group": "Docs meta",
+                "pages": ["start/hubs", "start/docs-directory"]
               }
             ]
           }
@@ -1169,60 +1249,79 @@
         "language": "zh-Hans",
         "tabs": [
           {
-            "tab": "Get started",
+            "tab": "快速开始",
             "groups": [
               {
-                "group": "Overview",
-                "pages": ["zh-CN/index", "zh-CN/start/showcase", "zh-CN/start/lore"]
+                "group": "概览",
+                "pages": ["zh-CN/index", "zh-CN/concepts/features", "zh-CN/start/showcase"]
               },
               {
-                "group": "Installation",
-                "pages": [
-                  "zh-CN/install/index",
-                  "zh-CN/install/installer",
-                  "zh-CN/install/docker",
-                  "zh-CN/install/bun",
-                  "zh-CN/install/nix",
-                  "zh-CN/install/ansible",
-                  "zh-CN/install/development-channels",
-                  "zh-CN/install/updating",
-                  "zh-CN/install/uninstall"
-                ]
-              },
-              {
-                "group": "Setup",
+                "group": "第一步",
                 "pages": [
                   "zh-CN/start/getting-started",
                   "zh-CN/start/wizard",
-                  "zh-CN/start/setup",
-                  "zh-CN/start/onboarding",
-                  "zh-CN/start/pairing",
-                  "zh-CN/start/openclaw",
-                  "zh-CN/start/hubs"
+                  "zh-CN/start/onboarding"
                 ]
               },
               {
-                "group": "Platforms",
-                "pages": [
-                  "zh-CN/platforms/index",
-                  "zh-CN/platforms/macos",
-                  "zh-CN/platforms/linux",
-                  "zh-CN/platforms/windows",
-                  "zh-CN/platforms/android",
-                  "zh-CN/platforms/ios"
-                ]
+                "group": "指南",
+                "pages": ["zh-CN/start/openclaw"]
               }
             ]
           },
           {
-            "tab": "Channels",
+            "tab": "安装",
             "groups": [
               {
-                "group": "Overview",
+                "group": "安装概览",
+                "pages": ["zh-CN/install/index", "zh-CN/install/installer"]
+              },
+              {
+                "group": "安装方式",
+                "pages": [
+                  "zh-CN/install/node",
+                  "zh-CN/install/docker",
+                  "zh-CN/install/nix",
+                  "zh-CN/install/ansible",
+                  "zh-CN/install/bun"
+                ]
+              },
+              {
+                "group": "维护",
+                "pages": [
+                  "zh-CN/install/updating",
+                  "zh-CN/install/migrating",
+                  "zh-CN/install/uninstall"
+                ]
+              },
+              {
+                "group": "托管与部署",
+                "pages": [
+                  "zh-CN/install/fly",
+                  "zh-CN/install/hetzner",
+                  "zh-CN/install/gcp",
+                  "zh-CN/install/macos-vm",
+                  "zh-CN/install/exe-dev",
+                  "zh-CN/install/railway",
+                  "zh-CN/install/render",
+                  "zh-CN/install/northflank"
+                ]
+              },
+              {
+                "group": "高级",
+                "pages": ["zh-CN/install/development-channels"]
+              }
+            ]
+          },
+          {
+            "tab": "消息渠道",
+            "groups": [
+              {
+                "group": "概览",
                 "pages": ["zh-CN/channels/index"]
               },
               {
-                "group": "Messaging platforms",
+                "group": "消息平台",
                 "pages": [
                   "zh-CN/channels/whatsapp",
                   "zh-CN/channels/telegram",
@@ -1242,8 +1341,9 @@
                 ]
               },
               {
-                "group": "Configuration",
+                "group": "配置",
                 "pages": [
+                  "zh-CN/start/pairing",
                   "zh-CN/concepts/group-messages",
                   "zh-CN/concepts/groups",
                   "zh-CN/broadcast-groups",
@@ -1255,10 +1355,10 @@
             ]
           },
           {
-            "tab": "Agents",
+            "tab": "代理",
             "groups": [
               {
-                "group": "Fundamentals",
+                "group": "基础",
                 "pages": [
                   "zh-CN/concepts/architecture",
                   "zh-CN/concepts/agent",
@@ -1270,7 +1370,7 @@
                 ]
               },
               {
-                "group": "Sessions and memory",
+                "group": "会话与记忆",
                 "pages": [
                   "zh-CN/concepts/session",
                   "zh-CN/concepts/sessions",
@@ -1281,11 +1381,11 @@
                 ]
               },
               {
-                "group": "Multi-agent",
+                "group": "多代理",
                 "pages": ["zh-CN/concepts/multi-agent", "zh-CN/concepts/presence"]
               },
               {
-                "group": "Messages and delivery",
+                "group": "消息与投递",
                 "pages": [
                   "zh-CN/concepts/messages",
                   "zh-CN/concepts/streaming",
@@ -1296,14 +1396,14 @@
             ]
           },
           {
-            "tab": "Tools",
+            "tab": "工具",
             "groups": [
               {
-                "group": "Overview",
+                "group": "概览",
                 "pages": ["zh-CN/tools/index"]
               },
               {
-                "group": "Built-in tools",
+                "group": "内置工具",
                 "pages": [
                   "zh-CN/tools/lobster",
                   "zh-CN/tools/llm-task",
@@ -1316,7 +1416,7 @@
                 ]
               },
               {
-                "group": "Browser",
+                "group": "浏览器",
                 "pages": [
                   "zh-CN/tools/browser",
                   "zh-CN/tools/browser-login",
@@ -1325,7 +1425,7 @@
                 ]
               },
               {
-                "group": "Agent coordination",
+                "group": "代理协作",
                 "pages": [
                   "zh-CN/tools/agent-send",
                   "zh-CN/tools/subagents",
@@ -1333,7 +1433,7 @@
                 ]
               },
               {
-                "group": "Skills and extensions",
+                "group": "技能与扩展",
                 "pages": [
                   "zh-CN/tools/slash-commands",
                   "zh-CN/tools/skills",
@@ -1345,7 +1445,7 @@
                 ]
               },
               {
-                "group": "Automation",
+                "group": "自动化",
                 "pages": [
                   "zh-CN/hooks",
                   "zh-CN/hooks/soul-evil",
@@ -1358,7 +1458,7 @@
                 ]
               },
               {
-                "group": "Media and devices",
+                "group": "媒体与设备",
                 "pages": [
                   "zh-CN/nodes/index",
                   "zh-CN/nodes/images",
@@ -1372,10 +1472,10 @@
             ]
           },
           {
-            "tab": "Models",
+            "tab": "模型",
             "groups": [
               {
-                "group": "Overview",
+                "group": "概览",
                 "pages": [
                   "zh-CN/providers/index",
                   "zh-CN/providers/models",
@@ -1383,11 +1483,11 @@
                 ]
               },
               {
-                "group": "Configuration",
+                "group": "配置",
                 "pages": ["zh-CN/concepts/model-providers", "zh-CN/concepts/model-failover"]
               },
               {
-                "group": "Providers",
+                "group": "提供商",
                 "pages": [
                   "zh-CN/providers/anthropic",
                   "zh-CN/providers/openai",
@@ -1405,89 +1505,21 @@
             ]
           },
           {
-            "tab": "Infrastructure",
+            "tab": "平台",
             "groups": [
               {
-                "group": "Gateway",
+                "group": "平台概览",
                 "pages": [
-                  "zh-CN/gateway/index",
-                  {
-                    "group": "Configuration and operations",
-                    "pages": [
-                      "zh-CN/gateway/configuration",
-                      "zh-CN/gateway/configuration-examples",
-                      "zh-CN/gateway/authentication",
-                      "zh-CN/gateway/health",
-                      "zh-CN/gateway/heartbeat",
-                      "zh-CN/gateway/doctor",
-                      "zh-CN/gateway/logging",
-                      "zh-CN/gateway/gateway-lock",
-                      "zh-CN/gateway/background-process",
-                      "zh-CN/gateway/multiple-gateways",
-                      "zh-CN/gateway/troubleshooting"
-                    ]
-                  },
-                  {
-                    "group": "Security and sandboxing",
-                    "pages": [
-                      "zh-CN/gateway/security/index",
-                      "zh-CN/gateway/sandboxing",
-                      "zh-CN/gateway/sandbox-vs-tool-policy-vs-elevated"
-                    ]
-                  },
-                  {
-                    "group": "Protocols and APIs",
-                    "pages": [
-                      "zh-CN/gateway/protocol",
-                      "zh-CN/gateway/bridge-protocol",
-                      "zh-CN/gateway/openai-http-api",
-                      "zh-CN/gateway/tools-invoke-http-api",
-                      "zh-CN/gateway/cli-backends",
-                      "zh-CN/gateway/local-models"
-                    ]
-                  },
-                  {
-                    "group": "Networking and discovery",
-                    "pages": [
-                      "zh-CN/gateway/pairing",
-                      "zh-CN/gateway/discovery",
-                      "zh-CN/gateway/bonjour"
-                    ]
-                  }
+                  "zh-CN/platforms/index",
+                  "zh-CN/platforms/macos",
+                  "zh-CN/platforms/linux",
+                  "zh-CN/platforms/windows",
+                  "zh-CN/platforms/android",
+                  "zh-CN/platforms/ios"
                 ]
               },
               {
-                "group": "Remote access and deployment",
-                "pages": [
-                  "zh-CN/gateway/remote",
-                  "zh-CN/gateway/remote-gateway-readme",
-                  "zh-CN/gateway/tailscale",
-                  "zh-CN/platforms/fly",
-                  "zh-CN/platforms/hetzner",
-                  "zh-CN/platforms/gcp",
-                  "zh-CN/platforms/macos-vm",
-                  "zh-CN/platforms/exe-dev",
-                  "zh-CN/railway",
-                  "zh-CN/render",
-                  "zh-CN/northflank"
-                ]
-              },
-              {
-                "group": "Security",
-                "pages": ["zh-CN/security/formal-verification"]
-              },
-              {
-                "group": "Web interfaces",
-                "pages": [
-                  "zh-CN/web/index",
-                  "zh-CN/web/control-ui",
-                  "zh-CN/web/dashboard",
-                  "zh-CN/web/webchat",
-                  "zh-CN/tui"
-                ]
-              },
-              {
-                "group": "macOS companion app",
+                "group": "macOS 配套应用",
                 "pages": [
                   "zh-CN/platforms/mac/dev-setup",
                   "zh-CN/platforms/mac/menu-bar",
@@ -1512,10 +1544,87 @@
             ]
           },
           {
-            "tab": "Reference",
+            "tab": "网关与运维",
             "groups": [
               {
-                "group": "CLI commands",
+                "group": "网关",
+                "pages": [
+                  "zh-CN/gateway/index",
+                  {
+                    "group": "配置与运维",
+                    "pages": [
+                      "zh-CN/gateway/configuration",
+                      "zh-CN/gateway/configuration-examples",
+                      "zh-CN/gateway/authentication",
+                      "zh-CN/gateway/health",
+                      "zh-CN/gateway/heartbeat",
+                      "zh-CN/gateway/doctor",
+                      "zh-CN/gateway/logging",
+                      "zh-CN/gateway/gateway-lock",
+                      "zh-CN/gateway/background-process",
+                      "zh-CN/gateway/multiple-gateways",
+                      "zh-CN/gateway/troubleshooting"
+                    ]
+                  },
+                  {
+                    "group": "安全与沙箱",
+                    "pages": [
+                      "zh-CN/gateway/security/index",
+                      "zh-CN/gateway/sandboxing",
+                      "zh-CN/gateway/sandbox-vs-tool-policy-vs-elevated"
+                    ]
+                  },
+                  {
+                    "group": "协议与 API",
+                    "pages": [
+                      "zh-CN/gateway/protocol",
+                      "zh-CN/gateway/bridge-protocol",
+                      "zh-CN/gateway/openai-http-api",
+                      "zh-CN/gateway/tools-invoke-http-api",
+                      "zh-CN/gateway/cli-backends",
+                      "zh-CN/gateway/local-models"
+                    ]
+                  },
+                  {
+                    "group": "网络与发现",
+                    "pages": [
+                      "zh-CN/gateway/network-model",
+                      "zh-CN/gateway/pairing",
+                      "zh-CN/gateway/discovery",
+                      "zh-CN/gateway/bonjour"
+                    ]
+                  }
+                ]
+              },
+              {
+                "group": "远程访问",
+                "pages": [
+                  "zh-CN/gateway/remote",
+                  "zh-CN/gateway/remote-gateway-readme",
+                  "zh-CN/gateway/tailscale"
+                ]
+              },
+              {
+                "group": "安全",
+                "pages": ["zh-CN/security/formal-verification"]
+              },
+              {
+                "group": "Web 界面",
+                "pages": [
+                  "zh-CN/web/index",
+                  "zh-CN/web/control-ui",
+                  "zh-CN/web/dashboard",
+                  "zh-CN/web/webchat",
+                  "zh-CN/tui"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "参考",
+            "groups": [
+              {
+                "group": "CLI 命令",
                 "pages": [
                   "zh-CN/cli/index",
                   "zh-CN/cli/agent",
@@ -1556,11 +1665,11 @@
                 ]
               },
               {
-                "group": "RPC and API",
+                "group": "RPC 与 API",
                 "pages": ["zh-CN/reference/rpc", "zh-CN/reference/device-models"]
               },
               {
-                "group": "Templates",
+                "group": "模板",
                 "pages": [
                   "zh-CN/reference/AGENTS.default",
                   "zh-CN/reference/templates/AGENTS",
@@ -1574,7 +1683,7 @@
                 ]
               },
               {
-                "group": "Technical reference",
+                "group": "技术参考",
                 "pages": [
                   "zh-CN/concepts/typebox",
                   "zh-CN/concepts/markdown-formatting",
@@ -1585,20 +1694,28 @@
                 ]
               },
               {
-                "group": "Release notes",
+                "group": "项目",
+                "pages": ["zh-CN/reference/credits"]
+              },
+              {
+                "group": "发布说明",
                 "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
               }
             ]
           },
           {
-            "tab": "Help",
+            "tab": "帮助",
             "groups": [
               {
-                "group": "Help",
+                "group": "帮助",
                 "pages": ["zh-CN/help/index", "zh-CN/help/troubleshooting", "zh-CN/help/faq"]
               },
               {
-                "group": "Environment and debugging",
+                "group": "社区",
+                "pages": ["zh-CN/start/lore"]
+              },
+              {
+                "group": "环境与调试",
                 "pages": [
                   "zh-CN/environment",
                   "zh-CN/debugging",
@@ -1606,6 +1723,14 @@
                   "zh-CN/scripts",
                   "zh-CN/reference/session-management-compaction"
                 ]
+              },
+              {
+                "group": "开发者工作流",
+                "pages": ["zh-CN/start/setup"]
+              },
+              {
+                "group": "文档元信息",
+                "pages": ["zh-CN/start/hubs", "zh-CN/start/docs-directory"]
               }
             ]
           }

@@ -132,6 +132,37 @@ function ensureDir(filePath: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+// Coerce legacy/corrupted allowlists into `ExecAllowlistEntry[]` before we spread
+// entries to add ids (spreading strings creates {"0":"l","1":"s",...}).
+function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | undefined {
+  if (!Array.isArray(allowlist) || allowlist.length === 0) {
+    return Array.isArray(allowlist) ? (allowlist as ExecAllowlistEntry[]) : undefined;
+  }
+  let changed = false;
+  const result: ExecAllowlistEntry[] = [];
+  for (const item of allowlist) {
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed) {
+        result.push({ pattern: trimmed });
+        changed = true;
+      } else {
+        changed = true; // dropped empty string
+      }
+    } else if (item && typeof item === "object" && !Array.isArray(item)) {
+      const pattern = (item as { pattern?: unknown }).pattern;
+      if (typeof pattern === "string" && pattern.trim().length > 0) {
+        result.push(item as ExecAllowlistEntry);
+      } else {
+        changed = true; // dropped invalid entry
+      }
+    } else {
+      changed = true; // dropped invalid entry
+    }
+  }
+  return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
+}
+
 function ensureAllowlistIds(
   allowlist: ExecAllowlistEntry[] | undefined,
 ): ExecAllowlistEntry[] | undefined {
@@ -160,7 +191,8 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     delete agents.default;
   }
   for (const [key, agent] of Object.entries(agents)) {
-    const allowlist = ensureAllowlistIds(agent.allowlist);
+    const coerced = coerceAllowlistEntries(agent.allowlist);
+    const allowlist = ensureAllowlistIds(coerced);
     if (allowlist !== agent.allowlist) {
       agents[key] = { ...agent, allowlist };
     }

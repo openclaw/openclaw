@@ -1,7 +1,12 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { CronJob } from "../types.js";
 import type { CronEvent, CronServiceState } from "./state.js";
-import { computeJobNextRunAtMs, nextWakeAtMs, resolveJobPayloadTextForMain } from "./jobs.js";
+import {
+  computeJobNextRunAtMs,
+  nextWakeAtMs,
+  recomputeNextRuns,
+  resolveJobPayloadTextForMain,
+} from "./jobs.js";
 import { locked } from "./locked.js";
 import { ensureLoaded, persist } from "./store.js";
 
@@ -27,7 +32,6 @@ export function armTimer(state: CronServiceState) {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
     });
   }, clampedDelay);
-  state.timer.unref?.();
 }
 
 export async function onTimer(state: CronServiceState) {
@@ -37,13 +41,18 @@ export async function onTimer(state: CronServiceState) {
   state.running = true;
   try {
     await locked(state, async () => {
-      await ensureLoaded(state, { forceReload: true });
+      // Reload persisted due-times without recomputing so runDueJobs sees
+      // the original nextRunAtMs values.  Recomputing first would advance
+      // every/cron slots past the current tick when the timer fires late (#9788).
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       await runDueJobs(state);
+      recomputeNextRuns(state);
       await persist(state);
-      armTimer(state);
     });
   } finally {
     state.running = false;
+    // Always re-arm so transient errors (e.g. ENOSPC) don't kill the scheduler.
+    armTimer(state);
   }
 }
 

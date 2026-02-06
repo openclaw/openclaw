@@ -35,7 +35,7 @@ x-i18n:
 
 - **最佳用户体验：** 保持 `gateway.bind: "loopback"` 并使用 **Tailscale Serve** 作为控制 UI。
 - **回退方案：** 保持 loopback + 从任何需要访问的机器建立 SSH 隧道。
-- **示例：** [exe.dev](/platforms/exe-dev)（简易 VM）或 [Hetzner](/platforms/hetzner)（生产 VPS）。
+- **示例：** [exe.dev](/install/exe-dev)（简易 VM）或 [Hetzner](/install/hetzner)（生产 VPS）。
 
 当你的笔记本电脑经常休眠但你希望智能体始终在线时，这是理想的选择。
 

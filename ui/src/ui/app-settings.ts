@@ -1,4 +1,5 @@
 import type { OpenClawApp } from "./app.ts";
+import type { AgentsListResult } from "./types.ts";
 import { refreshChat } from "./app-chat.ts";
 import {
   startLogsPolling,
@@ -35,6 +36,7 @@ import { resolveTheme, type ResolvedTheme, type ThemeMode } from "./theme.ts";
 
 type SettingsHost = {
   settings: UiSettings;
+  password?: string;
   theme: ThemeMode;
   themeResolved: ResolvedTheme;
   applySessionKey: string;
@@ -46,34 +48,13 @@ type SettingsHost = {
   eventLog: unknown[];
   eventLogBuffer: unknown[];
   basePath: string;
+  agentsList?: AgentsListResult | null;
+  agentsSelectedId?: string | null;
+  agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   themeMedia: MediaQueryList | null;
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
   pendingGatewayUrl?: string | null;
 };
-
-function isTopLevelWindow(): boolean {
-  try {
-    return window.top === window.self;
-  } catch {
-    return false;
-  }
-}
-
-function normalizeGatewayUrl(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-      return null;
-    }
-    return trimmed;
-  } catch {
-    return null;
-  }
-}
 
 export function applySettings(host: SettingsHost, next: UiSettings) {
   const normalized = {
@@ -112,10 +93,6 @@ export function applySettingsFromUrl(host: SettingsHost) {
   let shouldCleanUrl = false;
 
   if (tokenRaw != null) {
-    const token = tokenRaw.trim();
-    if (token && token !== host.settings.token) {
-      applySettings(host, { ...host.settings, token });
-    }
     params.delete("token");
     shouldCleanUrl = true;
   }
@@ -123,7 +100,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
   if (passwordRaw != null) {
     const password = passwordRaw.trim();
     if (password) {
-      (host as unknown as { password: string }).password = password;
+      (host as { password: string }).password = password;
     }
     params.delete("password");
     shouldCleanUrl = true;
@@ -142,8 +119,8 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (gatewayUrlRaw != null) {
-    const gatewayUrl = normalizeGatewayUrl(gatewayUrlRaw);
-    if (gatewayUrl && gatewayUrl !== host.settings.gatewayUrl && isTopLevelWindow()) {
+    const gatewayUrl = gatewayUrlRaw.trim();
+    if (gatewayUrl && gatewayUrl !== host.settings.gatewayUrl) {
       host.pendingGatewayUrl = gatewayUrl;
     }
     params.delete("gatewayUrl");
@@ -213,24 +190,23 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadSkills(host as unknown as OpenClawApp);
   }
   if (host.tab === "agents") {
-    const app = host as unknown as OpenClawApp;
-    await loadAgents(app);
-    await loadConfig(app);
-    const agentIds = app.agentsList?.agents?.map((entry) => entry.id) ?? [];
+    await loadAgents(host as unknown as OpenClawApp);
+    await loadConfig(host as unknown as OpenClawApp);
+    const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
     if (agentIds.length > 0) {
-      void loadAgentIdentities(app, agentIds);
+      void loadAgentIdentities(host as unknown as OpenClawApp, agentIds);
     }
     const agentId =
-      app.agentsSelectedId ?? app.agentsList?.defaultId ?? app.agentsList?.agents?.[0]?.id;
+      host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
     if (agentId) {
-      void loadAgentIdentity(app, agentId);
-      if (app.agentsPanel === "skills") {
-        void loadAgentSkills(app, agentId);
+      void loadAgentIdentity(host as unknown as OpenClawApp, agentId);
+      if (host.agentsPanel === "skills") {
+        void loadAgentSkills(host as unknown as OpenClawApp, agentId);
       }
-      if (app.agentsPanel === "channels") {
-        void loadChannels(app, false);
+      if (host.agentsPanel === "channels") {
+        void loadChannels(host as unknown as OpenClawApp, false);
       }
-      if (app.agentsPanel === "cron") {
+      if (host.agentsPanel === "cron") {
         void loadCron(host);
       }
     }
@@ -405,7 +381,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   }
 }
 
-export function syncUrlWithSessionKey(sessionKey: string, replace: boolean) {
+export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
   if (typeof window === "undefined") {
     return;
   }

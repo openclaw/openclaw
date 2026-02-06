@@ -404,7 +404,7 @@ vi.mock("../config/config.js", async () => {
           ? (fileAgents.defaults as Record<string, unknown>)
           : {};
       const defaults = {
-        model: { primary: "anthropic/claude-opus-4-5" },
+        model: { primary: "anthropic/claude-opus-4-6" },
         workspace: path.join(os.tmpdir(), "openclaw-gateway-test"),
         ...fileDefaults,
         ...testState.agentConfig,
@@ -587,6 +587,15 @@ vi.mock("../cli/deps.js", async () => {
       sendMessageWhatsApp: (...args: unknown[]) =>
         (hoisted.sendWhatsAppMock as (...args: unknown[]) => unknown)(...args),
     }),
+  };
+});
+
+vi.mock("../plugins/loader.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
+  return {
+    ...actual,
+    loadOpenClawPlugins: () => pluginRegistryState.registry,
   };
 });
 
