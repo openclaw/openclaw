@@ -801,7 +801,7 @@
                 "pages": ["install/index", "install/installer"]
               },
               {
-                "group": "Install methods",
+                "group": "Other install methods",
                 "pages": [
                   "install/node",
                   "install/docker",
