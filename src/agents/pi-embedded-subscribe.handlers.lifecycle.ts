@@ -37,10 +37,14 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
 
 export function handleAutoCompactionEnd(
   ctx: EmbeddedPiSubscribeContext,
-  evt: AgentEvent & { willRetry?: unknown },
+  evt: AgentEvent & { willRetry?: unknown; retryCanceledMessage?: unknown },
 ) {
   ctx.state.compactionInFlight = false;
   const willRetry = Boolean(evt.willRetry);
+  const retryCanceledMessage =
+    typeof evt.retryCanceledMessage === "string" && evt.retryCanceledMessage.trim()
+      ? evt.retryCanceledMessage.trim()
+      : undefined;
   if (willRetry) {
     ctx.noteCompactionRetry();
     ctx.resetForCompactionRetry();
@@ -51,12 +55,17 @@ export function handleAutoCompactionEnd(
   emitAgentEvent({
     runId: ctx.params.runId,
     stream: "compaction",
-    data: { phase: "end", willRetry },
+    data: { phase: "end", willRetry, retryCanceledMessage },
   });
   void ctx.params.onAgentEvent?.({
     stream: "compaction",
-    data: { phase: "end", willRetry },
+    data: { phase: "end", willRetry, retryCanceledMessage },
   });
+
+  if (!willRetry && retryCanceledMessage) {
+    // User-facing propagation: Pi succeeded compacting but refused to retry due to prompt sizing.
+    void ctx.params.onBlockReply?.({ text: retryCanceledMessage });
+  }
 }
 
 export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {

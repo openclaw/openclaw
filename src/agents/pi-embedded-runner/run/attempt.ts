@@ -86,8 +86,8 @@ import {
 } from "../system-prompt.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
-import { detectAndLoadPromptImages } from "./images.js";
 import { createAutoCompactionRetryHook } from "./auto-compaction-retry-hook.js";
+import { detectAndLoadPromptImages } from "./images.js";
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -347,7 +347,7 @@ export async function runEmbeddedAttempt(
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
 
-    const appendPrompt = buildEmbeddedSystemPrompt({
+    const embeddedPromptParams = {
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
@@ -362,7 +362,6 @@ export async function runEmbeddedAttempt(
       ttsHint,
       workspaceNotes,
       reactionGuidance,
-      promptMode,
       runtimeInfo,
       messageToolHints,
       sandboxInfo,
@@ -371,8 +370,13 @@ export async function runEmbeddedAttempt(
       userTimezone,
       userTime,
       userTimeFormat,
-      contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+    } as const;
+
+    const appendPrompt = buildEmbeddedSystemPrompt({
+      ...embeddedPromptParams,
+      promptMode,
+      contextFiles,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
@@ -400,33 +404,19 @@ export async function runEmbeddedAttempt(
     const systemPromptText = systemPromptOverride();
 
     // Slim retry prompt for Pi-internal auto-compaction retry. Key difference: no injected workspace files.
-    const retrySystemPromptText = buildEmbeddedSystemPrompt({
-      workspaceDir: effectiveWorkspace,
-      defaultThinkLevel: params.thinkLevel,
-      reasoningLevel: params.reasoningLevel ?? "off",
-      extraSystemPrompt: params.extraSystemPrompt,
-      ownerNumbers: params.ownerNumbers,
-      reasoningTagHint,
-      heartbeatPrompt: isDefaultAgent
-        ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
-        : undefined,
-      skillsPrompt,
-      docsPath: docsPath ?? undefined,
-      ttsHint,
-      workspaceNotes,
-      reactionGuidance,
-      promptMode: "minimal",
-      runtimeInfo,
-      messageToolHints,
-      sandboxInfo,
-      tools,
-      modelAliasLines: buildModelAliasLines(params.config),
-      userTimezone,
-      userTime,
-      userTimeFormat,
-      contextFiles: [],
-      memoryCitationsMode: params.config?.memory?.citations,
-    });
+    const getRetrySystemPromptText = (() => {
+      let cached: string | null = null;
+      return () => {
+        if (!cached) {
+          cached = buildEmbeddedSystemPrompt({
+            ...embeddedPromptParams,
+            promptMode: "minimal",
+            contextFiles: [],
+          });
+        }
+        return cached;
+      };
+    })();
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -523,15 +513,46 @@ export async function runEmbeddedAttempt(
 
       // Prevent compaction cascades: if Pi compacts due to overflow and retries internally,
       // downgrade the system prompt (drop injected workspace files) when needed to fit.
-      activeSession.setAutoCompactionRetryHook(
-        createAutoCompactionRetryHook({
-          retrySystemPrompt: retrySystemPromptText,
-          onDowngradeSystemPrompt: () =>
-            applySystemPromptOverrideToSession(activeSession, retrySystemPromptText),
-          logger: log,
-          logPrefix: `runId=${params.runId} sessionId=${params.sessionId}`,
-        }),
-      );
+      let restoreOneShotRetryPromptOverride: (() => void) | null = null;
+      const downgradeSystemPromptOneShot = () => {
+        if (restoreOneShotRetryPromptOverride) {
+          return;
+        }
+        const mutableSession = activeSession as unknown as {
+          _baseSystemPrompt?: string;
+          _rebuildSystemPrompt?: (toolNames: string[]) => string;
+        };
+        const previousBasePrompt = mutableSession._baseSystemPrompt;
+        const previousRebuild = mutableSession._rebuildSystemPrompt;
+        applySystemPromptOverrideToSession(activeSession, getRetrySystemPromptText());
+        restoreOneShotRetryPromptOverride = () => {
+          mutableSession._baseSystemPrompt = previousBasePrompt;
+          mutableSession._rebuildSystemPrompt = previousRebuild;
+          activeSession.agent.setSystemPrompt(previousBasePrompt ?? systemPromptText);
+        };
+      };
+
+      const maybeSetAutoCompactionRetryHook = (
+        activeSession as unknown as {
+          setAutoCompactionRetryHook?: unknown;
+        }
+      ).setAutoCompactionRetryHook;
+      if (typeof maybeSetAutoCompactionRetryHook === "function") {
+        (maybeSetAutoCompactionRetryHook as (hook: unknown) => void).call(
+          activeSession,
+          createAutoCompactionRetryHook({
+            getRetrySystemPrompt: getRetrySystemPromptText,
+            onDowngradeSystemPrompt: downgradeSystemPromptOneShot,
+            logger: log,
+            logPrefix: `runId=${params.runId} sessionId=${params.sessionId}`,
+          }),
+        );
+      } else {
+        log.warn(
+          `runId=${params.runId} sessionId=${params.sessionId} ` +
+            "auto-compaction retry hook not supported by current pi-coding-agent; skipping safeguard",
+        );
+      }
 
       const cacheTrace = createCacheTrace({
         cfg: params.config,
@@ -872,6 +893,9 @@ export async function runEmbeddedAttempt(
           } else {
             throw err;
           }
+        } finally {
+          restoreOneShotRetryPromptOverride?.();
+          restoreOneShotRetryPromptOverride = null;
         }
 
         messagesSnapshot = activeSession.messages.slice();
