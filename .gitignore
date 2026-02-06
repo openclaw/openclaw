@@ -69,5 +69,9 @@ IDENTITY.md
 USER.md
 .tgz
 
+# Next.js
+**/.next/
+next-env.d.ts
+
 # local tooling
 .serena/

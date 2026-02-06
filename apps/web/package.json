@@ -1,0 +1,25 @@
+{
+  "name": "openclaw-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack --port 3100",
+    "build": "next build",
+    "start": "next start --port 3100"
+  },
+  "dependencies": {
+    "@ai-sdk/react": "^3.0.75",
+    "ai": "^6.0.73",
+    "next": "^15.3.3",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.8",
+    "@types/node": "^22.15.21",
+    "@types/react": "^19.1.4",
+    "@types/react-dom": "^19.1.5",
+    "tailwindcss": "^4.1.8",
+    "typescript": "^5.8.3"
+  }
+}

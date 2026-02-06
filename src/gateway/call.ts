@@ -41,6 +41,8 @@ export type CallGatewayOptions = {
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
   configPath?: string;
+  /** Optional callback for gateway events received while the request is in flight. */
+  onEvent?: (evt: { event: string; payload?: unknown; seq?: number }) => void;
 };
 
 export type GatewayConnectionDetails = {
@@ -220,6 +222,9 @@ export async function callGateway<T = Record<string, unknown>>(
       deviceIdentity: loadOrCreateDeviceIdentity(),
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
+      onEvent: opts.onEvent
+        ? (evt) => opts.onEvent!({ event: evt.event, payload: evt.payload, seq: evt.seq })
+        : undefined,
       onHelloOk: async () => {
         try {
           const result = await client.request<T>(opts.method, opts.params, {

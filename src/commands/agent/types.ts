@@ -41,6 +41,8 @@ export type AgentCommandOpts = {
   thinkingOnce?: string;
   verbose?: string;
   json?: boolean;
+  /** Stream NDJSON events to stdout during the agent run. */
+  streamJson?: boolean;
   timeout?: string;
   deliver?: boolean;
   /** Override delivery target (separate from session routing). */

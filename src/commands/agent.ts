@@ -46,6 +46,7 @@ import {
 import {
   clearAgentRunContext,
   emitAgentEvent,
+  onAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
 import { getRemoteSkillEligibility } from "../infra/skills-remote.js";
@@ -55,6 +56,7 @@ import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
+import { emitNdjsonLine } from "./agent-via-gateway.js";
 import { deliverAgentCommandResult } from "./agent/delivery.js";
 import { resolveAgentRunContext } from "./agent/run-context.js";
 import { updateSessionStoreAfterAgentRun } from "./agent/session-store.js";
@@ -155,6 +157,24 @@ export async function agentCommand(
   } = sessionResolution;
   let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
+
+  // Subscribe to agent events for NDJSON streaming when --stream-json is active.
+  const unsubNdjson = opts.streamJson
+    ? onAgentEvent((evt) => {
+        if (evt.runId !== runId) {
+          return;
+        }
+        emitNdjsonLine({
+          event: "agent",
+          runId: evt.runId,
+          seq: evt.seq,
+          stream: evt.stream,
+          ts: evt.ts,
+          data: evt.data,
+          ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
+        });
+      })
+    : undefined;
 
   try {
     if (opts.deliver === true) {
@@ -510,6 +530,16 @@ export async function agentCommand(
       });
     }
 
+    // Emit the final result as NDJSON when streaming.
+    if (opts.streamJson) {
+      emitNdjsonLine({
+        event: "result",
+        runId,
+        status: "ok",
+        payloads: result.payloads ?? [],
+      });
+    }
+
     const payloads = result.payloads ?? [];
     return await deliverAgentCommandResult({
       cfg,
@@ -521,6 +551,7 @@ export async function agentCommand(
       payloads,
     });
   } finally {
+    unsubNdjson?.();
     clearAgentRunContext(runId);
   }
 }

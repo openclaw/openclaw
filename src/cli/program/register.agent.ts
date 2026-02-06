@@ -41,6 +41,7 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
     )
     .option("--deliver", "Send the agent's reply back to the selected channel", false)
     .option("--json", "Output result as JSON", false)
+    .option("--stream-json", "Stream NDJSON events to stdout", false)
     .option(
       "--timeout <seconds>",
       "Override agent command timeout (seconds, default 600 or config value)",
@@ -73,10 +74,17 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .action(async (opts) => {
       const verboseLevel = typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
       setVerbose(verboseLevel === "on");
+      if (opts.json && opts.streamJson) {
+        throw new Error("Choose either --json or --stream-json, not both.");
+      }
       // Build default deps (keeps parity with other commands; future-proofing).
       const deps = createDefaultDeps();
       await runCommandWithRuntime(defaultRuntime, async () => {
-        await agentCliCommand(opts, defaultRuntime, deps);
+        await agentCliCommand(
+          { ...opts, streamJson: Boolean(opts.streamJson) },
+          defaultRuntime,
+          deps,
+        );
       });
     });
 

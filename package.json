@@ -147,7 +147,11 @@
     "tui:dev": "OPENCLAW_PROFILE=dev CLAWDBOT_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
     "ui:dev": "node scripts/ui.js dev",
-    "ui:install": "node scripts/ui.js install"
+    "ui:install": "node scripts/ui.js install",
+    "web:dev": "pnpm --dir apps/web dev",
+    "web:build": "pnpm --dir apps/web build",
+    "web:install": "pnpm --dir apps/web install",
+    "tail": "tail -f ~/.openclaw/agents/*/sessions/*.jsonl"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.13.1",

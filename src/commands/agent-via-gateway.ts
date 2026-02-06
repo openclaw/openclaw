@@ -15,6 +15,11 @@ import {
 import { agentCommand } from "./agent.js";
 import { resolveSessionKeyForRequest } from "./agent/session.js";
 
+/** Write a single NDJSON line to stdout. */
+export function emitNdjsonLine(obj: Record<string, unknown>): void {
+  process.stdout.write(`${JSON.stringify(obj)}\n`);
+}
+
 type AgentGatewayResult = {
   payloads?: Array<{
     text?: string;
@@ -39,6 +44,8 @@ export type AgentCliOpts = {
   thinking?: string;
   verbose?: string;
   json?: boolean;
+  /** Stream NDJSON events to stdout during the agent run. */
+  streamJson?: boolean;
   timeout?: string;
   deliver?: boolean;
   channel?: string;
@@ -172,6 +179,78 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   return response;
 }
 
+/**
+ * Gateway agent call with live NDJSON event streaming to stdout.
+ * Reuses callGateway with an onEvent callback to emit each gateway event as an NDJSON line.
+ */
+async function agentViaGatewayStreamJson(opts: AgentCliOpts, _runtime: RuntimeEnv) {
+  const body = (opts.message ?? "").trim();
+  if (!body) {
+    throw new Error("Message (--message) is required");
+  }
+  if (!opts.to && !opts.sessionId && !opts.agent) {
+    throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
+  }
+
+  const cfg = loadConfig();
+  const agentIdRaw = opts.agent?.trim();
+  const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
+  if (agentId) {
+    const knownAgents = listAgentIds(cfg);
+    if (!knownAgents.includes(agentId)) {
+      throw new Error(
+        `Unknown agent id "${agentIdRaw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
+      );
+    }
+  }
+  const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
+  const gatewayTimeoutMs = Math.max(10_000, (timeoutSeconds + 30) * 1000);
+
+  const sessionKey = resolveSessionKeyForRequest({
+    cfg,
+    agentId,
+    to: opts.to,
+    sessionId: opts.sessionId,
+  }).sessionKey;
+
+  const channel = normalizeMessageChannel(opts.channel) ?? DEFAULT_CHAT_CHANNEL;
+  const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
+
+  const response = await callGateway<GatewayAgentResponse>({
+    method: "agent",
+    params: {
+      message: body,
+      agentId,
+      to: opts.to,
+      replyTo: opts.replyTo,
+      sessionId: opts.sessionId,
+      sessionKey,
+      thinking: opts.thinking,
+      deliver: Boolean(opts.deliver),
+      channel,
+      replyChannel: opts.replyChannel,
+      replyAccountId: opts.replyAccount,
+      timeout: timeoutSeconds,
+      lane: opts.lane,
+      extraSystemPrompt: opts.extraSystemPrompt,
+      idempotencyKey,
+    },
+    expectFinal: true,
+    timeoutMs: gatewayTimeoutMs,
+    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+    onEvent: (evt) => {
+      // Emit each gateway event as an NDJSON line (chat deltas, agent tool/lifecycle events).
+      emitNdjsonLine({ event: evt.event, ...(evt.payload as Record<string, unknown>) });
+    },
+  });
+
+  // Emit the final result as the last NDJSON line.
+  emitNdjsonLine({ event: "result", ...response });
+
+  return response;
+}
+
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
   const localOpts = {
     ...opts,
@@ -180,6 +259,11 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
   };
   if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);
+  }
+
+  // Stream NDJSON via the gateway (no embedded fallback — streaming should fail loud).
+  if (opts.streamJson) {
+    return await agentViaGatewayStreamJson(opts, runtime);
   }
 
   try {
