@@ -1,3 +1,4 @@
+import { msg } from "@lit/localize";
 import { html, nothing } from "lit";
 import type {
   ChannelAccountSnapshot,
@@ -51,7 +52,7 @@ export function renderChannels(props: ChannelsProps) {
     });
 
   return html`
-    <section class="grid grid-cols-2">
+    <section class="grid channel-grid">
       ${orderedChannels.map((channel) =>
         renderChannel(channel.key, props, {
           whatsapp,
@@ -70,10 +71,12 @@ export function renderChannels(props: ChannelsProps) {
     <section class="card" style="margin-top: 18px;">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Channel health</div>
-          <div class="card-sub">Channel status snapshots from the gateway.</div>
+          <div class="card-title">${msg("Channel health", { id: "channels.health" })}</div>
+          <div class="card-sub">${msg("Channel status snapshots from the gateway.", {
+            id: "channels.healthSub",
+          })}</div>
         </div>
-        <div class="muted">${props.lastSuccessAt ? formatAgo(props.lastSuccessAt) : "n/a"}</div>
+        <div class="muted">${props.lastSuccessAt ? formatAgo(props.lastSuccessAt) : msg("n/a", { id: "channels.na" })}</div>
       </div>
       ${
         props.lastError
@@ -83,7 +86,7 @@ export function renderChannels(props: ChannelsProps) {
           : nothing
       }
       <pre class="code-block" style="margin-top: 12px;">
-${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : "No snapshot yet."}
+${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : msg("No snapshot yet.", { id: "channels.noSnapshot" })}
       </pre>
     </section>
   `;
@@ -194,7 +197,9 @@ function renderGenericChannelCard(
   return html`
     <div class="card">
       <div class="card-title">${label}</div>
-      <div class="card-sub">Channel status and configuration.</div>
+      <div class="card-sub">${msg("Channel status and configuration.", {
+        id: "channels.genericSub",
+      })}</div>
       ${accountCountLabel}
 
       ${
@@ -207,16 +212,16 @@ function renderGenericChannelCard(
           : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
-                <span class="label">Configured</span>
-                <span>${configured == null ? "n/a" : configured ? "Yes" : "No"}</span>
+                <span class="label">${msg("Configured", { id: "channels.generic.configured" })}</span>
+                <span>${configured == null ? msg("n/a", { id: "channels.generic.na" }) : configured ? msg("Yes", { id: "channels.generic.yes" }) : msg("No", { id: "channels.generic.no" })}</span>
               </div>
               <div>
-                <span class="label">Running</span>
-                <span>${running == null ? "n/a" : running ? "Yes" : "No"}</span>
+                <span class="label">${msg("Running", { id: "channels.generic.running" })}</span>
+                <span>${running == null ? msg("n/a", { id: "channels.generic.na" }) : running ? msg("Yes", { id: "channels.generic.yes" }) : msg("No", { id: "channels.generic.no" })}</span>
               </div>
               <div>
-                <span class="label">Connected</span>
-                <span>${connected == null ? "n/a" : connected ? "Yes" : "No"}</span>
+                <span class="label">${msg("Connected", { id: "channels.generic.connected" })}</span>
+                <span>${connected == null ? msg("n/a", { id: "channels.generic.na" }) : connected ? msg("Yes", { id: "channels.generic.yes" }) : msg("No", { id: "channels.generic.no" })}</span>
               </div>
             </div>
           `
@@ -258,29 +263,29 @@ function hasRecentActivity(account: ChannelAccountSnapshot): boolean {
   return Date.now() - account.lastInboundAt < RECENT_ACTIVITY_THRESHOLD_MS;
 }
 
-function deriveRunningStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" {
+function deriveRunningStatus(account: ChannelAccountSnapshot): string {
   if (account.running) {
-    return "Yes";
+    return msg("Yes", { id: "channels.account.yes" });
   }
   // If we have recent inbound activity, the channel is effectively running
   if (hasRecentActivity(account)) {
-    return "Active";
+    return msg("Active", { id: "channels.account.active" });
   }
-  return "No";
+  return msg("No", { id: "channels.account.no" });
 }
 
-function deriveConnectedStatus(account: ChannelAccountSnapshot): "Yes" | "No" | "Active" | "n/a" {
+function deriveConnectedStatus(account: ChannelAccountSnapshot): string {
   if (account.connected === true) {
-    return "Yes";
+    return msg("Yes", { id: "channels.account.yes" });
   }
   if (account.connected === false) {
-    return "No";
+    return msg("No", { id: "channels.account.no" });
   }
   // If connected is null/undefined but we have recent activity, show as active
   if (hasRecentActivity(account)) {
-    return "Active";
+    return msg("Active", { id: "channels.account.active" });
   }
-  return "n/a";
+  return msg("n/a", { id: "channels.account.na" });
 }
 
 function renderGenericAccount(account: ChannelAccountSnapshot) {
@@ -295,20 +300,20 @@ function renderGenericAccount(account: ChannelAccountSnapshot) {
       </div>
       <div class="status-list account-card-status">
         <div>
-          <span class="label">Running</span>
+          <span class="label">${msg("Running", { id: "channels.account.running" })}</span>
           <span>${runningStatus}</span>
         </div>
         <div>
-          <span class="label">Configured</span>
-          <span>${account.configured ? "Yes" : "No"}</span>
+          <span class="label">${msg("Configured", { id: "channels.account.configured" })}</span>
+          <span>${account.configured ? msg("Yes", { id: "channels.account.yes" }) : msg("No", { id: "channels.account.no" })}</span>
         </div>
         <div>
-          <span class="label">Connected</span>
+          <span class="label">${msg("Connected", { id: "channels.account.connected" })}</span>
           <span>${connectedStatus}</span>
         </div>
         <div>
-          <span class="label">Last inbound</span>
-          <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : "n/a"}</span>
+          <span class="label">${msg("Last inbound", { id: "channels.account.lastInbound" })}</span>
+          <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : msg("n/a", { id: "channels.account.na" })}</span>
         </div>
         ${
           account.lastError

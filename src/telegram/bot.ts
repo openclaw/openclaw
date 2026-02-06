@@ -132,10 +132,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
       : undefined;
+  const clientFetch =
+    shouldProvideFetch && fetchImpl
+      ? (fetchImpl as unknown as ApiClientOptions["fetch"])
+      : undefined;
   const client: ApiClientOptions | undefined =
-    shouldProvideFetch || timeoutSeconds
+    clientFetch || timeoutSeconds
       ? {
-          ...(shouldProvideFetch && fetchImpl ? { fetch: fetchImpl } : {}),
+          ...(clientFetch ? { fetch: clientFetch } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;

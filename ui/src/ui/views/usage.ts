@@ -1,3 +1,4 @@
+import { msg } from "@lit/localize";
 import { html, svg, nothing } from "lit";
 import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "../usage-helpers.ts";
 
@@ -2203,6 +2204,10 @@ export type SessionLogRole = SessionLogEntry["role"];
 // ~4 chars per token is a rough approximation
 const CHARS_PER_TOKEN = 4;
 
+function usageMsg(id: string, text: string, args?: Record<string, string | number>): string {
+  return msg(text, { id: `usage.${id}`, args });
+}
+
 function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
 }
@@ -2273,7 +2278,10 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     .map((entry) => ({
       label: formatHourLabel(entry.hour),
       value: `${(entry.rate * 100).toFixed(2)}%`,
-      sub: `${Math.round(entry.errors)} errors · ${Math.round(entry.msgs)} msgs`,
+      sub: usageMsg("peakErrorHours.sub", "{errors} errors · {msgs} msgs", {
+        errors: Math.round(entry.errors),
+        msgs: Math.round(entry.msgs),
+      }),
     }));
 }
 
@@ -2284,7 +2292,15 @@ type UsageMosaicStats = {
   weekdayTotals: Array<{ label: string; tokens: number }>;
 };
 
-const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAYS = [
+  () => usageMsg("weekday.sun", "Sun"),
+  () => usageMsg("weekday.mon", "Mon"),
+  () => usageMsg("weekday.tue", "Tue"),
+  () => usageMsg("weekday.wed", "Wed"),
+  () => usageMsg("weekday.thu", "Thu"),
+  () => usageMsg("weekday.fri", "Fri"),
+  () => usageMsg("weekday.sat", "Sat"),
+] as const;
 
 function getZonedHour(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCHours() : date.getHours();
@@ -2347,8 +2363,8 @@ function buildUsageMosaicStats(
     }
   }
 
-  const weekdayLabels = WEEKDAYS.map((label, index) => ({
-    label,
+  const weekdayLabels = WEEKDAYS.map((getLabel, index) => ({
+    label: getLabel(),
     tokens: weekdayTotals[index],
   }));
 
@@ -2372,12 +2388,18 @@ function renderUsageMosaic(
       <div class="card usage-mosaic">
         <div class="usage-mosaic-header">
           <div>
-            <div class="usage-mosaic-title">Activity by Time</div>
-            <div class="usage-mosaic-sub">Estimates require session timestamps.</div>
+            <div class="usage-mosaic-title">${usageMsg("mosaic.activityByTime", "Activity by Time")}</div>
+            <div class="usage-mosaic-sub">
+              ${usageMsg("mosaic.estimatesNeedTimestamps", "Estimates require session timestamps.")}
+            </div>
           </div>
-          <div class="usage-mosaic-total">${formatTokens(0)} tokens</div>
+          <div class="usage-mosaic-total">
+            ${usageMsg("mosaic.tokensLabel", "{value} tokens", { value: formatTokens(0) })}
+          </div>
         </div>
-        <div class="muted" style="padding: 12px; text-align: center;">No timeline data yet.</div>
+        <div class="muted" style="padding: 12px; text-align: center;">
+          ${usageMsg("mosaic.noTimelineData", "No timeline data yet.")}
+        </div>
       </div>
     `;
   }
@@ -2389,16 +2411,22 @@ function renderUsageMosaic(
     <div class="card usage-mosaic">
       <div class="usage-mosaic-header">
         <div>
-          <div class="usage-mosaic-title">Activity by Time</div>
+          <div class="usage-mosaic-title">${usageMsg("mosaic.activityByTime", "Activity by Time")}</div>
           <div class="usage-mosaic-sub">
-            Estimated from session spans (first/last activity). Time zone: ${timeZone === "utc" ? "UTC" : "Local"}.
+            ${usageMsg(
+              "mosaic.estimatedFromSpans",
+              "Estimated from session spans (first/last activity). Time zone: {zone}.",
+              { zone: timeZone === "utc" ? "UTC" : usageMsg("local", "Local") },
+            )}
           </div>
         </div>
-        <div class="usage-mosaic-total">${formatTokens(stats.totalTokens)} tokens</div>
+        <div class="usage-mosaic-total">
+          ${usageMsg("mosaic.tokensLabel", "{value} tokens", { value: formatTokens(stats.totalTokens) })}
+        </div>
       </div>
       <div class="usage-mosaic-grid">
         <div class="usage-mosaic-section">
-          <div class="usage-mosaic-section-title">Day of Week</div>
+          <div class="usage-mosaic-section-title">${usageMsg("mosaic.dayOfWeek", "Day of Week")}</div>
           <div class="usage-daypart-grid">
             ${stats.weekdayTotals.map((part) => {
               const intensity = Math.min(part.tokens / maxWeekday, 1);
@@ -2415,14 +2443,17 @@ function renderUsageMosaic(
         </div>
         <div class="usage-mosaic-section">
           <div class="usage-mosaic-section-title">
-            <span>Hours</span>
+            <span>${usageMsg("mosaic.hours", "Hours")}</span>
             <span class="usage-mosaic-sub">0 → 23</span>
           </div>
           <div class="usage-hour-grid">
             ${stats.hourTotals.map((value, hour) => {
               const intensity = Math.min(value / maxHour, 1);
               const bg = value > 0 ? `rgba(255, 77, 77, ${0.08 + intensity * 0.7})` : "transparent";
-              const title = `${hour}:00 · ${formatTokens(value)} tokens`;
+              const title = usageMsg("mosaic.hourTooltip", "{hour}:00 · {tokens} tokens", {
+                hour,
+                tokens: formatTokens(value),
+              });
               const border = intensity > 0.7 ? "rgba(255, 77, 77, 0.6)" : "rgba(255, 77, 77, 0.2)";
               const selected = selectedHours.includes(hour);
               return html`
@@ -2436,16 +2467,16 @@ function renderUsageMosaic(
             })}
           </div>
           <div class="usage-hour-labels">
-            <span>Midnight</span>
-            <span>4am</span>
-            <span>8am</span>
-            <span>Noon</span>
-            <span>4pm</span>
-            <span>8pm</span>
+            <span>${usageMsg("mosaic.hourLabel.midnight", "Midnight")}</span>
+            <span>${usageMsg("mosaic.hourLabel.4am", "4am")}</span>
+            <span>${usageMsg("mosaic.hourLabel.8am", "8am")}</span>
+            <span>${usageMsg("mosaic.hourLabel.noon", "Noon")}</span>
+            <span>${usageMsg("mosaic.hourLabel.4pm", "4pm")}</span>
+            <span>${usageMsg("mosaic.hourLabel.8pm", "8pm")}</span>
           </div>
           <div class="usage-hour-legend">
             <span></span>
-            Low → High token density
+            ${usageMsg("mosaic.legend.lowToHigh", "Low → High token density")}
           </div>
         </div>
       </div>
@@ -3148,16 +3179,21 @@ function renderFilterChips(
       ((selectedSession.label || selectedSession.key).length > 20 ? "…" : "")
     : selectedSessions.length === 1
       ? selectedSessions[0].slice(0, 8) + "…"
-      : `${selectedSessions.length} sessions`;
+      : usageMsg("filters.sessionsCount", "{count} sessions", { count: selectedSessions.length });
   const sessionsFullName = selectedSession
     ? selectedSession.label || selectedSession.key
     : selectedSessions.length === 1
       ? selectedSessions[0]
       : selectedSessions.join(", ");
 
-  const daysLabel = selectedDays.length === 1 ? selectedDays[0] : `${selectedDays.length} days`;
+  const daysLabel =
+    selectedDays.length === 1
+      ? selectedDays[0]
+      : usageMsg("filters.daysCount", "{count} days", { count: selectedDays.length });
   const hoursLabel =
-    selectedHours.length === 1 ? `${selectedHours[0]}:00` : `${selectedHours.length} hours`;
+    selectedHours.length === 1
+      ? `${selectedHours[0]}:00`
+      : usageMsg("filters.hoursCount", "{count} hours", { count: selectedHours.length });
 
   return html`
     <div class="active-filters">
@@ -3165,8 +3201,16 @@ function renderFilterChips(
         selectedDays.length > 0
           ? html`
             <div class="filter-chip">
-              <span class="filter-chip-label">Days: ${daysLabel}</span>
-              <button class="filter-chip-remove" @click=${onClearDays} title="Remove filter">×</button>
+              <span class="filter-chip-label">
+                ${usageMsg("filters.daysLabel", "Days")}: ${daysLabel}
+              </span>
+              <button
+                class="filter-chip-remove"
+                @click=${onClearDays}
+                title=${usageMsg("filters.remove", "Remove filter")}
+              >
+                ×
+              </button>
             </div>
           `
           : nothing
@@ -3175,8 +3219,16 @@ function renderFilterChips(
         selectedHours.length > 0
           ? html`
             <div class="filter-chip">
-              <span class="filter-chip-label">Hours: ${hoursLabel}</span>
-              <button class="filter-chip-remove" @click=${onClearHours} title="Remove filter">×</button>
+              <span class="filter-chip-label">
+                ${usageMsg("filters.hoursLabel", "Hours")}: ${hoursLabel}
+              </span>
+              <button
+                class="filter-chip-remove"
+                @click=${onClearHours}
+                title=${usageMsg("filters.remove", "Remove filter")}
+              >
+                ×
+              </button>
             </div>
           `
           : nothing
@@ -3185,8 +3237,16 @@ function renderFilterChips(
         selectedSessions.length > 0
           ? html`
             <div class="filter-chip" title="${sessionsFullName}">
-              <span class="filter-chip-label">Session: ${sessionsLabel}</span>
-              <button class="filter-chip-remove" @click=${onClearSessions} title="Remove filter">×</button>
+              <span class="filter-chip-label">
+                ${usageMsg("filters.sessionLabel", "Session")}: ${sessionsLabel}
+              </span>
+              <button
+                class="filter-chip-remove"
+                @click=${onClearSessions}
+                title=${usageMsg("filters.remove", "Remove filter")}
+              >
+                ×
+              </button>
             </div>
           `
           : nothing
@@ -3195,7 +3255,7 @@ function renderFilterChips(
         (selectedDays.length > 0 || selectedHours.length > 0) && selectedSessions.length > 0
           ? html`
             <button class="btn btn-sm filter-clear-btn" @click=${onClearFilters}>
-              Clear All
+              ${usageMsg("filters.clearAll", "Clear All")}
             </button>
           `
           : nothing
@@ -3215,8 +3275,10 @@ function renderDailyChartCompact(
   if (!daily.length) {
     return html`
       <div class="daily-chart-compact">
-        <div class="sessions-panel-title">Daily Usage</div>
-        <div class="muted" style="padding: 20px; text-align: center">No data</div>
+        <div class="sessions-panel-title">${usageMsg("daily.title", "Daily Usage")}</div>
+        <div class="muted" style="padding: 20px; text-align: center">
+          ${usageMsg("daily.noData", "No data")}
+        </div>
       </div>
     `;
   }
@@ -3237,16 +3299,20 @@ function renderDailyChartCompact(
             class="toggle-btn ${dailyChartMode === "total" ? "active" : ""}"
             @click=${() => onDailyChartModeChange("total")}
           >
-            Total
+            ${usageMsg("toggle.total", "Total")}
           </button>
           <button
             class="toggle-btn ${dailyChartMode === "by-type" ? "active" : ""}"
             @click=${() => onDailyChartModeChange("by-type")}
           >
-            By Type
+            ${usageMsg("toggle.byType", "By Type")}
           </button>
         </div>
-        <div class="card-title">Daily ${isTokenMode ? "Token" : "Cost"} Usage</div>
+        <div class="card-title">
+          ${usageMsg("daily.modeTitle", "Daily {mode} Usage", {
+            mode: isTokenMode ? usageMsg("tokens", "Token") : usageMsg("cost", "Cost"),
+          })}
+        </div>
       </div>
       <div class="daily-chart">
         <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">
@@ -3278,16 +3344,32 @@ function renderDailyChartCompact(
               dailyChartMode === "by-type"
                 ? isTokenMode
                   ? [
-                      `Output ${formatTokens(d.output)}`,
-                      `Input ${formatTokens(d.input)}`,
-                      `Cache write ${formatTokens(d.cacheWrite)}`,
-                      `Cache read ${formatTokens(d.cacheRead)}`,
+                      usageMsg("breakdown.outputValue", "Output {value}", {
+                        value: formatTokens(d.output),
+                      }),
+                      usageMsg("breakdown.inputValue", "Input {value}", {
+                        value: formatTokens(d.input),
+                      }),
+                      usageMsg("breakdown.cacheWriteValue", "Cache write {value}", {
+                        value: formatTokens(d.cacheWrite),
+                      }),
+                      usageMsg("breakdown.cacheReadValue", "Cache read {value}", {
+                        value: formatTokens(d.cacheRead),
+                      }),
                     ]
                   : [
-                      `Output ${formatCost(d.outputCost ?? 0)}`,
-                      `Input ${formatCost(d.inputCost ?? 0)}`,
-                      `Cache write ${formatCost(d.cacheWriteCost ?? 0)}`,
-                      `Cache read ${formatCost(d.cacheReadCost ?? 0)}`,
+                      usageMsg("breakdown.outputValue", "Output {value}", {
+                        value: formatCost(d.outputCost ?? 0),
+                      }),
+                      usageMsg("breakdown.inputValue", "Input {value}", {
+                        value: formatCost(d.inputCost ?? 0),
+                      }),
+                      usageMsg("breakdown.cacheWriteValue", "Cache write {value}", {
+                        value: formatCost(d.cacheWriteCost ?? 0),
+                      }),
+                      usageMsg("breakdown.cacheReadValue", "Cache read {value}", {
+                        value: formatCost(d.cacheReadCost ?? 0),
+                      }),
                     ]
                 : [];
             const totalLabel = isTokenMode ? formatTokens(d.totalTokens) : formatCost(d.totalCost);
@@ -3324,7 +3406,7 @@ function renderDailyChartCompact(
                 <div class="daily-bar-label" style="${labelStyle}">${shortLabel}</div>
                 <div class="daily-bar-tooltip">
                   <strong>${formatFullDate(d.date)}</strong><br />
-                  ${formatTokens(d.totalTokens)} tokens<br />
+                  ${usageMsg("tokensLabel", "{value} tokens", { value: formatTokens(d.totalTokens) })}<br />
                   ${formatCost(d.totalCost)}
                   ${
                     breakdownLines.length
@@ -3354,25 +3436,71 @@ function renderCostBreakdownCompact(totals: UsageTotals, mode: "tokens" | "cost"
 
   return html`
     <div class="cost-breakdown cost-breakdown-compact">
-      <div class="cost-breakdown-header">${isTokenMode ? "Tokens" : "Cost"} by Type</div>
+      <div class="cost-breakdown-header">
+        ${usageMsg("breakdown.byType", "{mode} by Type", {
+          mode: isTokenMode ? usageMsg("tokensPlural", "Tokens") : usageMsg("cost", "Cost"),
+        })}
+      </div>
       <div class="cost-breakdown-bar">
         <div class="cost-segment output" style="width: ${(isTokenMode ? tokenPcts.output : breakdown.output.pct).toFixed(1)}%"
-          title="Output: ${isTokenMode ? formatTokens(totals.output) : formatCost(breakdown.output.cost)}"></div>
+          title=${usageMsg("breakdown.outputTitle", "Output: {value}", {
+            value: isTokenMode ? formatTokens(totals.output) : formatCost(breakdown.output.cost),
+          })}></div>
         <div class="cost-segment input" style="width: ${(isTokenMode ? tokenPcts.input : breakdown.input.pct).toFixed(1)}%"
-          title="Input: ${isTokenMode ? formatTokens(totals.input) : formatCost(breakdown.input.cost)}"></div>
+          title=${usageMsg("breakdown.inputTitle", "Input: {value}", {
+            value: isTokenMode ? formatTokens(totals.input) : formatCost(breakdown.input.cost),
+          })}></div>
         <div class="cost-segment cache-write" style="width: ${(isTokenMode ? tokenPcts.cacheWrite : breakdown.cacheWrite.pct).toFixed(1)}%"
-          title="Cache Write: ${isTokenMode ? formatTokens(totals.cacheWrite) : formatCost(breakdown.cacheWrite.cost)}"></div>
+          title=${usageMsg("breakdown.cacheWriteTitle", "Cache Write: {value}", {
+            value: isTokenMode
+              ? formatTokens(totals.cacheWrite)
+              : formatCost(breakdown.cacheWrite.cost),
+          })}></div>
         <div class="cost-segment cache-read" style="width: ${(isTokenMode ? tokenPcts.cacheRead : breakdown.cacheRead.pct).toFixed(1)}%"
-          title="Cache Read: ${isTokenMode ? formatTokens(totals.cacheRead) : formatCost(breakdown.cacheRead.cost)}"></div>
+          title=${usageMsg("breakdown.cacheReadTitle", "Cache Read: {value}", {
+            value: isTokenMode
+              ? formatTokens(totals.cacheRead)
+              : formatCost(breakdown.cacheRead.cost),
+          })}></div>
       </div>
       <div class="cost-breakdown-legend">
-        <span class="legend-item"><span class="legend-dot output"></span>Output ${isTokenMode ? formatTokens(totals.output) : formatCost(breakdown.output.cost)}</span>
-        <span class="legend-item"><span class="legend-dot input"></span>Input ${isTokenMode ? formatTokens(totals.input) : formatCost(breakdown.input.cost)}</span>
-        <span class="legend-item"><span class="legend-dot cache-write"></span>Cache Write ${isTokenMode ? formatTokens(totals.cacheWrite) : formatCost(breakdown.cacheWrite.cost)}</span>
-        <span class="legend-item"><span class="legend-dot cache-read"></span>Cache Read ${isTokenMode ? formatTokens(totals.cacheRead) : formatCost(breakdown.cacheRead.cost)}</span>
+        <span class="legend-item"><span class="legend-dot output"></span>${usageMsg(
+          "breakdown.outputValue",
+          "Output {value}",
+          {
+            value: isTokenMode ? formatTokens(totals.output) : formatCost(breakdown.output.cost),
+          },
+        )}</span>
+        <span class="legend-item"><span class="legend-dot input"></span>${usageMsg(
+          "breakdown.inputValue",
+          "Input {value}",
+          {
+            value: isTokenMode ? formatTokens(totals.input) : formatCost(breakdown.input.cost),
+          },
+        )}</span>
+        <span class="legend-item"><span class="legend-dot cache-write"></span>${usageMsg(
+          "breakdown.cacheWriteLegend",
+          "Cache Write {value}",
+          {
+            value: isTokenMode
+              ? formatTokens(totals.cacheWrite)
+              : formatCost(breakdown.cacheWrite.cost),
+          },
+        )}</span>
+        <span class="legend-item"><span class="legend-dot cache-read"></span>${usageMsg(
+          "breakdown.cacheReadLegend",
+          "Cache Read {value}",
+          {
+            value: isTokenMode
+              ? formatTokens(totals.cacheRead)
+              : formatCost(breakdown.cacheRead.cost),
+          },
+        )}</span>
       </div>
       <div class="cost-breakdown-total">
-        Total: ${isTokenMode ? formatTokens(totals.totalTokens) : formatCost(totals.totalCost)}
+        ${usageMsg("totalValue", "Total: {value}", {
+          value: isTokenMode ? formatTokens(totals.totalTokens) : formatCost(totals.totalCost),
+        })}
       </div>
     </div>
   `;
@@ -3461,20 +3589,36 @@ function renderUsageInsights(
   const errorRatePct = stats.errorRate * 100;
   const throughputLabel =
     stats.throughputTokensPerMin !== undefined
-      ? `${formatTokens(Math.round(stats.throughputTokensPerMin))} tok/min`
+      ? usageMsg("insight.throughputTokens", "{value} tok/min", {
+          value: formatTokens(Math.round(stats.throughputTokensPerMin)),
+        })
       : "—";
   const throughputCostLabel =
     stats.throughputCostPerMin !== undefined
-      ? `${formatCost(stats.throughputCostPerMin, 4)} / min`
+      ? usageMsg("insight.throughputCost", "{value} / min", {
+          value: formatCost(stats.throughputCostPerMin, 4),
+        })
       : "—";
   const avgDurationLabel = stats.durationCount > 0 ? formatDurationShort(stats.avgDurationMs) : "—";
-  const cacheHint = "Cache hit rate = cache read / (input + cache read). Higher is better.";
-  const errorHint = "Error rate = errors / total messages. Lower is better.";
-  const throughputHint = "Throughput shows tokens per minute over active time. Higher is better.";
-  const tokensHint = "Average tokens per message in this range.";
+  const cacheHint = usageMsg(
+    "hint.cacheRate",
+    "Cache hit rate = cache read / (input + cache read). Higher is better.",
+  );
+  const errorHint = usageMsg(
+    "hint.errorRate",
+    "Error rate = errors / total messages. Lower is better.",
+  );
+  const throughputHint = usageMsg(
+    "hint.throughput",
+    "Throughput shows tokens per minute over active time. Higher is better.",
+  );
+  const tokensHint = usageMsg("hint.avgTokens", "Average tokens per message in this range.");
   const costHint = showCostHint
-    ? "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range."
-    : "Average cost per message when providers report costs.";
+    ? usageMsg(
+        "hint.avgCostMissing",
+        "Average cost per message when providers report costs. Cost data is missing for some or all sessions in this range.",
+      )
+    : usageMsg("hint.avgCost", "Average cost per message when providers report costs.");
 
   const errorDays = aggregates.daily
     .filter((day) => day.messages > 0 && day.errors > 0)
@@ -3483,7 +3627,11 @@ function renderUsageInsights(
       return {
         label: formatDayLabel(day.date),
         value: `${(rate * 100).toFixed(2)}%`,
-        sub: `${day.errors} errors · ${day.messages} msgs · ${formatTokens(day.tokens)}`,
+        sub: usageMsg("errorDays.sub", "{errors} errors · {messages} msgs · {tokens}", {
+          errors: day.errors,
+          messages: day.messages,
+          tokens: formatTokens(day.tokens),
+        }),
         rate,
       };
     })
@@ -3492,19 +3640,25 @@ function renderUsageInsights(
     .map(({ rate: _rate, ...rest }) => rest);
 
   const topModels = aggregates.byModel.slice(0, 5).map((entry) => ({
-    label: entry.model ?? "unknown",
+    label: entry.model ?? usageMsg("unknown", "unknown"),
     value: formatCost(entry.totals.totalCost),
-    sub: `${formatTokens(entry.totals.totalTokens)} · ${entry.count} msgs`,
+    sub: usageMsg("insight.tokensMessages", "{tokens} · {count} msgs", {
+      tokens: formatTokens(entry.totals.totalTokens),
+      count: entry.count,
+    }),
   }));
   const topProviders = aggregates.byProvider.slice(0, 5).map((entry) => ({
-    label: entry.provider ?? "unknown",
+    label: entry.provider ?? usageMsg("unknown", "unknown"),
     value: formatCost(entry.totals.totalCost),
-    sub: `${formatTokens(entry.totals.totalTokens)} · ${entry.count} msgs`,
+    sub: usageMsg("insight.tokensMessages", "{tokens} · {count} msgs", {
+      tokens: formatTokens(entry.totals.totalTokens),
+      count: entry.count,
+    }),
   }));
   const topTools = aggregates.tools.tools.slice(0, 6).map((tool) => ({
     label: tool.name,
     value: `${tool.count}`,
-    sub: "calls",
+    sub: usageMsg("calls", "calls"),
   }));
   const topAgents = aggregates.byAgent.slice(0, 5).map((entry) => ({
     label: entry.agentId,
@@ -3519,61 +3673,78 @@ function renderUsageInsights(
 
   return html`
     <section class="card" style="margin-top: 16px;">
-      <div class="card-title">Usage Overview</div>
+      <div class="card-title">${usageMsg("insight.overview", "Usage Overview")}</div>
       <div class="usage-summary-grid">
         <div class="usage-summary-card">
           <div class="usage-summary-title">
-            Messages
-            <span class="usage-summary-hint" title="Total user + assistant messages in range.">?</span>
+            ${usageMsg("insight.messages", "Messages")}
+            <span class="usage-summary-hint" title=${usageMsg("hint.totalMessages", "Total user + assistant messages in range.")}>?</span>
           </div>
           <div class="usage-summary-value">${aggregates.messages.total}</div>
           <div class="usage-summary-sub">
-            ${aggregates.messages.user} user · ${aggregates.messages.assistant} assistant
+            ${usageMsg("insight.userAssistant", "{user} user · {assistant} assistant", {
+              user: aggregates.messages.user,
+              assistant: aggregates.messages.assistant,
+            })}
           </div>
         </div>
         <div class="usage-summary-card">
           <div class="usage-summary-title">
-            Tool Calls
-            <span class="usage-summary-hint" title="Total tool call count across sessions.">?</span>
+            ${usageMsg("insight.toolCalls", "Tool Calls")}
+            <span class="usage-summary-hint" title=${usageMsg("hint.totalToolCalls", "Total tool call count across sessions.")}>?</span>
           </div>
           <div class="usage-summary-value">${aggregates.tools.totalCalls}</div>
-          <div class="usage-summary-sub">${aggregates.tools.uniqueTools} tools used</div>
+          <div class="usage-summary-sub">
+            ${usageMsg("insight.toolsUsed", "{count} tools used", { count: aggregates.tools.uniqueTools })}
+          </div>
         </div>
         <div class="usage-summary-card">
           <div class="usage-summary-title">
-            Errors
-            <span class="usage-summary-hint" title="Total message/tool errors in range.">?</span>
+            ${usageMsg("insight.errors", "Errors")}
+            <span class="usage-summary-hint" title=${usageMsg("hint.totalErrors", "Total message/tool errors in range.")}>?</span>
           </div>
           <div class="usage-summary-value">${aggregates.messages.errors}</div>
-          <div class="usage-summary-sub">${aggregates.messages.toolResults} tool results</div>
+          <div class="usage-summary-sub">
+            ${usageMsg("insight.toolResults", "{count} tool results", {
+              count: aggregates.messages.toolResults,
+            })}
+          </div>
         </div>
         <div class="usage-summary-card">
           <div class="usage-summary-title">
-            Avg Tokens / Msg
+            ${usageMsg("insight.avgTokensPerMsg", "Avg Tokens / Msg")}
             <span class="usage-summary-hint" title=${tokensHint}>?</span>
           </div>
           <div class="usage-summary-value">${formatTokens(avgTokens)}</div>
-          <div class="usage-summary-sub">Across ${aggregates.messages.total || 0} messages</div>
+          <div class="usage-summary-sub">
+            ${usageMsg("insight.acrossMessages", "Across {count} messages", {
+              count: aggregates.messages.total || 0,
+            })}
+          </div>
         </div>
         <div class="usage-summary-card">
           <div class="usage-summary-title">
-            Avg Cost / Msg
+            ${usageMsg("insight.avgCostPerMsg", "Avg Cost / Msg")}
             <span class="usage-summary-hint" title=${costHint}>?</span>
           </div>
           <div class="usage-summary-value">${formatCost(avgCost, 4)}</div>
-          <div class="usage-summary-sub">${formatCost(totals.totalCost)} total</div>
+          <div class="usage-summary-sub">
+            ${usageMsg("insight.totalCost", "{value} total", { value: formatCost(totals.totalCost) })}
+          </div>
         </div>
         <div class="usage-summary-card">
           <div class="usage-summary-title">
-            Sessions
-            <span class="usage-summary-hint" title="Distinct sessions in the range.">?</span>
+            ${usageMsg("insight.sessions", "Sessions")}
+            <span class="usage-summary-hint" title=${usageMsg("hint.distinctSessions", "Distinct sessions in the range.")}>?</span>
           </div>
           <div class="usage-summary-value">${sessionCount}</div>
-          <div class="usage-summary-sub">of ${totalSessions} in range</div>
+          <div class="usage-summary-sub">
+            ${usageMsg("insight.ofInRange", "of {count} in range", { count: totalSessions })}
+          </div>
         </div>
         <div class="usage-summary-card">
           <div class="usage-summary-title">
-            Throughput
+            ${usageMsg("insight.throughput", "Throughput")}
             <span class="usage-summary-hint" title=${throughputHint}>?</span>
           </div>
           <div class="usage-summary-value">${throughputLabel}</div>
@@ -3581,33 +3752,67 @@ function renderUsageInsights(
         </div>
         <div class="usage-summary-card">
           <div class="usage-summary-title">
-            Error Rate
+            ${usageMsg("insight.errorRate", "Error Rate")}
             <span class="usage-summary-hint" title=${errorHint}>?</span>
           </div>
           <div class="usage-summary-value ${errorRatePct > 5 ? "bad" : errorRatePct > 1 ? "warn" : "good"}">${errorRatePct.toFixed(2)}%</div>
           <div class="usage-summary-sub">
-            ${aggregates.messages.errors} errors · ${avgDurationLabel} avg session
+            ${usageMsg("insight.errorsAvgSession", "{errors} errors · {duration} avg session", {
+              errors: aggregates.messages.errors,
+              duration: avgDurationLabel,
+            })}
           </div>
         </div>
         <div class="usage-summary-card">
           <div class="usage-summary-title">
-            Cache Hit Rate
+            ${usageMsg("insight.cacheHitRate", "Cache Hit Rate")}
             <span class="usage-summary-hint" title=${cacheHint}>?</span>
           </div>
           <div class="usage-summary-value ${cacheHitRate > 0.6 ? "good" : cacheHitRate > 0.3 ? "warn" : "bad"}">${cacheHitLabel}</div>
           <div class="usage-summary-sub">
-            ${formatTokens(totals.cacheRead)} cached · ${formatTokens(cacheBase)} prompt
+            ${usageMsg("insight.cachedPrompt", "{cached} cached · {prompt} prompt", {
+              cached: formatTokens(totals.cacheRead),
+              prompt: formatTokens(cacheBase),
+            })}
           </div>
         </div>
       </div>
       <div class="usage-insights-grid">
-        ${renderInsightList("Top Models", topModels, "No model data")}
-        ${renderInsightList("Top Providers", topProviders, "No provider data")}
-        ${renderInsightList("Top Tools", topTools, "No tool calls")}
-        ${renderInsightList("Top Agents", topAgents, "No agent data")}
-        ${renderInsightList("Top Channels", topChannels, "No channel data")}
-        ${renderPeakErrorList("Peak Error Days", errorDays, "No error data")}
-        ${renderPeakErrorList("Peak Error Hours", errorHours, "No error data")}
+        ${renderInsightList(
+          usageMsg("insight.topModels", "Top Models"),
+          topModels,
+          usageMsg("insight.noModelData", "No model data"),
+        )}
+        ${renderInsightList(
+          usageMsg("insight.topProviders", "Top Providers"),
+          topProviders,
+          usageMsg("insight.noProviderData", "No provider data"),
+        )}
+        ${renderInsightList(
+          usageMsg("insight.topTools", "Top Tools"),
+          topTools,
+          usageMsg("insight.noToolCalls", "No tool calls"),
+        )}
+        ${renderInsightList(
+          usageMsg("insight.topAgents", "Top Agents"),
+          topAgents,
+          usageMsg("insight.noAgentData", "No agent data"),
+        )}
+        ${renderInsightList(
+          usageMsg("insight.topChannels", "Top Channels"),
+          topChannels,
+          usageMsg("insight.noChannelData", "No channel data"),
+        )}
+        ${renderPeakErrorList(
+          usageMsg("insight.peakErrorDays", "Peak Error Days"),
+          errorDays,
+          usageMsg("insight.noErrorData", "No error data"),
+        )}
+        ${renderPeakErrorList(
+          usageMsg("insight.peakErrorHours", "Peak Error Hours"),
+          errorHours,
+          usageMsg("insight.noErrorData", "No error data"),
+        )}
       </div>
     </section>
   `;
@@ -3731,46 +3936,71 @@ function renderSessionsCard(
   return html`
     <div class="card sessions-card">
       <div class="sessions-card-header">
-        <div class="card-title">Sessions</div>
+        <div class="card-title">${usageMsg("sessions.title", "Sessions")}</div>
         <div class="sessions-card-count">
-          ${sessions.length} shown${totalSessions !== sessions.length ? ` · ${totalSessions} total` : ""}
+          ${usageMsg("sessions.shownCount", "{count} shown", { count: sessions.length })}
+          ${
+            totalSessions !== sessions.length
+              ? usageMsg("sessions.totalCount", " · {count} total", {
+                  count: totalSessions,
+                })
+              : ""
+          }
         </div>
       </div>
       <div class="sessions-card-meta">
         <div class="sessions-card-stats">
-          <span>${isTokenMode ? formatTokens(avgValue) : formatCost(avgValue)} avg</span>
-          <span>${totalErrors} errors</span>
+          <span>
+            ${usageMsg("sessions.avg", "{value} avg", {
+              value: isTokenMode ? formatTokens(avgValue) : formatCost(avgValue),
+            })}
+          </span>
+          <span>${usageMsg("sessions.errors", "{count} errors", { count: totalErrors })}</span>
         </div>
         <div class="chart-toggle small">
           <button
             class="toggle-btn ${sessionsTab === "all" ? "active" : ""}"
             @click=${() => onSessionsTabChange("all")}
           >
-            All
+            ${usageMsg("all", "All")}
           </button>
           <button
             class="toggle-btn ${sessionsTab === "recent" ? "active" : ""}"
             @click=${() => onSessionsTabChange("recent")}
           >
-            Recently viewed
+            ${usageMsg("sessions.recentlyViewed", "Recently viewed")}
           </button>
         </div>
         <label class="sessions-sort">
-          <span>Sort</span>
+          <span>${usageMsg("sessions.sort", "Sort")}</span>
           <select
             @change=${(e: Event) => onSessionSortChange((e.target as HTMLSelectElement).value as typeof sessionSort)}
           >
-            <option value="cost" ?selected=${sessionSort === "cost"}>Cost</option>
-            <option value="errors" ?selected=${sessionSort === "errors"}>Errors</option>
-            <option value="messages" ?selected=${sessionSort === "messages"}>Messages</option>
-            <option value="recent" ?selected=${sessionSort === "recent"}>Recent</option>
-            <option value="tokens" ?selected=${sessionSort === "tokens"}>Tokens</option>
+            <option value="cost" ?selected=${sessionSort === "cost"}>
+              ${usageMsg("cost", "Cost")}
+            </option>
+            <option value="errors" ?selected=${sessionSort === "errors"}>
+              ${usageMsg("insight.errors", "Errors")}
+            </option>
+            <option value="messages" ?selected=${sessionSort === "messages"}>
+              ${usageMsg("insight.messages", "Messages")}
+            </option>
+            <option value="recent" ?selected=${sessionSort === "recent"}>
+              ${usageMsg("sessions.recent", "Recent")}
+            </option>
+            <option value="tokens" ?selected=${sessionSort === "tokens"}>
+              ${usageMsg("tokensPlural", "Tokens")}
+            </option>
           </select>
         </label>
         <button
           class="btn btn-sm sessions-action-btn icon"
           @click=${() => onSessionSortDirChange(sessionSortDir === "desc" ? "asc" : "desc")}
-          title=${sessionSortDir === "desc" ? "Descending" : "Ascending"}
+          title=${
+            sessionSortDir === "desc"
+              ? usageMsg("sessions.desc", "Descending")
+              : usageMsg("sessions.asc", "Ascending")
+          }
         >
           ${sessionSortDir === "desc" ? "↓" : "↑"}
         </button>
@@ -3778,7 +4008,7 @@ function renderSessionsCard(
           selectedCount > 0
             ? html`
                 <button class="btn btn-sm sessions-action-btn sessions-clear-btn" @click=${onClearSessions}>
-                  Clear Selection
+                  ${usageMsg("sessions.clearSelection", "Clear Selection")}
                 </button>
               `
             : nothing
@@ -3788,7 +4018,9 @@ function renderSessionsCard(
         sessionsTab === "recent"
           ? recentEntries.length === 0
             ? html`
-                <div class="muted" style="padding: 20px; text-align: center">No recent sessions</div>
+                <div class="muted" style="padding: 20px; text-align: center">
+                  ${usageMsg("sessions.noRecent", "No recent sessions")}
+                </div>
               `
             : html`
                 <div class="session-bars" style="max-height: 220px; margin-top: 6px;">
@@ -3811,13 +4043,13 @@ function renderSessionsCard(
                         <div class="session-bar-actions">
                           <button
                             class="session-copy-btn"
-                            title="Copy session name"
+                            title=${usageMsg("sessions.copyName", "Copy session name")}
                             @click=${(e: MouseEvent) => {
                               e.stopPropagation();
                               void copySessionName(s);
                             }}
                           >
-                            Copy
+                            ${usageMsg("copy", "Copy")}
                           </button>
                           <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
                         </div>
@@ -3828,7 +4060,9 @@ function renderSessionsCard(
               `
           : sessions.length === 0
             ? html`
-                <div class="muted" style="padding: 20px; text-align: center">No sessions in range</div>
+                <div class="muted" style="padding: 20px; text-align: center">
+                  ${usageMsg("sessions.noSessionsInRange", "No sessions in range")}
+                </div>
               `
             : html`
                 <div class="session-bars">
@@ -3852,20 +4086,28 @@ function renderSessionsCard(
                         <div class="session-bar-actions">
                           <button
                             class="session-copy-btn"
-                            title="Copy session name"
+                            title=${usageMsg("sessions.copyName", "Copy session name")}
                             @click=${(e: MouseEvent) => {
                               e.stopPropagation();
                               void copySessionName(s);
                             }}
                           >
-                            Copy
+                            ${usageMsg("copy", "Copy")}
                           </button>
                           <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
                         </div>
                       </div>
                     `;
                   })}
-                  ${sessions.length > 50 ? html`<div class="muted" style="padding: 8px; text-align: center; font-size: 11px;">+${sessions.length - 50} more</div>` : nothing}
+                  ${
+                    sessions.length > 50
+                      ? html`<div class="muted" style="padding: 8px; text-align: center; font-size: 11px;">
+                          ${usageMsg("sessions.moreCount", "+{count} more", {
+                            count: sessions.length - 50,
+                          })}
+                        </div>`
+                      : nothing
+                  }
                 </div>
               `
       }
@@ -3873,7 +4115,11 @@ function renderSessionsCard(
         selectedCount > 1
           ? html`
               <div style="margin-top: 10px;">
-                <div class="sessions-card-count">Selected (${selectedCount})</div>
+                <div class="sessions-card-count">
+                  ${usageMsg("sessions.selectedCount", "Selected ({count})", {
+                    count: selectedCount,
+                  })}
+                </div>
                 <div class="session-bars" style="max-height: 160px; margin-top: 6px;">
                   ${selectedEntries.map((s) => {
                     const value = getSessionValue(s);
@@ -3893,13 +4139,13 @@ function renderSessionsCard(
                         <div class="session-bar-actions">
                           <button
                             class="session-copy-btn"
-                            title="Copy session name"
+                            title=${usageMsg("sessions.copyName", "Copy session name")}
                             @click=${(e: MouseEvent) => {
                               e.stopPropagation();
                               void copySessionName(s);
                             }}
                           >
-                            Copy
+                            ${usageMsg("copy", "Copy")}
                           </button>
                           <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
                         </div>
@@ -3923,7 +4169,7 @@ function renderSessionSummary(session: UsageSessionEntry) {
   const usage = session.usage;
   if (!usage) {
     return html`
-      <div class="muted">No usage data for this session.</div>
+      <div class="muted">${usageMsg("session.noUsageData", "No usage data for this session.")}</div>
     `;
   }
 
@@ -3947,11 +4193,11 @@ function renderSessionSummary(session: UsageSessionEntry) {
     usage.toolUsage?.tools.slice(0, 6).map((tool) => ({
       label: tool.name,
       value: `${tool.count}`,
-      sub: "calls",
+      sub: usageMsg("calls", "calls"),
     })) ?? [];
   const modelItems =
     usage.modelUsage?.slice(0, 6).map((entry) => ({
-      label: entry.model ?? "unknown",
+      label: entry.model ?? usageMsg("unknown", "unknown"),
       value: formatCost(entry.totals.totalCost),
       sub: formatTokens(entry.totals.totalTokens),
     })) ?? [];
@@ -3960,29 +4206,50 @@ function renderSessionSummary(session: UsageSessionEntry) {
     ${badges.length > 0 ? html`<div class="usage-badges">${badges.map((b) => html`<span class="usage-badge">${b}</span>`)}</div>` : nothing}
     <div class="session-summary-grid">
       <div class="session-summary-card">
-        <div class="session-summary-title">Messages</div>
+        <div class="session-summary-title">${usageMsg("insight.messages", "Messages")}</div>
         <div class="session-summary-value">${usage.messageCounts?.total ?? 0}</div>
-        <div class="session-summary-meta">${usage.messageCounts?.user ?? 0} user · ${usage.messageCounts?.assistant ?? 0} assistant</div>
+        <div class="session-summary-meta">
+          ${usageMsg("insight.userAssistant", "{user} user · {assistant} assistant", {
+            user: usage.messageCounts?.user ?? 0,
+            assistant: usage.messageCounts?.assistant ?? 0,
+          })}
+        </div>
       </div>
       <div class="session-summary-card">
-        <div class="session-summary-title">Tool Calls</div>
+        <div class="session-summary-title">${usageMsg("insight.toolCalls", "Tool Calls")}</div>
         <div class="session-summary-value">${usage.toolUsage?.totalCalls ?? 0}</div>
-        <div class="session-summary-meta">${usage.toolUsage?.uniqueTools ?? 0} tools</div>
+        <div class="session-summary-meta">
+          ${usageMsg("session.toolsCount", "{count} tools", {
+            count: usage.toolUsage?.uniqueTools ?? 0,
+          })}
+        </div>
       </div>
       <div class="session-summary-card">
-        <div class="session-summary-title">Errors</div>
+        <div class="session-summary-title">${usageMsg("insight.errors", "Errors")}</div>
         <div class="session-summary-value">${usage.messageCounts?.errors ?? 0}</div>
-        <div class="session-summary-meta">${usage.messageCounts?.toolResults ?? 0} tool results</div>
+        <div class="session-summary-meta">
+          ${usageMsg("insight.toolResults", "{count} tool results", {
+            count: usage.messageCounts?.toolResults ?? 0,
+          })}
+        </div>
       </div>
       <div class="session-summary-card">
-        <div class="session-summary-title">Duration</div>
+        <div class="session-summary-title">${usageMsg("session.duration", "Duration")}</div>
         <div class="session-summary-value">${formatDurationMs(usage.durationMs)}</div>
         <div class="session-summary-meta">${formatTs(usage.firstActivity)} → ${formatTs(usage.lastActivity)}</div>
       </div>
     </div>
     <div class="usage-insights-grid" style="margin-top: 12px;">
-      ${renderInsightList("Top Tools", toolItems, "No tool calls")}
-      ${renderInsightList("Model Mix", modelItems, "No model data")}
+      ${renderInsightList(
+        usageMsg("insight.topTools", "Top Tools"),
+        toolItems,
+        usageMsg("insight.noToolCalls", "No tool calls"),
+      )}
+      ${renderInsightList(
+        usageMsg("session.modelMix", "Model Mix"),
+        modelItems,
+        usageMsg("insight.noModelData", "No model data"),
+      )}
     </div>
   `;
 }
@@ -4031,13 +4298,22 @@ function renderSessionDetailPanel(
           ${
             usage
               ? html`
-            <span><strong>${formatTokens(usage.totalTokens)}</strong> tokens</span>
+            <span>
+              <strong>${formatTokens(usage.totalTokens)}</strong>
+              ${usageMsg("tokensPlural", "tokens")}
+            </span>
             <span><strong>${formatCost(usage.totalCost)}</strong></span>
           `
               : nothing
           }
         </div>
-        <button class="session-close-btn" @click=${onClose} title="Close session details">×</button>
+        <button
+          class="session-close-btn"
+          @click=${onClose}
+          title=${usageMsg("session.closeDetails", "Close session details")}
+        >
+          ×
+        </button>
       </div>
       <div class="session-detail-content">
         ${renderSessionSummary(session)}
@@ -4088,14 +4364,16 @@ function renderTimeSeriesCompact(
   if (loading) {
     return html`
       <div class="session-timeseries-compact">
-        <div class="muted" style="padding: 20px; text-align: center">Loading...</div>
+        <div class="muted" style="padding: 20px; text-align: center">${usageMsg("loading", "Loading...")}</div>
       </div>
     `;
   }
   if (!timeSeries || timeSeries.points.length < 2) {
     return html`
       <div class="session-timeseries-compact">
-        <div class="muted" style="padding: 20px; text-align: center">No timeline data</div>
+        <div class="muted" style="padding: 20px; text-align: center">
+          ${usageMsg("timeseries.noTimelineData", "No timeline data")}
+        </div>
       </div>
     `;
   }
@@ -4120,7 +4398,9 @@ function renderTimeSeriesCompact(
   if (points.length < 2) {
     return html`
       <div class="session-timeseries-compact">
-        <div class="muted" style="padding: 20px; text-align: center">No data in range</div>
+        <div class="muted" style="padding: 20px; text-align: center">
+          ${usageMsg("timeseries.noDataInRange", "No data in range")}
+        </div>
       </div>
     `;
   }
@@ -4162,20 +4442,22 @@ function renderTimeSeriesCompact(
   return html`
     <div class="session-timeseries-compact">
       <div class="timeseries-header-row">
-        <div class="card-title" style="font-size: 13px;">Usage Over Time</div>
+        <div class="card-title" style="font-size: 13px;">
+          ${usageMsg("timeseries.usageOverTime", "Usage Over Time")}
+        </div>
         <div class="timeseries-controls">
           <div class="chart-toggle small">
             <button
               class="toggle-btn ${!isCumulative ? "active" : ""}"
               @click=${() => onModeChange("per-turn")}
             >
-              Per Turn
+              ${usageMsg("timeseries.perTurn", "Per Turn")}
             </button>
             <button
               class="toggle-btn ${isCumulative ? "active" : ""}"
               @click=${() => onModeChange("cumulative")}
             >
-              Cumulative
+              ${usageMsg("timeseries.cumulative", "Cumulative")}
             </button>
           </div>
           ${
@@ -4186,13 +4468,13 @@ function renderTimeSeriesCompact(
                       class="toggle-btn ${breakdownMode === "total" ? "active" : ""}"
                       @click=${() => onBreakdownChange("total")}
                     >
-                      Total
+                      ${usageMsg("toggle.total", "Total")}
                     </button>
                     <button
                       class="toggle-btn ${breakdownMode === "by-type" ? "active" : ""}"
                       @click=${() => onBreakdownChange("by-type")}
                     >
-                      By Type
+                      ${usageMsg("toggle.byType", "By Type")}
                     </button>
                   </div>
                 `
@@ -4231,13 +4513,27 @@ function renderTimeSeriesCompact(
               hour: "2-digit",
               minute: "2-digit",
             }),
-            `${formatTokens(val)} tokens`,
+            usageMsg("tokensLabel", "{value} tokens", { value: formatTokens(val) }),
           ];
           if (breakdownByType) {
-            tooltipLines.push(`Output ${formatTokens(p.output)}`);
-            tooltipLines.push(`Input ${formatTokens(p.input)}`);
-            tooltipLines.push(`Cache write ${formatTokens(p.cacheWrite)}`);
-            tooltipLines.push(`Cache read ${formatTokens(p.cacheRead)}`);
+            tooltipLines.push(
+              usageMsg("breakdown.outputValue", "Output {value}", {
+                value: formatTokens(p.output),
+              }),
+            );
+            tooltipLines.push(
+              usageMsg("breakdown.inputValue", "Input {value}", { value: formatTokens(p.input) }),
+            );
+            tooltipLines.push(
+              usageMsg("breakdown.cacheWriteValue", "Cache write {value}", {
+                value: formatTokens(p.cacheWrite),
+              }),
+            );
+            tooltipLines.push(
+              usageMsg("breakdown.cacheReadValue", "Cache read {value}", {
+                value: formatTokens(p.cacheRead),
+              }),
+            );
           }
           const tooltip = tooltipLines.join(" · ");
           if (!breakdownByType) {
@@ -4262,12 +4558,20 @@ function renderTimeSeriesCompact(
           `;
         })}
       </svg>
-      <div class="timeseries-summary">${points.length} msgs · ${formatTokens(cumTokens)} · ${formatCost(cumCost)}</div>
+      <div class="timeseries-summary">
+        ${usageMsg("timeseries.summary", "{count} msgs · {tokens} · {cost}", {
+          count: points.length,
+          tokens: formatTokens(cumTokens),
+          cost: formatCost(cumCost),
+        })}
+      </div>
       ${
         breakdownByType
           ? html`
               <div style="margin-top: 8px;">
-                <div class="card-title" style="font-size: 12px; margin-bottom: 6px;">Tokens by Type</div>
+                <div class="card-title" style="font-size: 12px; margin-bottom: 6px;">
+                  ${usageMsg("breakdown.tokensByType", "Tokens by Type")}
+                </div>
                 <div class="cost-breakdown-bar" style="height: 18px;">
                   <div class="cost-segment output" style="width: ${pct(sumOutput, totalTypeTokens).toFixed(1)}%"></div>
                   <div class="cost-segment input" style="width: ${pct(sumInput, totalTypeTokens).toFixed(1)}%"></div>
@@ -4275,20 +4579,46 @@ function renderTimeSeriesCompact(
                   <div class="cost-segment cache-read" style="width: ${pct(sumCacheRead, totalTypeTokens).toFixed(1)}%"></div>
                 </div>
                 <div class="cost-breakdown-legend">
-                  <div class="legend-item" title="Assistant output tokens">
-                    <span class="legend-dot output"></span>Output ${formatTokens(sumOutput)}
+                  <div
+                    class="legend-item"
+                    title=${usageMsg("breakdown.assistantOutputTitle", "Assistant output tokens")}
+                  >
+                    <span class="legend-dot output"></span>
+                    ${usageMsg("breakdown.outputValue", "Output {value}", {
+                      value: formatTokens(sumOutput),
+                    })}
                   </div>
-                  <div class="legend-item" title="User + tool input tokens">
-                    <span class="legend-dot input"></span>Input ${formatTokens(sumInput)}
+                  <div
+                    class="legend-item"
+                    title=${usageMsg("breakdown.userToolInputTitle", "User + tool input tokens")}
+                  >
+                    <span class="legend-dot input"></span>
+                    ${usageMsg("breakdown.inputValue", "Input {value}", {
+                      value: formatTokens(sumInput),
+                    })}
                   </div>
-                  <div class="legend-item" title="Tokens written to cache">
-                    <span class="legend-dot cache-write"></span>Cache Write ${formatTokens(sumCacheWrite)}
+                  <div
+                    class="legend-item"
+                    title=${usageMsg("breakdown.cacheWriteTitleHint", "Tokens written to cache")}
+                  >
+                    <span class="legend-dot cache-write"></span>
+                    ${usageMsg("breakdown.cacheWriteLegend", "Cache Write {value}", {
+                      value: formatTokens(sumCacheWrite),
+                    })}
                   </div>
-                  <div class="legend-item" title="Tokens read from cache">
-                    <span class="legend-dot cache-read"></span>Cache Read ${formatTokens(sumCacheRead)}
+                  <div
+                    class="legend-item"
+                    title=${usageMsg("breakdown.cacheReadTitleHint", "Tokens read from cache")}
+                  >
+                    <span class="legend-dot cache-read"></span>
+                    ${usageMsg("breakdown.cacheReadLegend", "Cache Read {value}", {
+                      value: formatTokens(sumCacheRead),
+                    })}
                   </div>
                 </div>
-                <div class="cost-breakdown-total">Total: ${formatTokens(totalTypeTokens)}</div>
+                <div class="cost-breakdown-total">
+                  ${usageMsg("totalValue", "Total: {value}", { value: formatTokens(totalTypeTokens) })}
+                </div>
               </div>
             `
           : nothing
@@ -4306,7 +4636,9 @@ function renderContextPanel(
   if (!contextWeight) {
     return html`
       <div class="context-details-panel">
-        <div class="muted" style="padding: 20px; text-align: center">No context data</div>
+        <div class="muted" style="padding: 20px; text-align: center">
+          ${usageMsg("context.noData", "No context data")}
+        </div>
       </div>
     `;
   }
@@ -4324,7 +4656,9 @@ function renderContextPanel(
   if (usage && usage.totalTokens > 0) {
     const inputTokens = usage.input + usage.cacheRead;
     if (inputTokens > 0) {
-      contextPct = `~${Math.min((totalContextTokens / inputTokens) * 100, 100).toFixed(0)}% of input`;
+      contextPct = usageMsg("context.percentOfInput", "~{percent}% of input", {
+        percent: Math.min((totalContextTokens / inputTokens) * 100, 100).toFixed(0),
+      });
     }
   }
 
@@ -4348,29 +4682,35 @@ function renderContextPanel(
   return html`
     <div class="context-details-panel">
       <div class="context-breakdown-header">
-        <div class="card-title" style="font-size: 13px;">System Prompt Breakdown</div>
+        <div class="card-title" style="font-size: 13px;">
+          ${usageMsg("context.systemPromptBreakdown", "System Prompt Breakdown")}
+        </div>
         ${
           hasMore
             ? html`<button class="context-expand-btn" @click=${onToggleExpanded}>
-                ${showAll ? "Collapse" : "Expand all"}
+                ${showAll ? usageMsg("collapse", "Collapse") : usageMsg("expandAll", "Expand all")}
               </button>`
             : nothing
         }
       </div>
-      <p class="context-weight-desc">${contextPct || "Base context per message"}</p>
+      <p class="context-weight-desc">
+        ${contextPct || usageMsg("context.basePerMessage", "Base context per message")}
+      </p>
       <div class="context-stacked-bar">
-        <div class="context-segment system" style="width: ${pct(systemTokens, totalContextTokens).toFixed(1)}%" title="System: ~${formatTokens(systemTokens)}"></div>
-        <div class="context-segment skills" style="width: ${pct(skillsTokens, totalContextTokens).toFixed(1)}%" title="Skills: ~${formatTokens(skillsTokens)}"></div>
-        <div class="context-segment tools" style="width: ${pct(toolsTokens, totalContextTokens).toFixed(1)}%" title="Tools: ~${formatTokens(toolsTokens)}"></div>
-        <div class="context-segment files" style="width: ${pct(filesTokens, totalContextTokens).toFixed(1)}%" title="Files: ~${formatTokens(filesTokens)}"></div>
+        <div class="context-segment system" style="width: ${pct(systemTokens, totalContextTokens).toFixed(1)}%" title=${usageMsg("context.systemValue", "System: ~{value}", { value: formatTokens(systemTokens) })}></div>
+        <div class="context-segment skills" style="width: ${pct(skillsTokens, totalContextTokens).toFixed(1)}%" title=${usageMsg("context.skillsValue", "Skills: ~{value}", { value: formatTokens(skillsTokens) })}></div>
+        <div class="context-segment tools" style="width: ${pct(toolsTokens, totalContextTokens).toFixed(1)}%" title=${usageMsg("context.toolsValue", "Tools: ~{value}", { value: formatTokens(toolsTokens) })}></div>
+        <div class="context-segment files" style="width: ${pct(filesTokens, totalContextTokens).toFixed(1)}%" title=${usageMsg("context.filesValue", "Files: ~{value}", { value: formatTokens(filesTokens) })}></div>
       </div>
       <div class="context-legend">
-        <span class="legend-item"><span class="legend-dot system"></span>Sys ~${formatTokens(systemTokens)}</span>
-        <span class="legend-item"><span class="legend-dot skills"></span>Skills ~${formatTokens(skillsTokens)}</span>
-        <span class="legend-item"><span class="legend-dot tools"></span>Tools ~${formatTokens(toolsTokens)}</span>
-        <span class="legend-item"><span class="legend-dot files"></span>Files ~${formatTokens(filesTokens)}</span>
+        <span class="legend-item"><span class="legend-dot system"></span>${usageMsg("context.sysValue", "Sys ~{value}", { value: formatTokens(systemTokens) })}</span>
+        <span class="legend-item"><span class="legend-dot skills"></span>${usageMsg("context.skillsValue", "Skills: ~{value}", { value: formatTokens(skillsTokens) })}</span>
+        <span class="legend-item"><span class="legend-dot tools"></span>${usageMsg("context.toolsValue", "Tools: ~{value}", { value: formatTokens(toolsTokens) })}</span>
+        <span class="legend-item"><span class="legend-dot files"></span>${usageMsg("context.filesValue", "Files: ~{value}", { value: formatTokens(filesTokens) })}</span>
       </div>
-      <div class="context-total">Total: ~${formatTokens(totalContextTokens)}</div>
+      <div class="context-total">
+        ${usageMsg("context.totalApprox", "Total: ~{value}", { value: formatTokens(totalContextTokens) })}
+      </div>
       <div class="context-breakdown-grid">
         ${
           skillsList.length > 0
@@ -4378,7 +4718,9 @@ function renderContextPanel(
                 const more = skillsList.length - skillsTop.length;
                 return html`
                   <div class="context-breakdown-card">
-                    <div class="context-breakdown-title">Skills (${skillsList.length})</div>
+                    <div class="context-breakdown-title">
+                      ${usageMsg("context.skillsCount", "Skills ({count})", { count: skillsList.length })}
+                    </div>
                     <div class="context-breakdown-list">
                       ${skillsTop.map(
                         (s) => html`
@@ -4391,7 +4733,7 @@ function renderContextPanel(
                     </div>
                     ${
                       more > 0
-                        ? html`<div class="context-breakdown-more">+${more} more</div>`
+                        ? html`<div class="context-breakdown-more">${usageMsg("context.moreCount", "+{count} more", { count: more })}</div>`
                         : nothing
                     }
                   </div>
@@ -4405,7 +4747,9 @@ function renderContextPanel(
                 const more = toolsList.length - toolsTop.length;
                 return html`
                   <div class="context-breakdown-card">
-                    <div class="context-breakdown-title">Tools (${toolsList.length})</div>
+                    <div class="context-breakdown-title">
+                      ${usageMsg("context.toolsCount", "Tools ({count})", { count: toolsList.length })}
+                    </div>
                     <div class="context-breakdown-list">
                       ${toolsTop.map(
                         (t) => html`
@@ -4418,7 +4762,7 @@ function renderContextPanel(
                     </div>
                     ${
                       more > 0
-                        ? html`<div class="context-breakdown-more">+${more} more</div>`
+                        ? html`<div class="context-breakdown-more">${usageMsg("context.moreCount", "+{count} more", { count: more })}</div>`
                         : nothing
                     }
                   </div>
@@ -4432,7 +4776,9 @@ function renderContextPanel(
                 const more = filesList.length - filesTop.length;
                 return html`
                   <div class="context-breakdown-card">
-                    <div class="context-breakdown-title">Files (${filesList.length})</div>
+                    <div class="context-breakdown-title">
+                      ${usageMsg("context.filesCount", "Files ({count})", { count: filesList.length })}
+                    </div>
                     <div class="context-breakdown-list">
                       ${filesTop.map(
                         (f) => html`
@@ -4445,7 +4791,7 @@ function renderContextPanel(
                     </div>
                     ${
                       more > 0
-                        ? html`<div class="context-breakdown-more">+${more} more</div>`
+                        ? html`<div class="context-breakdown-more">${usageMsg("context.moreCount", "+{count} more", { count: more })}</div>`
                         : nothing
                     }
                   </div>
@@ -4478,16 +4824,18 @@ function renderSessionLogsCompact(
   if (loading) {
     return html`
       <div class="session-logs-compact">
-        <div class="session-logs-header">Conversation</div>
-        <div class="muted" style="padding: 20px; text-align: center">Loading...</div>
+        <div class="session-logs-header">${usageMsg("logs.conversation", "Conversation")}</div>
+        <div class="muted" style="padding: 20px; text-align: center">${usageMsg("loading", "Loading...")}</div>
       </div>
     `;
   }
   if (!logs || logs.length === 0) {
     return html`
       <div class="session-logs-compact">
-        <div class="session-logs-header">Conversation</div>
-        <div class="muted" style="padding: 20px; text-align: center">No messages</div>
+        <div class="session-logs-header">${usageMsg("logs.conversation", "Conversation")}</div>
+        <div class="muted" style="padding: 20px; text-align: center">
+          ${usageMsg("logs.noMessages", "No messages")}
+        </div>
       </div>
     `;
   }
@@ -4524,7 +4872,10 @@ function renderSessionLogsCompact(
   });
   const displayedCount =
     filters.roles.length > 0 || filters.tools.length > 0 || filters.hasTools || normalizedQuery
-      ? `${filteredEntries.length} of ${logs.length}`
+      ? usageMsg("logs.filteredCount", "{shown} of {total}", {
+          shown: filteredEntries.length,
+          total: logs.length,
+        })
       : `${logs.length}`;
 
   const roleSelected = new Set(filters.roles);
@@ -4533,9 +4884,18 @@ function renderSessionLogsCompact(
   return html`
     <div class="session-logs-compact">
       <div class="session-logs-header">
-        <span>Conversation <span style="font-weight: normal; color: var(--text-muted);">(${displayedCount} messages)</span></span>
+        <span>
+          ${usageMsg("logs.conversation", "Conversation")}
+          <span style="font-weight: normal; color: var(--text-muted);">
+            (${usageMsg("logs.messagesCount", "{count} messages", { count: displayedCount })})
+          </span>
+        </span>
         <button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${onToggleExpandedAll}>
-          ${expandedAll ? "Collapse All" : "Expand All"}
+          ${
+            expandedAll
+              ? usageMsg("logs.collapseAll", "Collapse All")
+              : usageMsg("logs.expandAll", "Expand All")
+          }
         </button>
       </div>
       <div class="usage-filters-inline" style="margin: 10px 12px;">
@@ -4549,10 +4909,18 @@ function renderSessionLogsCompact(
               ),
             )}
         >
-          <option value="user" ?selected=${roleSelected.has("user")}>User</option>
-          <option value="assistant" ?selected=${roleSelected.has("assistant")}>Assistant</option>
-          <option value="tool" ?selected=${roleSelected.has("tool")}>Tool</option>
-          <option value="toolResult" ?selected=${roleSelected.has("toolResult")}>Tool result</option>
+          <option value="user" ?selected=${roleSelected.has("user")}>
+            ${usageMsg("logs.role.user", "User")}
+          </option>
+          <option value="assistant" ?selected=${roleSelected.has("assistant")}>
+            ${usageMsg("logs.role.assistant", "Assistant")}
+          </option>
+          <option value="tool" ?selected=${roleSelected.has("tool")}>
+            ${usageMsg("logs.role.tool", "Tool")}
+          </option>
+          <option value="toolResult" ?selected=${roleSelected.has("toolResult")}>
+            ${usageMsg("logs.role.toolResult", "Tool result")}
+          </option>
         </select>
         <select
           multiple
@@ -4576,16 +4944,16 @@ function renderSessionLogsCompact(
             @change=${(event: Event) =>
               onFilterHasToolsChange((event.target as HTMLInputElement).checked)}
           />
-          Has tools
+          ${usageMsg("logs.hasTools", "Has tools")}
         </label>
         <input
           type="text"
-          placeholder="Search conversation"
+          placeholder=${usageMsg("logs.searchConversation", "Search conversation")}
           .value=${filters.query}
           @input=${(event: Event) => onFilterQueryChange((event.target as HTMLInputElement).value)}
         />
         <button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${onFilterClear}>
-          Clear
+          ${usageMsg("clear", "Clear")}
         </button>
       </div>
       <div class="session-logs-list">
@@ -4593,7 +4961,11 @@ function renderSessionLogsCompact(
           const { log, toolInfo, cleanContent } = entry;
           const roleClass = log.role === "user" ? "user" : "assistant";
           const roleLabel =
-            log.role === "user" ? "You" : log.role === "assistant" ? "Assistant" : "Tool";
+            log.role === "user"
+              ? usageMsg("logs.role.you", "You")
+              : log.role === "assistant"
+                ? usageMsg("logs.role.assistant", "Assistant")
+                : usageMsg("logs.role.tool", "Tool");
           return html`
           <div class="session-log-entry ${roleClass}">
             <div class="session-log-meta">
@@ -4624,7 +4996,9 @@ function renderSessionLogsCompact(
         ${
           filteredEntries.length === 0
             ? html`
-                <div class="muted" style="padding: 12px">No messages match the filters.</div>
+                <div class="muted" style="padding: 12px">
+                  ${usageMsg("logs.noMatchFilters", "No messages match the filters.")}
+                </div>
               `
             : nothing
         }
@@ -4651,7 +5025,9 @@ export function renderUsage(props: UsageProps) {
         <div class="row" style="justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px;">
           <div style="flex: 1; min-width: 250px;">
             <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 2px;">
-              <div class="card-title" style="margin: 0;">Token Usage</div>
+              <div class="card-title" style="margin: 0;">
+                ${usageMsg("loading.tokenUsage", "Token Usage")}
+              </div>
               <span style="
                 display: inline-flex;
                 align-items: center;
@@ -4670,14 +5046,14 @@ export function renderUsage(props: UsageProps) {
                   border-radius: 50%;
                   animation: initial-spin 0.6s linear infinite;
                 "></span>
-                Loading
+                ${usageMsg("loading", "Loading")}
               </span>
             </div>
           </div>
           <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 8px;">
             <div style="display: flex; gap: 8px; align-items: center;">
               <input type="date" .value=${props.startDate} disabled style="padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; opacity: 0.6;" />
-              <span style="color: var(--text-muted);">to</span>
+              <span style="color: var(--text-muted);">${usageMsg("to", "to")}</span>
               <input type="date" .value=${props.endDate} disabled style="padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; opacity: 0.6;" />
             </div>
           </div>
@@ -4933,7 +5309,7 @@ export function renderUsage(props: UsageProps) {
           0
       : false);
   const datePresets = [
-    { label: "Today", days: 1 },
+    { label: usageMsg("preset.today", "Today"), days: 1 },
     { label: "7d", days: 7 },
     { label: "30d", days: 30 },
   ];
@@ -4977,7 +5353,7 @@ export function renderUsage(props: UsageProps) {
             selectedCount > 0
               ? html`<span class="usage-filter-badge">${selectedCount}</span>`
               : html`
-                  <span class="usage-filter-badge">All</span>
+                  <span class="usage-filter-badge">${usageMsg("all", "All")}</span>
                 `
           }
         </summary>
@@ -4992,7 +5368,7 @@ export function renderUsage(props: UsageProps) {
               }}
               ?disabled=${allSelected}
             >
-              Select All
+              ${usageMsg("selectAll", "Select All")}
             </button>
             <button
               class="btn btn-sm"
@@ -5003,7 +5379,7 @@ export function renderUsage(props: UsageProps) {
               }}
               ?disabled=${selectedCount === 0}
             >
-              Clear
+              ${usageMsg("clear", "Clear")}
             </button>
           </div>
           <div class="usage-filter-options">
@@ -5039,25 +5415,29 @@ export function renderUsage(props: UsageProps) {
     <style>${usageStylesString}</style>
 
     <section class="usage-page-header">
-      <div class="usage-page-title">Usage</div>
-      <div class="usage-page-subtitle">See where tokens go, when sessions spike, and what drives cost.</div>
+      <div class="usage-page-title">${usageMsg("title", "Usage")}</div>
+      <div class="usage-page-subtitle">
+        ${usageMsg("subtitle", "See where tokens go, when sessions spike, and what drives cost.")}
+      </div>
     </section>
 
     <section class="card usage-header ${props.headerPinned ? "pinned" : ""}">
       <div class="usage-header-row">
         <div class="usage-header-title">
-          <div class="card-title" style="margin: 0;">Filters</div>
+          <div class="card-title" style="margin: 0;">${usageMsg("filters.title", "Filters")}</div>
           ${
             props.loading
               ? html`
-                  <span class="usage-refresh-indicator">Loading</span>
+                  <span class="usage-refresh-indicator">${usageMsg("loading", "Loading")}</span>
                 `
               : nothing
           }
           ${
             isEmpty
               ? html`
-                  <span class="usage-query-hint">Select a date range and click Refresh to load usage.</span>
+                  <span class="usage-query-hint">
+                    ${usageMsg("empty.selectDateRange", "Select a date range and click Refresh to load usage.")}
+                  </span>
                 `
               : nothing
           }
@@ -5067,24 +5447,38 @@ export function renderUsage(props: UsageProps) {
             displayTotals
               ? html`
                 <span class="usage-metric-badge">
-                  <strong>${formatTokens(displayTotals.totalTokens)}</strong> tokens
+                  <strong>${formatTokens(displayTotals.totalTokens)}</strong>
+                  ${usageMsg("tokensPlural", "tokens")}
                 </span>
                 <span class="usage-metric-badge">
-                  <strong>${formatCost(displayTotals.totalCost)}</strong> cost
+                  <strong>${formatCost(displayTotals.totalCost)}</strong>
+                  ${usageMsg("cost", "cost")}
                 </span>
                 <span class="usage-metric-badge">
                   <strong>${displaySessionCount}</strong>
-                  session${displaySessionCount !== 1 ? "s" : ""}
+                  ${
+                    displaySessionCount === 1
+                      ? usageMsg("session.one", "session")
+                      : usageMsg("session.many", "sessions")
+                  }
                 </span>
               `
               : nothing
           }
           <button
             class="usage-pin-btn ${props.headerPinned ? "active" : ""}"
-            title=${props.headerPinned ? "Unpin filters" : "Pin filters"}
+            title=${
+              props.headerPinned
+                ? usageMsg("filters.unpin", "Unpin filters")
+                : usageMsg("filters.pin", "Pin filters")
+            }
             @click=${props.onToggleHeaderPinned}
           >
-            ${props.headerPinned ? "Pinned" : "Pin"}
+            ${
+              props.headerPinned
+                ? usageMsg("filters.pinned", "Pinned")
+                : usageMsg("filters.pin", "Pin")
+            }
           </button>
           <details
             class="usage-export-menu"
@@ -5103,7 +5497,7 @@ export function renderUsage(props: UsageProps) {
               window.addEventListener("click", onClick, true);
             }}
           >
-            <summary class="usage-export-button">Export ▾</summary>
+            <summary class="usage-export-button">${usageMsg("export", "Export")} ▾</summary>
             <div class="usage-export-popover">
               <div class="usage-export-list">
                 <button
@@ -5116,7 +5510,7 @@ export function renderUsage(props: UsageProps) {
                     )}
                   ?disabled=${filteredSessions.length === 0}
                 >
-                  Sessions CSV
+                  ${usageMsg("export.sessionsCsv", "Sessions CSV")}
                 </button>
                 <button
                   class="usage-export-item"
@@ -5128,7 +5522,7 @@ export function renderUsage(props: UsageProps) {
                     )}
                   ?disabled=${filteredDaily.length === 0}
                 >
-                  Daily CSV
+                  ${usageMsg("export.dailyCsv", "Daily CSV")}
                 </button>
                 <button
                   class="usage-export-item"
@@ -5149,7 +5543,7 @@ export function renderUsage(props: UsageProps) {
                     )}
                   ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
                 >
-                  JSON
+                  ${usageMsg("export.json", "JSON")}
                 </button>
               </div>
             </div>
@@ -5180,23 +5574,23 @@ export function renderUsage(props: UsageProps) {
           <input
             type="date"
             .value=${props.startDate}
-            title="Start Date"
+            title=${usageMsg("startDate", "Start Date")}
             @change=${(e: Event) => props.onStartDateChange((e.target as HTMLInputElement).value)}
           />
-          <span style="color: var(--text-muted);">to</span>
+          <span style="color: var(--text-muted);">${usageMsg("to", "to")}</span>
           <input
             type="date"
             .value=${props.endDate}
-            title="End Date"
+            title=${usageMsg("endDate", "End Date")}
             @change=${(e: Event) => props.onEndDateChange((e.target as HTMLInputElement).value)}
           />
           <select
-            title="Time zone"
+            title=${usageMsg("timezone", "Time zone")}
             .value=${props.timeZone}
             @change=${(e: Event) =>
               props.onTimeZoneChange((e.target as HTMLSelectElement).value as "local" | "utc")}
           >
-            <option value="local">Local</option>
+            <option value="local">${usageMsg("local", "Local")}</option>
             <option value="utc">UTC</option>
           </select>
           <div class="chart-toggle">
@@ -5204,13 +5598,13 @@ export function renderUsage(props: UsageProps) {
               class="toggle-btn ${isTokenMode ? "active" : ""}"
               @click=${() => props.onChartModeChange("tokens")}
             >
-              Tokens
+              ${usageMsg("tokensPlural", "Tokens")}
             </button>
             <button
               class="toggle-btn ${!isTokenMode ? "active" : ""}"
               @click=${() => props.onChartModeChange("cost")}
             >
-              Cost
+              ${usageMsg("cost", "Cost")}
             </button>
           </div>
           <button
@@ -5218,7 +5612,7 @@ export function renderUsage(props: UsageProps) {
             @click=${props.onRefresh}
             ?disabled=${props.loading}
           >
-            Refresh
+            ${usageMsg("refresh", "Refresh")}
           </button>
         </div>
         
@@ -5230,7 +5624,10 @@ export function renderUsage(props: UsageProps) {
             class="usage-query-input"
             type="text"
             .value=${props.queryDraft}
-            placeholder="Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)"
+            placeholder=${usageMsg(
+              "query.placeholder",
+              "Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
+            )}
             @input=${(e: Event) => props.onQueryDraftChange((e.target as HTMLInputElement).value)}
             @keydown=${(e: KeyboardEvent) => {
               if (e.key === "Enter") {
@@ -5245,30 +5642,35 @@ export function renderUsage(props: UsageProps) {
               @click=${props.onApplyQuery}
               ?disabled=${props.loading || (!hasDraftQuery && !hasQuery)}
             >
-              Filter (client-side)
+              ${usageMsg("query.filterClientSide", "Filter (client-side)")}
             </button>
             ${
               hasDraftQuery || hasQuery
-                ? html`<button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${props.onClearQuery}>Clear</button>`
+                ? html`<button class="btn btn-sm usage-action-btn usage-secondary-btn" @click=${props.onClearQuery}>${usageMsg("clear", "Clear")}</button>`
                 : nothing
             }
             <span class="usage-query-hint">
               ${
                 hasQuery
-                  ? `${filteredSessions.length} of ${totalSessions} sessions match`
-                  : `${totalSessions} sessions in range`
+                  ? usageMsg("query.matchCount", "{shown} of {total} sessions match", {
+                      shown: filteredSessions.length,
+                      total: totalSessions,
+                    })
+                  : usageMsg("query.sessionsInRange", "{count} sessions in range", {
+                      count: totalSessions,
+                    })
               }
             </span>
           </div>
         </div>
         <div class="usage-filter-row">
-          ${renderFilterSelect("agent", "Agent", agentOptions)}
-          ${renderFilterSelect("channel", "Channel", channelOptions)}
-          ${renderFilterSelect("provider", "Provider", providerOptions)}
-          ${renderFilterSelect("model", "Model", modelOptions)}
-          ${renderFilterSelect("tool", "Tool", toolOptions)}
+          ${renderFilterSelect("agent", usageMsg("filter.agent", "Agent"), agentOptions)}
+          ${renderFilterSelect("channel", usageMsg("filter.channel", "Channel"), channelOptions)}
+          ${renderFilterSelect("provider", usageMsg("filter.provider", "Provider"), providerOptions)}
+          ${renderFilterSelect("model", usageMsg("filter.model", "Model"), modelOptions)}
+          ${renderFilterSelect("tool", usageMsg("filter.tool", "Tool"), toolOptions)}
           <span class="usage-query-hint">
-            Tip: use filters or click bars to filter days.
+            ${usageMsg("tip.filterOrClickBars", "Tip: use filters or click bars to filter days.")}
           </span>
         </div>
         ${
@@ -5281,7 +5683,7 @@ export function renderUsage(props: UsageProps) {
                       <span class="usage-query-chip">
                         ${label}
                         <button
-                          title="Remove filter"
+                          title=${usageMsg("filters.remove", "Remove filter")}
                           @click=${() =>
                             props.onQueryDraftChange(removeQueryToken(props.queryDraft, label))}
                         >
@@ -5336,7 +5738,10 @@ export function renderUsage(props: UsageProps) {
         props.sessionsLimitReached
           ? html`
               <div class="callout warning" style="margin-top: 12px">
-                Showing first 1,000 sessions. Narrow date range for complete results.
+                ${usageMsg(
+                  "sessions.limitReached",
+                  "Showing first 1,000 sessions. Narrow date range for complete results.",
+                )}
               </div>
             `
           : nothing

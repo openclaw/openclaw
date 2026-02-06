@@ -1,13 +1,14 @@
+import { msg } from "@lit/localize";
 import type { IconName } from "./icons.js";
 
 export const TAB_GROUPS = [
-  { label: "Chat", tabs: ["chat"] },
+  { label: msg("Chat", { id: "nav.group.chat" }), tabs: ["chat"] },
   {
-    label: "Control",
+    label: msg("Control", { id: "nav.group.control" }),
     tabs: ["overview", "channels", "instances", "sessions", "usage", "cron"],
   },
-  { label: "Agent", tabs: ["agents", "skills", "nodes"] },
-  { label: "Settings", tabs: ["config", "debug", "logs"] },
+  { label: msg("Agent", { id: "nav.group.agent" }), tabs: ["agents", "skills", "nodes"] },
+  { label: msg("Settings", { id: "nav.group.settings" }), tabs: ["config", "debug", "logs"] },
 ] as const;
 
 export type Tab =
@@ -158,64 +159,82 @@ export function iconForTab(tab: Tab): IconName {
 export function titleForTab(tab: Tab) {
   switch (tab) {
     case "agents":
-      return "Agents";
+      return msg("Agents", { id: "tab.agents" });
     case "overview":
-      return "Overview";
+      return msg("Overview", { id: "tab.overview" });
     case "channels":
-      return "Channels";
+      return msg("Channels", { id: "tab.channels" });
     case "instances":
-      return "Instances";
+      return msg("Instances", { id: "tab.instances" });
     case "sessions":
-      return "Sessions";
+      return msg("Sessions", { id: "tab.sessions" });
     case "usage":
-      return "Usage";
+      return msg("Usage", { id: "tab.usage" });
     case "cron":
-      return "Cron Jobs";
+      return msg("Cron Jobs", { id: "tab.cron" });
     case "skills":
-      return "Skills";
+      return msg("Skills", { id: "tab.skills" });
     case "nodes":
-      return "Nodes";
+      return msg("Nodes", { id: "tab.nodes" });
     case "chat":
-      return "Chat";
+      return msg("Chat", { id: "tab.chat" });
     case "config":
-      return "Config";
+      return msg("Config", { id: "tab.config" });
     case "debug":
-      return "Debug";
+      return msg("Debug", { id: "tab.debug" });
     case "logs":
-      return "Logs";
+      return msg("Logs", { id: "tab.logs" });
     default:
-      return "Control";
+      return msg("Control", { id: "nav.group.control" });
   }
 }
 
 export function subtitleForTab(tab: Tab) {
   switch (tab) {
     case "agents":
-      return "Manage agent workspaces, tools, and identities.";
+      return msg("Manage agent workspaces, tools, and identities.", {
+        id: "subtitle.agents",
+      });
     case "overview":
-      return "Gateway status, entry points, and a fast health read.";
+      return msg("Gateway status, entry points, and a fast health read.", {
+        id: "subtitle.overview",
+      });
     case "channels":
-      return "Manage channels and settings.";
+      return msg("Manage channels and settings.", { id: "subtitle.channels" });
     case "instances":
-      return "Presence beacons from connected clients and nodes.";
+      return msg("Presence beacons from connected clients and nodes.", {
+        id: "subtitle.instances",
+      });
     case "sessions":
-      return "Inspect active sessions and adjust per-session defaults.";
+      return msg("Inspect active sessions and adjust per-session defaults.", {
+        id: "subtitle.sessions",
+      });
     case "usage":
-      return "";
+      return msg("Token, cost, and activity analytics across sessions.", {
+        id: "subtitle.usage",
+      });
     case "cron":
-      return "Schedule wakeups and recurring agent runs.";
+      return msg("Schedule wakeups and recurring agent runs.", { id: "subtitle.cron" });
     case "skills":
-      return "Manage skill availability and API key injection.";
+      return msg("Manage skill availability and API key injection.", {
+        id: "subtitle.skills",
+      });
     case "nodes":
-      return "Paired devices, capabilities, and command exposure.";
+      return msg("Paired devices, capabilities, and command exposure.", {
+        id: "subtitle.nodes",
+      });
     case "chat":
-      return "Direct gateway chat session for quick interventions.";
+      return msg("Direct gateway chat session for quick interventions.", {
+        id: "subtitle.chat",
+      });
     case "config":
-      return "Edit ~/.openclaw/openclaw.json safely.";
+      return msg("Edit ~/.openclaw/openclaw.json safely.", { id: "subtitle.config" });
     case "debug":
-      return "Gateway snapshots, events, and manual RPC calls.";
+      return msg("Gateway snapshots, events, and manual RPC calls.", {
+        id: "subtitle.debug",
+      });
     case "logs":
-      return "Live tail of the gateway file logs.";
+      return msg("Live tail of the gateway file logs.", { id: "subtitle.logs" });
     default:
       return "";
   }

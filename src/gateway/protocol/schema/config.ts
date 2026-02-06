@@ -33,7 +33,12 @@ export const ConfigPatchParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ConfigSchemaParamsSchema = Type.Object({}, { additionalProperties: false });
+export const ConfigSchemaParamsSchema = Type.Object(
+  {
+    locale: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
 
 export const UpdateRunParamsSchema = Type.Object(
   {

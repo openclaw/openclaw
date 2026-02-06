@@ -570,6 +570,9 @@ importers:
 
   ui:
     dependencies:
+      '@lit/localize':
+        specifier: ^0.12.2
+        version: 0.12.2
       '@noble/ed25519':
         specifier: 3.0.0
         version: 3.0.0
@@ -1363,6 +1366,9 @@ packages:
 
   '@lit/context@1.1.6':
     resolution: {integrity: sha512-M26qDE6UkQbZA2mQ3RjJ3Gzd8TxP+/0obMgE5HfkfLhEEyYE3Bui4A5XHiGPjy0MUGAyxB3QgVuw2ciS0kHn6A==}
+
+  '@lit/localize@0.12.2':
+    resolution: {integrity: sha512-Qv9kvgJKDq/JVSwXOxuWvQnnOBysHA99ti9im9a4fImCmx+fto+XXcUYQbjZHqiueEEc4V20PcRDPO+1g/6seQ==}
 
   '@lit/reactive-element@2.1.2':
     resolution: {integrity: sha512-pbCDiVMnne1lYUIaYNN5wrwQXDtHaYtg7YEFPeW+hws6U47WeFvISGUWekPGKWOP1ygrs0ef0o1VJMk1exos5A==}
@@ -6702,6 +6708,10 @@ snapshots:
   '@lit/context@1.1.6':
     dependencies:
       '@lit/reactive-element': 2.1.2
+
+  '@lit/localize@0.12.2':
+    dependencies:
+      lit: 3.3.2
 
   '@lit/reactive-element@2.1.2':
     dependencies:

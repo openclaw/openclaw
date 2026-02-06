@@ -1,10 +1,11 @@
+import { msg } from "@lit/localize";
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot } from "../types.ts";
 import type { ChannelKey, ChannelsProps } from "./channels.types.ts";
 
 export function formatDuration(ms?: number | null) {
   if (!ms && ms !== 0) {
-    return "n/a";
+    return msg("n/a", { id: "channels.shared.na" });
   }
   const sec = Math.round(ms / 1000);
   if (sec < 60) {
@@ -50,5 +51,8 @@ export function renderChannelAccountCount(
   if (count < 2) {
     return nothing;
   }
-  return html`<div class="account-count">Accounts (${count})</div>`;
+  return html`<div class="account-count">${msg("Accounts ({count})", {
+    id: "channels.shared.accounts",
+    args: { count },
+  })}</div>`;
 }

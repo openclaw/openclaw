@@ -1227,6 +1227,16 @@ public struct ConfigPatchParams: Codable, Sendable {
 }
 
 public struct ConfigSchemaParams: Codable, Sendable {
+    public let locale: String?
+
+    public init(
+        locale: String?
+    ) {
+        self.locale = locale
+    }
+    private enum CodingKeys: String, CodingKey {
+        case locale
+    }
 }
 
 public struct ConfigSchemaResponse: Codable, Sendable {

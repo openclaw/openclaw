@@ -1,3 +1,4 @@
+import { msg } from "@lit/localize";
 import { html } from "lit";
 import type { ConfigUiHints } from "../types.ts";
 import type { ChannelsProps } from "./channels.types.ts";
@@ -67,7 +68,7 @@ const EXTRA_CHANNEL_FIELDS = ["groupPolicy", "streamMode", "dmPolicy"] as const;
 
 function formatExtraValue(raw: unknown): string {
   if (raw == null) {
-    return "n/a";
+    return msg("n/a", { id: "channels.config.na" });
   }
   if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
     return String(raw);
@@ -75,7 +76,7 @@ function formatExtraValue(raw: unknown): string {
   try {
     return JSON.stringify(raw);
   } catch {
-    return "n/a";
+    return msg("n/a", { id: "channels.config.na" });
   }
 }
 
@@ -108,13 +109,17 @@ export function renderChannelConfigForm(props: ChannelConfigFormProps) {
   const normalized = analysis.schema;
   if (!normalized) {
     return html`
-      <div class="callout danger">Schema unavailable. Use Raw.</div>
+      <div class="callout danger">${msg("Schema unavailable. Use Raw.", {
+        id: "channels.config.schemaUnavailable",
+      })}</div>
     `;
   }
   const node = resolveSchemaNode(normalized, ["channels", props.channelId]);
   if (!node) {
     return html`
-      <div class="callout danger">Channel config schema unavailable.</div>
+      <div class="callout danger">${msg("Channel config schema unavailable.", {
+        id: "channels.config.channelSchemaUnavailable",
+      })}</div>
     `;
   }
   const configValue = props.configValue ?? {};
@@ -144,7 +149,9 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
       ${
         props.configSchemaLoading
           ? html`
-              <div class="muted">Loading config schema…</div>
+              <div class="muted">${msg("Loading config schema…", {
+                id: "channels.config.loadingSchema",
+              })}</div>
             `
           : renderChannelConfigForm({
               channelId,
@@ -161,14 +168,18 @@ export function renderChannelConfigSection(params: { channelId: string; props: C
           ?disabled=${disabled || !props.configFormDirty}
           @click=${() => props.onConfigSave()}
         >
-          ${props.configSaving ? "Saving…" : "Save"}
+          ${
+            props.configSaving
+              ? msg("Saving…", { id: "channels.config.saving" })
+              : msg("Save", { id: "channels.config.save" })
+          }
         </button>
         <button
           class="btn"
           ?disabled=${disabled}
           @click=${() => props.onConfigReload()}
         >
-          Reload
+          ${msg("Reload", { id: "channels.config.reload" })}
         </button>
       </div>
     </div>

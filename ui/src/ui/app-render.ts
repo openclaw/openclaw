@@ -1,3 +1,4 @@
+import { msg } from "@lit/localize";
 import { html, nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";
@@ -127,8 +128,16 @@ export function renderApp(state: AppViewState) {
                 ...state.settings,
                 navCollapsed: !state.settings.navCollapsed,
               })}
-            title="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
-            aria-label="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
+            title=${
+              state.settings.navCollapsed
+                ? msg("Expand sidebar", { id: "topbar.expandSidebar" })
+                : msg("Collapse sidebar", { id: "topbar.collapseSidebar" })
+            }
+            aria-label=${
+              state.settings.navCollapsed
+                ? msg("Expand sidebar", { id: "topbar.expandSidebar" })
+                : msg("Collapse sidebar", { id: "topbar.collapseSidebar" })
+            }
           >
             <span class="nav-collapse-toggle__icon">${icons.menu}</span>
           </button>
@@ -138,16 +147,36 @@ export function renderApp(state: AppViewState) {
             </div>
             <div class="brand-text">
               <div class="brand-title">OPENCLAW</div>
-              <div class="brand-sub">Gateway Dashboard</div>
+              <div class="brand-sub">${msg("Gateway Dashboard", { id: "topbar.gatewayDashboard" })}</div>
             </div>
           </div>
         </div>
         <div class="topbar-status">
           <div class="pill">
             <span class="statusDot ${state.connected ? "ok" : ""}"></span>
-            <span>Health</span>
-            <span class="mono">${state.connected ? "OK" : "Offline"}</span>
+            <span>${msg("Health", { id: "topbar.health" })}</span>
+            <span class="mono">
+              ${
+                state.connected
+                  ? msg("OK", { id: "topbar.ok" })
+                  : msg("Offline", { id: "topbar.offline" })
+              }
+            </span>
           </div>
+          <button
+            class="btn btn--sm"
+            @click=${() => {
+              const nextLocale = state.settings.locale === "zh-CN" ? "en" : "zh-CN";
+              state.applySettings({
+                ...state.settings,
+                locale: nextLocale,
+              });
+            }}
+            title=${msg("Language", { id: "topbar.language" })}
+            aria-label=${msg("Language", { id: "topbar.language" })}
+          >
+            ${msg("Language", { id: "topbar.language" })}: ${state.settings.locale === "zh-CN" ? "中文" : "EN"}
+          </button>
           ${renderThemeToggle(state)}
         </div>
       </header>
@@ -180,7 +209,7 @@ export function renderApp(state: AppViewState) {
         })}
         <div class="nav-group nav-group--links">
           <div class="nav-label nav-label--static">
-            <span class="nav-label__text">Resources</span>
+            <span class="nav-label__text">${msg("Resources", { id: "nav.resources" })}</span>
           </div>
           <div class="nav-group__items">
             <a

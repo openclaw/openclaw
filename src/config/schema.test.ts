@@ -101,4 +101,69 @@ describe("config schema", () => {
     expect(defaultsHint?.help).toContain("last");
     expect(listHint?.help).toContain("bluebubbles");
   });
+
+  it("returns zh-CN labels and localized schema titles", () => {
+    const res = buildConfigSchema({ locale: "zh-CN" });
+    const schema = res.schema as { properties?: Record<string, unknown> };
+    const gateway = schema.properties?.gateway as { title?: string } | undefined;
+    const agents = schema.properties?.agents as { title?: string } | undefined;
+
+    expect(res.uiHints.gateway?.label).toBe("网关");
+    expect(res.uiHints.agents?.label).toBe("代理");
+    expect(gateway?.title).toBe("网关");
+    expect(agents?.title).toBe("代理");
+  });
+
+  it("does not let channel metadata override existing zh labels", () => {
+    const res = buildConfigSchema({
+      locale: "zh-CN",
+      channels: [
+        {
+          id: "slack",
+          label: "Slack English Label",
+          description: "English channel blurb",
+          configSchema: { type: "object" },
+        },
+      ],
+    });
+
+    expect(res.uiHints["channels.slack"]?.label).toBe("Slack");
+  });
+
+  it("auto-generates zh labels for injected plugin/channel schema fields", () => {
+    const res = buildConfigSchema({
+      locale: "zh-CN",
+      plugins: [
+        {
+          id: "demo",
+          name: "Demo Plugin",
+          configSchema: {
+            type: "object",
+            properties: {
+              maxTokens: { type: "number" },
+              timeoutSeconds: { type: "number" },
+            },
+          },
+        },
+      ],
+      channels: [
+        {
+          id: "matrix",
+          label: "Matrix",
+          configSchema: {
+            type: "object",
+            properties: {
+              maxTokens: { type: "number" },
+              timeoutSeconds: { type: "number" },
+            },
+          },
+        },
+      ],
+    });
+
+    expect(res.uiHints["plugins.entries.demo.config.maxTokens"]?.label).toContain("最大");
+    expect(res.uiHints["plugins.entries.demo.config.timeoutSeconds"]?.label).toContain("超时");
+    expect(res.uiHints["channels.matrix.maxTokens"]?.label).toContain("最大");
+    expect(res.uiHints["channels.matrix.timeoutSeconds"]?.label).toContain("超时");
+  });
 });

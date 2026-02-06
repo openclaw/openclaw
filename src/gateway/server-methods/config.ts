@@ -131,7 +131,9 @@ export const configHandlers: GatewayRequestHandlers = {
         debug: () => {},
       },
     });
+    const locale = (params as { locale?: unknown }).locale;
     const schema = buildConfigSchema({
+      locale: typeof locale === "string" ? locale : undefined,
       plugins: pluginRegistry.plugins.map((plugin) => ({
         id: plugin.id,
         name: plugin.name,

@@ -1,3 +1,4 @@
+import { msg } from "@lit/localize";
 import { html, nothing } from "lit";
 import type { SlackStatus } from "../types.ts";
 import type { ChannelsProps } from "./channels.types.ts";
@@ -13,26 +14,28 @@ export function renderSlackCard(params: {
 
   return html`
     <div class="card">
-      <div class="card-title">Slack</div>
-      <div class="card-sub">Socket mode status and channel configuration.</div>
+      <div class="card-title">${msg("Slack", { id: "channels.slack.title" })}</div>
+      <div class="card-sub">${msg("Socket mode status and channel configuration.", {
+        id: "channels.slack.sub",
+      })}</div>
       ${accountCountLabel}
 
       <div class="status-list" style="margin-top: 16px;">
         <div>
-          <span class="label">Configured</span>
-          <span>${slack?.configured ? "Yes" : "No"}</span>
+          <span class="label">${msg("Configured", { id: "channels.slack.configured" })}</span>
+          <span>${slack?.configured ? msg("Yes", { id: "channels.slack.yes" }) : msg("No", { id: "channels.slack.no" })}</span>
         </div>
         <div>
-          <span class="label">Running</span>
-          <span>${slack?.running ? "Yes" : "No"}</span>
+          <span class="label">${msg("Running", { id: "channels.slack.running" })}</span>
+          <span>${slack?.running ? msg("Yes", { id: "channels.slack.yes" }) : msg("No", { id: "channels.slack.no" })}</span>
         </div>
         <div>
-          <span class="label">Last start</span>
-          <span>${slack?.lastStartAt ? formatAgo(slack.lastStartAt) : "n/a"}</span>
+          <span class="label">${msg("Last start", { id: "channels.slack.lastStart" })}</span>
+          <span>${slack?.lastStartAt ? formatAgo(slack.lastStartAt) : msg("n/a", { id: "channels.slack.na" })}</span>
         </div>
         <div>
-          <span class="label">Last probe</span>
-          <span>${slack?.lastProbeAt ? formatAgo(slack.lastProbeAt) : "n/a"}</span>
+          <span class="label">${msg("Last probe", { id: "channels.slack.lastProbe" })}</span>
+          <span>${slack?.lastProbeAt ? formatAgo(slack.lastProbeAt) : msg("n/a", { id: "channels.slack.na" })}</span>
         </div>
       </div>
 
@@ -47,7 +50,7 @@ export function renderSlackCard(params: {
       ${
         slack?.probe
           ? html`<div class="callout" style="margin-top: 12px;">
-            Probe ${slack.probe.ok ? "ok" : "failed"} ·
+            ${msg("Probe", { id: "channels.slack.probe" })} ${slack.probe.ok ? msg("ok", { id: "channels.slack.probeOk" }) : msg("failed", { id: "channels.slack.probeFailed" })} ·
             ${slack.probe.status ?? ""} ${slack.probe.error ?? ""}
           </div>`
           : nothing
@@ -57,7 +60,7 @@ export function renderSlackCard(params: {
 
       <div class="row" style="margin-top: 12px;">
         <button class="btn" @click=${() => props.onRefresh(true)}>
-          Probe
+          ${msg("Probe", { id: "channels.slack.probeButton" })}
         </button>
       </div>
     </div>

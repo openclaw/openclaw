@@ -22,6 +22,7 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
+import { normalizeLocale, setLocale } from "./localize.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -57,6 +58,7 @@ type SettingsHost = {
 };
 
 export function applySettings(host: SettingsHost, next: UiSettings) {
+  const previousLocale = host.settings.locale;
   const normalized = {
     ...next,
     lastActiveSessionKey: next.lastActiveSessionKey?.trim() || next.sessionKey.trim() || "main",
@@ -66,6 +68,9 @@ export function applySettings(host: SettingsHost, next: UiSettings) {
   if (next.theme !== host.theme) {
     host.theme = next.theme;
     applyResolvedTheme(host, resolveTheme(next.theme));
+  }
+  if (normalizeLocale(next.locale) !== normalizeLocale(previousLocale)) {
+    void setLocale(normalizeLocale(next.locale));
   }
   host.applySessionKey = host.settings.lastActiveSessionKey;
 }

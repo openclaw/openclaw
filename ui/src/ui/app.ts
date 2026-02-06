@@ -1,3 +1,4 @@
+import { updateWhenLocaleChanges } from "@lit/localize";
 import { LitElement } from "lit";
 import { customElement, state } from "lit/decorators.js";
 import type { EventLogEntry } from "./app-events.ts";
@@ -78,6 +79,7 @@ import {
 } from "./app-tool-stream.ts";
 import { resolveInjectedAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import { normalizeLocale, setLocale } from "./localize.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 
@@ -105,6 +107,12 @@ function resolveOnboardingMode(): boolean {
 @customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
+
+  constructor() {
+    super();
+    updateWhenLocaleChanges(this);
+    void setLocale(normalizeLocale(this.settings.locale));
+  }
   @state() password = "";
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();

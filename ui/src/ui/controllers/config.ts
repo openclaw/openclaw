@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
+import { getLocale } from "../localize.ts";
 import {
   cloneConfigObject,
   removePathValue,
@@ -59,7 +60,9 @@ export async function loadConfigSchema(state: ConfigState) {
   }
   state.configSchemaLoading = true;
   try {
-    const res = await state.client.request<ConfigSchemaResponse>("config.schema", {});
+    const res = await state.client.request<ConfigSchemaResponse>("config.schema", {
+      locale: getLocale(),
+    });
     applyConfigSchema(state, res);
   } catch (err) {
     state.lastError = String(err);

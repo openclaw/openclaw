@@ -1,3 +1,4 @@
+import { msg } from "@lit/localize";
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { AppViewState } from "./app-view-state.ts";
@@ -130,7 +131,7 @@ export function renderChatControls(state: AppViewState) {
           (state as unknown as OpenClawApp).resetToolStream();
           void refreshChat(state as unknown as Parameters<typeof refreshChat>[0]);
         }}
-        title="Refresh chat data"
+        title=${msg("Refresh chat data", { id: "chat.refresh" })}
       >
         ${refreshIcon}
       </button>
@@ -150,8 +151,10 @@ export function renderChatControls(state: AppViewState) {
         aria-pressed=${showThinking}
         title=${
           disableThinkingToggle
-            ? "Disabled during onboarding"
-            : "Toggle assistant thinking/working output"
+            ? msg("Disabled during onboarding", { id: "chat.disabledOnboarding" })
+            : msg("Toggle assistant thinking/working output", {
+                id: "chat.toggleThinking",
+              })
         }
       >
         ${icons.brain}
@@ -171,8 +174,10 @@ export function renderChatControls(state: AppViewState) {
         aria-pressed=${focusActive}
         title=${
           disableFocusToggle
-            ? "Disabled during onboarding"
-            : "Toggle focus mode (hide sidebar + page header)"
+            ? msg("Disabled during onboarding", { id: "chat.disabledOnboarding" })
+            : msg("Toggle focus mode (hide sidebar + page header)", {
+                id: "chat.toggleFocus",
+              })
         }
       >
         ${focusIcon}

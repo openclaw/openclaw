@@ -1,3 +1,4 @@
+import { msg } from "@lit/localize";
 import { html, nothing } from "lit";
 import type { LogEntry, LogLevel } from "../types.ts";
 
@@ -51,18 +52,25 @@ export function renderLogs(props: LogsProps) {
     }
     return matchesFilter(entry, needle);
   });
-  const exportLabel = needle || levelFiltered ? "filtered" : "visible";
+  const exportLabel =
+    needle || levelFiltered
+      ? msg("filtered", { id: "logs.export.filtered" })
+      : msg("visible", { id: "logs.export.visible" });
 
   return html`
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
-          <div class="card-title">Logs</div>
-          <div class="card-sub">Gateway file logs (JSONL).</div>
+          <div class="card-title">${msg("Logs", { id: "logs.title" })}</div>
+          <div class="card-sub">${msg("Gateway file logs (JSONL).", { id: "logs.subtitle" })}</div>
         </div>
         <div class="row" style="gap: 8px;">
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? "Loading…" : "Refresh"}
+            ${
+              props.loading
+                ? msg("Loading…", { id: "logs.loading" })
+                : msg("Refresh", { id: "logs.refresh" })
+            }
           </button>
           <button
             class="btn"
@@ -73,22 +81,22 @@ export function renderLogs(props: LogsProps) {
                 exportLabel,
               )}
           >
-            Export ${exportLabel}
+            ${msg("Export {label}", { id: "logs.export", args: { label: exportLabel } })}
           </button>
         </div>
       </div>
 
       <div class="filters" style="margin-top: 14px;">
         <label class="field" style="min-width: 220px;">
-          <span>Filter</span>
+          <span>${msg("Filter", { id: "logs.filter" })}</span>
           <input
             .value=${props.filterText}
             @input=${(e: Event) => props.onFilterTextChange((e.target as HTMLInputElement).value)}
-            placeholder="Search logs"
+            placeholder=${msg("Search logs", { id: "logs.searchPlaceholder" })}
           />
         </label>
         <label class="field checkbox">
-          <span>Auto-follow</span>
+          <span>${msg("Auto-follow", { id: "logs.autoFollow" })}</span>
           <input
             type="checkbox"
             .checked=${props.autoFollow}
@@ -116,13 +124,19 @@ export function renderLogs(props: LogsProps) {
 
       ${
         props.file
-          ? html`<div class="muted" style="margin-top: 10px;">File: ${props.file}</div>`
+          ? html`<div class="muted" style="margin-top: 10px;">${msg("File: {file}", {
+              id: "logs.file",
+              args: { file: props.file },
+            })}</div>`
           : nothing
       }
       ${
         props.truncated
           ? html`
-              <div class="callout" style="margin-top: 10px">Log output truncated; showing latest chunk.</div>
+              <div class="callout" style="margin-top: 10px">${msg(
+                "Log output truncated; showing latest chunk.",
+                { id: "logs.truncated" },
+              )}</div>
             `
           : nothing
       }
@@ -136,7 +150,9 @@ export function renderLogs(props: LogsProps) {
         ${
           filtered.length === 0
             ? html`
-                <div class="muted" style="padding: 12px">No log entries.</div>
+                <div class="muted" style="padding: 12px">${msg("No log entries.", {
+                  id: "logs.empty",
+                })}</div>
               `
             : filtered.map(
                 (entry) => html`

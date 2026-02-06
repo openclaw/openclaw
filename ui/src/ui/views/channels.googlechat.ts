@@ -1,3 +1,4 @@
+import { msg } from "@lit/localize";
 import { html, nothing } from "lit";
 import type { GoogleChatStatus } from "../types.ts";
 import type { ChannelsProps } from "./channels.types.ts";
@@ -13,40 +14,42 @@ export function renderGoogleChatCard(params: {
 
   return html`
     <div class="card">
-      <div class="card-title">Google Chat</div>
-      <div class="card-sub">Chat API webhook status and channel configuration.</div>
+      <div class="card-title">${msg("Google Chat", { id: "channels.googlechat.title" })}</div>
+      <div class="card-sub">${msg("Chat API webhook status and channel configuration.", {
+        id: "channels.googlechat.sub",
+      })}</div>
       ${accountCountLabel}
 
       <div class="status-list" style="margin-top: 16px;">
         <div>
-          <span class="label">Configured</span>
-          <span>${googleChat ? (googleChat.configured ? "Yes" : "No") : "n/a"}</span>
+          <span class="label">${msg("Configured", { id: "channels.googlechat.configured" })}</span>
+          <span>${googleChat ? (googleChat.configured ? msg("Yes", { id: "channels.googlechat.yes" }) : msg("No", { id: "channels.googlechat.no" })) : msg("n/a", { id: "channels.googlechat.na" })}</span>
         </div>
         <div>
-          <span class="label">Running</span>
-          <span>${googleChat ? (googleChat.running ? "Yes" : "No") : "n/a"}</span>
+          <span class="label">${msg("Running", { id: "channels.googlechat.running" })}</span>
+          <span>${googleChat ? (googleChat.running ? msg("Yes", { id: "channels.googlechat.yes" }) : msg("No", { id: "channels.googlechat.no" })) : msg("n/a", { id: "channels.googlechat.na" })}</span>
         </div>
         <div>
-          <span class="label">Credential</span>
-          <span>${googleChat?.credentialSource ?? "n/a"}</span>
+          <span class="label">${msg("Credential", { id: "channels.googlechat.credential" })}</span>
+          <span>${googleChat?.credentialSource ?? msg("n/a", { id: "channels.googlechat.na" })}</span>
         </div>
         <div>
-          <span class="label">Audience</span>
+          <span class="label">${msg("Audience", { id: "channels.googlechat.audience" })}</span>
           <span>
             ${
               googleChat?.audienceType
                 ? `${googleChat.audienceType}${googleChat.audience ? ` · ${googleChat.audience}` : ""}`
-                : "n/a"
+                : msg("n/a", { id: "channels.googlechat.na" })
             }
           </span>
         </div>
         <div>
-          <span class="label">Last start</span>
-          <span>${googleChat?.lastStartAt ? formatAgo(googleChat.lastStartAt) : "n/a"}</span>
+          <span class="label">${msg("Last start", { id: "channels.googlechat.lastStart" })}</span>
+          <span>${googleChat?.lastStartAt ? formatAgo(googleChat.lastStartAt) : msg("n/a", { id: "channels.googlechat.na" })}</span>
         </div>
         <div>
-          <span class="label">Last probe</span>
-          <span>${googleChat?.lastProbeAt ? formatAgo(googleChat.lastProbeAt) : "n/a"}</span>
+          <span class="label">${msg("Last probe", { id: "channels.googlechat.lastProbe" })}</span>
+          <span>${googleChat?.lastProbeAt ? formatAgo(googleChat.lastProbeAt) : msg("n/a", { id: "channels.googlechat.na" })}</span>
         </div>
       </div>
 
@@ -61,7 +64,7 @@ export function renderGoogleChatCard(params: {
       ${
         googleChat?.probe
           ? html`<div class="callout" style="margin-top: 12px;">
-            Probe ${googleChat.probe.ok ? "ok" : "failed"} ·
+            ${msg("Probe", { id: "channels.googlechat.probe" })} ${googleChat.probe.ok ? msg("ok", { id: "channels.googlechat.probeOk" }) : msg("failed", { id: "channels.googlechat.probeFailed" })} ·
             ${googleChat.probe.status ?? ""} ${googleChat.probe.error ?? ""}
           </div>`
           : nothing
@@ -71,7 +74,7 @@ export function renderGoogleChatCard(params: {
 
       <div class="row" style="margin-top: 12px;">
         <button class="btn" @click=${() => props.onRefresh(true)}>
-          Probe
+          ${msg("Probe", { id: "channels.googlechat.probeButton" })}
         </button>
       </div>
     </div>

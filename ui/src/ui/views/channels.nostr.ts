@@ -1,3 +1,4 @@
+import { msg } from "@lit/localize";
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
 import type { ChannelsProps } from "./channels.types.ts";
@@ -14,7 +15,7 @@ import {
  */
 function truncatePubkey(pubkey: string | null | undefined): string {
   if (!pubkey) {
-    return "n/a";
+    return msg("n/a", { id: "channels.nostr.na" });
   }
   if (pubkey.length <= 20) {
     return pubkey;
@@ -66,20 +67,20 @@ export function renderNostrCard(params: {
         </div>
         <div class="status-list account-card-status">
           <div>
-            <span class="label">Running</span>
-            <span>${account.running ? "Yes" : "No"}</span>
+            <span class="label">${msg("Running", { id: "channels.nostr.running" })}</span>
+            <span>${account.running ? msg("Yes", { id: "channels.nostr.yes" }) : msg("No", { id: "channels.nostr.no" })}</span>
           </div>
           <div>
-            <span class="label">Configured</span>
-            <span>${account.configured ? "Yes" : "No"}</span>
+            <span class="label">${msg("Configured", { id: "channels.nostr.configured" })}</span>
+            <span>${account.configured ? msg("Yes", { id: "channels.nostr.yes" }) : msg("No", { id: "channels.nostr.no" })}</span>
           </div>
           <div>
-            <span class="label">Public Key</span>
+            <span class="label">${msg("Public Key", { id: "channels.nostr.publicKey" })}</span>
             <span class="monospace" title="${publicKey ?? ""}">${truncatePubkey(publicKey)}</span>
           </div>
           <div>
-            <span class="label">Last inbound</span>
-            <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : "n/a"}</span>
+            <span class="label">${msg("Last inbound", { id: "channels.nostr.lastInbound" })}</span>
+            <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : msg("n/a", { id: "channels.nostr.na" })}</span>
           </div>
           ${
             account.lastError
@@ -123,7 +124,7 @@ export function renderNostrCard(params: {
     return html`
       <div style="margin-top: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 8px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-          <div style="font-weight: 500;">Profile</div>
+          <div style="font-weight: 500;">${msg("Profile", { id: "channels.nostr.profile" })}</div>
           ${
             summaryConfigured
               ? html`
@@ -132,7 +133,7 @@ export function renderNostrCard(params: {
                   @click=${onEditProfile}
                   style="font-size: 12px; padding: 4px 8px;"
                 >
-                  Edit Profile
+                  ${msg("Edit Profile", { id: "channels.nostr.editProfile" })}
                 </button>
               `
               : nothing
@@ -148,7 +149,7 @@ export function renderNostrCard(params: {
                       <div style="margin-bottom: 8px;">
                         <img
                           src=${picture}
-                          alt="Profile picture"
+                          alt=${msg("Profile picture", { id: "channels.nostr.profilePictureAlt" })}
                           style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover; border: 2px solid var(--border-color);"
                           @error=${(e: Event) => {
                             (e.target as HTMLImageElement).style.display = "none";
@@ -158,23 +159,25 @@ export function renderNostrCard(params: {
                     `
                     : nothing
                 }
-                ${name ? html`<div><span class="label">Name</span><span>${name}</span></div>` : nothing}
+                ${name ? html`<div><span class="label">${msg("Name", { id: "channels.nostr.name" })}</span><span>${name}</span></div>` : nothing}
                 ${
                   displayName
-                    ? html`<div><span class="label">Display Name</span><span>${displayName}</span></div>`
+                    ? html`<div><span class="label">${msg("Display Name", { id: "channels.nostr.displayName" })}</span><span>${displayName}</span></div>`
                     : nothing
                 }
                 ${
                   about
-                    ? html`<div><span class="label">About</span><span style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">${about}</span></div>`
+                    ? html`<div><span class="label">${msg("About", { id: "channels.nostr.about" })}</span><span style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">${about}</span></div>`
                     : nothing
                 }
-                ${nip05 ? html`<div><span class="label">NIP-05</span><span>${nip05}</span></div>` : nothing}
+                ${nip05 ? html`<div><span class="label">${msg("NIP-05", { id: "channels.nostr.nip05" })}</span><span>${nip05}</span></div>` : nothing}
               </div>
             `
             : html`
                 <div style="color: var(--text-muted); font-size: 13px">
-                  No profile set. Click "Edit Profile" to add your name, bio, and avatar.
+                  ${msg('No profile set. Click "Edit Profile" to add your name, bio, and avatar.', {
+                    id: "channels.nostr.noProfile",
+                  })}
                 </div>
               `
         }
@@ -184,8 +187,10 @@ export function renderNostrCard(params: {
 
   return html`
     <div class="card">
-      <div class="card-title">Nostr</div>
-      <div class="card-sub">Decentralized DMs via Nostr relays (NIP-04).</div>
+      <div class="card-title">${msg("Nostr", { id: "channels.nostr.title" })}</div>
+      <div class="card-sub">${msg("Decentralized DMs via Nostr relays (NIP-04).", {
+        id: "channels.nostr.sub",
+      })}</div>
       ${accountCountLabel}
 
       ${
@@ -198,22 +203,22 @@ export function renderNostrCard(params: {
           : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
-                <span class="label">Configured</span>
-                <span>${summaryConfigured ? "Yes" : "No"}</span>
+                <span class="label">${msg("Configured", { id: "channels.nostr.configured" })}</span>
+                <span>${summaryConfigured ? msg("Yes", { id: "channels.nostr.yes" }) : msg("No", { id: "channels.nostr.no" })}</span>
               </div>
               <div>
-                <span class="label">Running</span>
-                <span>${summaryRunning ? "Yes" : "No"}</span>
+                <span class="label">${msg("Running", { id: "channels.nostr.running" })}</span>
+                <span>${summaryRunning ? msg("Yes", { id: "channels.nostr.yes" }) : msg("No", { id: "channels.nostr.no" })}</span>
               </div>
               <div>
-                <span class="label">Public Key</span>
+                <span class="label">${msg("Public Key", { id: "channels.nostr.publicKey" })}</span>
                 <span class="monospace" title="${summaryPublicKey ?? ""}"
                   >${truncatePubkey(summaryPublicKey)}</span
                 >
               </div>
               <div>
-                <span class="label">Last start</span>
-                <span>${summaryLastStartAt ? formatAgo(summaryLastStartAt) : "n/a"}</span>
+                <span class="label">${msg("Last start", { id: "channels.nostr.lastStart" })}</span>
+                <span>${summaryLastStartAt ? formatAgo(summaryLastStartAt) : msg("n/a", { id: "channels.nostr.na" })}</span>
               </div>
             </div>
           `
@@ -230,7 +235,9 @@ export function renderNostrCard(params: {
       ${renderChannelConfigSection({ channelId: "nostr", props })}
 
       <div class="row" style="margin-top: 12px;">
-        <button class="btn" @click=${() => props.onRefresh(false)}>Refresh</button>
+        <button class="btn" @click=${() => props.onRefresh(false)}>${msg("Refresh", {
+          id: "channels.nostr.refresh",
+        })}</button>
       </div>
     </div>
   `;

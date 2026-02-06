@@ -1,3 +1,4 @@
+import { msg } from "@lit/localize";
 import { html, nothing } from "lit";
 import type { ChannelAccountSnapshot, TelegramStatus } from "../types.ts";
 import type { ChannelsProps } from "./channels.types.ts";
@@ -27,16 +28,16 @@ export function renderTelegramCard(params: {
         </div>
         <div class="status-list account-card-status">
           <div>
-            <span class="label">Running</span>
-            <span>${account.running ? "Yes" : "No"}</span>
+            <span class="label">${msg("Running", { id: "channels.telegram.account.running" })}</span>
+            <span>${account.running ? msg("Yes", { id: "channels.telegram.account.yes" }) : msg("No", { id: "channels.telegram.account.no" })}</span>
           </div>
           <div>
-            <span class="label">Configured</span>
-            <span>${account.configured ? "Yes" : "No"}</span>
+            <span class="label">${msg("Configured", { id: "channels.telegram.account.configured" })}</span>
+            <span>${account.configured ? msg("Yes", { id: "channels.telegram.account.yes" }) : msg("No", { id: "channels.telegram.account.no" })}</span>
           </div>
           <div>
-            <span class="label">Last inbound</span>
-            <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : "n/a"}</span>
+            <span class="label">${msg("Last inbound", { id: "channels.telegram.account.lastInbound" })}</span>
+            <span>${account.lastInboundAt ? formatAgo(account.lastInboundAt) : msg("n/a", { id: "channels.telegram.account.na" })}</span>
           </div>
           ${
             account.lastError
@@ -54,8 +55,10 @@ export function renderTelegramCard(params: {
 
   return html`
     <div class="card">
-      <div class="card-title">Telegram</div>
-      <div class="card-sub">Bot status and channel configuration.</div>
+      <div class="card-title">${msg("Telegram", { id: "channels.telegram.title" })}</div>
+      <div class="card-sub">${msg("Bot status and channel configuration.", {
+        id: "channels.telegram.sub",
+      })}</div>
       ${accountCountLabel}
 
       ${
@@ -68,24 +71,24 @@ export function renderTelegramCard(params: {
           : html`
             <div class="status-list" style="margin-top: 16px;">
               <div>
-                <span class="label">Configured</span>
-                <span>${telegram?.configured ? "Yes" : "No"}</span>
+                <span class="label">${msg("Configured", { id: "channels.telegram.configured" })}</span>
+                <span>${telegram?.configured ? msg("Yes", { id: "channels.telegram.yes" }) : msg("No", { id: "channels.telegram.no" })}</span>
               </div>
               <div>
-                <span class="label">Running</span>
-                <span>${telegram?.running ? "Yes" : "No"}</span>
+                <span class="label">${msg("Running", { id: "channels.telegram.running" })}</span>
+                <span>${telegram?.running ? msg("Yes", { id: "channels.telegram.yes" }) : msg("No", { id: "channels.telegram.no" })}</span>
               </div>
               <div>
-                <span class="label">Mode</span>
-                <span>${telegram?.mode ?? "n/a"}</span>
+                <span class="label">${msg("Mode", { id: "channels.telegram.mode" })}</span>
+                <span>${telegram?.mode ?? msg("n/a", { id: "channels.telegram.na" })}</span>
               </div>
               <div>
-                <span class="label">Last start</span>
-                <span>${telegram?.lastStartAt ? formatAgo(telegram.lastStartAt) : "n/a"}</span>
+                <span class="label">${msg("Last start", { id: "channels.telegram.lastStart" })}</span>
+                <span>${telegram?.lastStartAt ? formatAgo(telegram.lastStartAt) : msg("n/a", { id: "channels.telegram.na" })}</span>
               </div>
               <div>
-                <span class="label">Last probe</span>
-                <span>${telegram?.lastProbeAt ? formatAgo(telegram.lastProbeAt) : "n/a"}</span>
+                <span class="label">${msg("Last probe", { id: "channels.telegram.lastProbe" })}</span>
+                <span>${telegram?.lastProbeAt ? formatAgo(telegram.lastProbeAt) : msg("n/a", { id: "channels.telegram.na" })}</span>
               </div>
             </div>
           `
@@ -102,7 +105,7 @@ export function renderTelegramCard(params: {
       ${
         telegram?.probe
           ? html`<div class="callout" style="margin-top: 12px;">
-            Probe ${telegram.probe.ok ? "ok" : "failed"} ·
+            ${msg("Probe", { id: "channels.telegram.probe" })} ${telegram.probe.ok ? msg("ok", { id: "channels.telegram.probeOk" }) : msg("failed", { id: "channels.telegram.probeFailed" })} ·
             ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
           </div>`
           : nothing
@@ -112,7 +115,7 @@ export function renderTelegramCard(params: {
 
       <div class="row" style="margin-top: 12px;">
         <button class="btn" @click=${() => props.onRefresh(true)}>
-          Probe
+          ${msg("Probe", { id: "channels.telegram.probeButton" })}
         </button>
       </div>
     </div>
