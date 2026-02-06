@@ -110,11 +110,9 @@ Details: [Gateway protocol](/gateway/protocol), [Pairing](/start/pairing),
 
 - Preferred: Tailscale or VPN.
 - Alternative: SSH tunnel
-
   ```bash
   ssh -N -L 18789:127.0.0.1:18789 user@host
   ```
-
 - The same handshake + auth token apply over the tunnel.
 - TLS + optional pinning can be enabled for WS in remote setups.
 

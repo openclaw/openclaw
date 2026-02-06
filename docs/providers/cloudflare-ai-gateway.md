@@ -25,7 +25,7 @@ For Anthropic models, use your Anthropic API key.
 openclaw onboard --auth-choice cloudflare-ai-gateway-api-key
 ```
 
-1. Set a default model:
+2. Set a default model:
 
 ```json5
 {
