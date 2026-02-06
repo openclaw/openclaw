@@ -281,6 +281,10 @@
   opacity: 0.85;
 }
 
+.chat-compose--loop:focus-within {
+  opacity: 1;
+}
+
 .chat-compose--loop .chat-compose__field > span {
   display: inline;
   font-size: 11px;
@@ -289,9 +293,25 @@
   margin-bottom: 2px;
 }
 
-.chat-compose--loop textarea {
+.chat-compose--loop .chat-compose__field textarea {
   font-size: 13px;
-  max-height: 120px;
+  max-height: 80px;
+  transition: max-height 0.2s ease;
+}
+
+.chat-compose--loop .chat-compose__field textarea:focus {
+  max-height: 300px;
+}
+
+/* Collapse main compose when loop textarea is focused */
+.chat-compose--loop:focus-within + .chat-compose .chat-compose__field textarea {
+  max-height: 48px;
+  transition: max-height 0.2s ease;
+}
+
+/* Expand main compose on its own focus */
+.chat-compose:not(.chat-compose--loop) .chat-compose__field textarea:focus {
+  max-height: 300px;
 }
 
 .chat-compose__field {
