@@ -62,6 +62,25 @@ Disable with:
 - Automation permission when sending.
 - `channels.imessage.cliPath` can point to any command that proxies stdin/stdout (for example, a wrapper script that SSHes to another Mac and runs `imsg rpc`).
 
+## Troubleshooting: macOS Privacy & Security (TCC)
+
+If sending/receiving fails (for example, `imsg rpc` exits non-zero, or the gateway appears to hang), this is almost always a macOS permission prompt that was never approved.
+
+Checklist:
+
+- **Full Disk Access**: allow access for the process running OpenClaw (and any shell/SSH wrapper that executes `imsg`). This is required to read the Messages database (`chat.db`).
+- **Automation → Messages**: allow the process running OpenClaw (and/or your terminal) to control **Messages.app** for outbound sends.
+
+Tip: If OpenClaw is running headless (LaunchAgent/systemd/SSH) the macOS prompt can be easy to miss. Run a one-time interactive command in a GUI terminal to force the prompt, then retry:
+
+```bash
+imsg chats --limit 1
+# or
+imsg send <handle> "test"
+```
+
+Related: if your workflow needs the agent to read local files from **Desktop/Documents/Downloads**, macOS may also gate those folders via TCC. If file reads/listings hang, grant the same process access (or move the file into the OpenClaw workspace).
+
 ## Setup (fast path)
 
 1. Ensure Messages is signed in on this Mac.
