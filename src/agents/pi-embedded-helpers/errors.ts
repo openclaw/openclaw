@@ -461,6 +461,10 @@ export function formatAssistantErrorText(
     return `LLM request rejected: ${invalidRequest[1]}`;
   }
 
+  if (isRateLimitErrorMessage(raw)) {
+    return "⚠️ API rate limit reached. Your account may need more credits or you should try again later.";
+  }
+
   if (isOverloadedErrorMessage(raw)) {
     return "The AI service is temporarily overloaded. Please try again in a moment.";
   }
