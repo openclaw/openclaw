@@ -148,7 +148,7 @@ If no external access request is detected, respond with:
 
 function createGeminiAnalyzer(config: ConductorAnalyzerConfig): ConductorAnalyzer {
   const apiKey = config.apiKey ?? process.env.GEMINI_API_KEY ?? "";
-  const model = config.model ?? "gemini-2.0-flash";
+  const model = config.model ?? "gemini-2.5-pro";
 
   if (!apiKey) {
     // Fall back to regex if no API key
