@@ -420,6 +420,7 @@ export async function compactEmbeddedPiSessionDirect(
           sessionManager,
           sessionId: params.sessionId,
           policy: transcriptPolicy,
+          thinkingEnabled: params.thinkLevel !== "off",
         });
         const validatedGemini = transcriptPolicy.validateGeminiTurns
           ? validateGeminiTurns(prior)

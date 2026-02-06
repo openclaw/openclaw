@@ -60,6 +60,87 @@ function hasFollowingNonThinkingBlock(
 }
 
 /**
+ * Check if an assistant message contains tool calls but no thinking block.
+ */
+function hasToolCallWithoutThinking(
+  content: Extract<AgentMessage, { role: "assistant" }>["content"],
+): boolean {
+  let hasToolCall = false;
+  let hasThinking = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const type = (block as { type?: unknown }).type;
+    if (type === "toolCall") {
+      hasToolCall = true;
+    }
+    if (type === "thinking") {
+      hasThinking = true;
+    }
+  }
+  return hasToolCall && !hasThinking;
+}
+
+/**
+ * Check if any assistant message in the history has tool calls without thinking blocks.
+ * This is used to detect incompatibility when switching to a reasoning-enabled model.
+ */
+export function hasHistoryToolCallWithoutThinking(messages: AgentMessage[]): boolean {
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    if ((msg as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+    if (!Array.isArray(assistantMsg.content)) {
+      continue;
+    }
+    if (hasToolCallWithoutThinking(assistantMsg.content)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Add empty thinking blocks to assistant messages that have tool calls but no thinking.
+ * This ensures compatibility when switching to a reasoning-enabled model.
+ *
+ * Fixes: "400 thinking is enabled but reasoning_content is missing in assistant tool call message"
+ */
+export function addEmptyThinkingToToolCallMessages(messages: AgentMessage[]): AgentMessage[] {
+  return messages.map((msg) => {
+    if (!msg || typeof msg !== "object") {
+      return msg;
+    }
+    if ((msg as { role?: unknown }).role !== "assistant") {
+      return msg;
+    }
+    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+    if (!Array.isArray(assistantMsg.content)) {
+      return msg;
+    }
+    if (!hasToolCallWithoutThinking(assistantMsg.content)) {
+      return msg;
+    }
+
+    // Prepend an empty thinking block to satisfy API requirements
+    type AssistantContentBlock = (typeof assistantMsg.content)[number];
+    const emptyThinking = {
+      type: "thinking" as const,
+      thinking: "",
+    } as AssistantContentBlock;
+    return {
+      ...assistantMsg,
+      content: [emptyThinking, ...assistantMsg.content],
+    } as AgentMessage;
+  });
+}
+
+/**
  * OpenAI Responses API can reject transcripts that contain a standalone `reasoning` item id
  * without the required following item.
  *
