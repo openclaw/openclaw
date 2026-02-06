@@ -220,7 +220,7 @@ export function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  if (ctx.params.onToolResult && ctx.shouldEmitToolOutput()) {
+  if (ctx.params.onToolResult && ctx.shouldEmitToolOutput() && !isToolError) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
