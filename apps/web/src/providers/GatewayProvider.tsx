@@ -16,6 +16,8 @@ import {
   type GatewayHelloOk,
   type GatewayClientConfig,
 } from "@/lib/api";
+import type { GatewaySnapshot } from "@/lib/api/gateway-snapshot";
+import { useGatewaySnapshotStore } from "@/stores/useGatewaySnapshotStore";
 
 export interface GatewayContextValue {
   /** The gateway client instance */
@@ -59,13 +61,22 @@ export function GatewayProvider({
   const [hello, setHello] = React.useState<GatewayHelloOk | null>(null);
   const eventHandlersRef = React.useRef<Set<(event: GatewayEvent) => void>>(new Set());
 
+  const applyHelloSnapshot = React.useCallback((nextHello: GatewayHelloOk) => {
+    const snapshot = nextHello.snapshot as GatewaySnapshot | undefined;
+    if (!snapshot) {return;}
+    useGatewaySnapshotStore.getState().applySnapshot(snapshot);
+  }, []);
+
   // Create client with config
   const client = React.useMemo(() => {
     const config: GatewayClientConfig = {
       url,
       token,
       password,
-      onHello: setHello,
+      onHello: (nextHello) => {
+        setHello(nextHello);
+        applyHelloSnapshot(nextHello);
+      },
       onEvent: (event) => {
         for (const handler of eventHandlersRef.current) {
           try {

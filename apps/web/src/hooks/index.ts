@@ -31,6 +31,10 @@ export {
   type UseGatewayStreamHandlerOptions,
 } from "./useGatewayStreamHandler";
 export {
+  useGatewayEventSync,
+  type UseGatewayEventSyncOptions,
+} from "./useGatewayEventSync";
+export {
   useFieldValidation,
   useMultiFieldValidation,
   createFieldValidator,

@@ -32,3 +32,11 @@ export type {
   ToolsetsActions,
   ToolsetsStore,
 } from "./useToolsetsStore";
+
+// Gateway Snapshot Store
+export { useGatewaySnapshotStore } from "./useGatewaySnapshotStore";
+export type {
+  GatewaySnapshotState,
+  GatewaySnapshotActions,
+  GatewaySnapshotStore,
+} from "./useGatewaySnapshotStore";

@@ -6,7 +6,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { OnboardingGuard } from "@/components/OnboardingGuard";
 import { UnlockGuard } from "@/features/security/components/unlock/UnlockGuard";
 import { GatewayAuthGuard } from "@/components/composed/GatewayAuthGuard";
-import { useGatewayStreamHandler } from "@/hooks";
+import { useGatewayEventSync, useGatewayStreamHandler } from "@/hooks";
 import { useUIStore } from "@/stores/useUIStore";
 
 export const Route = createRootRoute({
@@ -31,6 +31,7 @@ function RootLayout() {
 
   // Enable gateway stream handler to process streaming events
   useGatewayStreamHandler({ enabled: gatewayEnabled });
+  useGatewayEventSync({ enabled: gatewayEnabled });
 
   return (
     <ThemeProvider>
