@@ -23,6 +23,7 @@ const ZulipAccountSchemaBase = z
     defaultTopic: z.string().optional(),
     reactions: ReactionSchema.optional(),
     textChunkLimit: z.number().int().positive().optional(),
+    mediaMaxMb: z.number().int().positive().optional(),
   })
   .strict();
 

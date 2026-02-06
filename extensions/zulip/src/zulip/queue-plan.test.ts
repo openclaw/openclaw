@@ -9,6 +9,6 @@ describe("zulip queue plan", () => {
   });
 
   it("builds a channel narrow", () => {
-    expect(buildZulipRegisterNarrow("marcel-ai")).toBe('[["channel","marcel-ai"]]');
+    expect(buildZulipRegisterNarrow("marcel-ai")).toBe('[["stream","marcel-ai"]]');
   });
 });

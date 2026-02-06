@@ -9,7 +9,7 @@ title: "Zulip"
 # Zulip (plugin)
 
 Status: supported via plugin (bot email + API key + event queue). Streams/topics are supported.
-Private messages and attachments are not included in the first version.
+Private messages are not included in the first version. File uploads are supported via Zulip `user_uploads`.
 
 ## Plugin required
 
@@ -101,6 +101,20 @@ You can customize:
 
 Note: emoji availability is server-specific. Use emoji names from your Zulip server.
 
+To leave the `onStart` reaction (for example, keep `eyes` on the triggering message), set:
+
+```json5
+{
+  channels: {
+    zulip: {
+      reactions: {
+        clearOnFinish: false,
+      },
+    },
+  },
+}
+```
+
 ## Sessions (topics → sessions)
 
 Zulip topics map to OpenClaw sessions:
@@ -109,6 +123,37 @@ Zulip topics map to OpenClaw sessions:
 - Different topic → different session
 
 This keeps conversations separated per topic.
+
+## Creating new topics
+
+Zulip "creates" topics automatically when a message is sent with a new topic name.
+
+To let the agent intentionally switch topics, it can prefix a reply with:
+
+```text
+[[zulip_topic: <topic>]]
+```
+
+OpenClaw strips this directive before posting and sends the reply into the requested topic.
+
+## Media (uploads)
+
+Inbound: when a message contains `user_uploads` links, OpenClaw downloads up to `mediaMaxMb` and attaches the files to the agent context.
+
+Outbound: OpenClaw can upload local files (or remote URLs) to Zulip and post the resulting link into the stream/topic.
+
+Optional size limit:
+
+```json5
+{
+  channels: {
+    zulip: {
+      // Default is 5MB.
+      mediaMaxMb: 5,
+    },
+  },
+}
+```
 
 ## Targets for outbound delivery
 
@@ -122,6 +167,7 @@ Examples:
 ```bash
 openclaw message send --channel zulip --target "stream:marcel-ai" --message "hello"
 openclaw message send --channel zulip --target "stream:marcel-ai#deploy-notes" --message "ship it"
+openclaw message send --channel zulip --target "stream:marcel-ai" --message "screenshot" --media ./screenshot.png
 ```
 
 ## Troubleshooting

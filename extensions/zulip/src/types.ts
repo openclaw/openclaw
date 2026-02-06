@@ -40,4 +40,7 @@ export type ZulipAccountConfig = {
 
   /** Maximum chars before chunking. */
   textChunkLimit?: number;
+
+  /** Maximum inbound/outbound media size in MB (default: 5MB). */
+  mediaMaxMb?: number;
 };

@@ -19,7 +19,9 @@ import {
 } from "./zulip/accounts.js";
 import { monitorZulipProvider } from "./zulip/monitor.js";
 import { normalizeStreamName, normalizeTopic } from "./zulip/normalize.js";
+import { sendZulipStreamMessage } from "./zulip/send.js";
 import { parseZulipTarget } from "./zulip/targets.js";
+import { resolveOutboundMedia, uploadZulipFile } from "./zulip/uploads.js";
 
 const meta = {
   id: "zulip",
@@ -61,7 +63,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
     chatTypes: ["channel", "thread"],
     threads: true,
     reactions: true,
-    media: false,
+    media: true,
     nativeCommands: true,
   },
   groups: {
@@ -192,8 +194,71 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
       });
       return { channel: "zulip", messageId: String(result.id ?? "unknown") };
     },
-    sendMedia: async () => {
-      throw new Error("Zulip channel does not support media yet.");
+    sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) => {
+      // Note: Zulip "attachments" are links to uploaded files. We upload via /user_uploads
+      // then post the resulting link into the stream/topic.
+      if (!mediaUrl?.trim()) {
+        throw new Error("Zulip media delivery requires mediaUrl.");
+      }
+      const account = resolveZulipAccount({ cfg, accountId });
+      const parsed = parseZulipTarget(to);
+      if (!parsed) {
+        throw new Error(`Invalid Zulip target: ${to}`);
+      }
+      const stream = normalizeStreamName(parsed.stream);
+      const topic = normalizeTopic(parsed.topic) || account.defaultTopic;
+      if (!stream) {
+        throw new Error("Missing Zulip stream name");
+      }
+      const auth = {
+        baseUrl: account.baseUrl ?? "",
+        email: account.email ?? "",
+        apiKey: account.apiKey ?? "",
+      };
+
+      const resolved = await resolveOutboundMedia({
+        cfg,
+        accountId: account.accountId,
+        mediaUrl,
+      });
+      const uploadedUrl = await uploadZulipFile({
+        auth,
+        buffer: resolved.buffer,
+        contentType: resolved.contentType,
+        filename: resolved.filename ?? "attachment",
+      });
+
+      const caption = (text ?? "").trim();
+      if (caption.length > account.textChunkLimit) {
+        const chunks = getZulipRuntime().channel.text.chunkMarkdownText(
+          caption,
+          account.textChunkLimit,
+        );
+        let lastId: string | undefined;
+        for (const chunk of chunks.length > 0 ? chunks : [caption]) {
+          if (!chunk) {
+            continue;
+          }
+          const res = await sendZulipStreamMessage({ auth, stream, topic, content: chunk });
+          if (res.id != null) {
+            lastId = String(res.id);
+          }
+        }
+        const mediaRes = await sendZulipStreamMessage({
+          auth,
+          stream,
+          topic,
+          content: uploadedUrl,
+        });
+        if (mediaRes.id != null) {
+          lastId = String(mediaRes.id);
+        }
+        return { channel: "zulip", messageId: lastId ?? "unknown" };
+      } else {
+        const content = caption ? `${caption}\n\n${uploadedUrl}` : uploadedUrl;
+        const res = await sendZulipStreamMessage({ auth, stream, topic, content });
+        return { channel: "zulip", messageId: String(res.id ?? "unknown") };
+      }
     },
   },
   status: {

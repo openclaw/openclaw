@@ -10,6 +10,7 @@ import { normalizeStreamName, normalizeTopic } from "./normalize.js";
 import { buildZulipQueuePlan, buildZulipRegisterNarrow } from "./queue-plan.js";
 import { addZulipReaction, removeZulipReaction } from "./reactions.js";
 import { sendZulipStreamMessage } from "./send.js";
+import { downloadZulipUploads, resolveOutboundMedia, uploadZulipFile } from "./uploads.js";
 
 export type MonitorZulipOptions = {
   accountId?: string;
@@ -133,6 +134,24 @@ function buildTopicKey(topic: string): string {
   return `${encoded.slice(0, 64)}~${digest}`;
 }
 
+function extractZulipTopicDirective(text: string): { topic?: string; text: string } {
+  const raw = text ?? "";
+  // Allow an agent to create/switch topics by prefixing a reply with:
+  // [[zulip_topic: <topic>]]
+  const match = /^\s*\[\[zulip_topic:\s*([^\]]+)\]\]\s*\n?/i.exec(raw);
+  if (!match) {
+    return { text: raw };
+  }
+  const topic = normalizeTopic(match[1]) || undefined;
+  const nextText = raw.slice(match[0].length).trimStart();
+  if (!topic) {
+    return { text: nextText };
+  }
+  // Keep topics reasonably short (UI-friendly).
+  const truncated = topic.length > 60 ? topic.slice(0, 60).trim() : topic;
+  return { topic: truncated || topic, text: nextText };
+}
+
 async function fetchZulipMe(auth: ZulipAuth, abortSignal?: AbortSignal): Promise<ZulipMeResponse> {
   return await zulipRequest<ZulipMeResponse>({
     auth,
@@ -165,7 +184,7 @@ async function registerQueue(params: {
   }
   core.logging
     .getChildLogger({ channel: "zulip" })
-    .info(`[zulip] registered queue ${res.queue_id} (narrow=channel:${params.stream})`);
+    .info(`[zulip] registered queue ${res.queue_id} (narrow=stream:${params.stream})`);
   return { queueId: res.queue_id, lastEventId: res.last_event_id };
 }
 
@@ -250,25 +269,74 @@ async function deliverReply(params: {
   stream: string;
   topic: string;
   payload: ReplyPayload;
+  cfg: OpenClawConfig;
   abortSignal?: AbortSignal;
 }) {
   const core = getZulipRuntime();
-  const text = params.payload.text ?? "";
-  if (!text.trim()) {
+  const topicDirective = extractZulipTopicDirective(params.payload.text ?? "");
+  const topic = topicDirective.topic ?? params.topic;
+  const text = topicDirective.text;
+  const mediaUrls = (params.payload.mediaUrls ?? []).filter(Boolean);
+  const mediaUrl = params.payload.mediaUrl?.trim();
+  if (mediaUrl) {
+    mediaUrls.unshift(mediaUrl);
+  }
+
+  const sendTextChunks = async (value: string) => {
+    const chunks = core.channel.text.chunkMarkdownText(value, params.account.textChunkLimit);
+    for (const chunk of chunks.length > 0 ? chunks : [value]) {
+      if (!chunk) {
+        continue;
+      }
+      await sendZulipStreamMessage({
+        auth: params.auth,
+        stream: params.stream,
+        topic,
+        content: chunk,
+        abortSignal: params.abortSignal,
+      });
+    }
+  };
+
+  const trimmedText = text.trim();
+  if (!trimmedText && mediaUrls.length === 0) {
     return;
   }
-  const chunks = core.channel.text.chunkMarkdownText(text, params.account.textChunkLimit);
-  for (const chunk of chunks.length > 0 ? chunks : [text]) {
-    if (!chunk) {
-      continue;
-    }
+  if (mediaUrls.length === 0) {
+    await sendTextChunks(text);
+    return;
+  }
+
+  // Match core outbound behavior: treat text as a caption for the first media item.
+  // If the caption is very long, send it as text chunks first to avoid exceeding limits.
+  let caption = trimmedText;
+  if (caption.length > params.account.textChunkLimit) {
+    await sendTextChunks(text);
+    caption = "";
+  }
+
+  for (const source of mediaUrls) {
+    const resolved = await resolveOutboundMedia({
+      cfg: params.cfg,
+      accountId: params.account.accountId,
+      mediaUrl: source,
+    });
+    const uploadedUrl = await uploadZulipFile({
+      auth: params.auth,
+      buffer: resolved.buffer,
+      contentType: resolved.contentType,
+      filename: resolved.filename ?? "attachment",
+      abortSignal: params.abortSignal,
+    });
+    const content = caption ? `${caption}\n\n${uploadedUrl}` : uploadedUrl;
     await sendZulipStreamMessage({
       auth: params.auth,
       stream: params.stream,
-      topic: params.topic,
-      content: chunk,
+      topic,
+      content,
       abortSignal: params.abortSignal,
     });
+    caption = "";
   }
 }
 
@@ -354,6 +422,17 @@ export async function monitorZulipProvider(
         });
       }
 
+      const inboundUploads = await downloadZulipUploads({
+        cfg,
+        accountId: account.accountId,
+        auth,
+        content,
+        abortSignal,
+      });
+      const mediaPaths = inboundUploads.map((entry) => entry.path);
+      const mediaUrls = inboundUploads.map((entry) => entry.url);
+      const mediaTypes = inboundUploads.map((entry) => entry.contentType ?? "");
+
       const route = core.channel.routing.resolveAgentRoute({
         cfg,
         channel: "zulip",
@@ -399,7 +478,7 @@ export async function monitorZulipProvider(
         GroupSubject: stream,
         GroupChannel: `#${stream}`,
         GroupSystemPrompt: account.alwaysReply
-          ? "Always reply to every message in this Zulip stream/topic. If a full response isn't needed, acknowledge briefly in 1 short sentence."
+          ? "Always reply to every message in this Zulip stream/topic. If a full response isn't needed, acknowledge briefly in 1 short sentence. To start a new topic, prefix your reply with: [[zulip_topic: <topic>]]"
           : undefined,
         Provider: "zulip" as const,
         Surface: "zulip" as const,
@@ -410,6 +489,12 @@ export async function monitorZulipProvider(
         OriginatingChannel: "zulip" as const,
         OriginatingTo: to,
         Timestamp: typeof msg.timestamp === "number" ? msg.timestamp * 1000 : undefined,
+        MediaPath: mediaPaths[0],
+        MediaUrl: mediaUrls[0],
+        MediaType: mediaTypes[0],
+        MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+        MediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+        MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
         CommandAuthorized: true,
       });
 
@@ -431,6 +516,7 @@ export async function monitorZulipProvider(
               stream,
               topic,
               payload,
+              cfg,
               abortSignal,
             });
             opts.statusSink?.({ lastOutboundAt: Date.now() });
