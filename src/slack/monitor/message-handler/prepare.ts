@@ -181,6 +181,7 @@ export async function prepareSlackMessage(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
+<<<<<<< HEAD
   // Keep channel/group sessions thread-scoped to avoid cross-thread context bleed.
   // For DMs, preserve existing auto-thread behavior when replyToMode="all".
   const autoThreadId =
