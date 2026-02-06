@@ -1119,6 +1119,35 @@ public struct SessionsCompactParams: Codable, Sendable {
     }
 }
 
+public struct SessionsUsageParams: Codable, Sendable {
+    public let key: String?
+    public let startdate: String?
+    public let enddate: String?
+    public let limit: Int?
+    public let includecontextweight: Bool?
+
+    public init(
+        key: String?,
+        startdate: String?,
+        enddate: String?,
+        limit: Int?,
+        includecontextweight: Bool?
+    ) {
+        self.key = key
+        self.startdate = startdate
+        self.enddate = enddate
+        self.limit = limit
+        self.includecontextweight = includecontextweight
+    }
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case startdate = "startDate"
+        case enddate = "endDate"
+        case limit
+        case includecontextweight = "includeContextWeight"
+    }
+}
+
 public struct ConfigGetParams: Codable, Sendable {
 }
 

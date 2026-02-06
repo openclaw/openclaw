@@ -1,18 +1,17 @@
 import { html, nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
+import type { UsageState } from "./controllers/usage.ts";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
-import { ChatHost, refreshChatAvatar } from "./app-chat.ts";
+import { refreshChatAvatar } from "./app-chat.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
-import { OpenClawApp } from "./app.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
-import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { loadChatHistory } from "./controllers/chat.ts";
 import {
   applyConfig,
-  ConfigState,
   loadConfig,
   runUpdate,
   saveConfig,
@@ -40,7 +39,7 @@ import {
   saveExecApprovals,
   updateExecApprovalsFormValue,
 } from "./controllers/exec-approvals.ts";
-import { loadLogs, LogsState } from "./controllers/logs.ts";
+import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { deleteSession, loadSessions, patchSession } from "./controllers/sessions.ts";
@@ -51,9 +50,18 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-import { ConfigUiHints } from "./types.ts";
+
+// Module-scope debounce for usage date changes (avoids type-unsafe hacks on state object)
+let usageDateDebounceTimeout: number | null = null;
+const debouncedLoadUsage = (state: UsageState) => {
+  if (usageDateDebounceTimeout) {
+    clearTimeout(usageDateDebounceTimeout);
+  }
+  usageDateDebounceTimeout = window.setTimeout(() => void loadUsage(state), 400);
+};
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -68,6 +76,7 @@ import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
+import { renderUsage } from "./views/usage.ts";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
@@ -98,36 +107,14 @@ export function renderApp(state: AppViewState) {
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
   const chatAvatarUrl = state.chatAvatarUrl ?? assistantAvatarUrl ?? null;
-  const logoBase = normalizeBasePath(state.basePath);
-  const logoHref = logoBase ? `${logoBase}/favicon.svg` : "/favicon.svg";
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
+  const basePath = normalizeBasePath(state.basePath ?? "");
   const resolvedAgentId =
     state.agentsSelectedId ??
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
-  const ensureAgentListEntry = (agentId: string) => {
-    const snapshot = (state.configForm ??
-      (state.configSnapshot?.config as Record<string, unknown> | null)) as {
-      agents?: { list?: unknown[] };
-    } | null;
-    const listRaw = snapshot?.agents?.list;
-    const list = Array.isArray(listRaw) ? listRaw : [];
-    let index = list.findIndex(
-      (entry) =>
-        entry &&
-        typeof entry === "object" &&
-        "id" in entry &&
-        (entry as { id?: string }).id === agentId,
-    );
-    if (index < 0) {
-      const nextList = [...list, { id: agentId }];
-      updateConfigFormValue(state as unknown as ConfigState, ["agents", "list"], nextList);
-      index = nextList.length - 1;
-    }
-    return index;
-  };
 
   return html`
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
@@ -147,7 +134,7 @@ export function renderApp(state: AppViewState) {
           </button>
           <div class="brand">
             <div class="brand-logo">
-              <img src="${logoHref}" alt="OpenClaw" />
+              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
             </div>
             <div class="brand-text">
               <div class="brand-title">OPENCLAW</div>
@@ -212,8 +199,8 @@ export function renderApp(state: AppViewState) {
       <main class="content ${isChat ? "content--chat" : ""}">
         <section class="content-header">
           <div>
-            <div class="page-title">${titleForTab(state.tab)}</div>
-            <div class="page-sub">${subtitleForTab(state.tab)}</div>
+            ${state.tab === "usage" ? nothing : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
+            ${state.tab === "usage" ? nothing : html`<div class="page-sub">${subtitleForTab(state.tab)}</div>`}
           </div>
           <div class="page-meta">
             ${state.lastError ? html`<div class="pill danger">${state.lastError}</div>` : nothing}
@@ -239,7 +226,7 @@ export function renderApp(state: AppViewState) {
                 onSessionKeyChange: (next) => {
                   state.sessionKey = next;
                   state.chatMessage = "";
-                  (state as unknown as OpenClawApp).resetToolStream();
+                  state.resetToolStream();
                   state.applySettings({
                     ...state.settings,
                     sessionKey: next,
@@ -268,7 +255,7 @@ export function renderApp(state: AppViewState) {
                 configSchema: state.configSchema,
                 configSchemaLoading: state.configSchemaLoading,
                 configForm: state.configForm,
-                configUiHints: state.configUiHints as ConfigUiHints,
+                configUiHints: state.configUiHints,
                 configSaving: state.configSaving,
                 configFormDirty: state.configFormDirty,
                 nostrProfileFormState: state.nostrProfileFormState,
@@ -277,8 +264,7 @@ export function renderApp(state: AppViewState) {
                 onWhatsAppStart: (force) => state.handleWhatsAppStart(force),
                 onWhatsAppWait: () => state.handleWhatsAppWait(),
                 onWhatsAppLogout: () => state.handleWhatsAppLogout(),
-                onConfigPatch: (path, value) =>
-                  updateConfigFormValue(state as unknown as ConfigState, path, value),
+                onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onConfigSave: () => state.handleChannelConfigSave(),
                 onConfigReload: () => state.handleChannelConfigReload(),
                 onNostrProfileEdit: (accountId, profile) =>
@@ -325,6 +311,269 @@ export function renderApp(state: AppViewState) {
                 onRefresh: () => loadSessions(state),
                 onPatch: (key, patch) => patchSession(state, key, patch),
                 onDelete: (key) => deleteSession(state, key),
+              })
+            : nothing
+        }
+
+        ${
+          state.tab === "usage"
+            ? renderUsage({
+                loading: state.usageLoading,
+                error: state.usageError,
+                startDate: state.usageStartDate,
+                endDate: state.usageEndDate,
+                sessions: state.usageResult?.sessions ?? [],
+                sessionsLimitReached: (state.usageResult?.sessions?.length ?? 0) >= 1000,
+                totals: state.usageResult?.totals ?? null,
+                aggregates: state.usageResult?.aggregates ?? null,
+                costDaily: state.usageCostSummary?.daily ?? [],
+                selectedSessions: state.usageSelectedSessions,
+                selectedDays: state.usageSelectedDays,
+                selectedHours: state.usageSelectedHours,
+                chartMode: state.usageChartMode,
+                dailyChartMode: state.usageDailyChartMode,
+                timeSeriesMode: state.usageTimeSeriesMode,
+                timeSeriesBreakdownMode: state.usageTimeSeriesBreakdownMode,
+                timeSeries: state.usageTimeSeries,
+                timeSeriesLoading: state.usageTimeSeriesLoading,
+                sessionLogs: state.usageSessionLogs,
+                sessionLogsLoading: state.usageSessionLogsLoading,
+                sessionLogsExpanded: state.usageSessionLogsExpanded,
+                logFilterRoles: state.usageLogFilterRoles,
+                logFilterTools: state.usageLogFilterTools,
+                logFilterHasTools: state.usageLogFilterHasTools,
+                logFilterQuery: state.usageLogFilterQuery,
+                query: state.usageQuery,
+                queryDraft: state.usageQueryDraft,
+                sessionSort: state.usageSessionSort,
+                sessionSortDir: state.usageSessionSortDir,
+                recentSessions: state.usageRecentSessions,
+                sessionsTab: state.usageSessionsTab,
+                visibleColumns:
+                  state.usageVisibleColumns as import("./views/usage.ts").UsageColumnId[],
+                timeZone: state.usageTimeZone,
+                contextExpanded: state.usageContextExpanded,
+                headerPinned: state.usageHeaderPinned,
+                onStartDateChange: (date) => {
+                  state.usageStartDate = date;
+                  state.usageSelectedDays = [];
+                  state.usageSelectedHours = [];
+                  state.usageSelectedSessions = [];
+                  debouncedLoadUsage(state);
+                },
+                onEndDateChange: (date) => {
+                  state.usageEndDate = date;
+                  state.usageSelectedDays = [];
+                  state.usageSelectedHours = [];
+                  state.usageSelectedSessions = [];
+                  debouncedLoadUsage(state);
+                },
+                onRefresh: () => loadUsage(state),
+                onTimeZoneChange: (zone) => {
+                  state.usageTimeZone = zone;
+                },
+                onToggleContextExpanded: () => {
+                  state.usageContextExpanded = !state.usageContextExpanded;
+                },
+                onToggleSessionLogsExpanded: () => {
+                  state.usageSessionLogsExpanded = !state.usageSessionLogsExpanded;
+                },
+                onLogFilterRolesChange: (next) => {
+                  state.usageLogFilterRoles = next;
+                },
+                onLogFilterToolsChange: (next) => {
+                  state.usageLogFilterTools = next;
+                },
+                onLogFilterHasToolsChange: (next) => {
+                  state.usageLogFilterHasTools = next;
+                },
+                onLogFilterQueryChange: (next) => {
+                  state.usageLogFilterQuery = next;
+                },
+                onLogFilterClear: () => {
+                  state.usageLogFilterRoles = [];
+                  state.usageLogFilterTools = [];
+                  state.usageLogFilterHasTools = false;
+                  state.usageLogFilterQuery = "";
+                },
+                onToggleHeaderPinned: () => {
+                  state.usageHeaderPinned = !state.usageHeaderPinned;
+                },
+                onSelectHour: (hour, shiftKey) => {
+                  if (shiftKey && state.usageSelectedHours.length > 0) {
+                    const allHours = Array.from({ length: 24 }, (_, i) => i);
+                    const lastSelected =
+                      state.usageSelectedHours[state.usageSelectedHours.length - 1];
+                    const lastIdx = allHours.indexOf(lastSelected);
+                    const thisIdx = allHours.indexOf(hour);
+                    if (lastIdx !== -1 && thisIdx !== -1) {
+                      const [start, end] =
+                        lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
+                      const range = allHours.slice(start, end + 1);
+                      state.usageSelectedHours = [
+                        ...new Set([...state.usageSelectedHours, ...range]),
+                      ];
+                    }
+                  } else {
+                    if (state.usageSelectedHours.includes(hour)) {
+                      state.usageSelectedHours = state.usageSelectedHours.filter((h) => h !== hour);
+                    } else {
+                      state.usageSelectedHours = [...state.usageSelectedHours, hour];
+                    }
+                  }
+                },
+                onQueryDraftChange: (query) => {
+                  state.usageQueryDraft = query;
+                  if (state.usageQueryDebounceTimer) {
+                    window.clearTimeout(state.usageQueryDebounceTimer);
+                  }
+                  state.usageQueryDebounceTimer = window.setTimeout(() => {
+                    state.usageQuery = state.usageQueryDraft;
+                    state.usageQueryDebounceTimer = null;
+                  }, 250);
+                },
+                onApplyQuery: () => {
+                  if (state.usageQueryDebounceTimer) {
+                    window.clearTimeout(state.usageQueryDebounceTimer);
+                    state.usageQueryDebounceTimer = null;
+                  }
+                  state.usageQuery = state.usageQueryDraft;
+                },
+                onClearQuery: () => {
+                  if (state.usageQueryDebounceTimer) {
+                    window.clearTimeout(state.usageQueryDebounceTimer);
+                    state.usageQueryDebounceTimer = null;
+                  }
+                  state.usageQueryDraft = "";
+                  state.usageQuery = "";
+                },
+                onSessionSortChange: (sort) => {
+                  state.usageSessionSort = sort;
+                },
+                onSessionSortDirChange: (dir) => {
+                  state.usageSessionSortDir = dir;
+                },
+                onSessionsTabChange: (tab) => {
+                  state.usageSessionsTab = tab;
+                },
+                onToggleColumn: (column) => {
+                  if (state.usageVisibleColumns.includes(column)) {
+                    state.usageVisibleColumns = state.usageVisibleColumns.filter(
+                      (entry) => entry !== column,
+                    );
+                  } else {
+                    state.usageVisibleColumns = [...state.usageVisibleColumns, column];
+                  }
+                },
+                onSelectSession: (key, shiftKey) => {
+                  state.usageTimeSeries = null;
+                  state.usageSessionLogs = null;
+                  state.usageRecentSessions = [
+                    key,
+                    ...state.usageRecentSessions.filter((entry) => entry !== key),
+                  ].slice(0, 8);
+
+                  if (shiftKey && state.usageSelectedSessions.length > 0) {
+                    // Shift-click: select range from last selected to this session
+                    // Sort sessions same way as displayed (by tokens or cost descending)
+                    const isTokenMode = state.usageChartMode === "tokens";
+                    const sortedSessions = [...(state.usageResult?.sessions ?? [])].toSorted(
+                      (a, b) => {
+                        const valA = isTokenMode
+                          ? (a.usage?.totalTokens ?? 0)
+                          : (a.usage?.totalCost ?? 0);
+                        const valB = isTokenMode
+                          ? (b.usage?.totalTokens ?? 0)
+                          : (b.usage?.totalCost ?? 0);
+                        return valB - valA;
+                      },
+                    );
+                    const allKeys = sortedSessions.map((s) => s.key);
+                    const lastSelected =
+                      state.usageSelectedSessions[state.usageSelectedSessions.length - 1];
+                    const lastIdx = allKeys.indexOf(lastSelected);
+                    const thisIdx = allKeys.indexOf(key);
+                    if (lastIdx !== -1 && thisIdx !== -1) {
+                      const [start, end] =
+                        lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
+                      const range = allKeys.slice(start, end + 1);
+                      const newSelection = [...new Set([...state.usageSelectedSessions, ...range])];
+                      state.usageSelectedSessions = newSelection;
+                    }
+                  } else {
+                    // Regular click: focus a single session (so details always open).
+                    // Click the focused session again to clear selection.
+                    if (
+                      state.usageSelectedSessions.length === 1 &&
+                      state.usageSelectedSessions[0] === key
+                    ) {
+                      state.usageSelectedSessions = [];
+                    } else {
+                      state.usageSelectedSessions = [key];
+                    }
+                  }
+
+                  // Load timeseries/logs only if exactly one session selected
+                  if (state.usageSelectedSessions.length === 1) {
+                    void loadSessionTimeSeries(state, state.usageSelectedSessions[0]);
+                    void loadSessionLogs(state, state.usageSelectedSessions[0]);
+                  }
+                },
+                onSelectDay: (day, shiftKey) => {
+                  if (shiftKey && state.usageSelectedDays.length > 0) {
+                    // Shift-click: select range from last selected to this day
+                    const allDays = (state.usageCostSummary?.daily ?? []).map((d) => d.date);
+                    const lastSelected =
+                      state.usageSelectedDays[state.usageSelectedDays.length - 1];
+                    const lastIdx = allDays.indexOf(lastSelected);
+                    const thisIdx = allDays.indexOf(day);
+                    if (lastIdx !== -1 && thisIdx !== -1) {
+                      const [start, end] =
+                        lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
+                      const range = allDays.slice(start, end + 1);
+                      // Merge with existing selection
+                      const newSelection = [...new Set([...state.usageSelectedDays, ...range])];
+                      state.usageSelectedDays = newSelection;
+                    }
+                  } else {
+                    // Regular click: toggle single day
+                    if (state.usageSelectedDays.includes(day)) {
+                      state.usageSelectedDays = state.usageSelectedDays.filter((d) => d !== day);
+                    } else {
+                      state.usageSelectedDays = [day];
+                    }
+                  }
+                },
+                onChartModeChange: (mode) => {
+                  state.usageChartMode = mode;
+                },
+                onDailyChartModeChange: (mode) => {
+                  state.usageDailyChartMode = mode;
+                },
+                onTimeSeriesModeChange: (mode) => {
+                  state.usageTimeSeriesMode = mode;
+                },
+                onTimeSeriesBreakdownChange: (mode) => {
+                  state.usageTimeSeriesBreakdownMode = mode;
+                },
+                onClearDays: () => {
+                  state.usageSelectedDays = [];
+                },
+                onClearHours: () => {
+                  state.usageSelectedHours = [];
+                },
+                onClearSessions: () => {
+                  state.usageSelectedSessions = [];
+                  state.usageTimeSeries = null;
+                  state.usageSessionLogs = null;
+                },
+                onClearFilters: () => {
+                  state.usageSelectedDays = [];
+                  state.usageSelectedHours = [];
+                  state.usageSelectedSessions = [];
+                  state.usageTimeSeries = null;
+                  state.usageSessionLogs = null;
+                },
               })
             : nothing
         }
@@ -444,17 +693,7 @@ export function renderApp(state: AppViewState) {
                     void state.loadCron();
                   }
                 },
-                onLoadFiles: (agentId) => {
-                  void (async () => {
-                    await loadAgentFiles(state, agentId);
-                    if (state.agentFileActive) {
-                      await loadAgentFileContent(state, agentId, state.agentFileActive, {
-                        force: true,
-                        preserveDraft: true,
-                      });
-                    }
-                  })();
-                },
+                onLoadFiles: (agentId) => loadAgentFiles(state, agentId),
                 onSelectFile: (name) => {
                   state.agentFileActive = name;
                   if (!resolvedAgentId) {
@@ -497,19 +736,12 @@ export function renderApp(state: AppViewState) {
                   }
                   const basePath = ["agents", "list", index, "tools"];
                   if (profile) {
-                    updateConfigFormValue(
-                      state as unknown as ConfigState,
-                      [...basePath, "profile"],
-                      profile,
-                    );
+                    updateConfigFormValue(state, [...basePath, "profile"], profile);
                   } else {
-                    removeConfigFormValue(state as unknown as ConfigState, [
-                      ...basePath,
-                      "profile",
-                    ]);
+                    removeConfigFormValue(state, [...basePath, "profile"]);
                   }
                   if (clearAllow) {
-                    removeConfigFormValue(state as unknown as ConfigState, [...basePath, "allow"]);
+                    removeConfigFormValue(state, [...basePath, "allow"]);
                   }
                 },
                 onToolsOverridesChange: (agentId, alsoAllow, deny) => {
@@ -532,29 +764,18 @@ export function renderApp(state: AppViewState) {
                   }
                   const basePath = ["agents", "list", index, "tools"];
                   if (alsoAllow.length > 0) {
-                    updateConfigFormValue(
-                      state as unknown as ConfigState,
-                      [...basePath, "alsoAllow"],
-                      alsoAllow,
-                    );
+                    updateConfigFormValue(state, [...basePath, "alsoAllow"], alsoAllow);
                   } else {
-                    removeConfigFormValue(state as unknown as ConfigState, [
-                      ...basePath,
-                      "alsoAllow",
-                    ]);
+                    removeConfigFormValue(state, [...basePath, "alsoAllow"]);
                   }
                   if (deny.length > 0) {
-                    updateConfigFormValue(
-                      state as unknown as ConfigState,
-                      [...basePath, "deny"],
-                      deny,
-                    );
+                    updateConfigFormValue(state, [...basePath, "deny"], deny);
                   } else {
-                    removeConfigFormValue(state as unknown as ConfigState, [...basePath, "deny"]);
+                    removeConfigFormValue(state, [...basePath, "deny"]);
                   }
                 },
-                onConfigReload: () => loadConfig(state as unknown as ConfigState),
-                onConfigSave: () => saveConfig(state as unknown as ConfigState),
+                onConfigReload: () => loadConfig(state),
+                onConfigSave: () => saveConfig(state),
                 onChannelsRefresh: () => loadChannels(state, false),
                 onCronRefresh: () => state.loadCron(),
                 onSkillsFilterChange: (next) => (state.skillsFilter = next),
@@ -599,11 +820,7 @@ export function renderApp(state: AppViewState) {
                   } else {
                     next.delete(normalizedSkill);
                   }
-                  updateConfigFormValue(
-                    state as unknown as ConfigState,
-                    ["agents", "list", index, "skills"],
-                    [...next],
-                  );
+                  updateConfigFormValue(state, ["agents", "list", index, "skills"], [...next]);
                 },
                 onAgentSkillsClear: (agentId) => {
                   if (!configValue) {
@@ -623,12 +840,7 @@ export function renderApp(state: AppViewState) {
                   if (index < 0) {
                     return;
                   }
-                  removeConfigFormValue(state as unknown as ConfigState, [
-                    "agents",
-                    "list",
-                    index,
-                    "skills",
-                  ]);
+                  removeConfigFormValue(state, ["agents", "list", index, "skills"]);
                 },
                 onAgentSkillsDisableAll: (agentId) => {
                   if (!configValue) {
@@ -648,58 +860,32 @@ export function renderApp(state: AppViewState) {
                   if (index < 0) {
                     return;
                   }
-                  updateConfigFormValue(
-                    state as unknown as ConfigState,
-                    ["agents", "list", index, "skills"],
-                    [],
-                  );
+                  updateConfigFormValue(state, ["agents", "list", index, "skills"], []);
                 },
                 onModelChange: (agentId, modelId) => {
                   if (!configValue) {
                     return;
                   }
-                  const defaultId = state.agentsList?.defaultId ?? null;
-                  if (defaultId && agentId === defaultId) {
-                    const basePath = ["agents", "defaults", "model"];
-                    const defaults =
-                      (configValue as { agents?: { defaults?: { model?: unknown } } }).agents
-                        ?.defaults ?? {};
-                    const existing = defaults.model;
-                    if (!modelId) {
-                      removeConfigFormValue(state as unknown as ConfigState, basePath);
-                      return;
-                    }
-                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                      const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
-                      const next = {
-                        primary: modelId,
-                        ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
-                      };
-                      updateConfigFormValue(state as unknown as ConfigState, basePath, next);
-                    } else {
-                      updateConfigFormValue(state as unknown as ConfigState, basePath, {
-                        primary: modelId,
-                      });
-                    }
+                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  if (!Array.isArray(list)) {
                     return;
                   }
-
-                  const index = ensureAgentListEntry(agentId);
+                  const index = list.findIndex(
+                    (entry) =>
+                      entry &&
+                      typeof entry === "object" &&
+                      "id" in entry &&
+                      (entry as { id?: string }).id === agentId,
+                  );
+                  if (index < 0) {
+                    return;
+                  }
                   const basePath = ["agents", "list", index, "model"];
                   if (!modelId) {
-                    removeConfigFormValue(state as unknown as ConfigState, basePath);
+                    removeConfigFormValue(state, basePath);
                     return;
                   }
-                  const list = (
-                    (state.configForm ??
-                      (state.configSnapshot?.config as Record<string, unknown> | null)) as {
-                      agents?: { list?: unknown[] };
-                    }
-                  )?.agents?.list;
-                  const entry =
-                    Array.isArray(list) && list[index]
-                      ? (list[index] as { model?: unknown })
-                      : null;
+                  const entry = list[index] as { model?: unknown };
                   const existing = entry?.model;
                   if (existing && typeof existing === "object" && !Array.isArray(existing)) {
                     const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
@@ -707,70 +893,33 @@ export function renderApp(state: AppViewState) {
                       primary: modelId,
                       ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
                     };
-                    updateConfigFormValue(state as unknown as ConfigState, basePath, next);
+                    updateConfigFormValue(state, basePath, next);
                   } else {
-                    updateConfigFormValue(state as unknown as ConfigState, basePath, modelId);
+                    updateConfigFormValue(state, basePath, modelId);
                   }
                 },
                 onModelFallbacksChange: (agentId, fallbacks) => {
                   if (!configValue) {
                     return;
                   }
-                  const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
-                  const defaultId = state.agentsList?.defaultId ?? null;
-                  if (defaultId && agentId === defaultId) {
-                    const basePath = ["agents", "defaults", "model"];
-                    const defaults =
-                      (configValue as { agents?: { defaults?: { model?: unknown } } }).agents
-                        ?.defaults ?? {};
-                    const existing = defaults.model;
-                    const resolvePrimary = () => {
-                      if (typeof existing === "string") {
-                        return existing.trim() || null;
-                      }
-                      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-                        const primary = (existing as { primary?: unknown }).primary;
-                        if (typeof primary === "string") {
-                          const trimmed = primary.trim();
-                          return trimmed || null;
-                        }
-                      }
-                      return null;
-                    };
-                    const primary = resolvePrimary();
-                    if (normalized.length === 0) {
-                      if (primary) {
-                        updateConfigFormValue(state as unknown as ConfigState, basePath, {
-                          primary,
-                        });
-                      } else {
-                        removeConfigFormValue(state as unknown as ConfigState, basePath);
-                      }
-                      return;
-                    }
-                    const next = primary
-                      ? { primary, fallbacks: normalized }
-                      : { fallbacks: normalized };
-                    updateConfigFormValue(state as unknown as ConfigState, basePath, next);
+                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  if (!Array.isArray(list)) {
                     return;
                   }
-
-                  const index = ensureAgentListEntry(agentId);
+                  const index = list.findIndex(
+                    (entry) =>
+                      entry &&
+                      typeof entry === "object" &&
+                      "id" in entry &&
+                      (entry as { id?: string }).id === agentId,
+                  );
+                  if (index < 0) {
+                    return;
+                  }
                   const basePath = ["agents", "list", index, "model"];
-                  const list = (
-                    (state.configForm ??
-                      (state.configSnapshot?.config as Record<string, unknown> | null)) as {
-                      agents?: { list?: unknown[] };
-                    }
-                  )?.agents?.list;
-                  const entry =
-                    Array.isArray(list) && list[index]
-                      ? (list[index] as { model?: unknown })
-                      : null;
-                  const existing = entry?.model;
-                  if (!existing) {
-                    return;
-                  }
+                  const entry = list[index] as { model?: unknown };
+                  const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
+                  const existing = entry.model;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;
@@ -787,16 +936,16 @@ export function renderApp(state: AppViewState) {
                   const primary = resolvePrimary();
                   if (normalized.length === 0) {
                     if (primary) {
-                      updateConfigFormValue(state as unknown as ConfigState, basePath, primary);
+                      updateConfigFormValue(state, basePath, primary);
                     } else {
-                      removeConfigFormValue(state as unknown as ConfigState, basePath);
+                      removeConfigFormValue(state, basePath);
                     }
                     return;
                   }
                   const next = primary
                     ? { primary, fallbacks: normalized }
                     : { fallbacks: normalized };
-                  updateConfigFormValue(state as unknown as ConfigState, basePath, next);
+                  updateConfigFormValue(state, basePath, next);
                 },
               })
             : nothing
@@ -853,7 +1002,7 @@ export function renderApp(state: AppViewState) {
                 onDeviceRotate: (deviceId, role, scopes) =>
                   rotateDeviceToken(state, { deviceId, role, scopes }),
                 onDeviceRevoke: (deviceId, role) => revokeDeviceToken(state, { deviceId, role }),
-                onLoadConfig: () => loadConfig(state as unknown as ConfigState),
+                onLoadConfig: () => loadConfig(state),
                 onLoadExecApprovals: () => {
                   const target =
                     state.execApprovalsTarget === "node" && state.execApprovalsTargetNodeId
@@ -863,28 +1012,20 @@ export function renderApp(state: AppViewState) {
                 },
                 onBindDefault: (nodeId) => {
                   if (nodeId) {
-                    updateConfigFormValue(
-                      state as unknown as ConfigState,
-                      ["tools", "exec", "node"],
-                      nodeId,
-                    );
+                    updateConfigFormValue(state, ["tools", "exec", "node"], nodeId);
                   } else {
-                    removeConfigFormValue(state as unknown as ConfigState, [
-                      "tools",
-                      "exec",
-                      "node",
-                    ]);
+                    removeConfigFormValue(state, ["tools", "exec", "node"]);
                   }
                 },
                 onBindAgent: (agentIndex, nodeId) => {
                   const basePath = ["agents", "list", agentIndex, "tools", "exec", "node"];
                   if (nodeId) {
-                    updateConfigFormValue(state as unknown as ConfigState, basePath, nodeId);
+                    updateConfigFormValue(state, basePath, nodeId);
                   } else {
-                    removeConfigFormValue(state as unknown as ConfigState, basePath);
+                    removeConfigFormValue(state, basePath);
                   }
                 },
-                onSaveBindings: () => saveConfig(state as unknown as ConfigState),
+                onSaveBindings: () => saveConfig(state),
                 onExecApprovalsTargetChange: (kind, nodeId) => {
                   state.execApprovalsTarget = kind;
                   state.execApprovalsTargetNodeId = nodeId;
@@ -919,29 +1060,30 @@ export function renderApp(state: AppViewState) {
                   state.chatMessage = "";
                   state.chatAttachments = [];
                   state.chatStream = null;
+                  state.chatStreamStartedAt = null;
                   state.chatRunId = null;
-                  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
                   state.chatQueue = [];
-                  (state as unknown as OpenClawApp).resetToolStream();
-                  (state as unknown as OpenClawApp).resetChatScroll();
+                  state.resetToolStream();
+                  state.resetChatScroll();
                   state.applySettings({
                     ...state.settings,
                     sessionKey: next,
                     lastActiveSessionKey: next,
                   });
                   void state.loadAssistantIdentity();
-                  void loadChatHistory(state as unknown as ChatState);
-                  void refreshChatAvatar(state as unknown as ChatHost);
+                  void loadChatHistory(state);
+                  void refreshChatAvatar(state);
                 },
                 thinkingLevel: state.chatThinkingLevel,
                 showThinking,
                 loading: state.chatLoading,
                 sending: state.chatSending,
+                compactionStatus: state.compactionStatus,
                 assistantAvatarUrl: chatAvatarUrl,
                 messages: state.chatMessages,
                 toolMessages: state.chatToolMessages,
                 stream: state.chatStream,
-                streamStartedAt: null,
+                streamStartedAt: state.chatStreamStartedAt,
                 draft: state.chatMessage,
                 queue: state.chatQueue,
                 connected: state.connected,
@@ -951,10 +1093,8 @@ export function renderApp(state: AppViewState) {
                 sessions: state.sessionsResult,
                 focusMode: chatFocus,
                 onRefresh: () => {
-                  return Promise.all([
-                    loadChatHistory(state as unknown as ChatState),
-                    refreshChatAvatar(state as unknown as ChatHost),
-                  ]);
+                  state.resetToolStream();
+                  return Promise.all([loadChatHistory(state), refreshChatAvatar(state)]);
                 },
                 onToggleFocusMode: () => {
                   if (state.onboarding) {
@@ -965,28 +1105,25 @@ export function renderApp(state: AppViewState) {
                     chatFocusMode: !state.settings.chatFocusMode,
                   });
                 },
-                onChatScroll: (event) => (state as unknown as OpenClawApp).handleChatScroll(event),
+                onChatScroll: (event) => state.handleChatScroll(event),
                 onDraftChange: (next) => (state.chatMessage = next),
                 attachments: state.chatAttachments,
                 onAttachmentsChange: (next) => (state.chatAttachments = next),
-                onSend: () => (state as unknown as OpenClawApp).handleSendChat(),
+                onSend: () => state.handleSendChat(),
                 canAbort: Boolean(state.chatRunId),
-                onAbort: () => void (state as unknown as OpenClawApp).handleAbortChat(),
-                onQueueRemove: (id) => (state as unknown as OpenClawApp).removeQueuedMessage(id),
-                onNewSession: () =>
-                  (state as unknown as OpenClawApp).handleSendChat("/new", { restoreDraft: true }),
+                onAbort: () => void state.handleAbortChat(),
+                onQueueRemove: (id) => state.removeQueuedMessage(id),
+                onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
                 showNewMessages: state.chatNewMessagesBelow,
                 onScrollToBottom: () => state.scrollToBottom(),
                 // Sidebar props for tool output viewing
-                sidebarOpen: (state as unknown as OpenClawApp).sidebarOpen,
-                sidebarContent: (state as unknown as OpenClawApp).sidebarContent,
-                sidebarError: (state as unknown as OpenClawApp).sidebarError,
-                splitRatio: (state as unknown as OpenClawApp).splitRatio,
-                onOpenSidebar: (content: string) =>
-                  (state as unknown as OpenClawApp).handleOpenSidebar(content),
-                onCloseSidebar: () => (state as unknown as OpenClawApp).handleCloseSidebar(),
-                onSplitRatioChange: (ratio: number) =>
-                  (state as unknown as OpenClawApp).handleSplitRatioChange(ratio),
+                sidebarOpen: state.sidebarOpen,
+                sidebarContent: state.sidebarContent,
+                sidebarError: state.sidebarError,
+                splitRatio: state.splitRatio,
+                onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
+                onCloseSidebar: () => state.handleCloseSidebar(),
+                onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
               })
@@ -1007,31 +1144,28 @@ export function renderApp(state: AppViewState) {
                 connected: state.connected,
                 schema: state.configSchema,
                 schemaLoading: state.configSchemaLoading,
-                uiHints: state.configUiHints as ConfigUiHints,
+                uiHints: state.configUiHints,
                 formMode: state.configFormMode,
                 formValue: state.configForm,
                 originalValue: state.configFormOriginal,
-                searchQuery: (state as unknown as OpenClawApp).configSearchQuery,
-                activeSection: (state as unknown as OpenClawApp).configActiveSection,
-                activeSubsection: (state as unknown as OpenClawApp).configActiveSubsection,
+                searchQuery: state.configSearchQuery,
+                activeSection: state.configActiveSection,
+                activeSubsection: state.configActiveSubsection,
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },
                 onFormModeChange: (mode) => (state.configFormMode = mode),
-                onFormPatch: (path, value) =>
-                  updateConfigFormValue(state as unknown as OpenClawApp, path, value),
-                onSearchChange: (query) =>
-                  ((state as unknown as OpenClawApp).configSearchQuery = query),
+                onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
+                onSearchChange: (query) => (state.configSearchQuery = query),
                 onSectionChange: (section) => {
-                  (state as unknown as OpenClawApp).configActiveSection = section;
-                  (state as unknown as OpenClawApp).configActiveSubsection = null;
+                  state.configActiveSection = section;
+                  state.configActiveSubsection = null;
                 },
-                onSubsectionChange: (section) =>
-                  ((state as unknown as OpenClawApp).configActiveSubsection = section),
-                onReload: () => loadConfig(state as unknown as OpenClawApp),
-                onSave: () => saveConfig(state as unknown as OpenClawApp),
-                onApply: () => applyConfig(state as unknown as OpenClawApp),
-                onUpdate: () => runUpdate(state as unknown as OpenClawApp),
+                onSubsectionChange: (section) => (state.configActiveSubsection = section),
+                onReload: () => loadConfig(state),
+                onSave: () => saveConfig(state),
+                onApply: () => applyConfig(state),
+                onUpdate: () => runUpdate(state),
               })
             : nothing
         }
@@ -1073,10 +1207,9 @@ export function renderApp(state: AppViewState) {
                   state.logsLevelFilters = { ...state.logsLevelFilters, [level]: enabled };
                 },
                 onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
-                onRefresh: () => loadLogs(state as unknown as LogsState, { reset: true }),
-                onExport: (lines, label) =>
-                  (state as unknown as OpenClawApp).exportLogs(lines, label),
-                onScroll: (event) => (state as unknown as OpenClawApp).handleLogsScroll(event),
+                onRefresh: () => loadLogs(state, { reset: true }),
+                onExport: (lines, label) => state.exportLogs(lines, label),
+                onScroll: (event) => state.handleLogsScroll(event),
               })
             : nothing
         }
