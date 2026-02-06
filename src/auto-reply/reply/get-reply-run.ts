@@ -45,7 +45,10 @@ import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
-type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+type ExecOverrides = Pick<
+  ExecToolDefaults,
+  "host" | "security" | "ask" | "node" | "maxSecurityLevel"
+>;
 
 const BARE_SESSION_RESET_PROMPT =
   "New session started. Before greeting: 1) Read SOUL.md, USER.md, AGENTS.md, IDENTITY.md, MEMORY.md, TOOLS.md from workspace. 2) Read memory/YYYY-MM-DD.md for today and yesterday. 3) Create today's log if missing. 4) Then greet briefly (1-3 sentences) in your configured persona and ask what to work on. If runtime model differs from default_model, mention it. Do not narrate these steps to the user.";

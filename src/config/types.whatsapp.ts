@@ -65,6 +65,11 @@ export type WhatsAppConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /**
+   * Require messages to start with this prefix to trigger the agent.
+   * Case-insensitive. The prefix is stripped from the message before processing.
+   */
+  triggerPrefix?: string;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */

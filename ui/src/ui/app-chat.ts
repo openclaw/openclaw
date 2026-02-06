@@ -22,6 +22,7 @@ type ChatHost = {
   hello: GatewayHelloOk | null;
   chatAvatarUrl: string | null;
   refreshSessionsAfterChat: Set<string>;
+  settings: { execSecurityLevel?: "safe" | "low" | "medium" | "high" | "critical" };
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
@@ -91,9 +92,12 @@ async function sendChatMessageNow(
     refreshSessions?: boolean;
   },
 ) {
-  console.log("[DEBUG] sendChatMessageNow called:", { message, sessionKey: host.sessionKey });
+  console.log("[DEBUG] sendChatMessageNow called:", { message, sessionKey: host.sessionKey, execSecurityLevel: host.settings?.execSecurityLevel });
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
+  const runId = await sendChatMessage(host as unknown as OpenClawApp, message, {
+    attachments: opts?.attachments,
+    execSecurityLevel: host.settings?.execSecurityLevel,
+  });
   console.log("[DEBUG] sendChatMessage returned:", { runId });
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {

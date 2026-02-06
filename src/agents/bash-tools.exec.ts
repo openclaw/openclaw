@@ -19,6 +19,11 @@ import {
   resolveExecApprovals,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
+import {
+  type ExecSecurityLevel,
+  validateCommandSecurityLevel,
+  SECURITY_LEVEL_INFO,
+} from "../infra/exec-security-level.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
@@ -182,6 +187,7 @@ export type ExecToolDefaults = {
   messageProvider?: string;
   notifyOnExit?: boolean;
   cwd?: string;
+  maxSecurityLevel?: "safe" | "low" | "medium" | "high" | "critical";
 };
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -194,7 +200,11 @@ export type ExecElevatedDefaults = {
 
 const execSchema = Type.Object({
   command: Type.String({ description: "Shell command to execute" }),
-  purpose: Type.Optional(Type.String({ description: "Brief explanation of why this command is being run (shown in UI)" })),
+  purpose: Type.Optional(
+    Type.String({
+      description: "Brief explanation of why this command is being run (shown in UI)",
+    }),
+  ),
   workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
   env: Type.Optional(Type.Record(Type.String(), Type.String())),
   yieldMs: Type.Optional(
@@ -848,6 +858,20 @@ export function createExecTool(
 
       if (!params.command) {
         throw new Error("Provide a command to start.");
+      }
+
+      // Security level enforcement: Check command risk level against max allowed
+      const maxSecurityLevel = defaults?.maxSecurityLevel;
+      if (maxSecurityLevel) {
+        const validation = validateCommandSecurityLevel(params.command, maxSecurityLevel);
+        if (!validation.allowed) {
+          const levelInfo = SECURITY_LEVEL_INFO[validation.commandLevel];
+          logWarn(
+            `exec blocked: command "${params.command.slice(0, 80)}..." ` +
+              `classified as ${levelInfo.label}, max allowed is ${maxSecurityLevel.toUpperCase()}`,
+          );
+          throw new Error(validation.error);
+        }
       }
 
       const maxOutput = DEFAULT_MAX_OUTPUT;

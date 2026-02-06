@@ -21,6 +21,12 @@ export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Require messages to start with this prefix to trigger the agent.
+   * Case-insensitive. The prefix is stripped from the message before processing.
+   * Example: "Jarvis" means only messages starting with "Jarvis" or "jarvis" trigger.
+   */
+  triggerPrefix?: string;
 };
 
 export type ChannelsConfig = {

@@ -2,6 +2,47 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+
+/**
+ * Resolve the triggerPrefix for a channel.
+ * Returns undefined if no prefix is configured.
+ */
+function resolveTriggerPrefix(cfg: OpenClawConfig, channel: string): string | undefined {
+  // Check channel-specific config first, then defaults
+  const channelConfig = (cfg.channels as Record<string, { triggerPrefix?: string } | undefined>)?.[
+    channel
+  ];
+  return channelConfig?.triggerPrefix ?? cfg.channels?.defaults?.triggerPrefix;
+}
+
+/**
+ * Check if message passes triggerPrefix filter.
+ * Returns { pass: true, strippedBody } if prefix matches (or no prefix configured).
+ * Returns { pass: false } if prefix required but not found.
+ */
+function checkTriggerPrefix(
+  body: string,
+  prefix: string | undefined,
+): { pass: true; strippedBody: string } | { pass: false } {
+  if (!prefix) {
+    return { pass: true, strippedBody: body };
+  }
+  const trimmed = body.trim();
+  const prefixLower = prefix.toLowerCase();
+  const bodyLower = trimmed.toLowerCase();
+
+  // Check if body starts with prefix (case-insensitive)
+  if (!bodyLower.startsWith(prefixLower)) {
+    return { pass: false };
+  }
+
+  // Strip the prefix and any leading whitespace/punctuation after it
+  let stripped = trimmed.slice(prefix.length);
+  // Remove common separators (comma, colon, whitespace) after prefix
+  stripped = stripped.replace(/^[,:\s]+/, "");
+
+  return { pass: true, strippedBody: stripped || trimmed };
+}
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -143,6 +184,21 @@ export async function dispatchReplyFromConfig(params: {
   if (shouldSkipDuplicateInbound(ctx)) {
     recordProcessed("skipped", { reason: "duplicate" });
     return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+  }
+
+  // Check triggerPrefix filter (e.g., "Jarvis" prefix requirement)
+  const triggerPrefix = resolveTriggerPrefix(cfg, channel);
+  if (triggerPrefix) {
+    const messageBody = ctx.Body ?? ctx.BodyForAgent ?? "";
+    const prefixCheck = checkTriggerPrefix(messageBody, triggerPrefix);
+    if (!prefixCheck.pass) {
+      logVerbose(`Skipped message (triggerPrefix "${triggerPrefix}" not found)`);
+      recordProcessed("skipped", { reason: `triggerPrefix:${triggerPrefix}` });
+      return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+    }
+    // Optionally update Body with stripped version (prefix removed)
+    // ctx.Body = prefixCheck.strippedBody;
+    // ctx.BodyForAgent = prefixCheck.strippedBody;
   }
 
   const inboundAudio = isInboundAudioContext(ctx);

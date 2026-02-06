@@ -51,11 +51,17 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
   return { mimeType: match[1], content: match[2] };
 }
 
+export type SendChatOptions = {
+  attachments?: ChatAttachment[];
+  execSecurityLevel?: "safe" | "low" | "medium" | "high" | "critical";
+};
+
 export async function sendChatMessage(
   state: ChatState,
   message: string,
-  attachments?: ChatAttachment[],
+  options?: SendChatOptions,
 ): Promise<string | null> {
+  const attachments = options?.attachments;
   console.log("[DEBUG] sendChatMessage:", { hasClient: !!state.client, connected: state.connected, message });
   if (!state.client || !state.connected) {
     console.log("[DEBUG] sendChatMessage: no client or not connected, returning null");
@@ -117,13 +123,14 @@ export async function sendChatMessage(
     : undefined;
 
   try {
-    console.log("[DEBUG] Sending chat.send request:", { sessionKey: state.sessionKey, message: msg, runId });
+    console.log("[DEBUG] Sending chat.send request:", { sessionKey: state.sessionKey, message: msg, runId, execSecurityLevel: options?.execSecurityLevel });
     await state.client.request("chat.send", {
       sessionKey: state.sessionKey,
       message: msg,
       deliver: false,
       idempotencyKey: runId,
       attachments: apiAttachments,
+      execSecurityLevel: options?.execSecurityLevel,
     });
     console.log("[DEBUG] chat.send request succeeded");
     return runId;

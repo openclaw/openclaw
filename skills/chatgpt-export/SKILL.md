@@ -5,6 +5,9 @@ description: Export ALL your ChatGPT conversations instantly — no 24h wait, no
 
 # ChatGPT Exporter ULTIMATE
 
+> 🔗 **Part of the OpenClaw Ecosystem** — This skill is part of a larger AI agent revamp project.
+> Full project: https://github.com/openclaw/openclaw
+
 Export all ChatGPT conversations in seconds — no waiting for OpenAI's 24-hour export email.
 
 ## Usage

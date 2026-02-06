@@ -1,5 +1,5 @@
 import DOMPurify from "dompurify";
-import { marked } from "marked";
+import { Lexer, marked } from "marked";
 import { truncateText } from "./format";
 
 marked.setOptions({
@@ -7,6 +7,27 @@ marked.setOptions({
   breaks: true,
   mangle: false,
 });
+
+// Guard against infinite recursion in marked's tokenizer.
+// The actual recursion cycle is: inlineTokens → link → outputLink → inlineTokens (never
+// re-enters lex()). V8 (Chrome) may optimize deep recursion so it never throws a stack
+// overflow, causing a permanent hang. We patch inlineTokens to force a throw at a safe depth
+// that the try-catch in toSanitizedMarkdownHtml can reliably catch.
+const INLINE_DEPTH_LIMIT = 200;
+let inlineDepth = 0;
+const originalInlineTokens = Lexer.prototype.inlineTokens;
+Lexer.prototype.inlineTokens = function (...args: Parameters<typeof originalInlineTokens>) {
+  inlineDepth++;
+  if (inlineDepth > INLINE_DEPTH_LIMIT) {
+    inlineDepth = 0;
+    throw new Error("marked: inlineTokens recursion limit exceeded");
+  }
+  try {
+    return originalInlineTokens.apply(this, args);
+  } finally {
+    inlineDepth--;
+  }
+};
 
 const allowedTags = [
   "a",
@@ -99,7 +120,15 @@ export function toSanitizedMarkdownHtml(markdown: string): string {
     }
     return sanitized;
   }
-  const rendered = marked.parse(`${truncated.text}${suffix}`) as string;
+  let rendered: string;
+  try {
+    rendered = marked.parse(`${truncated.text}${suffix}`) as string;
+  } catch {
+    // marked can hit infinite recursion on certain input patterns (e.g. malformed links).
+    // Fall back to escaped plaintext so the UI doesn't freeze.
+    const escaped = escapeHtml(`${truncated.text}${suffix}`);
+    rendered = `<pre class="code-block">${escaped}</pre>`;
+  }
   const sanitized = DOMPurify.sanitize(rendered, {
     ALLOWED_TAGS: allowedTags,
     ALLOWED_ATTR: allowedAttrs,

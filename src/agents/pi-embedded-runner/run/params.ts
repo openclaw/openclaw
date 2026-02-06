@@ -66,7 +66,7 @@ export type RunEmbeddedPiAgentParams = {
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
-  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+  execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node" | "maxSecurityLevel">;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
   runId: string;

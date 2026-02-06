@@ -264,9 +264,15 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       actions.add("sticker");
       actions.add("renameGroup");
       actions.add("setGroupIcon");
+      actions.add("setGroupDescription");
       actions.add("addParticipant");
       actions.add("removeParticipant");
+      actions.add("promoteParticipant");
+      actions.add("demoteParticipant");
       actions.add("leaveGroup");
+      actions.add("getInviteCode");
+      actions.add("revokeInviteCode");
+      actions.add("getGroupInfo");
       return Array.from(actions);
     },
     supportsAction: ({ action }) => {

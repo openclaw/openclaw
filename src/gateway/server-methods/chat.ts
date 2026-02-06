@@ -324,6 +324,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       }>;
       timeoutMs?: number;
       idempotencyKey: string;
+      execSecurityLevel?: "safe" | "low" | "medium" | "high" | "critical";
     };
     const stopCommand = isChatStopCommandText(p.message);
     const normalizedAttachments =
@@ -511,6 +512,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           abortSignal: abortController.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
           disableBlockStreaming: true,
+          execSecurityLevel: p.execSecurityLevel,
           onAgentRunStart: () => {
             console.log(`[DEBUG] chat.send: onAgentRunStart called for runId="${clientRunId}"`);
             agentRunStarted = true;

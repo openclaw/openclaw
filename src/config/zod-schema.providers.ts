@@ -23,6 +23,7 @@ export const ChannelsSchema = z
       .object({
         groupPolicy: GroupPolicySchema.optional(),
         heartbeat: ChannelHeartbeatVisibilitySchema,
+        triggerPrefix: z.string().optional(),
       })
       .strict()
       .optional(),

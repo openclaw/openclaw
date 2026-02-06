@@ -22,7 +22,10 @@ import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./
 import { stripInlineStatus } from "./reply-inline.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
-type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+type ExecOverrides = Pick<
+  ExecToolDefaults,
+  "host" | "security" | "ask" | "node" | "maxSecurityLevel"
+>;
 
 export type ReplyDirectiveContinuation = {
   commandSource: string;
@@ -450,7 +453,15 @@ export async function resolveReplyDirectives(params: {
   model = applyResult.model;
   contextTokens = applyResult.contextTokens;
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
-  const execOverrides = resolveExecOverrides({ directives, sessionEntry });
+  const baseExecOverrides = resolveExecOverrides({ directives, sessionEntry });
+  // Merge execSecurityLevel from opts (UI setting) into execOverrides
+  const execOverrides: ExecOverrides | undefined =
+    baseExecOverrides || opts?.execSecurityLevel
+      ? {
+          ...baseExecOverrides,
+          maxSecurityLevel: opts?.execSecurityLevel,
+        }
+      : undefined;
 
   return {
     kind: "continue",

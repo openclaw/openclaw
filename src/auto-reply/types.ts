@@ -39,6 +39,8 @@ export type GetReplyOptions = {
   skillFilter?: string[];
   /** Mutable ref to track if a reply was sent (for Slack "first" threading mode). */
   hasRepliedRef?: { value: boolean };
+  /** Maximum security level for exec commands (safe|low|medium|high|critical). */
+  execSecurityLevel?: "safe" | "low" | "medium" | "high" | "critical";
 };
 
 export type ReplyPayload = {
