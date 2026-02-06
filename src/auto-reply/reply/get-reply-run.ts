@@ -218,6 +218,10 @@ export async function runPreparedReply(
     storePath,
     abortKey: command.abortKey,
     messageId: sessionCtx.MessageSid,
+    channelId:
+      ctx.Surface ??
+      ctx.Provider ??
+      (typeof ctx.OriginatingChannel === "string" ? ctx.OriginatingChannel : undefined),
   });
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -313,7 +317,9 @@ export async function runPreparedReply(
   const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
   const queueBodyBase = [threadStarterNote, baseBodyFinal].filter(Boolean).join("\n\n");
   const queueMessageId = sessionCtx.MessageSid?.trim();
-  const queueMessageIdHint = queueMessageId ? `[message_id: ${queueMessageId}]` : "";
+  const queueProvider = (sessionCtx.Provider ?? "").trim().toLowerCase();
+  const queueMessageIdHint =
+    queueProvider !== "whatsapp" && queueMessageId ? `[message_id: ${queueMessageId}]` : "";
   const queueBodyWithId = queueMessageIdHint
     ? `${queueBodyBase}\n${queueMessageIdHint}`
     : queueBodyBase;

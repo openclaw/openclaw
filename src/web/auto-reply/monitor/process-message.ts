@@ -163,14 +163,13 @@ export async function processMessage(params: {
         currentMessage: combinedBody,
         excludeLast: false,
         formatEntry: (entry) => {
-          const bodyWithId = entry.messageId
-            ? `${entry.body}\n[message_id: ${entry.messageId}]`
-            : entry.body;
+          // Keep provider message IDs out of the model-visible history context.
+          // These IDs are not user-meaningful and can get echoed back as fake @mentions.
           return formatInboundEnvelope({
             channel: "WhatsApp",
             from: conversationId,
             timestamp: entry.timestamp,
-            body: bodyWithId,
+            body: entry.body,
             chatType: "group",
             senderLabel: entry.sender,
             envelope: envelopeOptions,
