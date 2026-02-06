@@ -1,10 +1,35 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ExecApprovalsResolved } from "../infra/exec-approvals.js";
-import { createOpenClawCodingTools } from "./pi-tools.js";
+
+const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+
+beforeAll(() => {
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(
+    os.tmpdir(),
+    "openclaw-test-no-bundled-extensions",
+  );
+});
+
+afterAll(() => {
+  if (previousBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+  }
+});
+
+vi.mock("../infra/shell-env.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
+  return {
+    ...mod,
+    getShellPathFromLoginShell: vi.fn(() => "/usr/bin:/bin"),
+    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 500),
+  };
+});
 
 vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: () => undefined,
@@ -56,6 +81,7 @@ describe("createOpenClawCodingTools safeBins", () => {
       return;
     }
 
+    const { createOpenClawCodingTools } = await import("./pi-tools.js");
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-safe-bins-"));
     const cfg: OpenClawConfig = {
       tools: {

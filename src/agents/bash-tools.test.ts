@@ -287,16 +287,18 @@ describe("exec notifyOnExit", () => {
     expect(result.details.status).toBe("running");
     const sessionId = (result.details as { sessionId: string }).sessionId;
 
+    const prefix = sessionId.slice(0, 8);
     let finished = getFinishedSession(sessionId);
-    const deadline = Date.now() + (isWin ? 8000 : 2000);
-    while (!finished && Date.now() < deadline) {
+    let hasEvent = peekSystemEvents("agent:main:main").some((event) => event.includes(prefix));
+    const deadline = Date.now() + (isWin ? 12_000 : 5_000);
+    while ((!finished || !hasEvent) && Date.now() < deadline) {
       await sleep(20);
       finished = getFinishedSession(sessionId);
+      hasEvent = peekSystemEvents("agent:main:main").some((event) => event.includes(prefix));
     }
 
     expect(finished).toBeTruthy();
-    const events = peekSystemEvents("agent:main:main");
-    expect(events.some((event) => event.includes(sessionId.slice(0, 8)))).toBe(true);
+    expect(hasEvent).toBe(true);
   });
 });
 

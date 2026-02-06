@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 - Models: default Anthropic model to `anthropic/claude-opus-4-6`. (#9853) Thanks @TinyTb.
 - Models/Onboarding: refresh provider defaults, update OpenAI/OpenAI Codex wizard defaults, and harden model allowlist initialization for first-time configs with matching docs/tests. (#9911) Thanks @gumadeiras.
 - Telegram: auto-inject forum topic `threadId` in message tool and subagent announce so media, buttons, and subagent results land in the correct topic instead of General. (#7235) Thanks @Lukavyi.
+- Security: add skill/plugin code safety scanner that detects dangerous patterns (command injection, eval, data exfiltration, obfuscated code, crypto mining, env harvesting) in installed extensions. Integrated into `openclaw security audit --deep` and plugin install flow; scan failures surface as warnings. (#9806) Thanks @abdelsfane.
 - CLI: sort `openclaw --help` commands (and options) alphabetically. (#8068) Thanks @deepsoumya617.
 - Telegram: remove last `@ts-nocheck` from `bot-handlers.ts`, use Grammy types directly, deduplicate `StickerMetadata`. Zero `@ts-nocheck` remaining in `src/telegram/`. (#9206)
 - Telegram: remove `@ts-nocheck` from `bot-message.ts`, type deps via `Omit<BuildTelegramMessageContextParams>`, widen `allMedia` to `TelegramMediaRef[]`. (#9180)
