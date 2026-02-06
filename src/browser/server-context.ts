@@ -51,7 +51,7 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
 
 async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): Promise<T> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
     const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
@@ -66,7 +66,7 @@ async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): 
 
 async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
     const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
     const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
