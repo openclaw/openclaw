@@ -136,6 +136,8 @@ export type AgentDefaultsConfig = {
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  /** Default effort level for Claude Opus 4.6+ adaptive thinking (low|medium|high|max). */
+  effortDefault?: "low" | "medium" | "high" | "max";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */

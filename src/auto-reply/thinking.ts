@@ -5,6 +5,8 @@ export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ElevatedMode = "off" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
 export type UsageDisplayLevel = "off" | "tokens" | "full";
+/** Claude Opus 4.6+ effort parameter for adaptive thinking depth. */
+export type EffortLevel = "low" | "medium" | "high" | "max";
 
 function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
@@ -231,4 +233,67 @@ export function normalizeReasoningLevel(raw?: string | null): ReasoningLevel | u
     return "stream";
   }
   return undefined;
+}
+
+/** Models that support the effort parameter (Claude Opus 4.6+). */
+export const EFFORT_MODEL_REFS = [
+  "anthropic/claude-opus-4-6",
+  "anthropic/claude-opus-4-5",
+] as const;
+
+const EFFORT_MODEL_SET = new Set(EFFORT_MODEL_REFS.map((entry) => entry.toLowerCase()));
+const EFFORT_MODEL_IDS = new Set(
+  EFFORT_MODEL_REFS.map((entry) => entry.split("/")[1]?.toLowerCase()).filter(
+    (entry): entry is string => Boolean(entry),
+  ),
+);
+
+/** Check if a model supports the effort parameter. */
+export function supportsEffort(provider?: string | null, model?: string | null): boolean {
+  const modelKey = model?.trim().toLowerCase();
+  if (!modelKey) {
+    return false;
+  }
+  const providerKey = provider?.trim().toLowerCase();
+  if (providerKey === "anthropic") {
+    // All Claude Opus 4.5+ models support effort
+    if (modelKey.includes("opus-4-5") || modelKey.includes("opus-4-6")) {
+      return true;
+    }
+  }
+  if (providerKey) {
+    return EFFORT_MODEL_SET.has(`${providerKey}/${modelKey}`);
+  }
+  return EFFORT_MODEL_IDS.has(modelKey);
+}
+
+/** Normalize user-provided effort level strings to the canonical enum. */
+export function normalizeEffortLevel(raw?: string | null): EffortLevel | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const key = raw.trim().toLowerCase();
+  if (["low", "lite", "light", "minimal", "min"].includes(key)) {
+    return "low";
+  }
+  if (["med", "medium", "mid", "moderate", "default"].includes(key)) {
+    return "medium";
+  }
+  if (["high", "hard", "deep"].includes(key)) {
+    return "high";
+  }
+  if (["max", "maximum", "full", "ultra", "highest"].includes(key)) {
+    return "max";
+  }
+  return undefined;
+}
+
+/** List valid effort levels. */
+export function listEffortLevels(): EffortLevel[] {
+  return ["low", "medium", "high", "max"];
+}
+
+/** Format effort levels for display. */
+export function formatEffortLevels(separator = ", "): string {
+  return listEffortLevels().join(separator);
 }
