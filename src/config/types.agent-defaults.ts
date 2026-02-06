@@ -190,6 +190,14 @@ export type AgentDefaultsConfig = {
     prompt?: string;
     /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
     ackMaxChars?: number;
+
+    /** Optional CoreMemories maintenance during heartbeat runs. */
+    coreMemories?: {
+      /** Enable CoreMemories maintenance (best-effort). Default: false. */
+      enabled?: boolean;
+      /** How often to run maintenance (duration string). Default: 6h. */
+      every?: string;
+    };
     /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).

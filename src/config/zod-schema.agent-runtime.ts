@@ -27,6 +27,13 @@ export const HeartbeatSchema = z
     accountId: z.string().optional(),
     prompt: z.string().optional(),
     ackMaxChars: z.number().int().nonnegative().optional(),
+    coreMemories: z
+      .object({
+        enabled: z.boolean().optional(),
+        every: z.string().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -82,6 +89,20 @@ export const HeartbeatSchema = z
 
     validateTime(active.start, { allow24: false }, "start");
     validateTime(active.end, { allow24: true }, "end");
+
+    const coreMemories = val.coreMemories;
+    if (!coreMemories?.every) {
+      return;
+    }
+    try {
+      parseDurationMs(coreMemories.every, { defaultUnit: "m" });
+    } catch {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["coreMemories", "every"],
+        message: "invalid duration (use ms, s, m, h)",
+      });
+    }
   })
   .optional();
 

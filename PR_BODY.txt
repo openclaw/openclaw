@@ -1,175 +1,77 @@
 ## Summary
 
-This PR introduces **CoreMemories**, a hierarchical memory system for OpenClaw agents that improves token efficiency and context retention through event-driven, age-based memory layers.
+Adds **CoreMemories**: a local-first memory store for OpenClaw that captures recent chat into a lightweight “Flash” layer, supports optional compression into “Warm”, and provides fast keyword-based retrieval.
 
-## Problem Statement
+This PR is designed to be **best-effort** (must never break message handling) and **portable** (no reliance on process cwd).
 
-Current OpenClaw memory system:
-- Loads full MEMORY.md at every session start (~1000-2000 tokens)
-- No automatic consolidation of old memories  
-- Static weighting (old memories = new memories)
-- No fast retrieval mechanism
+## What’s included
 
-## Solution
+### 1) New package: `packages/core-memories` (`@openclaw/core-memories`)
 
-CoreMemories implements a 3-layer system with sublayers:
+- **Flash (hot)**: last ~48h of entries stored on disk
+- **Warm (hot)**: compressed entries (rule-based by default; optional Ollama-assisted compression)
+- **Per-session storage**: CoreMemories data is stored under a session-scoped directory (passed in via `memoryDir`) so different chats don’t contaminate each other.
+- **Per-session index**: `index.json` maintains a simple keyword → entryId map.
 
-### Hot Layer (Always loaded, ~1400 tokens)
-- **Flash** (0-48h): Full conversation detail
-- **Warm** (2-7d): Summaries + key quotes
+### 2) Ingestion hook (best-effort)
 
-### Recent Layer (Triggered load)
-- **Week 1-4**: Progressive compression (50% → 20% detail)
+- `src/auto-reply/reply/dispatch-from-config.ts` records:
+  - inbound user text as `conversation`
+  - assistant outputs (tool/block/final/abort text) as `assistant_reply`
+- Ingestion uses a deterministic `memoryDir` derived from the agent workspace and sessionKey.
+- All ingestion is wrapped in try/catch and is non-blocking.
 
-### Archive Layer (Deep retrieval)
-- **Fresh → Core** (1 month → 1+ years): Essence extraction
+### 3) Global keyword “links” index (cross-session)
 
-## Key Features
+To avoid scanning many session folders when doing keyword lookup, this adds a **global links index**:
 
-1. **Local-first**: All Hot/Warm processing happens locally (free, private, fast)
-2. **Token efficient**: ~30-40% reduction in memory tokens
-3. **Event-driven**: Load memories only when keywords match
-4. **Progressive compression**: Detail fades with age (human-like)
-5. **User-controlled privacy**: Per-memory privacy levels
+- **Write path:** append-only JSONL log
+  - `<agentWorkspace>/.openclaw/memory/links/links.jsonl`
+- **Read path:** compacted index
+  - `<agentWorkspace>/.openclaw/memory/links/index.json`
+- **Compaction:** periodic rebuild from JSONL to JSON (best-effort), keeping writes O(1) and reads fast.
 
-## Integration Points
+### 4) Repo integration
 
-### HEARTBEAT (Every 6 hours)
-- Compress Flash → Warm
-- Review high-salience entries
-- Update keyword index
+- Root `package.json` includes `@openclaw/core-memories` as `workspace:*` so the gateway’s dynamic import can typecheck in CI.
 
-### CRON (Exact time)
-- Smart reminders with context
-- Query CoreMemories for relevant history
-- Include context in reminder notifications
+## Why
 
-### MEMORY.md
-- Proposes important memories for curated biography
-- User approval required before updates
-- Automatic backup of old version
+- Loading large static memory files at startup doesn’t scale.
+- Recent context is valuable, but needs:
+  - bounded retention
+  - fast retrieval
+  - safe persistence
+  - isolation between sessions
 
-## Files Added
+CoreMemories provides a pragmatic baseline with minimal risk: a keyword index and storage layout that can later be extended (semantic retrieval, UI, better compaction policies) without changing the ingestion contract.
 
-```
-packages/core-memories/
-├── package.json
-├── README.md
-├── src/
-│   ├── index.js              # Main implementation
-│   └── integration.js        # HEARTBEAT/CRON bridge
-├── docs/
-│   ├── spec.md               # Full specification
-│   └── architecture.md       # System architecture
-└── __tests__/
-    └── index.test.js         # Test suite
-```
+## Storage layout
 
-## Configuration
+When `memoryDir` points at a session directory:
 
-```json
-{
-  "coreMemories": {
-    "enabled": true,
-    "compression": "auto",
-    "engines": {
-      "local": {
-        "provider": "ollama",
-        "model": "phi3:mini"
-      }
-    }
-  }
-}
-```
+- `.../memory/sessions/<session>/hot/flash/current.json`
+- `.../memory/sessions/<session>/hot/warm/week-*.json`
+- `.../memory/sessions/<session>/index.json`
 
-## Usage Example
+Global links:
 
-```javascript
-const { getCoreMemories } = require('@openclaw/core-memories');
-
-const cm = await getCoreMemories();
-
-// Add a memory
-cm.addFlashEntry('User wants voice setup', 'user');
-
-// Find by keyword
-const results = cm.findByKeyword('voice');
-
-// Load session context
-const { flash, warm, totalTokens } = cm.loadSessionContext();
-```
+- `.../memory/links/links.jsonl`
+- `.../memory/links/index.json`
+- `.../memory/links/meta.json`
 
 ## Testing
 
-```bash
-cd packages/core-memories
-npm test
-```
+- `pnpm -C packages/core-memories lint`
+- `pnpm -C packages/core-memories test`
+- `pnpm -w check` (tsgo + lint + format)
 
-All tests passing ✅
+## Notes / scope
 
-## Performance
+- Ollama use is optional and best-effort; the system falls back to rule-based compression.
+- This PR intentionally focuses on:
+  - safe ingestion
+  - deterministic storage paths
+  - keyword routing (including cross-session via global links)
 
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| Default tokens | 2200 | 1800 | -18% |
-| With context | 2200 | 2400 max | +9% (when needed) |
-| Retrieval speed | O(n) scan | O(1) index | Instant |
-
-## Backward Compatibility
-
-- MEMORY.md remains unchanged
-- CoreMemories adds a dynamic layer
-- Opt-in via configuration
-- Existing agents unaffected
-
-## Storage Impact
-
-- 1 year: ~13 MB
-- 5 years: ~50 MB
-- 10 years: ~80 MB
-
-## Migration Path
-
-Existing users:
-1. Update OpenClaw
-2. CoreMemories auto-detects local LLM
-3. Falls back to rules if not available
-4. Recent conversations imported to CoreMemories
-5. Old memories preserved in archive/
-
-## Documentation
-
-- Full spec: `packages/core-memories/docs/spec.md`
-- Architecture: `packages/core-memories/docs/architecture.md`
-- User guide: `packages/core-memories/README.md`
-
-## Future Work (v2.0)
-
-- Vector embeddings for semantic search
-- Cross-session memory sharing
-- Memory browser UI
-- Automatic topic clustering
-
-## Checklist
-
-- [x] Implementation complete
-- [x] Tests passing
-- [x] Documentation written
-- [x] Backward compatible
-- [x] Configuration added
-- [ ] Review by maintainer
-- [ ] Integration tests
-- [ ] Merge to main
-
-## Authors
-
-- OpenClaw Community (concept, design, implementation, testing)
-
----
-
-**This is a significant architectural upgrade to how OpenClaw agents remember and reason.**
-
-Instead of loading a static file every session, agents now have a dynamic, age-graded memory system that feels more like actual human recall — recent details are vivid, older memories fade to hooks, and important moments get preserved in the curated biography.
-
-The "medicine" analogy: It's a vitamin that gets stronger over time. Day 1 feels the same, but after weeks of use, the agent genuinely "remembers" what you've been working on, retrieves it instantly by keyword, and suggests important moments for your permanent record.
+Follow-ups (not required for merge): richer retrieval UX/tools, semantic retrieval, improved compaction scheduling/config.
