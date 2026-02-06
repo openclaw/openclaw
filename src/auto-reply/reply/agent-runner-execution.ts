@@ -194,6 +194,8 @@ export async function runAgentTurnWithFallback(params: {
                   ownerNumbers: params.followupRun.run.ownerNumbers,
                   cliSessionId,
                   images: params.opts?.images,
+                  // Enable streaming mode when toolFeedback is configured
+                  onToolStatus: params.opts?.onToolStatus,
                 });
 
                 // CLI backends don't emit streaming assistant events, so we need to

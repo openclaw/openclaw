@@ -26,9 +26,12 @@ import {
   resolveSystemPromptUsage,
   writeCliImages,
 } from "./cli-runner/helpers.js";
+import { formatToolStatusLabel, runStreamingCli } from "./cli-runner/streaming.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
+
+export type CliToolStatusCallback = (info: { toolName: string; toolCallId: string }) => void;
 
 const log = createSubsystemLogger("agent/claude-cli");
 
@@ -49,6 +52,8 @@ export async function runCliAgent(params: {
   ownerNumbers?: string[];
   cliSessionId?: string;
   images?: ImageContent[];
+  /** Callback for tool execution status (enables streaming mode). */
+  onToolStatus?: CliToolStatusCallback;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -159,6 +164,14 @@ export async function runCliAgent(params: {
     useResume,
   });
 
+  // When streaming is enabled, replace --output-format json with stream-json
+  const useStreaming = Boolean(params.onToolStatus);
+  const streamArgs = useStreaming
+    ? args.map((arg, i) =>
+        args[i - 1] === "--output-format" && arg === "json" ? "stream-json" : arg,
+      )
+    : args;
+
   const serialize = backend.serialize ?? true;
   const queueKey = serialize ? backendResolved.id : `${backendResolved.id}:${params.runId}`;
 
@@ -216,6 +229,44 @@ export async function runCliAgent(params: {
       await cleanupSuspendedCliProcesses(backend);
       if (useResume && cliSessionIdToSend) {
         await cleanupResumeProcesses(backend, cliSessionIdToSend);
+      }
+
+      // Use streaming execution when onToolStatus is provided
+      if (useStreaming && params.onToolStatus) {
+        log.info("cli streaming mode enabled");
+        const streamResult = await runStreamingCli({
+          command: backend.command,
+          args: streamArgs,
+          cwd: workspaceDir,
+          env,
+          timeoutMs: params.timeoutMs,
+          onEvent: (event) => {
+            if (event.type === "tool_start" && params.onToolStatus) {
+              log.debug(`cli tool start: ${event.toolName}`);
+              params.onToolStatus({
+                toolName: event.toolName,
+                toolCallId: event.toolCallId,
+              });
+            }
+          },
+        });
+
+        if (streamResult.exitCode !== 0 && !streamResult.text) {
+          const reason = classifyFailoverReason("CLI streaming failed") ?? "unknown";
+          const status = resolveFailoverStatus(reason);
+          throw new FailoverError("CLI streaming failed", {
+            reason,
+            provider: params.provider,
+            model: modelId,
+            status,
+          });
+        }
+
+        return {
+          text: streamResult.text,
+          sessionId: streamResult.sessionId,
+          usage: streamResult.usage,
+        };
       }
 
       const result = await runCommandWithTimeout([backend.command, ...args], {
@@ -324,6 +375,8 @@ export async function runClaudeCliAgent(params: {
   ownerNumbers?: string[];
   claudeSessionId?: string;
   images?: ImageContent[];
+  /** Callback for tool execution status (enables streaming mode). */
+  onToolStatus?: CliToolStatusCallback;
 }): Promise<EmbeddedPiRunResult> {
   return runCliAgent({
     sessionId: params.sessionId,
@@ -341,5 +394,8 @@ export async function runClaudeCliAgent(params: {
     ownerNumbers: params.ownerNumbers,
     cliSessionId: params.claudeSessionId,
     images: params.images,
+    onToolStatus: params.onToolStatus,
   });
 }
+
+export { formatToolStatusLabel } from "./cli-runner/streaming.js";
