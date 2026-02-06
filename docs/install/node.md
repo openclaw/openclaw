@@ -9,7 +9,7 @@ read_when:
 
 # Node.js
 
-OpenClaw requires **Node 22 or newer**. The [installer script](/install#installer-script-recommended) will detect and install Node automatically — this page is for when you want to set up Node yourself and make sure everything is wired up correctly (versions, PATH, global installs).
+OpenClaw requires **Node 22 or newer**. The [installer script](/install#install-methods) will detect and install Node automatically — this page is for when you want to set up Node yourself and make sure everything is wired up correctly (versions, PATH, global installs).
 
 ## Check your version
 
