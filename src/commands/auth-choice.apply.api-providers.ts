@@ -15,6 +15,8 @@ import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "./google-gemini-model-default.js";
 import {
+  applyApertisConfig,
+  applyApertisProviderConfig,
   applyAuthProfileConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
@@ -42,6 +44,7 @@ import {
   applyXiaomiProviderConfig,
   applyZaiConfig,
   applyZaiProviderConfig,
+  APERTIS_DEFAULT_MODEL_REF,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
@@ -52,6 +55,7 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
+  setApertisApiKey,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
@@ -113,6 +117,8 @@ export async function applyAuthChoiceApiProviders(
       authChoice = "together-api-key";
     } else if (params.opts.tokenProvider === "huggingface") {
       authChoice = "huggingface-api-key";
+    } else if (params.opts.tokenProvider === "apertis") {
+      authChoice = "apertis-api-key";
     } else if (params.opts.tokenProvider === "opencode") {
       authChoice = "opencode-zen";
     } else if (params.opts.tokenProvider === "qianfan") {
@@ -769,6 +775,64 @@ export async function applyAuthChoiceApiProviders(
         applyDefaultConfig: applyVeniceConfig,
         applyProviderConfig: applyVeniceProviderConfig,
         noteDefault: VENICE_DEFAULT_MODEL_REF,
+        noteAgentModel,
+        prompter: params.prompter,
+      });
+      nextConfig = applied.config;
+      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
+    }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "apertis-api-key") {
+    let hasCredential = false;
+
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "apertis") {
+      await setApertisApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "Apertis AI is a multi-model proxy with dynamic model discovery.",
+          "Get your API key at: https://api.apertis.ai",
+        ].join("\n"),
+        "Apertis AI",
+      );
+    }
+
+    const envKey = resolveEnvApiKey("apertis");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing APERTIS_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setApertisApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Apertis AI API key",
+        validate: validateApiKeyInput,
+      });
+      await setApertisApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "apertis:default",
+      provider: "apertis",
+      mode: "api_key",
+    });
+    {
+      const applied = await applyDefaultModelChoice({
+        config: nextConfig,
+        setDefaultModel: params.setDefaultModel,
+        defaultModel: APERTIS_DEFAULT_MODEL_REF,
+        applyDefaultConfig: applyApertisConfig,
+        applyProviderConfig: applyApertisProviderConfig,
+        noteDefault: APERTIS_DEFAULT_MODEL_REF,
         noteAgentModel,
         prompter: params.prompter,
       });

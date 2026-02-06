@@ -9,6 +9,8 @@ export type AuthChoiceOption = {
   label: string;
   hint?: string;
 };
+
+
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;
@@ -147,6 +149,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "LiteLLM",
     hint: "Unified LLM gateway (100+ providers)",
     choices: ["litellm-api-key"],
+  },
+  {
+    value: "apertis",
+    label: "Apertis AI",
+    hint: "API key (multi-model proxy)",
+    choices: ["apertis-api-key"],
   },
   {
     value: "cloudflare-ai-gateway",

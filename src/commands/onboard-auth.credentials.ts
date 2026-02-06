@@ -206,6 +206,20 @@ export async function setVeniceApiKey(key: string, agentDir?: string) {
   });
 }
 
+export const APERTIS_DEFAULT_MODEL_REF = "apertis/claude-opus-4-5-20251101";
+
+export async function setApertisApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "apertis:default",
+    credential: {
+      type: "api_key",
+      provider: "apertis",
+      key,
+    },
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-5";
 export const XIAOMI_DEFAULT_MODEL_REF = "xiaomi/mimo-v2-flash";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
