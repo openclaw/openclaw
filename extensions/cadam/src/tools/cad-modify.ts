@@ -2,66 +2,82 @@
  * cad_modify tool - Modify CAD model parameters
  */
 
-import { Type } from '@sinclair/typebox';
-import type { CADAMConfig } from '../config.js';
-import { applyParameterChanges } from '../parameter-parser.js';
-import { renderModel, checkOpenSCADAvailable } from '../renderer/openscad-cli.js';
-import { writeFile, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { Type } from "@sinclair/typebox";
+import { writeFile, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import type { PluginLogger } from "../../../src/plugins/types.js";
+import type { CADAMConfig } from "../config.js";
+import type { RenderOptions } from "../renderer/openscad-cli.js";
+import { applyParameterChanges } from "../parameter-parser.js";
+import { renderModel, checkOpenSCADAvailable } from "../renderer/openscad-cli.js";
 
 export const CADModifySchema = Type.Object({
-  modelName: Type.String({ description: 'Name of the model to modify' }),
+  modelName: Type.String({ description: "Name of the model to modify" }),
   parameters: Type.Array(
     Type.Object({
-      name: Type.String({ description: 'Parameter name' }),
+      name: Type.String({ description: "Parameter name" }),
       value: Type.Union([Type.String(), Type.Number(), Type.Boolean()], {
-        description: 'New parameter value',
+        description: "New parameter value",
       }),
     }),
-    { description: 'List of parameter changes to apply' },
+    { description: "List of parameter changes to apply" },
   ),
 });
 
-export async function createCADModifyTool(config: CADAMConfig, logger: any) {
+type CADModifyParams = {
+  modelName: string;
+  parameters: Array<{ name: string; value: string | number | boolean }>;
+};
+
+export async function createCADModifyTool(config: CADAMConfig, logger: PluginLogger) {
   return {
-    name: 'cad_modify',
-    label: 'Modify CAD Parameters',
+    name: "cad_modify",
+    label: "Modify CAD Parameters",
     description:
-      'Modify parameters of an existing CAD model without regenerating. Useful for simple adjustments like changing dimensions.',
+      "Modify parameters of an existing CAD model without regenerating. Useful for simple adjustments like changing dimensions.",
     parameters: CADModifySchema,
-    async execute(_toolCallId: string, params: any) {
+    async execute(_toolCallId: string, params: CADModifyParams) {
       const json = (payload: unknown) => ({
-        content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
         details: payload,
       });
 
       try {
         if (!config.enabled) {
-          throw new Error('CADAM plugin is disabled');
+          throw new Error("CADAM plugin is disabled");
         }
 
-        const modelName = String(params.modelName || '').trim();
+        const modelName = String(params.modelName || "").trim();
         if (!modelName) {
-          throw new Error('modelName is required');
+          throw new Error("modelName is required");
         }
 
         if (!Array.isArray(params.parameters) || params.parameters.length === 0) {
-          throw new Error('parameters array is required and must not be empty');
+          throw new Error("parameters array is required and must not be empty");
         }
 
         logger.info(`[cadam] Modifying model: ${modelName}`);
 
         // Read existing .scad file
         const scadPath = join(config.outputDir, `${modelName}.scad`);
-        const originalCode = await readFile(scadPath, 'utf-8');
+        const originalCode = await readFile(scadPath, "utf-8");
 
         // Apply parameter changes
         const modifiedCode = applyParameterChanges(originalCode, params.parameters);
 
         // Save modified code
-        await writeFile(scadPath, modifiedCode, 'utf-8');
+        await writeFile(scadPath, modifiedCode, "utf-8");
 
-        const response: any = {
+        const response: {
+          success: boolean;
+          code: string;
+          scadPath: string;
+          modelName: string;
+          appliedChanges: Array<{ name: string; value: string | number | boolean }>;
+          exportPath?: string;
+          format?: string;
+          renderError?: string;
+        } = {
           success: true,
           code: modifiedCode,
           scadPath,
@@ -70,17 +86,18 @@ export async function createCADModifyTool(config: CADAMConfig, logger: any) {
         };
 
         // Re-render if CLI renderer is available
-        if (config.renderer === 'cli') {
+        if (config.renderer === "cli" && config.defaultExportFormat !== "scad") {
+          const renderFormat = config.defaultExportFormat;
           const available = await checkOpenSCADAvailable(config.openscadPath);
           if (available) {
             logger.info(`[cadam] Re-rendering ${config.defaultExportFormat}...`);
             const renderResult = await renderModel({
               openscadPath: config.openscadPath,
               outputDir: config.outputDir,
-              format: config.defaultExportFormat as any,
+              format: renderFormat,
               code: modifiedCode,
               modelName,
-            });
+            } as RenderOptions);
 
             if (renderResult.success && renderResult.outputPath) {
               response.exportPath = renderResult.outputPath;

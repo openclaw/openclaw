@@ -2,8 +2,8 @@
  * CAD code generator using AI
  */
 
-import { STRICT_CODE_PROMPT } from './prompts/openscad.js';
-import { parseParameters, type Parameter } from './parameter-parser.js';
+import { parseParameters, type Parameter } from "./parameter-parser.js";
+import { STRICT_CODE_PROMPT } from "./prompts/openscad.js";
 
 export interface GenerateOptions {
   description: string;
@@ -21,7 +21,7 @@ export interface GenerateResult {
 }
 
 interface AIMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: "system" | "user" | "assistant";
   content: string;
 }
 
@@ -36,13 +36,11 @@ export async function generateCADCode(
 
   try {
     // Build messages for AI
-    const messages: AIMessage[] = [
-      { role: 'system', content: STRICT_CODE_PROMPT },
-    ];
+    const messages: AIMessage[] = [{ role: "system", content: STRICT_CODE_PROMPT }];
 
     // Add base code if modifying existing design
     if (baseCode) {
-      messages.push({ role: 'assistant', content: baseCode });
+      messages.push({ role: "assistant", content: baseCode });
     }
 
     // Add user request
@@ -50,7 +48,7 @@ export async function generateCADCode(
     if (error) {
       userMessage = `${description}\n\nFix this OpenSCAD error: ${error}`;
     }
-    messages.push({ role: 'user', content: userMessage });
+    messages.push({ role: "user", content: userMessage });
 
     // Call AI to generate code
     const rawCode = await aiCall(messages, maxTokens);
@@ -67,7 +65,7 @@ export async function generateCADCode(
     if (!isValidOpenSCADCode(code)) {
       return {
         success: false,
-        error: 'Generated code does not appear to be valid OpenSCAD',
+        error: "Generated code does not appear to be valid OpenSCAD",
       };
     }
 
@@ -91,7 +89,9 @@ export async function generateCADCode(
  * Check if code looks like valid OpenSCAD
  */
 function isValidOpenSCADCode(code: string): boolean {
-  if (!code || code.length < 20) return false;
+  if (!code || code.length < 20) {
+    return false;
+  }
 
   // Check for OpenSCAD keywords
   const keywords = [
@@ -108,7 +108,9 @@ function isValidOpenSCADCode(code: string): boolean {
  * Extract OpenSCAD code from text (fallback when AI doesn't use tools)
  */
 export function extractOpenSCADCodeFromText(text: string): string | null {
-  if (!text) return null;
+  if (!text) {
+    return null;
+  }
 
   // Try to extract from markdown code blocks
   const codeBlockRegex = /```(?:openscad)?\s*\n?([\s\S]*?)\n?```/g;
@@ -142,7 +144,9 @@ export function extractOpenSCADCodeFromText(text: string): string | null {
  * Score how likely text is to be OpenSCAD code
  */
 function scoreOpenSCADCode(code: string): number {
-  if (!code || code.length < 20) return 0;
+  if (!code || code.length < 20) {
+    return 0;
+  }
 
   let score = 0;
 

@@ -6,7 +6,7 @@
 export interface Parameter {
   name: string;
   displayName: string;
-  type: 'number' | 'boolean' | 'string' | 'number[]' | 'string[]' | 'boolean[]';
+  type: "number" | "boolean" | "string" | "number[]" | "string[]" | "boolean[]";
   value: string | number | boolean | number[] | string[] | boolean[];
   defaultValue: string | number | boolean | number[] | string[] | boolean[];
   description?: string;
@@ -23,45 +23,45 @@ export interface Parameter {
 }
 
 function escapeRegExp(string: string): string {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function convertType(rawValue: string): {
   value: string | boolean | number | string[] | number[] | boolean[];
-  type: Parameter['type'];
+  type: Parameter["type"];
 } {
   if (/^-?\d+(\.\d+)?$/.test(rawValue)) {
-    return { value: Number.parseFloat(rawValue), type: 'number' };
+    return { value: Number.parseFloat(rawValue), type: "number" };
   }
-  if (rawValue === 'true' || rawValue === 'false') {
-    return { value: rawValue === 'true', type: 'boolean' };
+  if (rawValue === "true" || rawValue === "false") {
+    return { value: rawValue === "true", type: "boolean" };
   }
   if (/^".*"$/.test(rawValue)) {
-    rawValue = rawValue.replace(/^"(.*)"$/, '$1');
-    return { value: rawValue, type: 'string' };
+    rawValue = rawValue.replace(/^"(.*)"$/, "$1");
+    return { value: rawValue, type: "string" };
   }
-  if (rawValue.startsWith('[') && rawValue.endsWith(']')) {
+  if (rawValue.startsWith("[") && rawValue.endsWith("]")) {
     const arrayValue = rawValue
       .slice(1, -1)
-      .split(',')
+      .split(",")
       .map((item) => item.trim());
 
     if (arrayValue.length > 0 && arrayValue.every((item) => /^\d+(\.\d+)?$/.test(item))) {
       return {
         value: arrayValue.map((item) => Number.parseFloat(item)),
-        type: 'number[]',
+        type: "number[]",
       };
     }
     if (arrayValue.length > 0 && arrayValue.every((item) => /^".*"$/.test(item))) {
       return {
         value: arrayValue.map((item) => item.slice(1, -1)),
-        type: 'string[]',
+        type: "string[]",
       };
     }
-    if (arrayValue.length > 0 && arrayValue.every((item) => item === 'true' || item === 'false')) {
+    if (arrayValue.length > 0 && arrayValue.every((item) => item === "true" || item === "false")) {
       return {
-        value: arrayValue.map((item) => item === 'true'),
-        type: 'boolean[]',
+        value: arrayValue.map((item) => item === "true"),
+        type: "boolean[]",
       };
     }
     throw new Error(
@@ -82,8 +82,8 @@ export function parseParameters(script: string): Parameter[] {
 
   const groupSections: { id: string; group: string; code: string }[] = [
     {
-      id: '',
-      group: '',
+      id: "",
+      group: "",
       code: script,
     },
   ];
@@ -94,7 +94,7 @@ export function parseParameters(script: string): Parameter[] {
     groupSections.push({
       id: tmpGroup[0],
       group: tmpGroup[1].trim(),
-      code: '',
+      code: "",
     });
   }
 
@@ -117,9 +117,7 @@ export function parseParameters(script: string): Parameter[] {
     while ((match = parameterRegex.exec(groupSection.code)) !== null) {
       const name = match[1];
       const value = match[2];
-      let typeAndValue:
-        | { value: Parameter['value']; type: Parameter['type'] }
-        | undefined;
+      let typeAndValue: { value: Parameter["value"]; type: Parameter["type"] } | undefined;
       try {
         typeAndValue = convertType(value);
       } catch {
@@ -130,46 +128,46 @@ export function parseParameters(script: string): Parameter[] {
         continue;
       }
 
-      let description: Parameter['description'];
-      const options: Parameter['options'] = [];
-      let range: Parameter['range'] = {};
+      let description: Parameter["description"];
+      const options: Parameter["options"] = [];
+      let range: Parameter["range"] = {};
 
       // Check if the value is another variable or an expression
       if (
-        value !== 'true' &&
-        value !== 'false' &&
-        (value.match(/^[a-zA-Z_]/) || value.split('\n').length > 1)
+        value !== "true" &&
+        value !== "false" &&
+        (value.match(/^[a-zA-Z_]/) || value.split("\n").length > 1)
       ) {
         continue;
       }
 
       if (match[3]) {
-        const rawComment = match[3].replace(/^\/\/\s*/, '').trim();
-        const cleaned = rawComment.replace(/^\[+|\]+$/g, '');
+        const rawComment = match[3].replace(/^\/\/\s*/, "").trim();
+        const cleaned = rawComment.replace(/^\[+|\]+$/g, "");
 
         if (!Number.isNaN(Number(rawComment))) {
-          if (typeAndValue.type === 'string') {
+          if (typeAndValue.type === "string") {
             range = { max: Number.parseFloat(cleaned) };
           } else {
             range = { step: Number.parseFloat(cleaned) };
           }
-        } else if (rawComment.startsWith('[') && cleaned.includes(',')) {
+        } else if (rawComment.startsWith("[") && cleaned.includes(",")) {
           options.push(
             ...cleaned
               .trim()
-              .split(',')
+              .split(",")
               .map((option) => {
-                const parts = option.trim().split(':');
+                const parts = option.trim().split(":");
                 let value: string | number = parts[0];
                 const label: string | undefined = parts[1];
-                if (typeAndValue.type === 'number') {
+                if (typeAndValue.type === "number") {
                   value = Number.parseFloat(value);
                 }
                 return { value, label };
               }),
           );
         } else if (cleaned.match(/([0-9]+:?)+/)) {
-          const [min, maxOrStep, max] = cleaned.trim().split(':');
+          const [min, maxOrStep, max] = cleaned.trim().split(":");
 
           if (min && (maxOrStep || max)) {
             range = { min: Number.parseFloat(min) };
@@ -184,28 +182,28 @@ export function parseParameters(script: string): Parameter[] {
       }
 
       // Search for the comment right above the parameter definition
-      let above = script.split(new RegExp(`^${escapeRegExp(match[0])}`, 'gm'))[0];
+      let above = script.split(new RegExp(`^${escapeRegExp(match[0])}`, "gm"))[0];
 
-      if (above.endsWith('\n')) {
+      if (above.endsWith("\n")) {
         above = above.slice(0, -1);
       }
 
-      const splitted = above.split('\n').reverse();
+      const splitted = above.split("\n").toReversed();
       const lastLineBeforeDefinition = splitted[0];
-      if (lastLineBeforeDefinition.trim().startsWith('//')) {
-        description = lastLineBeforeDefinition.replace(/^\/\/\/*\s*/, '');
+      if (lastLineBeforeDefinition.trim().startsWith("//")) {
+        description = lastLineBeforeDefinition.replace(/^\/\/\/*\s*/, "");
         if (description.length === 0) {
           description = undefined;
         }
       }
 
       let displayName = name
-        .replace(/_/g, ' ')
-        .split(' ')
+        .replace(/_/g, " ")
+        .split(" ")
         .map((word) => word[0].toUpperCase() + word.slice(1))
-        .join(' ');
-      if (name === '$fn') {
-        displayName = 'Resolution';
+        .join(" ");
+      if (name === "$fn") {
+        displayName = "Resolution";
       }
 
       parameters[name] = {
@@ -233,14 +231,21 @@ export function applyParameterChanges(
 
   for (const upd of updates) {
     const target = currentParams.find((p) => p.name === upd.name);
-    if (!target) continue;
+    if (!target) {
+      continue;
+    }
 
     let coerced: string | number | boolean = upd.value;
     try {
-      if (target.type === 'number') coerced = Number(upd.value);
-      else if (target.type === 'boolean') coerced = String(upd.value) === 'true';
-      else if (target.type === 'string') coerced = String(upd.value);
-      else coerced = upd.value;
+      if (target.type === "number") {
+        coerced = Number(upd.value);
+      } else if (target.type === "boolean") {
+        coerced = String(upd.value) === "true";
+      } else if (target.type === "string") {
+        coerced = String(upd.value);
+      } else {
+        coerced = upd.value;
+      }
     } catch {
       coerced = upd.value;
     }
@@ -248,13 +253,13 @@ export function applyParameterChanges(
     patchedCode = patchedCode.replace(
       new RegExp(
         `^\\s*(${escapeRegExp(target.name)}\\s*=\\s*)[^;]+;([\\t\\f\\cK ]*\\/\\/[^\\n]*)?`,
-        'm',
+        "m",
       ),
       (_match, g1: string, g2: string) => {
-        if (target.type === 'string') {
-          return `${g1}"${String(coerced).replace(/"/g, '\\"')}";${g2 || ''}`;
+        if (target.type === "string") {
+          return `${g1}"${String(coerced).replace(/"/g, '\\"')}";${g2 || ""}`;
         }
-        return `${g1}${coerced};${g2 || ''}`;
+        return `${g1}${coerced};${g2 || ""}`;
       },
     );
   }
