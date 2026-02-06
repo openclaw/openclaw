@@ -611,19 +611,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             continue;
           }
 
-          const lintStep = await runStep(
-            step(`preflight lint (${shortSha})`, managerScriptArgs(manager, "lint"), worktreeDir),
-          );
-          steps.push(lintStep);
-          if (lintStep.exitCode !== 0) {
-            continue;
-          }
-
           const buildStep = await runStep(
             step(`preflight build (${shortSha})`, managerScriptArgs(manager, "build"), worktreeDir),
           );
           steps.push(buildStep);
           if (buildStep.exitCode !== 0) {
+            continue;
+          }
+
+          const lintStep = await runStep(
+            step(`preflight lint (${shortSha})`, managerScriptArgs(manager, "lint"), worktreeDir),
+          );
+          steps.push(lintStep);
+          if (lintStep.exitCode !== 0) {
             continue;
           }
 
