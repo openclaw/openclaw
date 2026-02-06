@@ -34,15 +34,17 @@ async function releaseAllLocks(): Promise<void> {
   }
 }
 
-// Register cleanup handlers to release locks on unexpected termination
-process.on("exit", releaseAllLocks);
-process.on("SIGTERM", () => {
-  void releaseAllLocks().then(() => process.exit(0));
-});
-process.on("SIGINT", () => {
-  void releaseAllLocks().then(() => process.exit(0));
-});
-// Note: unhandledRejection handler will call process.exit() which triggers 'exit'
+if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
+  // Register cleanup handlers to release locks on unexpected termination
+  process.on("exit", releaseAllLocks);
+  process.on("SIGTERM", () => {
+    void releaseAllLocks().then(() => process.exit(0));
+  });
+  process.on("SIGINT", () => {
+    void releaseAllLocks().then(() => process.exit(0));
+  });
+  // Note: unhandledRejection handler will call process.exit() which triggers 'exit'
+}
 
 function isAlive(pid: number): boolean {
   if (!Number.isFinite(pid) || pid <= 0) {
