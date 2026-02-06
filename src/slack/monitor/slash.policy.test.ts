@@ -32,6 +32,9 @@ function createHarness(overrides?: {
   channelsConfig?: Record<string, { allow?: boolean; requireMention?: boolean }>;
   channelId?: string;
   channelName?: string;
+  allowFrom?: string[];
+  useAccessGroups?: boolean;
+  resolveChannelName?: () => Promise<{ name?: string; type?: string }>;
 }) {
   const commands = new Map<unknown, (args: unknown) => Promise<void>>();
   const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
@@ -51,14 +54,14 @@ function createHarness(overrides?: {
     botToken: "bot-token",
     botUserId: "bot",
     teamId: "T1",
-    allowFrom: ["*"],
+    allowFrom: overrides?.allowFrom ?? ["*"],
     dmEnabled: true,
     dmPolicy: "open",
     groupDmEnabled: false,
     groupDmChannels: [],
     defaultRequireMention: true,
     groupPolicy: overrides?.groupPolicy ?? "open",
-    useAccessGroups: true,
+    useAccessGroups: overrides?.useAccessGroups ?? true,
     channelsConfig: overrides?.channelsConfig,
     slashCommand: {
       enabled: true,
@@ -69,7 +72,8 @@ function createHarness(overrides?: {
     textLimit: 4000,
     app,
     isChannelAllowed: () => true,
-    resolveChannelName: async () => ({ name: channelName, type: "channel" }),
+    resolveChannelName:
+      overrides?.resolveChannelName ?? (async () => ({ name: channelName, type: "channel" })),
     resolveUserName: async () => ({ name: "Ada" }),
   } as unknown;
 
@@ -190,6 +194,112 @@ describe("slack slash commands channel policy", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith({
       text: "This channel is not allowed.",
+      response_type: "ephemeral",
+    });
+  });
+});
+
+describe("slack slash commands access groups", () => {
+  it("fails closed when channel type lookup returns empty for channels", async () => {
+    const { commands, ctx, account, channelId, channelName } = createHarness({
+      allowFrom: [],
+      channelId: "C_UNKNOWN",
+      channelName: "unknown",
+      resolveChannelName: async () => ({}),
+    });
+    registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+
+    const handler = [...commands.values()][0];
+    if (!handler) {
+      throw new Error("Missing slash handler");
+    }
+
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: channelId,
+        channel_name: channelName,
+        text: "hello",
+        trigger_id: "t1",
+      },
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond,
+    });
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith({
+      text: "You are not authorized to use this command.",
+      response_type: "ephemeral",
+    });
+  });
+
+  it("still treats D-prefixed channel ids as DMs when lookup fails", async () => {
+    const { commands, ctx, account } = createHarness({
+      allowFrom: [],
+      channelId: "D123",
+      channelName: "notdirectmessage",
+      resolveChannelName: async () => ({}),
+    });
+    registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+
+    const handler = [...commands.values()][0];
+    if (!handler) {
+      throw new Error("Missing slash handler");
+    }
+
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: "D123",
+        channel_name: "notdirectmessage",
+        text: "hello",
+        trigger_id: "t1",
+      },
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond,
+    });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(respond).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: "You are not authorized to use this command." }),
+    );
+  });
+
+  it("enforces access-group gating when lookup fails for private channels", async () => {
+    const { commands, ctx, account, channelId, channelName } = createHarness({
+      allowFrom: [],
+      channelId: "G123",
+      channelName: "private",
+      resolveChannelName: async () => ({}),
+    });
+    registerSlackMonitorSlashCommands({ ctx: ctx as never, account: account as never });
+
+    const handler = [...commands.values()][0];
+    if (!handler) {
+      throw new Error("Missing slash handler");
+    }
+
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      command: {
+        user_id: "U1",
+        user_name: "Ada",
+        channel_id: channelId,
+        channel_name: channelName,
+        text: "hello",
+        trigger_id: "t1",
+      },
+      ack: vi.fn().mockResolvedValue(undefined),
+      respond,
+    });
+
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith({
+      text: "You are not authorized to use this command.",
       response_type: "ephemeral",
     });
   });

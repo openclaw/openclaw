@@ -28,7 +28,7 @@ Run the Gateway on a persistent host and reach it via **Tailscale** or SSH.
 
 - **Best UX:** keep `gateway.bind: "loopback"` and use **Tailscale Serve** for the Control UI.
 - **Fallback:** keep loopback + SSH tunnel from any machine that needs access.
-- **Examples:** [exe.dev](/platforms/exe-dev) (easy VM) or [Hetzner](/platforms/hetzner) (production VPS).
+- **Examples:** [exe.dev](/install/exe-dev) (easy VM) or [Hetzner](/install/hetzner) (production VPS).
 
 This is ideal when your laptop sleeps often but you want the agent always-on.
 
@@ -80,6 +80,8 @@ With the tunnel up:
 - `openclaw gateway {status,health,send,agent,call}` can also target the forwarded URL via `--url` when needed.
 
 Note: replace `18789` with your configured `gateway.port` (or `--port`/`OPENCLAW_GATEWAY_PORT`).
+Note: when you pass `--url`, the CLI does not fall back to config or environment credentials.
+Include `--token` or `--password` explicitly. Missing explicit credentials is an error.
 
 ## CLI remote defaults
 

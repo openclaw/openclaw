@@ -2,7 +2,9 @@ import { Type } from "@sinclair/typebox";
 import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { truncateUtf16Safe } from "../../utils.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
   createAgentToAgentPolicy,
@@ -18,6 +20,131 @@ const SessionsHistoryToolSchema = Type.Object({
   limit: Type.Optional(Type.Number({ minimum: 1 })),
   includeTools: Type.Optional(Type.Boolean()),
 });
+
+const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
+const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
+
+function truncateHistoryText(text: string): { text: string; truncated: boolean } {
+  if (text.length <= SESSIONS_HISTORY_TEXT_MAX_CHARS) {
+    return { text, truncated: false };
+  }
+  const cut = truncateUtf16Safe(text, SESSIONS_HISTORY_TEXT_MAX_CHARS);
+  return { text: `${cut}\n…(truncated)…`, truncated: true };
+}
+
+function sanitizeHistoryContentBlock(block: unknown): { block: unknown; truncated: boolean } {
+  if (!block || typeof block !== "object") {
+    return { block, truncated: false };
+  }
+  const entry = { ...(block as Record<string, unknown>) };
+  let truncated = false;
+  const type = typeof entry.type === "string" ? entry.type : "";
+  if (typeof entry.text === "string") {
+    const res = truncateHistoryText(entry.text);
+    entry.text = res.text;
+    truncated ||= res.truncated;
+  }
+  if (type === "thinking") {
+    if (typeof entry.thinking === "string") {
+      const res = truncateHistoryText(entry.thinking);
+      entry.thinking = res.text;
+      truncated ||= res.truncated;
+    }
+    // The encrypted signature can be extremely large and is not useful for history recall.
+    if ("thinkingSignature" in entry) {
+      delete entry.thinkingSignature;
+      truncated = true;
+    }
+  }
+  if (typeof entry.partialJson === "string") {
+    const res = truncateHistoryText(entry.partialJson);
+    entry.partialJson = res.text;
+    truncated ||= res.truncated;
+  }
+  if (type === "image") {
+    const data = typeof entry.data === "string" ? entry.data : undefined;
+    const bytes = data ? data.length : undefined;
+    if ("data" in entry) {
+      delete entry.data;
+      truncated = true;
+    }
+    entry.omitted = true;
+    if (bytes !== undefined) {
+      entry.bytes = bytes;
+    }
+  }
+  return { block: entry, truncated };
+}
+
+function sanitizeHistoryMessage(message: unknown): { message: unknown; truncated: boolean } {
+  if (!message || typeof message !== "object") {
+    return { message, truncated: false };
+  }
+  const entry = { ...(message as Record<string, unknown>) };
+  let truncated = false;
+  // Tool result details often contain very large nested payloads.
+  if ("details" in entry) {
+    delete entry.details;
+    truncated = true;
+  }
+  if ("usage" in entry) {
+    delete entry.usage;
+    truncated = true;
+  }
+  if ("cost" in entry) {
+    delete entry.cost;
+    truncated = true;
+  }
+
+  if (typeof entry.content === "string") {
+    const res = truncateHistoryText(entry.content);
+    entry.content = res.text;
+    truncated ||= res.truncated;
+  } else if (Array.isArray(entry.content)) {
+    const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block));
+    entry.content = updated.map((item) => item.block);
+    truncated ||= updated.some((item) => item.truncated);
+  }
+  if (typeof entry.text === "string") {
+    const res = truncateHistoryText(entry.text);
+    entry.text = res.text;
+    truncated ||= res.truncated;
+  }
+  return { message: entry, truncated };
+}
+
+function jsonUtf8Bytes(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch {
+    return Buffer.byteLength(String(value), "utf8");
+  }
+}
+
+function enforceSessionsHistoryHardCap(params: {
+  items: unknown[];
+  bytes: number;
+  maxBytes: number;
+}): { items: unknown[]; bytes: number; hardCapped: boolean } {
+  if (params.bytes <= params.maxBytes) {
+    return { items: params.items, bytes: params.bytes, hardCapped: false };
+  }
+
+  const last = params.items.at(-1);
+  const lastOnly = last ? [last] : [];
+  const lastBytes = jsonUtf8Bytes(lastOnly);
+  if (lastBytes <= params.maxBytes) {
+    return { items: lastOnly, bytes: lastBytes, hardCapped: true };
+  }
+
+  const placeholder = [
+    {
+      role: "assistant",
+      content: "[sessions_history omitted: message too large]",
+    },
+  ];
+  return { items: placeholder, bytes: jsonUtf8Bytes(placeholder), hardCapped: true };
+}
 
 function resolveSandboxSessionToolsVisibility(cfg: ReturnType<typeof loadConfig>) {
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
@@ -131,10 +258,26 @@ export function createSessionsHistoryTool(opts?: {
         params: { sessionKey: resolvedKey, limit },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
-      const messages = includeTools ? rawMessages : stripToolMessages(rawMessages);
+      const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
+      const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
+      const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
+      const cappedMessages = capArrayByJsonBytes(
+        sanitizedMessages.map((entry) => entry.message),
+        SESSIONS_HISTORY_MAX_BYTES,
+      );
+      const droppedMessages = cappedMessages.items.length < selectedMessages.length;
+      const hardened = enforceSessionsHistoryHardCap({
+        items: cappedMessages.items,
+        bytes: cappedMessages.bytes,
+        maxBytes: SESSIONS_HISTORY_MAX_BYTES,
+      });
       return jsonResult({
         sessionKey: displayKey,
-        messages,
+        messages: hardened.items,
+        truncated: droppedMessages || contentTruncated || hardened.hardCapped,
+        droppedMessages: droppedMessages || hardened.hardCapped,
+        contentTruncated,
+        bytes: hardened.bytes,
       });
     },
   };

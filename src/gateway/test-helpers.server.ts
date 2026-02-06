@@ -28,6 +28,7 @@ import {
   sessionStoreSaveDelayMs,
   setTestConfigRoot,
   testIsNixMode,
+  testTailscaleWhois,
   testState,
   testTailnetIPv4,
 } from "./test-helpers.mocks.js";
@@ -43,6 +44,7 @@ let previousConfigPath: string | undefined;
 let previousSkipBrowserControl: string | undefined;
 let previousSkipGmailWatcher: string | undefined;
 let previousSkipCanvasHost: string | undefined;
+let previousBundledPluginsDir: string | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
 
@@ -82,6 +84,7 @@ async function setupGatewayTestHome() {
   previousSkipBrowserControl = process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
   previousSkipGmailWatcher = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
   previousSkipCanvasHost = process.env.OPENCLAW_SKIP_CANVAS_HOST;
+  previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-home-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
@@ -93,6 +96,9 @@ function applyGatewaySkipEnv() {
   process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
   process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
   process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tempHome
+    ? path.join(tempHome, "openclaw-test-no-bundled-extensions")
+    : "openclaw-test-no-bundled-extensions";
 }
 
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
@@ -109,6 +115,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   setTestConfigRoot(tempConfigRoot);
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
+  testTailscaleWhois.value = null;
   testState.gatewayBind = undefined;
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
@@ -181,6 +188,11 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
       delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
     } else {
       process.env.OPENCLAW_SKIP_CANVAS_HOST = previousSkipCanvasHost;
+    }
+    if (previousBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
     }
   }
   if (options.restoreEnv && tempHome) {
@@ -273,7 +285,9 @@ export function onceMessage<T = unknown>(
 
 export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
   const mod = await serverModulePromise;
-  return await mod.startGatewayServer(port, opts);
+  const resolvedOpts =
+    opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
+  return await mod.startGatewayServer(port, resolvedOpts);
 }
 
 export async function startServerWithClient(token?: string, opts?: GatewayServerOptions) {
@@ -311,7 +325,30 @@ export async function startServerWithClient(token?: string, opts?: GatewayServer
   }
 
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off("open", onOpen);
+      ws.off("error", onError);
+      ws.off("close", onClose);
+    };
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: unknown) => {
+      cleanup();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+    const onClose = (code: number, reason: Buffer) => {
+      cleanup();
+      reject(new Error(`closed ${code}: ${reason.toString()}`));
+    };
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+    ws.once("close", onClose);
+  });
   return { server, ws, port, prevToken: prev };
 }
 

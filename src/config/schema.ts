@@ -124,6 +124,7 @@ const FIELD_LABELS: Record<string, string> = {
   "diagnostics.cacheTrace.includePrompt": "Cache Trace Include Prompt",
   "diagnostics.cacheTrace.includeSystem": "Cache Trace Include System",
   "agents.list.*.identity.avatar": "Identity Avatar",
+  "agents.list.*.skills": "Agent Skill Filter",
   "gateway.remote.url": "Remote Gateway URL",
   "gateway.remote.sshTarget": "Remote Gateway SSH Target",
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
@@ -200,6 +201,8 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.maxRedirects": "Web Fetch Max Redirects",
   "tools.web.fetch.userAgent": "Web Fetch User-Agent",
   "gateway.controlUi.basePath": "Control UI Base Path",
+  "gateway.controlUi.root": "Control UI Assets Root",
+  "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",
   "gateway.controlUi.allowInsecureAuth": "Allow Insecure Control UI Auth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth": "Dangerously Disable Control UI Device Auth",
   "gateway.http.endpoints.chatCompletions.enabled": "OpenAI Chat Completions Endpoint",
@@ -253,6 +256,27 @@ const FIELD_LABELS: Record<string, string> = {
     "Memory Search Hybrid Candidate Multiplier",
   "agents.defaults.memorySearch.cache.enabled": "Memory Search Embedding Cache",
   "agents.defaults.memorySearch.cache.maxEntries": "Memory Search Embedding Cache Max Entries",
+  memory: "Memory",
+  "memory.backend": "Memory Backend",
+  "memory.citations": "Memory Citations Mode",
+  "memory.qmd.command": "QMD Binary",
+  "memory.qmd.includeDefaultMemory": "QMD Include Default Memory",
+  "memory.qmd.paths": "QMD Extra Paths",
+  "memory.qmd.paths.path": "QMD Path",
+  "memory.qmd.paths.pattern": "QMD Path Pattern",
+  "memory.qmd.paths.name": "QMD Path Name",
+  "memory.qmd.sessions.enabled": "QMD Session Indexing",
+  "memory.qmd.sessions.exportDir": "QMD Session Export Directory",
+  "memory.qmd.sessions.retentionDays": "QMD Session Retention (days)",
+  "memory.qmd.update.interval": "QMD Update Interval",
+  "memory.qmd.update.debounceMs": "QMD Update Debounce (ms)",
+  "memory.qmd.update.onBoot": "QMD Update on Startup",
+  "memory.qmd.update.embedInterval": "QMD Embed Interval",
+  "memory.qmd.limits.maxResults": "QMD Max Results",
+  "memory.qmd.limits.maxSnippetChars": "QMD Max Snippet Chars",
+  "memory.qmd.limits.maxInjectedChars": "QMD Max Injected Chars",
+  "memory.qmd.limits.timeoutMs": "QMD Search Timeout (ms)",
+  "memory.qmd.scope": "QMD Surface Scope",
   "auth.profiles": "Auth Profiles",
   "auth.order": "Auth Profile Order",
   "auth.cooldowns.billingBackoffHours": "Billing Backoff (hours)",
@@ -277,6 +301,7 @@ const FIELD_LABELS: Record<string, string> = {
   "commands.debug": "Allow /debug",
   "commands.restart": "Allow Restart",
   "commands.useAccessGroups": "Use Access Groups",
+  "commands.ownerAllowFrom": "Command Owners",
   "ui.seamColor": "Accent Color",
   "ui.assistant.name": "Assistant Name",
   "ui.assistant.avatar": "Assistant Avatar",
@@ -346,6 +371,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.mattermost.requireMention": "Mattermost Require Mention",
   "channels.signal.account": "Signal Account",
   "channels.imessage.cliPath": "iMessage CLI Path",
+  "agents.list[].skills": "Agent Skill Filter",
   "agents.list[].identity.avatar": "Agent Avatar",
   "discovery.mdns.mode": "mDNS Discovery Mode",
   "plugins.enabled": "Enable Plugins",
@@ -377,6 +403,10 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
+  "agents.list.*.skills":
+    "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
+  "agents.list[].skills":
+    "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "discovery.mdns.mode":
@@ -386,6 +416,10 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.auth.password": "Required for Tailscale funnel.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
+  "gateway.controlUi.root":
+    "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
+  "gateway.controlUi.allowedOrigins":
+    "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com).",
   "gateway.controlUi.allowInsecureAuth":
     "Allow Control UI auth over insecure HTTP (token-only; not recommended).",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
@@ -450,6 +484,8 @@ const FIELD_HELP: Record<string, string> = {
     'Perplexity model override (default: "perplexity/sonar-pro").',
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
+  "tools.web.fetch.maxCharsCap":
+    "Hard cap for web_fetch maxChars (applies to config and tool calls).",
   "tools.web.fetch.timeoutSeconds": "Timeout in seconds for web_fetch requests.",
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
   "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",
@@ -542,6 +578,37 @@ const FIELD_HELP: Record<string, string> = {
     "Multiplier for candidate pool size (default: 4).",
   "agents.defaults.memorySearch.cache.enabled":
     "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
+  memory: "Memory backend configuration (global).",
+  "memory.backend": 'Memory backend ("builtin" for OpenClaw embeddings, "qmd" for QMD sidecar).',
+  "memory.citations": 'Default citation behavior ("auto", "on", or "off").',
+  "memory.qmd.command": "Path to the qmd binary (default: resolves from PATH).",
+  "memory.qmd.includeDefaultMemory":
+    "Whether to automatically index MEMORY.md + memory/**/*.md (default: true).",
+  "memory.qmd.paths":
+    "Additional directories/files to index with QMD (path + optional glob pattern).",
+  "memory.qmd.paths.path": "Absolute or ~-relative path to index via QMD.",
+  "memory.qmd.paths.pattern": "Glob pattern relative to the path root (default: **/*.md).",
+  "memory.qmd.paths.name":
+    "Optional stable name for the QMD collection (default derived from path).",
+  "memory.qmd.sessions.enabled":
+    "Enable QMD session transcript indexing (experimental, default: false).",
+  "memory.qmd.sessions.exportDir":
+    "Override directory for sanitized session exports before indexing.",
+  "memory.qmd.sessions.retentionDays":
+    "Retention window for exported sessions before pruning (default: unlimited).",
+  "memory.qmd.update.interval":
+    "How often the QMD sidecar refreshes indexes (duration string, default: 5m).",
+  "memory.qmd.update.debounceMs":
+    "Minimum delay between successive QMD refresh runs (default: 15000).",
+  "memory.qmd.update.onBoot": "Run QMD update once on gateway startup (default: true).",
+  "memory.qmd.update.embedInterval":
+    "How often QMD embeddings are refreshed (duration string, default: 60m). Set to 0 to disable periodic embed.",
+  "memory.qmd.limits.maxResults": "Max QMD results returned to the agent loop (default: 6).",
+  "memory.qmd.limits.maxSnippetChars": "Max characters per snippet pulled from QMD (default: 700).",
+  "memory.qmd.limits.maxInjectedChars": "Max total characters injected from QMD hits per turn.",
+  "memory.qmd.limits.timeoutMs": "Per-query timeout for QMD searches (default: 4000).",
+  "memory.qmd.scope":
+    "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only).",
   "agents.defaults.memorySearch.cache.maxEntries":
     "Optional cap on cached embeddings (best-effort).",
   "agents.defaults.memorySearch.sync.onSearch":
@@ -595,6 +662,8 @@ const FIELD_HELP: Record<string, string> = {
   "commands.debug": "Allow /debug chat command for runtime-only overrides (default: false).",
   "commands.restart": "Allow /restart and gateway restart tool actions (default: false).",
   "commands.useAccessGroups": "Enforce access-group allowlists/policies for commands.",
+  "commands.ownerAllowFrom":
+    "Explicit owner allowlist for owner-only tools/commands. Use channel-native IDs (optionally prefixed like \"whatsapp:+15551234567\"). '*' is ignored.",
   "session.dmScope":
     'DM session scoping: "main" keeps continuity; "per-peer", "per-channel-peer", or "per-account-channel-peer" isolates DM history (recommended for shared inboxes/multi-account).',
   "session.identityLinks":
@@ -689,6 +758,8 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",
   "gateway.controlUi.basePath": "/openclaw",
+  "gateway.controlUi.root": "dist/control-ui",
+  "gateway.controlUi.allowedOrigins": "https://control.example.com",
   "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.list[].identity.avatar": "avatars/openclaw.png",
 };

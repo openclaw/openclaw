@@ -172,15 +172,21 @@ export function createSessionsSpawnTool(opts?: {
         normalizeModelSelection(modelOverride) ??
         normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
         normalizeModelSelection(cfg.agents?.defaults?.subagents?.model);
+
+      const resolvedThinkingDefaultRaw =
+        readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
+        readStringParam(cfg.agents?.defaults?.subagents ?? {}, "thinking");
+
       let thinkingOverride: string | undefined;
-      if (thinkingOverrideRaw) {
-        const normalized = normalizeThinkLevel(thinkingOverrideRaw);
+      const thinkingCandidateRaw = thinkingOverrideRaw || resolvedThinkingDefaultRaw;
+      if (thinkingCandidateRaw) {
+        const normalized = normalizeThinkLevel(thinkingCandidateRaw);
         if (!normalized) {
           const { provider, model } = splitModelRef(resolvedModel);
           const hint = formatThinkingLevels(provider, model);
           return jsonResult({
             status: "error",
-            error: `Invalid thinking level "${thinkingOverrideRaw}". Use one of: ${hint}.`,
+            error: `Invalid thinking level "${thinkingCandidateRaw}". Use one of: ${hint}.`,
           });
         }
         thinkingOverride = normalized;
@@ -225,6 +231,10 @@ export function createSessionsSpawnTool(opts?: {
             message: task,
             sessionKey: childSessionKey,
             channel: requesterOrigin?.channel,
+            to: requesterOrigin?.to ?? undefined,
+            accountId: requesterOrigin?.accountId ?? undefined,
+            threadId:
+              requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
             idempotencyKey: childIdem,
             deliver: false,
             lane: AGENT_LANE_SUBAGENT,

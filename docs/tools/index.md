@@ -252,6 +252,7 @@ Core parameters:
 Notes:
 
 - Enable via `tools.web.fetch.enabled`.
+- `maxChars` is clamped by `tools.web.fetch.maxCharsCap` (default 50000).
 - Responses are cached (default 15 min).
 - For JS-heavy sites, prefer the browser tool.
 - See [Web tools](/tools/web) for setup.
@@ -463,6 +464,9 @@ Gateway-backed tools (`canvas`, `nodes`, `cron`):
 - `gatewayUrl` (default `ws://127.0.0.1:18789`)
 - `gatewayToken` (if auth enabled)
 - `timeoutMs`
+
+Note: when `gatewayUrl` is set, include `gatewayToken` explicitly. Tools do not inherit config
+or environment credentials for overrides, and missing explicit credentials is an error.
 
 Browser tool:
 

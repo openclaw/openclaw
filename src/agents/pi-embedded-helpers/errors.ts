@@ -3,6 +3,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { FailoverReason } from "./types.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 
+export const BILLING_ERROR_USER_MESSAGE =
+  "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -351,6 +354,14 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isMissingToolCallInputError(raw)) {
+    return (
+      "Session history looks corrupted (tool call input missing). " +
+      "Use /new to start a fresh session. " +
+      "If this keeps happening, reset the session or delete the corrupted session transcript."
+    );
+  }
+
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
     return `LLM request rejected: ${invalidRequest[1]}`;
@@ -358,6 +369,10 @@ export function formatAssistantErrorText(
 
   if (isOverloadedErrorMessage(raw)) {
     return "The AI service is temporarily overloaded. Please try again in a moment.";
+  }
+
+  if (isBillingErrorMessage(raw)) {
+    return BILLING_ERROR_USER_MESSAGE;
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
@@ -393,6 +408,10 @@ export function sanitizeUserFacingText(text: string): string {
       "Context overflow: prompt too large for the model. " +
       "Try again with less input or a larger-context model."
     );
+  }
+
+  if (isBillingErrorMessage(trimmed)) {
+    return BILLING_ERROR_USER_MESSAGE;
   }
 
   if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
@@ -465,6 +484,11 @@ const ERROR_PATTERNS = {
   ],
 } as const;
 
+const TOOL_CALL_INPUT_MISSING_RE =
+  /tool_(?:use|call)\.(?:input|arguments).*?(?:field required|required)/i;
+const TOOL_CALL_INPUT_PATH_RE =
+  /messages\.\d+\.content\.\d+\.tool_(?:use|call)\.(?:input|arguments)/i;
+
 const IMAGE_DIMENSION_ERROR_RE =
   /image dimensions exceed max allowed size for many-image requests:\s*(\d+)\s*pixels/i;
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
@@ -503,6 +527,13 @@ export function isBillingErrorMessage(raw: string): boolean {
       value.includes("payment") ||
       value.includes("plan"))
   );
+}
+
+export function isMissingToolCallInputError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  return TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw);
 }
 
 export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {

@@ -46,6 +46,7 @@ import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
+import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import {
@@ -224,6 +225,7 @@ export async function runEmbeddedAttempt(
           senderName: params.senderName,
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
+          senderIsOwner: params.senderIsOwner,
           sessionKey: params.sessionKey ?? params.sessionId,
           agentDir,
           workspaceDir: effectiveWorkspace,
@@ -237,6 +239,9 @@ export async function runEmbeddedAttempt(
           replyToMode: params.replyToMode,
           hasRepliedRef: params.hasRepliedRef,
           modelHasVision,
+          requireExplicitMessageTarget:
+            params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+          disableMessageTool: params.disableMessageTool,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
     logToolSchemasForGoogle({ tools, provider: params.provider });
@@ -366,6 +371,7 @@ export async function runEmbeddedAttempt(
       userTime,
       userTimeFormat,
       contextFiles,
+      memoryCitationsMode: params.config?.memory?.citations,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
@@ -399,6 +405,10 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     try {
+      await repairSessionFileIfNeeded({
+        sessionFile: params.sessionFile,
+        warn: (message) => log.warn(message),
+      });
       const hadSessionFile = await fs
         .stat(params.sessionFile)
         .then(() => true)

@@ -96,7 +96,7 @@ Configure via CLI:
 
 ### MiniMax M2.1 as fallback (Opus primary)
 
-**Best for:** keep Opus 4.5 as primary, fail over to MiniMax M2.1.
+**Best for:** keep Opus 4.6 as primary, fail over to MiniMax M2.1.
 
 ```json5
 {
@@ -104,11 +104,11 @@ Configure via CLI:
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-opus-4-5": { alias: "opus" },
+        "anthropic/claude-opus-4-6": { alias: "opus" },
         "minimax/MiniMax-M2.1": { alias: "minimax" },
       },
       model: {
-        primary: "anthropic/claude-opus-4-5",
+        primary: "anthropic/claude-opus-4-6",
         fallbacks: ["minimax/MiniMax-M2.1"],
       },
     },
