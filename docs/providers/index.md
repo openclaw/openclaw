@@ -31,6 +31,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [GLM models](/providers/glm)
 - [Hugging Face (Inference)](/providers/huggingface)
+- [Apertis AI (multi-model proxy)](/providers/apertis)
 - [Kilocode](/providers/kilocode)
 - [LiteLLM (unified gateway)](/providers/litellm)
 - [MiniMax](/providers/minimax)
