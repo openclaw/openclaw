@@ -28,13 +28,13 @@ metadata:
 
 ## 路由规则
 
-| 条件 | 选择模型 |
-|------|----------|
-| `taskHint === "code"` | `anthropic/claude-opus-4-5` |
-| `taskHint === "chat"` | `deepseek/deepseek-chat` |
+| 条件                    | 选择模型                    |
+| ----------------------- | --------------------------- |
+| `taskHint === "code"`   | `anthropic/claude-opus-4-5` |
+| `taskHint === "chat"`   | `deepseek/deepseek-chat`    |
 | `contextLength > 64000` | `anthropic/claude-opus-4-5` |
-| `contextLength < 4000` | `deepseek/deepseek-chat` |
-| 默认 | 不干预 |
+| `contextLength < 4000`  | `deepseek/deepseek-chat`    |
+| 默认                    | 不干预                      |
 
 ## 返回值
 
