@@ -159,7 +159,9 @@ export async function processDingTalkMessage(params: {
     const requireMention = groupConfig?.requireMention ?? true;
     const wasMentioned =
       data.isInAtList === true ||
-      Boolean(data.chatbotUserId && data.atUsers?.some((user: any) => user.userId === data.chatbotUserId));
+      Boolean(
+        data.chatbotUserId && data.atUsers?.some((user: any) => user.userId === data.chatbotUserId),
+      );
     if (requireMention && !wasMentioned) {
       return;
     }
