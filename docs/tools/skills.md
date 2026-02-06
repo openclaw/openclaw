@@ -50,7 +50,7 @@ tool surface those skills teach.
 ## ClawHub (install + sync)
 
 ClawHub is the public skills registry for OpenClaw. Browse at
-https://clawhub.com. Use it to discover, install, update, and back up skills.
+[https://clawhub.com](https://clawhub.com). Use it to discover, install, update, and back up skills.
 Full guide: [ClawHub](/tools/clawhub).
 
 Common flows:
@@ -295,6 +295,6 @@ See [Skills config](/tools/skills-config) for the full configuration schema.
 
 ## Looking for more skills?
 
-Browse https://clawhub.com.
+Browse [https://clawhub.com](https://clawhub.com).
 
 ---
