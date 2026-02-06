@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Onboarding: add Moonshot (.cn) auth choice and keep the China base URL when preserving defaults. (#7180) Thanks @waynelwz.
 - Onboarding: add xAI (Grok) auth choice and provider defaults. (#9885) Thanks @grp06.
 - Docs: clarify tmux send-keys for TUI by splitting text and Enter. (#7737) Thanks @Wangnov.
+- Web UI: add Token Usage dashboard with session analytics. (#8462) Thanks @mcinteerj.
 - Docs: mirror the landing page revamp for zh-CN (features, quickstart, docs directory, network model, credits). (#8994) Thanks @joshp123.
 - Docs: strengthen secure DM mode guidance for multi-user inboxes with an explicit warning and example. (#9377) Thanks @Shrinija17.
 - Docs: document `activeHours` heartbeat field with timezone resolution chain and example. (#9366) Thanks @unisone.
@@ -53,6 +54,7 @@ Docs: https://docs.openclaw.ai
 - Web UI: resolve header logo path when `gateway.controlUi.basePath` is set. (#7178) Thanks @Yeom-JinHo.
 - Web UI: apply button styling to the new-messages indicator.
 - Onboarding: infer auth choice from non-interactive API key flags. (#8484) Thanks @f-trycua.
+- Usage: include estimated cost when breakdown is missing and keep `usage.cost` days support. (#8462) Thanks @mcinteerj.
 - Security: keep untrusted channel metadata out of system prompts (Slack/Discord). Thanks @KonstantinMirin.
 - Security: redact channel credentials (tokens, passwords, API keys, secrets) from gateway config APIs and preserve secrets during Control UI round-trips. (#9858) Thanks @abdelsfane.
 - Discord: treat allowlisted senders as owner for system-prompt identity hints while keeping channel topics untrusted.
