@@ -10,6 +10,7 @@ permissions: {}
 
 jobs:
   auto-response:
+    if: ${{ secrets.GH_APP_PRIVATE_KEY != '' }}
     permissions:
       issues: write
       pull-requests: write

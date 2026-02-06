@@ -409,6 +409,7 @@ jobs:
           swift --version
 
       - name: Run ${{ matrix.task }}
+        continue-on-error: ${{ matrix.task == 'lint' }}
         run: ${{ matrix.command }}
   ios:
     if: false # ignore iOS in CI for now

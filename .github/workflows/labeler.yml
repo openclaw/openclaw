@@ -10,6 +10,7 @@ permissions: {}
 
 jobs:
   label:
+    if: ${{ secrets.GH_APP_PRIVATE_KEY != '' }}
     permissions:
       contents: read
       pull-requests: write
@@ -48,6 +49,7 @@ jobs:
             });
 
   label-issues:
+    if: ${{ secrets.GH_APP_PRIVATE_KEY != '' }}
     permissions:
       issues: write
     runs-on: ubuntu-latest
