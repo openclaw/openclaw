@@ -1058,6 +1058,10 @@ const memoryNeo4jPlugin = {
 
           if (stored > 0) {
             api.logger.info(`memory-neo4j: auto-captured ${stored} memories (attention-gated)`);
+          } else {
+            api.logger.info(
+              `memory-neo4j: auto-capture ran (0 stored, ${userMessages.length} user msgs, ${retained.length} passed attention gate)`,
+            );
           }
         } catch (err) {
           api.logger.warn(`memory-neo4j: auto-capture failed: ${String(err)}`);
