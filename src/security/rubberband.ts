@@ -296,7 +296,7 @@ const PATTERNS: Record<string, PatternRule> = {
       // This avoids false positives like: cat file 2>/dev/null || cat skills/SKILL.md
       /(echo|cat|printf)[^;|&\n]*>\s*[^;|&\n]*SKILL\.md/i,
       />\s*[^;|&\n]*skills\/[^;|&\n]*\.md/i,
-      /(echo|cat|printf)[^;|&\n]*system[^;|&\n]*prompt/i,
+      /(echo|cat|printf)[^;|&\n]*>\s*[^;|&\n]*system[^;|&\n]*prompt/i,
       />\s*[^;|&\n]*\.claude\//i,
       // cp/mv/tee to skill paths
       /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*SKILL\.md/i,
