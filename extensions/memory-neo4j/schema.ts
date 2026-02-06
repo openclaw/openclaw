@@ -30,7 +30,6 @@ export type EntityNode = {
   name: string;
   type: EntityType;
   aliases: string[];
-  embedding?: number[];
   description?: string;
   firstSeen: string;
   lastSeen: string;
@@ -118,7 +117,6 @@ export type MergeEntityInput = {
   type: EntityType;
   aliases?: string[];
   description?: string;
-  embedding?: number[];
 };
 
 // ============================================================================

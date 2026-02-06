@@ -686,22 +686,18 @@ const memoryNeo4jPlugin = {
                 batchSize,
                 onProgress: (phase, done, total) => {
                   if (phase === "drop-indexes" && done === 0) {
-                    console.log("▶ Dropping old vector indexes…");
+                    console.log("▶ Dropping old vector index…");
                   } else if (phase === "memories") {
                     console.log(`   Memories: ${done}/${total}`);
-                  } else if (phase === "entities") {
-                    console.log(`   Entities: ${done}/${total}`);
                   } else if (phase === "create-indexes" && done === 0) {
-                    console.log("▶ Recreating vector indexes…");
+                    console.log("▶ Recreating vector index…");
                   }
                 },
               });
 
               const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
               console.log("\n═════════════════════════════════════════════════════════════");
-              console.log(
-                `✅ Reindex complete in ${elapsed}s — ${result.memories} memories, ${result.entities} entities`,
-              );
+              console.log(`✅ Reindex complete in ${elapsed}s — ${result.memories} memories`);
               console.log("");
             } catch (err) {
               console.error(

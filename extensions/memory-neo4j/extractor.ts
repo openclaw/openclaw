@@ -313,19 +313,7 @@ export async function runBackgroundExtraction(
       return;
     }
 
-    // Generate embeddings for entity names (for entity vector search)
-    let entityEmbeddings: Map<string, number[]> | undefined;
-    if (result.entities.length > 0) {
-      try {
-        const names = result.entities.map((e) => e.name);
-        const vectors = await embeddings.embedBatch(names);
-        entityEmbeddings = new Map(names.map((n, i) => [n, vectors[i]]));
-      } catch (err) {
-        logger.debug?.(`memory-neo4j: entity embedding generation failed: ${String(err)}`);
-      }
-    }
-
-    // MERGE Entity nodes
+    // MERGE Entity nodes (entities use fulltext search, not vector embeddings)
     for (const entity of result.entities) {
       try {
         await db.mergeEntity({
@@ -334,7 +322,6 @@ export async function runBackgroundExtraction(
           type: entity.type,
           aliases: entity.aliases,
           description: entity.description,
-          embedding: entityEmbeddings?.get(entity.name),
         });
 
         // Create MENTIONS relationship
