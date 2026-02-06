@@ -1,4 +1,17 @@
 /**
+ * Relay abort without forwarding the Event argument as the abort reason.
+ * Using .bind() avoids closure scope capture (memory leak prevention).
+ */
+function relayAbort(this: AbortController) {
+  this.abort();
+}
+
+/** Returns a bound abort relay for use as an event listener. */
+export function bindAbortRelay(controller: AbortController): () => void {
+  return relayAbort.bind(controller);
+}
+
+/**
  * Fetch wrapper that adds timeout support via AbortController.
  *
  * @param url - The URL to fetch
