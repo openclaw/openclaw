@@ -1,0 +1,1663 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Adaptive Tool Approval Overview</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #f8f6ef;
+        --bg-2: #fffdf8;
+        --ink: #12212d;
+        --muted: #53626f;
+        --line: #d8ddd4;
+        --card: #ffffff;
+        --accent: #0b7a75;
+        --accent-2: #dd6b20;
+        --safe: #1f9d62;
+        --warn: #cc7a00;
+        --risk: #b42929;
+        --shadow: 0 14px 34px rgba(18, 33, 45, 0.1);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 10% 10%, #e8f8f6 0%, transparent 36%),
+          radial-gradient(circle at 90% 0%, #fff0d8 0%, transparent 30%),
+          linear-gradient(180deg, var(--bg), var(--bg-2));
+        font-family: "Space Grotesk", "Segoe UI", sans-serif;
+      }
+
+      .wrap {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 28px 20px 72px;
+      }
+
+      .hero {
+        position: relative;
+        overflow: hidden;
+        background: linear-gradient(135deg, #ffffff, #f5fbff 62%, #fff7ea);
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        box-shadow: var(--shadow);
+        padding: 28px;
+        display: grid;
+        gap: 18px;
+        animation: rise 680ms ease;
+      }
+
+      .hero::after {
+        content: "";
+        position: absolute;
+        right: -58px;
+        top: -70px;
+        width: 220px;
+        height: 220px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(11, 122, 117, 0.17), transparent 70%);
+      }
+
+      .hero h1 {
+        margin: 0;
+        font-size: clamp(1.68rem, 3.1vw, 2.6rem);
+        line-height: 1.07;
+        letter-spacing: -0.025em;
+      }
+
+      .sub {
+        margin: 0;
+        max-width: 980px;
+        color: var(--muted);
+        font-size: clamp(0.97rem, 1.6vw, 1.13rem);
+      }
+
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .pill {
+        border: 1px solid var(--line);
+        background: #ffffff;
+        color: #264153;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        padding: 7px 11px;
+        font-weight: 600;
+      }
+
+      .metrics {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .metric {
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 12px;
+      }
+
+      .metric .k {
+        font-size: 1.4rem;
+        font-weight: 700;
+      }
+
+      .metric .l {
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      .grid {
+        margin-top: 22px;
+        display: grid;
+        gap: 16px;
+      }
+
+      .panel {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        box-shadow: var(--shadow);
+        padding: 16px;
+      }
+
+      .panel h2 {
+        margin: 0 0 8px;
+        font-size: 1.14rem;
+        letter-spacing: -0.01em;
+      }
+
+      .desc {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .controls {
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .input,
+      .select,
+      .btn {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fff;
+        color: var(--ink);
+        font-family: inherit;
+        font-size: 0.9rem;
+        padding: 8px 10px;
+      }
+
+      .btn {
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .btn.active {
+        background: #e8f8f6;
+        border-color: #9fd6d2;
+        color: #0e5350;
+      }
+
+      .arch-layout {
+        margin-top: 12px;
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 1.55fr 1fr;
+      }
+
+      .map {
+        position: relative;
+        min-height: 500px;
+        border: 1px dashed #c6d4ce;
+        border-radius: 16px;
+        background:
+          linear-gradient(180deg, rgba(12, 122, 117, 0.06), rgba(255, 255, 255, 0) 46%),
+          linear-gradient(140deg, rgba(221, 107, 32, 0.06), rgba(255, 255, 255, 0) 46%), #fff;
+        overflow: hidden;
+      }
+
+      .legend {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        display: grid;
+        gap: 6px;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px;
+        font-size: 0.76rem;
+      }
+
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }
+
+      .dot.runtime {
+        background: #0b7a75;
+      }
+
+      .dot.factor {
+        background: #dd6b20;
+      }
+
+      .dot.transport {
+        background: #2c7cbf;
+      }
+
+      .dot.safety {
+        background: #8a5ac2;
+      }
+
+      .dot.audit {
+        background: #5d6d7b;
+      }
+
+      .edge-layer,
+      .node-layer {
+        position: absolute;
+        inset: 0;
+      }
+
+      .edge {
+        stroke: #9fb2aa;
+        stroke-width: 1.7;
+        stroke-linecap: round;
+        opacity: 0.7;
+        transition:
+          opacity 180ms ease,
+          stroke-width 180ms ease;
+      }
+
+      .edge.hot {
+        stroke: #0b7a75;
+        stroke-width: 2.8;
+        opacity: 1;
+      }
+
+      .node {
+        position: absolute;
+        transform: translate(-50%, -50%);
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        background: #fff;
+        padding: 8px 10px;
+        min-width: 126px;
+        cursor: pointer;
+        box-shadow: 0 6px 15px rgba(18, 33, 45, 0.08);
+        transition:
+          transform 170ms ease,
+          box-shadow 170ms ease,
+          border-color 170ms ease;
+      }
+
+      .node:hover {
+        transform: translate(-50%, -50%) scale(1.03);
+        box-shadow: 0 10px 20px rgba(18, 33, 45, 0.15);
+      }
+
+      .node.active {
+        border-color: var(--accent);
+        box-shadow:
+          0 0 0 3px rgba(11, 122, 117, 0.16),
+          0 12px 26px rgba(18, 33, 45, 0.2);
+      }
+
+      .node .t {
+        font-size: 0.8rem;
+        font-weight: 700;
+      }
+
+      .node .k {
+        margin-top: 3px;
+        font-size: 0.7rem;
+        color: var(--muted);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .runtime .t {
+        color: #0e5350;
+      }
+
+      .factor .t {
+        color: #925217;
+      }
+
+      .transport .t {
+        color: #1f5b92;
+      }
+
+      .safety .t {
+        color: #623f95;
+      }
+
+      .audit .t {
+        color: #344452;
+      }
+
+      .detail {
+        display: grid;
+        gap: 12px;
+      }
+
+      .focus-card {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        background: #fff;
+      }
+
+      .focus-card h3 {
+        margin: 0 0 6px;
+        font-size: 1rem;
+      }
+
+      .meta,
+      .list,
+      .refs,
+      .tiny {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .meta li,
+      .list li,
+      .refs li {
+        margin-bottom: 6px;
+        font-size: 0.86rem;
+      }
+
+      .meta li strong {
+        color: #294457;
+      }
+
+      .tag {
+        display: inline-block;
+        border-radius: 999px;
+        font-size: 0.73rem;
+        border: 1px solid #ccebe8;
+        color: #0f5f5a;
+        background: #effaf8;
+        padding: 4px 8px;
+        margin: 3px 5px 0 0;
+      }
+
+      .flow-layout {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 1.25fr 1fr;
+        margin-top: 12px;
+      }
+
+      .flow-canvas {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: #fff;
+        min-height: 360px;
+        position: relative;
+        padding: 10px;
+      }
+
+      .flow-svg {
+        width: 100%;
+        height: 100%;
+      }
+
+      .flow-node {
+        fill: #ffffff;
+        stroke: #8ea8a2;
+        stroke-width: 1.6;
+        rx: 10;
+      }
+
+      .flow-node.active {
+        stroke: var(--accent);
+        stroke-width: 2.8;
+      }
+
+      .flow-edge {
+        stroke: #90a49d;
+        stroke-width: 2;
+        marker-end: url(#arrow);
+      }
+
+      .step-list {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: #fff;
+        padding: 10px;
+        display: grid;
+        gap: 8px;
+      }
+
+      .step {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px;
+        cursor: pointer;
+        background: #fff;
+      }
+
+      .step.active {
+        border-color: #9fd6d2;
+        background: #f2fbfa;
+      }
+
+      .step .idx {
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      .step .name {
+        font-size: 0.88rem;
+        font-weight: 700;
+      }
+
+      .step .small {
+        margin-top: 4px;
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      .callouts {
+        margin-top: 12px;
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .callout {
+        border: 1px solid var(--line);
+        background: #fff;
+        border-radius: 12px;
+        padding: 11px;
+      }
+
+      .callout h4 {
+        margin: 0;
+        font-size: 0.95rem;
+      }
+
+      .callout p {
+        margin: 8px 0 0;
+        font-size: 0.84rem;
+        color: var(--muted);
+      }
+
+      .safeguards {
+        margin-top: 12px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .sg-item {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+        background: #fff;
+      }
+
+      .sg-head {
+        width: 100%;
+        text-align: left;
+        border: 0;
+        background: transparent;
+        padding: 11px 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        cursor: pointer;
+        font-family: inherit;
+      }
+
+      .sg-head .title {
+        font-size: 0.92rem;
+        font-weight: 700;
+      }
+
+      .sg-body {
+        display: none;
+        border-top: 1px solid var(--line);
+        padding: 10px 12px;
+      }
+
+      .sg-item.open .sg-body {
+        display: block;
+        animation: fadeIn 180ms ease;
+      }
+
+      .sg-body p {
+        margin: 0 0 7px;
+        font-size: 0.84rem;
+        color: var(--muted);
+      }
+
+      .sim {
+        margin-top: 12px;
+        display: grid;
+        gap: 12px;
+        grid-template-columns: 1.4fr 1fr;
+      }
+
+      .sim-card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+        background: #fff;
+      }
+
+      .sim-grid {
+        margin-top: 8px;
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 0.88rem;
+      }
+
+      .range {
+        width: 100%;
+      }
+
+      .result {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 12px;
+        background: #fdfefe;
+      }
+
+      .result .headline {
+        font-weight: 700;
+        font-size: 1rem;
+      }
+
+      .badge {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 5px 9px;
+        font-size: 0.73rem;
+        border: 1px solid;
+        margin-right: 6px;
+        margin-bottom: 5px;
+      }
+
+      .badge.ok {
+        border-color: #98d6b0;
+        color: #1b7f52;
+        background: #ecfbf3;
+      }
+
+      .badge.warn {
+        border-color: #f4d29a;
+        color: #a65f00;
+        background: #fff7e8;
+      }
+
+      .badge.no {
+        border-color: #efb2b2;
+        color: #9f1e1e;
+        background: #fff0f0;
+      }
+
+      .citation {
+        text-decoration: none;
+        font-weight: 700;
+        color: #1e5f95;
+        margin-left: 3px;
+      }
+
+      .foot {
+        margin-top: 18px;
+        border-top: 1px solid var(--line);
+        padding-top: 12px;
+      }
+
+      .foot ol {
+        margin: 8px 0 0;
+        padding-left: 18px;
+      }
+
+      .foot li {
+        margin-bottom: 7px;
+        font-size: 0.85rem;
+        color: #395364;
+      }
+
+      .mono {
+        font-family: "IBM Plex Mono", monospace;
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
+
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+        }
+
+        to {
+          opacity: 1;
+        }
+      }
+
+      @media (max-width: 1080px) {
+        .metrics {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .arch-layout,
+        .flow-layout,
+        .sim {
+          grid-template-columns: 1fr;
+        }
+
+        .map {
+          min-height: 460px;
+        }
+
+        .callouts {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .wrap {
+          padding: 14px 12px 44px;
+        }
+
+        .hero,
+        .panel {
+          border-radius: 16px;
+          padding: 12px;
+        }
+
+        .metrics {
+          grid-template-columns: 1fr;
+        }
+
+        .node {
+          min-width: 112px;
+          padding: 6px 8px;
+        }
+
+        .map {
+          min-height: 400px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="hero">
+        <h1>Adaptive Multi-factor Tool Approval: Architecture Overview</h1>
+        <p class="sub">
+          This design introduces <strong>risk-proportional autonomy</strong>: high-consequence
+          operations are gated with explicit, auditable multi-factor approval, while low-risk
+          operations proceed with low-friction speed. The result is a more secure and more usable
+          agent runtime, built to address common concerns around over-permissive tool execution.
+        </p>
+        <div class="pill-row">
+          <span class="pill">Goal: maximize assurance where consequence is high</span>
+          <span class="pill"
+            >Goal: minimize interruption where confidence is high and impact is low</span
+          >
+          <span class="pill">Default factors: user_request + rules_based (minApprovals=1)</span>
+          <span class="pill">Future-ready: 5–8 factors with tunable quorum</span>
+        </div>
+        <div class="metrics">
+          <article class="metric">
+            <div class="k">5</div>
+            <div class="l">Risk classes (R0–R4)</div>
+          </article>
+          <article class="metric">
+            <div class="k">3</div>
+            <div class="l">Approver families in v1 design</div>
+          </article>
+          <article class="metric">
+            <div class="k">20</div>
+            <div class="l">Execution tracks already decomposed</div>
+          </article>
+          <article class="metric">
+            <div class="k">7</div>
+            <div class="l">External best-practice references mapped</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <h2>Interactive Architecture Map</h2>
+          <p class="desc">
+            Click any node to focus details, interfaces, risk role, and citations. Use filters to
+            isolate specific planes and decision surfaces.
+          </p>
+          <div class="controls">
+            <input
+              class="input"
+              id="nodeSearch"
+              type="search"
+              placeholder="Search node or capability"
+            />
+            <select id="planeFilter" class="select">
+              <option value="all">All planes</option>
+              <option value="runtime">Runtime</option>
+              <option value="safety">Safety</option>
+              <option value="factor">Approver</option>
+              <option value="transport">Transport</option>
+              <option value="audit">Audit</option>
+            </select>
+            <button class="btn active" id="viewAllBtn" type="button">Reset Focus</button>
+          </div>
+          <div class="arch-layout">
+            <div class="map" id="archMap">
+              <svg class="edge-layer" id="edgeLayer" aria-hidden="true"></svg>
+              <div class="node-layer" id="nodeLayer"></div>
+              <div class="legend">
+                <span><i class="dot runtime"></i>Runtime</span>
+                <span><i class="dot safety"></i>Safety</span>
+                <span><i class="dot factor"></i>Approver</span>
+                <span><i class="dot transport"></i>Transport</span>
+                <span><i class="dot audit"></i>Audit</span>
+              </div>
+            </div>
+            <aside class="detail">
+              <div class="focus-card">
+                <h3 id="focusTitle">Select a component</h3>
+                <p class="desc" id="focusSummary">
+                  Pick a node to inspect why it exists, what interfaces it touches, and which
+                  safeguards it enables.
+                </p>
+              </div>
+              <div class="focus-card">
+                <ul class="meta" id="focusMeta"></ul>
+              </div>
+              <div class="focus-card">
+                <strong class="mono">Critical Interfaces</strong>
+                <ul class="list" id="focusInterfaces"></ul>
+              </div>
+              <div class="focus-card">
+                <strong class="mono">Safeguard Value-add</strong>
+                <ul class="list" id="focusValue"></ul>
+              </div>
+              <div class="focus-card">
+                <strong class="mono">Citations</strong>
+                <ul class="refs" id="focusRefs"></ul>
+              </div>
+            </aside>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2>Flow Explorer</h2>
+          <p class="desc">
+            Switch among decision flows to inspect how the platform balances low-friction execution
+            and high-assurance gating.
+          </p>
+          <div class="controls" id="flowButtons"></div>
+          <div class="flow-layout">
+            <div class="flow-canvas">
+              <svg
+                class="flow-svg"
+                id="flowSvg"
+                viewBox="0 0 980 350"
+                preserveAspectRatio="xMidYMid meet"
+              ></svg>
+            </div>
+            <div class="step-list" id="flowSteps"></div>
+          </div>
+          <div class="callouts">
+            <article class="callout">
+              <h4>Fast-path Read Operations</h4>
+              <p>
+                Read-only or low-impact operations can complete without waiting on human response
+                when policy confidence is high.
+              </p>
+            </article>
+            <article class="callout">
+              <h4>Quorum-sensitive Operations</h4>
+              <p>
+                External mutation paths require quorum checks and, by default at higher risk
+                classes, explicit human confirmation.
+              </p>
+            </article>
+            <article class="callout">
+              <h4>Degradation Safety</h4>
+              <p>
+                Timeout, parser ambiguity, or factor insufficiency defaults to fail-closed outcomes
+                for sensitive operations.
+              </p>
+            </article>
+          </div>
+        </article>
+
+        <article class="panel">
+          <h2>Advanced Safeguard Highlights</h2>
+          <p class="desc">
+            These patterns are grounded in established approval and authorization practices and
+            adapted to autonomous agent workflows. Expand each item for details and citations.
+          </p>
+          <div class="safeguards" id="safeguards"></div>
+        </article>
+
+        <article class="panel">
+          <h2>Quorum Simulator</h2>
+          <p class="desc">
+            Test factor policy combinations and see whether a request is allowed, escalated, or
+            blocked under current risk-level rules.
+          </p>
+          <div class="sim">
+            <div class="sim-card">
+              <div class="sim-grid">
+                <div>
+                  <strong>Allowed approvers</strong>
+                  <label class="check"
+                    ><input
+                      type="checkbox"
+                      data-allow="user_request"
+                      checked
+                    />UserRequestApprover</label
+                  >
+                  <label class="check"
+                    ><input
+                      type="checkbox"
+                      data-allow="rules_based"
+                      checked
+                    />RulesBasedApprover</label
+                  >
+                  <label class="check"
+                    ><input
+                      type="checkbox"
+                      data-allow="llm_evaluation"
+                    />LLMEvaluationApprover</label
+                  >
+                </div>
+                <div>
+                  <strong>Disabled approvers</strong>
+                  <label class="check"
+                    ><input type="checkbox" data-disable="user_request" />Disable
+                    user_request</label
+                  >
+                  <label class="check"
+                    ><input type="checkbox" data-disable="rules_based" />Disable rules_based</label
+                  >
+                  <label class="check"
+                    ><input type="checkbox" data-disable="llm_evaluation" />Disable
+                    llm_evaluation</label
+                  >
+                </div>
+              </div>
+              <div class="sim-grid" style="margin-top: 10px">
+                <div>
+                  <label for="riskSel"><strong>Risk class</strong></label>
+                  <select id="riskSel" class="select" style="width: 100%">
+                    <option>R0</option>
+                    <option>R1</option>
+                    <option selected>R3</option>
+                    <option>R4</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="minRange"
+                    ><strong>Minimum approvals</strong>
+                    <span id="minLabel" class="mono">1</span></label
+                  >
+                  <input id="minRange" class="range" type="range" min="0" max="5" value="1" />
+                </div>
+              </div>
+              <div class="sim-grid" style="margin-top: 10px">
+                <div>
+                  <label for="rulesVerdict"><strong>Rules factor verdict</strong></label>
+                  <select id="rulesVerdict" class="select" style="width: 100%">
+                    <option value="approve">approve</option>
+                    <option value="abstain">abstain</option>
+                    <option value="reject">reject</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="llmVerdict"><strong>LLM factor verdict</strong></label>
+                  <select id="llmVerdict" class="select" style="width: 100%">
+                    <option value="abstain" selected>abstain</option>
+                    <option value="approve">approve</option>
+                    <option value="reject">reject</option>
+                  </select>
+                </div>
+              </div>
+              <div class="sim-grid" style="margin-top: 10px">
+                <div>
+                  <label for="userVerdict"><strong>User factor verdict</strong></label>
+                  <select id="userVerdict" class="select" style="width: 100%">
+                    <option value="approve" selected>approve</option>
+                    <option value="abstain">abstain</option>
+                    <option value="reject">reject</option>
+                  </select>
+                </div>
+                <div>
+                  <strong>Defaults at risk</strong>
+                  <ul class="tiny" id="riskDefaults"></ul>
+                </div>
+              </div>
+            </div>
+            <aside class="result" id="simResult">
+              <div class="headline">Awaiting configuration…</div>
+            </aside>
+          </div>
+        </article>
+
+        <article class="panel foot">
+          <h2>Citation Ledger</h2>
+          <p class="desc">
+            External references used for safeguard rationale and approval-pattern design.
+          </p>
+          <ol>
+            <li id="c1">
+              <a
+                href="https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html"
+                target="_blank"
+                rel="noreferrer"
+                >OWASP Authorization Cheat Sheet</a
+              >
+            </li>
+            <li id="c2">
+              <a
+                href="https://www.govinfo.gov/content/pkg/FR-2020-12-10/pdf/2020-27049.pdf"
+                target="_blank"
+                rel="noreferrer"
+                >NIST SP 800-53 Rev. 5 (AC-5, CM-3)</a
+              >
+            </li>
+            <li id="c3">
+              <a
+                href="https://developer.hashicorp.com/vault/docs/enterprise/control-groups"
+                target="_blank"
+                rel="noreferrer"
+                >HashiCorp Vault Control Groups</a
+              >
+            </li>
+            <li id="c4">
+              <a
+                href="https://docs.github.com/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches"
+                target="_blank"
+                rel="noreferrer"
+                >GitHub Protected Branches</a
+              >
+            </li>
+            <li id="c5">
+              <a
+                href="https://docs.gitlab.com/user/project/merge_requests/approvals/"
+                target="_blank"
+                rel="noreferrer"
+                >GitLab Merge Request Approvals</a
+              >
+            </li>
+            <li id="c6">
+              <a
+                href="https://cloud.google.com/access-approval/docs/overview"
+                target="_blank"
+                rel="noreferrer"
+                >Google Access Approval</a
+              >
+            </li>
+            <li id="c7">
+              <a
+                href="https://learn.microsoft.com/en-us/entra/id-governance/privileged-identity-management/pim-how-to-change-default-settings"
+                target="_blank"
+                rel="noreferrer"
+                >Microsoft Entra PIM Approval Settings</a
+              >
+            </li>
+          </ol>
+        </article>
+      </section>
+    </main>
+
+    <script>
+      const nodes = [
+        {
+          id: "invocation",
+          label: "Tool Invocation",
+          plane: "runtime",
+          x: 10,
+          y: 24,
+          summary:
+            "Entry point for every requested tool call. Carries context needed for risk and policy checks.",
+          role: "Collect normalized tool args and route metadata.",
+          interfaces: [
+            "before-tool seam (pi-tools.before-tool-call)",
+            "tool metadata normalization",
+            "agent/session/channel context packaging",
+          ],
+          value: [
+            "Creates a single choke-point for consistent controls.",
+            "Eliminates approval bypass paths across tool families.",
+          ],
+          refs: [4],
+        },
+        {
+          id: "policy",
+          label: "Hard Policy Gate",
+          plane: "runtime",
+          x: 24,
+          y: 24,
+          summary: "Deterministic deny/allow baseline before adaptive logic.",
+          role: "Apply allow/deny and sandbox constraints first.",
+          interfaces: ["tools.allow / tools.deny", "sandbox mode", "agent trust defaults"],
+          value: [
+            "Prevents model output from bypassing hard guardrails.",
+            "Keeps adaptive layer additive instead of replacing security policy.",
+          ],
+          refs: [1, 2],
+        },
+        {
+          id: "risk",
+          label: "Risk Classifier",
+          plane: "safety",
+          x: 38,
+          y: 24,
+          summary:
+            "Combines static taxonomy with optional fast model evaluation for ambiguous cases.",
+          role: "Assign R0–R4 risk and confidence tags.",
+          interfaces: ["static risk rules", "fast model path", "confidence thresholds"],
+          value: [
+            "Minimizes unnecessary prompts for low-risk actions.",
+            "Escalates uncertain/high-impact actions with evidence.",
+          ],
+          refs: [1, 2],
+        },
+        {
+          id: "registry",
+          label: "Approver Registry",
+          plane: "factor",
+          x: 53,
+          y: 24,
+          summary: "Activates allowed approvers after disabled filters and capability checks.",
+          role: "Resolve effective factor set.",
+          interfaces: ["allowedApprovers", "disabledApprovers", "supports(context)"],
+          value: [
+            "Makes factor policy tunable without code forks.",
+            "Supports expansion to 5–8 factors over time.",
+          ],
+          refs: [3],
+        },
+        {
+          id: "aggregate",
+          label: "Quorum Engine",
+          plane: "factor",
+          x: 67,
+          y: 24,
+          summary: "Computes approval result from factor verdicts and minApprovals constraints.",
+          role: "Return approved / rejected / needs-human-factor.",
+          interfaces: ["minApprovals", "reject precedence", "risk overrides"],
+          value: [
+            "Implements threshold approvals for sensitive actions.",
+            "Provides transparent reason codes for every outcome.",
+          ],
+          refs: [3, 5],
+        },
+        {
+          id: "request",
+          label: "Approval Request API",
+          plane: "transport",
+          x: 53,
+          y: 44,
+          summary: "Gateway RPC surface for human-in-the-loop approvals.",
+          role: "Create and track pending approval records.",
+          interfaces: [
+            "tool.approval.request",
+            "tool.approval.resolve",
+            "operator.approvals scope",
+          ],
+          value: [
+            "Unified method for UI, CLI, and channel approvals.",
+            "Maintains compatibility with exec approval aliases.",
+          ],
+          refs: [4, 5, 6],
+        },
+        {
+          id: "router",
+          label: "Approval Router",
+          plane: "transport",
+          x: 67,
+          y: 44,
+          summary: "Delivers approval prompts to the right operator surfaces.",
+          role: "Fanout via session/targets/both modes.",
+          interfaces: ["control UI adapter", "CLI adapter", "channel adapters"],
+          value: [
+            "Reduces operational blind spots by multi-surface delivery.",
+            "Prevents single-channel dependency failures.",
+          ],
+          refs: [6],
+        },
+        {
+          id: "user",
+          label: "UserRequestApprover",
+          plane: "factor",
+          x: 81,
+          y: 44,
+          summary: "Human factor for high-consequence operations.",
+          role: "Provide explicit approve/deny verdict.",
+          interfaces: ["UI click actions", "chat commands", "CLI resolve command"],
+          value: [
+            "Anchors accountability and intent confirmation.",
+            "Required-by-default for higher risk classes.",
+          ],
+          refs: [2, 6, 7],
+        },
+        {
+          id: "rules",
+          label: "RulesBasedApprover",
+          plane: "factor",
+          x: 81,
+          y: 24,
+          summary: "Deterministic factor from allowlist and policy checks.",
+          role: "Fast structured approve/reject/abstain verdict.",
+          interfaces: ["allowlist evaluation", "sender trust checks", "policy deny list"],
+          value: [
+            "Provides low-latency policy confidence.",
+            "Avoids unnecessary human intervention on known-safe patterns.",
+          ],
+          refs: [1, 2],
+        },
+        {
+          id: "llm",
+          label: "LLMEvaluationApprover",
+          plane: "factor",
+          x: 81,
+          y: 62,
+          summary: "Optional fast-model factor for ambiguous contexts.",
+          role: "Signal confidence and side-effect semantics.",
+          interfaces: ["strict output schema", "timeout fallback", "confidence threshold"],
+          value: [
+            "Improves adaptive precision in edge cases.",
+            "Never trusted as sole high-risk approver by default.",
+          ],
+          refs: [1, 2],
+        },
+        {
+          id: "execute",
+          label: "Tool Execution",
+          plane: "runtime",
+          x: 53,
+          y: 72,
+          summary: "Actual tool call executes only after policy and factor conditions pass.",
+          role: "Run tool with approved decision token.",
+          interfaces: ["approved execution token", "request hash", "risk context"],
+          value: [
+            "Maintains safety guarantees at the final execution boundary.",
+            "Eliminates race conditions with stale approvals.",
+          ],
+          refs: [4, 5],
+        },
+        {
+          id: "audit",
+          label: "Audit + Metrics",
+          plane: "audit",
+          x: 67,
+          y: 72,
+          summary: "Structured telemetry for factor results, quorum state, and final outcomes.",
+          role: "Support forensic replay and SLO operations.",
+          interfaces: ["factor result logs", "quorum metrics", "timeout/error counters"],
+          value: [
+            "Delivers operational visibility and incident response speed.",
+            "Builds trust through explainable approval records.",
+          ],
+          refs: [2, 6],
+        },
+      ];
+
+      const edges = [
+        ["invocation", "policy"],
+        ["policy", "risk"],
+        ["risk", "registry"],
+        ["registry", "aggregate"],
+        ["aggregate", "execute"],
+        ["aggregate", "request"],
+        ["request", "router"],
+        ["router", "user"],
+        ["registry", "rules"],
+        ["registry", "llm"],
+        ["rules", "aggregate"],
+        ["llm", "aggregate"],
+        ["user", "aggregate"],
+        ["execute", "audit"],
+        ["request", "audit"],
+      ];
+
+      const flows = {
+        fast: {
+          label: "Fast-path low-risk",
+          summary:
+            "High-confidence low-impact operations complete without waiting for manual approval.",
+          steps: [
+            ["Tool request", "Invocation arrives with context"],
+            ["Hard policy", "Allowlist/denylist and sandbox pass"],
+            ["Risk assessment", "Classified R0/R1 with high confidence"],
+            ["Rules factor", "Rules approver emits approve"],
+            ["Quorum pass", "minApprovals satisfied"],
+            ["Execute", "Tool runs and audit event is emitted"],
+          ],
+          path: [0, 1, 2, 3, 4, 5],
+        },
+        sensitive: {
+          label: "Sensitive operation",
+          summary:
+            "High-impact operations trigger factorized decisioning and human confirmation before execution.",
+          steps: [
+            ["Tool request", "Invocation carries external-write intent"],
+            ["Risk assessment", "Classified R3 or R4"],
+            ["Registry", "Effective factors computed"],
+            ["Quorum check", "Automatic factors insufficient"],
+            ["Approval request", "Prompt routed to UI/CLI/channels"],
+            ["Human factor", "UserRequestApprover resolves"],
+            ["Execute or block", "Run on quorum, otherwise fail closed"],
+          ],
+          path: [0, 1, 2, 3, 4, 5, 6],
+        },
+        degrade: {
+          label: "Failure-safe path",
+          summary:
+            "Timeouts, stale hashes, insufficient factors, or hard rejects converge to auditable fail-closed outcomes.",
+          steps: [
+            ["Ambiguous request", "Classifier timeout or low confidence"],
+            ["Policy fallback", "Rules enforce conservative path"],
+            ["Quorum shortfall", "Active factors < minApprovals"],
+            ["Block", "Request denied with explicit reason code"],
+            ["Audit", "Incident-friendly telemetry and context captured"],
+          ],
+          path: [0, 1, 2, 3, 4],
+        },
+      };
+
+      const safeguards = [
+        {
+          title: "Deny-by-default and least privilege as baseline",
+          body: "Adaptive behavior is layered on top of deterministic policy gates; uncertain or malformed sensitive requests fail closed instead of silently executing.",
+          benefit: "Reduces exposure from permissive model behavior and parser ambiguity.",
+          refs: [1, 2],
+        },
+        {
+          title: "Separation of duties at high risk levels",
+          body: "For sensitive classes, human confirmation is required by default and can be made mandatory in quorum policy, avoiding self-approving autonomous actions.",
+          benefit: "Improves accountability and change-control assurance.",
+          refs: [2, 7],
+        },
+        {
+          title: "Threshold-based approvals (quorum)",
+          body: "`minApprovals` enables policy-tuned N-of-M factor approvals for high-consequence operations and future expansion to 5–8 approver factors.",
+          benefit: "Balances resilience and security rigor for critical operations.",
+          refs: [3, 5],
+        },
+        {
+          title: "Stale approval invalidation",
+          body: "Approval resolutions bind to request hashes, preventing replay or approval reuse after request payload changes.",
+          benefit: "Closes a common approval workflow gap that can lead to unsafe execution.",
+          refs: [4, 5],
+        },
+        {
+          title: "Explicit, auditable approval trace",
+          body: "Each request records factor outcomes, resolver identity, timing, and final decision, enabling deterministic forensic replay.",
+          benefit: "Speeds incident triage and strengthens operator trust.",
+          refs: [6, 7],
+        },
+      ];
+
+      const nodeLayer = document.getElementById("nodeLayer");
+      const edgeLayer = document.getElementById("edgeLayer");
+      const nodeSearch = document.getElementById("nodeSearch");
+      const planeFilter = document.getElementById("planeFilter");
+      const viewAllBtn = document.getElementById("viewAllBtn");
+
+      const focusTitle = document.getElementById("focusTitle");
+      const focusSummary = document.getElementById("focusSummary");
+      const focusMeta = document.getElementById("focusMeta");
+      const focusInterfaces = document.getElementById("focusInterfaces");
+      const focusValue = document.getElementById("focusValue");
+      const focusRefs = document.getElementById("focusRefs");
+
+      let activeNodeId = null;
+
+      function citationLink(n) {
+        return `<a class="citation" href="#c${n}" title="Citation ${n}">[${n}]</a>`;
+      }
+
+      function renderMap() {
+        nodeLayer.innerHTML = "";
+        edgeLayer.innerHTML = "";
+
+        const query = nodeSearch.value.trim().toLowerCase();
+        const plane = planeFilter.value;
+
+        const visibleNodes = nodes.filter((n) => {
+          const okPlane = plane === "all" || n.plane === plane;
+          const hay = `${n.label} ${n.summary} ${n.role}`.toLowerCase();
+          const okText = !query || hay.includes(query);
+          return okPlane && okText;
+        });
+
+        const ids = new Set(visibleNodes.map((n) => n.id));
+
+        edges.forEach(([from, to]) => {
+          if (!ids.has(from) || !ids.has(to)) return;
+          const a = nodes.find((n) => n.id === from);
+          const b = nodes.find((n) => n.id === to);
+          const ln = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          ln.setAttribute("x1", `${a.x}%`);
+          ln.setAttribute("y1", `${a.y}%`);
+          ln.setAttribute("x2", `${b.x}%`);
+          ln.setAttribute("y2", `${b.y}%`);
+          ln.classList.add("edge");
+          ln.dataset.from = from;
+          ln.dataset.to = to;
+          if (activeNodeId && (from === activeNodeId || to === activeNodeId))
+            ln.classList.add("hot");
+          edgeLayer.appendChild(ln);
+        });
+
+        visibleNodes.forEach((node) => {
+          const el = document.createElement("button");
+          el.type = "button";
+          el.className = `node ${node.plane}`;
+          el.style.left = `${node.x}%`;
+          el.style.top = `${node.y}%`;
+          if (node.id === activeNodeId) el.classList.add("active");
+          el.innerHTML = `<div class="t">${node.label}</div><div class="k">${node.plane}</div>`;
+          el.addEventListener("click", () => {
+            activeNodeId = node.id;
+            renderMap();
+            renderFocus();
+          });
+          nodeLayer.appendChild(el);
+        });
+
+        if (activeNodeId && !ids.has(activeNodeId)) {
+          activeNodeId = null;
+          renderFocus();
+        }
+      }
+
+      function renderFocus() {
+        if (!activeNodeId) {
+          focusTitle.textContent = "Select a component";
+          focusSummary.textContent =
+            "Pick a node to inspect why it exists, what interfaces it touches, and which safeguards it enables.";
+          focusMeta.innerHTML = "";
+          focusInterfaces.innerHTML = "";
+          focusValue.innerHTML = "";
+          focusRefs.innerHTML = "";
+          return;
+        }
+
+        const n = nodes.find((x) => x.id === activeNodeId);
+        focusTitle.textContent = n.label;
+        focusSummary.textContent = n.summary;
+
+        focusMeta.innerHTML = `
+          <li><strong>Plane:</strong> ${n.plane}</li>
+          <li><strong>Role:</strong> ${n.role}</li>
+          <li><strong>Connections:</strong> ${edges.filter(([a, b]) => a === n.id || b === n.id).length}</li>
+        `;
+
+        focusInterfaces.innerHTML = n.interfaces.map((x) => `<li>${x}</li>`).join("");
+        focusValue.innerHTML = n.value.map((x) => `<li>${x}</li>`).join("");
+        focusRefs.innerHTML = n.refs.map((r) => `<li>Reference ${citationLink(r)}</li>`).join("");
+      }
+
+      nodeSearch.addEventListener("input", renderMap);
+      planeFilter.addEventListener("change", renderMap);
+      viewAllBtn.addEventListener("click", () => {
+        activeNodeId = null;
+        nodeSearch.value = "";
+        planeFilter.value = "all";
+        renderMap();
+        renderFocus();
+      });
+
+      const flowButtons = document.getElementById("flowButtons");
+      const flowSvg = document.getElementById("flowSvg");
+      const flowSteps = document.getElementById("flowSteps");
+
+      let activeFlow = "sensitive";
+      let activeStep = 0;
+
+      function renderFlowButtons() {
+        flowButtons.innerHTML = "";
+        Object.entries(flows).forEach(([key, flow]) => {
+          const btn = document.createElement("button");
+          btn.className = `btn ${activeFlow === key ? "active" : ""}`;
+          btn.textContent = flow.label;
+          btn.type = "button";
+          btn.onclick = () => {
+            activeFlow = key;
+            activeStep = 0;
+            renderFlowButtons();
+            renderFlow();
+          };
+          flowButtons.appendChild(btn);
+        });
+      }
+
+      function renderFlow() {
+        const flow = flows[activeFlow];
+        const stepW = 130;
+        const startX = 24;
+        const y = 90;
+        const gap = 28;
+
+        const nodesSvg = flow.steps
+          .map((step, i) => {
+            const x = startX + i * (stepW + gap);
+            const isActive = i === activeStep;
+            return `
+              <g data-step="${i}">
+                <rect class="flow-node ${isActive ? "active" : ""}" x="${x}" y="${y}" width="${stepW}" height="70"></rect>
+                <text x="${x + 10}" y="${y + 24}" fill="#173445" font-size="12" font-weight="700">${String(i + 1).padStart(2, "0")}</text>
+                <text x="${x + 10}" y="${y + 44}" fill="#2f4d61" font-size="11">${step[0]}</text>
+              </g>`;
+          })
+          .join("");
+
+        const edgesSvg = flow.steps
+          .slice(0, -1)
+          .map((_, i) => {
+            const x1 = startX + i * (stepW + gap) + stepW;
+            const x2 = startX + (i + 1) * (stepW + gap);
+            return `<line class="flow-edge" x1="${x1}" y1="${y + 35}" x2="${x2 - 8}" y2="${y + 35}"></line>`;
+          })
+          .join("");
+
+        flowSvg.innerHTML = `
+          <defs>
+            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L8,4 L0,8 z" fill="#90a49d"></path>
+            </marker>
+          </defs>
+          <text x="20" y="28" fill="#1c394b" font-size="17" font-weight="700">${flow.label}</text>
+          <text x="20" y="50" fill="#4b6778" font-size="13">${flow.summary}</text>
+          ${edgesSvg}
+          ${nodesSvg}
+        `;
+
+        Array.from(flowSvg.querySelectorAll("g[data-step]")).forEach((g) => {
+          g.style.cursor = "pointer";
+          g.addEventListener("click", () => {
+            activeStep = Number(g.dataset.step);
+            renderFlow();
+          });
+        });
+
+        flowSteps.innerHTML = "";
+        flow.steps.forEach((step, i) => {
+          const el = document.createElement("button");
+          el.type = "button";
+          el.className = `step ${i === activeStep ? "active" : ""}`;
+          el.innerHTML = `
+            <div class="idx">step ${String(i + 1).padStart(2, "0")}</div>
+            <div class="name">${step[0]}</div>
+            <div class="small">${step[1]}</div>`;
+          el.onclick = () => {
+            activeStep = i;
+            renderFlow();
+          };
+          flowSteps.appendChild(el);
+        });
+      }
+
+      const safeguardsEl = document.getElementById("safeguards");
+      function renderSafeguards() {
+        safeguardsEl.innerHTML = "";
+        safeguards.forEach((s, idx) => {
+          const wrap = document.createElement("article");
+          wrap.className = "sg-item";
+          wrap.innerHTML = `
+            <button type="button" class="sg-head" aria-expanded="false">
+              <span class="title">${s.title}</span>
+              <span class="mono">${idx + 1}</span>
+            </button>
+            <div class="sg-body">
+              <p>${s.body}</p>
+              <p><strong>Value-add:</strong> ${s.benefit}</p>
+              <div>${s.refs.map((r) => citationLink(r)).join(" ")}</div>
+            </div>`;
+          const btn = wrap.querySelector(".sg-head");
+          btn.addEventListener("click", () => {
+            wrap.classList.toggle("open");
+            btn.setAttribute("aria-expanded", String(wrap.classList.contains("open")));
+          });
+          safeguardsEl.appendChild(wrap);
+        });
+      }
+
+      const minRange = document.getElementById("minRange");
+      const minLabel = document.getElementById("minLabel");
+      const riskSel = document.getElementById("riskSel");
+      const rulesVerdict = document.getElementById("rulesVerdict");
+      const llmVerdict = document.getElementById("llmVerdict");
+      const userVerdict = document.getElementById("userVerdict");
+      const riskDefaults = document.getElementById("riskDefaults");
+      const simResult = document.getElementById("simResult");
+
+      function collectChecked(selector, attr) {
+        return Array.from(document.querySelectorAll(selector))
+          .filter((el) => el.checked)
+          .map((el) => el.dataset[attr]);
+      }
+
+      function renderRiskDefaults(risk) {
+        const tips = {
+          R0: ["Default min approvals: 0", "Human factor: optional", "Policy focus: velocity"],
+          R1: ["Default min approvals: 0", "Human factor: optional", "Policy focus: local safety"],
+          R3: [
+            "Default min approvals: 1",
+            "Human factor: recommended/required by policy",
+            "Policy focus: external mutation",
+          ],
+          R4: [
+            "Default min approvals: 2",
+            "Human factor: required by default",
+            "Policy focus: high-impact operations",
+          ],
+        };
+        riskDefaults.innerHTML = (tips[risk] || [])
+          .map((x) => `<li class="mono" style="font-size:0.74rem;margin-top:4px;">${x}</li>`)
+          .join("");
+      }
+
+      function evaluateSimulator() {
+        const allowed = collectChecked("input[data-allow]", "allow");
+        const disabled = new Set(collectChecked("input[data-disable]", "disable"));
+        const effective = allowed.filter((id) => !disabled.has(id));
+        const risk = riskSel.value;
+        let minApprovals = Number(minRange.value);
+
+        minLabel.textContent = String(minApprovals);
+
+        const requiredByRisk = risk === "R4" ? 2 : risk === "R3" ? 1 : 0;
+        const minEffective = Math.max(minApprovals, requiredByRisk);
+
+        const verdicts = {
+          rules_based: rulesVerdict.value,
+          llm_evaluation: llmVerdict.value,
+          user_request: userVerdict.value,
+        };
+
+        const activeVerdicts = effective.map((id) => ({ id, verdict: verdicts[id] || "abstain" }));
+        const hasReject = activeVerdicts.some((v) => v.verdict === "reject");
+        const approvals = activeVerdicts.filter((v) => v.verdict === "approve").length;
+
+        let decision = "Needs escalation";
+        let statusClass = "warn";
+        const notes = [];
+
+        if (effective.length === 0) {
+          decision = "Blocked: no effective approvers";
+          statusClass = "no";
+          notes.push("Fail-closed because effective approver set is empty.");
+        } else if (minEffective > effective.length) {
+          decision = "Blocked: insufficient factors for quorum";
+          statusClass = "no";
+          notes.push(
+            `minApprovals (${minEffective}) exceeds effective approver count (${effective.length}).`,
+          );
+        } else if (hasReject) {
+          decision = "Blocked: factor reject";
+          statusClass = "no";
+          notes.push("At least one active factor returned reject.");
+        } else if (approvals >= minEffective) {
+          decision = "Approved";
+          statusClass = "ok";
+          notes.push("Quorum reached with active factors.");
+        } else if (effective.includes("user_request")) {
+          decision = "Pending human action";
+          statusClass = "warn";
+          notes.push("Automatic factors insufficient; request routed to user factor.");
+        } else {
+          decision = "Blocked: no path to quorum";
+          statusClass = "no";
+          notes.push("No user factor active and quorum is unmet.");
+        }
+
+        simResult.innerHTML = `
+          <div class="headline">${decision}</div>
+          <div style="margin-top:8px;">
+            <span class="badge ${statusClass}">Risk: ${risk}</span>
+            <span class="badge ${statusClass}">Approvals: ${approvals}/${minEffective}</span>
+            <span class="badge ${statusClass}">Effective factors: ${effective.join(", ") || "none"}</span>
+          </div>
+          <ul class="list" style="margin-top:8px;">
+            ${notes.map((n) => `<li>${n}</li>`).join("")}
+          </ul>
+          <p class="desc" style="margin-top:8px;">
+            This simulator demonstrates the key design promise: strong gating for high-consequence requests, smooth execution for low-risk requests.
+          </p>
+        `;
+
+        renderRiskDefaults(risk);
+      }
+
+      [
+        ...document.querySelectorAll("input[data-allow]"),
+        ...document.querySelectorAll("input[data-disable]"),
+        minRange,
+        riskSel,
+        rulesVerdict,
+        llmVerdict,
+        userVerdict,
+      ].forEach((el) => el.addEventListener("input", evaluateSimulator));
+
+      renderMap();
+      renderFocus();
+      renderFlowButtons();
+      renderFlow();
+      renderSafeguards();
+      evaluateSimulator();
+    </script>
+  </body>
+</html>
