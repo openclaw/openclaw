@@ -33,14 +33,19 @@ OLD_SHA=$(git rev-parse HEAD)
 OLD_SHORT=$(git rev-parse --short HEAD)
 log "Current commit: ${OLD_SHORT}"
 
-# --- Git pull (rebase to keep local commits on top) ---
-log "Pulling latest changes (rebase)..."
-if git pull --rebase 2>&1; then
-  ok "Git pull complete"
+# --- Rebase adabot on top of origin/main ---
+# This repo is the single source of truth for adabot.
+# We rebase our commits on top of upstream (origin/main), then force-push out.
+# Never pull/rebase from bitbucket/fork — those are downstream mirrors.
+log "Fetching origin..."
+git fetch origin 2>&1 || fail "Could not fetch origin"
+log "Rebasing onto origin/main..."
+if git rebase origin/main 2>&1; then
+  ok "Rebase onto origin/main complete"
 else
   warn "Rebase failed — aborting rebase and stopping."
   git rebase --abort 2>/dev/null || true
-  fail "Git pull --rebase failed (conflicts?). Resolve manually."
+  fail "Rebase onto origin/main failed (conflicts?). Resolve manually."
 fi
 
 NEW_SHA=$(git rev-parse HEAD)
@@ -89,6 +94,13 @@ ok "Linked globally"
 BUILT_SHA=$(git rev-parse HEAD)
 BUILT_SHORT=$(git rev-parse --short HEAD)
 log "Built commit: ${BUILT_SHORT} (${BUILT_SHA})"
+
+# --- Force-push to remotes (this repo is source of truth) ---
+BRANCH=$(git branch --show-current)
+log "Force-pushing ${BRANCH} to bitbucket and fork..."
+git push --force-with-lease bitbucket "HEAD:${BRANCH}" 2>&1 || warn "Could not push to bitbucket"
+git push --force-with-lease fork "HEAD:${BRANCH}" 2>&1 || warn "Could not push to fork"
+ok "Pushed to remotes"
 
 # --- Restart gateway ---
 log "Restarting gateway..."
