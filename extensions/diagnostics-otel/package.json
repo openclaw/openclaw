@@ -4,6 +4,8 @@
   "description": "OpenClaw diagnostics OpenTelemetry exporter",
   "type": "module",
   "dependencies": {
+    "@langfuse/otel": "^4.5.1",
+    "@langfuse/tracing": "^4.5.1",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/api-logs": "^0.211.0",
     "@opentelemetry/exporter-logs-otlp-http": "^0.211.0",

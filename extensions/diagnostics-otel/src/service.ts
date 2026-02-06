@@ -1,10 +1,11 @@
 import type { SeverityNumber } from "@opentelemetry/api-logs";
 import type { DiagnosticEventPayload, OpenClawPluginService } from "openclaw/plugin-sdk";
+import { LangfuseSpanProcessor } from "@langfuse/otel";
 import { metrics, trace, SpanStatusCode } from "@opentelemetry/api";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { Resource } from "@opentelemetry/resources";
+import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { NodeSDK } from "@opentelemetry/sdk-node";
@@ -73,7 +74,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
-      const resource = new Resource({
+      const resource = resourceFromAttributes({
         [SemanticResourceAttributes.SERVICE_NAME]: serviceName,
       });
 
@@ -104,20 +105,78 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         : undefined;
 
       if (tracesEnabled || metricsEnabled) {
-        sdk = new NodeSDK({
-          resource,
-          ...(traceExporter ? { traceExporter } : {}),
-          ...(metricReader ? { metricReader } : {}),
-          ...(sampleRate !== undefined
-            ? {
-                sampler: new ParentBasedSampler({
-                  root: new TraceIdRatioBasedSampler(sampleRate),
-                }),
-              }
-            : {}),
-        });
+        // Detect if this is Langfuse endpoint
+        const isLangfuse = endpoint?.includes("langfuse");
 
-        sdk.start();
+        if (isLangfuse && tracesEnabled) {
+          // Use Langfuse-native SDK for better integration
+          // Extract credentials from headers (Basic auth) or use env vars
+          let publicKey: string | undefined;
+          let secretKey: string | undefined;
+          let baseUrl: string | undefined;
+
+          if (headers?.Authorization?.startsWith("Basic ")) {
+            try {
+              const decoded = Buffer.from(headers.Authorization.slice(6), "base64").toString();
+              const [pk, sk] = decoded.split(":");
+              publicKey = pk;
+              secretKey = sk;
+            } catch {
+              // ignore decode errors
+            }
+          }
+
+          // Extract base URL from endpoint (remove /api/public/otel suffix)
+          if (endpoint) {
+            baseUrl = endpoint.replace(/\/api\/public\/otel\/?$/, "");
+          }
+
+          // Set env vars for Langfuse SDK if we have credentials
+          if (publicKey && secretKey) {
+            process.env.LANGFUSE_PUBLIC_KEY = publicKey;
+            process.env.LANGFUSE_SECRET_KEY = secretKey;
+          }
+          if (baseUrl) {
+            process.env.LANGFUSE_BASE_URL = baseUrl;
+          }
+
+          sdk = new NodeSDK({
+            resource,
+            spanProcessors: [new LangfuseSpanProcessor()],
+            ...(metricReader ? { metricReader } : {}),
+            ...(sampleRate !== undefined
+              ? {
+                  sampler: new ParentBasedSampler({
+                    root: new TraceIdRatioBasedSampler(sampleRate),
+                  }),
+                }
+              : {}),
+          });
+
+          sdk.start();
+          ctx.logger.info(
+            `diagnostics-otel: Langfuse SDK started (baseUrl=${baseUrl || "default"})`,
+          );
+        } else {
+          // Use standard OTEL exporters for non-Langfuse endpoints
+          sdk = new NodeSDK({
+            resource,
+            ...(traceExporter ? { traceExporter } : {}),
+            ...(metricReader ? { metricReader } : {}),
+            ...(sampleRate !== undefined
+              ? {
+                  sampler: new ParentBasedSampler({
+                    root: new TraceIdRatioBasedSampler(sampleRate),
+                  }),
+                }
+              : {}),
+          });
+
+          sdk.start();
+          ctx.logger.info(
+            `diagnostics-otel: SDK started (traces=${tracesEnabled}, metrics=${metricsEnabled}, endpoint=${endpoint})`,
+          );
+        }
       }
 
       const logSeverityMap: Record<string, SeverityNumber> = {
