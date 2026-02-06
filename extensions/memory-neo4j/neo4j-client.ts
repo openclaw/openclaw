@@ -179,6 +179,30 @@ export class Neo4jMemoryClient {
     }
   }
 
+  /**
+   * Run a raw Cypher query and return records as plain objects.
+   * Keys in the RETURN clause become object properties.
+   */
+  async runQuery<T extends Record<string, unknown>>(
+    cypher: string,
+    params: Record<string, unknown> = {},
+  ): Promise<T[]> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const result = await session.run(cypher, params);
+      return result.records.map((r) => {
+        const obj: Record<string, unknown> = {};
+        for (const key of r.keys) {
+          obj[key as string] = r.get(key as string);
+        }
+        return obj as T;
+      });
+    } finally {
+      await session.close();
+    }
+  }
+
   async verifyConnection(): Promise<boolean> {
     if (!this.driver) {
       return false;
