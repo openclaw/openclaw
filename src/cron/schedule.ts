@@ -2,19 +2,14 @@ import { Cron } from "croner";
 import type { CronSchedule } from "./types.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 
-export function computeNextRunAtMs(
-  schedule: CronSchedule,
-  nowMs: number,
-): number | undefined {
+export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
     // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
     // The store migration should convert atMs→at, but be defensive in case
     // the migration hasn't run yet or was bypassed.
     const sched = schedule as { at?: string; atMs?: number | string };
     const atMs =
-      typeof sched.atMs === "number" &&
-      Number.isFinite(sched.atMs) &&
-      sched.atMs > 0
+      typeof sched.atMs === "number" && Number.isFinite(sched.atMs) && sched.atMs > 0
         ? sched.atMs
         : typeof sched.atMs === "string"
           ? parseAbsoluteTimeMs(sched.atMs)
@@ -61,11 +56,7 @@ export function computeNextRunAtMs(
     let attempts = 0;
     const maxAttempts = 100; // Safety limit to prevent infinite loops
 
-    while (
-      futureDate &&
-      futureDate.getTime() < nowMs &&
-      attempts < maxAttempts
-    ) {
+    while (futureDate && futureDate.getTime() < nowMs && attempts < maxAttempts) {
       futureDate = cron.nextRun(futureDate);
       attempts++;
     }
