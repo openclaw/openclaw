@@ -354,6 +354,22 @@ export type PluginHookMessageReceivedEvent = {
   metadata?: Record<string, unknown>;
 };
 
+// message_received hook result (for blocking)
+export type PluginHookMessageReceivedResult = {
+  /** Block the message from reaching the agent */
+  block?: boolean;
+  /** Reason for blocking (for audit logs) */
+  blockReason?: string;
+  /** Message to send back to the user when blocked */
+  notifyUser?: string;
+  /** System message to inject into agent context */
+  notifyAgent?: string;
+  /** Threat level for logging/metrics */
+  threatLevel?: "HIGH" | "MEDIUM" | "LOW";
+  /** Custom metadata for audit */
+  auditMetadata?: Record<string, unknown>;
+};
+
 // message_sending hook
 export type PluginHookMessageSendingEvent = {
   to: string;
@@ -478,7 +494,7 @@ export type PluginHookHandlerMap = {
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
-  ) => Promise<void> | void;
+  ) => Promise<PluginHookMessageReceivedResult | void> | PluginHookMessageReceivedResult | void;
   message_sending: (
     event: PluginHookMessageSendingEvent,
     ctx: PluginHookMessageContext,
