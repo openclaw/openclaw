@@ -1,6 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { streamSimple } from "@mariozechner/pi-ai";
+import { streamSimple, getEnvApiKey } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { log } from "./logger.js";
 
@@ -8,6 +8,32 @@ const OPENROUTER_APP_HEADERS: Record<string, string> = {
   "HTTP-Referer": "https://openclaw.ai",
   "X-Title": "OpenClaw",
 };
+
+/**
+ * Current Claude Code version for Anthropic OAuth stealth mode.
+ * pi-ai hardcodes an older version; override here to stay current.
+ * Bump when a new Claude Code release ships updated beta headers.
+ */
+const CLAUDE_CODE_VERSION = "2.1.33";
+
+/**
+ * Override headers for Anthropic OAuth ("stealth mode").
+ * pi-ai's built-in `claude-code-20250219` beta header is too old for
+ * models released after that date (e.g. claude-opus-4-6).  We inject
+ * updated headers via the streamFn `options.headers` path so they
+ * win the `mergeHeaders(…, model.headers, optionsHeaders)` call
+ * inside pi-ai's `createClient`.
+ */
+function getAnthropicOAuthHeaders(apiKey: string): Record<string, string> | undefined {
+  if (!apiKey.includes("sk-ant-oat")) {
+    return undefined;
+  }
+  return {
+    "anthropic-beta":
+      "claude-code-20260205,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+    "user-agent": `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`,
+  };
+}
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -118,8 +144,33 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
 }
 
 /**
+ * Create a streamFn wrapper that overrides stale stealth-mode headers
+ * for Anthropic OAuth tokens.  pi-ai hardcodes `claude-code-20250219`
+ * which is too old for models released after that date.
+ */
+function createAnthropicOAuthHeadersWrapper(
+  baseStreamFn: StreamFn | undefined,
+  apiKey: string,
+): StreamFn | undefined {
+  const oauthHeaders = getAnthropicOAuthHeaders(apiKey);
+  if (!oauthHeaders) {
+    return undefined;
+  }
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        ...oauthHeaders,
+      },
+    });
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
- * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
+ * Also adds provider-specific headers (OpenRouter attribution,
+ * Anthropic OAuth stealth-mode overrides).
  *
  * @internal Exported for testing
  */
@@ -152,5 +203,15 @@ export function applyExtraParamsToAgent(
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
+  }
+
+  // Override stale stealth-mode headers for Anthropic OAuth tokens.
+  if (provider === "anthropic") {
+    const apiKey = getEnvApiKey("anthropic") ?? "";
+    const wrapped = createAnthropicOAuthHeadersWrapper(agent.streamFn, apiKey);
+    if (wrapped) {
+      log.debug(`overriding Anthropic OAuth stealth headers for ${provider}/${modelId}`);
+      agent.streamFn = wrapped;
+    }
   }
 }

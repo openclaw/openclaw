@@ -1,7 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { AssistantMessageEventStream } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
 
 describe("resolveExtraParams", () => {
@@ -90,5 +90,64 @@ describe("applyExtraParamsToAgent", () => {
       "X-Title": "OpenClaw",
       "X-Custom": "1",
     });
+  });
+
+  it("overrides Anthropic OAuth stealth headers when an OAuth token is set", () => {
+    // Simulate an OAuth token in the env (pi-ai resolves via ANTHROPIC_API_KEY)
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-oat01-fake-token");
+
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-opus-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, undefined);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toBeDefined();
+    const headers = calls[0]!.headers as Record<string, string>;
+    expect(headers["anthropic-beta"]).toContain("claude-code-20260205");
+    expect(headers["user-agent"]).toContain("claude-cli/");
+
+    vi.unstubAllEnvs();
+  });
+
+  it("does not override headers for non-OAuth Anthropic API keys", () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-api03-regular-key");
+
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-opus-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, undefined);
+
+    // Should call the base streamFn directly (no wrapper applied)
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.headers).toBeUndefined();
+
+    vi.unstubAllEnvs();
   });
 });
