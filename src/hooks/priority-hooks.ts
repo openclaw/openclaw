@@ -41,6 +41,8 @@ export type PriorityHookEntry = {
   priority: number;
   label: string | undefined;
   once: boolean;
+  /** Monotonic insertion index for stable ordering within the same priority */
+  _insertionIdx: number;
 };
 
 export type PriorityHookStats = {
@@ -74,11 +76,13 @@ export function registerPriorityHook(
     priority: options.priority ?? 50,
     label: options.label,
     once: options.once ?? false,
+    _insertionIdx: idCounter,
   };
 
   const list = registry.get(eventKey) ?? [];
   list.push(entry);
-  list.sort((a, b) => a.priority - b.priority);
+  // Sort by priority, then by insertion order for deterministic equal-priority behavior
+  list.sort((a, b) => a.priority - b.priority || a._insertionIdx - b._insertionIdx);
   registry.set(eventKey, list);
 
   return id;
@@ -126,8 +130,16 @@ export async function triggerPriorityHook(event: InternalHookEvent): Promise<Err
   const typeHandlers = registry.get(event.type) ?? [];
   const specificHandlers = registry.get(`${event.type}:${event.action}`) ?? [];
 
-  // Merge and sort — stable sort keeps insertion order for equal priorities
-  const all = [...typeHandlers, ...specificHandlers].sort((a, b) => a.priority - b.priority);
+  // Merge, de-duplicate by ID, and sort by priority + insertion order
+  const seen = new Set<string>();
+  const merged: PriorityHookEntry[] = [];
+  for (const entry of [...typeHandlers, ...specificHandlers]) {
+    if (!seen.has(entry.id)) {
+      seen.add(entry.id);
+      merged.push(entry);
+    }
+  }
+  const all = merged.sort((a, b) => a.priority - b.priority || a._insertionIdx - b._insertionIdx);
 
   if (all.length === 0) return [];
 
