@@ -1,6 +1,6 @@
 import { WecomCrypto } from "./crypto.js";
 import { logger } from "./logger.js";
-import { MessageDeduplicator, randomString } from "./utils.js";
+import { MessageDeduplicator } from "./utils.js";
 
 /**
  * WeCom AI Bot Webhook Handler
@@ -15,6 +15,9 @@ export class WecomWebhook {
   config;
   crypto;
   deduplicator = new MessageDeduplicator();
+
+  /** Sentinel returned when a message is a duplicate (caller should ACK 200). */
+  static DUPLICATE = Symbol.for("wecom.duplicate");
 
   constructor(config) {
     this.config = config;
@@ -141,11 +144,11 @@ export class WecomWebhook {
       const msgId = data.msgid || `msg_${Date.now()}`;
       const fromUser = data.from?.userid || ""; // Note: "userid" not "user_id"
       const responseUrl = data.response_url || "";
-      const chatType = data.chattype || "single"; // "single" 或 "group"
-      const chatId = data.chatid || ""; // 群聊 ID（仅群聊时存在）
-      const aibotId = data.aibotid || ""; // 机器人 ID
+      const chatType = data.chattype || "single";
+      const chatId = data.chatid || "";
+      const aibotId = data.aibotid || "";
 
-      // 解析引用消息（可选）
+      // Parse quoted message metadata when present.
       const quote = data.quote
         ? {
             msgType: data.quote.msgtype,
@@ -156,7 +159,7 @@ export class WecomWebhook {
       // Check for duplicates
       if (this.deduplicator.isDuplicate(msgId)) {
         logger.debug("Duplicate message ignored", { msgId });
-        return null;
+        return WecomWebhook.DUPLICATE;
       }
 
       logger.info("Received text message", {
@@ -173,10 +176,10 @@ export class WecomWebhook {
           content,
           fromUser,
           chatType,
-          chatId, // 群聊 ID
-          aibotId, // 机器人 ID
-          quote, // 引用消息
-          responseUrl, // For async response
+          chatId,
+          aibotId,
+          quote,
+          responseUrl,
         },
         query: { timestamp, nonce },
       };
@@ -189,14 +192,22 @@ export class WecomWebhook {
           id: streamId,
         },
         query: { timestamp, nonce },
-        rawData: data, // 保留完整数据用于调试
+        rawData: data,
       };
     } else if (msgtype === "image") {
       const imageUrl = data.image?.url;
       const msgId = data.msgid || `msg_${Date.now()}`;
       const fromUser = data.from?.userid || "";
       const responseUrl = data.response_url || "";
-      logger.info("Received image message", { fromUser, imageUrl });
+      const chatType = data.chattype || "single";
+      const chatId = data.chatid || "";
+
+      if (this.deduplicator.isDuplicate(msgId)) {
+        logger.debug("Duplicate image message ignored", { msgId });
+        return WecomWebhook.DUPLICATE;
+      }
+
+      logger.info("Received image message", { fromUser, chatType, imageUrl });
 
       return {
         message: {
@@ -204,6 +215,51 @@ export class WecomWebhook {
           msgType: "image",
           imageUrl,
           fromUser,
+          chatType,
+          chatId,
+          responseUrl,
+        },
+        query: { timestamp, nonce },
+      };
+    } else if (msgtype === "voice") {
+      // Voice message (single chat only) - WeCom automatically transcribes to text
+      const content = data.voice?.content || "";
+      const msgId = data.msgid || `msg_${Date.now()}`;
+      const fromUser = data.from?.userid || "";
+      const responseUrl = data.response_url || "";
+      const chatType = data.chattype || "single";
+      const chatId = data.chatid || "";
+
+      // Check for duplicates
+      if (this.deduplicator.isDuplicate(msgId)) {
+        logger.debug("Duplicate voice message ignored", { msgId });
+        return WecomWebhook.DUPLICATE;
+      }
+
+      // Validate content
+      if (!content.trim()) {
+        logger.warn("Empty voice message received", { msgId, fromUser });
+        return null;
+      }
+
+      logger.info("Received voice message (auto-transcribed by WeCom)", {
+        fromUser,
+        chatType,
+        chatId: chatId || "(private)",
+        originalType: "voice",
+        transcribedLength: content.length,
+        preview: content.substring(0, 50),
+      });
+
+      // Treat voice as text since WeCom already transcribed it
+      return {
+        message: {
+          msgId,
+          msgType: "text",
+          content,
+          fromUser,
+          chatType,
+          chatId,
           responseUrl,
         },
         query: { timestamp, nonce },
@@ -215,8 +271,157 @@ export class WecomWebhook {
         query: { timestamp, nonce },
       };
     } else if (msgtype === "mixed") {
-      logger.warn("Mixed message type not fully supported", { data });
-      return null;
+      // Mixed message: array of text + image items.
+      const msgId = data.msgid || `msg_${Date.now()}`;
+      const fromUser = data.from?.userid || "";
+      const responseUrl = data.response_url || "";
+      const chatType = data.chattype || "single";
+      const chatId = data.chatid || "";
+      const aibotId = data.aibotid || "";
+
+      if (this.deduplicator.isDuplicate(msgId)) {
+        logger.debug("Duplicate mixed message ignored", { msgId });
+        return WecomWebhook.DUPLICATE;
+      }
+
+      const msgItems = data.mixed?.msg_item || [];
+      const textParts = [];
+      const imageUrls = [];
+
+      for (const item of msgItems) {
+        if (item.msgtype === "text" && item.text?.content) {
+          textParts.push(item.text.content);
+        } else if (item.msgtype === "image" && item.image?.url) {
+          imageUrls.push(item.image.url);
+        }
+      }
+
+      const content = textParts.join("\n");
+
+      logger.info("Received mixed message", {
+        fromUser,
+        chatType,
+        chatId: chatId || "(private)",
+        textParts: textParts.length,
+        imageCount: imageUrls.length,
+        contentPreview: content.substring(0, 50),
+      });
+
+      return {
+        message: {
+          msgId,
+          msgType: "mixed",
+          content,
+          imageUrls,
+          fromUser,
+          chatType,
+          chatId,
+          aibotId,
+          responseUrl,
+        },
+        query: { timestamp, nonce },
+      };
+    } else if (msgtype === "file") {
+      const fileUrl = data.file?.url || "";
+      const fileName = data.file?.name || data.file?.filename || "";
+      const msgId = data.msgid || `msg_${Date.now()}`;
+      const fromUser = data.from?.userid || "";
+      const responseUrl = data.response_url || "";
+      const chatType = data.chattype || "single";
+      const chatId = data.chatid || "";
+
+      if (this.deduplicator.isDuplicate(msgId)) {
+        logger.debug("Duplicate file message ignored", { msgId });
+        return WecomWebhook.DUPLICATE;
+      }
+
+      logger.info("Received file message", {
+        fromUser,
+        fileName,
+        fileUrl: fileUrl.substring(0, 80),
+      });
+
+      return {
+        message: {
+          msgId,
+          msgType: "file",
+          fileUrl,
+          fileName,
+          fromUser,
+          chatType,
+          chatId,
+          responseUrl,
+        },
+        query: { timestamp, nonce },
+      };
+    } else if (msgtype === "location") {
+      const msgId = data.msgid || `msg_${Date.now()}`;
+      const fromUser = data.from?.userid || "";
+      const responseUrl = data.response_url || "";
+      const chatType = data.chattype || "single";
+      const chatId = data.chatid || "";
+      const latitude = data.location?.latitude || "";
+      const longitude = data.location?.longitude || "";
+      const name = data.location?.name || data.location?.label || "";
+
+      if (this.deduplicator.isDuplicate(msgId)) {
+        logger.debug("Duplicate location message ignored", { msgId });
+        return WecomWebhook.DUPLICATE;
+      }
+
+      const content = name
+        ? `[位置] ${name} (${latitude}, ${longitude})`
+        : `[位置] ${latitude}, ${longitude}`;
+
+      logger.info("Received location message", { fromUser, latitude, longitude, name });
+
+      return {
+        message: {
+          msgId,
+          msgType: "text",
+          content,
+          fromUser,
+          chatType,
+          chatId,
+          responseUrl,
+        },
+        query: { timestamp, nonce },
+      };
+    } else if (msgtype === "link") {
+      const msgId = data.msgid || `msg_${Date.now()}`;
+      const fromUser = data.from?.userid || "";
+      const responseUrl = data.response_url || "";
+      const chatType = data.chattype || "single";
+      const chatId = data.chatid || "";
+      const title = data.link?.title || "";
+      const description = data.link?.description || "";
+      const url = data.link?.url || "";
+
+      if (this.deduplicator.isDuplicate(msgId)) {
+        logger.debug("Duplicate link message ignored", { msgId });
+        return WecomWebhook.DUPLICATE;
+      }
+
+      const parts = [];
+      if (title) parts.push(`[链接] ${title}`);
+      if (description) parts.push(description);
+      if (url) parts.push(url);
+      const content = parts.join("\n") || "[链接]";
+
+      logger.info("Received link message", { fromUser, title, url: url.substring(0, 80) });
+
+      return {
+        message: {
+          msgId,
+          msgType: "text",
+          content,
+          fromUser,
+          chatType,
+          chatId,
+          responseUrl,
+        },
+        query: { timestamp, nonce },
+      };
     } else {
       logger.warn("Unknown message type", { msgtype });
       return null;
@@ -225,21 +430,21 @@ export class WecomWebhook {
 
   // =========================================================================
   // Build Stream Response (AI Bot format)
-  // 完整支持企业微信流式消息所有字段
+  // Supports all core WeCom stream response fields used by this plugin.
   // =========================================================================
   buildStreamResponse(streamId, content, finish, timestamp, nonce, options = {}) {
     const stream = {
       id: streamId,
       finish: finish,
-      content: content, // 最长20480字节,utf8编码
+      content: content,
     };
 
-    // 可选: 图文混排消息列表 (仅在finish=true时支持image)
+    // Optional mixed media list (images are valid on finished responses).
     if (options.msgItem && options.msgItem.length > 0) {
       stream.msg_item = options.msgItem;
     }
 
-    // 可选: 用户反馈追踪ID (首次回复时设置,最长256字节)
+    // Optional feedback tracking id.
     if (options.feedbackId) {
       stream.feedback = { id: options.feedbackId };
     }
@@ -255,16 +460,9 @@ export class WecomWebhook {
 
     return JSON.stringify({
       encrypt: encrypted,
-      msg_signature: signature,
+      msgsignature: signature,
       timestamp: timestamp,
       nonce: nonce,
     });
-  }
-
-  /**
-   * Build success acknowledgment (no reply)
-   */
-  buildSuccessAck() {
-    return "success";
   }
 }
