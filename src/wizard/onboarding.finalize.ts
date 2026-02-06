@@ -289,6 +289,12 @@ export async function finalizeOnboardingWizard(
       .join("\n"),
     "Control UI",
   );
+  if (tokenParam) {
+    await prompter.note(
+      "⚠️ The URL above contains your gateway token. Avoid sharing it.",
+      "Security",
+    );
+  }
 
   let controlUiOpened = false;
   let controlUiOpenHint: string | undefined;

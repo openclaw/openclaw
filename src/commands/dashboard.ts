@@ -1,4 +1,5 @@
 import type { RuntimeEnv } from "../runtime.js";
+import chalk from "chalk";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { defaultRuntime } from "../runtime.js";
@@ -34,6 +35,11 @@ export async function dashboardCommand(
   const authedUrl = token ? `${links.httpUrl}?token=${encodeURIComponent(token)}` : links.httpUrl;
 
   runtime.log(`Dashboard URL: ${authedUrl}`);
+  if (token) {
+    const isTTY = process.stdout.isTTY;
+    runtime.log(isTTY ? chalk.yellow("⚠️ This URL contains your gateway token. Avoid sharing it.") : "⚠️ This URL contains your gateway token. Avoid sharing it.");
+    runtime.log(isTTY ? chalk.dim("The token will be stripped from the URL after loading in the browser.") : "The token will be stripped from the URL after loading in the browser.");
+  }
 
   const copied = await copyToClipboard(authedUrl).catch(() => false);
   runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");

@@ -190,7 +190,7 @@ export function formatControlUiSshHint(params: {
   const tokenParam = params.token ? `?token=${encodeURIComponent(params.token)}` : "";
   const authedUrl = params.token ? `${localUrl}${tokenParam}` : undefined;
   const sshTarget = resolveSshTargetHint();
-  return [
+  const lines = [
     "No GUI detected. Open from your computer:",
     `ssh -N -L ${params.port}:127.0.0.1:${params.port} ${sshTarget}`,
     "Then open:",
@@ -199,9 +199,12 @@ export function formatControlUiSshHint(params: {
     "Docs:",
     "https://docs.openclaw.ai/gateway/remote",
     "https://docs.openclaw.ai/web/control-ui",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ];
+  if (params.token) {
+    lines.push("");
+    lines.push("⚠️ The URL above contains your gateway token. Avoid sharing it.");
+  }
+  return lines.filter(Boolean).join("\n");
 }
 
 function resolveSshTargetHint(): string {

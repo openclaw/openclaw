@@ -1,5 +1,7 @@
 import type { DaemonLifecycleOptions } from "./types.js";
+import fs from "node:fs/promises";
 import { resolveIsNixMode } from "../../config/paths.js";
+import { resolveGatewayLockPath } from "../../infra/gateway-lock.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
@@ -216,6 +218,14 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   } catch (err) {
     fail(`Gateway stop failed: ${String(err)}`);
     return;
+  }
+
+  // Clean up the gateway lock file to allow manual starts after service stop
+  try {
+    const { lockPath } = resolveGatewayLockPath(process.env);
+    await fs.unlink(lockPath);
+  } catch {
+    // Best effort - lock file may not exist or be accessible
   }
 
   let stopped = false;
