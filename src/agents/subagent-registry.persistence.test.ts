@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../config/config.js";
+import { resolveAgentTimeoutMs } from "./timeout.js";
 
 const noop = () => {};
 const callGatewayMock = vi.fn(async () => ({
@@ -133,8 +135,9 @@ describe("subagent registry persistence", () => {
 
     expect(waitCall?.method).toBe("agent.wait");
     expect(waitCall?.params?.runId).toBe("run-timeout-zero");
-    expect(waitCall?.params?.timeoutMs).toBe(600_000);
-    expect(waitCall?.timeoutMs).toBe(610_000);
+    const expectedWaitTimeoutMs = resolveAgentTimeoutMs({ cfg: loadConfig() });
+    expect(waitCall?.params?.timeoutMs).toBe(expectedWaitTimeoutMs);
+    expect(waitCall?.timeoutMs).toBe(expectedWaitTimeoutMs + 10_000);
   });
 
   it("skips cleanup when cleanupHandled was persisted", async () => {
