@@ -1,4 +1,4 @@
-﻿package ai.openclaw.android
+package ai.openclaw.android
 
 import android.Manifest
 import android.content.Context
@@ -569,8 +569,8 @@ class NodeRuntime(context: Context) {
 
   private fun connect(endpoint: GatewayEndpoint, tokenOverride: String?) {
     connectedEndpoint = endpoint
-    operatorStatusText = "ConnectingΓÇª"
-    nodeStatusText = "ConnectingΓÇª"
+    operatorStatusText = "Connecting..."
+    nodeStatusText = "Connecting..."
     updateStatus()
     val token = tokenOverride?.takeIf { it.isNotEmpty() } ?: prefs.loadGatewayToken()
     val password = prefs.loadGatewayPassword()
@@ -581,8 +581,8 @@ class NodeRuntime(context: Context) {
 
   fun connect(endpoint: GatewayEndpoint) {
     connectedEndpoint = endpoint
-    operatorStatusText = "ConnectingΓÇª"
-    nodeStatusText = "ConnectingΓÇª"
+    operatorStatusText = "Connecting..."
+    nodeStatusText = "Connecting..."
     updateStatus()
     val token = prefs.loadGatewayToken()
     val password = prefs.loadGatewayPassword()
@@ -964,7 +964,7 @@ class NodeRuntime(context: Context) {
         GatewaySession.InvokeResult.ok(res)
       }
       OpenClawCameraCommand.Snap.rawValue -> {
-        showCameraHud(message = "Taking photoΓÇª", kind = CameraHudKind.Photo)
+        showCameraHud(message = "Taking photo...", kind = CameraHudKind.Photo)
         triggerCameraFlash()
         val res =
           try {
@@ -981,7 +981,7 @@ class NodeRuntime(context: Context) {
         val includeAudio = paramsJson?.contains("\"includeAudio\":true") != false
         if (includeAudio) externalAudioCaptureActive.value = true
         try {
-          showCameraHud(message = "RecordingΓÇª", kind = CameraHudKind.Recording)
+          showCameraHud(message = "Recording...", kind = CameraHudKind.Recording)
           val res =
             try {
               camera.clip(paramsJson)

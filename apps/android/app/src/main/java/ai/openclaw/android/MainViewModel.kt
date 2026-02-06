@@ -1,4 +1,4 @@
-﻿package ai.openclaw.android
+package ai.openclaw.android
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
