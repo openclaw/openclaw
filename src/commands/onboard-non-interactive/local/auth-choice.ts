@@ -257,6 +257,9 @@ export async function applyNonInteractiveAuthChoice(params: {
     if (!resolved) {
       return null;
     }
+    if (resolved.source !== "profile") {
+      setXaiApiKey(resolved.key);
+    }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "xai:default",
       provider: "xai",
