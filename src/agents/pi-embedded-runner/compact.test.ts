@@ -234,7 +234,9 @@ vi.mock("../../tts/tts.js", () => ({
 }));
 
 import { createAgentSession } from "@mariozechner/pi-coding-agent";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
+import { sanitizeSessionHistory, sanitizeToolsForGoogle } from "./google.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 
@@ -337,6 +339,34 @@ describe("compactEmbeddedPiSessionDirect", () => {
     );
     expect(log.info).toHaveBeenCalledWith(
       expect.stringContaining("compaction: using override model"),
+    );
+  });
+
+  it("uses override provider/model consistently in pipeline when overrideModel is true", async () => {
+    mockSession();
+
+    await compactEmbeddedPiSessionDirect({
+      ...baseParams,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      config: {
+        agents: {
+          defaults: { compaction: { model: "openai/gpt-4o-mini", overrideModel: true } },
+        },
+      },
+    });
+
+    // sanitizeToolsForGoogle should receive the override provider
+    expect(vi.mocked(sanitizeToolsForGoogle)).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai" }),
+    );
+    // resolveTranscriptPolicy should receive the override provider/model
+    expect(vi.mocked(resolveTranscriptPolicy)).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", modelId: "gpt-4o-mini" }),
+    );
+    // sanitizeSessionHistory should receive the override provider/model
+    expect(vi.mocked(sanitizeSessionHistory)).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", modelId: "gpt-4o-mini" }),
     );
   });
 
