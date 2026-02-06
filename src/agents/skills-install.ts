@@ -15,6 +15,7 @@ import {
   resolveSkillsInstallPreferences,
   type SkillEntry,
   type SkillInstallSpec,
+  type SkillUninstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
 import { resolveSkillKey } from "./skills/frontmatter.js";
@@ -35,6 +36,16 @@ export type SkillInstallResult = {
   code: number | null;
   warnings?: string[];
 };
+
+export type SkillUninstallRequest = {
+  workspaceDir: string;
+  skillName: string;
+  installId: string;
+  timeoutMs?: number;
+  config?: OpenClawConfig;
+};
+
+export type SkillUninstallResult = SkillInstallResult;
 
 function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
   return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
@@ -123,7 +134,7 @@ async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<strin
     }
   } catch (err) {
     warnings.push(
-      `Skill "${skillName}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
+      `Skill "${skillName}" code safety scan failed (${String(err)}). Operation continues; run "openclaw security audit --deep" after install.`,
     );
   }
 
@@ -144,6 +155,30 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
   return undefined;
 }
 
+function deriveDefaultUninstallSpec(spec: SkillInstallSpec): SkillUninstallSpec | undefined {
+  if (spec.kind === "brew" && spec.formula) {
+    return { kind: "brew", formula: spec.formula, bins: spec.bins };
+  }
+  if (spec.kind === "node" && spec.package) {
+    return { kind: "node", package: spec.package, bins: spec.bins };
+  }
+  if (spec.kind === "go" && spec.module) {
+    return { kind: "go", module: spec.module, bins: spec.bins };
+  }
+  if (spec.kind === "uv" && spec.package) {
+    return { kind: "uv", package: spec.package, bins: spec.bins };
+  }
+  return undefined;
+}
+
+function findUninstallSpec(entry: SkillEntry, installId: string): SkillUninstallSpec | undefined {
+  const installSpec = findInstallSpec(entry, installId);
+  if (!installSpec) {
+    return undefined;
+  }
+  return installSpec.uninstall ?? deriveDefaultUninstallSpec(installSpec);
+}
+
 function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
   switch (prefs.nodeManager) {
     case "pnpm":
@@ -154,6 +189,19 @@ function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPrefer
       return ["bun", "add", "-g", packageName];
     default:
       return ["npm", "install", "-g", packageName];
+  }
+}
+
+function buildNodeUninstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
+  switch (prefs.nodeManager) {
+    case "pnpm":
+      return ["pnpm", "remove", "-g", packageName];
+    case "yarn":
+      return ["yarn", "global", "remove", packageName];
+    case "bun":
+      return ["bun", "remove", "-g", packageName];
+    default:
+      return ["npm", "uninstall", "-g", packageName];
   }
 }
 
@@ -196,6 +244,51 @@ function buildInstallCommand(
     }
     default:
       return { argv: null, error: "unsupported installer" };
+  }
+}
+
+function normalizeGoModulePath(modulePath: string): string {
+  return modulePath.trim().replace(/@[^@]+$/, "");
+}
+
+function buildUninstallCommand(
+  spec: SkillUninstallSpec,
+  prefs: SkillsInstallPreferences,
+): {
+  argv: string[] | null;
+  error?: string;
+} {
+  switch (spec.kind) {
+    case "brew": {
+      if (!spec.formula) {
+        return { argv: null, error: "missing brew formula" };
+      }
+      return { argv: ["brew", "uninstall", spec.formula] };
+    }
+    case "node": {
+      if (!spec.package) {
+        return { argv: null, error: "missing node package" };
+      }
+      return { argv: buildNodeUninstallCommand(spec.package, prefs) };
+    }
+    case "go": {
+      if (!spec.module) {
+        return { argv: null, error: "missing go module" };
+      }
+      const modulePath = normalizeGoModulePath(spec.module);
+      if (!modulePath) {
+        return { argv: null, error: "invalid go module" };
+      }
+      return { argv: ["go", "clean", "-i", modulePath] };
+    }
+    case "uv": {
+      if (!spec.package) {
+        return { argv: null, error: "missing uv package" };
+      }
+      return { argv: ["uv", "tool", "uninstall", spec.package] };
+    }
+    default:
+      return { argv: null, error: "unsupported uninstaller" };
   }
 }
 
@@ -562,6 +655,134 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     {
       ok: success,
       message: success ? "Installed" : formatInstallFailureMessage(result),
+      stdout: result.stdout.trim(),
+      stderr: result.stderr.trim(),
+      code: result.code,
+    },
+    warnings,
+  );
+}
+
+export async function uninstallSkill(params: SkillUninstallRequest): Promise<SkillUninstallResult> {
+  const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
+  const workspaceDir = resolveUserPath(params.workspaceDir);
+  const entries = loadWorkspaceSkillEntries(workspaceDir);
+  const entry = entries.find((item) => item.skill.name === params.skillName);
+  if (!entry) {
+    return {
+      ok: false,
+      message: `Skill not found: ${params.skillName}`,
+      stdout: "",
+      stderr: "",
+      code: null,
+    };
+  }
+
+  const uninstallSpec = findUninstallSpec(entry, params.installId);
+  const warnings = await collectSkillInstallScanWarnings(entry);
+  if (!uninstallSpec) {
+    return withWarnings(
+      {
+        ok: false,
+        message: `Uninstaller not configured: ${params.installId}`,
+        stdout: "",
+        stderr: "",
+        code: null,
+      },
+      warnings,
+    );
+  }
+
+  const prefs = resolveSkillsInstallPreferences(params.config);
+  const command = buildUninstallCommand(uninstallSpec, prefs);
+  if (command.error) {
+    return withWarnings(
+      {
+        ok: false,
+        message: command.error,
+        stdout: "",
+        stderr: "",
+        code: null,
+      },
+      warnings,
+    );
+  }
+
+  const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
+  if (uninstallSpec.kind === "brew" && !brewExe) {
+    return withWarnings(
+      {
+        ok: false,
+        message: "brew not installed",
+        stdout: "",
+        stderr: "",
+        code: null,
+      },
+      warnings,
+    );
+  }
+
+  if (uninstallSpec.kind === "go" && !hasBinary("go")) {
+    return withWarnings(
+      {
+        ok: false,
+        message: "go not installed",
+        stdout: "",
+        stderr: "",
+        code: null,
+      },
+      warnings,
+    );
+  }
+
+  if (uninstallSpec.kind === "uv" && !hasBinary("uv")) {
+    return withWarnings(
+      {
+        ok: false,
+        message: "uv not installed",
+        stdout: "",
+        stderr: "",
+        code: null,
+      },
+      warnings,
+    );
+  }
+
+  if (!command.argv || command.argv.length === 0) {
+    return withWarnings(
+      {
+        ok: false,
+        message: "invalid uninstall command",
+        stdout: "",
+        stderr: "",
+        code: null,
+      },
+      warnings,
+    );
+  }
+
+  if (uninstallSpec.kind === "brew" && brewExe && command.argv[0] === "brew") {
+    command.argv[0] = brewExe;
+  }
+
+  const result = await (async () => {
+    const argv = command.argv;
+    if (!argv || argv.length === 0) {
+      return { code: null, stdout: "", stderr: "invalid uninstall command" };
+    }
+    try {
+      return await runCommandWithTimeout(argv, { timeoutMs });
+    } catch (err) {
+      const stderr = err instanceof Error ? err.message : String(err);
+      return { code: null, stdout: "", stderr };
+    }
+  })();
+
+  const success = result.code === 0;
+  return withWarnings(
+    {
+      ok: success,
+      message: success ? "Uninstalled" : formatInstallFailureMessage(result),
       stdout: result.stdout.trim(),
       stderr: result.stderr.trim(),
       code: result.code,

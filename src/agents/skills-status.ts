@@ -13,6 +13,7 @@ import {
   type SkillEntry,
   type SkillEligibilityContext,
   type SkillInstallSpec,
+  type SkillUninstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
 import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
@@ -26,6 +27,14 @@ export type SkillStatusConfigCheck = {
 export type SkillInstallOption = {
   id: string;
   kind: SkillInstallSpec["kind"];
+  label: string;
+  bins: string[];
+  installed?: boolean;
+  uninstall?: SkillUninstallOption;
+};
+
+export type SkillUninstallOption = {
+  kind: SkillUninstallSpec["kind"];
   label: string;
   bins: string[];
 };
@@ -125,9 +134,26 @@ function normalizeInstallOptions(
     return [];
   }
 
-  const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
-    const id = (spec.id ?? `${spec.kind}-${index}`).trim();
-    const bins = spec.bins ?? [];
+  const normalizeBins = (bins: string[] | undefined): string[] =>
+    (bins ?? []).map((value) => value.trim()).filter(Boolean);
+
+  const deriveDefaultUninstallSpec = (spec: SkillInstallSpec): SkillUninstallSpec | undefined => {
+    if (spec.kind === "brew" && spec.formula) {
+      return { kind: "brew", formula: spec.formula, bins: spec.bins };
+    }
+    if (spec.kind === "node" && spec.package) {
+      return { kind: "node", package: spec.package, bins: spec.bins };
+    }
+    if (spec.kind === "go" && spec.module) {
+      return { kind: "go", module: spec.module, bins: spec.bins };
+    }
+    if (spec.kind === "uv" && spec.package) {
+      return { kind: "uv", package: spec.package, bins: spec.bins };
+    }
+    return undefined;
+  };
+
+  const resolveInstallLabel = (spec: SkillInstallSpec): string => {
     let label = (spec.label ?? "").trim();
     if (spec.kind === "node" && spec.package) {
       label = `Install ${spec.package} (${prefs.nodeManager})`;
@@ -149,7 +175,62 @@ function normalizeInstallOptions(
         label = "Run installer";
       }
     }
-    return { id, kind: spec.kind, label, bins };
+    return label;
+  };
+
+  const resolveUninstallLabel = (spec: SkillUninstallSpec): string => {
+    const explicit = (spec.label ?? "").trim();
+    if (explicit) {
+      return explicit;
+    }
+    if (spec.kind === "brew" && spec.formula) {
+      return `Uninstall ${spec.formula} (brew)`;
+    }
+    if (spec.kind === "node" && spec.package) {
+      return `Uninstall ${spec.package} (${prefs.nodeManager})`;
+    }
+    if (spec.kind === "go" && spec.module) {
+      return `Uninstall ${spec.module} (go)`;
+    }
+    if (spec.kind === "uv" && spec.package) {
+      return `Uninstall ${spec.package} (uv)`;
+    }
+    return "Run uninstaller";
+  };
+
+  const toUninstallOption = (
+    uninstallSpec: SkillUninstallSpec | undefined,
+    installBins: string[],
+  ): SkillUninstallOption | undefined => {
+    if (!uninstallSpec) {
+      return undefined;
+    }
+    const uninstallOs = uninstallSpec.os ?? [];
+    if (uninstallOs.length > 0 && !uninstallOs.includes(platform)) {
+      return undefined;
+    }
+    const bins = normalizeBins(uninstallSpec.bins);
+    return {
+      kind: uninstallSpec.kind,
+      label: resolveUninstallLabel(uninstallSpec),
+      bins: bins.length > 0 ? bins : installBins,
+    };
+  };
+
+  const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {
+    const id = (spec.id ?? `${spec.kind}-${index}`).trim();
+    const bins = normalizeBins(spec.bins);
+    const uninstall = toUninstallOption(spec.uninstall ?? deriveDefaultUninstallSpec(spec), bins);
+    const probeBins = bins.length > 0 ? bins : (uninstall?.bins ?? []);
+    const installed = probeBins.length > 0 && probeBins.every((bin) => hasBinary(bin));
+    return {
+      id,
+      kind: spec.kind,
+      label: resolveInstallLabel(spec),
+      bins,
+      installed,
+      uninstall,
+    };
   };
 
   const allDownloads = filtered.every((spec) => spec.kind === "download");

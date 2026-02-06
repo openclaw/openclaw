@@ -5,7 +5,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { installSkill } from "../../agents/skills-install.js";
+import { installSkill, uninstallSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
@@ -18,6 +18,7 @@ import {
   validateSkillsBinsParams,
   validateSkillsInstallParams,
   validateSkillsStatusParams,
+  validateSkillsUninstallParams,
   validateSkillsUpdateParams,
 } from "../protocol/index.js";
 
@@ -143,6 +144,38 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const cfg = loadConfig();
     const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
     const result = await installSkill({
+      workspaceDir: workspaceDirRaw,
+      skillName: p.name,
+      installId: p.installId,
+      timeoutMs: p.timeoutMs,
+      config: cfg,
+    });
+    respond(
+      result.ok,
+      result,
+      result.ok ? undefined : errorShape(ErrorCodes.UNAVAILABLE, result.message),
+    );
+  },
+  "skills.uninstall": async ({ params, respond }) => {
+    if (!validateSkillsUninstallParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.uninstall params: ${formatValidationErrors(validateSkillsUninstallParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as {
+      name: string;
+      installId: string;
+      timeoutMs?: number;
+    };
+    const cfg = loadConfig();
+    const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
+    const result = await uninstallSkill({
       workspaceDir: workspaceDirRaw,
       skillName: p.name,
       installId: p.installId,

@@ -128,9 +128,9 @@ export {
   useDisableSkill,
   useInstallSkill,
   useUninstallSkill,
-  useReloadSkills,
   type SkillUpdateParams,
   type SkillInstallParams,
+  type SkillUninstallParams,
 } from "./useSkillMutations";
 
 // Nodes, Devices, Exec Approvals

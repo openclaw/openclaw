@@ -10,9 +10,9 @@ import {
   disableSkill,
   installSkill,
   uninstallSkill,
-  reloadSkills,
   type SkillUpdateParams,
   type SkillInstallParams,
+  type SkillUninstallParams,
 } from "@/lib/api/skills";
 import { skillKeys } from "@/hooks/queries/useSkills";
 
@@ -101,16 +101,20 @@ export function useInstallSkill() {
 }
 
 /**
- * Hook to uninstall a skill
+ * Hook to uninstall an installed skill dependency
  */
 export function useUninstallSkill() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (name: string) => uninstallSkill(name),
-    onSuccess: (_, name) => {
+    mutationFn: (params: SkillUninstallParams) => uninstallSkill(params),
+    onSuccess: (result, params) => {
       void queryClient.invalidateQueries({ queryKey: skillKeys.status() });
-      toast.success(`Skill "${name}" uninstalled`);
+      if (result.ok) {
+        toast.success(`Skill "${params.name}" uninstall completed`);
+      } else {
+        toast.info(result.message ?? "Skill uninstall completed");
+      }
     },
     onError: (error) => {
       console.error("[useUninstallSkill] Failed:", error);
@@ -119,24 +123,5 @@ export function useUninstallSkill() {
   });
 }
 
-/**
- * Hook to reload all skills
- */
-export function useReloadSkills() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: () => reloadSkills(),
-    onSuccess: (result) => {
-      void queryClient.invalidateQueries({ queryKey: skillKeys.all });
-      toast.success(`Reloaded ${result.count} skills`);
-    },
-    onError: (error) => {
-      console.error("[useReloadSkills] Failed:", error);
-      toast.error("Failed to reload skills");
-    },
-  });
-}
-
 // Re-export types
-export type { SkillUpdateParams, SkillInstallParams };
+export type { SkillUpdateParams, SkillInstallParams, SkillUninstallParams };

@@ -29,6 +29,7 @@ import {
   SkillsBinsResultSchema,
   SkillsInstallParamsSchema,
   SkillsStatusParamsSchema,
+  SkillsUninstallParamsSchema,
   SkillsUpdateParamsSchema,
 } from "./agents-models-skills.js";
 import {
@@ -234,6 +235,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   SkillsBinsParams: SkillsBinsParamsSchema,
   SkillsBinsResult: SkillsBinsResultSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,
+  SkillsUninstallParams: SkillsUninstallParamsSchema,
   SkillsUpdateParams: SkillsUpdateParamsSchema,
   CronJob: CronJobSchema,
   CronListParams: CronListParamsSchema,

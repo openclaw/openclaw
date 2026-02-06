@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installSkill } from "./skills-install.js";
+import { installSkill, uninstallSkill } from "./skills-install.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const scanDirectoryWithSummaryMock = vi.fn();
@@ -27,7 +27,7 @@ async function writeInstallableSkill(workspaceDir: string, name: string): Promis
     `---
 name: ${name}
 description: test skill
-metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-package"}]}}
+metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-package","uninstall":{"kind":"node","package":"example-package"}}]}}
 ---
 
 # ${name}
@@ -104,9 +104,89 @@ describe("installSkill code safety scanning", () => {
       expect(result.warnings?.some((warning) => warning.includes("code safety scan failed"))).toBe(
         true,
       );
-      expect(result.warnings?.some((warning) => warning.includes("Installation continues"))).toBe(
+      expect(result.warnings?.some((warning) => warning.includes("Operation continues"))).toBe(
         true,
       );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+});
+
+describe("uninstallSkill", () => {
+  beforeEach(() => {
+    runCommandWithTimeoutMock.mockReset();
+    scanDirectoryWithSummaryMock.mockReset();
+    runCommandWithTimeoutMock.mockResolvedValue({
+      code: 0,
+      stdout: "ok",
+      stderr: "",
+      signal: null,
+      killed: false,
+    });
+    scanDirectoryWithSummaryMock.mockResolvedValue({
+      scannedFiles: 0,
+      critical: 0,
+      warn: 0,
+      info: 0,
+      findings: [],
+    });
+  });
+
+  it("runs uninstall command when uninstall metadata exists", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-uninstall-"));
+    try {
+      await writeInstallableSkill(workspaceDir, "uninstall-skill");
+
+      const result = await uninstallSkill({
+        workspaceDir,
+        skillName: "uninstall-skill",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+        ["npm", "uninstall", "-g", "example-package"],
+        expect.objectContaining({ timeoutMs: 300000 }),
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it("returns an error when uninstall metadata is missing", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-uninstall-"));
+    try {
+      const skillDir = path.join(workspaceDir, "skills", "no-uninstall");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.writeFile(
+        path.join(skillDir, "SKILL.md"),
+        `---
+name: no-uninstall
+description: no uninstall
+metadata: {"openclaw":{"install":[{"id":"deps","kind":"download","url":"https://example.com/tool.tar.gz"}]}}
+---
+
+# no-uninstall
+`,
+        "utf-8",
+      );
+      scanDirectoryWithSummaryMock.mockResolvedValue({
+        scannedFiles: 0,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
+      });
+
+      const result = await uninstallSkill({
+        workspaceDir,
+        skillName: "no-uninstall",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("Uninstaller not configured");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
     }

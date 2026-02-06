@@ -11,6 +11,7 @@ import { CardSkeleton } from "@/components/composed";
 import { useSkillsStatus, type SkillStatusEntry } from "@/hooks/queries/useSkills";
 import { useConfig } from "@/hooks/queries/useConfig";
 import { usePatchConfig } from "@/hooks/mutations/useConfigMutations";
+import { useInstallSkill, useUninstallSkill } from "@/hooks/mutations/useSkillMutations";
 import { buildAgentsPatch, getAgentsList, type AgentConfigEntry } from "@/lib/agents";
 
 interface AgentSkillsTabProps {
@@ -72,6 +73,8 @@ export function AgentSkillsTab({ agentId }: AgentSkillsTabProps) {
   const { data: report, isLoading, error, refetch, isFetching } = useSkillsStatus({ agentId });
   const { data: configSnapshot, isLoading: configLoading } = useConfig();
   const patchConfig = usePatchConfig();
+  const installSkillMutation = useInstallSkill();
+  const uninstallSkillMutation = useUninstallSkill();
 
   const agentsList = React.useMemo(
     () => getAgentsList(configSnapshot?.config),
@@ -267,6 +270,17 @@ export function AgentSkillsTab({ agentId }: AgentSkillsTabProps) {
                   {group.skills.map((skill) => {
                     const enabled = usingAllowlist ? allowSet.has(skill.name) : true;
                     const missing = buildMissingSummary(skill);
+                    const installOption = skill.install[0];
+                    const canInstall = Boolean(
+                      installOption &&
+                        !installOption.installed &&
+                        skill.missing.bins.length > 0
+                    );
+                    const canUninstall = Boolean(
+                      installOption?.installed && installOption?.uninstall
+                    );
+                    const skillActionPending =
+                      installSkillMutation.isPending || uninstallSkillMutation.isPending;
                     const reasons = [
                       skill.disabled ? "disabled" : null,
                       skill.blockedByAllowlist ? "blocked by allowlist" : null,
@@ -307,15 +321,71 @@ export function AgentSkillsTab({ agentId }: AgentSkillsTabProps) {
                             </p>
                           )}
                         </div>
-                        <div className="flex items-center gap-3">
-                          <Switch
-                            checked={enabled}
-                            onCheckedChange={(next) => handleToggle(skill.name, next)}
-                            disabled={!canEdit}
-                          />
-                          <span className="text-xs text-muted-foreground">
-                            {enabled ? "Enabled" : "Disabled"}
-                          </span>
+                        <div className="flex flex-col items-end gap-3">
+                          <div className="flex items-center gap-3">
+                            <Switch
+                              checked={enabled}
+                              onCheckedChange={(next) => handleToggle(skill.name, next)}
+                              disabled={!canEdit}
+                            />
+                            <span className="text-xs text-muted-foreground">
+                              {enabled ? "Enabled" : "Disabled"}
+                            </span>
+                          </div>
+                          {(canInstall || canUninstall) && (
+                            <div className="flex flex-wrap justify-end gap-2">
+                              {canInstall && installOption && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={skillActionPending}
+                                  onClick={() => {
+                                    installSkillMutation.mutate(
+                                      {
+                                        name: skill.name,
+                                        installId: installOption.id,
+                                        timeoutMs: 120000,
+                                      },
+                                      {
+                                        onSettled: () => {
+                                          void refetch();
+                                        },
+                                      }
+                                    );
+                                  }}
+                                >
+                                  {installSkillMutation.isPending
+                                    ? "Installing…"
+                                    : installOption.label}
+                                </Button>
+                              )}
+                              {canUninstall && installOption?.uninstall && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={skillActionPending}
+                                  onClick={() => {
+                                    uninstallSkillMutation.mutate(
+                                      {
+                                        name: skill.name,
+                                        installId: installOption.id,
+                                        timeoutMs: 120000,
+                                      },
+                                      {
+                                        onSettled: () => {
+                                          void refetch();
+                                        },
+                                      }
+                                    );
+                                  }}
+                                >
+                                  {uninstallSkillMutation.isPending
+                                    ? "Uninstalling…"
+                                    : installOption.uninstall.label}
+                                </Button>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     );

@@ -251,12 +251,13 @@ export {
   disableSkill,
   installSkill,
   uninstallSkill,
-  reloadSkills,
   type SkillStatusEntry,
   type SkillsStatusReport,
   type SkillUpdateParams,
   type SkillInstallParams,
   type SkillInstallResult,
+  type SkillUninstallParams,
+  type SkillUninstallResult,
 } from "./skills";
 
 // Nodes, Devices, and Exec Approvals API functions

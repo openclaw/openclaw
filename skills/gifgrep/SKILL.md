@@ -1,33 +1,55 @@
 ---
+
 name: gifgrep
 description: Search GIF providers with CLI/TUI, download results, and extract stills/sheets.
 homepage: https://gifgrep.com
 metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "🧲",
-        "requires": { "bins": ["gifgrep"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "steipete/tap/gifgrep",
-              "bins": ["gifgrep"],
-              "label": "Install gifgrep (brew)",
-            },
-            {
-              "id": "go",
-              "kind": "go",
-              "module": "github.com/steipete/gifgrep/cmd/gifgrep@latest",
-              "bins": ["gifgrep"],
-              "label": "Install gifgrep (go)",
-            },
-          ],
-      },
-  }
----
+{
+"openclaw": {
+"emoji": "🧲",
+"requires": {
+"bins": [
+"gifgrep"
+]
+},
+"install": [
+{
+"id": "brew",
+"kind": "brew",
+"formula": "steipete/tap/gifgrep",
+"bins": [
+"gifgrep"
+],
+"label": "Install gifgrep (brew)",
+"uninstall": {
+"kind": "brew",
+"formula": "steipete/tap/gifgrep",
+"bins": [
+"gifgrep"
+],
+"label": "Uninstall steipete/tap/gifgrep (brew)"
+}
+},
+{
+"id": "go",
+"kind": "go",
+"module": "github.com/steipete/gifgrep/cmd/gifgrep@latest",
+"bins": [
+"gifgrep"
+],
+"label": "Install gifgrep (go)",
+"uninstall": {
+"kind": "go",
+"module": "github.com/steipete/gifgrep/cmd/gifgrep@latest",
+"bins": [
+"gifgrep"
+],
+"label": "Uninstall github.com/steipete/gifgrep/cmd/gifgrep@latest (go)"
+}
+}
+]
+}
+}---
 
 # gifgrep
 

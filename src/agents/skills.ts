@@ -20,6 +20,7 @@ export type {
   SkillCommandSpec,
   SkillEntry,
   SkillInstallSpec,
+  SkillUninstallSpec,
   SkillSnapshot,
   SkillsInstallPreferences,
 } from "./skills/types.js";

@@ -5,6 +5,7 @@ import type {
   ParsedSkillFrontmatter,
   SkillEntry,
   SkillInstallSpec,
+  SkillUninstallSpec,
   SkillInvocationPolicy,
 } from "./types.js";
 import { LEGACY_MANIFEST_KEYS, MANIFEST_KEY } from "../../compat/legacy-names.js";
@@ -85,7 +86,50 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   if (typeof raw.targetDir === "string") {
     spec.targetDir = raw.targetDir;
   }
+  const uninstall = parseUninstallSpec(raw.uninstall);
+  if (uninstall) {
+    spec.uninstall = uninstall;
+  }
 
+  return spec;
+}
+
+function parseUninstallSpec(input: unknown): SkillUninstallSpec | undefined {
+  if (!input || typeof input !== "object") {
+    return undefined;
+  }
+  const raw = input as Record<string, unknown>;
+  const kindRaw =
+    typeof raw.kind === "string" ? raw.kind : typeof raw.type === "string" ? raw.type : "";
+  const kind = kindRaw.trim().toLowerCase();
+  if (kind !== "brew" && kind !== "node" && kind !== "go" && kind !== "uv") {
+    return undefined;
+  }
+
+  const spec: SkillUninstallSpec = {
+    kind: kind,
+  };
+
+  if (typeof raw.label === "string") {
+    spec.label = raw.label;
+  }
+  const bins = normalizeStringList(raw.bins);
+  if (bins.length > 0) {
+    spec.bins = bins;
+  }
+  const osList = normalizeStringList(raw.os);
+  if (osList.length > 0) {
+    spec.os = osList;
+  }
+  if (typeof raw.formula === "string") {
+    spec.formula = raw.formula;
+  }
+  if (typeof raw.package === "string") {
+    spec.package = raw.package;
+  }
+  if (typeof raw.module === "string") {
+    spec.module = raw.module;
+  }
   return spec;
 }
 

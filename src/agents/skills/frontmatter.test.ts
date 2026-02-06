@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveSkillInvocationPolicy } from "./frontmatter.js";
+import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
 
 describe("resolveSkillInvocationPolicy", () => {
   it("defaults to enabled behaviors", () => {
@@ -15,5 +15,18 @@ describe("resolveSkillInvocationPolicy", () => {
     });
     expect(policy.userInvocable).toBe(false);
     expect(policy.disableModelInvocation).toBe(true);
+  });
+});
+
+describe("resolveOpenClawMetadata", () => {
+  it("parses install uninstall metadata", () => {
+    const metadata = resolveOpenClawMetadata({
+      metadata:
+        '{"openclaw":{"install":[{"id":"brew","kind":"brew","formula":"gog","bins":["gog"],"uninstall":{"kind":"brew","formula":"gog","bins":["gog"],"label":"Uninstall gog (brew)"}}]}}',
+    });
+
+    expect(metadata?.install).toHaveLength(1);
+    expect(metadata?.install?.[0]?.uninstall?.kind).toBe("brew");
+    expect(metadata?.install?.[0]?.uninstall?.label).toBe("Uninstall gog (brew)");
   });
 });

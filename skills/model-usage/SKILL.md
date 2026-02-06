@@ -14,8 +14,16 @@ metadata:
               "id": "brew-cask",
               "kind": "brew",
               "cask": "steipete/tap/codexbar",
+              "formula": "steipete/tap/codexbar",
               "bins": ["codexbar"],
               "label": "Install CodexBar (brew cask)",
+              "uninstall":
+                {
+                  "kind": "brew",
+                  "formula": "steipete/tap/codexbar",
+                  "bins": ["codexbar"],
+                  "label": "Uninstall steipete/tap/codexbar (brew)",
+                },
             },
           ],
       },

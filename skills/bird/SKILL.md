@@ -4,31 +4,54 @@ description: X/Twitter CLI for reading, searching, posting, and engagement via c
 homepage: https://bird.fast
 metadata:
   {
-    "openclaw":
-      {
-        "emoji": "🐦",
-        "requires": { "bins": ["bird"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "steipete/tap/bird",
-              "bins": ["bird"],
-              "label": "Install bird (brew)",
-              "os": ["darwin"],
-            },
-            {
-              "id": "npm",
-              "kind": "node",
-              "package": "@steipete/bird",
-              "bins": ["bird"],
-              "label": "Install bird (npm)",
-            },
-          ],
+    "openclaw": {
+      "emoji": "🐦",
+      "requires": {
+        "bins": [
+          "bird"
+        ]
       },
-  }
----
+      "install": [
+        {
+          "id": "brew",
+          "kind": "brew",
+          "formula": "steipete/tap/bird",
+          "bins": [
+            "bird"
+          ],
+          "label": "Install bird (brew)",
+          "os": [
+            "darwin"
+          ],
+          "uninstall": {
+            "kind": "brew",
+            "formula": "steipete/tap/bird",
+            "bins": [
+              "bird"
+            ],
+            "label": "Uninstall steipete/tap/bird (brew)"
+          }
+        },
+        {
+          "id": "npm",
+          "kind": "node",
+          "package": "@steipete/bird",
+          "bins": [
+            "bird"
+          ],
+          "label": "Install bird (npm)",
+          "uninstall": {
+            "kind": "node",
+            "package": "@steipete/bird",
+            "bins": [
+              "bird"
+            ],
+            "label": "Uninstall @steipete/bird (node)"
+          }
+        }
+      ]
+    }
+  }---
 
 # bird 🐦
 

@@ -188,6 +188,7 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
     method.startsWith("update.") ||
     method === "channels.logout" ||
     method === "skills.install" ||
+    method === "skills.uninstall" ||
     method === "skills.update" ||
     method === "cron.add" ||
     method === "cron.update" ||

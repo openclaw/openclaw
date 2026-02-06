@@ -36,7 +36,18 @@ export interface SkillStatusEntry {
     os: string[];
   };
   configChecks: Array<{ path: string; value: unknown; satisfied: boolean }>;
-  install: Array<{ id: string; kind: string; label: string; bins: string[] }>;
+  install: Array<{
+    id: string;
+    kind: string;
+    label: string;
+    bins: string[];
+    installed?: boolean;
+    uninstall?: {
+      kind: string;
+      label: string;
+      bins: string[];
+    };
+  }>;
 }
 
 export interface SkillsStatusReport {
@@ -60,7 +71,18 @@ export interface SkillInstallParams {
 
 export interface SkillInstallResult {
   ok: boolean;
+  installId?: string;
+  message?: string;
+}
+
+export interface SkillUninstallParams {
+  name: string;
   installId: string;
+  timeoutMs?: number;
+}
+
+export interface SkillUninstallResult {
+  ok: boolean;
   message?: string;
 }
 
@@ -122,17 +144,11 @@ export async function installSkill(params: SkillInstallParams): Promise<SkillIns
 }
 
 /**
- * Uninstall a skill (only works on custom/installed skills, not built-in)
+ * Uninstall an installed skill dependency
  */
-export async function uninstallSkill(name: string): Promise<{ ok: boolean }> {
+export async function uninstallSkill(params: SkillUninstallParams): Promise<SkillUninstallResult> {
   const client = getGatewayClient();
-  return client.request("skills.uninstall", { name });
-}
-
-/**
- * Reload all skills (useful after manual file changes)
- */
-export async function reloadSkills(): Promise<{ ok: boolean; count: number }> {
-  const client = getGatewayClient();
-  return client.request("skills.reload");
+  return client.request<SkillUninstallResult>("skills.uninstall", params, {
+    timeout: params.timeoutMs ?? 120000,
+  });
 }

@@ -14,6 +14,17 @@ export type SkillInstallSpec = {
   extract?: boolean;
   stripComponents?: number;
   targetDir?: string;
+  uninstall?: SkillUninstallSpec;
+};
+
+export type SkillUninstallSpec = {
+  kind: "brew" | "node" | "go" | "uv";
+  label?: string;
+  bins?: string[];
+  os?: string[];
+  formula?: string;
+  package?: string;
+  module?: string;
 };
 
 export type OpenClawSkillMetadata = {

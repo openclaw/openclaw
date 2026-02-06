@@ -1,27 +1,41 @@
 ---
+
 name: apple-notes
 description: Manage Apple Notes via the `memo` CLI on macOS (create, view, edit, delete, search, move, and export notes). Use when a user asks OpenClaw to add a note, list notes, search notes, or manage note folders.
 homepage: https://github.com/antoniorodr/memo
 metadata:
-  {
-    "openclaw":
-      {
-        "emoji": "📝",
-        "os": ["darwin"],
-        "requires": { "bins": ["memo"] },
-        "install":
-          [
-            {
-              "id": "brew",
-              "kind": "brew",
-              "formula": "antoniorodr/memo/memo",
-              "bins": ["memo"],
-              "label": "Install memo via Homebrew",
-            },
-          ],
-      },
-  }
----
+{
+"openclaw": {
+"emoji": "📝",
+"os": [
+"darwin"
+],
+"requires": {
+"bins": [
+"memo"
+]
+},
+"install": [
+{
+"id": "brew",
+"kind": "brew",
+"formula": "antoniorodr/memo/memo",
+"bins": [
+"memo"
+],
+"label": "Install memo via Homebrew",
+"uninstall": {
+"kind": "brew",
+"formula": "antoniorodr/memo/memo",
+"bins": [
+"memo"
+],
+"label": "Uninstall antoniorodr/memo/memo (brew)"
+}
+}
+]
+}
+}---
 
 # Apple Notes CLI
 

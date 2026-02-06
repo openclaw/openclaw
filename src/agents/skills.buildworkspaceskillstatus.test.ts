@@ -36,7 +36,7 @@ describe("buildWorkspaceSkillStatus", () => {
       name: "status-skill",
       description: "Needs setup",
       metadata:
-        '{"openclaw":{"requires":{"bins":["fakebin"],"env":["ENV_KEY"],"config":["browser.enabled"]},"install":[{"id":"brew","kind":"brew","formula":"fakebin","bins":["fakebin"],"label":"Install fakebin"}]}}',
+        '{"openclaw":{"requires":{"bins":["fakebin"],"env":["ENV_KEY"],"config":["browser.enabled"]},"install":[{"id":"brew","kind":"brew","formula":"fakebin","bins":["fakebin"],"label":"Install fakebin","uninstall":{"kind":"brew","formula":"fakebin","bins":["fakebin"],"label":"Uninstall fakebin"}}]}}',
     });
 
     const report = buildWorkspaceSkillStatus(workspaceDir, {
@@ -51,6 +51,30 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.missing.env).toContain("ENV_KEY");
     expect(skill?.missing.config).toContain("browser.enabled");
     expect(skill?.install[0]?.id).toBe("brew");
+    expect(skill?.install[0]?.installed).toBe(false);
+    expect(skill?.install[0]?.uninstall?.label).toBe("Uninstall fakebin");
+  });
+
+  it("marks install options as installed when probe bins exist", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+    const skillDir = path.join(workspaceDir, "skills", "installed-skill");
+
+    await writeSkill({
+      dir: skillDir,
+      name: "installed-skill",
+      description: "Already installed",
+      metadata:
+        '{"openclaw":{"install":[{"id":"node","kind":"node","package":"example-package","bins":["node"],"uninstall":{"kind":"node","package":"example-package","bins":["node"],"label":"Uninstall example-package (npm)"}}]}}',
+    });
+
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+    const skill = report.skills.find((entry) => entry.name === "installed-skill");
+
+    expect(skill).toBeDefined();
+    expect(skill?.install[0]?.installed).toBe(true);
+    expect(skill?.install[0]?.uninstall?.kind).toBe("node");
   });
   it("respects OS-gated skills", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
