@@ -16,6 +16,7 @@ export default defineConfig([
     env,
     fixedExtension: false,
     platform: "node",
+    external: ["./cli/daemon-cli.js"],
   },
   {
     dts: true,
@@ -27,6 +28,13 @@ export default defineConfig([
   },
   {
     entry: "src/extensionAPI.ts",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
+  {
+    entry: "src/cli/daemon-cli.ts",
+    outDir: "dist/cli",
     env,
     fixedExtension: false,
     platform: "node",
