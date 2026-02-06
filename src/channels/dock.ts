@@ -296,7 +296,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       resolveToolPolicy: resolveSlackGroupToolPolicy,
     },
     mentions: {
-      stripPatterns: () => ["<@[A-Z0-9]+>"],
+      stripPatterns: () => ["<@[^>]+>"],
     },
     threading: {
       resolveReplyToMode: ({ cfg, accountId, chatType }) =>
