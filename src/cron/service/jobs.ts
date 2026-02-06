@@ -61,7 +61,13 @@ export function recomputeNextRuns(state: CronServiceState) {
       );
       job.state.runningAtMs = undefined;
     }
-    job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
+    const nextAt = computeJobNextRunAtMs(job, now);
+    job.state.nextRunAtMs = nextAt;
+
+    // Track occurrence for recovery if job has replay policy
+    if (state.executionStore && job.replay?.mode === "on_recovery" && typeof nextAt === "number") {
+      state.executionStore.upsertOccurrence(job.id, nextAt);
+    }
   }
 }
 

@@ -9,6 +9,7 @@ import {
   recomputeNextRuns,
 } from "./jobs.js";
 import { locked } from "./locked.js";
+import { recoverMissedRuns } from "./recovery.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { armTimer, emit, executeJob, stopTimer, wake } from "./timer.js";
@@ -20,6 +21,7 @@ export async function start(state: CronServiceState) {
       return;
     }
     await ensureLoaded(state);
+    await recoverMissedRuns(state);
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);

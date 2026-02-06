@@ -26,6 +26,7 @@ export function buildGatewayCronService(params: {
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
   const storePath = resolveCronStorePath(params.cfg.cron?.store);
+  const executionStorePath = storePath.replace(/\.json$/, "-execution-store.sqlite");
   const cronEnabled = process.env.CLAWDBOT_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const resolveCronAgent = (requested?: string | null) => {
@@ -45,6 +46,7 @@ export function buildGatewayCronService(params: {
 
   const cron = new CronService({
     storePath,
+    executionStorePath,
     cronEnabled,
     enqueueSystemEvent: (text, opts) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);

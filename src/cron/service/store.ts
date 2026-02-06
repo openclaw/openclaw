@@ -1,3 +1,4 @@
+import { ExecutionStore } from "../execution-store.js";
 import { migrateLegacyCronPayload } from "../payload-migration.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
@@ -44,6 +45,11 @@ export async function ensureLoaded(state: CronServiceState) {
   state.store = { version: 1, jobs: jobs as unknown as CronJob[] };
   storeCache.set(state.deps.storePath, state.store);
   if (mutated) await persist(state);
+
+  // Initialize execution store
+  if (!state.executionStore) {
+    state.executionStore = new ExecutionStore(state.deps.executionStorePath);
+  }
 }
 
 export function warnIfDisabled(state: CronServiceState, action: string) {

@@ -64,6 +64,16 @@ export async function executeJob(
   job.state.lastError = undefined;
   emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
+  // Mark occurrence as fired for recovery tracking
+  const scheduledAt = job.state.nextRunAtMs;
+  if (
+    state.executionStore &&
+    job.replay?.mode === "on_recovery" &&
+    typeof scheduledAt === "number"
+  ) {
+    state.executionStore.markFired(job.id, scheduledAt, startedAt);
+  }
+
   let deleted = false;
 
   const finish = async (
