@@ -1,14 +1,110 @@
 /**
- * Tests for extractor.ts — Extraction Logic.
+ * Tests for extractor.ts and attention gate — Extraction Logic + Auto-capture Filtering.
  *
  * Tests exported functions: extractEntities(), extractUserMessages(), runBackgroundExtraction().
+ * Tests passesAttentionGate() from index.ts.
  * Note: validateExtractionResult() is not exported; it is tested indirectly through extractEntities().
- * Note: passesAttentionGate() is defined in index.ts and not exported; cannot be tested directly.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ExtractionConfig } from "./config.js";
 import { extractUserMessages, extractEntities, runBackgroundExtraction } from "./extractor.js";
+import { passesAttentionGate } from "./index.js";
+
+// ============================================================================
+// passesAttentionGate()
+// ============================================================================
+
+describe("passesAttentionGate", () => {
+  // --- Should REJECT ---
+
+  it("should reject short messages below MIN_CAPTURE_CHARS", () => {
+    expect(passesAttentionGate("Hi")).toBe(false);
+    expect(passesAttentionGate("Yup")).toBe(false);
+    expect(passesAttentionGate("yes")).toBe(false);
+    expect(passesAttentionGate("ok")).toBe(false);
+    expect(passesAttentionGate("")).toBe(false);
+  });
+
+  it("should reject noise greetings/acknowledgments", () => {
+    expect(passesAttentionGate("sounds good")).toBe(false);
+    expect(passesAttentionGate("Got it")).toBe(false);
+    expect(passesAttentionGate("thanks!")).toBe(false);
+    expect(passesAttentionGate("thank you!")).toBe(false);
+    expect(passesAttentionGate("perfect.")).toBe(false);
+  });
+
+  it("should reject messages with fewer than MIN_WORD_COUNT words", () => {
+    expect(passesAttentionGate("I need those")).toBe(false); // 3 words
+    expect(passesAttentionGate("yes please do")).toBe(false); // 3 words
+    expect(passesAttentionGate("that works fine")).toBe(false); // 3 words
+  });
+
+  it("should reject short contextual/deictic phrases", () => {
+    expect(passesAttentionGate("Ok, let me test it out")).toBe(false);
+    expect(passesAttentionGate("ok great")).toBe(false);
+    expect(passesAttentionGate("yes please")).toBe(false);
+    expect(passesAttentionGate("ok sure thanks")).toBe(false);
+  });
+
+  it("should reject two-word affirmations", () => {
+    expect(passesAttentionGate("ok great")).toBe(false);
+    expect(passesAttentionGate("yes please")).toBe(false);
+    expect(passesAttentionGate("sure thanks")).toBe(false);
+    expect(passesAttentionGate("cool noted")).toBe(false);
+    expect(passesAttentionGate("alright fine")).toBe(false);
+  });
+
+  it("should reject pure emoji messages", () => {
+    expect(passesAttentionGate("🎉🎉🎉🎉🎉")).toBe(false);
+  });
+
+  it("should reject messages exceeding MAX_CAPTURE_CHARS", () => {
+    expect(passesAttentionGate("a ".repeat(1500))).toBe(false);
+  });
+
+  it("should reject messages with injected memory context tags", () => {
+    expect(
+      passesAttentionGate(
+        "<relevant-memories>some context here for the agent</relevant-memories> and more text after that",
+      ),
+    ).toBe(false);
+    expect(
+      passesAttentionGate(
+        "<core-memory-refresh>refreshed data here for the agent</core-memory-refresh> and more text",
+      ),
+    ).toBe(false);
+  });
+
+  it("should reject XML/system markup", () => {
+    expect(passesAttentionGate("<system>You are a helpful assistant with context</system>")).toBe(
+      false,
+    );
+  });
+
+  // --- Should ACCEPT ---
+
+  it("should accept substantive messages with enough words", () => {
+    expect(passesAttentionGate("I noticed the LinkedIn posts are not auto-liking")).toBe(true);
+    expect(passesAttentionGate("Please update the deployment script for the new server")).toBe(
+      true,
+    );
+    expect(passesAttentionGate("The database migration failed on the staging environment")).toBe(
+      true,
+    );
+  });
+
+  it("should accept messages with specific information/preferences", () => {
+    expect(passesAttentionGate("I prefer using TypeScript over JavaScript")).toBe(true);
+    expect(passesAttentionGate("My meeting with John is on Thursday")).toBe(true);
+    expect(passesAttentionGate("The project deadline was moved to March")).toBe(true);
+  });
+
+  it("should accept actionable requests with context", () => {
+    expect(passesAttentionGate("Let's limit the wa-group-monitoring to business hours")).toBe(true);
+    expect(passesAttentionGate("Can you check the error logs on the production server")).toBe(true);
+  });
+});
 
 // ============================================================================
 // extractUserMessages()

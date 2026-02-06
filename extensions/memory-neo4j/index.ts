@@ -184,6 +184,19 @@ const memoryNeo4jPlugin = {
               category?: MemoryCategory;
             };
 
+            // Attention gate — reject noise even when the agent explicitly stores
+            if (!passesAttentionGate(text)) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: `Skipped: "${text.slice(0, 60)}" — too short or low-substance for long-term memory.`,
+                  },
+                ],
+                details: { action: "rejected", reason: "attention_gate" },
+              };
+            }
+
             // 1. Generate embedding
             const vector = await embeddings.embed(text);
 
@@ -706,6 +719,64 @@ const memoryNeo4jPlugin = {
               process.exitCode = 1;
             }
           });
+
+        memory
+          .command("cleanup")
+          .description(
+            "Retroactively apply the attention gate — find and remove low-substance memories",
+          )
+          .option("--execute", "Actually delete (default: dry-run preview)")
+          .option("--agent <id>", "Only clean up memories for a specific agent")
+          .action(async (opts: { execute?: boolean; agent?: string }) => {
+            try {
+              await db.ensureInitialized();
+
+              // Fetch all memories (id + text)
+              const agentFilter = opts.agent ? "WHERE m.agentId = $agentId" : "";
+              const allMemories = await db.runQuery<{ id: string; text: string; source: string }>(
+                `MATCH (m:Memory) ${agentFilter}
+                 RETURN m.id AS id, m.text AS text, COALESCE(m.source, 'unknown') AS source
+                 ORDER BY m.createdAt ASC`,
+                opts.agent ? { agentId: opts.agent } : {},
+              );
+
+              // Run each through the attention gate
+              const noise: Array<{ id: string; text: string; source: string }> = [];
+              for (const mem of allMemories) {
+                if (!passesAttentionGate(mem.text)) {
+                  noise.push(mem);
+                }
+              }
+
+              if (noise.length === 0) {
+                console.log("\nNo low-substance memories found. Everything passes the gate.");
+                return;
+              }
+
+              console.log(
+                `\nFound ${noise.length}/${allMemories.length} memories that fail the attention gate:\n`,
+              );
+
+              for (const mem of noise) {
+                const preview = mem.text.length > 80 ? `${mem.text.slice(0, 77)}...` : mem.text;
+                console.log(`  [${mem.source}] "${preview}"`);
+              }
+
+              if (!opts.execute) {
+                console.log(
+                  `\nDry run — ${noise.length} memories would be removed. Re-run with --execute to delete.\n`,
+                );
+                return;
+              }
+
+              // Delete in batch
+              const deleted = await db.pruneMemories(noise.map((m) => m.id));
+              console.log(`\nDeleted ${deleted} low-substance memories.\n`);
+            } catch (err) {
+              console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+              process.exitCode = 1;
+            }
+          });
       },
       { commands: [] }, // Adds subcommands to existing "memory" command, no conflict
     );
@@ -1103,8 +1174,15 @@ const memoryNeo4jPlugin = {
 // ============================================================================
 
 const NOISE_PATTERNS = [
-  // Greetings / acknowledgments
+  // Greetings / acknowledgments (exact match, with optional punctuation)
   /^(hi|hey|hello|yo|sup|ok|okay|sure|thanks|thank you|thx|ty|yep|yup|nope|no|yes|yeah|cool|nice|great|got it|sounds good|perfect|alright|fine|noted|ack|kk|k)\s*[.!?]*$/i,
+  // Two-word affirmations: "ok great", "sounds good", "yes please", etc.
+  /^(ok|okay|yes|yeah|yep|sure|no|nope|alright|right|fine|cool|nice|great)\s+(great|good|sure|thanks|please|ok|fine|cool|yeah|perfect|noted|absolutely|definitely|exactly)\s*[.!?]*$/i,
+  // Deictic: messages that are only pronouns/articles/common verbs — no standalone meaning
+  // e.g. "I need those", "let me do it", "ok let me test it out", "I got it"
+  /^(ok[,.]?\s+)?(i('ll|'m|'d|'ve)?\s+)?(just\s+)?(need|want|got|have|let|let's|let me|give me|send|do|did|try|check|see|look at|test|take|get|go|use)\s+(it|that|this|those|these|them|some|one|the|a|an|me|him|her|us)\s*(out|up|now|then|too|again|later|first|here|there|please)?\s*[.!?]*$/i,
+  // Short acknowledgments with trailing context: "ok, ..." / "yes, ..." when total is brief
+  /^(ok|okay|yes|yeah|yep|sure|no|nope|right|alright|fine|cool|nice|great|perfect)[,.]?\s+.{0,20}$/i,
   // Single-word or near-empty
   /^\S{0,3}$/,
   // Pure emoji
@@ -1119,11 +1197,20 @@ const MAX_CAPTURE_CHARS = 2000;
 /** Minimum message length — too short to be meaningful. */
 const MIN_CAPTURE_CHARS = 10;
 
+/** Minimum word count — short contextual phrases lack standalone meaning. */
+const MIN_WORD_COUNT = 5;
+
 function passesAttentionGate(text: string): boolean {
   const trimmed = text.trim();
 
   // Length bounds
   if (trimmed.length < MIN_CAPTURE_CHARS || trimmed.length > MAX_CAPTURE_CHARS) {
+    return false;
+  }
+
+  // Word count — short phrases ("I need those") lack context for recall
+  const wordCount = trimmed.split(/\s+/).length;
+  if (wordCount < MIN_WORD_COUNT) {
     return false;
   }
 
@@ -1146,6 +1233,9 @@ function passesAttentionGate(text: string): boolean {
   // Passes gate — retain for short-term storage
   return true;
 }
+
+// Exported for testing
+export { passesAttentionGate };
 
 // ============================================================================
 // Export
