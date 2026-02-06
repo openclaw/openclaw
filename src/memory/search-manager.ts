@@ -103,7 +103,6 @@ class FallbackMemoryManager implements MemorySearchManager {
       } catch (err) {
         this.lastError = err instanceof Error ? err.message : String(err);
         const transient = isTransientQmdError(err);
-        this.consecutivePrimaryFailures += 1;
 
         if (transient) {
           // Per-query fallback only. Do not permanently disable QMD for transient failures.
@@ -111,6 +110,7 @@ class FallbackMemoryManager implements MemorySearchManager {
             `qmd memory search failed (transient; consecutive=${this.consecutivePrimaryFailures}); falling back to builtin for this query: ${this.lastError}`,
           );
         } else {
+          this.consecutivePrimaryFailures += 1;
           const threshold = this.maxConsecutiveFailuresBeforeDisable;
           if (this.consecutivePrimaryFailures >= threshold) {
             this.primaryDisabled = true;
