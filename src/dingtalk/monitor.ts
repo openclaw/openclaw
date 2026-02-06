@@ -105,12 +105,13 @@ export async function monitorDingTalkProvider(opts: {
     opts.onDisconnected?.();
   };
 
-  if (!opts.abortSignal) {
+  const abortSignal = opts.abortSignal;
+  if (!abortSignal) {
     await new Promise<void>(() => {});
     return;
   }
 
-  if (opts.abortSignal.aborted) {
+  if (abortSignal.aborted) {
     logger.info(`DingTalk stream stopping (${account.accountId})`);
     stop();
     return;
@@ -119,10 +120,10 @@ export async function monitorDingTalkProvider(opts: {
   await new Promise<void>((resolve) => {
     const onAbort = () => {
       logger.info(`DingTalk stream stopping (${account.accountId})`);
-      opts.abortSignal?.removeEventListener("abort", onAbort);
+      abortSignal.removeEventListener("abort", onAbort);
       stop();
       resolve();
     };
-    opts.abortSignal.addEventListener("abort", onAbort, { once: true });
+    abortSignal.addEventListener("abort", onAbort, { once: true });
   });
 }

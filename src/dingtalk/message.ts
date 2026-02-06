@@ -101,9 +101,9 @@ export async function processDingTalkMessage(params: {
   const data = params.data;
 
   const isGroup = data.conversationType === "2";
-  const senderId = data.senderStaffId || data.senderId;
+  const senderId = data.senderStaffId || data.senderId || "";
   const senderName = data.senderNick || "Unknown";
-  const chatId = data.conversationId;
+  const chatId = data.conversationId || "";
   const sessionWebhook = data.sessionWebhook;
 
   const content = extractDingTalkContent(data);
@@ -199,7 +199,10 @@ export async function processDingTalkMessage(params: {
 
   const agentId = resolveSessionAgentId({ config: cfg });
   const account = resolveDingTalkAccount({ cfg, accountId });
-  const peer = { kind: isGroup ? "group" : "dm", id: isGroup ? chatId : senderId };
+  const peer: { kind: "group" | "dm"; id: string } = {
+    kind: isGroup ? "group" : "dm",
+    id: isGroup ? chatId : senderId,
+  };
   const sessionKey = buildAgentSessionKey({
     agentId,
     channel: "dingtalk",

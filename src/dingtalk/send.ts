@@ -55,12 +55,24 @@ function getErrorResponse(err: unknown): ErrorResponse | undefined {
   };
 }
 
-function getResponseMessage(data: unknown): string | undefined {
-  if (typeof data !== "object" || data === null) {
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null) {
     return undefined;
   }
-  const message = (data as { message?: unknown }).message;
-  return typeof message === "string" ? message : undefined;
+  return value as Record<string, unknown>;
+}
+
+function getStringField(data: unknown, field: string): string | undefined {
+  const value = toRecord(data)?.[field];
+  return typeof value === "string" ? value : undefined;
+}
+
+function getResponseMessage(data: unknown): string | undefined {
+  return getStringField(data, "message");
+}
+
+function getProcessQueryKey(data: unknown): string | undefined {
+  return getStringField(data, "processQueryKey");
 }
 
 type ProactiveSendOptions = {
@@ -323,13 +335,18 @@ async function sendNormalToUser(
       },
     );
 
-    if (resp.data?.processQueryKey) {
-      log?.info?.(`[DingTalk][Normal] 发送成功: processQueryKey=${resp.data.processQueryKey}`);
-      return { ok: true, processQueryKey: resp.data.processQueryKey, usedAICard: false };
+    const processQueryKey = getProcessQueryKey(resp.data);
+    if (processQueryKey) {
+      log?.info?.(`[DingTalk][Normal] 发送成功: processQueryKey=${processQueryKey}`);
+      return { ok: true, processQueryKey, usedAICard: false };
     }
 
     log?.warn?.(`[DingTalk][Normal] 发送响应异常: ${JSON.stringify(resp.data)}`);
-    return { ok: false, error: resp.data?.message || "Unknown error", usedAICard: false };
+    return {
+      ok: false,
+      error: getResponseMessage(resp.data) || "Unknown error",
+      usedAICard: false,
+    };
   } catch (err: unknown) {
     const errMsg = getResponseMessage(getErrorResponse(err)?.data) || getErrorMessage(err);
     log?.error?.(`[DingTalk][Normal] 发送失败: ${errMsg}`);
@@ -368,13 +385,18 @@ async function sendNormalToGroup(
       timeout: 10_000,
     });
 
-    if (resp.data?.processQueryKey) {
-      log?.info?.(`[DingTalk][Normal] 发送成功: processQueryKey=${resp.data.processQueryKey}`);
-      return { ok: true, processQueryKey: resp.data.processQueryKey, usedAICard: false };
+    const processQueryKey = getProcessQueryKey(resp.data);
+    if (processQueryKey) {
+      log?.info?.(`[DingTalk][Normal] 发送成功: processQueryKey=${processQueryKey}`);
+      return { ok: true, processQueryKey, usedAICard: false };
     }
 
     log?.warn?.(`[DingTalk][Normal] 发送响应异常: ${JSON.stringify(resp.data)}`);
-    return { ok: false, error: resp.data?.message || "Unknown error", usedAICard: false };
+    return {
+      ok: false,
+      error: getResponseMessage(resp.data) || "Unknown error",
+      usedAICard: false,
+    };
   } catch (err: unknown) {
     const errMsg = getResponseMessage(getErrorResponse(err)?.data) || getErrorMessage(err);
     log?.error?.(`[DingTalk][Normal] 发送失败: ${errMsg}`);

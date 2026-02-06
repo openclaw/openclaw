@@ -112,6 +112,16 @@ function toRecord(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
+function getStringField(data: unknown, field: string): string | undefined {
+  const value = toRecord(data)?.[field];
+  return typeof value === "string" ? value : undefined;
+}
+
+function getBooleanField(data: unknown, field: string): boolean | undefined {
+  const value = toRecord(data)?.[field];
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function resolveFfprobePath(ffmpegPath: string): string {
   return ffmpegPath.replace(/ffmpeg(\.exe)?$/i, "ffprobe$1");
 }
@@ -305,7 +315,7 @@ export async function uploadMediaToDingTalk(
       { headers: form.getHeaders(), timeout: 60_000 },
     );
 
-    const mediaId = resp.data?.media_id;
+    const mediaId = getStringField(resp.data, "media_id");
     if (mediaId) {
       log?.info?.(`[DingTalk][${mediaType}] 上传成功: media_id=${mediaId}`);
       return mediaId;
@@ -518,7 +528,7 @@ async function sendVideoMessage(
       timeout: 10_000,
     });
 
-    if (resp.data?.success !== false) {
+    if (getBooleanField(resp.data, "success") !== false) {
       log?.info?.(`[DingTalk][Video] 视频消息发送成功: ${fileName}`);
     } else {
       log?.error?.(`[DingTalk][Video] 视频消息发送失败: ${JSON.stringify(resp.data)}`);
@@ -745,7 +755,7 @@ async function sendFileMessage(
       timeout: 10_000,
     });
 
-    if (resp.data?.success !== false) {
+    if (getBooleanField(resp.data, "success") !== false) {
       log?.info?.(`[DingTalk][File] 文件消息发送成功: ${fileInfo.fileName}`);
     } else {
       log?.error?.(`[DingTalk][File] 文件消息发送失败: ${JSON.stringify(resp.data)}`);
@@ -787,7 +797,7 @@ async function sendAudioMessage(
       timeout: 10_000,
     });
 
-    if (resp.data?.success !== false) {
+    if (getBooleanField(resp.data, "success") !== false) {
       log?.info?.(`[DingTalk][Audio] 语音消息发送成功: ${fileInfo.fileName}`);
     } else {
       log?.error?.(`[DingTalk][Audio] 语音消息发送失败: ${JSON.stringify(resp.data)}`);
@@ -949,7 +959,7 @@ export async function sendFileProactive(
       timeout: 10_000,
     });
 
-    if (resp.data?.processQueryKey) {
+    if (getStringField(resp.data, "processQueryKey")) {
       log?.info?.(`[DingTalk][File][Proactive] 文件消息发送成功: ${fileInfo.fileName}`);
     } else {
       log?.warn?.(`[DingTalk][File][Proactive] 文件消息发送响应异常: ${JSON.stringify(resp.data)}`);
@@ -1001,7 +1011,7 @@ export async function sendAudioProactive(
       timeout: 10_000,
     });
 
-    if (resp.data?.processQueryKey) {
+    if (getStringField(resp.data, "processQueryKey")) {
       log?.info?.(`[DingTalk][Audio][Proactive] 音频消息发送成功: ${fileInfo.fileName}`);
     } else {
       log?.warn?.(
@@ -1058,7 +1068,7 @@ export async function sendVideoProactive(
       timeout: 10_000,
     });
 
-    if (resp.data?.processQueryKey) {
+    if (getStringField(resp.data, "processQueryKey")) {
       log?.info?.(`[DingTalk][Video][Proactive] 视频消息发送成功`);
     } else {
       log?.warn?.(

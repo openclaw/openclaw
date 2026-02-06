@@ -5,9 +5,14 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.j
 
 export type DingTalkTokenSource = "config" | "file" | "none";
 
+export type ResolvedDingTalkAccountConfig = DingTalkAccountConfig & {
+  clientId: string;
+  clientSecret: string;
+};
+
 export type ResolvedDingTalkAccount = {
   accountId: string;
-  config: DingTalkAccountConfig;
+  config: ResolvedDingTalkAccountConfig;
   tokenSource: DingTalkTokenSource;
   name?: string;
   enabled: boolean;
@@ -113,7 +118,7 @@ export function resolveDingTalkAccount(params: {
     tokenSource = "none";
   }
 
-  const config: DingTalkAccountConfig = { ...merged, clientId, clientSecret };
+  const config: ResolvedDingTalkAccountConfig = { ...merged, clientId, clientSecret };
   const name = config.name?.trim() || undefined;
 
   return { accountId, config, tokenSource, name, enabled };

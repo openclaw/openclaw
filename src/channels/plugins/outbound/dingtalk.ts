@@ -8,7 +8,7 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit) => chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendText: async ({ cfg, to, text, accountId, log }) => {
+  sendText: async ({ cfg, to, text, accountId }) => {
     const account = resolveDingTalkAccount({ cfg, accountId });
     if (!account.config.clientId || !account.config.clientSecret) {
       throw new Error("DingTalk not configured");
@@ -21,11 +21,10 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
         ? { type: "group", openConversationId: target.id }
         : { type: "user", userId: target.id },
       text,
-      { log },
     );
     return { channel: "dingtalk", messageId: "unknown" };
   },
-  sendMedia: async ({ cfg, to, text, mediaUrl, accountId, log }) => {
+  sendMedia: async ({ cfg, to, text, mediaUrl, accountId }) => {
     const account = resolveDingTalkAccount({ cfg, accountId });
     if (!account.config.clientId || !account.config.clientSecret) {
       throw new Error("DingTalk not configured");
@@ -39,7 +38,7 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
         ? { type: "group", openConversationId: target.id }
         : { type: "user", userId: target.id },
       payload,
-      { msgType: mediaUrl ? "image" : "text", log },
+      { msgType: mediaUrl ? "image" : "text" },
     );
     return { channel: "dingtalk", messageId: "unknown" };
   },
