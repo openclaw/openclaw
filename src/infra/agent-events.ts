@@ -49,7 +49,6 @@ export function clearAgentRunContext(runId: string) {
   seqByRun.delete(runId);
 }
 
-
 export function resetAgentRunContextForTest() {
   runContextById.clear();
 }
