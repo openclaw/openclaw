@@ -449,7 +449,7 @@ export async function runSubagentAnnounceFlow(params: {
     const agentConfig = resolveAgentConfig(cfg, childAgentId);
     const senderEmoji = identity?.emoji ?? "🤖";
     const senderName = agentConfig?.name ?? identity?.name ?? childAgentId;
-    const senderAvatar = identity?.avatar ?? identity?.avatarUrl;
+    const senderAvatar = identity?.avatar;
 
     if (announceMode === "direct") {
       // Direct mode: inject response with agent identity, no main agent processing

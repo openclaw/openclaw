@@ -478,7 +478,7 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         senderIdentity,
       };
     } else {
-      currentGroup.messages.push({ message: item.message, key: item.key });
+      currentGroup!.messages.push({ message: item.message, key: item.key });
     }
   }
 
