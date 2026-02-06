@@ -31,8 +31,13 @@ send_alert() {
 }
 
 check_429() {
-  local count=$(docker logs "$CONTAINER" --since "5m" 2>&1 | grep -c "429" 2>/dev/null || echo 0)
-  local line_count=$(docker logs "$CONTAINER" --since "5m" 2>&1 | grep -c "line.*429\|429.*line" 2>/dev/null || echo 0)
+  # 精確匹配真正的 429 HTTP 錯誤（排除群組 ID 中的 429）
+  local count
+  count=$(docker logs "$CONTAINER" --since "5m" 2>&1 | grep -cE "(429 - |429 Too Many|rate.?limit)" 2>/dev/null)
+  count=${count:-0}
+  local line_count
+  line_count=$(docker logs "$CONTAINER" --since "5m" 2>&1 | grep -c "\[line\].*429" 2>/dev/null)
+  line_count=${line_count:-0}
 
   echo -e "${YELLOW}📊 最近 5 分鐘 429 統計${NC}"
   echo "  總計: $count 次"
