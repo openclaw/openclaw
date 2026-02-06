@@ -7,7 +7,7 @@ import { readLoggingConfig } from "./config.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
 import { loggingState } from "./state.js";
-import { formatLocalIsoWithOffset } from "./timestamps.js";
+import { formatLocalIso } from "./timestamp.js";
 
 export type ConsoleStyle = "pretty" | "compact" | "json";
 type ConsoleSettings = {
@@ -151,14 +151,14 @@ function isEpipeError(err: unknown): boolean {
 }
 
 export function formatConsoleTimestamp(style: ConsoleStyle): string {
-  const now = new Date();
   if (style === "pretty") {
+    const now = new Date();
     const h = String(now.getHours()).padStart(2, "0");
     const m = String(now.getMinutes()).padStart(2, "0");
     const s = String(now.getSeconds()).padStart(2, "0");
     return `${h}:${m}:${s}`;
   }
-  return formatLocalIsoWithOffset(now);
+  return formatLocalIso();
 }
 
 function hasTimestampPrefix(value: string): boolean {

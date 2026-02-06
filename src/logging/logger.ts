@@ -8,6 +8,7 @@ import { readLoggingConfig } from "./config.js";
 import type { ConsoleStyle } from "./console.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { loggingState } from "./state.js";
+import { formatLocalIso } from "./timestamp.js";
 
 // When running under vitest, isolate logs to avoid polluting production logs.
 function getDefaultLogDir(): string {
@@ -113,7 +114,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
   logger.attachTransport((logObj: LogObj) => {
     try {
-      const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
+      const time = formatLocalIso(logObj.date ?? new Date());
       const line = JSON.stringify({ ...logObj, time });
       fs.appendFileSync(settings.file, `${line}\n`, { encoding: "utf8" });
     } catch {

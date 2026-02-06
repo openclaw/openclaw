@@ -9,6 +9,7 @@ import { getConsoleSettings, shouldLogSubsystemToConsole } from "./console.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
 import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
 import { loggingState } from "./state.js";
+import { formatLocalIso } from "./timestamp.js";
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
@@ -156,7 +157,7 @@ function formatConsoleLine(opts: {
     opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
     return JSON.stringify({
-      time: new Date().toISOString(),
+      time: formatLocalIso(),
       level: opts.level,
       subsystem: displaySubsystem,
       message: opts.message,
