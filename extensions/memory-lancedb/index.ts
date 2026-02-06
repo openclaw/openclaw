@@ -141,22 +141,20 @@ class MemoryDB {
     return this.table!.countRows();
   }
 
-  async findByIdPrefix(prefix: string): Promise<MemoryEntry | null> {
+  async findByIdPrefix(prefix: string): Promise<{ id: string } | { ambiguous: string[] } | null> {
     await this.ensureInitialized();
-    // Query all entries and find one starting with the prefix
-    const results = await this.table!.query().toArray();
-    const match = results.find((row) => (row.id as string).startsWith(prefix));
-    if (!match) {
+    // Only fetch id and text columns (skip vectors) for efficiency
+    const results = await this.table!.query().select(["id", "text"]).toArray();
+    const matches = results.filter((row) => (row.id as string).startsWith(prefix));
+
+    if (matches.length === 0) {
       return null;
     }
-    return {
-      id: match.id as string,
-      text: match.text as string,
-      vector: match.vector as number[],
-      importance: match.importance as number,
-      category: match.category as MemoryEntry["category"],
-      createdAt: match.createdAt as number,
-    };
+    if (matches.length > 1) {
+      // Ambiguous prefix - return all matching IDs for user to choose
+      return { ambiguous: matches.map((m) => `${m.id}: ${(m.text as string).slice(0, 50)}...`) };
+    }
+    return { id: matches[0].id as string };
   }
 }
 
@@ -392,6 +390,17 @@ const memoryPlugin = {
                 return {
                   content: [{ type: "text", text: `No memory found with ID prefix: ${memoryId}` }],
                   details: { error: "not_found", prefix: memoryId },
+                };
+              }
+              if ("ambiguous" in match) {
+                return {
+                  content: [
+                    {
+                      type: "text",
+                      text: `Ambiguous prefix "${memoryId}" matches multiple memories:\n${match.ambiguous.join("\n")}\n\nPlease use a longer prefix.`,
+                    },
+                  ],
+                  details: { error: "ambiguous", matches: match.ambiguous },
                 };
               }
               targetId = match.id;
