@@ -22,6 +22,8 @@ const runtime = {
   }),
 };
 
+vi.mock("./plugin-registry.js", () => ({ ensurePluginRegistryLoaded: () => undefined }));
+
 vi.mock("../commands/message.js", () => ({ messageCommand }));
 vi.mock("../commands/status.js", () => ({ statusCommand }));
 vi.mock("../commands/configure.js", () => ({

@@ -66,6 +66,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: include forward_from_chat metadata in forwarded messages and harden cron delivery target checks. (#8392) Thanks @Glucksberg.
 - Telegram: preserve DM topic threadId in deliveryContext. (#9039) Thanks @lailoo.
 - macOS: fix cron payload summary rendering and ISO 8601 formatter concurrency safety.
+- Security: require gateway auth for Canvas host and A2UI assets. (#9518) Thanks @coygeek.
 
 ## 2026.2.2-3
 
