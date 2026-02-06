@@ -2,6 +2,7 @@ import { type AddressInfo, createServer } from "node:net";
 import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
+import { canBindLoopback } from "./test-loopback.js";
 
 let testPort = 0;
 let cdpBaseUrl = "";
@@ -185,7 +186,9 @@ function makeResponse(
   } as unknown as Response;
 }
 
-describe("browser control server", () => {
+const describeWithLoopback = (await canBindLoopback()) ? describe : describe.skip;
+
+describeWithLoopback("browser control server", () => {
   beforeEach(async () => {
     reachable = false;
     cfgAttachOnly = false;

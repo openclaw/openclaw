@@ -1,6 +1,7 @@
 import { type AddressInfo, createServer } from "node:net";
 import { fetch as realFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { canBindLoopback } from "./test-loopback.js";
 
 let testPort = 0;
 let _cdpBaseUrl = "";
@@ -184,7 +185,9 @@ function makeResponse(
   } as unknown as Response;
 }
 
-describe("browser control server", () => {
+const describeWithLoopback = (await canBindLoopback()) ? describe : describe.skip;
+
+describeWithLoopback("browser control server", () => {
   beforeEach(async () => {
     reachable = false;
     cfgAttachOnly = false;
@@ -312,7 +315,7 @@ describe("browser control server", () => {
   });
 });
 
-describe("backward compatibility (profile parameter)", () => {
+describeWithLoopback("backward compatibility (profile parameter)", () => {
   beforeEach(async () => {
     reachable = false;
     cfgAttachOnly = false;
