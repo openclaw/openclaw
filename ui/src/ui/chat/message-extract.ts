@@ -53,7 +53,11 @@ export function extractText(message: unknown): string | null {
     const parts = content
       .map((p) => {
         const item = p as Record<string, unknown>;
-        if (item.type === "text" && typeof item.text === "string") {
+        const type = typeof item.type === "string" ? item.type : "";
+        if (
+          (type === "text" || type === "output_text" || type === "input_text") &&
+          typeof item.text === "string"
+        ) {
           return item.text;
         }
         return null;
@@ -139,7 +143,11 @@ export function extractRawText(message: unknown): string | null {
     const parts = content
       .map((p) => {
         const item = p as Record<string, unknown>;
-        if (item.type === "text" && typeof item.text === "string") {
+        const type = typeof item.type === "string" ? item.type : "";
+        if (
+          (type === "text" || type === "output_text" || type === "input_text") &&
+          typeof item.text === "string"
+        ) {
           return item.text;
         }
         return null;
