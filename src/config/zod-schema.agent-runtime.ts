@@ -534,6 +534,7 @@ export const ToolsSchema = z
     subagents: z
       .object({
         tools: ToolPolicySchema,
+        maxSpawnDepth: z.number().int().min(0).optional(),
       })
       .strict()
       .optional(),

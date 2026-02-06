@@ -25,6 +25,8 @@ export type SubagentRunRecord = {
   archiveAtMs?: number;
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
+  /** Spawn depth: 1 = first-level subagent, 2 = grandchild, etc. */
+  spawnDepth?: number;
 };
 
 const subagentRuns = new Map<string, SubagentRunRecord>();
@@ -288,6 +290,7 @@ export function registerSubagentRun(params: {
   cleanup: "delete" | "keep";
   label?: string;
   runTimeoutSeconds?: number;
+  spawnDepth?: number;
 }) {
   const now = Date.now();
   const cfg = loadConfig();
@@ -308,6 +311,7 @@ export function registerSubagentRun(params: {
     startedAt: now,
     archiveAtMs,
     cleanupHandled: false,
+    spawnDepth: params.spawnDepth,
   });
   ensureListener();
   persistSubagentRuns();
@@ -422,6 +426,23 @@ export function listSubagentRunsForRequester(requesterSessionKey: string): Subag
     return [];
   }
   return [...subagentRuns.values()].filter((entry) => entry.requesterSessionKey === key);
+}
+
+/**
+ * Look up spawn depth for a subagent session.
+ * Returns the depth if found, undefined otherwise.
+ */
+export function getSpawnDepthForSession(sessionKey: string | undefined | null): number | undefined {
+  const key = (sessionKey ?? "").trim();
+  if (!key) {
+    return undefined;
+  }
+  for (const entry of subagentRuns.values()) {
+    if (entry.childSessionKey === key) {
+      return entry.spawnDepth;
+    }
+  }
+  return undefined;
 }
 
 export function initSubagentRegistry() {

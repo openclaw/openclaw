@@ -8,6 +8,7 @@ import type { InlineDirectives } from "./directive-handling.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import type { TypingController } from "./typing.js";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
+import { getSpawnDepthForSession } from "../../agents/subagent-registry.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { logVerbose } from "../../globals.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
@@ -180,6 +181,7 @@ export async function handleInlineActions(params: {
         agentDir,
         workspaceDir,
         config: cfg,
+        spawnDepth: getSpawnDepthForSession(sessionKey),
       });
 
       const tool = tools.find((candidate) => candidate.name === dispatch.toolName);

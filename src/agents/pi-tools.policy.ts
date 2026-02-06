@@ -76,12 +76,12 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
   };
 }
 
-const DEFAULT_SUBAGENT_TOOL_DENY = [
-  // Session management - main agent orchestrates
+// Tools always denied for subagents (no config override)
+const SUBAGENT_TOOL_DENY_ALWAYS = [
+  // Session management - main agent orchestrates (except sessions_spawn which is depth-gated)
   "sessions_list",
   "sessions_history",
   "sessions_send",
-  "sessions_spawn",
   // System admin - dangerous from subagent
   "gateway",
   "agents_list",
@@ -95,10 +95,20 @@ const DEFAULT_SUBAGENT_TOOL_DENY = [
   "memory_get",
 ];
 
-export function resolveSubagentToolPolicy(cfg?: OpenClawConfig): SandboxToolPolicy {
+export function resolveSubagentToolPolicy(
+  cfg?: OpenClawConfig,
+  opts?: { spawnDepth?: number },
+): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
+  const maxSpawnDepth = cfg?.tools?.subagents?.maxSpawnDepth ?? 0;
+  const currentDepth = opts?.spawnDepth ?? 1;
+
+  // Deny sessions_spawn if nesting is disabled (maxSpawnDepth=0) or we're at/past max depth
+  const denySpawn = maxSpawnDepth === 0 || currentDepth >= maxSpawnDepth;
+
   const deny = [
-    ...DEFAULT_SUBAGENT_TOOL_DENY,
+    ...SUBAGENT_TOOL_DENY_ALWAYS,
+    ...(denySpawn ? ["sessions_spawn"] : []),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
   const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;

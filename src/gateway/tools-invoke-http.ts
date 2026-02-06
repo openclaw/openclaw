@@ -6,6 +6,7 @@ import {
   resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
 } from "../agents/pi-tools.policy.js";
+import { getSpawnDepthForSession } from "../agents/subagent-registry.js";
 import {
   buildPluginToolGroups,
   collectExplicitAllowlist,
@@ -207,7 +208,7 @@ export async function handleToolsInvokeHttpRequest(
     accountId: accountId ?? null,
   });
   const subagentPolicy = isSubagentSessionKey(sessionKey)
-    ? resolveSubagentToolPolicy(cfg)
+    ? resolveSubagentToolPolicy(cfg, { spawnDepth: getSpawnDepthForSession(sessionKey) })
     : undefined;
 
   // Build tool list (core + plugin tools).
@@ -226,6 +227,7 @@ export async function handleToolsInvokeHttpRequest(
       groupPolicy,
       subagentPolicy,
     ]),
+    spawnDepth: getSpawnDepthForSession(sessionKey),
   });
 
   const coreToolNames = new Set(

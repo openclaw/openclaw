@@ -57,6 +57,8 @@ export function createOpenClawTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** Current spawn depth for nested subagent spawning (0 = main session). */
+  spawnDepth?: number;
 }): AnyAgentTool[] {
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
@@ -138,6 +140,7 @@ export function createOpenClawTools(options?: {
       agentGroupSpace: options?.agentGroupSpace,
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
+      spawnDepth: options?.spawnDepth,
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,

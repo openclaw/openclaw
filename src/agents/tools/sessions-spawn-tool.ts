@@ -77,6 +77,8 @@ export function createSessionsSpawnTool(opts?: {
   sandboxed?: boolean;
   /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
   requesterAgentIdOverride?: string;
+  /** Current spawn depth (0 = main session, 1 = first subagent, etc.). */
+  spawnDepth?: number;
 }): AnyAgentTool {
   return {
     label: "Sessions",
@@ -119,11 +121,20 @@ export function createSessionsSpawnTool(opts?: {
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const requesterSessionKey = opts?.agentSessionKey;
+
+      // Depth-gated nested spawning: check if subagent is allowed to spawn
       if (typeof requesterSessionKey === "string" && isSubagentSessionKey(requesterSessionKey)) {
-        return jsonResult({
-          status: "forbidden",
-          error: "sessions_spawn is not allowed from sub-agent sessions",
-        });
+        const maxSpawnDepth = cfg.tools?.subagents?.maxSpawnDepth ?? 0;
+        const currentDepth = opts?.spawnDepth ?? 1;
+        if (maxSpawnDepth === 0 || currentDepth >= maxSpawnDepth) {
+          return jsonResult({
+            status: "forbidden",
+            error:
+              maxSpawnDepth === 0
+                ? "Nested spawning is disabled (tools.subagents.maxSpawnDepth = 0)"
+                : `Spawn depth limit reached (current: ${currentDepth}, max: ${maxSpawnDepth})`,
+          });
+        }
       }
       const requesterInternalKey = requesterSessionKey
         ? resolveInternalSessionKey({
@@ -273,6 +284,7 @@ export function createSessionsSpawnTool(opts?: {
         cleanup,
         label: label || undefined,
         runTimeoutSeconds,
+        spawnDepth: (opts?.spawnDepth ?? 0) + 1,
       });
 
       return jsonResult({

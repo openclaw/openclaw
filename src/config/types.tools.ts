@@ -441,6 +441,13 @@ export type ToolsConfig = {
       allow?: string[];
       deny?: string[];
     };
+    /**
+     * Maximum spawn depth for nested sub-agents.
+     * 0 = disabled (default, sub-agents cannot spawn).
+     * 1 = sub-agents can spawn one level of children.
+     * 2+ = deeper nesting allowed.
+     */
+    maxSpawnDepth?: number;
   };
   /** Sandbox tool policy defaults (deny wins). */
   sandbox?: {

@@ -43,6 +43,7 @@ import {
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
+import { getSpawnDepthForSession } from "./subagent-registry.js";
 import {
   applyOwnerOnlyToolPolicy,
   buildPluginToolGroups,
@@ -215,7 +216,9 @@ export function createOpenClawCodingTools(options?: {
   const scopeKey = options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
-      ? resolveSubagentToolPolicy(options.config)
+      ? resolveSubagentToolPolicy(options.config, {
+          spawnDepth: getSpawnDepthForSession(options.sessionKey),
+        })
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
     profilePolicyWithAlsoAllow,
@@ -358,6 +361,7 @@ export function createOpenClawCodingTools(options?: {
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
       requesterAgentIdOverride: agentId,
+      spawnDepth: getSpawnDepthForSession(options?.sessionKey),
     }),
   ];
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
