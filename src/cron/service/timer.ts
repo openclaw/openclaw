@@ -31,7 +31,10 @@ export function armTimer(state: CronServiceState) {
 
 export async function onTimer(state: CronServiceState) {
   if (state.running) {
-    return;
+    // Safety: if running flag is stuck true (e.g., from disable/enable cycle),
+    // reset it to prevent deadlock. This handles race conditions where a timer
+    // tick occurs during the disable/enable window.
+    state.running = false;
   }
   state.running = true;
   try {
