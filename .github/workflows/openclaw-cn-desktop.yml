@@ -1,0 +1,178 @@
+name: OpenClaw CN Desktop
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "ui/**"
+      - "src/**"
+      - "scripts/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/openclaw-cn-desktop.yml"
+  push:
+    branches: [main]
+    tags:
+      - "openclaw-cn-desktop-v*"
+  schedule:
+    # 03:20 China Standard Time (UTC+8) ~= 19:20 UTC (previous day)
+    - cron: "20 19 * * *"
+  workflow_dispatch:
+    inputs:
+      publish_nightly:
+        description: "Publish the nightly prerelease"
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: openclaw-cn-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      # Some dependencies use git+ssh; accept host keys non-interactively on CI.
+      GIT_SSH_COMMAND: "ssh -o StrictHostKeyChecking=accept-new"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: "pnpm-lock.yaml"
+
+      - name: Setup pnpm (corepack)
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          for attempt in 1 2 3; do
+            if corepack prepare pnpm@10.23.0 --activate; then
+              pnpm -v
+              exit 0
+            fi
+            echo "corepack prepare failed (attempt $attempt/3). Retrying..."
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Build Control UI (dist/control-ui)
+        shell: bash
+        run: node scripts/ui.js build
+
+      - name: Install Desktop deps (filtered)
+        shell: bash
+        run: pnpm --filter openclaw-cn-desktop install --frozen-lockfile
+
+      - name: Build Desktop
+        shell: bash
+        run: pnpm --filter openclaw-cn-desktop dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-cn-desktop-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/*.msi
+            apps/desktop/dist/*.AppImage
+            apps/desktop/dist/*.deb
+            apps/desktop/dist/latest*.yml
+            apps/desktop/dist/*.blockmap
+
+  publish-release:
+    name: Publish Release
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/openclaw-cn-desktop-v')
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  publish-nightly:
+    name: Publish Nightly
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    needs: [build]
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_nightly)
+    steps:
+      - name: Checkout (for tagging)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Update nightly tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          tag="openclaw-cn-nightly"
+          git tag -f "$tag" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$tag"
+
+      - name: Publish nightly prerelease (create/edit + upload assets)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="openclaw-cn-nightly"
+          today="$(date -u +%Y-%m-%d)"
+          title="OpenClaw CN Nightly (${today})"
+          notes=$(
+            cat <<EOF
+          Nightly build for commit \`${GITHUB_SHA}\`.
+
+          - Built on: ${today} (UTC)
+          - Platforms: Windows (NSIS), Ubuntu (AppImage/deb)
+          EOF
+          )
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$title" --notes "$notes" --prerelease
+          else
+            gh release create "$tag" --title "$title" --notes "$notes" --prerelease
+          fi
+
+          # Upload artifacts from both OS builds; --clobber overwrites existing assets.
+          shopt -s globstar nullglob
+          files=(artifacts/**/*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No artifacts found to upload."
+            exit 1
+          fi
+          gh release upload "$tag" artifacts/**/* --clobber
+

@@ -6,8 +6,8 @@
   "main": "src/main.cjs",
   "scripts": {
     "dev": "electron .",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "pack": "electron-builder --dir --publish never",
+    "dist": "electron-builder --publish never"
   },
   "devDependencies": {
     "electron": "34.3.0",
