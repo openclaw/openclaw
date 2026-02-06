@@ -1,7 +1,11 @@
 import { html, nothing } from "lit";
 import { icons } from "../icons.ts";
-import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
+import {
+  formatToolDetail,
+  resolveToolDisplay,
+  shouldSuppressToolCardWhenNoOutput,
+} from "../tool-display.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
@@ -43,6 +47,13 @@ export function extractToolCards(message: unknown): ToolCard[] {
       "tool";
     const text = extractTextCached(message) ?? undefined;
     cards.push({ kind: "result", name, text });
+  }
+
+  const hasResultText = cards.some((card) => card.kind === "result" && Boolean(card.text?.trim()));
+  if (!hasResultText) {
+    return cards.filter(
+      (card) => card.kind !== "call" || !shouldSuppressToolCardWhenNoOutput(card.name),
+    );
   }
 
   return cards;
