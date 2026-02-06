@@ -79,7 +79,7 @@ export function buildAgentCard(params: BuildAgentCardParams): AgentCard {
     description,
     protocolVersion: "0.3.0",
     version: "1.0.0",
-    url: baseUrl,
+    url: `${baseUrl}/a2a`,
     capabilities: {
       streaming: true,
       pushNotifications: false,

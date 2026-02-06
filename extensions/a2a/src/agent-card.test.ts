@@ -35,7 +35,7 @@ describe("buildAgentCard", () => {
 
     expect(card.name).toBe("OpenClaw Agent (main)");
     expect(card.description).toBe("AI assistant powered by OpenClaw");
-    expect(card.url).toBe("https://example.com");
+    expect(card.url).toBe("https://example.com/a2a");
     expect(card.protocolVersion).toBe("0.3.0");
   });
 
@@ -111,7 +111,7 @@ describe("buildAgentCard", () => {
       publicUrl: "https://example.com/",
     });
 
-    expect(card.url).toBe("https://example.com");
+    expect(card.url).toBe("https://example.com/a2a");
   });
 
   it("sets correct capabilities", () => {
