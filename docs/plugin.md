@@ -310,7 +310,7 @@ Plugins export either:
 Plugins can ship hooks and register them at runtime. This lets a plugin bundle
 event-driven automation without a separate hook pack install.
 
-### Example
+### Registering hooks from a directory
 
 ```
 import { registerPluginHooksFromDir } from "openclaw/plugin-sdk";
@@ -326,6 +326,69 @@ Notes:
 - Hook eligibility rules still apply (OS/bins/env/config requirements).
 - Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
 - You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
+
+### Registering typed hooks (inline)
+
+Use `api.on()` to register a typed hook handler that **actually executes** when
+the event fires:
+
+```ts
+export default function register(api) {
+  // ✅ Correct — this handler will execute
+  api.on("gateway_start", async (event, ctx) => {
+    api.logger.info("Gateway started!");
+  });
+
+  api.on("command:new", async (event, ctx) => {
+    api.logger.info("New session requested");
+  });
+}
+```
+
+> **⚠️ Common pitfall: `api.registerHook()` vs `api.on()`**
+>
+> OpenClaw has two hook registration methods that look similar but behave very
+> differently:
+>
+> | Method                                    | Where it goes         | Executed by hook runner? |
+> | ----------------------------------------- | --------------------- | ------------------------ |
+> | `api.on(event, handler)`                  | `registry.typedHooks` | **Yes** ✅               |
+> | `api.registerHook(events, handler, opts)` | `registry.hooks`      | **No** ❌                |
+>
+> `api.registerHook()` registers hook **metadata** for UI and diagnostics only.
+> The handler you pass to it is **never called** by the hook runner. This can be
+> extremely confusing because registration succeeds silently — no errors, no
+> warnings — but your handler never fires.
+>
+> Additionally, `registerHook()` silently drops entries that are missing a `name`
+> in the `opts` parameter.
+>
+> ```ts
+> export default function register(api) {
+>   // ✅ Correct — hook will execute
+>   api.on("gateway_start", async (event, ctx) => {
+>     console.log("Gateway started!");
+>   });
+>
+>   // ❌ Wrong — registers metadata only, handler never fires
+>   api.registerHook(
+>     "gateway_start",
+>     async (event, ctx) => {
+>       console.log("This never runs!");
+>     },
+>     { name: "my-hook" },
+>   );
+>
+>   // ❌ Also wrong — silently dropped (no name in opts)
+>   api.registerHook("gateway_start", async (event, ctx) => {
+>     console.log("This is silently dropped!");
+>   });
+> }
+> ```
+>
+> **Rule of thumb:** If you want your handler to **run**, use `api.on()`.
+> Only use `api.registerHook()` if you specifically need to register metadata
+> for the hooks UI/diagnostics system.
 
 ## Provider plugins (model auth)
 
