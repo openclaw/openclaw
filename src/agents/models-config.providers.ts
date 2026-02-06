@@ -14,6 +14,7 @@ import {
   KILOCODE_MODEL_CATALOG,
 } from "../providers/kilocode-shared.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
+import { APERTIS_BASE_URL, discoverApertisModels } from "./apertis-models.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
@@ -756,6 +757,15 @@ export function buildXiaomiProvider(): ProviderConfig {
   };
 }
 
+async function buildApertisProvider(): Promise<ProviderConfig> {
+  const models = await discoverApertisModels();
+  return {
+    baseUrl: APERTIS_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 async function buildVeniceProvider(): Promise<ProviderConfig> {
   const models = await discoverVeniceModels();
   return {
@@ -1035,6 +1045,13 @@ export async function resolveImplicitProviders(params: {
       models: [buildCloudflareAiGatewayModelDefinition()],
     };
     break;
+  }
+
+  const apertisKey =
+    resolveEnvApiKeyVarName("apertis") ??
+    resolveApiKeyFromProfiles({ provider: "apertis", store: authStore });
+  if (apertisKey) {
+    providers.apertis = { ...(await buildApertisProvider()), apiKey: apertisKey };
   }
 
   // Ollama provider - auto-discover if running locally, or add if explicitly configured.
