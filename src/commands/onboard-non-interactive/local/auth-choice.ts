@@ -229,13 +229,6 @@ export async function applyNonInteractiveAuthChoice(params: {
       flagValue: opts.qianfanApiKey,
       flagName: "--qianfan-api-key",
       envVar: "QIANFAN_API_KEY",
-  if (authChoice === "xai-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
-      provider: "xai",
-      cfg: baseConfig,
-      flagValue: opts.xaiApiKey,
-      flagName: "--xai-api-key",
-      envVar: "XAI_API_KEY",
       runtime,
     });
     if (!resolved) {
@@ -250,7 +243,19 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyQianfanConfig(nextConfig);
-      setXaiApiKey(resolved.key);
+  }
+
+  if (authChoice === "xai-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "xai",
+      cfg: baseConfig,
+      flagValue: opts.xaiApiKey,
+      flagName: "--xai-api-key",
+      envVar: "XAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "xai:default",

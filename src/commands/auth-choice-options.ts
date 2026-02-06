@@ -23,7 +23,7 @@ export type AuthChoiceGroupId =
   | "synthetic"
   | "venice"
   | "qwen"
-  | "qianfan";
+  | "qianfan"
   | "xai";
 
 export type AuthChoiceGroup = {
