@@ -786,7 +786,7 @@ function resolveTlonSession(
 
 /**
  * Feishu ID formats:
- * - oc_xxx: chat_id (group chat)
+ * - oc_xxx: chat_id (can be group or DM, use chat_mode to distinguish or explicit dm:/group: prefix)
  * - ou_xxx: user open_id (DM)
  * - on_xxx: user union_id (DM)
  * - cli_xxx: app_id (not a valid send target)
