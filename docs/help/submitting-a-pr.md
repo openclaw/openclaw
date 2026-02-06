@@ -20,7 +20,7 @@ Good PRs are easy to review: reviewers should quickly know the intent, verify be
 
 Be concise; concise review > grammar. Omit any non-applicable sections.
 
-### Baseline validation commands (run/fix failures for your change):
+### Baseline validation commands (run/fix failures for your change)
 
 - `pnpm lint`
 - `pnpm check`
