@@ -17,8 +17,8 @@ OpenClaw = CLAW + TARDIS, because every space lobster needs a time and space mac
 
 ## Core contributors
 
-- **Maxim Vovshin** (@Hyaxia, [redacted-email]) - Blogwatcher skill
-- **Nacho Iacovino** (@nachoiacovino, [redacted-email]) - Location parsing (Telegram and WhatsApp)
+- **Maxim Vovshin** (@Hyaxia, [[redacted-email]](mailto:[redacted-email])) - Blogwatcher skill
+- **Nacho Iacovino** (@nachoiacovino, [[redacted-email]](mailto:[redacted-email])) - Location parsing (Telegram and WhatsApp)
 
 ## License
 
