@@ -166,7 +166,7 @@ function readCodexKeychainCredentials(options?: {
       : Date.now() + 60 * 60 * 1000;
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
 
-    log.info("read codex credentials from keychain", {
+    log.debug("read codex credentials from keychain", {
       source: "keychain",
       expires: new Date(expires).toISOString(),
     });
@@ -301,7 +301,7 @@ export function readClaudeCliCredentials(options?: {
   if (platform === "darwin" && options?.allowKeychainPrompt !== false) {
     const keychainCreds = readClaudeCliKeychainCredentials(options?.execSync);
     if (keychainCreds) {
-      log.info("read anthropic credentials from claude cli keychain", {
+      log.debug("read anthropic credentials from claude cli keychain", {
         type: keychainCreds.type,
       });
       return keychainCreds;
@@ -410,7 +410,7 @@ export function writeClaudeCliKeychainCredentials(
       { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
     );
 
-    log.info("wrote refreshed credentials to claude cli keychain", {
+    log.debug("wrote refreshed credentials to claude cli keychain", {
       expires: new Date(newCredentials.expires).toISOString(),
     });
     return true;
@@ -452,7 +452,7 @@ export function writeClaudeCliFileCredentials(
     };
 
     saveJsonFile(credPath, data);
-    log.info("wrote refreshed credentials to claude cli file", {
+    log.debug("wrote refreshed credentials to claude cli file", {
       expires: new Date(newCredentials.expires).toISOString(),
     });
     return true;

@@ -836,3 +836,62 @@ export const MSTeamsConfigSchema = z
         'channels.msteams.dmPolicy="open" requires channels.msteams.allowFrom to include "*"',
     });
   });
+
+export const GoogleChatAccountSchemaBase = z
+  .object({
+    /** Optional display name for this account (used in CLI/UI lists). */
+    name: z.string().optional(),
+    /** If false, do not start this Google Chat account. Default: true. */
+    enabled: z.boolean().optional(),
+    /** Google Cloud Project ID. */
+    projectId: z.string().optional(),
+    /** Pub/Sub subscription name (full path: projects/.../subscriptions/...). */
+    subscriptionName: z.string().optional(),
+    /** Path to service account credentials JSON file. */
+    credentialsPath: z.string().optional(),
+    /** Direct message access policy (default: pairing). */
+    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    /** Allowlist for DM senders (email addresses). */
+    allowFrom: z.array(z.string()).optional(),
+    /** Group/space access policy (default: disabled). */
+    spacePolicy: GroupPolicySchema.optional().default("disabled"),
+    /** Allowlist for spaces (space IDs). */
+    allowSpaces: z.array(z.string()).optional(),
+    /** Max space messages to keep as history context (0 disables). */
+    historyLimit: z.number().int().min(0).optional(),
+    /** Max DM turns to keep as history context. */
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    /** Per-DM config overrides. */
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
+    /** Outbound text chunk size (chars). Default: 4000. */
+    textChunkLimit: z.number().int().positive().optional(),
+    /** Outbound message prefix. */
+    messagePrefix: z.string().optional(),
+    /** Heartbeat visibility settings. */
+    heartbeat: ChannelHeartbeatVisibilitySchema,
+  })
+  .strict();
+
+export const GoogleChatAccountSchema = GoogleChatAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.googlechat.dmPolicy="open" requires channels.googlechat.allowFrom to include "*"',
+  });
+});
+
+export const GoogleChatConfigSchema = GoogleChatAccountSchemaBase.extend({
+  accounts: z.record(z.string(), GoogleChatAccountSchema.optional()).optional(),
+}).superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.googlechat.dmPolicy="open" requires channels.googlechat.allowFrom to include "*"',
+  });
+});
