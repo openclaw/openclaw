@@ -46,6 +46,7 @@ type HookDispatchers = {
     model?: string;
     thinking?: string;
     timeoutSeconds?: number;
+    agentId?: string;
   }) => string;
 };
 
@@ -173,6 +174,7 @@ export function createHooksRequestHandler(
             model: mapped.action.model,
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,
+            agentId: mapped.action.agentId,
           });
           sendJson(res, 202, { ok: true, runId });
           return true;

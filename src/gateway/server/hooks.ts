@@ -41,6 +41,7 @@ export function createGatewayHooksRequestHandler(params: {
     model?: string;
     thinking?: string;
     timeoutSeconds?: number;
+    agentId?: string;
   }) => {
     const sessionKey = value.sessionKey.trim() ? value.sessionKey.trim() : `hook:${randomUUID()}`;
     const mainSessionKey = resolveMainSessionKeyFromConfig();
@@ -78,6 +79,7 @@ export function createGatewayHooksRequestHandler(params: {
           job,
           message: value.message,
           sessionKey,
+          agentId: value.agentId,
           lane: "cron",
         });
         const summary = result.summary?.trim() || result.error?.trim() || result.status;

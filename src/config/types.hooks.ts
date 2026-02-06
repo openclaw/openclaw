@@ -33,6 +33,8 @@ export type HookMappingConfig = {
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
+  /** Route this hook to a specific agent (by agent ID). */
+  agentId?: string;
   transform?: HookMappingTransform;
 };
 
