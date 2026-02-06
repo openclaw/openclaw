@@ -1,0 +1,58 @@
+{
+  "name": "codex",
+  "schema_version": 1,
+  "description": "Codex AI terminal",
+  "response_marker": "•",
+  "prompt_marker": "›",
+  "echo_pattern": "^HEALTH_\\d+$",
+  "stop_patterns": [
+    {
+      "type": "prefix",
+      "value": "›",
+      "description": "Next prompt"
+    },
+    {
+      "type": "separator",
+      "chars": "─",
+      "description": "Separator lines"
+    },
+    {
+      "type": "regex",
+      "pattern": "\\? for shortcuts",
+      "description": "Help hints"
+    }
+  ],
+  "noise_patterns": [
+    {
+      "type": "separator",
+      "description": "Separator lines"
+    },
+    {
+      "type": "regex",
+      "pattern": "\\? for shortcuts",
+      "description": "Help hints"
+    },
+    {
+      "type": "regex",
+      "pattern": "\\d+% context left",
+      "description": "Context indicators"
+    },
+    {
+      "type": "prefix",
+      "value": "│",
+      "description": "Command output boxes"
+    },
+    {
+      "type": "prefix",
+      "value": "└",
+      "description": "Command output terminators"
+    }
+  ],
+  "special_handling": {
+    "command_blocks": {
+      "enabled": true,
+      "description": "Codex shows command output in boxes with │ and └",
+      "skip_between_separators": true
+    }
+  }
+}

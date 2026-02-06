@@ -1,0 +1,62 @@
+{
+  "name": "claude-code",
+  "schema_version": 1,
+  "description": "Claude Code terminal (claude-cli)",
+  "response_marker": "⏺",
+  "prompt_marker": ">",
+  "echo_pattern": "^HEALTH_\\d+$",
+  "indentation": 2,
+  "stop_patterns": [
+    {
+      "type": "prefix",
+      "value": "●",
+      "description": "Feedback prompts"
+    },
+    {
+      "type": "prefix",
+      "value": "⏵⏵",
+      "description": "Status indicators"
+    },
+    {
+      "type": "prefix",
+      "value": "⎿",
+      "description": "File references"
+    },
+    {
+      "type": "separator",
+      "chars": "═─",
+      "description": "Separator lines"
+    },
+    {
+      "type": "regex",
+      "pattern": "Conversation compacted.*",
+      "description": "Compaction notices"
+    }
+  ],
+  "noise_patterns": [
+    {
+      "type": "prefix",
+      "value": "●",
+      "description": "Feedback prompts"
+    },
+    {
+      "type": "prefix",
+      "value": "⏵⏵",
+      "description": "Status indicators"
+    },
+    {
+      "type": "prefix",
+      "value": "⎿",
+      "description": "File references"
+    },
+    {
+      "type": "separator",
+      "description": "Separator lines"
+    },
+    {
+      "type": "regex",
+      "pattern": "ctrl\\+[a-z]",
+      "description": "Keyboard shortcuts"
+    }
+  ]
+}

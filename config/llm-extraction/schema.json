@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://moltbot.com/schemas/llm-extraction-config.json",
+  "title": "LLM Extraction Configuration",
+  "description": "Configuration schema for LLM terminal response extraction",
+  "type": "object",
+  "required": ["name", "response_marker", "prompt_marker", "stop_patterns", "noise_patterns"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Unique identifier for this LLM terminal",
+      "minLength": 1
+    },
+    "schema_version": {
+      "type": "number",
+      "description": "Schema version for config evolution",
+      "default": 1,
+      "minimum": 1
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of the LLM terminal"
+    },
+    "response_marker": {
+      "type": "string",
+      "description": "Symbol or string that marks the start of an LLM response",
+      "minLength": 1
+    },
+    "prompt_marker": {
+      "type": "string",
+      "description": "Symbol or string that marks a user prompt",
+      "minLength": 1
+    },
+    "echo_pattern": {
+      "type": "string",
+      "description": "Regex pattern for echo content to strip (e.g., health checks)"
+    },
+    "indentation": {
+      "type": "number",
+      "description": "Number of spaces used for response indentation",
+      "minimum": 0
+    },
+    "stop_patterns": {
+      "type": "array",
+      "description": "Patterns that mark boundaries where extraction should stop",
+      "items": {
+        "$ref": "#/definitions/NoisePattern"
+      }
+    },
+    "noise_patterns": {
+      "type": "array",
+      "description": "Patterns for UI noise to filter from extracted responses",
+      "items": {
+        "$ref": "#/definitions/NoisePattern"
+      }
+    },
+    "special_handling": {
+      "type": "object",
+      "description": "LLM-specific special handling rules",
+      "properties": {
+        "command_blocks": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "description": {
+              "type": "string"
+            },
+            "skip_between_separators": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "NoisePattern": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["prefix", "regex", "separator", "context_hint"],
+          "description": "Type of pattern matching to use"
+        },
+        "value": {
+          "type": "string",
+          "description": "For prefix type: exact string to match at line start"
+        },
+        "pattern": {
+          "type": "string",
+          "description": "For regex type: regex pattern string"
+        },
+        "chars": {
+          "type": "string",
+          "description": "For separator type: characters that constitute a separator"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of what this pattern matches"
+        }
+      }
+    }
+  }
+}
