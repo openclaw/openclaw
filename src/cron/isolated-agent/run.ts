@@ -68,6 +68,55 @@ import {
 } from "./helpers.js";
 import { resolveCronSession } from "./session.js";
 
+function fileEndsWithNewline(filePath: string): boolean {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size === 0) {
+      return true;
+    }
+    const fd = fs.openSync(filePath, "r");
+    try {
+      const buffer = Buffer.alloc(1);
+      fs.readSync(fd, buffer, 0, 1, stat.size - 1);
+      return buffer[0] === 0x0a;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return true;
+  }
+}
+
+function appendSessionTranscriptMessage(params: {
+  sessionFile: string;
+  role: "assistant" | "user";
+  text: string;
+  timestamp?: number;
+}): void {
+  const trimmed = params.text.trim();
+  if (!trimmed) {
+    return;
+  }
+  try {
+    fs.mkdirSync(path.dirname(params.sessionFile), { recursive: true });
+    const prefix =
+      fs.existsSync(params.sessionFile) && !fileEndsWithNewline(params.sessionFile) ? "\n" : "";
+    fs.appendFileSync(
+      params.sessionFile,
+      `${prefix}${JSON.stringify({
+        message: {
+          role: params.role,
+          content: [{ type: "text", text: trimmed }],
+          timestamp: params.timestamp ?? Date.now(),
+        },
+      })}\n`,
+      "utf-8",
+    );
+  } catch (err) {
+    logWarn(`[cron] Failed to append transcript note: ${String(err)}`);
+  }
+}
+
 function matchesMessagingToolDeliveryTarget(
   target: MessagingToolSend,
   delivery: { channel: string; to?: string; accountId?: string },
@@ -154,6 +203,13 @@ export async function runCronIsolatedAgentTurn(params: {
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
+  const now = Date.now();
+  const cronSession = resolveCronSession({
+    cfg: params.cfg,
+    sessionKey: agentSessionKey,
+    agentId,
+    nowMs: now,
+  });
 
   // Avoid creating "empty" heartbeat sessions when HEARTBEAT.md exists but has no tasks.
   // A missing file is not skipped (the model may still decide what to do).
@@ -166,6 +222,12 @@ export async function runCronIsolatedAgentTurn(params: {
       try {
         const content = fs.readFileSync(heartbeatPath, "utf-8");
         if (isHeartbeatContentEffectivelyEmpty(content)) {
+          appendSessionTranscriptMessage({
+            sessionFile: resolveSessionTranscriptPath(cronSession.sessionEntry.sessionId, agentId),
+            role: "assistant",
+            text: "Cron skipped: HEARTBEAT.md is empty.",
+            timestamp: now,
+          });
           return { status: "skipped", summary: "Heartbeat skipped (HEARTBEAT.md is empty)." };
         }
       } catch (err) {
@@ -228,14 +290,6 @@ export async function runCronIsolatedAgentTurn(params: {
     provider = resolvedOverride.ref.provider;
     model = resolvedOverride.ref.model;
   }
-  const now = Date.now();
-  const cronSession = resolveCronSession({
-    cfg: params.cfg,
-    sessionKey: agentSessionKey,
-    agentId,
-    nowMs: now,
-  });
-
   // Resolve thinking level - job thinking > hooks.gmail.thinking > agent default
   const hooksGmailThinking = isGmailHook
     ? normalizeThinkLevel(params.cfg.hooks?.gmail?.thinking)
