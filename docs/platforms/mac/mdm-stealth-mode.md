@@ -56,19 +56,21 @@ mkdir -p ~/.local/bin
 # SSH tunnel (port 22)
 cat << 'SCRIPT' > ~/.local/bin/bore-tunnel.sh
 #!/bin/bash
-/opt/homebrew/bin/bore local 22 --to bore.pub 2>&1 | tee ~/.bore-port.log
+/opt/homebrew/bin/bore local 22 --to bore.pub
 SCRIPT
 
 # VNC/Screen Sharing tunnel (port 5900)
 cat << 'SCRIPT' > ~/.local/bin/bore-vnc.sh
 #!/bin/bash
-/opt/homebrew/bin/bore local 5900 --to bore.pub 2>&1 | tee ~/.bore-vnc.log
+/opt/homebrew/bin/bore local 5900 --to bore.pub
 SCRIPT
 
 chmod +x ~/.local/bin/bore-tunnel.sh ~/.local/bin/bore-vnc.sh
 ```
 
 ### 3. Create LaunchAgents (auto-start on boot)
+
+The LaunchAgents capture bore output to log files so you can find the assigned ports.
 
 **SSH LaunchAgent:**
 
@@ -91,9 +93,9 @@ cat << 'PLIST' > ~/Library/LaunchAgents/com.bore.ssh.plist
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>/tmp/bore.log</string>
+    <string>/tmp/bore-ssh.log</string>
     <key>StandardErrorPath</key>
-    <string>/tmp/bore.log</string>
+    <string>/tmp/bore-ssh.log</string>
 </dict>
 </plist>
 PLIST
@@ -137,11 +139,11 @@ launchctl load ~/Library/LaunchAgents/com.bore.vnc.plist
 
 ### 5. Get your ports
 
-Ports are assigned randomly by bore.pub:
+Ports are assigned randomly by bore.pub. Check the log files:
 
 ```bash
 # SSH port
-grep "listening at" /tmp/bore.log | tail -1
+grep "listening at" /tmp/bore-ssh.log | tail -1
 
 # VNC port  
 grep "listening at" /tmp/bore-vnc.log | tail -1
@@ -194,7 +196,7 @@ ps aux | grep bore
 Use the full path: `/opt/homebrew/bin/bore`
 
 **Tunnel not starting**  
-Check logs: `cat /tmp/bore.log`
+Check logs: `cat /tmp/bore-ssh.log`
 
 **Can't connect**  
 - Verify the port is correct (ports change on restart)
