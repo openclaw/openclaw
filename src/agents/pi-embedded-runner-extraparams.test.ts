@@ -92,10 +92,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("overrides Anthropic OAuth stealth headers when an OAuth token is set", () => {
-    // Simulate an OAuth token in the env (pi-ai resolves via ANTHROPIC_API_KEY)
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-oat01-fake-token");
-
+  it("overrides Anthropic OAuth stealth headers when options.apiKey is an OAuth token", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       calls.push(options);
@@ -112,19 +109,20 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
 
-    void agent.streamFn?.(model, context, undefined);
+    // Simulate how the agent loop passes the API key at stream time
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-oat01-fake-token",
+    } as SimpleStreamOptions);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.headers).toBeDefined();
     const headers = calls[0]!.headers as Record<string, string>;
     expect(headers["anthropic-beta"]).toContain("claude-code-20260205");
     expect(headers["user-agent"]).toContain("claude-cli/");
-
-    vi.unstubAllEnvs();
   });
 
-  it("does not override headers for non-OAuth Anthropic API keys", () => {
-    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-api03-regular-key");
+  it("overrides headers when OAuth token is in env var (fallback path)", () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "sk-ant-oat01-env-token");
 
     const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -142,12 +140,41 @@ describe("applyExtraParamsToAgent", () => {
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
 
+    // No options.apiKey — should fall back to env var
     void agent.streamFn?.(model, context, undefined);
 
-    // Should call the base streamFn directly (no wrapper applied)
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.headers).toBeUndefined();
+    expect(calls[0]?.headers).toBeDefined();
+    const headers = calls[0]!.headers as Record<string, string>;
+    expect(headers["anthropic-beta"]).toContain("claude-code-20260205");
 
     vi.unstubAllEnvs();
+  });
+
+  it("does not override headers for non-OAuth Anthropic API keys", () => {
+    const calls: Array<SimpleStreamOptions | undefined> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push(options);
+      return new AssistantMessageEventStream();
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "anthropic", "claude-opus-4-6");
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "anthropic",
+      id: "claude-opus-4-6",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+
+    // Regular API key passed via options.apiKey
+    void agent.streamFn?.(model, context, {
+      apiKey: "sk-ant-api03-regular-key",
+    } as SimpleStreamOptions);
+
+    expect(calls).toHaveLength(1);
+    // Headers should not include OAuth overrides
+    expect(calls[0]?.headers).toBeUndefined();
   });
 });

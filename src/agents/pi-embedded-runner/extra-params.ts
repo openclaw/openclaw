@@ -147,24 +147,29 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
  * Create a streamFn wrapper that overrides stale stealth-mode headers
  * for Anthropic OAuth tokens.  pi-ai hardcodes `claude-code-20250219`
  * which is too old for models released after that date.
+ *
+ * The check happens at stream invocation time (not setup time) because
+ * the API key is resolved by the agent loop and passed via options.apiKey,
+ * not stored in process.env.
  */
-function createAnthropicOAuthHeadersWrapper(
-  baseStreamFn: StreamFn | undefined,
-  apiKey: string,
-): StreamFn | undefined {
-  const oauthHeaders = getAnthropicOAuthHeaders(apiKey);
-  if (!oauthHeaders) {
-    return undefined;
-  }
+function createAnthropicOAuthHeadersWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
+  return (model, context, options) => {
+    const apiKey = (options as Record<string, unknown> | undefined)?.apiKey as string | undefined;
+    const envKey = getEnvApiKey("anthropic");
+    const effectiveKey = apiKey ?? envKey ?? "";
+    const oauthHeaders = getAnthropicOAuthHeaders(effectiveKey);
+    if (!oauthHeaders) {
+      return underlying(model, context, options);
+    }
+    return underlying(model, context, {
       ...options,
       headers: {
         ...options?.headers,
         ...oauthHeaders,
       },
     });
+  };
 }
 
 /**
@@ -206,12 +211,9 @@ export function applyExtraParamsToAgent(
   }
 
   // Override stale stealth-mode headers for Anthropic OAuth tokens.
+  // Always install the wrapper; it checks options.apiKey at stream time.
   if (provider === "anthropic") {
-    const apiKey = getEnvApiKey("anthropic") ?? "";
-    const wrapped = createAnthropicOAuthHeadersWrapper(agent.streamFn, apiKey);
-    if (wrapped) {
-      log.debug(`overriding Anthropic OAuth stealth headers for ${provider}/${modelId}`);
-      agent.streamFn = wrapped;
-    }
+    log.debug(`installing Anthropic OAuth stealth header wrapper for ${provider}/${modelId}`);
+    agent.streamFn = createAnthropicOAuthHeadersWrapper(agent.streamFn);
   }
 }
