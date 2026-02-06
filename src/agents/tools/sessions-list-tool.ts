@@ -13,7 +13,7 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   type SessionListRow,
-  stripToolMessages,
+  summarizeMessages,
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
@@ -199,8 +199,9 @@ export function createSessionsListTool(opts?: {
             params: { sessionKey: resolvedKey, limit: messageLimit },
           });
           const rawMessages = Array.isArray(history?.messages) ? history.messages : [];
-          const filtered = stripToolMessages(rawMessages);
-          row.messages = filtered.length > messageLimit ? filtered.slice(-messageLimit) : filtered;
+          const summaries = summarizeMessages(rawMessages);
+          row.messages =
+            summaries.length > messageLimit ? summaries.slice(-messageLimit) : summaries;
         }
 
         rows.push(row);

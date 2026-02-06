@@ -350,6 +350,75 @@ export function stripToolMessages(messages: unknown[]): unknown[] {
   });
 }
 
+const MESSAGE_TEXT_PREVIEW_LIMIT = 300;
+
+/** Condense raw messages to lightweight summaries (role + timestamp + truncated text). */
+export function summarizeMessages(
+  messages: unknown[],
+): Array<{ role: string; timestamp?: number; text?: string; toolCalls?: string[] }> {
+  const summaries: Array<{
+    role: string;
+    timestamp?: number;
+    text?: string;
+    toolCalls?: string[];
+  }> = [];
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const m = msg as Record<string, unknown>;
+    const role = typeof m.role === "string" ? m.role : "unknown";
+    if (role === "toolResult") {
+      continue;
+    }
+    const timestamp = typeof m.timestamp === "number" ? m.timestamp : undefined;
+    const content = m.content;
+    let text: string | undefined;
+    const toolCalls: string[] = [];
+    if (Array.isArray(content)) {
+      const textChunks: string[] = [];
+      for (const block of content) {
+        if (!block || typeof block !== "object") {
+          continue;
+        }
+        const b = block as Record<string, unknown>;
+        if (b.type === "text" && typeof b.text === "string") {
+          textChunks.push(sanitizeTextContent(b.text));
+        } else if (b.type === "toolCall" && typeof b.name === "string") {
+          toolCalls.push(b.name);
+        }
+      }
+      const joined = textChunks.join("").trim();
+      if (joined) {
+        text =
+          joined.length > MESSAGE_TEXT_PREVIEW_LIMIT
+            ? `${joined.slice(0, MESSAGE_TEXT_PREVIEW_LIMIT)}…`
+            : joined;
+      }
+    } else if (typeof content === "string" && content.trim()) {
+      const sanitized = sanitizeTextContent(content).trim();
+      text =
+        sanitized.length > MESSAGE_TEXT_PREVIEW_LIMIT
+          ? `${sanitized.slice(0, MESSAGE_TEXT_PREVIEW_LIMIT)}…`
+          : sanitized;
+    }
+    const entry: { role: string; timestamp?: number; text?: string; toolCalls?: string[] } = {
+      role,
+    };
+    if (timestamp) {
+      entry.timestamp = timestamp;
+    }
+    if (text) {
+      entry.text = text;
+    }
+    if (toolCalls.length > 0) {
+      entry.toolCalls = toolCalls;
+    }
+    summaries.push(entry);
+  }
+  return summaries;
+}
+
 /**
  * Sanitize text content to strip tool call markers and thinking tags.
  * This ensures user-facing text doesn't leak internal tool representations.
