@@ -99,21 +99,22 @@ import { detectAndLoadPromptImages } from "./images.js";
  * Returns a teardown function that restores the original appendMessage.
  */
 export function installTranscriptPromptGuard(
-  sessionManager: { appendMessage: (msg: AgentMessage) => unknown },
+  sessionManager: Pick<SessionManager, "appendMessage">,
   originalPrompt: string,
 ): () => void {
   const origAppend = sessionManager.appendMessage;
   let intercepted = false;
-  sessionManager.appendMessage = ((msg: AgentMessage) => {
+  sessionManager.appendMessage = (msg) => {
     if (!intercepted && (msg as { role?: string }).role === "user") {
       intercepted = true;
-      const cleaned = { ...msg, content: originalPrompt } as AgentMessage;
-      return origAppend.call(sessionManager, cleaned as never);
+      // Safe: user-role messages always have `content`
+      const cleaned = Object.assign({}, msg, { content: originalPrompt });
+      return origAppend.call(sessionManager, cleaned);
     }
-    return origAppend.call(sessionManager, msg as never);
-  }) as typeof sessionManager.appendMessage;
+    return origAppend.call(sessionManager, msg);
+  };
   return () => {
-    sessionManager.appendMessage = origAppend as typeof sessionManager.appendMessage;
+    sessionManager.appendMessage = origAppend;
   };
 }
 
