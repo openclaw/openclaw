@@ -53,7 +53,7 @@ apps/ios/fastlane/test_output/
 apps/ios/fastlane/logs/
 apps/ios/fastlane/.env
 apps/ios/fastlane/report.xml
-
+.android-sdk/*
 # fastlane build artifacts (local)
 apps/ios/*.ipa
 apps/ios/*.dSYM.zip
