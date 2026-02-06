@@ -35,15 +35,18 @@ ENV NODE_ENV=production
 RUN chown -R node:node /app
 
 # ---- Render/Container start script ----
-# This ensures the gateway binds to 0.0.0.0 (lan) and uses $PORT (Render sets this).
-# It keeps running as the non-root 'node' user.
+# Bind to lan + use $PORT, and load trusted proxy config
 RUN printf '%s\n' \
   '#!/usr/bin/env sh' \
   'set -eu' \
   '' \
   'PORT="${PORT:-8080}"' \
   '' \
-  'exec node dist/index.js gateway --allow-unconfigured --bind lan --port "$PORT"' \
+  'exec node dist/index.js gateway \' \
+  '  --allow-unconfigured \' \
+  '  --bind lan \' \
+  '  --port "$PORT" \' \
+  '  --config /app/openclaw.config.json' \
   > /app/start-render.sh && chmod +x /app/start-render.sh && chown node:node /app/start-render.sh
 
 # Security hardening: Run as non-root user
