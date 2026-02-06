@@ -84,6 +84,7 @@ const ComputerToolSchema = Type.Object({
   resultIndex: Type.Optional(Type.Number()),
   focusMode: Type.Optional(stringEnum(["mouse", "uia", "auto"] as const)),
   value: Type.Optional(Type.String()),
+  valueFallback: Type.Optional(Type.Boolean()),
   invokeFallback: Type.Optional(Type.Boolean()),
 
   // Common action params
@@ -1078,7 +1079,12 @@ function isDangerousAction(action: ComputerToolAction, params: Record<string, un
   if (action === "drag") {
     return true;
   }
-  if (action === "click" || action === "click_text") {
+  if (action === "set_value_text") {
+    const value = typeof params.value === "string" ? params.value : "";
+    const valueFallback = typeof params.valueFallback === "boolean" ? params.valueFallback : true;
+    return valueFallback && value.trim().length > 0;
+  }
+  if (action === "click" || action === "click_text" || action === "click_text_uia") {
     const button = typeof params.button === "string" ? params.button.trim().toLowerCase() : "left";
     const clicks = typeof params.clicks === "number" && Number.isFinite(params.clicks) ? params.clicks : 1;
     return button !== "left" || clicks > 1;
@@ -1106,9 +1112,7 @@ function shouldApproveAction(params: {
     action === "release" ||
     action === "reset_focus" ||
     action === "find" ||
-    action === "focus_text" ||
-    action === "set_value_text" ||
-    action === "click_text_uia"
+    action === "focus_text"
   ) {
     return false;
   }
@@ -1143,6 +1147,7 @@ function formatApprovalCommand(action: string, params: Record<string, unknown>):
     "resultIndex",
     "focusMode",
     "value",
+    "valueFallback",
     "invokeFallback",
     "escCount",
     "key",
@@ -2309,6 +2314,19 @@ export function createComputerTool(options?: {
             resultIndex: number;
           }
         | null = null;
+      let setValueMeta:
+        | {
+            text: string;
+            value: string;
+            match: "contains" | "exact" | "prefix";
+            caseSensitive: boolean;
+            controlType?: string;
+            maxResults: number;
+            resultIndex: number;
+            focusMode: "mouse" | "uia" | "auto";
+            valueFallback: boolean;
+          }
+        | null = null;
 
       if (
         action === "find" ||
@@ -2388,7 +2406,13 @@ export function createComputerTool(options?: {
         if (action === "set_value_text") {
           const value = readStringParam(params, "value", { required: true, allowEmpty: true });
           const resultIndex = readNonNegativeInt(params, "resultIndex", 0);
-          const result = await trySetValueUiElement({
+          const valueFallback = typeof params.valueFallback === "boolean" ? params.valueFallback : true;
+          const focusModeRaw = readStringParam(params, "focusMode", { required: false });
+          const focusMode =
+            focusModeRaw === "mouse" || focusModeRaw === "uia" || focusModeRaw === "auto"
+              ? focusModeRaw
+              : "auto";
+          setValueMeta = {
             text,
             value,
             match,
@@ -2396,34 +2420,13 @@ export function createComputerTool(options?: {
             controlType: controlType || undefined,
             maxResults,
             resultIndex,
-          });
-          if (!result.success) {
-            const reason = result.reason ? ` (${result.reason})` : "";
-            throw new Error(`set_value_text failed${reason}`);
-          }
-          return jsonResult({ ok: true, target: result.target });
+            focusMode,
+            valueFallback,
+          };
         }
 
         if (action === "click_text_uia") {
           const resultIndex = readNonNegativeInt(params, "resultIndex", 0);
-          const invokeFallback = typeof params.invokeFallback === "boolean" ? params.invokeFallback : true;
-          const result = await tryInvokeUiElement({
-            text,
-            match,
-            caseSensitive,
-            controlType: controlType || undefined,
-            maxResults,
-            resultIndex,
-          });
-          if (result.success && result.target) {
-            invokeTarget = result.target;
-            return jsonResult({ ok: true, target: result.target });
-          }
-          if (!invokeFallback) {
-            const reason = result.reason ? ` (${result.reason})` : "";
-            throw new Error(`click_text_uia failed${reason}`);
-          }
-
           const matches = await resolveUiTextMatches({
             text,
             match,
@@ -2438,10 +2441,59 @@ export function createComputerTool(options?: {
             throw new Error(`resultIndex ${resultIndex} out of range (matches: ${matches.length})`);
           }
           const target = matches[resultIndex];
+          invokeTarget = target;
+          invokeMeta = {
+            text,
+            match,
+            caseSensitive,
+            controlType: controlType || undefined,
+            maxResults,
+            resultIndex,
+          };
+          uiHit = {
+            name: target.name ?? text,
+            automationId: target.automationId,
+            helpText: target.helpText,
+            controlType: target.controlType,
+          };
+          approvalParams = {
+            ...params,
+            ...(typeof target?.x === "number" && typeof target?.y === "number" ? { x: target.x, y: target.y } : {}),
+          };
+        }
+
+        if (action === "click_text") {
+          const matches = await resolveUiTextMatches({
+            text,
+            match,
+            caseSensitive,
+            controlType: controlType || undefined,
+            maxResults,
+          });
+
+          if (matches.length === 0) {
+            throw new Error(`no UI element matches text: ${text}`);
+          }
+
+          const resultIndex = readNonNegativeInt(params, "resultIndex", 0);
+          if (resultIndex >= matches.length) {
+            throw new Error(`resultIndex ${resultIndex} out of range (matches: ${matches.length})`);
+          }
+
+          const target = matches[resultIndex];
           if (typeof target?.x !== "number" || typeof target?.y !== "number") {
             throw new Error("matched UI element has no bounds");
           }
-          invokeTarget = target;
+
+          clickTextTarget = target;
+          clickTextMeta = {
+            text,
+            match,
+            caseSensitive,
+            controlType: controlType || undefined,
+            maxResults,
+            resultIndex,
+          };
           uiHit = {
             name: target.name ?? text,
             automationId: target.automationId,
@@ -2450,45 +2502,6 @@ export function createComputerTool(options?: {
           };
           approvalParams = { ...params, x: target.x, y: target.y };
         }
-
-        const matches = await resolveUiTextMatches({
-          text,
-          match,
-          caseSensitive,
-          controlType: controlType || undefined,
-          maxResults,
-        });
-
-        if (matches.length === 0) {
-          throw new Error(`no UI element matches text: ${text}`);
-        }
-
-        const resultIndex = readNonNegativeInt(params, "resultIndex", 0);
-        if (resultIndex >= matches.length) {
-          throw new Error(`resultIndex ${resultIndex} out of range (matches: ${matches.length})`);
-        }
-
-        const target = matches[resultIndex];
-        if (typeof target?.x !== "number" || typeof target?.y !== "number") {
-          throw new Error("matched UI element has no bounds");
-        }
-
-        clickTextTarget = target;
-        clickTextMeta = {
-          text,
-          match,
-          caseSensitive,
-          controlType: controlType || undefined,
-          maxResults,
-          resultIndex,
-        };
-        uiHit = {
-          name: target.name ?? text,
-          automationId: target.automationId,
-          helpText: target.helpText,
-          controlType: target.controlType,
-        };
-        approvalParams = { ...params, x: target.x, y: target.y };
       }
 
       if (confirm === "dangerous" && action === "click" && !uiHit) {
@@ -2551,6 +2564,132 @@ export function createComputerTool(options?: {
         return jsonResult({ ok: true });
       }
 
+      if (action === "set_value_text") {
+        if (!setValueMeta) {
+          throw new Error("set_value_text requires a text match");
+        }
+        const {
+          text,
+          value,
+          match,
+          caseSensitive,
+          controlType,
+          maxResults,
+          resultIndex,
+          focusMode,
+          valueFallback,
+        } = setValueMeta;
+
+        const result = await trySetValueUiElement({
+          text,
+          value,
+          match,
+          caseSensitive,
+          controlType,
+          maxResults,
+          resultIndex,
+        });
+        if (result.success) {
+          if (agentDir) {
+            await recordTeachStep({
+              agentDir,
+              sessionKey,
+              action: "set_value_text",
+              stepParams: {
+                text,
+                value,
+                match,
+                caseSensitive,
+                controlType,
+                resultIndex,
+                maxResults,
+                valueFallback,
+                mode: "value",
+              },
+            });
+          }
+          return jsonResult({ ok: true, mode: "value", target: result.target });
+        }
+
+        if (!valueFallback) {
+          const reason = result.reason ? ` (${result.reason})` : "";
+          throw new Error(`set_value_text failed${reason}`);
+        }
+
+        const matches = await resolveUiTextMatches({
+          text,
+          match,
+          caseSensitive,
+          controlType: controlType || undefined,
+          maxResults,
+        });
+        if (matches.length === 0) {
+          throw new Error(`no UI element matches text: ${text}`);
+        }
+        if (resultIndex >= matches.length) {
+          throw new Error(`resultIndex ${resultIndex} out of range (matches: ${matches.length})`);
+        }
+
+        const target = matches[resultIndex];
+        if (typeof target?.x !== "number" || typeof target?.y !== "number") {
+          throw new Error("matched UI element has no bounds");
+        }
+
+        if (focusMode !== "mouse") {
+          const focused = await tryFocusUiElement({
+            text,
+            match,
+            caseSensitive,
+            controlType,
+            maxResults,
+            resultIndex,
+          });
+          if (!focused.success) {
+            if (focusMode === "uia") {
+              throw new Error("set_value_text fallback focus failed");
+            }
+          }
+        }
+
+        if (focusMode === "mouse" || focusMode === "auto") {
+          const steps = readPositiveInt(params, "steps", 8);
+          const stepDelayMs = readPositiveInt(params, "stepDelayMs", 5);
+          const jitterPx = readNonNegativeInt(params, "jitterPx", 1);
+          await runInputAction({
+            action: "hover",
+            args: { x: target.x, y: target.y, durationMs: 80, steps, stepDelayMs, jitterPx, delayMs },
+          });
+        }
+
+        await runInputAction({ action: "hotkey", args: { key: "a", ctrl: true, delayMs } });
+        if (value.length > 0) {
+          await runInputAction({ action: "type", args: { text: value, delayMs } });
+        } else {
+          await runInputAction({ action: "press", args: { key: "backspace", delayMs } });
+        }
+
+        if (agentDir) {
+          await recordTeachStep({
+            agentDir,
+            sessionKey,
+            action: "set_value_text",
+            stepParams: {
+              text,
+              value,
+              match,
+              caseSensitive,
+              controlType,
+              resultIndex,
+              maxResults,
+              valueFallback,
+              mode: "type",
+            },
+          });
+        }
+
+        return jsonResult({ ok: true, mode: "type", target });
+      }
+
       if (action === "click_text") {
         if (!clickTextTarget || !clickTextMeta) {
           throw new Error("click_text requires a text match");
@@ -2603,9 +2742,66 @@ export function createComputerTool(options?: {
       }
 
       if (action === "click_text_uia") {
-        if (!invokeTarget || !invokeMeta) {
+        if (!invokeMeta) {
           throw new Error("click_text_uia requires a text match");
         }
+        const invokeFallback = typeof params.invokeFallback === "boolean" ? params.invokeFallback : true;
+        const invokeResult = await tryInvokeUiElement({
+          text: invokeMeta.text,
+          match: invokeMeta.match,
+          caseSensitive: invokeMeta.caseSensitive,
+          controlType: invokeMeta.controlType,
+          maxResults: invokeMeta.maxResults,
+          resultIndex: invokeMeta.resultIndex,
+        });
+        if (invokeResult.success && invokeResult.target) {
+          if (agentDir) {
+            await recordTeachStep({
+              agentDir,
+              sessionKey,
+              action: "click_text_uia",
+              stepParams: {
+                text: invokeMeta.text,
+                match: invokeMeta.match,
+                caseSensitive: invokeMeta.caseSensitive,
+                controlType: invokeMeta.controlType,
+                resultIndex: invokeMeta.resultIndex,
+                maxResults: invokeMeta.maxResults,
+                invokeFallback,
+                mode: "invoke",
+              },
+            });
+          }
+          return jsonResult({ ok: true, mode: "invoke", target: invokeResult.target });
+        }
+        if (!invokeFallback) {
+          const reason = invokeResult.reason ? ` (${invokeResult.reason})` : "";
+          throw new Error(`click_text_uia failed${reason}`);
+        }
+
+        if (!invokeTarget || typeof invokeTarget.x !== "number" || typeof invokeTarget.y !== "number") {
+          throw new Error("matched UI element has no bounds for fallback click");
+        }
+
+        const buttonRaw = readStringParam(params, "button", { required: false });
+        const button = buttonRaw === "right" || buttonRaw === "middle" ? buttonRaw : "left";
+        const clicks = readPositiveInt(params, "clicks", 1);
+        const steps = readPositiveInt(params, "steps", 8);
+        const stepDelayMs = readPositiveInt(params, "stepDelayMs", 5);
+        const jitterPx = readNonNegativeInt(params, "jitterPx", 1);
+        await runInputAction({
+          action: "click",
+          args: {
+            x: invokeTarget.x,
+            y: invokeTarget.y,
+            button,
+            clicks,
+            steps,
+            stepDelayMs,
+            jitterPx,
+            delayMs,
+          },
+        });
         if (agentDir) {
           await recordTeachStep({
             agentDir,
@@ -2618,12 +2814,22 @@ export function createComputerTool(options?: {
               controlType: invokeMeta.controlType,
               resultIndex: invokeMeta.resultIndex,
               maxResults: invokeMeta.maxResults,
-              invokeFallback: typeof params.invokeFallback === "boolean" ? params.invokeFallback : true,
+              invokeFallback,
+              mode: "mouse",
+              x: invokeTarget.x,
+              y: invokeTarget.y,
+              button,
+              clicks,
+              steps,
+              stepDelayMs,
+              jitterPx,
+              delayMs,
             },
           });
         }
         return jsonResult({
           ok: true,
+          mode: "mouse",
           target: {
             name: invokeTarget.name,
             automationId: invokeTarget.automationId,
