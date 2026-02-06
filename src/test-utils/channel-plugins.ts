@@ -23,6 +23,7 @@ export const createTestRegistry = (channels: PluginRegistry["channels"] = []): P
   commands: [],
   cronJobs: [],
   diagnostics: [],
+  searchBackends: [],
 });
 
 export const createIMessageTestPlugin = (params?: {

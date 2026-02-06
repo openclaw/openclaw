@@ -72,7 +72,14 @@ const RESTART_BACKOFF_MS = {
 
 const SIGKILL = "SIGKILL";
 
-export function createManagedProcessManager(options: ManagedProcessManagerOptions = {}) {
+export interface IManagedProcessManager {
+  start(commands?: GatewayStartupCommand[]): Promise<void>;
+  stopAll(opts?: StopOptions): Promise<void>;
+}
+
+export function createManagedProcessManager(
+  options: ManagedProcessManagerOptions = {},
+): IManagedProcessManager {
   const env = options.env ?? process.env;
   const stateDir = options.stateDir ?? STATE_DIR;
   const cwd = options.cwd ?? process.cwd();
@@ -81,7 +88,7 @@ export function createManagedProcessManager(options: ManagedProcessManagerOption
   return manager;
 }
 
-class ManagedProcessManager {
+class ManagedProcessManager implements IManagedProcessManager {
   private readonly env: NodeJS.ProcessEnv;
   private readonly stateDir: string;
   private readonly cwd: string;

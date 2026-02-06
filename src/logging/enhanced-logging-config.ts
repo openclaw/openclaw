@@ -111,6 +111,7 @@ export function getEnhancedLoggingConfig(): EnhancedLoggingConfig {
       performanceOutliers: false,
       tokenWarnings: false,
       gatewayHealth: false,
+      gatewayHealthSuppressCliConnectDisconnect: false,
     };
     return cachedConfig;
   }

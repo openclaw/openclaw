@@ -1,5 +1,6 @@
 import type {
   WorkItem,
+  WorkItemExecution,
   WorkItemListOptions,
   WorkItemPatch,
   WorkQueue,
@@ -33,7 +34,24 @@ export interface WorkQueueBackend {
   claimNextItem(
     queueId: string,
     assignTo: { sessionKey?: string; agentId?: string },
+    opts?: { workstream?: string },
   ): Promise<WorkItem | null>;
 
   getQueueStats(queueId: string): Promise<WorkQueueStats>;
+
+  recordExecution(exec: Omit<WorkItemExecution, "id">): Promise<WorkItemExecution>;
+  listExecutions(itemId: string, opts?: { limit?: number }): Promise<WorkItemExecution[]>;
+
+  storeTranscript(params: {
+    itemId: string;
+    executionId?: string;
+    sessionKey: string;
+    transcript: unknown[];
+  }): Promise<string>;
+  getTranscript(
+    transcriptId: string,
+  ): Promise<{ id: string; transcript: unknown[]; sessionKey: string; createdAt: string } | null>;
+  listTranscripts(
+    itemId: string,
+  ): Promise<Array<{ id: string; executionId?: string; sessionKey: string; createdAt: string }>>;
 }

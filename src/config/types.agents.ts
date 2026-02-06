@@ -90,6 +90,25 @@ export type AgentConfig = {
   /** Per-agent MCP server overrides/additions. Merged with root-level `mcpServers`. */
   mcpServers?: McpServersConfig;
   tools?: AgentToolsConfig;
+  /** Work queue worker configuration for this agent. */
+  worker?: WorkerConfig;
+};
+
+export type WorkerConfig = {
+  /** Enable the perpetual worker loop for this agent. */
+  enabled?: boolean;
+  /** Only process items in these workstreams (omit = all). */
+  workstreams?: string[];
+  /** Polling interval in ms when no work is available (default 5000). */
+  pollIntervalMs?: number;
+  /** Model override for worker sessions. */
+  model?: string;
+  /** Thinking level override for worker sessions. */
+  thinking?: string;
+  /** Context extraction strategy (default "transcript"). */
+  contextExtractor?: "transcript" | "llm";
+  /** Max session timeout in seconds (default 300). */
+  sessionTimeoutSeconds?: number;
 };
 
 export type AgentHandoffLoggingConfig = {

@@ -90,7 +90,7 @@ export class SharedEmbeddingRateLimiter {
 
   private async waitForStartWindow(): Promise<void> {
     const prev = this.startLock;
-    let release: (() => void) | null = null;
+    let release!: () => void;
     this.startLock = new Promise<void>((resolve) => {
       release = resolve;
     });
@@ -104,7 +104,7 @@ export class SharedEmbeddingRateLimiter {
       const nextSpacing = this.minSpacingMs > 0 ? this.minSpacingMs : 0;
       this.nextAllowedAt = Math.max(this.nextAllowedAt, Date.now() + nextSpacing);
     } finally {
-      release?.();
+      release();
     }
   }
 }

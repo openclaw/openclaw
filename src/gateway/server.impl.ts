@@ -606,18 +606,21 @@ export async function startGatewayServer(
   });
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
-  ({ browserControl, pluginServices, managedProcesses } = await startGatewaySidecars({
-    cfg: cfgAtStart,
-    pluginRegistry,
-    defaultWorkspaceDir,
-    deps,
-    startChannels,
-    log,
-    logManagedProcesses,
-    logHooks,
-    logChannels,
-    logBrowser,
-  }));
+  let workerManager: { stop: () => Promise<void> } | null = null;
+  ({ browserControl, pluginServices, managedProcesses, workerManager } = await startGatewaySidecars(
+    {
+      cfg: cfgAtStart,
+      pluginRegistry,
+      defaultWorkspaceDir,
+      deps,
+      startChannels,
+      log,
+      logManagedProcesses,
+      logHooks,
+      logChannels,
+      logBrowser,
+    },
+  ));
 
   const { applyHotReload, requestGatewayRestart } = createGatewayReloadHandlers({
     deps,
@@ -783,6 +786,7 @@ export async function startGatewayServer(
     configReloader,
     browserControl,
     managedProcesses,
+    workerManager,
     persistInterval,
     persistChatRunState: flushChatRunState,
     wss,

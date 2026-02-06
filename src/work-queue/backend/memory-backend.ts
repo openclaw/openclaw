@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   WorkItem,
+  WorkItemExecution,
   WorkItemListOptions,
   WorkItemPatch,
   WorkItemPriority,
@@ -45,6 +46,15 @@ function applyPatch(item: WorkItem, patch: WorkItemPatch): WorkItem {
 export class MemoryWorkQueueBackend implements WorkQueueBackend {
   private queues = new Map<string, WorkQueue>();
   private items = new Map<string, WorkItem>();
+  private executions: WorkItemExecution[] = [];
+  private transcripts: Array<{
+    id: string;
+    itemId: string;
+    executionId?: string;
+    sessionKey: string;
+    transcript: unknown[];
+    createdAt: string;
+  }> = [];
 
   async initialize(): Promise<void> {}
 
@@ -147,6 +157,7 @@ export class MemoryWorkQueueBackend implements WorkQueueBackend {
       .filter((item) => (opts.assignedTo ? item.assignedTo?.agentId === opts.assignedTo : true))
       .filter((item) => (opts.createdBy ? item.createdBy?.agentId === opts.createdBy : true))
       .filter((item) => (opts.parentItemId ? item.parentItemId === opts.parentItemId : true))
+      .filter((item) => (opts.workstream ? item.workstream === opts.workstream : true))
       .filter((item) => matchesTags(item.tags, opts.tags));
 
     const sorted = filtered.sort((a, b) => {
@@ -185,6 +196,7 @@ export class MemoryWorkQueueBackend implements WorkQueueBackend {
   async claimNextItem(
     queueId: string,
     assignTo: { sessionKey?: string; agentId?: string },
+    opts?: { workstream?: string },
   ): Promise<WorkItem | null> {
     const queue = this.queues.get(queueId);
     if (!queue) {
@@ -196,8 +208,30 @@ export class MemoryWorkQueueBackend implements WorkQueueBackend {
     if (inProgress.length >= queue.concurrencyLimit) {
       return null;
     }
+
+    // DAG check: returns true when all dependsOn items are completed.
+    const depsReady = (item: WorkItem): boolean => {
+      if (!item.dependsOn || item.dependsOn.length === 0) return true;
+      return item.dependsOn.every((depId) => {
+        const dep = this.items.get(depId);
+        return dep?.status === "completed";
+      });
+    };
+
+    const currentTime = new Date().toISOString();
+    const wsFilter = opts?.workstream;
     const pending = Array.from(this.items.values())
       .filter((item) => item.queueId === queueId && item.status === "pending")
+      .filter(depsReady)
+      .filter((item) => {
+        if (item.maxRetries != null && (item.retryCount ?? 0) >= item.maxRetries) return false;
+        return true;
+      })
+      .filter((item) => {
+        if (item.deadline && item.deadline <= currentTime) return false;
+        return true;
+      })
+      .filter((item) => (wsFilter ? item.workstream === wsFilter : true))
       .sort((a, b) => {
         const rank = priorityRank[a.priority] - priorityRank[b.priority];
         if (rank !== 0) {
@@ -250,5 +284,58 @@ export class MemoryWorkQueueBackend implements WorkQueueBackend {
       }
     }
     return stats;
+  }
+
+  async recordExecution(exec: Omit<WorkItemExecution, "id">): Promise<WorkItemExecution> {
+    const created: WorkItemExecution = { ...exec, id: randomUUID() };
+    this.executions.push(created);
+    return created;
+  }
+
+  async listExecutions(itemId: string, opts?: { limit?: number }): Promise<WorkItemExecution[]> {
+    const filtered = this.executions
+      .filter((e) => e.itemId === itemId)
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    return opts?.limit ? filtered.slice(0, opts.limit) : filtered;
+  }
+
+  async storeTranscript(params: {
+    itemId: string;
+    executionId?: string;
+    sessionKey: string;
+    transcript: unknown[];
+  }): Promise<string> {
+    const id = randomUUID();
+    this.transcripts.push({
+      id,
+      itemId: params.itemId,
+      executionId: params.executionId,
+      sessionKey: params.sessionKey,
+      transcript: params.transcript,
+      createdAt: new Date().toISOString(),
+    });
+    return id;
+  }
+
+  async getTranscript(
+    transcriptId: string,
+  ): Promise<{ id: string; transcript: unknown[]; sessionKey: string; createdAt: string } | null> {
+    const t = this.transcripts.find((t) => t.id === transcriptId);
+    if (!t) return null;
+    return { id: t.id, transcript: t.transcript, sessionKey: t.sessionKey, createdAt: t.createdAt };
+  }
+
+  async listTranscripts(
+    itemId: string,
+  ): Promise<Array<{ id: string; executionId?: string; sessionKey: string; createdAt: string }>> {
+    return this.transcripts
+      .filter((t) => t.itemId === itemId)
+      .map((t) => ({
+        id: t.id,
+        executionId: t.executionId,
+        sessionKey: t.sessionKey,
+        createdAt: t.createdAt,
+      }))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 }

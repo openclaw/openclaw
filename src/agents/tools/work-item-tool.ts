@@ -43,6 +43,7 @@ const WorkItemToolSchema = Type.Object({
   parentItemId: Type.Optional(Type.String()),
   dependsOn: Type.Optional(Type.Array(Type.String())),
   blockedBy: Type.Optional(Type.Array(Type.String())),
+  workstream: Type.Optional(Type.String()),
   tags: Type.Optional(Type.Array(Type.String())),
   status: optionalStringEnum(WORK_ITEM_STATUSES),
   statusReason: Type.Optional(Type.String()),
@@ -94,12 +95,14 @@ export function createWorkItemTool(options: WorkItemToolOptions = {}): AnyAgentT
     name: "work_item",
     label: "Work Item",
     description: `Manage work items in agent queues. Items persist after completion for history.
+Items support DAG dependencies (dependsOn) — claim skips items with unsatisfied deps.
+Use workstream to group related items across queues.
 
 Actions:
-- add: Create a new work item in a queue
-- claim: Atomically claim the next available item
-- update: Update item fields (title, description, priority, tags)
-- list: Query items with filters (status, priority, tags, date range)
+- add: Create a new work item (supports dependsOn, workstream)
+- claim: Atomically claim the next DAG-ready item (optional workstream filter)
+- update: Update item fields (title, description, priority, tags, workstream)
+- list: Query items with filters (status, priority, tags, workstream, date range)
 - get: Get a single item by ID with full details
 - complete: Mark item as completed with optional result
 - fail: Mark item as failed with error details
@@ -118,13 +121,16 @@ Actions:
       const description = readStringParam(params, "description");
       const priority = readStringParam(params, "priority") as WorkItemPriority | undefined;
       const parentItemId = readStringParam(params, "parentItemId");
+      const workstream = readStringParam(params, "workstream");
       const dependsOn = readStringArrayParam(params, "dependsOn");
       const blockedBy = readStringArrayParam(params, "blockedBy");
       const tags = readStringArrayParam(params, "tags");
       const statusReason = readStringParam(params, "statusReason");
       const status = readStringParam(params, "status") as WorkItemStatus | undefined;
       const result = (params as { result?: Record<string, unknown> }).result;
-      const error = (params as { error?: Record<string, unknown> }).error;
+      const error = (params as { error?: Record<string, unknown> }).error as
+        | import("../../work-queue/types.js").WorkItemError
+        | undefined;
       const payload = (params as { payload?: Record<string, unknown> }).payload;
 
       switch (action) {
@@ -143,6 +149,7 @@ Actions:
             description,
             payload,
             priority,
+            workstream,
             parentItemId,
             dependsOn,
             blockedBy,
@@ -155,7 +162,7 @@ Actions:
         }
         case "claim": {
           const assignTo = { sessionKey: options.agentSessionKey, agentId };
-          const claimed = await store.claimNextItem({ queueId, agentId, assignTo });
+          const claimed = await store.claimNextItem({ queueId, agentId, assignTo, workstream });
           return jsonResult({ item: claimed });
         }
         case "update": {
@@ -167,6 +174,7 @@ Actions:
             description,
             payload,
             priority,
+            workstream,
             tags,
             status,
             statusReason,
@@ -195,6 +203,7 @@ Actions:
             queueId,
             status: filteredStatuses,
             priority: priorities ? (priorities as WorkItemPriority[]) : undefined,
+            workstream,
             tags,
             assignedTo,
             createdBy,
@@ -234,7 +243,7 @@ Actions:
           const updated = await store.updateItem(itemId, {
             status: "failed",
             statusReason,
-            message: error,
+            error,
             completedAt: now,
           });
           return jsonResult({ item: updated });

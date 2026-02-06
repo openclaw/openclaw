@@ -4,6 +4,7 @@ import path from "node:path";
 import type { WorkQueueBackend } from "./backend/types.js";
 import type {
   WorkItem,
+  WorkItemExecution,
   WorkItemListOptions,
   WorkItemPatch,
   WorkItemPriority,
@@ -35,7 +36,12 @@ export function resolveWorkQueueDbPath(params?: {
 export class WorkQueueStore {
   private initialized = false;
 
-  constructor(private backend: WorkQueueBackend) {}
+  constructor(private _backend: WorkQueueBackend) {}
+
+  /** Access the underlying backend (e.g. for co-located stores). */
+  get backend(): WorkQueueBackend {
+    return this._backend;
+  }
 
   async initialize(): Promise<void> {
     if (this.initialized) {
@@ -58,6 +64,40 @@ export class WorkQueueStore {
 
   private normalizeAgent(agentId: string) {
     return normalizeAgentId(agentId);
+  }
+
+  /**
+   * DFS cycle detection. Walks the dependsOn graph from `startId` looking
+   * for a back-edge that reaches `startId`. `pendingDeps` are the deps
+   * about to be set on `startId` (not yet persisted).
+   */
+  private async detectCycle(startId: string, pendingDeps: string[]): Promise<string[] | null> {
+    const visited = new Set<string>();
+    const path: string[] = [];
+
+    const dfs = async (currentId: string): Promise<boolean> => {
+      if (currentId === startId && path.length > 0) {
+        path.push(currentId);
+        return true;
+      }
+      if (visited.has(currentId)) return false;
+      visited.add(currentId);
+      path.push(currentId);
+
+      const deps =
+        currentId === startId
+          ? pendingDeps
+          : ((await this.backend.getItem(currentId))?.dependsOn ?? []);
+
+      for (const depId of deps) {
+        if (await dfs(depId)) return true;
+      }
+      path.pop();
+      return false;
+    };
+
+    const found = await dfs(startId);
+    return found ? path : null;
   }
 
   async ensureQueueForAgent(agentId: string, name?: string): Promise<WorkQueue> {
@@ -124,12 +164,21 @@ export class WorkQueueStore {
     const queue = await this.ensureQueueForAgent(normalized);
     const status: WorkItemStatus = item.status ?? "pending";
     const priority: WorkItemPriority = item.priority ?? queue.defaultPriority ?? DEFAULT_PRIORITY;
-    return await this.backend.createItem({
+    const created = await this.backend.createItem({
       ...item,
       queueId: queue.id,
       status,
       priority,
     });
+    // Validate no cycles after creation (item now has an ID we can traverse).
+    if (created.dependsOn && created.dependsOn.length > 0) {
+      const cycle = await this.detectCycle(created.id, created.dependsOn);
+      if (cycle) {
+        await this.backend.deleteItem(created.id);
+        throw new Error(`Dependency cycle detected: ${cycle.join(" → ")}`);
+      }
+    }
+    return created;
   }
 
   async getItem(itemId: string): Promise<WorkItem | null> {
@@ -144,6 +193,12 @@ export class WorkQueueStore {
 
   async updateItem(itemId: string, patch: WorkItemPatch): Promise<WorkItem> {
     await this.ensureInitialized();
+    if (patch.dependsOn && patch.dependsOn.length > 0) {
+      const cycle = await this.detectCycle(itemId, patch.dependsOn);
+      if (cycle) {
+        throw new Error(`Dependency cycle detected: ${cycle.join(" → ")}`);
+      }
+    }
     return await this.backend.updateItem(itemId, patch);
   }
 
@@ -156,6 +211,7 @@ export class WorkQueueStore {
     queueId?: string;
     agentId?: string;
     assignTo: { sessionKey?: string; agentId?: string };
+    workstream?: string;
   }): Promise<WorkItem | null> {
     await this.ensureInitialized();
     const queueId = params.queueId ?? params.agentId;
@@ -164,12 +220,48 @@ export class WorkQueueStore {
     }
     const normalized = this.normalizeAgent(queueId);
     await this.ensureQueueForAgent(normalized);
-    return await this.backend.claimNextItem(normalized, params.assignTo);
+    return await this.backend.claimNextItem(normalized, params.assignTo, {
+      workstream: params.workstream,
+    });
   }
 
   async getQueueStats(queueId: string): Promise<WorkQueueStats> {
     await this.ensureInitialized();
     return await this.backend.getQueueStats(queueId);
+  }
+
+  async recordExecution(exec: Omit<WorkItemExecution, "id">): Promise<WorkItemExecution> {
+    await this.ensureInitialized();
+    return await this.backend.recordExecution(exec);
+  }
+
+  async listExecutions(itemId: string, opts?: { limit?: number }): Promise<WorkItemExecution[]> {
+    await this.ensureInitialized();
+    return await this.backend.listExecutions(itemId, opts);
+  }
+
+  async storeTranscript(params: {
+    itemId: string;
+    executionId?: string;
+    sessionKey: string;
+    transcript: unknown[];
+  }): Promise<string> {
+    await this.ensureInitialized();
+    return await this.backend.storeTranscript(params);
+  }
+
+  async getTranscript(
+    transcriptId: string,
+  ): Promise<{ id: string; transcript: unknown[]; sessionKey: string; createdAt: string } | null> {
+    await this.ensureInitialized();
+    return await this.backend.getTranscript(transcriptId);
+  }
+
+  async listTranscripts(
+    itemId: string,
+  ): Promise<Array<{ id: string; executionId?: string; sessionKey: string; createdAt: string }>> {
+    await this.ensureInitialized();
+    return await this.backend.listTranscripts(itemId);
   }
 }
 

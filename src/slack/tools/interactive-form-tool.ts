@@ -202,7 +202,9 @@ Note: This tool BLOCKS until submitted or timeout. Use appropriate timeout value
             }
             element = staticSelect({
               actionId: fieldActionId,
-              options: field.options.map((opt) => option(opt.text, opt.value)),
+              options: field.options.map((opt: { text: string; value: string }) =>
+                option(opt.text, opt.value),
+              ),
               placeholder: field.placeholder,
             });
             break;

@@ -33,6 +33,7 @@ export function createGatewayCloseHandler(params: {
   configReloader: { stop: () => Promise<void> };
   browserControl: { stop: () => Promise<void> } | null;
   managedProcesses?: { stopAll: (opts?: { reason?: string }) => Promise<void> } | null;
+  workerManager?: { stop: () => Promise<void> } | null;
   persistInterval?: ReturnType<typeof setInterval>;
   persistChatRunState?: () => Promise<void>;
   wss: WebSocketServer;
@@ -60,6 +61,10 @@ export function createGatewayCloseHandler(params: {
       typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
         ? Math.max(0, Math.floor(opts.restartExpectedMs))
         : null;
+    // Stop work-queue workers early so they finish current items before channels tear down.
+    if (params.workerManager) {
+      await params.workerManager.stop().catch(() => {});
+    }
     if (params.bonjourStop) {
       try {
         await params.bonjourStop();

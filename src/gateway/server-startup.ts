@@ -58,7 +58,7 @@ export async function startGatewaySidecars(params: {
   let managedProcesses: ReturnType<typeof createManagedProcessManager> | null = null;
   if (params.cfg.gateway?.startupCommands?.length) {
     try {
-      managedProcesses = createManagedProcessManager({ log: params.logManagedProcesses });
+      managedProcesses = createManagedProcessManager();
       await managedProcesses.start(params.cfg.gateway.startupCommands);
     } catch (err) {
       params.logManagedProcesses.error(`startup commands failed: ${String(err)}`);
@@ -165,6 +165,27 @@ export async function startGatewaySidecars(params: {
     }
   }
 
+  // Start work-queue workers for agents that have worker.enabled = true.
+  let workerManager: { stop: () => Promise<void> } | null = null;
+  if (!isTruthyEnvValue(process.env.OPENCLAW_SKIP_WORKERS)) {
+    try {
+      const { WorkQueueWorkerManager } = await import("../work-queue/worker-manager.js");
+      const mgr = new WorkQueueWorkerManager({
+        config: params.cfg,
+        log: {
+          info: (msg) => params.log.warn(`work-queue: ${msg}`),
+          warn: (msg) => params.log.warn(`work-queue: ${msg}`),
+          error: (msg) => params.log.warn(`work-queue: ${msg}`),
+          debug: () => {},
+        },
+      });
+      await mgr.start();
+      workerManager = mgr;
+    } catch (err) {
+      params.log.warn(`work-queue workers failed to start: ${String(err)}`);
+    }
+  }
+
   // Launch configured channels so gateway replies via the surface the message came from.
   // Tests can opt out via OPENCLAW_SKIP_CHANNELS (or legacy OPENCLAW_SKIP_PROVIDERS).
   const skipChannels =
@@ -210,5 +231,5 @@ export async function startGatewaySidecars(params: {
     }, 750);
   }
 
-  return { browserControl, pluginServices, managedProcesses };
+  return { browserControl, pluginServices, managedProcesses, workerManager };
 }

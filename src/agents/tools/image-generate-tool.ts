@@ -221,6 +221,7 @@ export function createImageGenerateTool(): AnyAgentTool {
                   text: "Error: GEMINI_API_KEY environment variable is not set. Cannot generate images without a Gemini API key.",
                 },
               ],
+              details: {},
             };
           }
 
@@ -260,6 +261,7 @@ export function createImageGenerateTool(): AnyAgentTool {
               text: `Error: Unsupported image generation provider: '${provider}'. Currently supported: 'gemini'.`,
             },
           ],
+          details: {},
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

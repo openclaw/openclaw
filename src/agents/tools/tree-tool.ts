@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -302,7 +303,7 @@ async function walkDirectory(
     }
   }
 
-  let entries: Awaited<ReturnType<typeof fs.readdir>>;
+  let entries: Dirent[];
   try {
     entries = await fs.readdir(dirPath, { withFileTypes: true });
   } catch (err) {

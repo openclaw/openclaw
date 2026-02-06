@@ -36,6 +36,20 @@ export type WorkItemError = {
   recoverable?: boolean;
 };
 
+export type WorkItemOutcome = "success" | "error" | "timeout" | "approval_timeout" | "cancelled";
+
+export type WorkItemExecution = {
+  id: string;
+  itemId: string;
+  attemptNumber: number;
+  sessionKey: string;
+  outcome: WorkItemOutcome;
+  error?: string;
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+};
+
 export type WorkItem = {
   id: string;
   queueId: string;
@@ -50,9 +64,14 @@ export type WorkItem = {
   createdBy?: WorkItemActor;
   assignedTo?: WorkItemActor;
   priority: WorkItemPriority;
+  workstream?: string;
   tags?: string[];
   createdAt: string;
   updatedAt: string;
+  retryCount?: number;
+  maxRetries?: number;
+  deadline?: string;
+  lastOutcome?: WorkItemOutcome;
   startedAt?: string;
   completedAt?: string;
   result?: WorkItemResult;
@@ -83,6 +102,7 @@ export type WorkItemListOptions = {
   queueId?: string;
   status?: WorkItemStatus | WorkItemStatus[];
   priority?: WorkItemPriority | WorkItemPriority[];
+  workstream?: string;
   tags?: string[];
   createdAfter?: string;
   createdBefore?: string;
@@ -109,7 +129,12 @@ export type WorkItemPatch = Partial<
     | "blockedBy"
     | "assignedTo"
     | "priority"
+    | "workstream"
     | "tags"
+    | "retryCount"
+    | "maxRetries"
+    | "deadline"
+    | "lastOutcome"
     | "startedAt"
     | "completedAt"
     | "result"

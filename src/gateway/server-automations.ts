@@ -87,6 +87,11 @@ export function buildGatewayAutomationsService(params: {
         lastError: automation.state.lastError,
         lastDurationMs: automation.state.lastDurationMs,
       };
+      // Convert AutomationSchedule to CronSchedule
+      const cronSchedule: CronJob["schedule"] =
+        automation.schedule.kind === "at"
+          ? { kind: "at", at: new Date(automation.schedule.atMs).toISOString() }
+          : automation.schedule;
       const job: CronJob = {
         id: automation.id,
         agentId,
@@ -95,16 +100,15 @@ export function buildGatewayAutomationsService(params: {
         enabled: automation.enabled,
         createdAtMs: automation.createdAtMs,
         updatedAtMs: automation.updatedAtMs,
-        schedule: automation.schedule,
+        schedule: cronSchedule,
         sessionTarget: "isolated",
         wakeMode: "now",
         payload: {
           kind: "agentTurn",
           message,
         },
-        isolation: {
-          postToMainPrefix: "Automation",
-          postToMainMode: "summary",
+        delivery: {
+          mode: "announce",
         },
         state,
       };

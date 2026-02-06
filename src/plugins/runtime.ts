@@ -14,6 +14,7 @@ const createEmptyRegistry = (): PluginRegistry => ({
   services: [],
   commands: [],
   diagnostics: [],
+  searchBackends: [],
 });
 
 const REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");

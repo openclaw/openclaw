@@ -2,7 +2,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import type {
   WorkItem,
+  WorkItemExecution,
   WorkItemListOptions,
+  WorkItemOutcome,
   WorkItemPatch,
   WorkItemPriority,
   WorkItemStatus,
@@ -81,6 +83,22 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
       return;
     }
     this.db.exec(`
+      CREATE TABLE IF NOT EXISTS workstream_notes (
+        id          TEXT PRIMARY KEY,
+        workstream  TEXT NOT NULL,
+        item_id     TEXT,
+        kind        TEXT NOT NULL DEFAULT 'context',
+        content     TEXT NOT NULL,
+        metadata_json TEXT,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        created_by_json TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_workstream_notes_ws
+        ON workstream_notes(workstream, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_workstream_notes_item
+        ON workstream_notes(item_id);
+    `);
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS work_queues (
         id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL UNIQUE,
@@ -105,6 +123,7 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
         created_by_json TEXT,
         assigned_to_json TEXT,
         priority TEXT NOT NULL DEFAULT 'medium',
+        workstream TEXT,
         tags_json TEXT,
         result_json TEXT,
         error_json TEXT,
@@ -120,13 +139,68 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
         ON work_items(priority, created_at);
       CREATE INDEX IF NOT EXISTS idx_work_items_parent
         ON work_items(parent_item_id);
+      CREATE INDEX IF NOT EXISTS idx_work_items_workstream
+        ON work_items(workstream);
     `);
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS work_item_executions (
+        id             TEXT PRIMARY KEY,
+        item_id        TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+        attempt_number INTEGER NOT NULL,
+        session_key    TEXT NOT NULL,
+        outcome        TEXT NOT NULL,
+        error          TEXT,
+        started_at     TEXT NOT NULL,
+        completed_at   TEXT NOT NULL,
+        duration_ms    INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_executions_item
+        ON work_item_executions(item_id, started_at DESC);
+
+      CREATE TABLE IF NOT EXISTS work_item_transcripts (
+        id             TEXT PRIMARY KEY,
+        item_id        TEXT NOT NULL REFERENCES work_items(id) ON DELETE CASCADE,
+        execution_id   TEXT REFERENCES work_item_executions(id) ON DELETE SET NULL,
+        session_key    TEXT NOT NULL,
+        transcript_json TEXT NOT NULL,
+        created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_transcripts_item
+        ON work_item_transcripts(item_id);
+    `);
+    this.migrateSchema();
+  }
+
+  private migrateSchema() {
+    if (!this.db) return;
+    const cols = this.db.prepare("PRAGMA table_info(work_items)").all() as Array<{ name: string }>;
+    const colNames = new Set(cols.map((c) => c.name));
+    if (!colNames.has("workstream")) {
+      this.db.exec("ALTER TABLE work_items ADD COLUMN workstream TEXT");
+    }
+    if (!colNames.has("retry_count")) {
+      this.db.exec("ALTER TABLE work_items ADD COLUMN retry_count INTEGER DEFAULT 0");
+    }
+    if (!colNames.has("max_retries")) {
+      this.db.exec("ALTER TABLE work_items ADD COLUMN max_retries INTEGER");
+    }
+    if (!colNames.has("deadline")) {
+      this.db.exec("ALTER TABLE work_items ADD COLUMN deadline TEXT");
+    }
+    if (!colNames.has("last_outcome")) {
+      this.db.exec("ALTER TABLE work_items ADD COLUMN last_outcome TEXT");
+    }
   }
 
   private requireDb(): DatabaseSync {
     if (!this.db) {
       throw new Error("WorkQueue backend not initialized");
     }
+    return this.db;
+  }
+
+  /** Expose the raw DB handle for co-located stores (e.g. workstream notes). */
+  getDb(): DatabaseSync | null {
     return this.db;
   }
 
@@ -177,9 +251,14 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
     created_by_json: string | null;
     assigned_to_json: string | null;
     priority: WorkItemPriority;
+    workstream: string | null;
     tags_json: string | null;
     result_json: string | null;
     error_json: string | null;
+    retry_count: number | null;
+    max_retries: number | null;
+    deadline: string | null;
+    last_outcome: string | null;
     created_at: string;
     updated_at: string;
     started_at: string | null;
@@ -199,9 +278,14 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
       createdBy: parseJson(row.created_by_json),
       assignedTo: parseJson(row.assigned_to_json),
       priority: row.priority,
+      workstream: row.workstream ?? undefined,
       tags: parseJson(row.tags_json),
       result: parseJson(row.result_json),
       error: parseJson(row.error_json),
+      retryCount: row.retry_count ?? undefined,
+      maxRetries: row.max_retries ?? undefined,
+      deadline: row.deadline ?? undefined,
+      lastOutcome: (row.last_outcome as WorkItemOutcome) ?? undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       startedAt: row.started_at ?? undefined,
@@ -325,9 +409,10 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
       `
       INSERT INTO work_items (
         id, queue_id, title, description, payload_json, status, status_reason, parent_item_id,
-        depends_on_json, blocked_by_json, created_by_json, assigned_to_json, priority, tags_json,
-        result_json, error_json, created_at, updated_at, started_at, completed_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        depends_on_json, blocked_by_json, created_by_json, assigned_to_json, priority, workstream,
+        tags_json, result_json, error_json, retry_count, max_retries, deadline, last_outcome,
+        created_at, updated_at, started_at, completed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     ).run(
       id,
@@ -343,9 +428,14 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
       encodeJson(item.createdBy),
       encodeJson(item.assignedTo),
       item.priority,
+      item.workstream ?? null,
       encodeJson(item.tags),
       encodeJson(item.result),
       encodeJson(item.error),
+      item.retryCount ?? 0,
+      item.maxRetries ?? null,
+      item.deadline ?? null,
+      item.lastOutcome ?? null,
       now,
       now,
       item.startedAt ?? null,
@@ -398,6 +488,11 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
     if (opts.createdBefore) {
       conditions.push("created_at <= ?");
       params.push(opts.createdBefore);
+    }
+
+    if (opts.workstream) {
+      conditions.push("workstream = ?");
+      params.push(opts.workstream);
     }
 
     if (opts.parentItemId) {
@@ -473,9 +568,14 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
     if (has("blockedBy")) apply("blocked_by_json", encodeJson(patch.blockedBy));
     if (has("assignedTo")) apply("assigned_to_json", encodeJson(patch.assignedTo));
     if (has("priority")) apply("priority", patch.priority);
+    if (has("workstream")) apply("workstream", patch.workstream ?? null);
     if (has("tags")) apply("tags_json", encodeJson(patch.tags));
     if (has("result")) apply("result_json", encodeJson(patch.result));
     if (has("error")) apply("error_json", encodeJson(patch.error));
+    if (has("retryCount")) apply("retry_count", patch.retryCount ?? 0);
+    if (has("maxRetries")) apply("max_retries", patch.maxRetries ?? null);
+    if (has("deadline")) apply("deadline", patch.deadline ?? null);
+    if (has("lastOutcome")) apply("last_outcome", patch.lastOutcome ?? null);
     if (has("startedAt")) apply("started_at", patch.startedAt ?? null);
     if (has("completedAt")) apply("completed_at", patch.completedAt ?? null);
 
@@ -504,6 +604,7 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
   async claimNextItem(
     queueId: string,
     assignTo: { sessionKey?: string; agentId?: string },
+    opts?: { workstream?: string },
   ): Promise<WorkItem | null> {
     const db = this.requireDb();
     db.exec("BEGIN IMMEDIATE");
@@ -522,29 +623,41 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
         db.exec("ROLLBACK");
         return null;
       }
+
+      // Build the claim query with DAG enforcement and optional workstream filter.
+      // Items whose dependsOn contains any non-completed items are skipped.
+      const wsFilter = opts?.workstream;
+      const now = new Date().toISOString();
       const row = db
         .prepare(
           `
-          SELECT id FROM work_items
-          WHERE queue_id = ? AND status = 'pending'
+          SELECT wi.id FROM work_items wi
+          WHERE wi.queue_id = ? AND wi.status = 'pending'
+            AND NOT EXISTS (
+              SELECT 1 FROM json_each(wi.depends_on_json) AS dep
+              JOIN work_items dep_item ON dep_item.id = dep.value
+              WHERE dep_item.status != 'completed'
+            )
+            AND (wi.max_retries IS NULL OR wi.retry_count < wi.max_retries)
+            AND (wi.deadline IS NULL OR wi.deadline > ?)
+            AND (wi.workstream = ? OR ? IS NULL)
           ORDER BY
-            CASE priority
+            CASE wi.priority
               WHEN 'critical' THEN 0
               WHEN 'high' THEN 1
               WHEN 'medium' THEN 2
               WHEN 'low' THEN 3
             END,
-            created_at ASC
+            wi.created_at ASC
           LIMIT 1
         `,
         )
-        .get(queueId) as { id: string } | undefined;
+        .get(queueId, now, wsFilter ?? null, wsFilter ?? null) as { id: string } | undefined;
       if (!row) {
         db.exec("ROLLBACK");
         return null;
       }
 
-      const now = new Date().toISOString();
       db.prepare(
         `
         UPDATE work_items
@@ -605,5 +718,110 @@ export class SqliteWorkQueueBackend implements WorkQueueBackend {
     }
 
     return stats;
+  }
+
+  async recordExecution(exec: Omit<WorkItemExecution, "id">): Promise<WorkItemExecution> {
+    const db = this.requireDb();
+    const id = randomUUID();
+    db.prepare(
+      `INSERT INTO work_item_executions
+        (id, item_id, attempt_number, session_key, outcome, error, started_at, completed_at, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      exec.itemId,
+      exec.attemptNumber,
+      exec.sessionKey,
+      exec.outcome,
+      exec.error ?? null,
+      exec.startedAt,
+      exec.completedAt,
+      exec.durationMs,
+    );
+    return { ...exec, id };
+  }
+
+  async listExecutions(itemId: string, opts?: { limit?: number }): Promise<WorkItemExecution[]> {
+    const db = this.requireDb();
+    const limit = opts?.limit ?? 50;
+    const rows = db
+      .prepare(
+        `SELECT * FROM work_item_executions
+         WHERE item_id = ?
+         ORDER BY started_at DESC
+         LIMIT ?`,
+      )
+      .all(itemId, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: row.id as string,
+      itemId: row.item_id as string,
+      attemptNumber: row.attempt_number as number,
+      sessionKey: row.session_key as string,
+      outcome: row.outcome as WorkItemOutcome,
+      error: (row.error as string) ?? undefined,
+      startedAt: row.started_at as string,
+      completedAt: row.completed_at as string,
+      durationMs: row.duration_ms as number,
+    }));
+  }
+
+  async storeTranscript(params: {
+    itemId: string;
+    executionId?: string;
+    sessionKey: string;
+    transcript: unknown[];
+  }): Promise<string> {
+    const db = this.requireDb();
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO work_item_transcripts
+        (id, item_id, execution_id, session_key, transcript_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      id,
+      params.itemId,
+      params.executionId ?? null,
+      params.sessionKey,
+      JSON.stringify(params.transcript),
+      now,
+    );
+    return id;
+  }
+
+  async getTranscript(
+    transcriptId: string,
+  ): Promise<{ id: string; transcript: unknown[]; sessionKey: string; createdAt: string } | null> {
+    const db = this.requireDb();
+    const row = db.prepare("SELECT * FROM work_item_transcripts WHERE id = ?").get(transcriptId) as
+      | Record<string, unknown>
+      | undefined;
+    if (!row) return null;
+    return {
+      id: row.id as string,
+      transcript: JSON.parse(row.transcript_json as string) as unknown[],
+      sessionKey: row.session_key as string,
+      createdAt: row.created_at as string,
+    };
+  }
+
+  async listTranscripts(
+    itemId: string,
+  ): Promise<Array<{ id: string; executionId?: string; sessionKey: string; createdAt: string }>> {
+    const db = this.requireDb();
+    const rows = db
+      .prepare(
+        `SELECT id, execution_id, session_key, created_at
+         FROM work_item_transcripts
+         WHERE item_id = ?
+         ORDER BY created_at DESC`,
+      )
+      .all(itemId) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: row.id as string,
+      executionId: (row.execution_id as string) ?? undefined,
+      sessionKey: row.session_key as string,
+      createdAt: row.created_at as string,
+    }));
   }
 }
