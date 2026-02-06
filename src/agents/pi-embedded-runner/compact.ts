@@ -272,8 +272,12 @@ export async function compactEmbeddedPiSessionDirect(
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
   await ensureOpenClawModelsJson(params.config, agentDir);
 
-  // Override with compaction-specific model if configured
-  const compactionModelRef = params.config?.agents?.defaults?.compaction?.model?.trim();
+  // Override with compaction-specific model if configured and enabled
+  const compactionOverrideEnabled =
+    params.config?.agents?.defaults?.compaction?.overrideModel ?? false;
+  const compactionModelRef = compactionOverrideEnabled
+    ? params.config?.agents?.defaults?.compaction?.model?.trim()
+    : undefined;
   let effectiveProvider = provider;
   let effectiveModelId = modelId;
   if (compactionModelRef) {

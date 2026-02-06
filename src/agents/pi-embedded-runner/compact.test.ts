@@ -317,14 +317,14 @@ describe("compactEmbeddedPiSessionDirect", () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("compaction: timeout"));
   });
 
-  it("uses compaction model override when configured", async () => {
+  it("uses compaction model override when overrideModel is true", async () => {
     mockSession();
 
     await compactEmbeddedPiSessionDirect({
       ...baseParams,
       config: {
         agents: {
-          defaults: { compaction: { model: "openai/gpt-4o-mini" } },
+          defaults: { compaction: { model: "openai/gpt-4o-mini", overrideModel: true } },
         },
       },
     });
@@ -340,6 +340,48 @@ describe("compactEmbeddedPiSessionDirect", () => {
     );
   });
 
+  it("ignores compaction model when overrideModel is false", async () => {
+    mockSession();
+
+    await compactEmbeddedPiSessionDirect({
+      ...baseParams,
+      config: {
+        agents: {
+          defaults: { compaction: { model: "openai/gpt-4o-mini", overrideModel: false } },
+        },
+      },
+    });
+
+    // Should use default provider/model, not the override
+    expect(mockedResolveModel).toHaveBeenCalledWith(
+      "anthropic",
+      "test-model",
+      expect.any(String),
+      expect.anything(),
+    );
+  });
+
+  it("ignores compaction model when overrideModel is omitted", async () => {
+    mockSession();
+
+    await compactEmbeddedPiSessionDirect({
+      ...baseParams,
+      config: {
+        agents: {
+          defaults: { compaction: { model: "openai/gpt-4o-mini" } },
+        },
+      },
+    });
+
+    // overrideModel defaults to false — should use default provider/model
+    expect(mockedResolveModel).toHaveBeenCalledWith(
+      "anthropic",
+      "test-model",
+      expect.any(String),
+      expect.anything(),
+    );
+  });
+
   it("returns error for unknown model override", async () => {
     mockedResolveModel.mockReturnValueOnce({
       model: null,
@@ -352,7 +394,7 @@ describe("compactEmbeddedPiSessionDirect", () => {
       ...baseParams,
       config: {
         agents: {
-          defaults: { compaction: { model: "bad-provider/bad-model" } },
+          defaults: { compaction: { model: "bad-provider/bad-model", overrideModel: true } },
         },
       },
     });

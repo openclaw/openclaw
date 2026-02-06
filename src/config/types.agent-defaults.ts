@@ -301,8 +301,10 @@ export type AgentCompactionConfig = {
   memoryFlush?: AgentCompactionMemoryFlushConfig;
   /** Timeout in ms for compaction summarization (default: 120000). */
   timeoutMs?: number;
-  /** Model override for compaction (e.g. "anthropic/claude-haiku-4-5-20251001"). */
+  /** Model override for compaction (e.g. "openai/gpt-4o-mini"). */
   model?: string;
+  /** Enable the model override (default: false). When false, the primary model is used. */
+  overrideModel?: boolean;
 };
 
 export type AgentCompactionMemoryFlushConfig = {

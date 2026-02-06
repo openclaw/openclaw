@@ -106,6 +106,7 @@ export const AgentDefaultsSchema = z
           .optional(),
         timeoutMs: z.number().int().positive().optional(),
         model: z.string().optional(),
+        overrideModel: z.boolean().optional(),
       })
       .strict()
       .optional(),
