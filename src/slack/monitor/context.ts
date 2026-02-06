@@ -91,6 +91,8 @@ export type SlackMonitorContext = {
   resolveSlackSystemEventSessionKey: (params: {
     channelId?: string | null;
     channelType?: string | null;
+    threadTs?: string | null;
+    messageTs?: string | null;
   }) => string;
   isChannelAllowed: (params: {
     channelId?: string;
@@ -175,6 +177,8 @@ export function createSlackMonitorContext(params: {
   const resolveSlackSystemEventSessionKey = (p: {
     channelId?: string | null;
     channelType?: string | null;
+    threadTs?: string | null;
+    messageTs?: string | null;
   }) => {
     const channelId = p.channelId?.trim() ?? "";
     if (!channelId) {
@@ -183,11 +187,19 @@ export function createSlackMonitorContext(params: {
     const channelType = normalizeSlackChannelType(p.channelType, channelId);
     const isDirectMessage = channelType === "im";
     const isGroup = channelType === "mpim";
-    const from = isDirectMessage
+    const isRoomish = !isDirectMessage;
+
+    // Thread-level sessions: use threadTs or messageTs for channels/groups
+    const threadId = p.threadTs?.trim() || p.messageTs?.trim() || "";
+    const base = isDirectMessage
       ? `slack:${channelId}`
       : isGroup
         ? `slack:group:${channelId}`
         : `slack:channel:${channelId}`;
+
+    // Only use thread-level sessions for channels/groups (not DMs)
+    const from = isRoomish && threadId ? `${base}:thread:${threadId}` : base;
+
     const chatType = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
     return resolveSessionKey(
       params.sessionScope,
