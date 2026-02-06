@@ -63,6 +63,7 @@ export function normalizeReplyPayload(
 
   if (text) {
     text = sanitizeUserFacingText(text);
+    text = replaceEmDashes(text);
   }
   if (!text?.trim() && !hasMedia && !hasChannelData) {
     opts.onSkip?.("empty");
@@ -91,4 +92,17 @@ export function normalizeReplyPayload(
   }
 
   return { ...enrichedPayload, text };
+}
+
+/**
+ * Replace em-dashes with commas for more natural-sounding text.
+ * Handles both spaced (` — `) and unspaced (`word—word`) em-dashes.
+ * Leaves leading em-dashes alone (e.g. quote attributions).
+ */
+function replaceEmDashes(text: string): string {
+  // Spaced em-dash used as parenthetical: "Got it — I'm ready" → "Got it, I'm ready"
+  text = text.replace(/ — /g, ", ");
+  // Unspaced em-dash between word characters: "this—that" → "this, that"
+  text = text.replace(/(\w)—(\w)/g, "$1, $2");
+  return text;
 }
