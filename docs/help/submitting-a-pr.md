@@ -77,6 +77,12 @@ This keeps review fast while preserving deep context for anyone who needs it.
 ## Tests
 
 ## Evidence
+
+## Sign-Off
+
+- Models used:
+- Submitter effort summary (self-reported, subjective):
+- Agent notes (optional; brief; cite evidence):
 ```
 
 ## Templates by PR type
@@ -95,6 +101,12 @@ This keeps review fast while preserving deep context for anyone who needs it.
 ## Tests
 
 ## Evidence
+
+## Sign-Off
+
+- Models used:
+- Submitter effort summary (self-reported, subjective):
+- Agent notes (optional; brief; cite evidence):
 ```
 
 ### Feature
@@ -108,11 +120,22 @@ This keeps review fast while preserving deep context for anyone who needs it.
 
 ## Existing Functionality Check
 
-I searched the codebase for existing functionality before implementing this.
+- [ ] I searched the codebase for existing functionality before implementing this.
+
+Searches performed (1-3 bullets, one sentence each):
+
+-
+-
 
 ## Tests
 
 ## Evidence
+
+## Sign-Off
+
+- Models used:
+- Submitter effort summary (self-reported, subjective):
+- Agent notes (optional; brief; cite evidence):
 ```
 
 ### Refactor
@@ -125,6 +148,12 @@ I searched the codebase for existing functionality before implementing this.
 ## No Behavior Change Statement
 
 ## Tests
+
+## Sign-Off
+
+- Models used:
+- Submitter effort summary (self-reported, subjective):
+- Agent notes (optional; brief; cite evidence):
 ```
 
 ### Chore/Maintenance
@@ -135,6 +164,12 @@ I searched the codebase for existing functionality before implementing this.
 ## Why This Matters
 
 ## Tests
+
+## Sign-Off
+
+- Models used:
+- Submitter effort summary (self-reported, subjective):
+- Agent notes (optional; brief; cite evidence):
 ```
 
 ### Docs
@@ -149,6 +184,12 @@ I searched the codebase for existing functionality before implementing this.
 ## Formatting
 
 pnpm format
+
+## Sign-Off
+
+- Models used:
+- Submitter effort summary (self-reported, subjective):
+- Agent notes (optional; brief; cite evidence):
 ```
 
 ### Test
@@ -159,6 +200,12 @@ pnpm format
 ## Gap Covered
 
 ## Tests
+
+## Sign-Off
+
+- Models used:
+- Submitter effort summary (self-reported, subjective):
+- Agent notes (optional; brief; cite evidence):
 ```
 
 ### Perf
@@ -173,6 +220,12 @@ pnpm format
 ## Measurement Method
 
 ## Tests
+
+## Sign-Off
+
+- Models used:
+- Submitter effort summary (self-reported, subjective):
+- Agent notes (optional; brief; cite evidence):
 ```
 
 ### UX/UI
@@ -185,6 +238,12 @@ pnpm format
 ## Accessibility Impact
 
 ## Tests
+
+## Sign-Off
+
+- Models used:
+- Submitter effort summary (self-reported, subjective):
+- Agent notes (optional; brief; cite evidence):
 ```
 
 ### Infra/Build
@@ -195,6 +254,12 @@ pnpm format
 ## Environments Affected
 
 ## Validation Steps
+
+## Sign-Off
+
+- Models used:
+- Submitter effort summary (self-reported, subjective):
+- Agent notes (optional; brief; cite evidence):
 ```
 
 ### Security
@@ -211,4 +276,10 @@ pnpm format
 ## Verification
 
 ## Tests
+
+## Sign-Off
+
+- Models used:
+- Submitter effort summary (self-reported, subjective):
+- Agent notes (optional; brief; cite evidence):
 ```
