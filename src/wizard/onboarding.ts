@@ -239,7 +239,17 @@ export async function runOnboardingWizard(
   })();
 
   if (flow === "quickstart") {
-    const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
+    const formatBind = (
+      value:
+        | "loopback"
+        | "lan"
+        | "auto"
+        | "custom"
+        | "tailnet"
+        | "overlay"
+        | "zerotier"
+        | "wireguard",
+    ) => {
       if (value === "loopback") {
         return "Loopback (127.0.0.1)";
       }
@@ -251,6 +261,15 @@ export async function runOnboardingWizard(
       }
       if (value === "tailnet") {
         return "Tailnet (Tailscale IP)";
+      }
+      if (value === "zerotier") {
+        return "ZeroTier (ZeroTier IP)";
+      }
+      if (value === "wireguard") {
+        return "WireGuard (WireGuard IP)";
+      }
+      if (value === "overlay") {
+        return "Overlay (auto-detect)";
       }
       return "Auto";
     };

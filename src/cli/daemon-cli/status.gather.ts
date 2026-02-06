@@ -171,7 +171,7 @@ export async function gatherDaemonStatus(
     ? "service args"
     : "env/config";
 
-  const bindMode = (daemonCfg.gateway?.bind ?? "loopback") as GatewayBindMode;
+  const bindMode = daemonCfg.gateway?.bind ?? "loopback";
   const customBindHostResolved =
     bindMode === "overlay"
       ? daemonCfg.gateway?.overlayInterface
@@ -276,7 +276,7 @@ export async function gatherDaemonStatus(
     gateway: {
       bindMode,
       bindHost,
-      customBindHost,
+      customBindHost: daemonCfg.gateway?.customBindHost,
       port: daemonPort,
       portSource,
       probeUrl,
