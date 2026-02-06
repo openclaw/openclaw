@@ -1184,6 +1184,20 @@ const NOISE_PATTERNS = [
   /^[\p{Emoji}\s]+$/u,
   // System/XML markup
   /^<[a-z-]+>[\s\S]*<\/[a-z-]+>$/i,
+
+  // --- System infrastructure messages (never user-generated) ---
+  // Heartbeat prompts
+  /Read HEARTBEAT\.md if it exists/i,
+  // Pre-compaction flush prompts
+  /^Pre-compaction memory flush/i,
+  // System timestamp messages (cron outputs, reminders, exec reports)
+  /^System:\s*\[/i,
+  // Cron job wrappers
+  /^\[cron:[0-9a-f-]+/i,
+  // Gateway restart JSON payloads
+  /^GatewayRestart:\s*\{/i,
+  // Background task completion reports
+  /^\[\w{3}\s+\d{4}-\d{2}-\d{2}\s.*\]\s*A background task/i,
 ];
 
 /** Maximum message length — code dumps, logs, etc. are not memories. */

@@ -82,6 +82,46 @@ describe("passesAttentionGate", () => {
     );
   });
 
+  it("should reject system infrastructure messages", () => {
+    // Heartbeat prompts
+    expect(
+      passesAttentionGate(
+        "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly.",
+      ),
+    ).toBe(false);
+
+    // Pre-compaction flush
+    expect(passesAttentionGate("Pre-compaction memory flush. Store durable memories now.")).toBe(
+      false,
+    );
+
+    // System cron/exec messages
+    expect(
+      passesAttentionGate(
+        "System: [2026-02-06 10:25:00 UTC] Reminder: Check if wa-group-monitor updated",
+      ),
+    ).toBe(false);
+
+    // Cron job wrappers
+    expect(
+      passesAttentionGate(
+        "[cron:720b01aa-03d1-4888-a2d4-0f0a9e0d7b6c Memory Sleep Cycle] Run the sleep cycle",
+      ),
+    ).toBe(false);
+
+    // Gateway restart payloads
+    expect(passesAttentionGate('GatewayRestart:\n{ "kind": "restart", "status": "ok" }')).toBe(
+      false,
+    );
+
+    // Background task completion
+    expect(
+      passesAttentionGate(
+        "[Sat 2026-02-07 01:02 GMT+8] A background task just completed successfully.",
+      ),
+    ).toBe(false);
+  });
+
   // --- Should ACCEPT ---
 
   it("should accept substantive messages with enough words", () => {
@@ -247,6 +287,55 @@ describe("extractUserMessages", () => {
     ];
     const result = extractUserMessages(messages as unknown[]);
     expect(result).toEqual([]);
+  });
+
+  it("should strip Telegram channel metadata and extract raw user text", () => {
+    const messages = [
+      {
+        role: "user",
+        content:
+          "[Telegram Tarun (@ts1974_001) id:878224171 +1m 2026-02-06 23:18 GMT+8] I restarted the gateway but it still shows UTC time\n[message_id: 6363]",
+      },
+    ];
+    const result = extractUserMessages(messages);
+    expect(result).toEqual(["I restarted the gateway but it still shows UTC time"]);
+  });
+
+  it("should strip Telegram wrapper and filter if remaining text is too short", () => {
+    const messages = [
+      {
+        role: "user",
+        content:
+          "[Telegram Tarun (@ts1974_001) id:878224171 +1m 2026-02-06 13:32 UTC] Hi\n[message_id: 6302]",
+      },
+    ];
+    const result = extractUserMessages(messages);
+    // "Hi" is < 10 chars after stripping — should be filtered out
+    expect(result).toEqual([]);
+  });
+
+  it("should strip media attachment preamble and keep user text", () => {
+    const messages = [
+      {
+        role: "user",
+        content:
+          "[media attached: /path/to/file.jpg (image/jpeg) | /path/to/file.jpg]\nTo send an image back, prefer the message tool.\n[Telegram Tarun (@ts1974_001) id:878224171 +5m 2026-02-06 14:01 UTC] My claim for the business expense\n[message_id: 6334]",
+      },
+    ];
+    const result = extractUserMessages(messages);
+    expect(result).toEqual(["My claim for the business expense"]);
+  });
+
+  it("should strip System exec output prefixes", () => {
+    const messages = [
+      {
+        role: "user",
+        content:
+          "System: [2026-01-31 05:44:57 UTC] Exec completed (gentle-s, code 0)\n\n[Telegram User id:123 +1m 2026-01-31 05:46 UTC] I want 4k imax copy of Interstellar\n[message_id: 2098]",
+      },
+    ];
+    const result = extractUserMessages(messages);
+    expect(result).toEqual(["I want 4k imax copy of Interstellar"]);
   });
 });
 
