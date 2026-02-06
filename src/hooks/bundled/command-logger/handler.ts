@@ -28,6 +28,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { formatLocalIso } from "../../../logging/timestamp.js";
 import type { HookHandler } from "../../hooks.js";
 
 const log = createSubsystemLogger("command-logger");
@@ -51,7 +52,7 @@ const logCommand: HookHandler = async (event) => {
     const logFile = path.join(logDir, "commands.log");
     const logLine =
       JSON.stringify({
-        timestamp: event.timestamp.toISOString(),
+        timestamp: formatLocalIso(event.timestamp),
         action: event.action,
         sessionKey: event.sessionKey,
         senderId: event.context.senderId ?? "unknown",

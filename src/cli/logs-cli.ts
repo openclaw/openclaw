@@ -73,17 +73,13 @@ export function formatLogTimestamp(
   if (Number.isNaN(parsed.getTime())) {
     return value;
   }
-
-  let timeString: string;
-  if (localTime) {
-    timeString = formatLocalIsoWithOffset(parsed);
-  } else {
-    timeString = parsed.toISOString();
-  }
   if (mode === "pretty") {
-    return timeString.slice(11, 19);
+    const h = String(parsed.getHours()).padStart(2, "0");
+    const m = String(parsed.getMinutes()).padStart(2, "0");
+    const s = String(parsed.getSeconds()).padStart(2, "0");
+    return `${h}:${m}:${s}`;
   }
-  return timeString;
+  return formatLocalIso(parsed);
 }
 
 function formatLogLine(
