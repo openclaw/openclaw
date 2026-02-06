@@ -53,6 +53,8 @@ Docs: https://docs.openclaw.ai
 - Security: redact channel credentials (tokens, passwords, API keys, secrets) from gateway config APIs and preserve secrets during Control UI round-trips. (#9858) Thanks @abdelsfane.
 - Discord: treat allowlisted senders as owner for system-prompt identity hints while keeping channel topics untrusted.
 - Slack: strip `<@...>` mention tokens before command matching so `/new` and `/reset` work when prefixed with a mention. (#9971) Thanks @ironbyte-rgb.
+- Agents: cap `sessions_history` tool output and strip oversized fields to prevent context overflow. (#10000) Thanks @gut-puncture.
+- Security: normalize code safety finding paths in `openclaw security audit --deep` output for cross-platform consistency. (#10000) Thanks @gut-puncture.
 - Security: enforce sandboxed media paths for message tool attachments. (#9182) Thanks @victormier.
 - Security: require explicit credentials for gateway URL overrides to prevent credential leakage. (#8113) Thanks @victormier.
 - Security: gate `whatsapp_login` tool to owner senders and default-deny non-owner contexts. (#8768) Thanks @victormier.
