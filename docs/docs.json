@@ -848,7 +848,8 @@
                   "install/exe-dev",
                   "install/railway",
                   "install/render",
-                  "install/northflank"
+                  "install/northflank",
+                  "install/coolify"
                 ]
               },
               {
