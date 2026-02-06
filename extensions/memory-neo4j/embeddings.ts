@@ -44,11 +44,11 @@ export class Embeddings {
 
   /**
    * Truncate text to fit within the model's context length.
-   * Uses a conservative ~3 chars/token estimate to leave headroom.
+   * Uses a conservative ~4 chars/token estimate to leave headroom.
    * Truncates at a word boundary when possible.
    */
   private truncateToContext(text: string): string {
-    const maxChars = this.contextLength * 3;
+    const maxChars = this.contextLength * 4;
     if (text.length <= maxChars) {
       return text;
     }

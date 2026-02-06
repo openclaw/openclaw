@@ -6,7 +6,7 @@
 // Node Types
 // ============================================================================
 
-export type MemoryCategory = "preference" | "fact" | "decision" | "entity" | "other";
+export type MemoryCategory = "core" | "preference" | "fact" | "decision" | "entity" | "other";
 export type EntityType = "person" | "organization" | "location" | "event" | "concept";
 export type ExtractionStatus = "pending" | "complete" | "failed" | "skipped";
 export type MemorySource = "user" | "auto-capture" | "memory-watcher" | "import";
@@ -21,8 +21,13 @@ export type MemoryNode = {
   createdAt: string;
   updatedAt: string;
   extractionStatus: ExtractionStatus;
+  extractionRetries: number;
   agentId: string;
   sessionKey?: string;
+  retrievalCount: number;
+  lastRetrievedAt?: string;
+  promotedAt?: string;
+  demotedAt?: string;
 };
 
 export type EntityNode = {
@@ -123,7 +128,14 @@ export type MergeEntityInput = {
 // Constants
 // ============================================================================
 
-export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
+export const MEMORY_CATEGORIES = [
+  "core",
+  "preference",
+  "fact",
+  "decision",
+  "entity",
+  "other",
+] as const;
 
 export const ENTITY_TYPES = ["person", "organization", "location", "event", "concept"] as const;
 

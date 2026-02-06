@@ -70,9 +70,24 @@ describe("extractUserMessages", () => {
     expect(result).toEqual(["1234567890", "This is longer than ten characters"]);
   });
 
-  it("should filter out messages containing <relevant-memories>", () => {
+  it("should strip <relevant-memories> blocks and keep user content", () => {
     const messages = [
       { role: "user", content: "Normal user message that is long enough here" },
+      {
+        role: "user",
+        content:
+          "<relevant-memories>Some injected context</relevant-memories>\n\nWhat does Tarun prefer for meetings?",
+      },
+    ];
+    const result = extractUserMessages(messages);
+    expect(result).toEqual([
+      "Normal user message that is long enough here",
+      "What does Tarun prefer for meetings?",
+    ]);
+  });
+
+  it("should drop message if only injected context remains after stripping", () => {
+    const messages = [
       {
         role: "user",
         content:
@@ -80,16 +95,30 @@ describe("extractUserMessages", () => {
       },
     ];
     const result = extractUserMessages(messages);
-    expect(result).toEqual(["Normal user message that is long enough here"]);
+    expect(result).toEqual([]);
   });
 
-  it("should filter out messages containing <system>", () => {
+  it("should strip <system> blocks and keep user content", () => {
     const messages = [
-      { role: "user", content: "<system>System markup that should be filtered</system>" },
-      { role: "user", content: "Normal user message that is long enough here" },
+      {
+        role: "user",
+        content: "<system>System markup</system>\n\nNormal user message that is long enough here",
+      },
     ];
     const result = extractUserMessages(messages);
     expect(result).toEqual(["Normal user message that is long enough here"]);
+  });
+
+  it("should strip <core-memory-refresh> blocks and keep user content", () => {
+    const messages = [
+      {
+        role: "user",
+        content:
+          "<core-memory-refresh>refreshed memories</core-memory-refresh>\n\nTell me about the project status",
+      },
+    ];
+    const result = extractUserMessages(messages);
+    expect(result).toEqual(["Tell me about the project status"]);
   });
 
   it("should handle null and non-object messages gracefully", () => {

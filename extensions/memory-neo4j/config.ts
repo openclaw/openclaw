@@ -195,6 +195,7 @@ export const memoryNeo4jConfigSchema = {
     if (typeof neo4jRaw.uri !== "string" || !neo4jRaw.uri) {
       throw new Error("neo4j.uri is required");
     }
+    const neo4jUri = neo4jRaw.uri as string;
     // Validate URI scheme — must be a valid Neo4j connection protocol
     const VALID_NEO4J_SCHEMES = [
       "bolt://",
@@ -204,9 +205,9 @@ export const memoryNeo4jConfigSchema = {
       "neo4j+s://",
       "neo4j+ssc://",
     ];
-    if (!VALID_NEO4J_SCHEMES.some((scheme) => neo4jRaw.uri.startsWith(scheme))) {
+    if (!VALID_NEO4J_SCHEMES.some((scheme) => neo4jUri.startsWith(scheme))) {
       throw new Error(
-        `neo4j.uri must start with a valid scheme (${VALID_NEO4J_SCHEMES.join(", ")}), got: "${neo4jRaw.uri}"`,
+        `neo4j.uri must start with a valid scheme (${VALID_NEO4J_SCHEMES.join(", ")}), got: "${neo4jUri}"`,
       );
     }
 

@@ -382,7 +382,7 @@ export async function runBackgroundExtraction(
 }
 
 // ============================================================================
-// Sleep Cycle - Five Phase Memory Consolidation
+// Sleep Cycle - Seven Phase Memory Consolidation
 // ============================================================================
 
 /**
@@ -872,8 +872,15 @@ export function extractUserMessages(messages: unknown[]): string[] {
     }
   }
 
-  // Filter out noise
-  return texts.filter(
-    (t) => t.length >= 10 && !t.includes("<relevant-memories>") && !t.includes("<system>"),
-  );
+  // Strip injected context blocks (auto-recall prepends these into user messages)
+  // then filter out noise
+  return texts
+    .map((t) =>
+      t
+        .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g, "")
+        .replace(/<core-memory-refresh>[\s\S]*?<\/core-memory-refresh>\s*/g, "")
+        .replace(/<system>[\s\S]*?<\/system>\s*/g, "")
+        .trim(),
+    )
+    .filter((t) => t.length >= 10);
 }
