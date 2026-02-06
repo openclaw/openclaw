@@ -1,165 +1,152 @@
 ---
-summary: "How to file high signal issues and bug reports"
+summary: "Filing high-signal issues and bug reports"
 title: "Submitting an Issue"
 ---
 
-# Submitting an Issue
+## Submitting an Issue
 
-Good issues make it easy to reproduce, diagnose, and fix problems quickly. This guide covers what to include for bugs, regressions, and feature gaps.
+Clear, concise issues speed up diagnosis and fixes. Include the following for bugs, regressions, or feature gaps:
 
-## What makes a good issue
+### What to include
 
-- [ ] Clear title: include the area and the symptom.
-- [ ] Repro steps: minimal steps that consistently reproduce the issue.
-- [ ] Expected vs actual: what you thought would happen and what did.
-- [ ] Impact: who is affected and how severe the problem is.
-- [ ] Environment: OS, runtime, versions, and relevant config.
-- [ ] Evidence: logs, screenshots, or recordings (redacted; prefer non-PII data).
-- [ ] Scope: note if it is new, regression, or long-standing.
-- [ ] Code word: include “lobster-biscuit” somewhere in the issue description to confirm you read this guide.
-- [ ] Due diligence: search the codebase for existing functionality and check GitHub to see if the issue is already filed or fixed.
-- [ ] I searched for existing and recently closed issues/PRs.
-- [ ] For security reports: confirmed it has not already been fixed or addressed recently.
-- [ ] Grounded in reality: claims should be backed by evidence, reproduction, or direct observation.
+- [ ] Title: area & symptom
+- [ ] Minimal repro steps
+- [ ] Expected vs actual
+- [ ] Impact & severity
+- [ ] Environment: OS, runtime, versions, config
+- [ ] Evidence: redacted logs, screenshots (non-PII)
+- [ ] Scope: new, regression, or longstanding
+- [ ] Code word: lobster-biscuit in your issue
+- [ ] Searched codebase & GitHub for existing issue
+- [ ] Confirmed not recently fixed/addressed (esp. security)
+- [ ] Claims backed by evidence or repro
 
-Guideline: concision > grammar. Be terse if it makes review faster.
+Be brief. Terseness > perfect grammar.
 
-Baseline validation commands (run as appropriate for the change, and fix failures before submitting a PR):
+Validation (run/fix before PR):
 
 - `pnpm lint`
 - `pnpm check`
 - `pnpm build`
 - `pnpm test`
-- If you touch protocol code: `pnpm protocol:check`
+- If protocol code: `pnpm protocol:check`
 
-## Templates
+### Templates
 
-### Bug report
+#### Bug report
 
 ```md
-## Bug report checklist
-
-- [ ] Minimal repro steps
+- [ ] Minimal repro
 - [ ] Expected vs actual
-- [ ] Versions and environment
-- [ ] Affected channels and where it does not reproduce
-- [ ] Logs or screenshots
-- [ ] Evidence is redacted and non-PII where possible
-- [ ] Impact and severity
-- [ ] Any known workarounds
+- [ ] Environment
+- [ ] Affected channels, where not seen
+- [ ] Logs/screenshots (redacted)
+- [ ] Impact/severity
+- [ ] Workarounds
 
-## Summary
+### Summary
 
-## Repro Steps
+### Repro Steps
 
-## Expected
+### Expected
 
-## Actual
+### Actual
 
-## Environment
+### Environment
 
-## Logs or Evidence
+### Logs/Evidence
 
-## Impact
+### Impact
 
-## Workarounds
+### Workarounds
 ```
 
-### Security issue
+#### Security issue
 
 ```md
-## Summary
+### Summary
 
-## Impact
+### Impact
 
-## Affected Versions
+### Versions
 
-## Repro Steps (if safe to share)
+### Repro Steps (safe to share)
 
-## Mitigation or Workaround
+### Mitigation/workaround
 
-## Evidence (redacted)
+### Evidence (redacted)
 ```
 
-Security note: avoid posting secrets or exploit details in public issues. If the report is sensitive, keep repro details minimal and ask for a private disclosure path.
+_Avoid secrets/exploit details in public. For sensitive issues, minimize detail and request private disclosure._
 
-### Regression report
+#### Regression report
 
 ```md
-## Summary
+### Summary
 
-## Last Known Good
+### Last Known Good
 
-## First Known Bad
+### First Known Bad
 
-## Repro Steps
+### Repro Steps
 
-## Expected
+### Expected
 
-## Actual
+### Actual
 
-## Environment
+### Environment
 
-## Logs or Evidence
+### Logs/Evidence
 
-## Impact
+### Impact
 ```
 
-### Feature request
+#### Feature request
 
 ```md
-## Summary
+### Summary
 
-## Problem
+### Problem
 
-## Proposed Solution
+### Proposed Solution
 
-## Alternatives Considered
+### Alternatives
 
-## Impact
+### Impact
 
-## Evidence or Examples
+### Evidence/examples
 ```
 
-### Enhancement request
+#### Enhancement
 
 ```md
-## Summary
+### Summary
 
-## Current Behavior
+### Current vs Desired Behavior
 
-## Desired Behavior
+### Rationale
 
-## Why This Matters
+### Alternatives
 
-## Alternatives Considered
-
-## Evidence or Examples
+### Evidence/examples
 ```
 
-### Investigation request
+#### Investigation
 
 ```md
-## Summary
+### Summary
 
-## Symptoms
+### Symptoms
 
-## What Was Tried
+### What Was Tried
 
-## Environment
+### Environment
 
-## Logs or Evidence
+### Logs/Evidence
 
-## Impact
+### Impact
 ```
 
-## If you are submitting a fix PR
+### Submitting a fix PR
 
-Creating a separate issue first is optional. If you skip it, include the relevant details in the PR description.
-
-- Keep the PR focused on the issue.
-- Include the issue number in the PR description.
-- Add tests when possible, or explain why they are not feasible.
-- Note any behavior changes and risks.
-- Include redacted logs, screenshots, or videos that validate the fix.
-- Run relevant `pnpm` validation commands and report results when appropriate.
+Issue before PR is optional. Include details in PR if skipping. Keep the PR focused, note issue number, add tests or explain absence, document behavior changes/risks, include redacted logs/screenshots as proof, and run proper validation before submitting.
