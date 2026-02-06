@@ -155,7 +155,8 @@ export function wrapToolWithBeforeToolCallHook(
         throw new Error(afterOutcome.reason);
       }
 
-      return afterOutcome.result;
+      // oxlint-disable-next-line typescript/no-explicit-any
+      return afterOutcome.result as any;
     },
   };
 }
