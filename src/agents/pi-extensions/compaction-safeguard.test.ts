@@ -306,6 +306,93 @@ describe("compaction-safeguard extension cancels on failure (#10332)", () => {
   });
 });
 
+describe("compaction-safeguard extension live test", () => {
+  const apiKey = process.env.ANTHROPIC_AUTH_TOKEN ?? process.env.ANTHROPIC_API_KEY;
+  const LIVE = (process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1") && !!apiKey;
+
+  it.skipIf(!LIVE)(
+    "produces a real summary with a live model (LIVE=1)",
+    async () => {
+      const { resolveModel } = await import("../pi-embedded-runner/model.js");
+
+      const provider = "anthropic";
+      const modelId = process.env.LIVE_MODEL ?? "claude-haiku-4-5-20251001";
+      const baseUrl = process.env.ANTHROPIC_BASE_URL;
+
+      const { model, authStorage } = resolveModel(provider, modelId);
+      if (!model) {
+        throw new Error(`resolveModel failed for ${provider}/${modelId}`);
+      }
+      if (baseUrl) {
+        (model as unknown as Record<string, unknown>).baseUrl = baseUrl;
+      }
+      authStorage.setRuntimeApiKey(provider, apiKey!);
+
+      // Register extension handler
+      let handler: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
+      const api = {
+        on(_event: string, h: (event: unknown, ctx: unknown) => Promise<unknown>) {
+          handler = h;
+        },
+      };
+      const mod = await import("./compaction-safeguard.js");
+      mod.default(api as never);
+      expect(handler).toBeDefined();
+
+      const messages: AgentMessage[] = [
+        {
+          role: "user",
+          content: "Help me set up Docker for Node.js",
+          timestamp: Date.now() - 60000,
+        },
+        {
+          role: "user",
+          content: "Also add PostgreSQL with docker-compose",
+          timestamp: Date.now() - 30000,
+        },
+      ];
+
+      const preparation = {
+        firstKeptEntryId: "live-test-entry",
+        tokensBefore: 50_000,
+        messagesToSummarize: messages,
+        turnPrefixMessages: [] as AgentMessage[],
+        isSplitTurn: false,
+        previousSummary: undefined,
+        fileOps: { read: new Set<string>(), edited: new Set<string>(), written: new Set<string>() },
+        settings: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 },
+      };
+
+      const event = {
+        type: "session_before_compact" as const,
+        preparation,
+        branchEntries: [],
+        customInstructions: undefined,
+        signal: new AbortController().signal,
+      };
+
+      const ctx = {
+        model,
+        modelRegistry: { getApiKey: async () => apiKey! },
+        sessionManager: {},
+      };
+
+      const result = (await handler!(event, ctx)) as {
+        cancel?: boolean;
+        compaction?: { summary: string; firstKeptEntryId: string };
+      };
+
+      // Should NOT cancel — real model + key available
+      expect(result.cancel).toBeUndefined();
+      expect(result.compaction).toBeDefined();
+      expect(result.compaction!.summary.length).toBeGreaterThan(50);
+      expect(result.compaction!.summary).not.toContain("Summary unavailable");
+      expect(result.compaction!.firstKeptEntryId).toBe("live-test-entry");
+    },
+    60_000,
+  );
+});
+
 describe("compaction-safeguard runtime registry", () => {
   it("stores and retrieves config by session manager identity", () => {
     const sm = {};
