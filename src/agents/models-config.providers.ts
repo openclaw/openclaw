@@ -4,6 +4,7 @@ import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
+import { APERTIS_BASE_URL, discoverApertisModels } from "./apertis-models.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
@@ -536,6 +537,15 @@ export function buildXiaomiProvider(): ProviderConfig {
   };
 }
 
+async function buildApertisProvider(): Promise<ProviderConfig> {
+  const models = await discoverApertisModels();
+  return {
+    baseUrl: APERTIS_BASE_URL,
+    api: "openai-completions",
+    models,
+  };
+}
+
 async function buildVeniceProvider(): Promise<ProviderConfig> {
   const models = await discoverVeniceModels();
   return {
@@ -742,6 +752,13 @@ export async function resolveImplicitProviders(params: {
       models: [buildCloudflareAiGatewayModelDefinition()],
     };
     break;
+  }
+
+  const apertisKey =
+    resolveEnvApiKeyVarName("apertis") ??
+    resolveApiKeyFromProfiles({ provider: "apertis", store: authStore });
+  if (apertisKey) {
+    providers.apertis = { ...(await buildApertisProvider()), apiKey: apertisKey };
   }
 
   // Ollama provider - only add if explicitly configured.
