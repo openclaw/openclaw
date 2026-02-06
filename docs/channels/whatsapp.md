@@ -339,6 +339,28 @@ Behavior notes:
 - group mode `mentions` reacts on mention-triggered turns; group activation `always` acts as bypass for this check
 - WhatsApp uses `channels.whatsapp.ackReaction` (legacy `messages.ackReaction` is not used here)
 
+## Disappearing (ephemeral) messages
+
+WhatsApp supports disappearing messages (24h / 7d / 90d).
+
+OpenClaw can mark outbound WhatsApp messages as disappearing by setting an expiration (seconds):
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      // 7 days
+      disappearingMessagesSeconds: 604800,
+    },
+  },
+}
+```
+
+Notes:
+
+- This only marks messages sent by OpenClaw; it does **not** toggle the chat’s disappearing-message setting.
+- Per-account override: `channels.whatsapp.accounts.<id>.disappearingMessagesSeconds`.
+
 ## Multi-account and credentials
 
 <AccordionGroup>

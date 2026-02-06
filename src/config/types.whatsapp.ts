@@ -44,6 +44,14 @@ export type WhatsAppConfig = {
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
+  /**
+   * Mark outbound WhatsApp messages as disappearing (ephemeral) with this expiration in **seconds**.
+   *
+   * Notes:
+   * - This only affects messages sent by OpenClaw (it does not toggle the chat's disappearing setting).
+   * - Common values: 0 (off), 86400 (24h), 604800 (7d), 7776000 (90d).
+   */
+  disappearingMessagesSeconds?: number;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
   /**
@@ -112,6 +120,11 @@ export type WhatsAppAccountConfig = {
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
+  /**
+   * Per-account override for outbound disappearing messages expiration (seconds).
+   * See `channels.whatsapp.disappearingMessagesSeconds`.
+   */
+  disappearingMessagesSeconds?: number;
   /** If false, do not start this WhatsApp account provider. Default: true. */
   enabled?: boolean;
   /** Send read receipts for incoming messages (default true). */

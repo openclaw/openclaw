@@ -35,6 +35,7 @@ const WhatsAppSharedSchema = z.object({
   capabilities: z.array(z.string()).optional(),
   markdown: MarkdownConfigSchema,
   configWrites: z.boolean().optional(),
+  disappearingMessagesSeconds: z.number().int().nonnegative().optional(),
   sendReadReceipts: z.boolean().optional(),
   messagePrefix: z.string().optional(),
   responsePrefix: z.string().optional(),

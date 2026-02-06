@@ -1,4 +1,8 @@
-import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
+import type {
+  AnyMessageContent,
+  MiscMessageGenerationOptions,
+  WAPresence,
+} from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { toWhatsappJid } from "../../utils.js";
 import type { ActiveWebSendOptions } from "../active-listener.js";
@@ -19,11 +23,29 @@ function resolveOutboundMessageId(result: unknown): string {
 
 export function createWebSendApi(params: {
   sock: {
-    sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
+    sendMessage: (
+      jid: string,
+      content: AnyMessageContent,
+      options?: MiscMessageGenerationOptions,
+    ) => Promise<unknown>;
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
   };
   defaultAccountId: string;
+  /** Optional disappearing messages expiration (seconds) to apply to all outbound sends. */
+  ephemeralExpiration?: number;
 }) {
+  const disappearingOptions =
+    typeof params.ephemeralExpiration === "number" && params.ephemeralExpiration > 0
+      ? ({
+          ephemeralExpiration: params.ephemeralExpiration,
+        } satisfies MiscMessageGenerationOptions)
+      : undefined;
+
+  const sendMessage = (jid: string, content: AnyMessageContent) =>
+    disappearingOptions
+      ? params.sock.sendMessage(jid, content, disappearingOptions)
+      : params.sock.sendMessage(jid, content);
+
   return {
     sendMessage: async (
       to: string,
@@ -63,7 +85,7 @@ export function createWebSendApi(params: {
       } else {
         payload = { text };
       }
-      const result = await params.sock.sendMessage(jid, payload);
+      const result = await sendMessage(jid, payload);
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       recordWhatsAppOutbound(accountId);
       const messageId = resolveOutboundMessageId(result);
@@ -74,7 +96,7 @@ export function createWebSendApi(params: {
       poll: { question: string; options: string[]; maxSelections?: number },
     ): Promise<{ messageId: string }> => {
       const jid = toWhatsappJid(to);
-      const result = await params.sock.sendMessage(jid, {
+      const result = await sendMessage(jid, {
         poll: {
           name: poll.question,
           values: poll.options,

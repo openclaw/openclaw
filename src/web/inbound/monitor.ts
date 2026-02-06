@@ -1,13 +1,20 @@
-import type { AnyMessageContent, proto, WAMessage } from "@whiskeysockets/baileys";
+import type {
+  AnyMessageContent,
+  MiscMessageGenerationOptions,
+  proto,
+  WAMessage,
+} from "@whiskeysockets/baileys";
 import { DisconnectReason, isJidGroup } from "@whiskeysockets/baileys";
 import { createInboundDebouncer } from "../../auto-reply/inbound-debounce.js";
 import { formatLocationText } from "../../channels/location.js";
+import { loadConfig } from "../../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { jidToE164, resolveJidToE164 } from "../../utils.js";
+import { resolveWhatsAppAccount } from "../accounts.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
@@ -42,6 +49,42 @@ export async function monitorWebInbox(options: {
   });
   await waitForWaConnection(sock);
   const connectedAtMs = Date.now();
+
+  // Disappearing messages (outbound only): apply a configured expiration (seconds) to all
+  // outbound sends from this listener.
+  //
+  // - Config override: channels.whatsapp.disappearingMessagesSeconds (or per-account override)
+  // - Fallback: Baileys creds defaultDisappearingMode (if present)
+  const cfg = loadConfig();
+  const account = resolveWhatsAppAccount({
+    cfg,
+    accountId: (options as { accountId?: string | null }).accountId,
+  });
+  const configuredExpiration = account.disappearingMessagesSeconds;
+  const credsDefaultRaw = (sock as unknown as { authState?: any })?.authState?.creds
+    ?.accountSettings?.defaultDisappearingMode?.ephemeralExpiration;
+  const credsDefault =
+    typeof credsDefaultRaw === "number"
+      ? credsDefaultRaw
+      : typeof credsDefaultRaw === "string"
+        ? Number(credsDefaultRaw)
+        : undefined;
+  const ephemeralExpirationSeconds =
+    typeof configuredExpiration === "number"
+      ? configuredExpiration > 0
+        ? configuredExpiration
+        : undefined
+      : typeof credsDefault === "number" && Number.isFinite(credsDefault) && credsDefault > 0
+        ? credsDefault
+        : undefined;
+  const disappearingOptions =
+    typeof ephemeralExpirationSeconds === "number" && ephemeralExpirationSeconds > 0
+      ? { ephemeralExpiration: ephemeralExpirationSeconds }
+      : undefined;
+  const sendMessage = (jid: string, content: AnyMessageContent) =>
+    disappearingOptions
+      ? sock.sendMessage(jid, content, disappearingOptions)
+      : sock.sendMessage(jid, content);
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -209,7 +252,7 @@ export async function monitorWebInbox(options: {
         isFromMe: Boolean(msg.key?.fromMe),
         messageTimestampMs,
         connectedAtMs,
-        sock: { sendMessage: (jid, content) => sock.sendMessage(jid, content) },
+        sock: { sendMessage: (jid, content) => sendMessage(jid, content) },
         remoteJid,
       });
       if (!access.allowed) {
@@ -286,10 +329,10 @@ export async function monitorWebInbox(options: {
         }
       };
       const reply = async (text: string) => {
-        await sock.sendMessage(chatJid, { text });
+        await sendMessage(chatJid, { text });
       };
       const sendMedia = async (payload: AnyMessageContent) => {
-        await sock.sendMessage(chatJid, payload);
+        await sendMessage(chatJid, payload);
       };
       const timestamp = messageTimestampMs;
       const mentionedJids = extractMentionedJids(msg.message as proto.IMessage | undefined);
@@ -366,10 +409,15 @@ export async function monitorWebInbox(options: {
 
   const sendApi = createWebSendApi({
     sock: {
-      sendMessage: (jid: string, content: AnyMessageContent) => sock.sendMessage(jid, content),
+      sendMessage: (
+        jid: string,
+        content: AnyMessageContent,
+        options?: MiscMessageGenerationOptions,
+      ) => (options ? sock.sendMessage(jid, content, options) : sock.sendMessage(jid, content)),
       sendPresenceUpdate: (presence, jid?: string) => sock.sendPresenceUpdate(presence, jid),
     },
     defaultAccountId: options.accountId,
+    ephemeralExpiration: ephemeralExpirationSeconds,
   });
 
   return {
