@@ -80,6 +80,301 @@ type RoleRefsCacheEntry = {
   mode?: NonNullable<PageState["roleRefsMode"]>;
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Session Context Registry - isolate browser state per agent/session
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Serializable cookie structure matching Playwright's cookie format.
+ */
+export type SessionCookie = {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: "Strict" | "Lax" | "None";
+};
+
+/**
+ * Represents an isolated session context for browser operations.
+ * Each session can have its own set of role refs, page states, etc.
+ */
+export type SessionContext = {
+  /** Unique session identifier (e.g., agent ID or conversation ID) */
+  sessionId: string;
+  /** When this session was created */
+  createdAt: number;
+  /** When this session was last accessed */
+  lastAccessedAt: number;
+  /** Role refs cache scoped to this session (keyed by cdpUrl::targetId) */
+  roleRefsByTarget: Map<string, RoleRefsCacheEntry>;
+  /** Per-page state overrides for this session (keyed by cdpUrl::targetId) */
+  pageStateOverrides: Map<string, Partial<PageState>>;
+  /** Cookies inherited or captured for this session */
+  cookies: SessionCookie[];
+};
+
+/** Default session ID for backward compatibility with non-session-aware callers */
+const DEFAULT_SESSION_ID = "__default__";
+
+/** Session contexts keyed by sessionId */
+const sessionContexts = new Map<string, SessionContext>();
+
+/** How long before a session is considered stale (30 minutes) */
+const SESSION_STALE_THRESHOLD_MS = 30 * 60 * 1000;
+
+/** Maximum number of sessions to keep in memory */
+const MAX_SESSIONS = 100;
+
+/**
+ * Get or create a session context for the given session ID.
+ * If sessionId is undefined/null, returns the default session for backward compatibility.
+ */
+export function getOrCreateSessionContext(sessionId?: string | null): SessionContext {
+  const id = sessionId?.trim() || DEFAULT_SESSION_ID;
+  const existing = sessionContexts.get(id);
+  if (existing) {
+    existing.lastAccessedAt = Date.now();
+    return existing;
+  }
+
+  const context: SessionContext = {
+    sessionId: id,
+    createdAt: Date.now(),
+    lastAccessedAt: Date.now(),
+    roleRefsByTarget: new Map(),
+    pageStateOverrides: new Map(),
+    cookies: [],
+  };
+  sessionContexts.set(id, context);
+
+  // Prevent unbounded growth by cleaning up stale sessions
+  if (sessionContexts.size > MAX_SESSIONS) {
+    cleanupStaleSessions();
+  }
+
+  return context;
+}
+
+/**
+ * Clean up stale sessions that haven't been accessed recently.
+ * Keeps the default session and any session accessed within the threshold.
+ */
+export function cleanupStaleSessions(): void {
+  const now = Date.now();
+  const toDelete: string[] = [];
+
+  for (const [id, ctx] of sessionContexts) {
+    // Never delete the default session
+    if (id === DEFAULT_SESSION_ID) {
+      continue;
+    }
+    // Delete if stale
+    if (now - ctx.lastAccessedAt > SESSION_STALE_THRESHOLD_MS) {
+      toDelete.push(id);
+    }
+  }
+
+  for (const id of toDelete) {
+    sessionContexts.delete(id);
+  }
+
+  // If still over limit after stale cleanup, remove oldest non-default sessions
+  if (sessionContexts.size > MAX_SESSIONS) {
+    const sorted = [...sessionContexts.entries()]
+      .filter(([id]) => id !== DEFAULT_SESSION_ID)
+      .sort((a, b) => a[1].lastAccessedAt - b[1].lastAccessedAt);
+
+    const excess = sessionContexts.size - MAX_SESSIONS;
+    for (let i = 0; i < excess && i < sorted.length; i++) {
+      const entry = sorted[i];
+      if (entry) {
+        sessionContexts.delete(entry[0]);
+      }
+    }
+  }
+}
+
+/**
+ * Get all active session IDs (for debugging/monitoring).
+ */
+export function getActiveSessionIds(): string[] {
+  return [...sessionContexts.keys()];
+}
+
+/**
+ * Delete a specific session context.
+ */
+export function deleteSessionContext(sessionId: string): boolean {
+  if (sessionId === DEFAULT_SESSION_ID) {
+    return false; // Cannot delete default session
+  }
+  return sessionContexts.delete(sessionId);
+}
+
+/**
+ * Clone a session context to a new session ID.
+ * Copies role refs, page state overrides, and cookies from source to target.
+ * If source doesn't exist, creates an empty session.
+ */
+export function cloneSessionContext(
+  sourceSessionId: string | null | undefined,
+  targetSessionId: string,
+): SessionContext {
+  const targetId = targetSessionId.trim();
+  if (!targetId || targetId === DEFAULT_SESSION_ID) {
+    throw new Error("Cannot clone to default session or empty ID");
+  }
+
+  const source = getOrCreateSessionContext(sourceSessionId);
+  const target: SessionContext = {
+    sessionId: targetId,
+    createdAt: Date.now(),
+    lastAccessedAt: Date.now(),
+    // Deep clone the maps
+    roleRefsByTarget: new Map(source.roleRefsByTarget),
+    pageStateOverrides: new Map(source.pageStateOverrides),
+    // Clone cookies array
+    cookies: source.cookies.map((c) => ({ ...c })),
+  };
+
+  sessionContexts.set(targetId, target);
+
+  // Cleanup if over limit
+  if (sessionContexts.size > MAX_SESSIONS) {
+    cleanupStaleSessions();
+  }
+
+  return target;
+}
+
+/**
+ * Capture cookies from the browser's default context and store them in a session.
+ * This allows new sessions to inherit login state from the browser.
+ */
+export async function captureCookiesFromBrowser(opts: {
+  cdpUrl: string;
+  sessionId?: string;
+  urls?: string[];
+}): Promise<SessionCookie[]> {
+  const { browser } = await connectBrowser(opts.cdpUrl);
+  const contexts = browser.contexts();
+  if (!contexts.length) {
+    return [];
+  }
+
+  // Get cookies from the first (default) context
+  const context = contexts[0];
+  const cookies = await context.cookies(opts.urls);
+
+  // Convert to SessionCookie format
+  const sessionCookies: SessionCookie[] = cookies.map((c) => ({
+    name: c.name,
+    value: c.value,
+    domain: c.domain,
+    path: c.path,
+    expires: c.expires,
+    httpOnly: c.httpOnly,
+    secure: c.secure,
+    sameSite: c.sameSite,
+  }));
+
+  // Store in session context
+  const sessionCtx = getOrCreateSessionContext(opts.sessionId);
+  sessionCtx.cookies = sessionCookies;
+
+  return sessionCookies;
+}
+
+/**
+ * Apply stored cookies from a session context to the browser.
+ * Call this before navigating to restore login state.
+ */
+export async function applyCookiesToBrowser(opts: {
+  cdpUrl: string;
+  sessionId?: string;
+}): Promise<number> {
+  const sessionCtx = getOrCreateSessionContext(opts.sessionId);
+  if (!sessionCtx.cookies.length) {
+    return 0;
+  }
+
+  const { browser } = await connectBrowser(opts.cdpUrl);
+  const contexts = browser.contexts();
+  if (!contexts.length) {
+    return 0;
+  }
+
+  const context = contexts[0];
+  await context.addCookies(sessionCtx.cookies);
+
+  return sessionCtx.cookies.length;
+}
+
+/**
+ * Inherit cookies from the default session to a target session.
+ * This enables new agent sessions to inherit login state.
+ */
+export function inheritCookiesFromDefault(targetSessionId: string): SessionCookie[] {
+  const targetId = targetSessionId.trim();
+  if (!targetId || targetId === DEFAULT_SESSION_ID) {
+    return [];
+  }
+
+  const defaultSession = getOrCreateSessionContext(null);
+  const targetSession = getOrCreateSessionContext(targetId);
+
+  // Clone cookies from default to target
+  targetSession.cookies = defaultSession.cookies.map((c) => ({ ...c }));
+
+  return targetSession.cookies;
+}
+
+/**
+ * Copy cookies from one session to another.
+ */
+export function copyCookiesBetweenSessions(
+  sourceSessionId: string | null | undefined,
+  targetSessionId: string,
+): SessionCookie[] {
+  const targetId = targetSessionId.trim();
+  if (!targetId) {
+    return [];
+  }
+
+  const sourceSession = getOrCreateSessionContext(sourceSessionId);
+  const targetSession = getOrCreateSessionContext(targetId);
+
+  // Clone cookies from source to target
+  targetSession.cookies = sourceSession.cookies.map((c) => ({ ...c }));
+
+  return targetSession.cookies;
+}
+
+/**
+ * Get the stored cookies for a session (without applying them).
+ */
+export function getSessionCookies(sessionId?: string | null): SessionCookie[] {
+  const session = getOrCreateSessionContext(sessionId);
+  return session.cookies;
+}
+
+/**
+ * Set cookies directly on a session context.
+ */
+export function setSessionCookies(
+  sessionId: string | null | undefined,
+  cookies: SessionCookie[],
+): void {
+  const session = getOrCreateSessionContext(sessionId);
+  session.cookies = cookies.map((c) => ({ ...c }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 type ContextState = {
   traceActive: boolean;
 };
@@ -115,16 +410,33 @@ export function rememberRoleRefsForTarget(opts: {
   refs: RoleRefs;
   frameSelector?: string;
   mode?: NonNullable<PageState["roleRefsMode"]>;
+  sessionId?: string;
 }): void {
   const targetId = opts.targetId.trim();
   if (!targetId) {
     return;
   }
-  roleRefsByTarget.set(roleRefsKey(opts.cdpUrl, targetId), {
+  const key = roleRefsKey(opts.cdpUrl, targetId);
+  const entry: RoleRefsCacheEntry = {
     refs: opts.refs,
     ...(opts.frameSelector ? { frameSelector: opts.frameSelector } : {}),
     ...(opts.mode ? { mode: opts.mode } : {}),
-  });
+  };
+
+  // Store in session-scoped cache
+  const sessionCtx = getOrCreateSessionContext(opts.sessionId);
+  sessionCtx.roleRefsByTarget.set(key, entry);
+  while (sessionCtx.roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
+    const first = sessionCtx.roleRefsByTarget.keys().next();
+    if (first.done) {
+      break;
+    }
+    sessionCtx.roleRefsByTarget.delete(first.value);
+  }
+
+  // Also store in global cache for backward compatibility with callers
+  // that don't pass sessionId (will be deprecated in future)
+  roleRefsByTarget.set(key, entry);
   while (roleRefsByTarget.size > MAX_ROLE_REFS_CACHE) {
     const first = roleRefsByTarget.keys().next();
     if (first.done) {
@@ -141,6 +453,7 @@ export function storeRoleRefsForTarget(opts: {
   refs: RoleRefs;
   frameSelector?: string;
   mode: NonNullable<PageState["roleRefsMode"]>;
+  sessionId?: string;
 }): void {
   const state = ensurePageState(opts.page);
   state.roleRefs = opts.refs;
@@ -155,6 +468,7 @@ export function storeRoleRefsForTarget(opts: {
     refs: opts.refs,
     frameSelector: opts.frameSelector,
     mode: opts.mode,
+    sessionId: opts.sessionId,
   });
 }
 
@@ -162,22 +476,33 @@ export function restoreRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId?: string;
   page: Page;
+  sessionId?: string;
 }): void {
   const targetId = opts.targetId?.trim() || "";
   if (!targetId) {
     return;
   }
-  const cached = roleRefsByTarget.get(roleRefsKey(opts.cdpUrl, targetId));
-  if (!cached) {
+  const key = roleRefsKey(opts.cdpUrl, targetId);
+
+  // Try session-scoped cache first
+  const sessionCtx = getOrCreateSessionContext(opts.sessionId);
+  let cachedEntry = sessionCtx.roleRefsByTarget.get(key);
+
+  // Fall back to global cache for backward compatibility
+  if (!cachedEntry) {
+    cachedEntry = roleRefsByTarget.get(key);
+  }
+
+  if (!cachedEntry) {
     return;
   }
   const state = ensurePageState(opts.page);
   if (state.roleRefs) {
     return;
   }
-  state.roleRefs = cached.refs;
-  state.roleRefsFrameSelector = cached.frameSelector;
-  state.roleRefsMode = cached.mode;
+  state.roleRefs = cachedEntry.refs;
+  state.roleRefsFrameSelector = cachedEntry.frameSelector;
+  state.roleRefsMode = cachedEntry.mode;
 }
 
 export function ensurePageState(page: Page): PageState {
@@ -438,6 +763,7 @@ async function findPageByTargetId(
 export async function getPageForTargetId(opts: {
   cdpUrl: string;
   targetId?: string;
+  sessionId?: string;
 }): Promise<Page> {
   const { browser } = await connectBrowser(opts.cdpUrl);
   const pages = await getAllPages(browser);
@@ -446,6 +772,12 @@ export async function getPageForTargetId(opts: {
   }
   const first = pages[0];
   if (!opts.targetId) {
+    // Restore role refs from session-scoped cache if available
+    restoreRoleRefsForTarget({
+      cdpUrl: opts.cdpUrl,
+      page: first,
+      sessionId: opts.sessionId,
+    });
     return first;
   }
   const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
@@ -454,10 +786,22 @@ export async function getPageForTargetId(opts: {
     // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
     // only exposes a single Page, use it as a best-effort fallback.
     if (pages.length === 1) {
+      restoreRoleRefsForTarget({
+        cdpUrl: opts.cdpUrl,
+        page: first,
+        sessionId: opts.sessionId,
+      });
       return first;
     }
     throw new Error("tab not found");
   }
+  // Restore role refs from session-scoped cache
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page: found,
+    sessionId: opts.sessionId,
+  });
   return found;
 }
 

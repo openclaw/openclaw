@@ -2,6 +2,8 @@ export type BrowserRequest = {
   params: Record<string, string>;
   query: Record<string, unknown>;
   body?: unknown;
+  /** Optional session ID for browser state isolation (from header or body) */
+  sessionId?: string;
 };
 
 export type BrowserResponse = {

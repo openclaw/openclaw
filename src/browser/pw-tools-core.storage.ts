@@ -3,6 +3,7 @@ import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 export async function cookiesGetViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  sessionId?: string;
 }): Promise<{ cookies: unknown[] }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -24,6 +25,7 @@ export async function cookiesSetViaPlaywright(opts: {
     secure?: boolean;
     sameSite?: "Lax" | "None" | "Strict";
   };
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -46,6 +48,7 @@ export async function cookiesSetViaPlaywright(opts: {
 export async function cookiesClearViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -59,6 +62,7 @@ export async function storageGetViaPlaywright(opts: {
   targetId?: string;
   kind: StorageKind;
   key?: string;
+  sessionId?: string;
 }): Promise<{ values: Record<string, string> }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -95,6 +99,7 @@ export async function storageSetViaPlaywright(opts: {
   kind: StorageKind;
   key: string;
   value: string;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -115,6 +120,7 @@ export async function storageClearViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   kind: StorageKind;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);

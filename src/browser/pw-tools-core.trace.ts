@@ -6,6 +6,7 @@ export async function traceStartViaPlaywright(opts: {
   screenshots?: boolean;
   snapshots?: boolean;
   sources?: boolean;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   const context = page.context();
@@ -25,6 +26,7 @@ export async function traceStopViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   path: string;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   const context = page.context();

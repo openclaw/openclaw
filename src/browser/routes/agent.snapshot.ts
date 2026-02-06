@@ -15,6 +15,7 @@ import {
 } from "../screenshot.js";
 import {
   getPwAiModule,
+  getSessionId,
   handleRouteError,
   readBody,
   requirePwAi,
@@ -34,6 +35,7 @@ export function registerBrowserAgentSnapshotRoutes(
     const body = readBody(req);
     const url = toStringOrEmpty(body.url);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const sessionId = getSessionId(req);
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
@@ -47,6 +49,7 @@ export function registerBrowserAgentSnapshotRoutes(
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         url,
+        sessionId,
       });
       res.json({ ok: true, targetId: tab.targetId, ...result });
     } catch (err) {
@@ -61,6 +64,7 @@ export function registerBrowserAgentSnapshotRoutes(
     }
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const sessionId = getSessionId(req);
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "pdf");
@@ -70,6 +74,7 @@ export function registerBrowserAgentSnapshotRoutes(
       const pdf = await pw.pdfViaPlaywright({
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
+        sessionId,
       });
       await ensureMediaDir();
       const saved = await saveMediaBuffer(
@@ -100,6 +105,7 @@ export function registerBrowserAgentSnapshotRoutes(
     const ref = toStringOrEmpty(body.ref) || undefined;
     const element = toStringOrEmpty(body.element) || undefined;
     const type = body.type === "jpeg" ? "jpeg" : "png";
+    const sessionId = getSessionId(req);
 
     if (fullPage && (ref || element)) {
       return jsonError(res, 400, "fullPage is not supported for element screenshots");
@@ -122,6 +128,7 @@ export function registerBrowserAgentSnapshotRoutes(
           element,
           fullPage,
           type,
+          sessionId,
         });
         buffer = snap.buffer;
       } else {
@@ -161,6 +168,7 @@ export function registerBrowserAgentSnapshotRoutes(
       return;
     }
     const targetId = typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const sessionId = getSessionId(req);
     const mode = req.query.mode === "efficient" ? "efficient" : undefined;
     const labels = toBoolean(req.query.labels) ?? undefined;
     const explicitFormat =
@@ -226,12 +234,14 @@ export function registerBrowserAgentSnapshotRoutes(
                 compact: compact ?? undefined,
                 maxDepth: depth ?? undefined,
               },
+              sessionId,
             })
           : await pw
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
                 ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+                sessionId,
               })
               .catch(async (err) => {
                 // Public-API fallback when Playwright's private _snapshotForAI is missing.
@@ -247,6 +257,7 @@ export function registerBrowserAgentSnapshotRoutes(
                       compact: compact ?? undefined,
                       maxDepth: depth ?? undefined,
                     },
+                    sessionId,
                   });
                 }
                 throw err;
@@ -257,6 +268,7 @@ export function registerBrowserAgentSnapshotRoutes(
             targetId: tab.targetId,
             refs: "refs" in snap ? snap.refs : {},
             type: "png",
+            sessionId,
           });
           const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
             maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -306,6 +318,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   cdpUrl: profileCtx.profile.cdpUrl,
                   targetId: tab.targetId,
                   limit,
+                  sessionId,
                 });
               });
             })()

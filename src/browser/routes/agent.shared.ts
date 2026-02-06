@@ -2,7 +2,7 @@ import type { PwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
 import { getPwAiModule as getPwAiModuleBase } from "../pw-ai-module.js";
-import { getProfileContext, jsonError } from "./utils.js";
+import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
 
 export const SELECTOR_UNSUPPORTED_MESSAGE = [
   "Error: 'selector' is not supported. Use 'ref' from snapshot instead.",
@@ -20,6 +20,32 @@ export function readBody(req: BrowserRequest): Record<string, unknown> {
     return {};
   }
   return body;
+}
+
+/**
+ * Extract sessionId from request.
+ * Priority: 1) req.sessionId (set by middleware from header)
+ *           2) body.sessionId
+ *           3) query.sessionId
+ */
+export function getSessionId(req: BrowserRequest): string | undefined {
+  // First check if already set on request (e.g., from header middleware)
+  if (req.sessionId?.trim()) {
+    return req.sessionId.trim();
+  }
+
+  // Then check body
+  const body = readBody(req);
+  if (typeof body.sessionId === "string" && body.sessionId.trim()) {
+    return body.sessionId.trim();
+  }
+
+  // Finally check query
+  if (typeof req.query.sessionId === "string" && req.query.sessionId.trim()) {
+    return req.query.sessionId.trim();
+  }
+
+  return undefined;
 }
 
 export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) {

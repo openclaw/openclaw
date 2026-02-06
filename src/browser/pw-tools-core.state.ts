@@ -15,6 +15,7 @@ export async function setOfflineViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   offline: boolean;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -25,6 +26,7 @@ export async function setExtraHTTPHeadersViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   headers: Record<string, string>;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -37,6 +39,7 @@ export async function setHttpCredentialsViaPlaywright(opts: {
   username?: string;
   password?: string;
   clear?: boolean;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -60,6 +63,7 @@ export async function setGeolocationViaPlaywright(opts: {
   accuracy?: number;
   origin?: string;
   clear?: boolean;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -95,6 +99,7 @@ export async function emulateMediaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   colorScheme: "dark" | "light" | "no-preference" | null;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -105,6 +110,7 @@ export async function setLocaleViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   locale: string;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -128,6 +134,7 @@ export async function setTimezoneViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   timezoneId: string;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -155,6 +162,7 @@ export async function setDeviceViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   name: string;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);

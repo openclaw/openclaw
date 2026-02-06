@@ -24,6 +24,7 @@ export async function responseBodyViaPlaywright(opts: {
   url: string;
   timeoutMs?: number;
   maxChars?: number;
+  sessionId?: string;
 }): Promise<{
   url: string;
   status?: number;

@@ -17,11 +17,13 @@ export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   limit?: number;
+  sessionId?: string;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = Math.max(1, Math.min(2000, Math.floor(opts.limit ?? 500)));
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
+    sessionId: opts.sessionId,
   });
   ensurePageState(page);
   const session = await page.context().newCDPSession(page);
@@ -42,10 +44,12 @@ export async function snapshotAiViaPlaywright(opts: {
   targetId?: string;
   timeoutMs?: number;
   maxChars?: number;
+  sessionId?: string;
 }): Promise<{ snapshot: string; truncated?: boolean; refs: RoleRefMap }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
+    sessionId: opts.sessionId,
   });
   ensurePageState(page);
 
@@ -77,6 +81,7 @@ export async function snapshotAiViaPlaywright(opts: {
     targetId: opts.targetId,
     refs: built.refs,
     mode: "aria",
+    sessionId: opts.sessionId,
   });
   return truncated ? { snapshot, truncated, refs: built.refs } : { snapshot, refs: built.refs };
 }
@@ -88,6 +93,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   frameSelector?: string;
   refsMode?: "role" | "aria";
   options?: RoleSnapshotOptions;
+  sessionId?: string;
 }): Promise<{
   snapshot: string;
   refs: Record<string, { role: string; name?: string; nth?: number }>;
@@ -96,6 +102,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
+    sessionId: opts.sessionId,
   });
   ensurePageState(page);
 
@@ -118,6 +125,7 @@ export async function snapshotRoleViaPlaywright(opts: {
       targetId: opts.targetId,
       refs: built.refs,
       mode: "aria",
+      sessionId: opts.sessionId,
     });
     return {
       snapshot: built.snapshot,
@@ -145,6 +153,7 @@ export async function snapshotRoleViaPlaywright(opts: {
     refs: built.refs,
     frameSelector: frameSelector || undefined,
     mode: "role",
+    sessionId: opts.sessionId,
   });
   return {
     snapshot: built.snapshot,
@@ -158,12 +167,17 @@ export async function navigateViaPlaywright(opts: {
   targetId?: string;
   url: string;
   timeoutMs?: number;
+  sessionId?: string;
 }): Promise<{ url: string }> {
   const url = String(opts.url ?? "").trim();
   if (!url) {
     throw new Error("url is required");
   }
-  const page = await getPageForTargetId(opts);
+  const page = await getPageForTargetId({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    sessionId: opts.sessionId,
+  });
   ensurePageState(page);
   await page.goto(url, {
     timeout: Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000)),
@@ -176,8 +190,13 @@ export async function resizeViewportViaPlaywright(opts: {
   targetId?: string;
   width: number;
   height: number;
+  sessionId?: string;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  const page = await getPageForTargetId({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    sessionId: opts.sessionId,
+  });
   ensurePageState(page);
   await page.setViewportSize({
     width: Math.max(1, Math.floor(opts.width)),
@@ -188,8 +207,13 @@ export async function resizeViewportViaPlaywright(opts: {
 export async function closePageViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  sessionId?: string;
 }): Promise<void> {
-  const page = await getPageForTargetId(opts);
+  const page = await getPageForTargetId({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    sessionId: opts.sessionId,
+  });
   ensurePageState(page);
   await page.close();
 }
@@ -197,8 +221,13 @@ export async function closePageViaPlaywright(opts: {
 export async function pdfViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
+  sessionId?: string;
 }): Promise<{ buffer: Buffer }> {
-  const page = await getPageForTargetId(opts);
+  const page = await getPageForTargetId({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    sessionId: opts.sessionId,
+  });
   ensurePageState(page);
   const buffer = await page.pdf({ printBackground: true });
   return { buffer };

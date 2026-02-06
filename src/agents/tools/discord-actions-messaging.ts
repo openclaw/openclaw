@@ -235,11 +235,16 @@ export async function handleDiscordMessagingAction(
       const replyTo = readStringParam(params, "replyTo");
       const embeds =
         Array.isArray(params.embeds) && params.embeds.length > 0 ? params.embeds : undefined;
+      const components =
+        Array.isArray(params.components) && params.components.length > 0
+          ? params.components
+          : undefined;
       const result = await sendMessageDiscord(to, content, {
         ...(accountId ? { accountId } : {}),
         mediaUrl,
         replyTo,
         embeds,
+        components,
       });
       return jsonResult({ ok: true, result });
     }
@@ -281,18 +286,31 @@ export async function handleDiscordMessagingAction(
       const channelId = resolveChannelId();
       const name = readStringParam(params, "name", { required: true });
       const messageId = readStringParam(params, "messageId");
+      // Optional initial content (required for forum posts).
+      const content = readStringParam(params, "content") ?? undefined;
+      // Optional applied tag ids (forum posts).
+      const appliedTagIds = Array.isArray(params.appliedTagIds)
+        ? params.appliedTagIds.filter((x) => typeof x === "string" && x.trim())
+        : undefined;
       const autoArchiveMinutesRaw = params.autoArchiveMinutes;
       const autoArchiveMinutes =
         typeof autoArchiveMinutesRaw === "number" && Number.isFinite(autoArchiveMinutesRaw)
           ? autoArchiveMinutesRaw
           : undefined;
+
       const thread = accountId
         ? await createThreadDiscord(
             channelId,
-            { name, messageId, autoArchiveMinutes },
+            { name, messageId, autoArchiveMinutes, content, appliedTagIds },
             { accountId },
           )
-        : await createThreadDiscord(channelId, { name, messageId, autoArchiveMinutes });
+        : await createThreadDiscord(channelId, {
+            name,
+            messageId,
+            autoArchiveMinutes,
+            content,
+            appliedTagIds,
+          });
       return jsonResult({ ok: true, thread });
     }
     case "threadList": {

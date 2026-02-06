@@ -8,6 +8,7 @@ import {
   parseClickModifiers,
 } from "./agent.act.shared.js";
 import {
+  getSessionId,
   handleRouteError,
   readBody,
   requirePwAi,
@@ -32,6 +33,7 @@ export function registerBrowserAgentActRoutes(
     }
     const kind: ActKind = kindRaw;
     const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const sessionId = getSessionId(req);
     if (Object.hasOwn(body, "selector") && kind !== "wait") {
       return jsonError(res, 400, SELECTOR_UNSUPPORTED_MESSAGE);
     }
@@ -70,6 +72,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             ref,
             doubleClick,
+            sessionId,
           };
           if (button) {
             clickRequest.button = button;
@@ -102,6 +105,7 @@ export function registerBrowserAgentActRoutes(
             text,
             submit,
             slowly,
+            sessionId,
           };
           if (timeoutMs) {
             typeRequest.timeoutMs = timeoutMs;
@@ -120,6 +124,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             key,
             delayMs: delayMs ?? undefined,
+            sessionId,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -134,6 +139,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             ref,
             timeoutMs: timeoutMs ?? undefined,
+            sessionId,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -147,6 +153,7 @@ export function registerBrowserAgentActRoutes(
             cdpUrl,
             targetId: tab.targetId,
             ref,
+            sessionId,
           };
           if (timeoutMs) {
             scrollRequest.timeoutMs = timeoutMs;
@@ -167,6 +174,7 @@ export function registerBrowserAgentActRoutes(
             startRef,
             endRef,
             timeoutMs: timeoutMs ?? undefined,
+            sessionId,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -183,6 +191,7 @@ export function registerBrowserAgentActRoutes(
             ref,
             values,
             timeoutMs: timeoutMs ?? undefined,
+            sessionId,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -219,6 +228,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             fields,
             timeoutMs: timeoutMs ?? undefined,
+            sessionId,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -233,6 +243,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             width,
             height,
+            sessionId,
           });
           return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
         }
@@ -287,6 +298,7 @@ export function registerBrowserAgentActRoutes(
             loadState,
             fn,
             timeoutMs,
+            sessionId,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -311,6 +323,7 @@ export function registerBrowserAgentActRoutes(
             targetId: tab.targetId,
             fn,
             ref,
+            sessionId,
           });
           return res.json({
             ok: true,
@@ -320,7 +333,7 @@ export function registerBrowserAgentActRoutes(
           });
         }
         case "close": {
-          await pw.closePageViaPlaywright({ cdpUrl, targetId: tab.targetId });
+          await pw.closePageViaPlaywright({ cdpUrl, targetId: tab.targetId, sessionId });
           return res.json({ ok: true, targetId: tab.targetId });
         }
         default: {
@@ -344,6 +357,7 @@ export function registerBrowserAgentActRoutes(
     const element = toStringOrEmpty(body.element) || undefined;
     const paths = toStringArray(body.paths) ?? [];
     const timeoutMs = toNumber(body.timeoutMs);
+    const sessionId = getSessionId(req);
     if (!paths.length) {
       return jsonError(res, 400, "paths are required");
     }
@@ -363,6 +377,7 @@ export function registerBrowserAgentActRoutes(
           inputRef,
           element,
           paths,
+          sessionId,
         });
       } else {
         await pw.armFileUploadViaPlaywright({
@@ -370,12 +385,14 @@ export function registerBrowserAgentActRoutes(
           targetId: tab.targetId,
           paths,
           timeoutMs: timeoutMs ?? undefined,
+          sessionId,
         });
         if (ref) {
           await pw.clickViaPlaywright({
             cdpUrl: profileCtx.profile.cdpUrl,
             targetId: tab.targetId,
             ref,
+            sessionId,
           });
         }
       }
@@ -395,6 +412,7 @@ export function registerBrowserAgentActRoutes(
     const accept = toBoolean(body.accept);
     const promptText = toStringOrEmpty(body.promptText) || undefined;
     const timeoutMs = toNumber(body.timeoutMs);
+    const sessionId = getSessionId(req);
     if (accept === undefined) {
       return jsonError(res, 400, "accept is required");
     }
@@ -410,6 +428,7 @@ export function registerBrowserAgentActRoutes(
         accept,
         promptText,
         timeoutMs: timeoutMs ?? undefined,
+        sessionId,
       });
       res.json({ ok: true });
     } catch (err) {
@@ -426,6 +445,7 @@ export function registerBrowserAgentActRoutes(
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const out = toStringOrEmpty(body.path) || undefined;
     const timeoutMs = toNumber(body.timeoutMs);
+    const sessionId = getSessionId(req);
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "wait for download");
@@ -437,6 +457,7 @@ export function registerBrowserAgentActRoutes(
         targetId: tab.targetId,
         path: out,
         timeoutMs: timeoutMs ?? undefined,
+        sessionId,
       });
       res.json({ ok: true, targetId: tab.targetId, download: result });
     } catch (err) {
@@ -454,6 +475,7 @@ export function registerBrowserAgentActRoutes(
     const ref = toStringOrEmpty(body.ref);
     const out = toStringOrEmpty(body.path);
     const timeoutMs = toNumber(body.timeoutMs);
+    const sessionId = getSessionId(req);
     if (!ref) {
       return jsonError(res, 400, "ref is required");
     }
@@ -472,6 +494,7 @@ export function registerBrowserAgentActRoutes(
         ref,
         path: out,
         timeoutMs: timeoutMs ?? undefined,
+        sessionId,
       });
       res.json({ ok: true, targetId: tab.targetId, download: result });
     } catch (err) {
@@ -489,6 +512,7 @@ export function registerBrowserAgentActRoutes(
     const url = toStringOrEmpty(body.url);
     const timeoutMs = toNumber(body.timeoutMs);
     const maxChars = toNumber(body.maxChars);
+    const sessionId = getSessionId(req);
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
@@ -504,6 +528,7 @@ export function registerBrowserAgentActRoutes(
         url,
         timeoutMs: timeoutMs ?? undefined,
         maxChars: maxChars ?? undefined,
+        sessionId,
       });
       res.json({ ok: true, targetId: tab.targetId, response: result });
     } catch (err) {
@@ -519,6 +544,7 @@ export function registerBrowserAgentActRoutes(
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const ref = toStringOrEmpty(body.ref);
+    const sessionId = getSessionId(req);
     if (!ref) {
       return jsonError(res, 400, "ref is required");
     }
@@ -532,6 +558,7 @@ export function registerBrowserAgentActRoutes(
         cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         ref,
+        sessionId,
       });
       res.json({ ok: true, targetId: tab.targetId });
     } catch (err) {

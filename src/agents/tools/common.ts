@@ -130,8 +130,10 @@ export function readStringArrayParam(
 ) {
   const { required = false, label = key } = options;
   const raw = params[key];
-  if (Array.isArray(raw)) {
-    const values = raw
+
+  // Helper to normalize array values
+  const normalizeArray = (arr: unknown[]): string[] | undefined => {
+    const values = arr
       .filter((entry) => typeof entry === "string")
       .map((entry) => entry.trim())
       .filter(Boolean);
@@ -142,7 +144,14 @@ export function readStringArrayParam(
       return undefined;
     }
     return values;
+  };
+
+  // Handle existing array input
+  if (Array.isArray(raw)) {
+    return normalizeArray(raw);
   }
+
+  // Handle string input
   if (typeof raw === "string") {
     const value = raw.trim();
     if (!value) {
@@ -151,8 +160,34 @@ export function readStringArrayParam(
       }
       return undefined;
     }
+
+    // Try JSON array parsing if string looks like JSON array
+    if (value.startsWith("[") && value.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(value);
+        if (Array.isArray(parsed)) {
+          return normalizeArray(parsed);
+        }
+      } catch {
+        // Not valid JSON, fall through to comma splitting
+      }
+    }
+
+    // Try comma-separated splitting
+    if (value.includes(",")) {
+      const parts = value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (parts.length > 0) {
+        return parts;
+      }
+    }
+
+    // Single value
     return [value];
   }
+
   if (required) {
     throw new Error(`${label} required`);
   }

@@ -9,6 +9,7 @@ export async function getPageErrorsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   clear?: boolean;
+  sessionId?: string;
 }): Promise<{ errors: BrowserPageError[] }> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
@@ -24,6 +25,7 @@ export async function getNetworkRequestsViaPlaywright(opts: {
   targetId?: string;
   filter?: string;
   clear?: boolean;
+  sessionId?: string;
 }): Promise<{ requests: BrowserNetworkRequest[] }> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
@@ -57,6 +59,7 @@ export async function getConsoleMessagesViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   level?: string;
+  sessionId?: string;
 }): Promise<BrowserConsoleMessage[]> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);

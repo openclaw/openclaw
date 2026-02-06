@@ -77,6 +77,7 @@ export async function armFileUploadViaPlaywright(opts: {
   targetId?: string;
   paths?: string[];
   timeoutMs?: number;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
@@ -127,6 +128,7 @@ export async function armDialogViaPlaywright(opts: {
   accept: boolean;
   promptText?: string;
   timeoutMs?: number;
+  sessionId?: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
@@ -157,6 +159,7 @@ export async function waitForDownloadViaPlaywright(opts: {
   targetId?: string;
   path?: string;
   timeoutMs?: number;
+  sessionId?: string;
 }): Promise<{
   url: string;
   suggestedFilename: string;
@@ -200,6 +203,7 @@ export async function downloadViaPlaywright(opts: {
   ref: string;
   path: string;
   timeoutMs?: number;
+  sessionId?: string;
 }): Promise<{
   url: string;
   suggestedFilename: string;
@@ -207,7 +211,12 @@ export async function downloadViaPlaywright(opts: {
 }> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+  restoreRoleRefsForTarget({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    page,
+    sessionId: opts.sessionId,
+  });
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
   const ref = requireRef(opts.ref);
