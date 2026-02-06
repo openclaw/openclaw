@@ -112,19 +112,11 @@ export function applySettingsFromUrl(host: SettingsHost) {
   let shouldCleanUrl = false;
 
   if (tokenRaw != null) {
-    const token = tokenRaw.trim();
-    if (token && token !== host.settings.token) {
-      applySettings(host, { ...host.settings, token });
-    }
     params.delete("token");
     shouldCleanUrl = true;
   }
 
   if (passwordRaw != null) {
-    const password = passwordRaw.trim();
-    if (password) {
-      (host as unknown as { password: string }).password = password;
-    }
     params.delete("password");
     shouldCleanUrl = true;
   }
