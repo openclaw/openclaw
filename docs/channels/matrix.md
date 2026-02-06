@@ -74,7 +74,7 @@ Details: [Plugins](/plugin)
    - When set, `channels.matrix.userId` should be the full Matrix ID (example: `@bot:example.org`).
 5. Restart the gateway (or finish onboarding).
 6. Start a DM with the bot or invite it to a room from any Matrix client
-   (Element, Beeper, etc.; see https://matrix.org/ecosystem/clients/). Beeper requires E2EE,
+   (Element, Beeper, etc.; see [https://matrix.org/ecosystem/clients/](https://matrix.org/ecosystem/clients/)). Beeper requires E2EE,
    so set `channels.matrix.encryption: true` and verify the device.
 
 Minimal config (access token, user ID auto-fetched):
