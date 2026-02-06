@@ -40,14 +40,15 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
 }
 
+export function getAgentRunContext(runId: string) {
+  return runContextById.get(runId);
+}
+
 export function clearAgentRunContext(runId: string) {
   runContextById.delete(runId);
   seqByRun.delete(runId);
 }
 
-export function clearAgentRunContext(runId: string) {
-  runContextById.delete(runId);
-}
 
 export function resetAgentRunContextForTest() {
   runContextById.clear();
