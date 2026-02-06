@@ -13,7 +13,7 @@ ModelScope provides OpenAI-compatible APIs for hosted models. OpenClaw uses the
 
 ## Model overview
 
-- Default model: `Qwen/Qwen3-8B`
+- Default model: `Qwen/Qwen3-32B`
 - Base URL: `https://api-inference.modelscope.cn/v1`
 - Authorization: `Bearer $MODELSCOPE_API_KEY`
 
@@ -32,7 +32,7 @@ openclaw onboard --auth-choice apiKey --token-provider modelscope --token "$MODE
   env: { MODELSCOPE_API_KEY: "ms-or-..." },
   agents: {
     defaults: {
-      model: { primary: "modelscope/Qwen/Qwen3-8B" },
+      model: { primary: "modelscope/Qwen/Qwen3-32B" },
     },
   },
 }
@@ -41,7 +41,7 @@ openclaw onboard --auth-choice apiKey --token-provider modelscope --token "$MODE
 ## Notes
 
 - Model refs are `modelscope/<provider>/<model>`.
-- example: `modelscope/Qwen/Qwen3-8B`.
+- example: `modelscope/Qwen/Qwen3-32B`.
 - The provider is injected automatically when `MODELSCOPE_API_KEY` is set (or an auth profile exists).
 - See [/concepts/model-providers](/concepts/model-providers) for provider rules.
 - See [ModelScope API-Inference](https://modelscope.cn/docs/model-service/API-Inference/intro) to learn more about how to get an API key.
