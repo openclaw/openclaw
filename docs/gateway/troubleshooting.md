@@ -42,11 +42,9 @@ Fix options:
 
 - Re-run onboarding and choose **Anthropic** for that agent.
 - Or paste a setup-token on the **gateway host**:
-
   ```bash
   openclaw models auth setup-token --provider anthropic
   ```
-
 - Or copy `auth-profiles.json` from the main agent dir to the new agent dir.
 
 Verify:
@@ -122,17 +120,13 @@ Doctor/service will show runtime state (PID/last exit) and log hints.
 **Enable more logging:**
 
 - Bump file log detail (persisted JSONL):
-
   ```json
   { "logging": { "level": "debug" } }
   ```
-
 - Bump console verbosity (TTY output only):
-
   ```json
   { "logging": { "consoleLevel": "debug", "consoleStyle": "pretty" } }
   ```
-
 - Quick tip: `--verbose` affects **console** output only. File logs remain controlled by `logging.level`.
 
 See [/logging](/logging) for a full overview of formats, config, and access.
@@ -145,13 +139,10 @@ Gateway refuses to start.
 **Fix (recommended):**
 
 - Run the wizard and set the Gateway run mode to **Local**:
-
   ```bash
   openclaw configure
   ```
-
 - Or set it directly:
-
   ```bash
   openclaw config set gateway.mode local
   ```
@@ -159,7 +150,6 @@ Gateway refuses to start.
 **If you meant to run a remote Gateway instead:**
 
 - Set a remote URL and keep `gateway.mode=remote`:
-
   ```bash
   openclaw config set gateway.mode remote
   openclaw config set gateway.remote.url "wss://gateway.example.com"
@@ -564,7 +554,6 @@ Notes:
 
 - The git flow only rebases if the repo is clean. Commit or stash changes first.
 - After switching, run:
-
   ```bash
   openclaw doctor
   openclaw gateway restart

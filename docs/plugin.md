@@ -25,13 +25,13 @@ Fast path:
 openclaw plugins list
 ```
 
-1. Install an official plugin (example: Voice Call):
+2. Install an official plugin (example: Voice Call):
 
 ```bash
 openclaw plugins install @openclaw/voice-call
 ```
 
-1. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
+3. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
 
 See [Voice Call](/plugins/voice-call) for a concrete example plugin.
 
@@ -94,17 +94,17 @@ OpenClaw scans, in order:
 
 - `plugins.load.paths` (file or directory)
 
-1. Workspace extensions
+2. Workspace extensions
 
 - `<workspace>/.openclaw/extensions/*.ts`
 - `<workspace>/.openclaw/extensions/*/index.ts`
 
-1. Global extensions
+3. Global extensions
 
 - `~/.openclaw/extensions/*.ts`
 - `~/.openclaw/extensions/*/index.ts`
 
-1. Bundled extensions (shipped with OpenClaw, **disabled by default**)
+4. Bundled extensions (shipped with OpenClaw, **disabled by default**)
 
 - `<openclaw>/extensions/*`
 
@@ -432,26 +432,26 @@ Model provider docs live under `/providers/*`.
 - All channel config lives under `channels.<id>`.
 - Prefer `channels.<id>.accounts.<accountId>` for multi‑account setups.
 
-1. Define the channel metadata
+2. Define the channel metadata
 
 - `meta.label`, `meta.selectionLabel`, `meta.docsPath`, `meta.blurb` control CLI/UI lists.
 - `meta.docsPath` should point at a docs page like `/channels/<id>`.
 - `meta.preferOver` lets a plugin replace another channel (auto-enable prefers it).
 - `meta.detailLabel` and `meta.systemImage` are used by UIs for detail text/icons.
 
-1. Implement the required adapters
+3. Implement the required adapters
 
 - `config.listAccountIds` + `config.resolveAccount`
 - `capabilities` (chat types, media, threads, etc.)
 - `outbound.deliveryMode` + `outbound.sendText` (for basic send)
 
-1. Add optional adapters as needed
+4. Add optional adapters as needed
 
 - `setup` (wizard), `security` (DM policy), `status` (health/diagnostics)
 - `gateway` (start/stop/login), `mentions`, `threading`, `streaming`
 - `actions` (message actions), `commands` (native command behavior)
 
-1. Register the channel in your plugin
+5. Register the channel in your plugin
 
 - `api.registerChannel({ plugin })`
 

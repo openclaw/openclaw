@@ -67,7 +67,7 @@ node openclaw.mjs gateway --port 18789 --verbose
 openclaw channels login
 ```
 
-1. Sanity check:
+5. Sanity check:
 
 ```bash
 openclaw health

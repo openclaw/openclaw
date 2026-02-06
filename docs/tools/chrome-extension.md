@@ -31,18 +31,18 @@ OpenClaw then controls the attached tab through the normal `browser` tool surfac
 openclaw browser extension install
 ```
 
-1. Print the installed extension directory path:
+2. Print the installed extension directory path:
 
 ```bash
 openclaw browser extension path
 ```
 
-1. Chrome → `chrome://extensions`
+3. Chrome → `chrome://extensions`
 
 - Enable “Developer mode”
 - “Load unpacked” → select the directory printed above
 
-1. Pin the extension.
+4. Pin the extension.
 
 ## Updates (no build step)
 

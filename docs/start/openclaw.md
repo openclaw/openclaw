@@ -58,13 +58,13 @@ If you link your personal WhatsApp to OpenClaw, every message to you becomes “
 openclaw channels login
 ```
 
-1. Start the Gateway (leave it running):
+2. Start the Gateway (leave it running):
 
 ```bash
 openclaw gateway --port 18789
 ```
 
-1. Put a minimal config in `~/.openclaw/openclaw.json`:
+3. Put a minimal config in `~/.openclaw/openclaw.json`:
 
 ```json5
 {
