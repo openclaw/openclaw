@@ -444,7 +444,7 @@ openclaw hooks enable session-memory
 openclaw hooks disable command-logger
 ```
 
-## Bundled Hooks
+## Bundled hook reference
 
 ### session-memory
 
