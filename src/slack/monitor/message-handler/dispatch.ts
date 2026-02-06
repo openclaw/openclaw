@@ -138,11 +138,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   // Slack native text streaming state
   // -----------------------------------------------------------------------
   const streamingEnabled = account.config.streaming === true;
-  const replyThreadTs = replyPlan.nextThreadTs();
+
+  // Peek at the thread target without consuming it (for streaming check only).
+  const streamThreadHint = incomingThreadTs ?? statusThreadTs;
 
   const useStreaming = shouldUseStreaming({
     streamingEnabled,
-    threadTs: replyThreadTs ?? incomingThreadTs ?? statusThreadTs,
+    threadTs: streamThreadHint,
   });
 
   let streamSession: SlackStreamSession | null = null;
