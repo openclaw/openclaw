@@ -16,7 +16,9 @@ import type {
   SearchSignalResult,
   StoreMemoryInput,
 } from "./schema.js";
-import { escapeLucene, validateRelationshipType } from "./schema.js";
+import { ALLOWED_RELATIONSHIP_TYPES, escapeLucene, validateRelationshipType } from "./schema.js";
+
+const RELATIONSHIP_TYPE_PATTERN = [...ALLOWED_RELATIONSHIP_TYPES].join("|");
 
 // ============================================================================
 // Types
@@ -526,7 +528,7 @@ export class Neo4jMemoryClient {
 
              UNWIND $entityIds AS eid
              // 1-hop: Entity → relationship → Entity ← MENTIONS ← Memory
-             OPTIONAL MATCH (e:Entity {id: eid})-[r1:RELATED_TO|KNOWS|WORKS_AT|LIVES_AT|MARRIED_TO|PREFERS|DECIDED]-(e2:Entity)
+             OPTIONAL MATCH (e:Entity {id: eid})-[r1:${RELATIONSHIP_TYPE_PATTERN}]-(e2:Entity)
              WHERE coalesce(r1.confidence, 0.7) >= $firingThreshold
              OPTIONAL MATCH (e2)<-[rm:MENTIONS]-(m:Memory)
              WHERE m IS NOT NULL ${agentFilter}
