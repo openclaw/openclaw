@@ -28,13 +28,14 @@ import {
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
-import { resolveRunWorkspaceDir } from "./workspace-run.js";
+import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
 
 export async function runCliAgent(params: {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   sessionFile: string;
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -54,12 +55,21 @@ export async function runCliAgent(params: {
   const workspaceResolution = resolveRunWorkspaceDir({
     workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     config: params.config,
   });
   const resolvedWorkspace = workspaceResolution.workspaceDir;
+  const redactedSessionId = redactRunIdentifier(params.sessionId);
+  const redactedSessionKey = redactRunIdentifier(params.sessionKey);
+  const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
+  if (workspaceResolution.malformedSessionKey && workspaceResolution.agentIdSource === "default") {
+    log.warn(
+      `[workspace-agent-default] caller=runCliAgent reason=malformed_session_key run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId}`,
+    );
+  }
   if (workspaceResolution.usedFallback) {
     log.warn(
-      `[workspace-fallback] caller=runCliAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${params.sessionId} sessionKey=${params.sessionKey ?? "-"} agent=${workspaceResolution.agentId} workspace=${resolvedWorkspace}`,
+      `[workspace-fallback] caller=runCliAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
     );
   }
   const workspaceDir = resolvedWorkspace;
@@ -321,6 +331,7 @@ export async function runCliAgent(params: {
 export async function runClaudeCliAgent(params: {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   sessionFile: string;
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -338,6 +349,7 @@ export async function runClaudeCliAgent(params: {
   return runCliAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.config,

@@ -104,6 +104,52 @@ describe("runCliAgent resume cleanup", () => {
     const options = runCommandWithTimeoutMock.mock.calls[0]?.[1] as { cwd?: string };
     expect(options.cwd).toBe(path.resolve(fallbackWorkspace));
   });
+
+  it("uses explicit agent fallback when sessionKey is malformed", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-runner-"));
+    const mainWorkspace = path.join(tempDir, "workspace-main");
+    const researchWorkspace = path.join(tempDir, "workspace-research");
+    await fs.mkdir(mainWorkspace, { recursive: true });
+    await fs.mkdir(researchWorkspace, { recursive: true });
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: mainWorkspace,
+        },
+        list: [{ id: "research", workspace: researchWorkspace }],
+      },
+    } satisfies OpenClawConfig;
+
+    runExecMock.mockResolvedValue({ stdout: "", stderr: "" });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "ok",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+
+    try {
+      await runCliAgent({
+        sessionId: "s1",
+        sessionKey: "agent::broken",
+        agentId: "research",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: undefined as unknown as string,
+        config: cfg,
+        prompt: "hi",
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-2",
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    const options = runCommandWithTimeoutMock.mock.calls[0]?.[1] as { cwd?: string };
+    expect(options.cwd).toBe(path.resolve(researchWorkspace));
+  });
 });
 
 describe("cleanupSuspendedCliProcesses", () => {

@@ -45,7 +45,7 @@ import {
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
-import { resolveRunWorkspaceDir } from "../workspace-run.js";
+import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -95,12 +95,24 @@ export async function runEmbeddedPiAgent(
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
+        agentId: params.agentId,
         config: params.config,
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
+      const redactedSessionId = redactRunIdentifier(params.sessionId);
+      const redactedSessionKey = redactRunIdentifier(params.sessionKey);
+      const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
+      if (
+        workspaceResolution.malformedSessionKey &&
+        workspaceResolution.agentIdSource === "default"
+      ) {
+        log.warn(
+          `[workspace-agent-default] caller=runEmbeddedPiAgent reason=malformed_session_key run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId}`,
+        );
+      }
       if (workspaceResolution.usedFallback) {
         log.warn(
-          `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${params.sessionId} sessionKey=${params.sessionKey ?? "-"} agent=${workspaceResolution.agentId} workspace=${resolvedWorkspace}`,
+          `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
         );
       }
       const prevCwd = process.cwd();
@@ -355,6 +367,7 @@ export async function runEmbeddedPiAgent(
             model,
             authStorage,
             modelRegistry,
+            agentId: workspaceResolution.agentId,
             thinkLevel,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,

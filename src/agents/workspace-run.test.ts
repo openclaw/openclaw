@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -70,5 +71,32 @@ describe("resolveRunWorkspaceDir", () => {
     expect(result.fallbackReason).toBe("missing");
     expect(result.agentId).toBe("main");
     expect(result.workspaceDir).toBe(path.resolve(DEFAULT_AGENT_WORKSPACE_DIR));
+  });
+
+  it("warns by metadata and defaults agent id for malformed session keys", () => {
+    const result = resolveRunWorkspaceDir({
+      workspaceDir: undefined,
+      sessionKey: "agent::broken",
+      config: undefined,
+    });
+
+    expect(result.agentId).toBe("main");
+    expect(result.agentIdSource).toBe("default");
+    expect(result.malformedSessionKey).toBe(true);
+    expect(result.workspaceDir).toBe(path.resolve(DEFAULT_AGENT_WORKSPACE_DIR));
+  });
+
+  it("uses explicit agent id for per-agent fallback when config is unavailable", () => {
+    const result = resolveRunWorkspaceDir({
+      workspaceDir: undefined,
+      sessionKey: "definitely-not-a-valid-session-key",
+      agentId: "research",
+      config: undefined,
+    });
+
+    expect(result.agentId).toBe("research");
+    expect(result.agentIdSource).toBe("explicit");
+    expect(result.malformedSessionKey).toBe(false);
+    expect(result.workspaceDir).toBe(path.resolve(os.homedir(), ".openclaw", "workspace-research"));
   });
 });
