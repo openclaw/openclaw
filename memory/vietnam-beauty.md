@@ -386,12 +386,53 @@
   - 설정 페이지에 동기화 UI 추가
   - Frontend API 함수 (sheetsSyncApi) 추가
 
+### 2026-02-06 (오후)
+- [x] **T013 D018 판매 시나리오 API E2E 재검증** (`5c4e75f`)
+  - Python HTTP 직접 호출 방식으로 전체 판매 프로세스 검증
+  - 54/54 ALL PASS (44.7초)
+  - STEP 0~7: 인증, Sheets 동기화, 콘텐츠 CRUD, 리드 CRUD+상태이력, 마케팅 캠페인+AI카피(Ollama), 가격 모니터링, 대시보드 통계, 외부 연동
+  - AI 카피 생성 실제 동작 확인 (qwen3:8b, 베트남어 3종, 9.97초)
+  - 데이터 정합성 검증 (리드 추가 시 대시보드 통계 즉시 반영)
+  - T012(UI 33건) → T013(API 54건): 검증 범위 63% 확대
+
+### 2026-02-06 (오전)
+- [x] **n8n 연동 테스트 전체 완료**
+  - n8n Cloud (`mai-n8n.app.n8n.cloud`) healthz OK, 워크플로우 5개 활성 확인
+  - MAIBEAUTY API 시뮬레이션: 새 리드 조회 → 상태 업데이트 → 복원 성공
+- [x] **카카오톡 알림 서비스 3/3 성공**
+  - 텍스트(80ms) / 피드(242ms) / 커머스(244ms) 전부 PASS
+  - 토큰 만료 → 자동 갱신 (Refresh Token) 정상 작동
+- [x] **Settings 페이지 전체 연동 테스트 — 15개 항목**
+  - 인증/API/연동/프론트엔드 전수 테스트 → 14/15 PASS (Ollama만 미실행)
+  - I022 문서화 완료
+- [x] **Google Sheets Railway 연동 완료** (`ac9bdc7`)
+  - Railway 환경변수: `CRM_SPREADSHEET_ID` + `GOOGLE_SERVICE_ACCOUNT_JSON_B64` 설정
+  - PEM 파싱 문제 → Base64 인코딩으로 해결
+  - `sheets_sync.py` B64 디코딩 지원 추가
+  - Push 11건 성공 / Pull 성공 (양방향 동기화 검증)
+  - Settings 페이지: 연결됨 (MAIBEAUTY CRM - Vietnam Beauty Sales)
+
 ### Railway 인프라 현황
 | 서비스 | URL | 상태 |
 |--------|-----|------|
 | maibeauty-api | maibeauty-api-production.up.railway.app | 🟢 Online |
 | Postgres-qWem | postgres-qwem.railway.internal:5432 | 🟢 Online |
+| n8n Cloud | mai-n8n.app.n8n.cloud | 🟢 Online |
+
+### Admin 로그인 계정 (2026-02-06 지니님 확인)
+| 항목 | 값 |
+|------|-----|
+| URL | https://jini92.github.io/MAIBEAUTY/ |
+| 이메일 | `admin@maibeauty.com` |
+| 비밀번호 | `Maibeauty2026!` |
+| 권한 | admin |
+
+### Railway 환경변수 (2026-02-06 추가)
+| 변수 | 용도 |
+|------|------|
+| `CRM_SPREADSHEET_ID` | Google Sheets CRM 스프레드시트 ID |
+| `GOOGLE_SERVICE_ACCOUNT_JSON_B64` | SA JSON Base64 인코딩 |
 
 ---
 
-*Last updated: 2026-02-05 20:15*
+*Last updated: 2026-02-06 09:55*

@@ -16,6 +16,18 @@
 | MAIOSS | `C:\TEST\MAIOSS` | [jini92/MAIOSS](https://github.com/jini92/MAIOSS) | Claude Code | Railway + GitHub Pages |
 | MAIBOT (메인) | `C:\MAIBOT` | [jini92/MAIBOT](https://github.com/jini92/MAIBOT) | Claude Code | — |
 
+## 개발 방식 (전체 프로젝트 공통)
+
+| 항목 | 내용 |
+|------|------|
+| 방식 | 🏆 하이브리드 — MAIBOT(오케스트레이터) + Claude Code CLI(개발자) |
+| 확정일 | 2026-02-06 |
+| 적용 범위 | 모든 프로젝트 (MAIBEAUTY, MAIOSS, MAIBOT 등) |
+| 전체 적용일 | 2026-02-06 (3개 프로젝트 모두 서브에이전트+MCP+CLAUDE.md 세팅 완료) |
+| 과금 | 둘 다 Claude Max 구독 (동일 계정) |
+| Claude Code | v2.1.34 |
+| 스킬 | `skills/hybrid-coding/SKILL.md` — 새 프로젝트에 재사용 가능 |
+
 ## 완료 프로젝트
 
 *(아직 없음)*

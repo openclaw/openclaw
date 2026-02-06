@@ -1,0 +1,9 @@
+{
+  "enabledMcpjsonServers": [
+    "playwright",
+    "fetcher",
+    "context7",
+    "magic"
+  ],
+  "enableAllProjectMcpServers": true
+}
