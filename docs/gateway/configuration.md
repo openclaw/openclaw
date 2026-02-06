@@ -1589,8 +1589,8 @@ active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` t
 #### `messages.tts`
 
 Enable text-to-speech for outbound replies. When on, OpenClaw generates audio
-using ElevenLabs or OpenAI and attaches it to responses. Telegram uses Opus
-voice notes; other channels send MP3 audio.
+using ElevenLabs, OpenAI, Typecast, or Edge TTS and attaches it to responses.
+Telegram uses Opus voice notes; other channels send MP3 audio.
 
 ```json5
 {
@@ -1627,6 +1627,19 @@ voice notes; other channels send MP3 audio.
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
+      typecast: {
+        apiKey: "typecast_api_key",
+        voiceId: "tc_your_voice_id",
+        model: "ssfm-v30",
+        language: "kor",
+        emotionPreset: "normal",
+        emotionIntensity: 1.0,
+        output: {
+          audioFormat: "mp3",
+          audioTempo: 1.0,
+          volume: 100,
+        },
+      },
     },
   },
 }
@@ -1643,10 +1656,16 @@ Notes:
   - Accepts `provider/model` or an alias from `agents.defaults.models`.
 - `modelOverrides` enables model-driven overrides like `[[tts:...]]` tags (on by default).
 - `/tts limit` and `/tts summary` control per-user summarization settings.
-- `apiKey` values fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+- `apiKey` values fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`, and `TYPECAST_API_KEY`.
 - `elevenlabs.baseUrl` overrides the ElevenLabs API base URL.
 - `elevenlabs.voiceSettings` supports `stability`/`similarityBoost`/`style` (0..1),
   `useSpeakerBoost`, and `speed` (0.5..2.0).
+- `typecast.voiceId`: required voice ID (`tc_xxx` or `uc_xxx`).
+- `typecast.model`: `ssfm-v21` or `ssfm-v30` (default `ssfm-v30`).
+- `typecast.language`: ISO 639-3 code (e.g. `kor`, `eng`). Auto-detected if unset.
+- `typecast.emotionPreset`: `normal|happy|sad|angry|whisper|toneup|tonedown`.
+- `typecast.emotionIntensity`: `0..2` (default `1.0`).
+- `typecast.output`: `volume` (0..200), `audioPitch` (-12..12), `audioTempo` (0.5..2), `audioFormat` (wav|mp3).
 
 ### `talk`
 
