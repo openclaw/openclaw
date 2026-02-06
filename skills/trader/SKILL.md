@@ -26,9 +26,11 @@ The trading system runs as a hybrid of manual execution and automated monitoring
     - **Function:** Connects to Alpaca WebSocket, streams data for active positions (`AMZN`, `MSTR`).
     - **Logic:** Alerts if PnL varies by > +/- 5% from entry.
     - **Notification:** Sends a system event to the **Main Session** (Control Room) via Gateway API (`/api/v1/sessions/send`).
-3.  **Scheduling (Cron):**
-    - **Start:** 16:25 EET (Mon-Fri) -> `nohup ... sentinel.py &`
-    - **Stop:** 23:05 EET (Mon-Fri) -> `pkill -f sentinel.py`
+3.  **Sentinel Operations (Monitoring):**
+    - **Launch:** Must use `nohup` and log redirection to prevent session-kill.
+    - **Command:** `nohup /home/damon/qwen-venv/bin/python3 skills/trader/sentinel.py > skills/trader/sentinel.std.log 2>&1 &`
+    - **Logs:** `sentinel.log` (App), `sentinel.std.log` (Crash/Stderr).
+    - **Schedule:** Start 16:25 EET, Stop 23:05 EET (Mon-Fri).
 
 ### Protocol: [SENTINEL ALERT]
 
@@ -50,5 +52,5 @@ If you receive a message starting with `[SENTINEL ALERT]`:
 ## Active Strategy: Scouter V1
 
 - **Goal:** +50% PnL (The Gauntlet).
-- **Positions:** Long AMZN, Short MSTR.
-- **Thesis:** AMZN (Mean Reversion), MSTR (Crypto Contagion).
+- **Positions:** Long AMZN. (MSTR Closed 2026-02-06 @ $126.39).
+- **Thesis:** AMZN (Mean Reversion), MSTR (Short Squeeze - Failed).

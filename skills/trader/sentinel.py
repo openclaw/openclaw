@@ -4,17 +4,26 @@ import time
 import subprocess
 import asyncio
 import logging
+import sys
 from alpaca.data.live import StockDataStream
 from alpaca.trading.client import TradingClient
 
 # --- Configuration ---
 CRED_PATH = os.path.expanduser("~/.openclaw/credentials/alpaca_credentials.json")
 TARGET_CHANNEL_ID = "1469273412357718048"  # #saiabets
-SYMBOLS = ["AMZN", "MSTR", "POET"]
+SYMBOLS = ["AMZN", "APLD"]
 THRESHOLDS = 0.05  # +/- 5%
 
 # Setup Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Force flush to ensure logs appear immediately in tail -f
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(os.path.join(os.path.dirname(__file__), "sentinel.log"))
+    ]
+)
 
 def load_creds():
     with open(CRED_PATH, 'r') as f:
@@ -42,91 +51,127 @@ def find_target_session_id_cli():
         logging.error(f"Failed to resolve session via CLI: {e}")
         return None
 
-def notify_session(message):
-    session_id = find_target_session_id_cli()
+async def notify_session_async(session_id, message):
     if not session_id:
-        logging.warning("No target session found. Cannot notify.")
+        logging.warning("No target session ID. Cannot notify.")
         return
 
     try:
         cmd = [
             "openclaw", "agent", 
             "--session-id", session_id,
-            "--message", f"[SENTINEL ALERT] {message}"
+            "--message", f"[SENTINEL ALERT] {message}",
+            "--timeout", "10"  # Enforce 10s timeout on the agent turn
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            logging.info(f"Notified session {session_id}: {message}")
-        else:
-            logging.error(f"CLI Error: {result.stderr}")
+        # Non-blocking subprocess call
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        # Add asyncio timeout for the subprocess itself
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+            
+            if proc.returncode == 0:
+                logging.info(f"Notified session {session_id}: {message}")
+            else:
+                logging.error(f"CLI Error: {stderr.decode()}")
+        except asyncio.TimeoutError:
+            logging.error("Notification Timed Out (Subprocess hung)")
+            try:
+                proc.kill()
+            except:
+                pass
+                
     except Exception as e:
         logging.error(f"Failed to notify session: {e}")
+
+async def heartbeat_loop():
+    """Logs a heartbeat every 60 seconds to prove aliveness."""
+    while True:
+        await asyncio.sleep(60)
+        logging.info("HEARTBEAT: Sentinel is running...")
 
 async def run_sentinel():
     creds = load_creds()
     api_key = creds["APCA_API_KEY_ID"]
     secret_key = creds["APCA_API_SECRET_KEY"]
     
+    # Resolve Session ID ONCE at startup
+    session_id = find_target_session_id_cli()
+    if not session_id:
+        logging.error("CRITICAL: Could not find Target Session for #saiabets. Notifications disabled.")
+    else:
+        logging.info(f"Target Session Resolved: {session_id}")
+
     trade_client = TradingClient(api_key, secret_key, paper=True)
-    stream = StockDataStream(api_key, secret_key)
     
-    initial_prices = {}
-    last_alert_bucket = {}
-    
-    try:
-        positions = trade_client.get_all_positions()
-        for p in positions:
-            if p.symbol in SYMBOLS:
-                initial_prices[p.symbol] = float(p.avg_entry_price)
-                logging.info(f"Tracking {p.symbol} from entry: ${initial_prices[p.symbol]}")
-    except Exception as e:
-        logging.error(f"Failed to fetch positions: {e}")
-        return
-    
-    async def handle_trade(data):
-        symbol = data.symbol
-        price = data.price
-        
-        if symbol not in initial_prices:
-            return
+    # Main Retry Loop
+    while True:
+        try:
+            stream = StockDataStream(api_key, secret_key)
+            initial_prices = {}
+            last_alert_bucket = {}
+            
+            # Fetch positions
+            try:
+                positions = trade_client.get_all_positions()
+                for p in positions:
+                    if p.symbol in SYMBOLS:
+                        initial_prices[p.symbol] = float(p.avg_entry_price)
+                        logging.info(f"Tracking {p.symbol} from entry: ${initial_prices[p.symbol]}")
+            except Exception as e:
+                logging.error(f"Failed to fetch positions: {e}. Retrying in 10s...")
+                await asyncio.sleep(10)
+                continue
 
-        entry = initial_prices[symbol]
-        change_pct = (price - entry) / entry
-        pct_value = change_pct * 100
-        
-        # Logic: Alert every 5% step (5, 10, 15...)
-        # Calculate current bucket (e.g. 6.3% -> 5, 11% -> 10, -7% -> -5)
-        step = 5.0
-        
-        # If below first threshold, clear state and return
-        if abs(pct_value) < step:
-            if symbol in last_alert_bucket:
-                # Optional: Alert "Back to Normal"? For now, just reset silently.
-                last_alert_bucket.pop(symbol)
-            return
+            async def handle_trade(data):
+                symbol = data.symbol
+                price = data.price
+                
+                if symbol not in initial_prices:
+                    return
 
-        # Determine bucket
-        # int(6.3 / 5) * 5 = 5
-        # int(-6.3 / 5) * 5 = -5 (Wait, int(-1.2) is -1. Correct.)
-        current_bucket = int(pct_value / step) * int(step)
-        
-        # Only alert if we moved to a NEW bucket
-        last_bucket = last_alert_bucket.get(symbol, 0)
-        
-        if current_bucket != last_bucket:
-            last_alert_bucket[symbol] = current_bucket
-            direction = "UP" if change_pct > 0 else "DOWN"
-            msg = f"{symbol} hit {current_bucket}% threshold ({direction} {pct_value:.2f}%) (Price: ${price}, Entry: ${entry})"
-            notify_session(msg)
+                entry = initial_prices[symbol]
+                change_pct = (price - entry) / entry
+                pct_value = change_pct * 100
+                
+                step = 5.0
+                if abs(pct_value) < step:
+                    if symbol in last_alert_bucket:
+                        last_alert_bucket.pop(symbol)
+                    return
 
-    try:
-        stream.subscribe_trades(handle_trade, *SYMBOLS)
-        logging.info(f"Sentinel started. Monitoring {SYMBOLS} for +/- {THRESHOLDS*100}% moves.")
-        await stream._run_forever()
-    except Exception as e:
-        logging.error(f"Stream error: {e}")
+                current_bucket = int(pct_value / step) * int(step)
+                last_bucket = last_alert_bucket.get(symbol, 0)
+                
+                if current_bucket != last_bucket:
+                    last_alert_bucket[symbol] = current_bucket
+                    direction = "UP" if change_pct > 0 else "DOWN"
+                    msg = f"{symbol} hit {current_bucket}% threshold ({direction} {pct_value:.2f}%) (Price: ${price}, Entry: ${entry})"
+                    logging.info(f"ALERT TRIGGERED: {msg}")
+                    # Fire and forget async task
+                    asyncio.create_task(notify_session_async(session_id, msg))
+
+            stream.subscribe_trades(handle_trade, *SYMBOLS)
+            logging.info(f"Sentinel connected. Monitoring {SYMBOLS}.")
+            
+            # Run stream and heartbeat concurrently
+            await asyncio.gather(
+                stream._run_forever(),
+                heartbeat_loop()
+            )
+            
+        except Exception as e:
+            logging.error(f"Stream crashed: {e}. Reconnecting in 5s...")
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_sentinel())
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run_sentinel())
+    except KeyboardInterrupt:
+        logging.info("Sentinel stopped by user.")
