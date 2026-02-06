@@ -90,6 +90,7 @@ export async function generateSmartAck(params: {
     `If COMPLEX: prefix your response with "ACK: " and give a brief acknowledgment showing you ` +
     `understand the request (e.g. "Working on..." or "Let me look into..."). ` +
     `Do NOT answer complex requests, just acknowledge them.\n\n` +
+    `Writing style: never use em-dashes or hyphens as grammatical punctuation. Use commas, periods, or semicolons instead.\n\n` +
     `User's message:\n${message}`;
 
   // Build CLI args for claude command
@@ -100,6 +101,7 @@ export async function generateSmartAck(params: {
 
     const result = await runCommandWithTimeout(["claude", ...args], {
       timeoutMs,
+      input: "",
     });
 
     if (signal?.aborted) {
