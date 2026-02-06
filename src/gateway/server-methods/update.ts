@@ -15,6 +15,7 @@ import {
   formatValidationErrors,
   validateUpdateRunParams,
 } from "../protocol/index.js";
+import { sendGatewayRestartNotice } from "../restart-notice.js";
 
 export const updateHandlers: GatewayRequestHandlers = {
   "update.run": async ({ params, respond }) => {
@@ -108,6 +109,13 @@ export const updateHandlers: GatewayRequestHandlers = {
     } catch {
       sentinelPath = null;
     }
+
+    await sendGatewayRestartNotice({
+      cfg,
+      sessionKey,
+      reason: "update.run",
+      delayMs: restartDelayMs,
+    });
 
     const restart = scheduleGatewaySigusr1Restart({
       delayMs: restartDelayMs,

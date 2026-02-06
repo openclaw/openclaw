@@ -373,6 +373,16 @@ export const OpenClawSchema = z
             z.literal("tailnet"),
           ])
           .optional(),
+        restartNotice: z
+          .object({
+            /**
+             * Send a deterministic "restarting..." message to the last delivery target before
+             * gateway restarts initiated via gateway methods (config.apply/config.patch/update.run).
+             */
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
         controlUi: z
           .object({
             enabled: z.boolean().optional(),
