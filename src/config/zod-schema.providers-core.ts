@@ -266,6 +266,7 @@ export const DiscordAccountSchema = z
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
     token: z.string().optional().register(sensitive),
+    proxy: z.string().optional(),
     allowBots: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     historyLimit: z.number().int().min(0).optional(),

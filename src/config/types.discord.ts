@@ -123,6 +123,8 @@ export type DiscordAccountConfig = {
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: string;
+  /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
+  proxy?: string;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
   /**
