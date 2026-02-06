@@ -149,6 +149,43 @@ describe("server-side compaction", () => {
     });
   });
 
+  it("ignores non-string anthropic-beta header values", async () => {
+    const agent: { streamFn?: unknown } = {};
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            serverSide: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-5");
+
+    const wrappedFn = agent.streamFn as (
+      model: unknown,
+      context: unknown,
+      options?: unknown,
+    ) => unknown;
+
+    // Call with non-string beta header (e.g. object/array)
+    wrappedFn({}, {}, { headers: { "anthropic-beta": ["bad-value"] } });
+
+    const [, , options] = mockStreamSimple.mock.calls[0] as [
+      unknown,
+      unknown,
+      Record<string, unknown>,
+    ];
+
+    // Should use only the compaction beta, not concatenate the non-string value
+    expect((options.headers as Record<string, string>)["anthropic-beta"]).toBe(
+      "context-management-2025-06-27",
+    );
+  });
+
   it("appends to existing anthropic-beta header", async () => {
     const agent: { streamFn?: unknown } = {};
     const cfg: OpenClawConfig = {
@@ -184,6 +221,60 @@ describe("server-side compaction", () => {
     expect((options.headers as Record<string, string>)["anthropic-beta"]).toBe(
       "existing-feature,context-management-2025-06-27",
     );
+  });
+
+  it("merges with existing context_management fields and appends edits", async () => {
+    const agent: { streamFn?: unknown } = {};
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          compaction: {
+            serverSide: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "anthropic", "claude-opus-4-5");
+
+    const wrappedFn = agent.streamFn as (
+      model: unknown,
+      context: unknown,
+      options?: unknown,
+    ) => unknown;
+
+    // Call with existing context_management that has edits and other fields
+    wrappedFn(
+      {},
+      {},
+      {
+        extraBody: {
+          context_management: {
+            edits: [{ type: "existing_edit" }],
+            some_other_field: true,
+          },
+        },
+      },
+    );
+
+    const [, , options] = mockStreamSimple.mock.calls[0] as [
+      unknown,
+      unknown,
+      Record<string, unknown>,
+    ];
+
+    const ctxMgmt = (options.extraBody as Record<string, unknown>).context_management as Record<
+      string,
+      unknown
+    >;
+
+    // Should preserve existing edits and append new one
+    expect(ctxMgmt.edits).toEqual([{ type: "existing_edit" }, { type: "compact_20260112" }]);
+
+    // Should preserve other context_management fields
+    expect(ctxMgmt.some_other_field).toBe(true);
   });
 
   it("preserves existing extraBody properties", async () => {

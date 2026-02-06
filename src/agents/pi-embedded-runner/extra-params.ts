@@ -1076,28 +1076,40 @@ function createAnthropicServerSideCompactionWrapper(
   log.debug(`enabling Anthropic server-side compaction with strategy: ${strategy}`);
 
   return (model, context, options) => {
-    // Add beta header for context management
-    const existingHeaders = options?.headers ?? {};
+    // Add beta header for context management.
+    // Cast to Record<string, unknown> since runtime headers may contain non-string values.
+    const existingHeaders = (options?.headers ?? {}) as Record<string, unknown>;
     const existingBeta = existingHeaders["anthropic-beta"];
-    const betaValue = existingBeta
-      ? `${existingBeta},${ANTHROPIC_CONTEXT_MANAGEMENT_BETA}`
-      : ANTHROPIC_CONTEXT_MANAGEMENT_BETA;
+    const betaValue =
+      typeof existingBeta === "string" && existingBeta.length > 0
+        ? `${existingBeta},${ANTHROPIC_CONTEXT_MANAGEMENT_BETA}`
+        : ANTHROPIC_CONTEXT_MANAGEMENT_BETA;
 
-    // Build context_management.edits with the compaction strategy
-    const contextManagement = {
-      edits: [{ type: strategy }],
-    };
-
-    // Merge with any existing extraBody
+    // Merge with any existing extraBody, preserving existing context_management fields
     const existingExtraBody =
       options && "extraBody" in options
         ? (options as { extraBody?: unknown }).extraBody
         : undefined;
+    const existingExtraBodyObj =
+      typeof existingExtraBody === "object" && existingExtraBody !== null
+        ? (existingExtraBody as Record<string, unknown>)
+        : {};
+    const existingCtxMgmt = existingExtraBodyObj.context_management as
+      | { edits?: unknown[] }
+      | undefined;
+    const existingEdits =
+      existingCtxMgmt !== null &&
+      existingCtxMgmt !== undefined &&
+      Array.isArray(existingCtxMgmt.edits)
+        ? existingCtxMgmt.edits
+        : [];
+
     const extraBody = {
-      ...(typeof existingExtraBody === "object" && existingExtraBody !== null
-        ? existingExtraBody
-        : {}),
-      context_management: contextManagement,
+      ...existingExtraBodyObj,
+      context_management: {
+        ...(existingCtxMgmt ?? {}),
+        edits: [...existingEdits, { type: strategy }],
+      },
     };
 
     return underlying(model, context, {
