@@ -7,16 +7,16 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Tests: add test coverage for security/windows-acl.ts. (#9335) Thanks @M00N7682.
+- Tests: stabilize Windows ACL tests + command auth registry. (#9493) Thanks @steipete.
 - Docs: streamline start and install docs. (#9648) Thanks @sebslight.
 - enhancement(CLI): sort commands alphabetically in help output. (#8068) Thanks @deepsoumya617.
 - docs: add bootstrapping page. (#9767) Thanks @sebslight.
 - Docs: simplify onboarding IA for CLI and macOS. (#9830) Thanks @sebslight.
-- 🔴 FIX: Telegram DM Topics — auto-inject threadId in message tool & subagent announce. (#7235) Thanks @Lukavyi.
 - docs: fix incorrect model.fallback to model.fallbacks in Ollama config (#9384). (#9749) Thanks @lailoo.
 - feat: add Claude Opus 4.6 to built-in model catalog. (#9853) Thanks @TinyTb.
 - chore: add agent credentials to gitignore. (#9874) Thanks @caelum0x.
 - Docs: escape hash symbol in help channel names in issue template. (#9695) Thanks @mattqdev.
-- feat(skills): add QR code generation and reading skill. (#8817) Thanks @Omar-Khaleel.
+- feat(skills): add QR code generation and reading skill (reverted in 6b7d3c30). (#8817) Thanks @Omar-Khaleel.
 - chore(agentsmd): add missing tsgo commands to AGENTS.md. (#9894) Thanks @vincentkoc.
 - chore: apply local workspace updates. (#9911) Thanks @gumadeiras.
 - docs: improve DM security guidance with concrete example. (#9377) Thanks @Shrinija17.
@@ -46,7 +46,9 @@ Docs: https://docs.openclaw.ai
 - Fix chrome extension bundled path resolution. (#8914) Thanks @kelvinCB.
 - fix(telegram): preserve DM topic threadId in deliveryContext. (#9039) Thanks @lailoo.
 - fix(telegram): pass parentPeer for forum topic binding inheritance. (#9789) Thanks @christianklotz.
+- 🔴 FIX: Telegram DM Topics — auto-inject threadId in message tool & subagent announce. (#7235) Thanks @Lukavyi.
 - fix(cli): pass --disable-warning via execArgv instead of NODE_OPTIONS. (#9691) Thanks @18-RAJAT.
+- fix: remove orphaned tool_results during compaction pruning. (#9868) Thanks @christianklotz.
 - fix cron scheduling and reminder delivery regressions. (#9733) Thanks @tyler6204.
 - fix(runtime): bump minimum Node.js version to 22.12.0. (#5370) Thanks @Glucksberg.
 - fix: clear stale token metrics on /new and /reset. (#8929) Thanks @Glucksberg.
@@ -82,7 +84,6 @@ Docs: https://docs.openclaw.ai
 - 1008c28f test(cli): use unique temp dir for extension install (Kelvin Calcano).
 - 44bbe09b fix(cli): support bundled extension path in dist root (Kelvin Calcano).
 - 34e78a70 style(cli): satisfy lint rules in extension path resolver (Kelvin Calcano).
-- f26cc608 Tests: add test coverage for security/windows-acl.ts (M00N7682).
 - bdb90ea4 test: register discord plugin in allowlist test (Peter Steinberger).
 - 5031b283 chore: bump version to 2026.2.4 (Peter Steinberger).
 - a4d1af1b fix: resolve discord owner allowFrom matches (Peter Steinberger).
@@ -100,7 +101,7 @@ Docs: https://docs.openclaw.ai
 - 1473fb19 update handle (Gustavo Madeira Santana).
 - 4fc4c525 🤖 Feishu: expand channel support (Josh Palmer).
 - 7c951b01 🤖 Feishu: tighten mention gating (Josh Palmer).
-- f32eeae3 fix: remove orphaned tool_results during compaction pruning (Christian Klotz).
+- 6b7d3c30 Revert "feat(skills): add QR code skill (#8817)" (Gustavo Madeira Santana).
 - b8004a28 docs: improve DM security guidance with concrete example (Shrinija Kummari).
 - 873182ec docs: tighten secure DM example (George Pickett).
 - 8577d015 chore: remove tracked .DS_Store files (Gustavo Madeira Santana).
@@ -131,6 +132,7 @@ Docs: https://docs.openclaw.ai
 - 1bf9f237 docs: linting (Sebastian).
 - c7aec066 docs(markdownlint): enable autofixable rules and normalize links (Sebastian).
 - 0a1f4f66 revert(docs): undo markdownlint autofix churn (Sebastian).
+- 3b768a28 docs(changelog): prepare 2026.2.6 (Peter Steinberger).
 
 ## 2026.2.2-3
 
