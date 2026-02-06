@@ -36,8 +36,11 @@ export const normalizeAllowFromWithStore = (params: {
 
 export const isSenderAllowed = (params: { allow: NormalizedAllowFrom; senderId?: string }) => {
   const { allow, senderId } = params;
-  if (!allow.hasEntries || allow.hasWildcard) {
+  if (allow.hasWildcard) {
     return true;
+  }
+  if (!allow.hasEntries) {
+    return false;
   }
   if (senderId && allow.entries.includes(senderId)) {
     return true;

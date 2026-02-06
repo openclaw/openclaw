@@ -2,24 +2,26 @@ import { loadDingTalkAxios } from "./deps.js";
 
 const axios = loadDingTalkAxios();
 
-let accessToken: string | null = null;
-let accessTokenExpiry = 0;
+const tokenCache = new Map<string, { accessToken: string; expiry: number }>();
 
 export async function getDingTalkAccessToken(config: {
   clientId: string;
   clientSecret: string;
 }): Promise<string> {
   const now = Date.now();
-  if (accessToken && accessTokenExpiry > now + 60_000) {
-    return accessToken;
+  const cached = tokenCache.get(config.clientId);
+  if (cached && cached.expiry > now + 60_000) {
+    return cached.accessToken;
   }
   const response = await axios.post("https://api.dingtalk.com/v1.0/oauth2/accessToken", {
     appKey: config.clientId,
     appSecret: config.clientSecret,
   });
-  accessToken = response.data.accessToken;
-  accessTokenExpiry = now + response.data.expireIn * 1000;
-  return accessToken!;
+  tokenCache.set(config.clientId, {
+    accessToken: response.data.accessToken,
+    expiry: now + response.data.expireIn * 1000,
+  });
+  return response.data.accessToken;
 }
 
 export async function getDingTalkOapiToken(config: {
