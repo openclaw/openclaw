@@ -17,7 +17,7 @@ describe("attachDiscordGatewayLogging", () => {
     vi.clearAllMocks();
   });
 
-  it("logs debug events and promotes reconnect/close to info", () => {
+  it("logs debug events and promotes reconnect/close/stable to info", () => {
     const emitter = new EventEmitter();
     const runtime = makeRuntime();
 
@@ -29,10 +29,11 @@ describe("attachDiscordGatewayLogging", () => {
     emitter.emit("debug", "WebSocket connection opened");
     emitter.emit("debug", "WebSocket connection closed with code 1001");
     emitter.emit("debug", "Reconnecting with backoff: 1000ms after code 1001");
+    emitter.emit("debug", "connection stable after 30s");
 
     const logVerboseMock = vi.mocked(logVerbose);
-    expect(logVerboseMock).toHaveBeenCalledTimes(3);
-    expect(runtime.log).toHaveBeenCalledTimes(2);
+    expect(logVerboseMock).toHaveBeenCalledTimes(4);
+    expect(runtime.log).toHaveBeenCalledTimes(3);
     expect(runtime.log).toHaveBeenNthCalledWith(
       1,
       "discord gateway: WebSocket connection closed with code 1001",
@@ -41,6 +42,7 @@ describe("attachDiscordGatewayLogging", () => {
       2,
       "discord gateway: Reconnecting with backoff: 1000ms after code 1001",
     );
+    expect(runtime.log).toHaveBeenNthCalledWith(3, "discord gateway: connection stable after 30s");
 
     cleanup();
   });
