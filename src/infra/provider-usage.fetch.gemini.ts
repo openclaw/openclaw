@@ -7,7 +7,7 @@ import { fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 
 type GeminiUsageResponse = {
-  buckets?: Array<{ modelId?: string; remainingFraction?: number }>;
+  buckets?: Array<{ modelId?: string; remainingFraction?: number; resetTime?: string }>;
 };
 
 export async function fetchGeminiUsage(
@@ -35,55 +35,38 @@ export async function fetchGeminiUsage(
       provider,
       displayName: PROVIDER_LABELS[provider],
       windows: [],
-      error: `HTTP ${res.status}`,
+      error: res.status === 401 ? "Token expired" : `HTTP ${res.status}`,
     };
   }
 
   const data = (await res.json()) as GeminiUsageResponse;
-  const quotas: Record<string, number> = {};
+  const windows: UsageWindow[] = [];
 
   for (const bucket of data.buckets || []) {
-    const model = bucket.modelId || "unknown";
+    const modelId = bucket.modelId;
+    if (!modelId) continue;
+
+    // Skip internal models (chat_*, tab_*)
+    const lower = modelId.toLowerCase();
+    if (lower.includes("chat_") || lower.includes("tab_")) continue;
+
     const frac = bucket.remainingFraction ?? 1;
-    if (!quotas[model] || frac < quotas[model]) {
-      quotas[model] = frac;
-    }
-  }
+    const usedPercent = clampPercent((1 - frac) * 100);
 
-  const windows: UsageWindow[] = [];
-  let proMin = 1;
-  let flashMin = 1;
-  let hasPro = false;
-  let hasFlash = false;
-
-  for (const [model, frac] of Object.entries(quotas)) {
-    const lower = model.toLowerCase();
-    if (lower.includes("pro")) {
-      hasPro = true;
-      if (frac < proMin) {
-        proMin = frac;
+    const window: UsageWindow = { label: modelId, usedPercent };
+    if (bucket.resetTime) {
+      const resetMs = Date.parse(bucket.resetTime);
+      if (Number.isFinite(resetMs)) {
+        window.resetAt = resetMs;
       }
     }
-    if (lower.includes("flash")) {
-      hasFlash = true;
-      if (frac < flashMin) {
-        flashMin = frac;
-      }
-    }
+    windows.push(window);
   }
 
-  if (hasPro) {
-    windows.push({
-      label: "Pro",
-      usedPercent: clampPercent((1 - proMin) * 100),
-    });
-  }
-  if (hasFlash) {
-    windows.push({
-      label: "Flash",
-      usedPercent: clampPercent((1 - flashMin) * 100),
-    });
-  }
+  // Sort by usage (highest first) and limit to top 10
+  windows.sort((a, b) => b.usedPercent - a.usedPercent);
+  const topWindows = windows.slice(0, 10);
 
-  return { provider, displayName: PROVIDER_LABELS[provider], windows };
+  return { provider, displayName: PROVIDER_LABELS[provider], windows: topWindows };
 }
+
