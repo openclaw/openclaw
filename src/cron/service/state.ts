@@ -46,6 +46,10 @@ export type CronServiceState = {
   store: CronStoreFile | null;
   timer: NodeJS.Timeout | null;
   running: boolean;
+  /** Timestamp (ms) when `running` was set to `true`. Used by the watchdog. */
+  runningStartedAtMs: number | null;
+  /** Watchdog interval that detects permanently stuck `running` state. */
+  watchdogTimer: NodeJS.Timeout | null;
   op: Promise<unknown>;
   warnedDisabled: boolean;
   /** @internal Promise of the last onTimer run, for test synchronization. */
@@ -60,6 +64,8 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     store: null,
     timer: null,
     running: false,
+    runningStartedAtMs: null,
+    watchdogTimer: null,
     op: Promise.resolve(),
     warnedDisabled: false,
     storeLoadedAtMs: null,
