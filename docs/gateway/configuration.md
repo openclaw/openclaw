@@ -1517,6 +1517,25 @@ See [Messages](/concepts/messages) for queueing, sessions, and streaming context
 `responsePrefix` is applied to **all outbound replies** (tool summaries, block
 streaming, final replies) across channels unless already present.
 
+Overrides can be configured per channel and per account:
+
+- `channels.<channel>.responsePrefix`
+- `channels.<channel>.accounts.<id>.responsePrefix`
+
+Resolution order (most specific wins):
+
+1. `channels.<channel>.accounts.<id>.responsePrefix`
+2. `channels.<channel>.responsePrefix`
+3. `messages.responsePrefix`
+
+Semantics:
+
+- `undefined` falls through to the next level.
+- `""` explicitly disables the prefix and stops the cascade.
+- `"auto"` derives `[{identity.name}]` for the routed agent.
+
+Overrides apply to all channels, including extensions, and to every outbound reply kind.
+
 If `messages.responsePrefix` is unset, no prefix is applied by default. WhatsApp self-chat
 replies are the exception: they default to `[{identity.name}]` when set, otherwise
 `[openclaw]`, so same-phone conversations stay legible.
@@ -1528,8 +1547,8 @@ The `responsePrefix` string can include template variables that resolve dynamica
 
 | Variable          | Description            | Example                     |
 | ----------------- | ---------------------- | --------------------------- |
-| `{model}`         | Short model name       | `claude-opus-4-5`, `gpt-4o` |
-| `{modelFull}`     | Full model identifier  | `anthropic/claude-opus-4-5` |
+| `{model}`         | Short model name       | `claude-opus-4-6`, `gpt-4o` |
+| `{modelFull}`     | Full model identifier  | `anthropic/claude-opus-4-6` |
 | `{provider}`      | Provider name          | `anthropic`, `openai`       |
 | `{thinkingLevel}` | Current thinking level | `high`, `low`, `off`        |
 | `{identity.name}` | Agent identity name    | (same as `"auto"` mode)     |
@@ -1545,7 +1564,7 @@ Unresolved variables remain as literal text.
 }
 ```
 
-Example output: `[claude-opus-4-5 | think:high] Here's my response...`
+Example output: `[claude-opus-4-6 | think:high] Here's my response...`
 
 WhatsApp inbound prefix is configured via `channels.whatsapp.messagePrefix` (deprecated:
 `messages.messagePrefix`). Default stays **unchanged**: `"[openclaw]"` when
@@ -1691,7 +1710,7 @@ Z.AI GLM-4.x models automatically enable thinking mode unless you:
 OpenClaw also ships a few built-in alias shorthands. Defaults only apply when the model
 is already present in `agents.defaults.models`:
 
-- `opus` -> `anthropic/claude-opus-4-5`
+- `opus` -> `anthropic/claude-opus-4-6`
 - `sonnet` -> `anthropic/claude-sonnet-4-5`
 - `gpt` -> `openai/gpt-5.2`
 - `gpt-mini` -> `openai/gpt-5-mini`
@@ -1700,18 +1719,18 @@ is already present in `agents.defaults.models`:
 
 If you configure the same alias name (case-insensitive) yourself, your value wins (defaults never override).
 
-Example: Opus 4.5 primary with MiniMax M2.1 fallback (hosted MiniMax):
+Example: Opus 4.6 primary with MiniMax M2.1 fallback (hosted MiniMax):
 
 ```json5
 {
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-opus-4-5": { alias: "opus" },
+        "anthropic/claude-opus-4-6": { alias: "opus" },
         "minimax/MiniMax-M2.1": { alias: "minimax" },
       },
       model: {
-        primary: "anthropic/claude-opus-4-5",
+        primary: "anthropic/claude-opus-4-6",
         fallbacks: ["minimax/MiniMax-M2.1"],
       },
     },
@@ -1767,7 +1786,7 @@ Example:
   agents: {
     defaults: {
       models: {
-        "anthropic/claude-opus-4-5": { alias: "Opus" },
+        "anthropic/claude-opus-4-6": { alias: "Opus" },
         "anthropic/claude-sonnet-4-1": { alias: "Sonnet" },
         "openrouter/deepseek/deepseek-r1:free": {},
         "zai/glm-4.7": {
@@ -1781,7 +1800,7 @@ Example:
         },
       },
       model: {
-        primary: "anthropic/claude-opus-4-5",
+        primary: "anthropic/claude-opus-4-6",
         fallbacks: [
           "openrouter/deepseek/deepseek-r1:free",
           "openrouter/meta-llama/llama-3.3-70b-instruct:free",
@@ -1992,7 +2011,7 @@ Typing indicators:
 - `session.typingIntervalSeconds`: per-session override for the refresh interval.
   See [/concepts/typing-indicators](/concepts/typing-indicators) for behavior details.
 
-`agents.defaults.model.primary` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
+`agents.defaults.model.primary` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-6`).
 Aliases come from `agents.defaults.models.*.alias` (e.g. `Opus`).
 If you omit the provider, OpenClaw currently assumes `anthropic` as a temporary
 deprecation fallback.
@@ -2039,6 +2058,7 @@ of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 - `tools.web.search.cacheTtlMinutes` (default 15)
 - `tools.web.fetch.enabled` (default true)
 - `tools.web.fetch.maxChars` (default 50000)
+- `tools.web.fetch.maxCharsCap` (default 50000; clamps maxChars from config/tool calls)
 - `tools.web.fetch.timeoutSeconds` (default 30)
 - `tools.web.fetch.cacheTtlMinutes` (default 15)
 - `tools.web.fetch.userAgent` (optional override)
@@ -2465,7 +2485,7 @@ the built-in `opencode` provider from pi-ai; set `OPENCODE_API_KEY` (or
 
 Notes:
 
-- Model refs use `opencode/<modelId>` (example: `opencode/claude-opus-4-5`).
+- Model refs use `opencode/<modelId>` (example: `opencode/claude-opus-4-6`).
 - If you enable an allowlist via `agents.defaults.models`, add each model you plan to use.
 - Shortcut: `openclaw onboard --auth-choice opencode-zen`.
 
@@ -2473,8 +2493,8 @@ Notes:
 {
   agents: {
     defaults: {
-      model: { primary: "opencode/claude-opus-4-5" },
-      models: { "opencode/claude-opus-4-5": { alias: "Opus" } },
+      model: { primary: "opencode/claude-opus-4-6" },
+      models: { "opencode/claude-opus-4-6": { alias: "Opus" } },
     },
   },
 }
@@ -2551,7 +2571,9 @@ Notes:
 
 - Set `MOONSHOT_API_KEY` in the environment or use `openclaw onboard --auth-choice moonshot-api-key`.
 - Model ref: `moonshot/kimi-k2.5`.
-- Use `https://api.moonshot.cn/v1` if you need the China endpoint.
+- For the China endpoint, either:
+  - Run `openclaw onboard --auth-choice moonshot-api-key-cn` (wizard will set `https://api.moonshot.cn/v1`), or
+  - Manually set `baseUrl: "https://api.moonshot.cn/v1"` in `models.providers.moonshot`.
 
 ### Kimi Coding
 
@@ -2630,7 +2652,7 @@ Use MiniMax M2.1 directly without LM Studio:
   agent: {
     model: { primary: "minimax/MiniMax-M2.1" },
     models: {
-      "anthropic/claude-opus-4-5": { alias: "Opus" },
+      "anthropic/claude-opus-4-6": { alias: "Opus" },
       "minimax/MiniMax-M2.1": { alias: "Minimax" },
     },
   },
@@ -2763,6 +2785,7 @@ Fields:
   - `per-peer`: isolate DMs by sender id across channels.
   - `per-channel-peer`: isolate DMs per channel + sender (recommended for multi-user inboxes).
   - `per-account-channel-peer`: isolate DMs per account + channel + sender (recommended for multi-account inboxes).
+  - Secure DM mode (recommended): set `session.dmScope: "per-channel-peer"` when multiple people can DM the bot (shared inboxes, multi-person allowlists, or `dmPolicy: "open"`).
 - `identityLinks`: map canonical ids to provider-prefixed peers so the same person shares a DM session across channels when using `per-peer`, `per-channel-peer`, or `per-account-channel-peer`.
   - Example: `alice: ["telegram:123456789", "discord:987654321012345678"]`.
 - `reset`: primary reset policy. Defaults to daily resets at 4:00 AM local time on the gateway host.

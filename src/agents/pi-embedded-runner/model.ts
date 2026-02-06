@@ -19,6 +19,50 @@ type InlineProviderConfig = {
   models?: ModelDefinitionConfig[];
 };
 
+const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
+
+const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
+
+function resolveOpenAICodexGpt53FallbackModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmedModelId = modelId.trim();
+  if (normalizedProvider !== "openai-codex") {
+    return undefined;
+  }
+  if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
+    return undefined;
+  }
+
+  for (const templateId of OPENAI_CODEX_TEMPLATE_MODEL_IDS) {
+    const template = modelRegistry.find(normalizedProvider, templateId) as Model<Api> | null;
+    if (!template) {
+      continue;
+    }
+    return normalizeModelCompat({
+      ...template,
+      id: trimmedModelId,
+      name: trimmedModelId,
+    } as Model<Api>);
+  }
+
+  return normalizeModelCompat({
+    id: trimmedModelId,
+    name: trimmedModelId,
+    api: "openai-codex-responses",
+    provider: normalizedProvider,
+    baseUrl: "https://chatgpt.com/backend-api",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: DEFAULT_CONTEXT_TOKENS,
+    maxTokens: DEFAULT_CONTEXT_TOKENS,
+  } as Model<Api>);
+}
+
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
 ): InlineModelEntry[] {
@@ -84,6 +128,17 @@ export function resolveModel(
         authStorage,
         modelRegistry,
       };
+    }
+    // Codex gpt-5.3 forward-compat fallback must be checked BEFORE the generic providerCfg fallback.
+    // Otherwise, if cfg.models.providers["openai-codex"] is configured, the generic fallback fires
+    // with api: "openai-responses" instead of the correct "openai-codex-responses".
+    const codexForwardCompat = resolveOpenAICodexGpt53FallbackModel(
+      provider,
+      modelId,
+      modelRegistry,
+    );
+    if (codexForwardCompat) {
+      return { model: codexForwardCompat, authStorage, modelRegistry };
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
