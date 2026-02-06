@@ -752,7 +752,7 @@ export async function applyAuthChoiceApiProviders(
         [
           "OpenCode Zen provides access to Claude, GPT, Gemini, and more models.",
           "Get your API key at: https://opencode.ai/auth",
-          "Requires an active OpenCode Zen subscription.",
+          "OpenCode Zen bills per request. Check your OpenCode dashboard for details.",
         ].join("\n"),
         "OpenCode Zen",
       );
