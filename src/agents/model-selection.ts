@@ -2,7 +2,7 @@ import type { MoltbotConfig } from "../config/config.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
 import { resolveAgentModelPrimary } from "./agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { resolveDefaultModel, resolveDefaultProvider } from "./defaults.js";
 
 export type ModelRef = {
   provider: string;
@@ -136,11 +136,11 @@ export function resolveConfiguredModelRef(params: {
       const aliasMatch = aliasIndex.byAlias.get(aliasKey);
       if (aliasMatch) return aliasMatch.ref;
 
-      // Default to anthropic if no provider is specified, but warn as this is deprecated.
+      // Default to defaultProvider if no provider is specified, but warn as this is deprecated.
       console.warn(
-        `[moltbot] Model "${trimmed}" specified without provider. Falling back to "anthropic/${trimmed}". Please use "anthropic/${trimmed}" in your config.`,
+        `[moltbot] Model "${trimmed}" specified without provider. Falling back to "${params.defaultProvider}/${trimmed}". Please use "${params.defaultProvider}/${trimmed}" in your config.`,
       );
-      return { provider: "anthropic", model: trimmed };
+      return { provider: params.defaultProvider, model: trimmed };
     }
 
     const resolved = resolveModelRefFromString({
@@ -178,10 +178,12 @@ export function resolveDefaultModelForAgent(params: {
           },
         }
       : params.cfg;
+  const effectiveDefaultProvider = resolveDefaultProvider();
+  const effectiveDefaultModel = resolveDefaultModel(effectiveDefaultProvider);
   return resolveConfiguredModelRef({
     cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    defaultProvider: effectiveDefaultProvider,
+    defaultModel: effectiveDefaultModel,
   });
 }
 

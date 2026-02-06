@@ -7,6 +7,7 @@ import {
   capArrayByJsonBytes,
   classifySessionKey,
   deriveSessionTitle,
+  getSessionDefaults,
   listSessionsFromStore,
   parseGroupKey,
   resolveGatewaySessionStoreTarget,
@@ -91,6 +92,36 @@ describe("gateway session utils", () => {
     expect(target.canonicalKey).toBe("agent:ops:main");
     expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:main", "main"]));
     expect(target.storePath).toBe(path.resolve(storeTemplate.replace("{agentId}", "ops")));
+  });
+});
+
+describe("getSessionDefaults", () => {
+  test("returns moonshot and kimi-k2-0905-preview when MOONSHOT_API_KEY is set", () => {
+    const prior = process.env.MOONSHOT_API_KEY;
+    try {
+      process.env.MOONSHOT_API_KEY = "test-key";
+      const cfg = {} as MoltbotConfig;
+      const defaults = getSessionDefaults(cfg);
+      expect(defaults.modelProvider).toBe("moonshot");
+      expect(defaults.model).toBe("kimi-k2-0905-preview");
+    } finally {
+      if (prior === undefined) delete process.env.MOONSHOT_API_KEY;
+      else process.env.MOONSHOT_API_KEY = prior;
+    }
+  });
+
+  test("returns ollama and llama3:chat when MOONSHOT_API_KEY is unset", () => {
+    const prior = process.env.MOONSHOT_API_KEY;
+    try {
+      delete process.env.MOONSHOT_API_KEY;
+      const cfg = {} as MoltbotConfig;
+      const defaults = getSessionDefaults(cfg);
+      expect(defaults.modelProvider).toBe("ollama");
+      expect(defaults.model).toBe("llama3:chat");
+    } finally {
+      if (prior === undefined) delete process.env.MOONSHOT_API_KEY;
+      else process.env.MOONSHOT_API_KEY = prior;
+    }
   });
 });
 

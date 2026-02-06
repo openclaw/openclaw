@@ -24,8 +24,9 @@ export type SmokeTestConfig = {
   timeout?: number;
 };
 
-const DEFAULT_BASE_URL = "https://api.moonshot.cn/v1";
-const DEFAULT_MODEL = "moonshot-v1-8k";
+const DEFAULT_BASE_URL = "https://api.moonshot.ai/v1";
+// Must match MOONSHOT_DEFAULT_MODEL_ID in src/commands/onboard-auth.models.ts
+const DEFAULT_MODEL = "kimi-k2-0905-preview";
 const DEFAULT_TIMEOUT_MS = 30000;
 
 /**
@@ -73,7 +74,7 @@ export async function runPingTest(config: SmokeTestConfig): Promise<SmokeTestRes
         passed: false,
         message: `Moonshot API returned ${response.status}`,
         durationMs: Date.now() - startTime,
-        details: { status: response.status, body: errorText },
+        details: { status: response.status, body: errorText, baseUrl, model },
       };
     }
 

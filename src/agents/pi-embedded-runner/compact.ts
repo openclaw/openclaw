@@ -27,7 +27,7 @@ import { resolveSessionAgentIds } from "../agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { resolveMoltbotDocsPath } from "../docs-path.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { resolveDefaultModel, resolveDefaultProvider } from "../defaults.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureMoltbotModelsJson } from "../models-config.js";
 import {
@@ -112,8 +112,10 @@ export async function compactEmbeddedPiSessionDirect(
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const prevCwd = process.cwd();
 
-  const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-  const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+  const effectiveDefaultProvider = resolveDefaultProvider();
+  const effectiveDefaultModel = resolveDefaultModel(effectiveDefaultProvider);
+  const provider = (params.provider ?? effectiveDefaultProvider).trim() || effectiveDefaultProvider;
+  const modelId = (params.model ?? effectiveDefaultModel).trim() || effectiveDefaultModel;
   const agentDir = params.agentDir ?? resolveMoltbotAgentDir();
   await ensureMoltbotModelsJson(params.config, agentDir);
   const { model, error, authStorage, modelRegistry } = resolveModel(
@@ -138,7 +140,8 @@ export async function compactEmbeddedPiSessionDirect(
     });
 
     if (!apiKeyInfo.apiKey) {
-      if (apiKeyInfo.mode !== "aws-sdk") {
+      // Allow mode: "none" (local authless provider) and "aws-sdk" (IAM credentials)
+      if (apiKeyInfo.mode !== "aws-sdk" && apiKeyInfo.mode !== "none") {
         throw new Error(
           `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
         );

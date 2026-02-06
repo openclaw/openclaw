@@ -17,8 +17,8 @@ export function registerMoonshotCommands(program: Command) {
     .command("moonshot:smoke")
     .description("Run Moonshot (Kimi) provider smoke test")
     .option("--json", "Output as JSON", false)
-    .option("--base-url <url>", "API base URL (default: https://api.moonshot.cn/v1)")
-    .option("--model <name>", "Model to use for test (default: moonshot-v1-8k)")
+    .option("--base-url <url>", "API base URL (default: https://api.moonshot.ai/v1)")
+    .option("--model <name>", "Model to use for test (default: kimi-k2-0905-preview)")
     .option("--timeout <ms>", "Request timeout in milliseconds", "30000")
     .addHelpText(
       "after",
@@ -33,7 +33,7 @@ export function registerMoonshotCommands(program: Command) {
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["moltbot moonshot:smoke", "Run smoke test with defaults"],
           ["moltbot moonshot:smoke --json", "Output results as JSON"],
-          ["moltbot moonshot:smoke --model moonshot-v1-32k", "Use specific model"],
+          ["moltbot moonshot:smoke --model kimi-k2-0905-preview", "Use specific model"],
         ])}`,
     )
     .action(async (opts) => {

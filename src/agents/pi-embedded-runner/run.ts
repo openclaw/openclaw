@@ -16,7 +16,11 @@ import {
   evaluateContextWindowGuard,
   resolveContextWindowInfo,
 } from "../context-window-guard.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  resolveDefaultModel,
+  resolveDefaultProvider,
+} from "../defaults.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import {
   ensureAuthProfileStore,
@@ -92,8 +96,11 @@ export async function runEmbeddedPiAgent(
       const resolvedWorkspace = resolveUserPath(params.workspaceDir);
       const prevCwd = process.cwd();
 
-      const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      const effectiveDefaultProvider = resolveDefaultProvider();
+      const effectiveDefaultModel = resolveDefaultModel(effectiveDefaultProvider);
+      const provider =
+        (params.provider ?? effectiveDefaultProvider).trim() || effectiveDefaultProvider;
+      const modelId = (params.model ?? effectiveDefaultModel).trim() || effectiveDefaultModel;
       const agentDir = params.agentDir ?? resolveMoltbotAgentDir();
       const fallbackConfigured =
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
@@ -229,7 +236,8 @@ export async function runEmbeddedPiAgent(
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
         const resolvedProfileId = apiKeyInfo.profileId ?? candidate;
         if (!apiKeyInfo.apiKey) {
-          if (apiKeyInfo.mode !== "aws-sdk") {
+          // Allow mode: "none" (local authless provider) and "aws-sdk" (IAM credentials)
+          if (apiKeyInfo.mode !== "aws-sdk" && apiKeyInfo.mode !== "none") {
             throw new Error(
               `No API key resolved for provider "${model.provider}" (auth mode: ${apiKeyInfo.mode}).`,
             );

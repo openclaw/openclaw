@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveDefaultModel, resolveDefaultProvider } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveAllowedModelRef, resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
@@ -114,10 +114,12 @@ export async function applySessionsPatchToStore(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeThinkLevel(String(raw));
       if (!normalized) {
+        const effectiveDefaultProvider = resolveDefaultProvider();
+        const effectiveDefaultModel = resolveDefaultModel(effectiveDefaultProvider);
         const resolvedDefault = resolveConfiguredModelRef({
           cfg,
-          defaultProvider: DEFAULT_PROVIDER,
-          defaultModel: DEFAULT_MODEL,
+          defaultProvider: effectiveDefaultProvider,
+          defaultModel: effectiveDefaultModel,
         });
         const hintProvider = existing?.providerOverride?.trim() || resolvedDefault.provider;
         const hintModel = existing?.modelOverride?.trim() || resolvedDefault.model;
@@ -221,10 +223,12 @@ export async function applySessionsPatchToStore(params: {
 
   if ("model" in patch) {
     const raw = patch.model;
+    const effectiveDefaultProvider = resolveDefaultProvider();
+    const effectiveDefaultModel = resolveDefaultModel(effectiveDefaultProvider);
     const resolvedDefault = resolveConfiguredModelRef({
       cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
+      defaultProvider: effectiveDefaultProvider,
+      defaultModel: effectiveDefaultModel,
     });
     if (raw === null) {
       applyModelOverrideToSessionEntry({
@@ -270,10 +274,12 @@ export async function applySessionsPatchToStore(params: {
   }
 
   if (next.thinkingLevel === "xhigh") {
+    const xhighDefaultProvider = resolveDefaultProvider();
+    const xhighDefaultModel = resolveDefaultModel(xhighDefaultProvider);
     const resolvedDefault = resolveConfiguredModelRef({
       cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
+      defaultProvider: xhighDefaultProvider,
+      defaultModel: xhighDefaultModel,
     });
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;

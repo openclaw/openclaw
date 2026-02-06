@@ -3,7 +3,11 @@ import path from "node:path";
 
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  resolveDefaultModel,
+  resolveDefaultProvider,
+} from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { type MoltbotConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -447,10 +451,12 @@ export function loadCombinedSessionStoreForGateway(cfg: MoltbotConfig): {
 }
 
 export function getSessionDefaults(cfg: MoltbotConfig): GatewaySessionsDefaults {
+  const effectiveDefaultProvider = resolveDefaultProvider();
+  const effectiveDefaultModel = resolveDefaultModel(effectiveDefaultProvider);
   const resolved = resolveConfiguredModelRef({
     cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    defaultProvider: effectiveDefaultProvider,
+    defaultModel: effectiveDefaultModel,
   });
   const contextTokens =
     cfg.agents?.defaults?.contextTokens ??
@@ -467,10 +473,12 @@ export function resolveSessionModelRef(
   cfg: MoltbotConfig,
   entry?: SessionEntry,
 ): { provider: string; model: string } {
+  const effectiveDefaultProvider = resolveDefaultProvider();
+  const effectiveDefaultModel = resolveDefaultModel(effectiveDefaultProvider);
   const resolved = resolveConfiguredModelRef({
     cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    defaultProvider: effectiveDefaultProvider,
+    defaultModel: effectiveDefaultModel,
   });
   let provider = resolved.provider;
   let model = resolved.model;

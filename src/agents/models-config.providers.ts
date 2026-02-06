@@ -31,7 +31,8 @@ const MINIMAX_API_COST = {
 };
 
 const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
-const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2.5";
+// Must match MOONSHOT_DEFAULT_MODEL_ID in src/commands/onboard-auth.models.ts
+const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2-0905-preview";
 const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
 const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
 const MOONSHOT_DEFAULT_COST = {
@@ -275,7 +276,7 @@ function buildMoonshotProvider(): ProviderConfig {
     models: [
       {
         id: MOONSHOT_DEFAULT_MODEL_ID,
-        name: "Kimi K2.5",
+        name: "Kimi K2 0905 Preview",
         reasoning: false,
         input: ["text"],
         cost: MOONSHOT_DEFAULT_COST,
@@ -422,8 +423,8 @@ export async function resolveImplicitProviders(params: {
     const { discoverLocalOllama } = await import("./local-provider-discovery.js");
     const localOllama = await discoverLocalOllama();
     if (localOllama) {
-      // Ollama running locally - register with placeholder apiKey (not actually used)
-      providers.ollama = { ...localOllama, apiKey: "ollama" };
+      // Ollama running locally - auth: "none" is set by discovery, no fake apiKey needed
+      providers.ollama = localOllama;
     }
   }
 
