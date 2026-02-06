@@ -29,7 +29,7 @@ See [Venice AI](/providers/venice).
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```
 
@@ -40,6 +40,7 @@ See [Venice AI](/providers/venice).
 - [Qwen (OAuth)](/providers/qwen)
 - [OpenRouter](/providers/openrouter)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
+- [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [OpenCode Zen](/providers/opencode)
 - [Amazon Bedrock](/bedrock)

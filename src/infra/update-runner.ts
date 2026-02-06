@@ -611,19 +611,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             continue;
           }
 
-          const lintStep = await runStep(
-            step(`preflight lint (${shortSha})`, managerScriptArgs(manager, "lint"), worktreeDir),
-          );
-          steps.push(lintStep);
-          if (lintStep.exitCode !== 0) {
-            continue;
-          }
-
           const buildStep = await runStep(
             step(`preflight build (${shortSha})`, managerScriptArgs(manager, "build"), worktreeDir),
           );
           steps.push(buildStep);
           if (buildStep.exitCode !== 0) {
+            continue;
+          }
+
+          const lintStep = await runStep(
+            step(`preflight lint (${shortSha})`, managerScriptArgs(manager, "lint"), worktreeDir),
+          );
+          steps.push(lintStep);
+          if (lintStep.exitCode !== 0) {
             continue;
           }
 
@@ -745,17 +745,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       step("ui:build", managerScriptArgs(manager, "ui:build"), gitRoot),
     );
     steps.push(uiBuildStep);
-
-    // Restore dist/control-ui/ to committed state to prevent dirty repo after update
-    // (ui:build regenerates assets with new hashes, which would block future updates)
-    const restoreUiStep = await runStep(
-      step(
-        "restore control-ui",
-        ["git", "-C", gitRoot, "checkout", "--", "dist/control-ui/"],
-        gitRoot,
-      ),
-    );
-    steps.push(restoreUiStep);
 
     const doctorStep = await runStep(
       step(

@@ -392,6 +392,23 @@ Two independent controls:
 
 Most users want: `groupPolicy: "allowlist"` + `groupAllowFrom` + specific groups listed in `channels.telegram.groups`
 
+To allow **any group member** to talk in a specific group (while still keeping control commands restricted to authorized senders), set a per-group override:
+
+```json5
+{
+  channels: {
+    telegram: {
+      groups: {
+        "-1001234567890": {
+          groupPolicy: "open",
+          requireMention: false,
+        },
+      },
+    },
+  },
+}
+```
+
 ## Long-polling vs webhook
 
 - Default: long-polling (no public URL required).
@@ -714,12 +731,14 @@ Provider options:
 - `channels.telegram.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `channels.telegram.groupAllowFrom`: group sender allowlist (ids/usernames).
 - `channels.telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
+  - `channels.telegram.groups.<id>.groupPolicy`: per-group override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.requireMention`: mention gating default.
   - `channels.telegram.groups.<id>.skills`: skill filter (omit = all skills, empty = none).
   - `channels.telegram.groups.<id>.allowFrom`: per-group sender allowlist override.
   - `channels.telegram.groups.<id>.systemPrompt`: extra system prompt for the group.
   - `channels.telegram.groups.<id>.enabled`: disable the group when `false`.
   - `channels.telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (same fields as group).
+  - `channels.telegram.groups.<id>.topics.<threadId>.groupPolicy`: per-topic override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
 - `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.

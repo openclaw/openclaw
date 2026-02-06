@@ -56,6 +56,8 @@ export type MsgContext = {
   ForwardedFromUsername?: string;
   ForwardedFromTitle?: string;
   ForwardedFromSignature?: string;
+  ForwardedFromChatType?: string;
+  ForwardedFromMessageId?: number;
   ForwardedDate?: number;
   ThreadStarterBody?: string;
   ThreadLabel?: string;
@@ -89,6 +91,8 @@ export type MsgContext = {
   GroupSystemPrompt?: string;
   /** Untrusted metadata that must not be treated as system instructions. */
   UntrustedContext?: string[];
+  /** Explicit owner allowlist overrides (trusted, configuration-derived). */
+  OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
   SenderId?: string;
   SenderUsername?: string;

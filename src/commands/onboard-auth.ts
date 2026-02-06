@@ -5,6 +5,8 @@ export {
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
 export {
   applyAuthProfileConfig,
+  applyCloudflareAiGatewayConfig,
+  applyCloudflareAiGatewayProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
@@ -22,6 +24,8 @@ export {
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
   applyZaiConfig,
+  applyXaiConfig,
+  applyXaiProviderConfig,
 } from "./onboard-auth.config-core.js";
 export {
   applyMinimaxApiConfig,
@@ -37,8 +41,10 @@ export {
   applyOpencodeZenProviderConfig,
 } from "./onboard-auth.config-opencode.js";
 export {
+  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
+  setCloudflareAiGatewayConfig,
   setGeminiApiKey,
   setKimiCodingApiKey,
   setMinimaxApiKey,
@@ -50,10 +56,12 @@ export {
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
+  setXaiApiKey,
   writeOAuthCredentials,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
+  XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
   buildMinimaxApiModelDefinition,
