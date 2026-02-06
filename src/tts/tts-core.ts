@@ -149,7 +149,7 @@ export function parseTtsDirectives(
             if (!policy.allowProvider) {
               break;
             }
-            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "edge") {
+            if (rawValue === "openai" || rawValue === "elevenlabs" || rawValue === "typecast" || rawValue === "edge") {
               overrides.provider = rawValue;
             } else {
               warnings.push(`unsupported provider "${rawValue}"`);
@@ -637,6 +637,107 @@ export async function openaiTTS(params: {
 
     if (!response.ok) {
       throw new Error(`OpenAI TTS API error (${response.status})`);
+    }
+
+    return Buffer.from(await response.arrayBuffer());
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Parse sample rate from a WAV header (bytes 24-27, little-endian uint32). */
+export function parseWavSampleRate(buf: Buffer, fallback = 24000): number {
+  if (
+    buf.length >= 28 &&
+    buf[0] === 0x52 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x46
+  ) {
+    return buf.readUInt32LE(24);
+  }
+  return fallback;
+}
+
+export async function typecastTTS(params: {
+  text: string;
+  apiKey: string;
+  baseHost: string;
+  voiceId?: string;
+  model: "ssfm-v21" | "ssfm-v30";
+  language?: string;
+  emotionPreset: string;
+  emotionIntensity: number;
+  seed?: number;
+  output: {
+    volume: number;
+    audioPitch: number;
+    audioTempo: number;
+    audioFormat: "wav" | "mp3";
+  };
+  timeoutMs: number;
+}): Promise<Buffer> {
+  const {
+    text,
+    apiKey,
+    baseHost,
+    voiceId,
+    model,
+    language,
+    emotionPreset,
+    emotionIntensity,
+    seed,
+    output,
+    timeoutMs,
+  } = params;
+
+  if (!voiceId) {
+    throw new Error("Typecast voiceId is required");
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const normalizedBase = baseHost.replace(/\/+$/, "");
+    const url = `${normalizedBase}/v1/text-to-speech`;
+
+    const body: Record<string, unknown> = {
+      text,
+      voice_id: voiceId,
+      model,
+      prompt: {
+        emotion_preset: emotionPreset,
+        emotion_intensity: emotionIntensity,
+      },
+      output: {
+        volume: output.volume,
+        audio_pitch: output.audioPitch,
+        audio_tempo: output.audioTempo,
+        audio_format: output.audioFormat,
+      },
+    };
+
+    if (language) {
+      body.language = language;
+    }
+    if (seed !== undefined) {
+      body.seed = seed;
+    }
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "X-API-KEY": apiKey,
+        "Content-Type": "application/json",
+        Accept: `audio/${output.audioFormat}`,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Typecast API error (${response.status})`);
     }
 
     return Buffer.from(await response.arrayBuffer());
