@@ -86,14 +86,13 @@ export function recomputeNextRuns(state: CronServiceState) {
 
 export function nextWakeAtMs(state: CronServiceState) {
   const jobs = state.store?.jobs ?? [];
-  const enabled = jobs.filter((j) => j.enabled && typeof j.state?.nextRunAtMs === "number");
-  if (enabled.length === 0) {
+  const times = jobs
+    .filter((j) => j.enabled && typeof j.state?.nextRunAtMs === "number")
+    .map((j) => j.state!.nextRunAtMs as number);
+  if (times.length === 0) {
     return undefined;
   }
-  return enabled.reduce(
-    (min, j) => Math.min(min, j.state?.nextRunAtMs as number),
-    enabled[0].state?.nextRunAtMs as number,
-  );
+  return Math.min(...times);
 }
 
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
