@@ -750,12 +750,32 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     );
     steps.push(uiBuildStep);
 
-    const doctorArgv = [
-      process.execPath,
-      path.join(gitRoot, "openclaw.mjs"),
-      "doctor",
-      "--non-interactive",
-    ];
+    const doctorEntry = path.join(gitRoot, "openclaw.mjs");
+    const doctorEntryExists = await fs
+      .stat(doctorEntry)
+      .then(() => true)
+      .catch(() => false);
+    if (!doctorEntryExists) {
+      steps.push({
+        name: "openclaw doctor entry",
+        command: `verify ${doctorEntry}`,
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: `missing ${doctorEntry}`,
+      });
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "doctor-entry-missing",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
+    const doctorArgv = [process.execPath, doctorEntry, "doctor", "--non-interactive"];
     const doctorStep = await runStep(
       step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
     );
