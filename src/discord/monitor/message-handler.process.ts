@@ -30,7 +30,13 @@ import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import { buildUntrustedChannelMetadata } from "../../security/channel-metadata.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { reactMessageDiscord, removeReactionDiscord } from "../send.js";
+import {
+  deleteMessageDiscord,
+  editMessageDiscord,
+  reactMessageDiscord,
+  removeReactionDiscord,
+  sendMessageDiscord,
+} from "../send.js";
 import { normalizeDiscordSlug, resolveDiscordOwnerAllowFrom } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import {
@@ -446,34 +452,44 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   }
 
   // Set up periodic progress updates for long-running requests.
+  // Instead of spamming new messages, we edit a single progress message.
   const progressUpdates = discordConfig?.progressUpdates;
   let progressInterval: ReturnType<typeof setInterval> | undefined;
-  let progressStopped = false;
   const progressStartTime = Date.now();
+  let progressMessageId: string | undefined;
+  let progressChannelId: string | undefined;
   if (progressUpdates) {
     const intervalSec = typeof progressUpdates === "number" ? Math.max(15, progressUpdates) : 60;
-    progressInterval = setInterval(() => {
-      if (progressStopped) {
-        return;
-      }
+
+    progressInterval = setInterval(async () => {
       const elapsedSec = Math.round((Date.now() - progressStartTime) / 1000);
       const minutes = Math.floor(elapsedSec / 60);
       const seconds = elapsedSec % 60;
       const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${elapsedSec}s`;
-      deliverDiscordReply({
-        replies: [{ text: `*Still working... (${timeStr})*` }],
-        target: deliverTarget,
-        token,
-        accountId,
-        rest: client.rest,
-        runtime,
-        textLimit,
-        maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
-        tableMode,
-        chunkMode: resolveChunkMode(cfg, "discord", accountId),
-      }).catch((err) => {
+      const progressText = `*Still working... (${timeStr})*`;
+
+      try {
+        if (progressMessageId && progressChannelId) {
+          // Edit the existing progress message
+          await editMessageDiscord(
+            progressChannelId,
+            progressMessageId,
+            { content: progressText },
+            { rest: client.rest },
+          );
+        } else {
+          // Send the first progress message and capture its ID for subsequent edits
+          const result = await sendMessageDiscord(deliverTarget, progressText, {
+            token,
+            accountId,
+            rest: client.rest,
+          });
+          progressMessageId = result.messageId !== "unknown" ? result.messageId : undefined;
+          progressChannelId = result.channelId;
+        }
+      } catch (err) {
         logVerbose(`discord: progress update failed: ${String(err)}`);
-      });
+      }
     }, intervalSec * 1000);
   }
 
@@ -529,17 +545,24 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       onModelSelected,
     },
   });
-  // Stop progress updates immediately so no late callbacks fire.
-  progressStopped = true;
-  if (progressInterval) {
-    clearInterval(progressInterval);
-    progressInterval = undefined;
-  }
   markDispatchIdle();
   // Clean up early typing interval if it wasn't cleared by main typing loop.
   if (earlyTypingInterval) {
     clearInterval(earlyTypingInterval);
     earlyTypingInterval = undefined;
+  }
+  // Clean up progress interval and delete the progress message.
+  if (progressInterval) {
+    clearInterval(progressInterval);
+    progressInterval = undefined;
+  }
+  // Delete the progress message since the real response arrived.
+  if (progressMessageId && progressChannelId) {
+    deleteMessageDiscord(progressChannelId, progressMessageId, { rest: client.rest }).catch(
+      (err) => {
+        logVerbose(`discord: failed to delete progress message: ${String(err)}`);
+      },
+    );
   }
   // Cancel smart ack (main response arrived).
   if (smartAckController) {

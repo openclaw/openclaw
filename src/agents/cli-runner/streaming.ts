@@ -11,6 +11,36 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("agent/cli-streaming");
 
+/** Usage in the format expected by the rest of the codebase. */
+export type CliUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
+/** Raw usage format from Claude CLI stream-json output. */
+type RawCliUsage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+};
+
+/** Convert raw CLI usage to our expected format. */
+function convertUsage(raw?: RawCliUsage): CliUsage | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const input = raw.input_tokens;
+  const output = raw.output_tokens;
+  const cacheRead = raw.cache_read_input_tokens;
+  const cacheWrite = raw.cache_creation_input_tokens;
+  const total = (input ?? 0) + (output ?? 0);
+  return { input, output, cacheRead, cacheWrite, total: total || undefined };
+}
+
 export type CliStreamEvent =
   | { type: "tool_start"; toolName: string; toolCallId: string }
   | { type: "tool_result"; toolCallId: string; isError: boolean }
@@ -18,11 +48,6 @@ export type CliStreamEvent =
   | { type: "thinking"; text: string }
   | { type: "result"; text: string; sessionId?: string; usage?: CliUsage }
   | { type: "error"; message: string };
-
-export type CliUsage = {
-  input_tokens?: number;
-  output_tokens?: number;
-};
 
 export type StreamingCliOptions = {
   command: string;
@@ -52,7 +77,7 @@ type StreamJsonMessage = {
   duration_ms?: number;
   duration_api_ms?: number;
   num_turns?: number;
-  usage?: CliUsage;
+  usage?: RawCliUsage;
 };
 
 /**
@@ -90,7 +115,9 @@ export async function runStreamingCli(options: StreamingCliOptions): Promise<{
     const rl = createInterface({ input: child.stdout });
 
     rl.on("line", (line) => {
-      if (!line.trim()) return;
+      if (!line.trim()) {
+        return;
+      }
 
       try {
         const event = JSON.parse(line) as StreamJsonMessage;
@@ -107,7 +134,7 @@ export async function runStreamingCli(options: StreamingCliOptions): Promise<{
             resultText = event.result;
           }
           if (event.usage) {
-            usage = event.usage;
+            usage = convertUsage(event.usage);
           }
         }
       } catch {
@@ -123,14 +150,18 @@ export async function runStreamingCli(options: StreamingCliOptions): Promise<{
     });
 
     child.on("error", (err) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
       reject(err);
     });
 
     child.on("close", (code) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       clearTimeout(timer);
 
@@ -156,7 +187,9 @@ function processStreamEvent(
   onEvent: ((event: CliStreamEvent) => void) | undefined,
   setResult: (text: string) => void,
 ): void {
-  if (!onEvent) return;
+  if (!onEvent) {
+    return;
+  }
 
   // Handle different event types from Claude CLI stream-json format
   if (event.type === "assistant" && event.message?.content) {
@@ -194,7 +227,7 @@ function processStreamEvent(
         type: "result",
         text: event.result,
         sessionId: event.session_id,
-        usage: event.usage,
+        usage: convertUsage(event.usage),
       });
     }
   }
