@@ -726,6 +726,25 @@ export async function runHeartbeatOnce(opts: {
     opts.sessionKey,
   );
   const previousUpdatedAt = entry?.updatedAt;
+
+  // Skip heartbeat if the user was recently active in this session.
+  // This avoids interrupting active conversations with heartbeat messages.
+  // Cron-triggered wakes and background-exit notifications bypass this check.
+  const RECENT_ACTIVITY_MS = 5 * 60_000; // 5 minutes
+  const isScheduledHeartbeat = opts.reason === "interval";
+  if (
+    isScheduledHeartbeat &&
+    typeof previousUpdatedAt === "number" &&
+    startedAt - previousUpdatedAt < RECENT_ACTIVITY_MS
+  ) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: "recent-activity",
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: "recent-activity" };
+  }
+
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
   if (delivery.reason === "unknown-account") {
