@@ -26,7 +26,7 @@ When the operator says “release”, immediately do this preflight (no extra qu
 - [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to [`openclaw.mjs`](https://github.com/openclaw/openclaw/blob/main/openclaw.mjs) for `openclaw`.
 - [ ] If dependencies changed, run `pnpm install` so `pnpm-lock.yaml` is current.
 
-2. **Build & artifacts**
+1. **Build & artifacts**
 
 - [ ] If A2UI inputs changed, run `pnpm canvas:a2ui:bundle` and commit any updated [`src/canvas-host/a2ui/a2ui.bundle.js`](https://github.com/openclaw/openclaw/blob/main/src/canvas-host/a2ui/a2ui.bundle.js).
 - [ ] `pnpm run build` (regenerates `dist/`).
@@ -34,12 +34,12 @@ When the operator says “release”, immediately do this preflight (no extra qu
 - [ ] Confirm `dist/build-info.json` exists and includes the expected `commit` hash (CLI banner uses this for npm installs).
 - [ ] Optional: `npm pack --pack-destination /tmp` after the build; inspect the tarball contents and keep it handy for the GitHub release (do **not** commit it).
 
-3. **Changelog & docs**
+1. **Changelog & docs**
 
 - [ ] Update `CHANGELOG.md` with user-facing highlights (create the file if missing); keep entries strictly descending by version.
 - [ ] Ensure README examples/flags match current CLI behavior (notably new commands or options).
 
-4. **Validation**
+1. **Validation**
 
 - [ ] `pnpm build`
 - [ ] `pnpm check`
@@ -54,7 +54,7 @@ When the operator says “release”, immediately do this preflight (no extra qu
   - `pnpm test:install:e2e` (requires both keys; runs both providers)
 - [ ] (Optional) Spot-check the web gateway if your changes affect send/receive paths.
 
-5. **macOS app (Sparkle)**
+1. **macOS app (Sparkle)**
 
 - [ ] Build + sign the macOS app, then zip it for distribution.
 - [ ] Generate the Sparkle appcast (HTML notes via [`scripts/make_appcast.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/make_appcast.sh)) and update `appcast.xml`.
@@ -63,7 +63,7 @@ When the operator says “release”, immediately do this preflight (no extra qu
   - `APP_BUILD` must be numeric + monotonic (no `-beta`) so Sparkle compares versions correctly.
   - If notarizing, use the `openclaw-notary` keychain profile created from App Store Connect API env vars (see [macOS release](/platforms/mac/release)).
 
-6. **Publish (npm)**
+1. **Publish (npm)**
 
 - [ ] Confirm git status is clean; commit and push as needed.
 - [ ] `npm login` (verify 2FA) if needed.
@@ -80,7 +80,7 @@ When the operator says “release”, immediately do this preflight (no extra qu
 - **Tag needs repointing after a late fix**: force-update and push the tag, then ensure the GitHub release assets still match:
   - `git tag -f vX.Y.Z && git push -f origin vX.Y.Z`
 
-7. **GitHub release + appcast**
+1. **GitHub release + appcast**
 
 - [ ] Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z` (or `git push --tags`).
 - [ ] Create/refresh the GitHub release for `vX.Y.Z` with **title `openclaw X.Y.Z`** (not just the tag); body should include the **full** changelog section for that version (Highlights + Changes + Fixes), inline (no bare links), and **must not repeat the title inside the body**.

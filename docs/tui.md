@@ -16,13 +16,13 @@ title: "TUI"
 openclaw gateway
 ```
 
-2. Open the TUI.
+1. Open the TUI.
 
 ```bash
 openclaw tui
 ```
 
-3. Type a message and press Enter.
+1. Type a message and press Enter.
 
 Remote Gateway:
 

@@ -66,7 +66,7 @@ export AWS_PROFILE="your-profile"
 export AWS_BEARER_TOKEN_BEDROCK="..."
 ```
 
-2. Add a Bedrock provider and model to your config (no `apiKey` required):
+1. Add a Bedrock provider and model to your config (no `apiKey` required):
 
 ```json5
 {

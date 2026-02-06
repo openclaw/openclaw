@@ -36,13 +36,13 @@ Manual steps (same result):
 openclaw gateway stop
 ```
 
-2. Uninstall the gateway service (launchd/systemd/schtasks):
+1. Uninstall the gateway service (launchd/systemd/schtasks):
 
 ```bash
 openclaw gateway uninstall
 ```
 
-3. Delete state + config:
+1. Delete state + config:
 
 ```bash
 rm -rf "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
@@ -50,13 +50,13 @@ rm -rf "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 
 If you set `OPENCLAW_CONFIG_PATH` to a custom location outside the state dir, delete that file too.
 
-4. Delete your workspace (optional, removes agent files):
+1. Delete your workspace (optional, removes agent files):
 
 ```bash
 rm -rf ~/.openclaw/workspace
 ```
 
-5. Remove the CLI install (pick the one you used):
+1. Remove the CLI install (pick the one you used):
 
 ```bash
 npm rm -g openclaw
@@ -64,7 +64,7 @@ pnpm remove -g openclaw
 bun remove -g openclaw
 ```
 
-6. If you installed the macOS app:
+1. If you installed the macOS app:
 
 ```bash
 rm -rf /Applications/OpenClaw.app

@@ -57,7 +57,7 @@ It is a good fit for support or notifications where you want deterministic routi
 
 ### 1) Create a bot token (Zalo Bot Platform)
 
-1. Go to **https://bot.zaloplatforms.com** and sign in.
+1. Go to **[https://bot.zaloplatforms.com](https://bot.zaloplatforms.com)** and sign in.
 2. Create a new bot and configure its settings.
 3. Copy the bot token (format: `12345689:abc-xyz`).
 
@@ -81,8 +81,8 @@ Env option: `ZALO_BOT_TOKEN=...` (works for the default account only).
 
 Multi-account support: use `channels.zalo.accounts` with per-account tokens and optional `name`.
 
-3. Restart the gateway. Zalo starts when a token is resolved (env or config).
-4. DM access defaults to pairing. Approve the code when the bot is first contacted.
+1. Restart the gateway. Zalo starts when a token is resolved (env or config).
+2. DM access defaults to pairing. Approve the code when the bot is first contacted.
 
 ## How it works (behavior)
 

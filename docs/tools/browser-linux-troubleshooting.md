@@ -67,7 +67,7 @@ If you must use snap Chromium, configure OpenClaw to attach to a manually-starte
 }
 ```
 
-2. Start Chromium manually:
+1. Start Chromium manually:
 
 ```bash
 chromium-browser --headless --no-sandbox --disable-gpu \
@@ -76,7 +76,7 @@ chromium-browser --headless --no-sandbox --disable-gpu \
   about:blank &
 ```
 
-3. Optionally create a systemd user service to auto-start Chrome:
+1. Optionally create a systemd user service to auto-start Chrome:
 
 ```ini
 # ~/.config/systemd/user/openclaw-browser.service

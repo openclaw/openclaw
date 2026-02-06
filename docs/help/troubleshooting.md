@@ -65,7 +65,7 @@ You can also set `OPENCLAW_VERBOSE=1` instead of the flag.
 Some Comcast/Xfinity connections block `docs.openclaw.ai` via Xfinity Advanced Security.
 Disable Advanced Security or add `docs.openclaw.ai` to the allowlist, then retry.
 
-- Xfinity Advanced Security help: https://www.xfinity.com/support/articles/using-xfinity-xfi-advanced-security
+- Xfinity Advanced Security help: [https://www.xfinity.com/support/articles/using-xfinity-xfi-advanced-security](https://www.xfinity.com/support/articles/using-xfinity-xfi-advanced-security)
 - Quick sanity checks: try a mobile hotspot or VPN to confirm it’s ISP-level filtering
 
 ### Service says running, but RPC probe fails

@@ -217,7 +217,7 @@ export type SystemEchoParams = Static<typeof SystemEchoParamsSchema>;
 export type SystemEchoResult = Static<typeof SystemEchoResultSchema>;
 ```
 
-2. **Validation**
+1. **Validation**
 
 In `src/gateway/protocol/index.ts`, export an AJV validator:
 
@@ -225,7 +225,7 @@ In `src/gateway/protocol/index.ts`, export an AJV validator:
 export const validateSystemEchoParams = ajv.compile<SystemEchoParams>(SystemEchoParamsSchema);
 ```
 
-3. **Server behavior**
+1. **Server behavior**
 
 Add a handler in `src/gateway/server-methods/system.ts`:
 
@@ -241,13 +241,13 @@ export const systemHandlers: GatewayRequestHandlers = {
 Register it in `src/gateway/server-methods.ts` (already merges `systemHandlers`),
 then add `"system.echo"` to `METHODS` in `src/gateway/server.ts`.
 
-4. **Regenerate**
+1. **Regenerate**
 
 ```bash
 pnpm protocol:check
 ```
 
-5. **Tests + docs**
+1. **Tests + docs**
 
 Add a server test in `src/gateway/server.*.test.ts` and note the method in docs.
 
@@ -280,7 +280,7 @@ Unknown frame types are preserved as raw payloads for forward compatibility.
 Generated JSON Schema is in the repo at `dist/protocol.schema.json`. The
 published raw file is typically available at:
 
-- https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json
+- [https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json](https://raw.githubusercontent.com/openclaw/openclaw/main/dist/protocol.schema.json)
 
 ## When you change schemas
 

@@ -252,7 +252,7 @@ openclaw browser extension install
 - “Load unpacked” → select the directory printed by `openclaw browser extension path`
 - Pin the extension, then click it on the tab you want to control (badge shows `ON`).
 
-2. Use it:
+1. Use it:
 
 - CLI: `openclaw browser --browser-profile chrome tabs`
 - Agent tool: `browser` with `profile="chrome"`

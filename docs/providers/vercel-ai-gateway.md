@@ -22,7 +22,7 @@ The [Vercel AI Gateway](https://vercel.com/ai-gateway) provides a unified API to
 openclaw onboard --auth-choice ai-gateway-api-key
 ```
 
-2. Set a default model:
+1. Set a default model:
 
 ```json5
 {

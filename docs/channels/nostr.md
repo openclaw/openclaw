@@ -49,7 +49,7 @@ Restart the Gateway after installing or enabling plugins.
 nak key generate
 ```
 
-2. Add to config:
+1. Add to config:
 
 ```json
 {
@@ -61,13 +61,13 @@ nak key generate
 }
 ```
 
-3. Export the key:
+1. Export the key:
 
 ```bash
 export NOSTR_PRIVATE_KEY="nsec1..."
 ```
 
-4. Restart the Gateway.
+1. Restart the Gateway.
 
 ## Configuration reference
 
