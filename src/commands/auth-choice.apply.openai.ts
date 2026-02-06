@@ -185,6 +185,7 @@ export async function applyAuthChoiceOpenAI(
         "Trouble with OAuth? See https://docs.openclaw.ai/start/faq",
         "OAuth help",
       );
+      throw err instanceof Error ? err : new Error(String(err));
     }
     return { config: nextConfig, agentModelOverride };
   }

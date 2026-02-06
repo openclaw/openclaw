@@ -24,6 +24,10 @@ export function createVpsAwareOAuthHandlers(params: {
   return {
     onAuth: async ({ url }) => {
       if (params.isRemote) {
+        if (manualCodePromise) {
+          params.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
+          return;
+        }
         params.spin.stop("OAuth URL ready");
         params.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
         manualCodePromise = params.prompter
