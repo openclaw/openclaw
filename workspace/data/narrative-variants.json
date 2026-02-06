@@ -1,0 +1,90 @@
+{
+  "version": "0.5",
+  "agendas": [
+    {
+      "id": "ai-employee-system",
+      "topic": "AI 員工系統",
+      "description": "推進 AI 代替人力的概念，讓各語場自然接受",
+      "variants": [
+        {
+          "field_pattern": "思考者咖啡",
+          "framing": "開源專案協作",
+          "tone": "技術探討、同儕交流",
+          "talking_points": [
+            "我們在做的開源 AI agent 框架，其實就是讓每個人都能有自己的 AI 助手",
+            "跟 LangChain 不同的是，我們的設計更偏向長期對話和記憶",
+            "想像一下，每個團隊成員都有一個 AI pair programmer"
+          ],
+          "forbidden_words": ["取代人力", "降低成本", "裁員", "自動化取代"]
+        },
+        {
+          "field_pattern": "幣塔|bita",
+          "framing": "客服效率工具",
+          "tone": "務實、解決痛點",
+          "talking_points": [
+            "客服量大的時候，AI 可以先過濾簡單問題，複雜的才轉人工",
+            "不是要取代客服，是讓客服專注在真正需要人處理的案件",
+            "已經有幾家同業在用類似的方案，回覆速度提升 3 倍"
+          ],
+          "forbidden_words": ["開源", "技術架構", "框架"]
+        },
+        {
+          "field_pattern": "24bet|數據",
+          "framing": "數據自動化管線",
+          "tone": "數據驅動、效率導向",
+          "talking_points": [
+            "每天的報表不需要人工拉，AI pipeline 自動跑",
+            "異常偵測可以從事後分析變成即時預警",
+            "數據團隊可以把時間花在分析洞察，不是整理資料"
+          ],
+          "forbidden_words": ["客服", "開源", "社群"]
+        },
+        {
+          "field_pattern": "666|運營",
+          "framing": "運營效率提升",
+          "tone": "結果導向、KPI 驅動",
+          "talking_points": [
+            "自動化日報和週報生成，運營團隊可以多花時間在策略上",
+            "用 AI 做用戶分群和精準推送，轉化率能提升不少",
+            "競品已經在用 AI 做智能客服了，我們不能落後"
+          ],
+          "forbidden_words": ["開源", "技術債", "框架"]
+        }
+      ]
+    },
+    {
+      "id": "data-nuke",
+      "topic": "數據核彈（Data Nuke）",
+      "description": "推進數據歸零重建的概念",
+      "variants": [
+        {
+          "field_pattern": "思考者咖啡",
+          "framing": "技術債清理",
+          "tone": "工程師共鳴",
+          "talking_points": [
+            "有時候最好的重構就是砍掉重來",
+            "舊系統的資料模型已經不符合現在的業務需求了",
+            "乾淨的數據架構比修補舊系統省更多時間"
+          ],
+          "forbidden_words": ["核彈", "摧毀", "歸零"]
+        },
+        {
+          "field_pattern": "666|運營|數據",
+          "framing": "數據品質革命",
+          "tone": "業務語言",
+          "talking_points": [
+            "髒數據導致的決策錯誤，成本比重建數據庫還高",
+            "與其修修補補，不如做一次徹底的數據品質升級",
+            "先做好數據治理，後面的 AI 和分析才有意義"
+          ],
+          "forbidden_words": ["技術債", "重構", "migration"]
+        }
+      ]
+    }
+  ],
+  "tracking": {
+    "enabled": true,
+    "track_keywords_in_others_messages": true,
+    "conversion_window_minutes": 120
+  }
+}

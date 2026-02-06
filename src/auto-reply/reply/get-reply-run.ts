@@ -40,6 +40,7 @@ import { runReplyAgent } from "./agent-runner.js";
 import { extractSessionHintParts } from "./body.js";
 import { type ContextSegment, findSegment, renderSegments } from "./context-segments.js";
 import { buildGroupIntro } from "./groups.js";
+import { buildNarrativeGuide } from "./narrative-engine.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { buildSystemEventsBlock, ensureSkillSnapshot } from "./session-updates.js";
@@ -256,12 +257,19 @@ export async function runPreparedReply(
 
   // Warroom briefing (cached, ~5 min TTL; directives are chat-specific)
   const warroomBriefing = await buildWarroomBriefing(workspaceDir, sessionKey);
+  // Narrative guide (cached, field-specific talking points + forbidden words)
+  const narrativeGuide = await buildNarrativeGuide(
+    workspaceDir,
+    sessionKey,
+    sessionEntry?.chatName ?? ctx.GroupSubject,
+  );
 
   // Build segments in canonical order
   const contextSegments: ContextSegment[] = [
     ...(mediaNote ? [{ kind: "media-note" as const, content: mediaNote }] : []),
     ...(mediaReplyHint ? [{ kind: "media-hint" as const, content: mediaReplyHint }] : []),
     ...(warroomBriefing ? [{ kind: "warroom-briefing" as const, content: warroomBriefing }] : []),
+    ...(narrativeGuide ? [{ kind: "narrative-guide" as const, content: narrativeGuide }] : []),
     ...(threadStarterNote ? [{ kind: "thread-starter" as const, content: threadStarterNote }] : []),
     ...(systemEventsBlock ? [{ kind: "system-event" as const, content: systemEventsBlock }] : []),
     ...(hintParts.abortHint ? [{ kind: "abort-hint" as const, content: hintParts.abortHint }] : []),
