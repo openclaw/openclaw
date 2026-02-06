@@ -42,7 +42,16 @@ USER node
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
 #
-# For container platforms requiring external health checks:
+# SECURITY: Authentication is REQUIRED before the gateway will start.
+# Set one of these environment variables:
+#   - OPENCLAW_GATEWAY_TOKEN: Pre-shared authentication token
+#   - OPENCLAW_GATEWAY_PASSWORD: Password-based authentication
+#
+# For network access (e.g., container orchestration, remote clients):
 #   1. Set OPENCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_PASSWORD env var
-#   2. Override CMD: ["node","dist/index.js","gateway","--allow-unconfigured","--bind","lan"]
-CMD ["node", "dist/index.js", "gateway", "--allow-unconfigured"]
+#   2. Override CMD: ["node","dist/index.js","gateway","--bind","lan"]
+#
+# NOTE: --allow-unconfigured was removed for security reasons.
+# If you need to bypass authentication (NOT RECOMMENDED), explicitly override:
+#   CMD ["node","dist/index.js","gateway","--allow-unconfigured"]
+CMD ["node", "dist/index.js", "gateway"]
