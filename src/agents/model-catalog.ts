@@ -2,6 +2,7 @@ import { getDetectedProviderIds } from "../commands/providers/detection.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { discoverSupplementalModels } from "./supplemental-models.js";
 
 export type ModelCatalogEntry = {
   id: string;
@@ -105,6 +106,22 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
 
+      // Discover supplemental models from provider APIs (Anthropic, OpenAI).
+      // These fill gaps in pi-ai's static catalog. Dedup by id ensures no
+      // conflicts when pi-ai already includes a model.
+      const seen = new Set(models.map((m) => m.id));
+      try {
+        const supplemental = await discoverSupplementalModels({ agentDir });
+        for (const sup of supplemental) {
+          if (!seen.has(sup.id)) {
+            models.push(sup);
+            seen.add(sup.id);
+          }
+        }
+      } catch {
+        // Discovery failed — continue with existing models only.
+      }
+
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
         modelCatalogPromise = null;
@@ -173,4 +190,29 @@ export function findModelInCatalog(
       entry.provider.toLowerCase() === normalizedProvider &&
       entry.id.toLowerCase() === normalizedModelId,
   );
+}
+
+/**
+ * Date-suffix pattern for versioned/snapshot model IDs.
+ * Matches IDs ending with `-YYYYMMDD` or `-YYYY-MM-DD`.
+ */
+const DATE_SUFFIX_RE = /-\d{8}$|-\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Check whether a catalog entry represents the "latest" (canonical) version
+ * of a model rather than a date-pinned snapshot.
+ *
+ * Models whose ID ends with a date stamp (e.g. `claude-opus-4-5-20251101`,
+ * `gpt-4o-2024-11-20`) are considered snapshots and excluded by this filter.
+ */
+export function isLatestModel(entry: ModelCatalogEntry): boolean {
+  return !DATE_SUFFIX_RE.test(entry.id);
+}
+
+/**
+ * Filter a catalog to only include "latest" (canonical / non-dated) models.
+ * Useful for showing users a concise list without redundant snapshots.
+ */
+export function getLatestModels(catalog: ModelCatalogEntry[]): ModelCatalogEntry[] {
+  return catalog.filter(isLatestModel);
 }

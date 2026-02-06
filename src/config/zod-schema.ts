@@ -487,6 +487,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        modelCatalog: z
+          .object({
+            refreshIntervalSeconds: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
         nodes: z
           .object({
             browser: z

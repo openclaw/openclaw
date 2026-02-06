@@ -266,6 +266,18 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     }
   }
 
+  if (evt.event === "models-updated") {
+    const payload = evt.payload as { count?: number } | undefined;
+    const count = payload?.count;
+    const msg =
+      typeof count === "number"
+        ? `Model catalog updated (${count} models available)`
+        : "Model catalog updated";
+    (host as unknown as OpenClawApp).showToast("info", msg);
+    void loadPrimaryModel(host as unknown as Parameters<typeof loadPrimaryModel>[0]);
+    return;
+  }
+
   // Real-time hierarchy updates
   if (evt.event === "hierarchy") {
     const payload = evt.payload as

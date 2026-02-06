@@ -28,6 +28,15 @@ export type ModelCapabilities = {
  */
 export const MODEL_CAPABILITIES_REGISTRY: Record<string, Partial<ModelCapabilities>> = {
   // Anthropic
+  "claude-opus-4-6": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    general: true,
+    creative: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
   "claude-opus-4-5": {
     coding: true,
     reasoning: true,
@@ -95,15 +104,125 @@ export const MODEL_CAPABILITIES_REGISTRY: Record<string, Partial<ModelCapabiliti
     costTier: "cheap",
   },
 
-  // OpenAI
-  "gpt-4o": {
+  // OpenAI — GPT-5.x family
+  "gpt-5.2": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    general: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "gpt-5.2-codex": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "gpt-5.2-pro": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    general: true,
+    creative: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "gpt-5.1": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    general: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "gpt-5.1-codex": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "gpt-5.1-codex-max": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "gpt-5.1-codex-mini": {
+    coding: true,
+    reasoning: true,
+    fast: true,
+    performanceTier: "balanced",
+    costTier: "moderate",
+  },
+  "gpt-5": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    general: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "gpt-5-codex": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "gpt-5-pro": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    general: true,
+    creative: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "gpt-5-mini": {
+    coding: true,
+    reasoning: true,
+    vision: true,
+    general: true,
+    performanceTier: "balanced",
+    costTier: "moderate",
+  },
+  "gpt-5-nano": {
+    coding: true,
+    reasoning: true,
+    fast: true,
+    general: true,
+    performanceTier: "fast",
+    costTier: "cheap",
+  },
+
+  // OpenAI — GPT-4.x family
+  "gpt-4.1": {
     coding: true,
     vision: true,
     general: true,
     performanceTier: "balanced",
     costTier: "moderate",
   },
-  "gpt-4o-2024-11-20": {
+  "gpt-4.1-mini": {
+    coding: true,
+    vision: true,
+    fast: true,
+    general: true,
+    performanceTier: "fast",
+    costTier: "cheap",
+  },
+  "gpt-4.1-nano": {
+    fast: true,
+    vision: true,
+    general: true,
+    performanceTier: "fast",
+    costTier: "cheap",
+  },
+  "gpt-4o": {
     coding: true,
     vision: true,
     general: true,
@@ -117,12 +236,49 @@ export const MODEL_CAPABILITIES_REGISTRY: Record<string, Partial<ModelCapabiliti
     performanceTier: "fast",
     costTier: "cheap",
   },
-  "gpt-4o-mini-2024-07-18": {
+  "gpt-4-turbo": {
     coding: true,
-    fast: true,
+    vision: true,
     general: true,
+    performanceTier: "balanced",
+    costTier: "moderate",
+  },
+  "gpt-4": {
+    coding: true,
+    general: true,
+    performanceTier: "balanced",
+    costTier: "moderate",
+  },
+
+  // OpenAI — o-series reasoning
+  "o4-mini": {
+    coding: true,
+    reasoning: true,
+    fast: true,
     performanceTier: "fast",
-    costTier: "cheap",
+    costTier: "moderate",
+  },
+  o3: {
+    coding: true,
+    reasoning: true,
+    general: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "o3-pro": {
+    coding: true,
+    reasoning: true,
+    general: true,
+    creative: true,
+    performanceTier: "powerful",
+    costTier: "expensive",
+  },
+  "o3-mini": {
+    coding: true,
+    reasoning: true,
+    fast: true,
+    performanceTier: "fast",
+    costTier: "moderate",
   },
   o1: {
     coding: true,
@@ -131,7 +287,7 @@ export const MODEL_CAPABILITIES_REGISTRY: Record<string, Partial<ModelCapabiliti
     performanceTier: "powerful",
     costTier: "expensive",
   },
-  "o1-2024-12-17": {
+  "o1-pro": {
     coding: true,
     reasoning: true,
     general: true,
@@ -144,50 +300,14 @@ export const MODEL_CAPABILITIES_REGISTRY: Record<string, Partial<ModelCapabiliti
     performanceTier: "balanced",
     costTier: "moderate",
   },
-  "o1-mini-2024-09-12": {
-    coding: true,
-    reasoning: true,
-    performanceTier: "balanced",
-    costTier: "moderate",
-  },
-  "o1-preview": {
-    coding: true,
-    reasoning: true,
-    general: true,
-    performanceTier: "powerful",
-    costTier: "expensive",
-  },
-  "o3-mini": {
+
+  // OpenAI — Codex
+  "codex-mini-latest": {
     coding: true,
     reasoning: true,
     fast: true,
-    performanceTier: "fast",
-    costTier: "moderate",
-  },
-  "gpt-4-turbo": {
-    coding: true,
-    vision: true,
-    general: true,
     performanceTier: "balanced",
     costTier: "moderate",
-  },
-  "gpt-4-turbo-preview": {
-    coding: true,
-    general: true,
-    performanceTier: "balanced",
-    costTier: "moderate",
-  },
-  "gpt-4": {
-    coding: true,
-    general: true,
-    performanceTier: "balanced",
-    costTier: "moderate",
-  },
-  "gpt-3.5-turbo": {
-    fast: true,
-    general: true,
-    performanceTier: "fast",
-    costTier: "cheap",
   },
 
   // Google

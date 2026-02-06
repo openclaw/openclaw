@@ -93,6 +93,7 @@ const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 const logBrowser = log.child("browser");
 const logHealth = log.child("health");
+const logModelCatalog = log.child("model-catalog");
 const logCron = log.child("cron");
 const logReload = log.child("reload");
 const logHooks = log.child("hooks");
@@ -444,22 +445,35 @@ export async function startGatewayServer(
     }, skillsRefreshDelayMs);
   });
 
-  const { tickInterval, healthInterval, dedupeCleanup } = startGatewayMaintenanceTimers({
-    broadcast,
-    nodeSendToAllSubscribed,
-    getPresenceVersion,
-    getHealthVersion,
-    refreshGatewayHealthSnapshot,
-    logHealth,
-    dedupe,
-    chatAbortControllers,
-    chatRunState,
-    chatRunBuffers,
-    chatDeltaSentAt,
-    removeChatRun,
-    agentRunSeq,
-    nodeSendToSession,
-  });
+  const { tickInterval, healthInterval, dedupeCleanup, modelCatalogRefresh } =
+    startGatewayMaintenanceTimers({
+      broadcast,
+      nodeSendToAllSubscribed,
+      getPresenceVersion,
+      getHealthVersion,
+      refreshGatewayHealthSnapshot,
+      logHealth,
+      logModelCatalog,
+      modelCatalogRefreshIntervalMs:
+        (cfgAtStart.gateway?.modelCatalog?.refreshIntervalSeconds ?? 3600) * 1000,
+      refreshModelCatalog: async () => {
+        const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
+        const { invalidateModelCatalogCache, loadModelCatalog: loadCatalog } =
+          await import("../agents/model-catalog.js");
+        const { wrote } = await ensureOpenClawModelsJson(loadConfig());
+        invalidateModelCatalogCache();
+        const catalog = await loadCatalog({ useCache: false });
+        return { wrote, count: catalog.length };
+      },
+      dedupe,
+      chatAbortControllers,
+      chatRunState,
+      chatRunBuffers,
+      chatDeltaSentAt,
+      removeChatRun,
+      agentRunSeq,
+      nodeSendToSession,
+    });
 
   const agentUnsub = onAgentEvent(
     createAgentEventHandler({
@@ -631,6 +645,7 @@ export async function startGatewayServer(
     tickInterval,
     healthInterval,
     dedupeCleanup,
+    modelCatalogRefresh,
     agentUnsub,
     heartbeatUnsub,
     chatRunState,

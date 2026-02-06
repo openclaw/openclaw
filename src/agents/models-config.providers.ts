@@ -164,6 +164,12 @@ function resolveApiKeyFromProfiles(params: {
     if (cred.type === "token") {
       return cred.token;
     }
+    if (cred.type === "oauth") {
+      const access = (cred as { access?: string }).access?.trim();
+      if (access) {
+        return access;
+      }
+    }
   }
   return undefined;
 }

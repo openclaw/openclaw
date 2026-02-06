@@ -6,6 +6,7 @@ import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
   HEALTH_REFRESH_INTERVAL_MS,
+  MODEL_CATALOG_REFRESH_INTERVAL_MS,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
 import { formatError } from "./server-utils.js";
@@ -25,6 +26,9 @@ export function startGatewayMaintenanceTimers(params: {
   getHealthVersion: () => number;
   refreshGatewayHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   logHealth: { error: (msg: string) => void };
+  logModelCatalog?: { info: (msg: string) => void; error: (msg: string) => void };
+  modelCatalogRefreshIntervalMs?: number;
+  refreshModelCatalog?: () => Promise<{ wrote: boolean; count: number }>;
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunState: { abortedRuns: Map<string, number> };
@@ -41,6 +45,7 @@ export function startGatewayMaintenanceTimers(params: {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
   dedupeCleanup: ReturnType<typeof setInterval>;
+  modelCatalogRefresh: ReturnType<typeof setInterval> | null;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {
@@ -116,5 +121,30 @@ export function startGatewayMaintenanceTimers(params: {
     }
   }, 60_000);
 
-  return { tickInterval, healthInterval, dedupeCleanup };
+  // periodic model catalog refresh
+  const catalogIntervalMs =
+    params.modelCatalogRefreshIntervalMs ?? MODEL_CATALOG_REFRESH_INTERVAL_MS;
+  let modelCatalogRefresh: ReturnType<typeof setInterval> | null = null;
+  if (catalogIntervalMs > 0 && params.refreshModelCatalog) {
+    const doRefresh = params.refreshModelCatalog;
+    let previousModelCount = -1;
+    modelCatalogRefresh = setInterval(() => {
+      void (async () => {
+        try {
+          const { wrote, count } = await doRefresh();
+          if (wrote || (previousModelCount >= 0 && count !== previousModelCount)) {
+            params.logModelCatalog?.info(
+              `Model catalog refreshed: ${previousModelCount < 0 ? "?" : previousModelCount} → ${count} models`,
+            );
+            params.broadcast("models-updated", { count });
+          }
+          previousModelCount = count;
+        } catch (err) {
+          params.logModelCatalog?.error(`refresh failed: ${formatError(err)}`);
+        }
+      })();
+    }, catalogIntervalMs);
+  }
+
+  return { tickInterval, healthInterval, dedupeCleanup, modelCatalogRefresh };
 }

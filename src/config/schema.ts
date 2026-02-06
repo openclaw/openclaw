@@ -209,6 +209,8 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "gateway.nodes.browser.mode": "Gateway Node Browser Mode",
   "gateway.nodes.browser.node": "Gateway Node Browser Pin",
+  "gateway.modelCatalog": "Model Catalog",
+  "gateway.modelCatalog.refreshIntervalSeconds": "Auto-Refresh Interval (seconds)",
   "gateway.nodes.allowCommands": "Gateway Node Allowlist (Extra Commands)",
   "gateway.nodes.denyCommands": "Gateway Node Denylist",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
@@ -430,6 +432,8 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
+  "gateway.modelCatalog.refreshIntervalSeconds":
+    "How often to re-scan providers for new models (0 = disabled). Default: 3600 (1 hour).",
   "gateway.nodes.allowCommands":
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings).",
   "gateway.nodes.denyCommands":
@@ -758,6 +762,7 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.controlUi.basePath": "/openclaw",
   "gateway.controlUi.root": "dist/control-ui",
   "channels.mattermost.baseUrl": "https://chat.example.com",
+  "gateway.modelCatalog.refreshIntervalSeconds": "3600",
   "agents.defaults.projects.rootDir": "~/Desenvolvimento",
   "agents.list[].identity.avatar": "avatars/openclaw.png",
 };

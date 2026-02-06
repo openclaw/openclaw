@@ -243,4 +243,9 @@ export type GatewayConfig = {
    * `x-real-ip`) to determine the client IP for local pairing and HTTP checks.
    */
   trustedProxies?: string[];
+  /** Model catalog auto-refresh settings. */
+  modelCatalog?: {
+    /** Refresh interval in seconds (default: 3600 = 1h). Set to 0 to disable. */
+    refreshIntervalSeconds?: number;
+  };
 };
