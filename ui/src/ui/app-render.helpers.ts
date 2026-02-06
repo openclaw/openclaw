@@ -205,6 +205,10 @@ function resolveMainSessionKey(
   return null;
 }
 
+function isSubagentSessionKey(key: string) {
+  return key.includes(":subagent:");
+}
+
 function resolveSessionDisplayName(key: string, row?: SessionsListResult["sessions"][number]) {
   const label = row?.label?.trim();
   if (label) {
@@ -212,6 +216,9 @@ function resolveSessionDisplayName(key: string, row?: SessionsListResult["sessio
   }
   const displayName = row?.displayName?.trim();
   if (displayName) {
+    if (isSubagentSessionKey(key)) {
+      return `${displayName} (${key})`;
+    }
     return displayName;
   }
   return key;
