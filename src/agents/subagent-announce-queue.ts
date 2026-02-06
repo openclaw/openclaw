@@ -89,7 +89,9 @@ function scheduleAnnounceDrain(key: string) {
   void (async () => {
     try {
       let forceIndividualCollect = false;
-      while (queue.items.length > 0 || queue.droppedCount > 0) {
+      const DRAIN_DEADLINE_MS = 120_000;
+      const deadline = Date.now() + DRAIN_DEADLINE_MS;
+      while ((queue.items.length > 0 || queue.droppedCount > 0) && Date.now() < deadline) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
           if (forceIndividualCollect) {
@@ -149,6 +151,11 @@ function scheduleAnnounceDrain(key: string) {
           break;
         }
         await queue.send(next);
+      }
+      if (queue.items.length > 0 || queue.droppedCount > 0) {
+        defaultRuntime.error?.(
+          `announce queue drain timed out for ${key}: ${queue.items.length} items remaining, ${queue.droppedCount} dropped`,
+        );
       }
     } catch (err) {
       defaultRuntime.error?.(`announce queue drain failed for ${key}: ${String(err)}`);
