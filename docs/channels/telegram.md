@@ -147,7 +147,7 @@ You can add custom commands to the menu via config:
 }
 ```
 
-## Troubleshooting
+## Setup troubleshooting (commands)
 
 - `setMyCommands failed` in logs usually means outbound HTTPS/DNS is blocked to `api.telegram.org`.
 - If you see `sendMessage` or `sendChatAction` failures, check IPv6 routing and DNS.

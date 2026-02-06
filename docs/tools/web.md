@@ -207,12 +207,12 @@ await web_search({
 
 Fetch a URL and extract readable content.
 
-### Requirements
+### web_fetch requirements
 
 - `tools.web.fetch.enabled` must not be `false` (default: enabled)
 - Optional Firecrawl fallback: set `tools.web.fetch.firecrawl.apiKey` or `FIRECRAWL_API_KEY`.
 
-### Config
+### web_fetch config
 
 ```json5
 {
@@ -241,7 +241,7 @@ Fetch a URL and extract readable content.
 }
 ```
 
-### Tool parameters
+### web_fetch tool parameters
 
 - `url` (required, http/https only)
 - `extractMode` (`markdown` | `text`)

@@ -49,7 +49,7 @@ Use the manifest below so scopes and events stay in sync.
 
 Multi-account support: use `channels.slack.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
-### OpenClaw config (minimal)
+### OpenClaw config (Socket mode)
 
 Set tokens via env vars (recommended):
 
@@ -130,7 +130,7 @@ Example with userTokenReadOnly explicitly set (allow user token writes):
 Use HTTP webhook mode when your Gateway is reachable by Slack over HTTPS (typical for server deployments).
 HTTP mode uses the Events API + Interactivity + Slash Commands with a shared request URL.
 
-### Setup
+### Setup (HTTP mode)
 
 1. Create a Slack app and **disable Socket Mode** (optional if you only use HTTP).
 2. **Basic Information** → copy the **Signing Secret**.
