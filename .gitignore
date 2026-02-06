@@ -76,3 +76,7 @@ USER.md
 memory/
 .agent/*.json
 !.agent/workflows/
+
+# Watchdog versioned builds and state
+.builds/
+.watchdog/
