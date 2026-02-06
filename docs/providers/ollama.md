@@ -12,7 +12,7 @@ Ollama is a local LLM runtime that makes it easy to run open-source models on yo
 
 ## Quick start
 
-1. Install Ollama: https://ollama.ai
+1. Install Ollama: [https://ollama.ai](https://ollama.ai)
 
 2. Pull a model:
 
