@@ -3,6 +3,7 @@ import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk";
 import type { ResolvedSimplexAccount } from "./types.js";
 import { getSimplexRuntime } from "./runtime.js";
 import {
+  buildCancelFileCommand,
   buildReceiveFileCommand,
   buildSendMessagesCommand,
   formatChatRef,
@@ -655,15 +656,23 @@ async function handleSimplexEvent(params: {
           pendingFiles.set(pendingKey(account.accountId, fileId), pending);
           setTimeout(() => {
             const key = pendingKey(account.accountId, fileId);
-            if (pendingFiles.has(key)) {
+            const current = pendingFiles.get(key);
+            if (current) {
               pendingFiles.delete(key);
-              dispatchInbound({ pending, mediaPath: undefined, mediaType: undefined }).catch(
-                (err) => {
-                  runtime.error?.(
-                    `[${account.accountId}] SimpleX pending file timeout: ${String(err)}`,
-                  );
-                },
-              );
+              void current.client.sendCommand(buildCancelFileCommand(fileId)).catch((err) => {
+                runtime.error?.(
+                  `[${account.accountId}] SimpleX file timeout cancel failed: ${String(err)}`,
+                );
+              });
+              void dispatchInbound({
+                pending: current,
+                mediaPath: undefined,
+                mediaType: undefined,
+              }).catch((err) => {
+                runtime.error?.(
+                  `[${account.accountId}] SimpleX pending file timeout: ${String(err)}`,
+                );
+              });
             }
           }, PENDING_FILE_TIMEOUT_MS);
           continue;
