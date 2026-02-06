@@ -43,6 +43,9 @@ def find_target_session():
                  return sess["sessionKey"]
 
         return None
+    except Exception as e:
+        logging.error(f"Error finding session: {e}")
+        return None
 
 def notify_session(message):
     session_key = find_target_session()
