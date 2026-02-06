@@ -1082,7 +1082,7 @@ description: test skill
     );
     expect(pluginFinding).toBeDefined();
     expect(pluginFinding?.detail).toContain("dangerous-exec");
-    expect(pluginFinding?.detail).toMatch(/\.hidden\/index\.js:\d+/);
+    expect(pluginFinding?.detail).toMatch(/\.hidden[\\/]+index\.js:\d+/);
 
     const skillFinding = deepRes.findings.find(
       (finding) => finding.checkId === "skills.code_safety" && finding.severity === "critical",
