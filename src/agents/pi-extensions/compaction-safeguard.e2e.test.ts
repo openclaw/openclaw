@@ -1,10 +1,20 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
 import {
   getCompactionSafeguardRuntime,
   setCompactionSafeguardRuntime,
 } from "./compaction-safeguard-runtime.js";
-import { __testing } from "./compaction-safeguard.js";
+import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
+
+// Allow mocking summarizeInStages for the "summarization throws" test
+vi.mock("../compaction.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../compaction.js")>();
+  return {
+    ...original,
+    summarizeInStages: vi.fn(original.summarizeInStages),
+  };
+});
 
 const {
   collectToolFailures,
@@ -247,5 +257,114 @@ describe("compaction-safeguard runtime registry", () => {
     setCompactionSafeguardRuntime(sm2, { maxHistoryShare: 0.8 });
     expect(getCompactionSafeguardRuntime(sm1)).toEqual({ maxHistoryShare: 0.3 });
     expect(getCompactionSafeguardRuntime(sm2)).toEqual({ maxHistoryShare: 0.8 });
+  });
+});
+
+// --- Regression tests for #10332: compaction must cancel on failure paths ---
+
+function makeMinimalPreparation() {
+  return {
+    messagesToSummarize: [] as AgentMessage[],
+    turnPrefixMessages: [] as AgentMessage[],
+    firstKeptEntryId: "entry-1",
+    tokensBefore: 5000,
+    isSplitTurn: false,
+    previousSummary: undefined,
+    settings: { reserveTokens: 500 },
+    fileOps: {
+      read: [] as string[],
+      edited: [] as string[],
+      written: [] as string[],
+    },
+  };
+}
+
+function captureHandler() {
+  let handler: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
+
+  const api = {
+    on: (name: string, fn: unknown) => {
+      if (name === "session_before_compact") {
+        handler = fn as typeof handler;
+      }
+    },
+    appendEntry: (_type: string, _data?: unknown) => {},
+  } as unknown as ExtensionAPI;
+
+  compactionSafeguardExtension(api);
+  if (!handler) {
+    throw new Error("missing session_before_compact handler");
+  }
+  return handler;
+}
+
+describe("compaction-safeguard cancels on failure (#10332)", () => {
+  it("cancels compaction when no model is available", async () => {
+    const handler = captureHandler();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await handler(
+      { preparation: makeMinimalPreparation(), customInstructions: undefined, signal: undefined },
+      {
+        model: undefined,
+        modelRegistry: { getApiKey: async () => "key" },
+        sessionManager: {},
+      },
+    );
+
+    expect(result).toEqual({ cancel: true });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("no model available"));
+    warnSpy.mockRestore();
+  });
+
+  it("cancels compaction when no API key is available", async () => {
+    const handler = captureHandler();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await handler(
+      { preparation: makeMinimalPreparation(), customInstructions: undefined, signal: undefined },
+      {
+        model: { contextWindow: 128_000 },
+        modelRegistry: { getApiKey: async () => undefined },
+        sessionManager: {},
+      },
+    );
+
+    expect(result).toEqual({ cancel: true });
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("no API key available"));
+    warnSpy.mockRestore();
+  });
+
+  it("cancels compaction when summarization throws", async () => {
+    const handler = captureHandler();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // Mock summarizeInStages to throw for this test
+    const { summarizeInStages } = await import("../compaction.js");
+    const mockedSummarize = vi.mocked(summarizeInStages);
+    mockedSummarize.mockRejectedValueOnce(new Error("LLM API timeout"));
+
+    const result = await handler(
+      {
+        preparation: {
+          ...makeMinimalPreparation(),
+          messagesToSummarize: [{ role: "user", content: "hello", timestamp: Date.now() }],
+        },
+        customInstructions: undefined,
+        signal: undefined,
+      },
+      {
+        model: { contextWindow: 128_000 },
+        modelRegistry: { getApiKey: async () => "test-key" },
+        sessionManager: {},
+      },
+    );
+
+    expect(result).toEqual({ cancel: true });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("cancelling compaction to preserve history"),
+    );
+    warnSpy.mockRestore();
+    mockedSummarize.mockRestore();
   });
 });
