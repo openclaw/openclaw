@@ -1,12 +1,12 @@
 {
-  "name": "openclaw",
+  "name": "gensparx",
   "version": "2026.2.4",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "keywords": [],
   "license": "MIT",
   "author": "",
   "bin": {
-    "openclaw": "openclaw.mjs"
+    "gensparx": "gensparx.mjs"
   },
   "files": [
     "assets/",
@@ -15,7 +15,7 @@
     "docs/",
     "extensions/",
     "LICENSE",
-    "openclaw.mjs",
+    "gensparx.mjs",
     "README-header.png",
     "README.md",
     "skills/"
@@ -25,7 +25,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./plugin-sdk": "./dist/plugin-sdk/index.js",
-    "./cli-entry": "./openclaw.mjs"
+    "./cli-entry": "./gensparx.mjs"
   },
   "scripts": {
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",

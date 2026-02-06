@@ -89,7 +89,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
 
 function resolveProfileStateDir(profile: string, homedir: () => string): string {
   const suffix = profile.toLowerCase() === "default" ? "" : `-${profile}`;
-  return path.join(homedir(), `.openclaw${suffix}`);
+  return path.join(homedir(), `.gensparx${suffix}`);
 }
 
 export function applyCliProfileEnv(params: {

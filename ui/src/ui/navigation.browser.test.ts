@@ -22,14 +22,14 @@ beforeEach(() => {
   OpenClawApp.prototype.connect = () => {
     // no-op: avoid real gateway WS connections in browser tests
   };
-  window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
+  window.__GENSPARX_CONTROL_UI_BASE_PATH__ = undefined;
   localStorage.clear();
   document.body.innerHTML = "";
 });
 
 afterEach(() => {
   OpenClawApp.prototype.connect = originalConnect;
-  window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
+  window.__GENSPARX_CONTROL_UI_BASE_PATH__ = undefined;
   localStorage.clear();
   document.body.innerHTML = "";
 });
@@ -62,11 +62,11 @@ describe("control UI routing", () => {
   });
 
   it("honors explicit base path overrides", async () => {
-    window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = "/openclaw";
-    const app = mountApp("/openclaw/sessions");
+    window.__GENSPARX_CONTROL_UI_BASE_PATH__ = "/gensparx";
+    const app = mountApp("/gensparx/sessions");
     await app.updateComplete;
 
-    expect(app.basePath).toBe("/openclaw");
+    expect(app.basePath).toBe("/gensparx");
     expect(app.tab).toBe("sessions");
     expect(window.location.pathname).toBe("/openclaw/sessions");
   });
