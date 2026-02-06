@@ -70,9 +70,10 @@ export function computeZulipMonitorBackoffMs(params: {
   retryAfterMs?: number;
 }): number {
   const cappedAttempt = Math.max(1, Math.min(10, Math.floor(params.attempt)));
-  const base = params.status === 429 ? 1500 : 500;
+  // Zulip can rate-limit /events fairly aggressively on some deployments; prefer slower retries.
+  const base = params.status === 429 ? 10_000 : 500;
   const max = params.status === 429 ? 120_000 : 30_000;
-  const exp = Math.min(max, base * 2 ** Math.min(7, cappedAttempt));
+  const exp = Math.min(max, base * 2 ** Math.min(7, cappedAttempt - 1));
   const jitter = Math.floor(Math.random() * 500);
   return Math.max(exp + jitter, params.retryAfterMs ?? 0, base);
 }
