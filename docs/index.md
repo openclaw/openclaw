@@ -120,7 +120,7 @@ Need the full install and dev setup? See [Quick start](/start/quickstart).
 
 Open the browser Control UI after the Gateway starts.
 
-- Local default: http://127.0.0.1:18789/
+- Local default: [http://127.0.0.1:18789/](http://127.0.0.1:18789/)
 - Remote access: [Web surfaces](/web) and [Tailscale](/gateway/tailscale)
 
 <p align="center">
