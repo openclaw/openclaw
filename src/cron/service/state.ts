@@ -1,4 +1,5 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import type { ExecutionStore } from "../execution-store.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoreFile } from "../types.js";
 
 export type CronEvent = {
@@ -23,6 +24,7 @@ export type CronServiceDeps = {
   nowMs?: () => number;
   log: Logger;
   storePath: string;
+  executionStorePath: string;
   cronEnabled: boolean;
   enqueueSystemEvent: (text: string, opts?: { agentId?: string }) => void;
   requestHeartbeatNow: (opts?: { reason?: string }) => void;
@@ -44,6 +46,7 @@ export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  executionStore: ExecutionStore | null;
   timer: NodeJS.Timeout | null;
   running: boolean;
   op: Promise<unknown>;
@@ -54,6 +57,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
   return {
     deps: { ...deps, nowMs: deps.nowMs ?? (() => Date.now()) },
     store: null,
+    executionStore: null,
     timer: null,
     running: false,
     op: Promise.resolve(),
