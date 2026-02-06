@@ -206,9 +206,7 @@ export async function prepareSlackMessage(params: {
   // - For thread replies: use incomingThreadTs (the parent thread)
   // - For new messages: use message.ts (this message becomes the thread root)
   // - For DMs: undefined (DMs don't need thread-level sessions)
-  const canonicalThreadId = isRoomish
-    ? (threadContext.incomingThreadTs ?? message.ts)
-    : undefined;
+  const canonicalThreadId = isRoomish ? (threadContext.incomingThreadTs ?? message.ts) : undefined;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId: canonicalThreadId,
