@@ -509,9 +509,11 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     : null;
 
   // Set up listener to send smart ack when delay passes (if not cancelled).
+  // For simple messages (greetings, etc.), the smart ack IS the full response (not italic).
+  // For complex messages, it's an italic interim acknowledgment.
   if (smartAckController) {
-    void smartAckController.result.then((ackText) => {
-      if (ackText) {
+    void smartAckController.result.then((ackResult) => {
+      if (ackResult) {
         // Smart ack gave the user feedback, so suppress progress messages.
         if (progressInterval) {
           clearInterval(progressInterval);
@@ -529,8 +531,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           progressMessageId = undefined;
           progressChannelId = undefined;
         }
+        // Full responses are sent as-is; interim acks are italicized.
+        const displayText = ackResult.isFull ? ackResult.text : `*${ackResult.text}*`;
         deliverDiscordReply({
-          replies: [{ text: ackText }],
+          replies: [{ text: displayText }],
           target: deliverTarget,
           token,
           accountId,

@@ -22,6 +22,13 @@ export type SmartAckConfig = {
   timeoutMs?: number;
 };
 
+export type SmartAckResult = {
+  /** The response text (without formatting). */
+  text: string;
+  /** Whether this is a full response (true) or interim acknowledgment (false). */
+  isFull: boolean;
+};
+
 type ClaudeCliResponse = {
   result?: string;
   is_error?: boolean;
@@ -49,7 +56,10 @@ function parseCliResponse(stdout: string): string | null {
 /**
  * Generate a contextual acknowledgment message using Claude CLI with Haiku.
  * Uses the Max subscription instead of per-token API charges.
- * Returns null if generation fails or times out.
+ *
+ * For simple messages (greetings, thanks, casual chat), returns a full response
+ * that can replace the main model run. For complex requests, returns an interim
+ * acknowledgment formatted in italics.
  */
 export async function generateSmartAck(params: {
   message: string;
@@ -57,7 +67,7 @@ export async function generateSmartAck(params: {
   cfg: OpenClawConfig;
   config?: SmartAckConfig;
   signal?: AbortSignal;
-}): Promise<string | null> {
+}): Promise<SmartAckResult | null> {
   const { message, senderName, config, signal } = params;
 
   if (signal?.aborted) {
@@ -70,11 +80,16 @@ export async function generateSmartAck(params: {
   const nameContext = senderName ? `The user's name is ${senderName}. ` : "";
 
   const prompt =
-    `You are a helpful AI assistant. Generate a brief, friendly acknowledgment (1-2 sentences) ` +
-    `that shows you understand what the user is asking for. ${nameContext}` +
-    `The acknowledgment should be specific to their request, not generic. ` +
-    `Start with something like "I see you want to..." or "Working on..." or "Let me help you with...". ` +
-    `Keep it warm but concise. Do NOT actually answer the request, just acknowledge it.\n\n` +
+    `You are a helpful AI assistant responding in a Discord server. ${nameContext}` +
+    `Decide if this message is SIMPLE or COMPLEX.\n\n` +
+    `SIMPLE messages are: greetings, thanks, casual chat, short questions with obvious answers, ` +
+    `acknowledgments, or anything a fast model can fully answer in 1-2 sentences.\n` +
+    `COMPLEX messages are: technical questions, code requests, multi-step tasks, research, ` +
+    `or anything needing deep thought or tools.\n\n` +
+    `If SIMPLE: prefix your response with "FULL: " and give a complete, friendly reply (1-2 sentences).\n` +
+    `If COMPLEX: prefix your response with "ACK: " and give a brief acknowledgment showing you ` +
+    `understand the request (e.g. "Working on..." or "Let me look into..."). ` +
+    `Do NOT answer complex requests, just acknowledge them.\n\n` +
     `User's message:\n${message}`;
 
   // Build CLI args for claude command
@@ -104,10 +119,25 @@ export async function generateSmartAck(params: {
       return null;
     }
 
-    logVerbose(`smart-ack: generated acknowledgment (${ack.length} chars)`);
+    // Parse FULL/ACK prefix to determine response type
+    const isFull = ack.startsWith("FULL: ") || ack.startsWith("FULL:");
+    const isAck = ack.startsWith("ACK: ") || ack.startsWith("ACK:");
+    const cleanText = isFull
+      ? ack.replace(/^FULL:\s*/, "")
+      : isAck
+        ? ack.replace(/^ACK:\s*/, "")
+        : ack;
 
-    // Format as italics for Discord
-    return `*${ack}*`;
+    if (!cleanText.trim()) {
+      logVerbose("smart-ack: empty after prefix strip");
+      return null;
+    }
+
+    logVerbose(
+      `smart-ack: generated ${isFull ? "full response" : "acknowledgment"} (${cleanText.length} chars)`,
+    );
+
+    return { text: cleanText, isFull };
   } catch (err) {
     if (signal?.aborted) {
       logVerbose("smart-ack: generation aborted (main response arrived first or timeout)");
@@ -122,7 +152,7 @@ export type SmartAckController = {
   /** Cancel the smart ack (e.g., when main response arrives). */
   cancel: () => void;
   /** Wait for the smart ack result (if delay passed and not cancelled). */
-  result: Promise<string | null>;
+  result: Promise<SmartAckResult | null>;
 };
 
 /**
@@ -138,9 +168,9 @@ export function startSmartAck(params: {
   const delayMs = params.config?.delayMs ?? DEFAULT_ACK_DELAY_MS;
   const abortController = new AbortController();
   let cancelled = false;
-  let resolveResult: (value: string | null) => void;
+  let resolveResult: (value: SmartAckResult | null) => void;
 
-  const result = new Promise<string | null>((resolve) => {
+  const result = new Promise<SmartAckResult | null>((resolve) => {
     resolveResult = resolve;
   });
 
