@@ -194,7 +194,7 @@ export function buildSlackMediaPayload(mediaList: SlackMediaItem[]): {
 } {
   const first = mediaList[0];
   const mediaPaths = mediaList.map((m) => m.path);
-  const mediaTypes = mediaList.map((m) => m.contentType).filter(Boolean) as string[];
+  const mediaTypes = mediaList.map((m) => m.contentType ?? "");
   return {
     MediaPath: first?.path,
     MediaType: first?.contentType,

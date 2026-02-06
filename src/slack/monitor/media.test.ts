@@ -462,6 +462,21 @@ describe("buildSlackMediaPayload", () => {
     expect(payload.MediaPaths).toBeUndefined();
   });
 
+  it("preserves positional alignment when some items lack contentType", async () => {
+    const { buildSlackMediaPayload } = await import("./media.js");
+
+    const payload = buildSlackMediaPayload([
+      { path: "/tmp/a.jpg", contentType: "image/jpeg", placeholder: "[Slack file: a.jpg]" },
+      { path: "/tmp/b.bin", placeholder: "[Slack file: b.bin]" }, // no contentType
+      { path: "/tmp/c.png", contentType: "image/png", placeholder: "[Slack file: c.png]" },
+    ]);
+
+    // MediaTypes must stay aligned with MediaPaths by index
+    expect(payload.MediaPaths).toEqual(["/tmp/a.jpg", "/tmp/b.bin", "/tmp/c.png"]);
+    expect(payload.MediaTypes).toEqual(["image/jpeg", "", "image/png"]);
+    expect(payload.MediaTypes).toHaveLength(payload.MediaPaths!.length);
+  });
+
   it("handles single item list", async () => {
     const { buildSlackMediaPayload } = await import("./media.js");
 
