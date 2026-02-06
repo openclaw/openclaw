@@ -17,6 +17,7 @@ import {
   type MemoryCategory,
   type MemoryConfig,
   memoryConfigSchema,
+  resolveEffectiveModel,
   vectorDimsForModel,
 } from "./config.js";
 
@@ -357,15 +358,11 @@ class LocalEmbeddingProvider implements EmbeddingProvider {
 // ============================================================================
 
 function createEmbeddingProvider(cfg: MemoryConfig): EmbeddingProvider {
+  const model = resolveEffectiveModel(cfg);
   if (cfg.embedding.provider === "local") {
-    const modelPath =
-      cfg.local?.modelPath ??
-      cfg.embedding.model ??
-      "hf:nomic-ai/nomic-embed-text-v1.5-GGUF/nomic-embed-text-v1.5.f16.gguf";
-    return new LocalEmbeddingProvider(modelPath, cfg.local?.modelCacheDir);
+    return new LocalEmbeddingProvider(model, cfg.local?.modelCacheDir);
   }
-  // OpenAI provider (default)
-  return new OpenAIEmbeddingProvider(cfg.embedding.apiKey!, cfg.embedding.model!);
+  return new OpenAIEmbeddingProvider(cfg.embedding.apiKey!, model);
 }
 
 // ============================================================================
@@ -439,7 +436,7 @@ const memoryPlugin = {
   register(api: OpenClawPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
     const resolvedDbPath = api.resolvePath(cfg.dbPath!);
-    const vectorDim = vectorDimsForModel(cfg.embedding.model ?? "text-embedding-3-small");
+    const vectorDim = vectorDimsForModel(resolveEffectiveModel(cfg));
     const db = new MemoryDB(resolvedDbPath, vectorDim);
     const embeddings = createEmbeddingProvider(cfg);
 
@@ -683,9 +680,7 @@ const memoryPlugin = {
             // Re-read config so reindex always uses the current provider/model,
             // even if register() ran with a previous configuration.
             const currentCfg = memoryConfigSchema.parse(api.pluginConfig);
-            const currentDim = vectorDimsForModel(
-              currentCfg.embedding.model ?? "text-embedding-3-small",
-            );
+            const currentDim = vectorDimsForModel(resolveEffectiveModel(currentCfg));
             const currentEmbeddings = createEmbeddingProvider(currentCfg);
 
             // Open the old table without dimension validation

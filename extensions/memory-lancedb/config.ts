@@ -115,6 +115,19 @@ function resolveEmbeddingModel(
   return model;
 }
 
+const LOCAL_DEFAULT_MODEL = "hf:nomic-ai/nomic-embed-text-v1.5-GGUF/nomic-embed-text-v1.5.f16.gguf";
+
+/**
+ * Resolve the model identifier actually used for embeddings.
+ * For local provider, `local.modelPath` takes precedence over `embedding.model`.
+ */
+export function resolveEffectiveModel(cfg: MemoryConfig): string {
+  if (cfg.embedding.provider === "local") {
+    return cfg.local?.modelPath ?? cfg.embedding.model ?? LOCAL_DEFAULT_MODEL;
+  }
+  return cfg.embedding.model ?? DEFAULT_MODEL;
+}
+
 export const memoryConfigSchema = {
   parse(value: unknown): MemoryConfig {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
