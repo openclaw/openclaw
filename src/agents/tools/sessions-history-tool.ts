@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { capArrayByJsonBytes } from "../../gateway/session-utils.js";
 import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -18,6 +19,60 @@ const SessionsHistoryToolSchema = Type.Object({
   limit: Type.Optional(Type.Number({ minimum: 1 })),
   includeTools: Type.Optional(Type.Boolean()),
 });
+
+const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
+const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
+
+function truncateHistoryText(text: string): string {
+  if (text.length <= SESSIONS_HISTORY_TEXT_MAX_CHARS) {
+    return text;
+  }
+  return `${text.slice(0, SESSIONS_HISTORY_TEXT_MAX_CHARS)}\n…(truncated)…`;
+}
+
+function sanitizeHistoryContentBlock(block: unknown): unknown {
+  if (!block || typeof block !== "object") {
+    return block;
+  }
+  const entry = { ...(block as Record<string, unknown>) };
+  const type = typeof entry.type === "string" ? entry.type : "";
+  if (type === "text" && typeof entry.text === "string") {
+    entry.text = truncateHistoryText(entry.text);
+  }
+  if (type === "thinking") {
+    if (typeof entry.thinking === "string") {
+      entry.thinking = truncateHistoryText(entry.thinking);
+    }
+    // The encrypted signature can be extremely large and is not useful for history recall.
+    delete entry.thinkingSignature;
+  }
+  if (typeof entry.partialJson === "string") {
+    entry.partialJson = truncateHistoryText(entry.partialJson);
+  }
+  if (type === "image") {
+    delete entry.data;
+    entry.omitted = true;
+  }
+  return entry;
+}
+
+function sanitizeHistoryMessage(message: unknown): unknown {
+  if (!message || typeof message !== "object") {
+    return message;
+  }
+  const entry = { ...(message as Record<string, unknown>) };
+  // Tool result details often contain very large nested payloads.
+  delete entry.details;
+  delete entry.usage;
+  delete entry.cost;
+
+  if (typeof entry.content === "string") {
+    entry.content = truncateHistoryText(entry.content);
+  } else if (Array.isArray(entry.content)) {
+    entry.content = entry.content.map((block) => sanitizeHistoryContentBlock(block));
+  }
+  return entry;
+}
 
 function resolveSandboxSessionToolsVisibility(cfg: ReturnType<typeof loadConfig>) {
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
@@ -131,10 +186,14 @@ export function createSessionsHistoryTool(opts?: {
         params: { sessionKey: resolvedKey, limit },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
-      const messages = includeTools ? rawMessages : stripToolMessages(rawMessages);
+      const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
+      const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
+      const cappedMessages = capArrayByJsonBytes(sanitizedMessages, SESSIONS_HISTORY_MAX_BYTES);
       return jsonResult({
         sessionKey: displayKey,
-        messages,
+        messages: cappedMessages.items,
+        truncated: cappedMessages.items.length < selectedMessages.length,
+        bytes: cappedMessages.bytes,
       });
     },
   };
