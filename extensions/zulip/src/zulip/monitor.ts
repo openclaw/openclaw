@@ -181,6 +181,8 @@ async function pollEvents(params: {
     query: {
       queue_id: params.queueId,
       last_event_id: params.lastEventId,
+      // Be explicit: we want long-poll behavior to avoid tight polling loops that can trigger 429s.
+      dont_block: false,
     },
     abortSignal: params.abortSignal,
   });
@@ -508,6 +510,15 @@ export async function monitorZulipProvider(
           const list = events.events ?? [];
           if (typeof events.last_event_id === "number") {
             lastEventId = events.last_event_id;
+          }
+
+          // Defensive throttle: if Zulip responds immediately with no events (e.g. dont_block behavior,
+          // proxies, or aggressive server settings), avoid a tight loop that can hit 429s.
+          if (list.length === 0) {
+            const jitterMs = Math.floor(Math.random() * 250);
+            await sleep(2000 + jitterMs, abortSignal).catch(() => undefined);
+            retry = 0;
+            continue;
           }
 
           stage = "handle";
