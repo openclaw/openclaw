@@ -5,6 +5,7 @@ import {
   repairToolUseResultPairing,
   sanitizeToolCallInputs,
   sanitizeToolUseResultPairing,
+  repairToolUseResultPairing,
 } from "./session-transcript-repair.js";
 
 describe("sanitizeToolUseResultPairing", () => {
@@ -113,6 +114,100 @@ describe("sanitizeToolUseResultPairing", () => {
     const out = sanitizeToolUseResultPairing(input);
     expect(out.some((m) => m.role === "toolResult")).toBe(false);
     expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("skips tool call extraction for assistant messages with stopReason 'error'", () => {
+    // When an assistant message has stopReason: "error", its tool_use blocks may be
+    // incomplete/malformed. We should NOT create synthetic tool_results for them,
+    // as this causes API 400 errors: "unexpected tool_use_id found in tool_result blocks"
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_error", name: "exec", arguments: {} }],
+        stopReason: "error",
+      },
+      { role: "user", content: "something went wrong" },
+    ] as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+
+    // Should NOT add synthetic tool results for errored messages
+    expect(result.added).toHaveLength(0);
+    // The assistant message should be passed through unchanged
+    expect(result.messages[0]?.role).toBe("assistant");
+    expect(result.messages[1]?.role).toBe("user");
+    expect(result.messages).toHaveLength(2);
+  });
+
+  it("skips tool call extraction for assistant messages with stopReason 'aborted'", () => {
+    // When a request is aborted mid-stream, the assistant message may have incomplete
+    // tool_use blocks (with partialJson). We should NOT create synthetic tool_results.
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_aborted", name: "Bash", arguments: {} }],
+        stopReason: "aborted",
+      },
+      { role: "user", content: "retrying after abort" },
+    ] as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+
+    // Should NOT add synthetic tool results for aborted messages
+    expect(result.added).toHaveLength(0);
+    // Messages should be passed through without synthetic insertions
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]?.role).toBe("assistant");
+    expect(result.messages[1]?.role).toBe("user");
+  });
+
+  it("still repairs tool results for normal assistant messages with stopReason 'toolUse'", () => {
+    // Normal tool calls (stopReason: "toolUse" or "stop") should still be repaired
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_normal", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      },
+      { role: "user", content: "user message" },
+    ] as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+
+    // Should add a synthetic tool result for the missing result
+    expect(result.added).toHaveLength(1);
+    expect(result.added[0]?.toolCallId).toBe("call_normal");
+  });
+
+  it("drops orphan tool results that follow an aborted assistant message", () => {
+    // When an assistant message is aborted, any tool results that follow should be
+    // dropped as orphans (since we skip extracting tool calls from aborted messages).
+    // This addresses the edge case where a partial tool result was persisted before abort.
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_aborted", name: "exec", arguments: {} }],
+        stopReason: "aborted",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_aborted",
+        toolName: "exec",
+        content: [{ type: "text", text: "partial result" }],
+        isError: false,
+      },
+      { role: "user", content: "retrying" },
+    ] as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+
+    // The orphan tool result should be dropped
+    expect(result.droppedOrphanCount).toBe(1);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]?.role).toBe("assistant");
+    expect(result.messages[1]?.role).toBe("user");
+    // No synthetic results should be added
+    expect(result.added).toHaveLength(0);
   });
 });
 
