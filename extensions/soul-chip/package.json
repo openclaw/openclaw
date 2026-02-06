@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/soul-chip",
+  "version": "2026.2.7",
+  "description": "Agent Soul Chip \u2014 the immutable identity core of a Windborne civilisation node",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

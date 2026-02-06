@@ -1,0 +1,29 @@
+{
+  "id": "void-reflection",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "cronIntervalHours": {
+        "type": "number",
+        "default": 6,
+        "description": "Hours between scheduled reflection cycles"
+      },
+      "thresholdRuns": {
+        "type": "number",
+        "default": 10,
+        "description": "Number of agent runs before triggering a threshold-based reflection"
+      },
+      "maxObservations": {
+        "type": "number",
+        "default": 200,
+        "description": "Maximum observations to keep in the JSONL log"
+      },
+      "reflectionModel": {
+        "type": ["string", "null"],
+        "default": null,
+        "description": "Optional model override for the reflection LLM call (e.g. 'anthropic/claude-4-sonnet'). Uses default model when null."
+      }
+    }
+  }
+}

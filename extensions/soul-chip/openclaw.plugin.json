@@ -1,0 +1,24 @@
+{
+  "id": "soul-chip",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "pauseKeyword": {
+        "type": "string",
+        "default": "\u98ce\u9690",
+        "description": "Keyword that triggers meditation/pause mode. All elements halt except Void observation."
+      },
+      "resumeKeyword": {
+        "type": "string",
+        "default": "\u98ce\u6e2f",
+        "description": "Keyword that resumes from meditation mode."
+      },
+      "injectPriority": {
+        "type": "number",
+        "default": -100,
+        "description": "Hook priority (lower = earlier). Soul should inject before all other plugins."
+      }
+    }
+  }
+}

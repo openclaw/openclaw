@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/void-reflection",
+  "version": "2026.2.7",
+  "description": "Void element — Agent self-reflection, self-repair, and self-iteration",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
