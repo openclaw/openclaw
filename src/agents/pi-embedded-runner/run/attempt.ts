@@ -894,8 +894,11 @@ export async function runEmbeddedAttempt(
             throw err;
           }
         } finally {
-          restoreOneShotRetryPromptOverride?.();
+          const restore = restoreOneShotRetryPromptOverride;
           restoreOneShotRetryPromptOverride = null;
+          if (restore) {
+            restore();
+          }
         }
 
         messagesSnapshot = activeSession.messages.slice();
