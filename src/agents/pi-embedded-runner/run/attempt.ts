@@ -752,8 +752,7 @@ export async function runEmbeddedAttempt(
         }
       }
 
-      // Get hook runner once for both before_agent_start and agent_end hooks
-      const hookRunner = getGlobalHookRunner();
+      // Resolve agent ID for before_agent_start and agent_end hooks
       const hookAgentId =
         typeof params.agentId === "string" && params.agentId.trim()
           ? normalizeAgentId(params.agentId)
