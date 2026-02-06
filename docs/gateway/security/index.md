@@ -773,18 +773,22 @@ If it fails, there are new candidates not yet in the baseline.
 ### If CI fails
 
 1. Reproduce locally:
+
    ```bash
    detect-secrets scan --baseline .secrets.baseline
    ```
+
 2. Understand the tools:
    - `detect-secrets scan` finds candidates and compares them to the baseline.
    - `detect-secrets audit` opens an interactive review to mark each baseline
      item as real or false positive.
 3. For real secrets: rotate/remove them, then re-run the scan to update the baseline.
 4. For false positives: run the interactive audit and mark them as false:
+
    ```bash
    detect-secrets audit .secrets.baseline
    ```
+
 5. If you need new excludes, add them to `.detect-secrets.cfg` and regenerate the
    baseline with matching `--exclude-files` / `--exclude-lines` flags (the config
    file is reference-only; detect-secrets doesn’t read it automatically).
@@ -814,7 +818,7 @@ Mario asking for find ~
 
 Found a vulnerability in OpenClaw? Please report responsibly:
 
-1. Email: security@openclaw.ai
+1. Email: [security@openclaw.ai](mailto:security@openclaw.ai)
 2. Don't post publicly until fixed
 3. We'll credit you (unless you prefer anonymity)
 

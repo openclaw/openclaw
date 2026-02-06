@@ -34,9 +34,11 @@ Details: [Plugins](/plugin)
 
 1. Install the Nextcloud Talk plugin.
 2. On your Nextcloud server, create a bot:
+
    ```bash
    ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature reaction
    ```
+
 3. Enable the bot in the target room settings.
 4. Configure OpenClaw:
    - Config: `channels.nextcloud-talk.baseUrl` + `channels.nextcloud-talk.botSecret`
