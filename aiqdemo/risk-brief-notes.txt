@@ -1,0 +1,3 @@
+- Reports highlight identity spoofing risks in bot communities.
+- Credential handling remains a top concern; avoid collecting secrets in workflows.
+- Recommend stricter tool allowlists and session-scoped intent tokens.

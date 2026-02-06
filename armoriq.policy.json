@@ -1,15 +1,9 @@
 {
-  "version": 8,
-  "updatedAt": "2026-02-04T13:44:08.767Z",
+  "version": 32,
+  "updatedAt": "2026-02-06T13:18:32.632Z",
   "updatedBy": "main",
   "policy": {
-    "rules": [
-      {
-        "id": "allow-all",
-        "action": "allow",
-        "tool": "*"
-      }
-    ]
+    "rules": []
   },
   "history": [
     {
@@ -179,6 +173,424 @@
             "tool": "*"
           }
         ]
+      }
+    },
+    {
+      "version": 9,
+      "updatedAt": "2026-02-04T16:58:36.104Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy reset Policy new: block send_email for PAYMENT Policy new: block upload_file for PII Policy new: require approval before write_file",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          }
+        ]
+      }
+    },
+    {
+      "version": 10,
+      "updatedAt": "2026-02-04T17:00:34.838Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy reset Policy new: block send_email for PAYMENT Policy new: block upload_file for PII Policy new: require approval before write_file",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy2",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          }
+        ]
+      }
+    },
+    {
+      "version": 11,
+      "updatedAt": "2026-02-04T17:39:21.695Z",
+      "updatedBy": "main",
+      "reason": "User policy update: policy lsit",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy2",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy3",
+            "action": "deny",
+            "tool": "*"
+          }
+        ]
+      }
+    },
+    {
+      "version": 12,
+      "updatedAt": "2026-02-04T17:40:24.545Z",
+      "updatedBy": "main",
+      "reason": "Policy reorder: Policy prioritize policy3 1",
+      "policy": {
+        "rules": [
+          {
+            "id": "policy3",
+            "action": "deny",
+            "tool": "*"
+          },
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy2",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          }
+        ]
+      }
+    },
+    {
+      "version": 13,
+      "updatedAt": "2026-02-04T20:33:05.602Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy reset Policy new: block write_file for PAYMENT",
+      "policy": {
+        "rules": [
+          {
+            "id": "policy3",
+            "action": "deny",
+            "tool": "*"
+          },
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy2",
+            "action": "require_approval",
+            "tool": "send_email",
+            "dataClass": "PAYMENT"
+          },
+          {
+            "id": "policy4",
+            "action": "deny",
+            "tool": "write_file",
+            "dataClass": "PAYMENT"
+          }
+        ]
+      }
+    },
+    {
+      "version": 14,
+      "updatedAt": "2026-02-04T20:35:39.472Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: Policy reset",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          }
+        ]
+      }
+    },
+    {
+      "version": 15,
+      "updatedAt": "2026-02-05T13:55:56.506Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy liist",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "deny",
+            "tool": "*"
+          }
+        ]
+      }
+    },
+    {
+      "version": 16,
+      "updatedAt": "2026-02-06T11:52:28.622Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: policy reset",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          }
+        ]
+      }
+    },
+    {
+      "version": 17,
+      "updatedAt": "2026-02-06T11:58:50.928Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Polocy list",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "deny",
+            "tool": "*"
+          }
+        ]
+      }
+    },
+    {
+      "version": 18,
+      "updatedAt": "2026-02-06T12:15:27.735Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy new: block exec commands",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          },
+          {
+            "id": "policy1",
+            "action": "deny",
+            "tool": "*"
+          },
+          {
+            "id": "policy2",
+            "action": "deny",
+            "tool": "exec"
+          }
+        ]
+      }
+    },
+    {
+      "version": 19,
+      "updatedAt": "2026-02-06T12:16:37.132Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: policy reset",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          }
+        ]
+      }
+    },
+    {
+      "version": 20,
+      "updatedAt": "2026-02-06T12:30:04.801Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: policy reset",
+      "policy": {
+        "rules": [
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          }
+        ]
+      }
+    },
+    {
+      "version": 21,
+      "updatedAt": "2026-02-06T12:37:36.466Z",
+      "updatedBy": "main",
+      "reason": "User policy update: policy rest",
+      "policy": {
+        "rules": [
+          {
+            "id": "policy1",
+            "action": "deny",
+            "tool": "*"
+          },
+          {
+            "id": "allow-all",
+            "action": "allow",
+            "tool": "*"
+          }
+        ]
+      }
+    },
+    {
+      "version": 22,
+      "updatedAt": "2026-02-06T12:38:08.932Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: policy reset",
+      "policy": {
+        "rules": []
+      }
+    },
+    {
+      "version": 23,
+      "updatedAt": "2026-02-06T12:39:43.877Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy new: block exec commands",
+      "policy": {
+        "rules": [
+          {
+            "id": "policy1",
+            "action": "deny",
+            "tool": "exec"
+          }
+        ]
+      }
+    },
+    {
+      "version": 24,
+      "updatedAt": "2026-02-06T12:40:50.805Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: Policy reset",
+      "policy": {
+        "rules": []
+      }
+    },
+    {
+      "version": 25,
+      "updatedAt": "2026-02-06T12:43:55.458Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy new: block exec commands",
+      "policy": {
+        "rules": [
+          {
+            "id": "policy1",
+            "action": "deny",
+            "tool": "exec"
+          }
+        ]
+      }
+    },
+    {
+      "version": 26,
+      "updatedAt": "2026-02-06T12:45:52.973Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: Policy reset",
+      "policy": {
+        "rules": []
+      }
+    },
+    {
+      "version": 27,
+      "updatedAt": "2026-02-06T13:01:35.650Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: Policy reset",
+      "policy": {
+        "rules": []
+      }
+    },
+    {
+      "version": 28,
+      "updatedAt": "2026-02-06T13:02:42.278Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: Policy reset",
+      "policy": {
+        "rules": []
+      }
+    },
+    {
+      "version": 29,
+      "updatedAt": "2026-02-06T13:07:17.305Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy new: block exec commands",
+      "policy": {
+        "rules": [
+          {
+            "id": "policy1",
+            "action": "deny",
+            "tool": "exec"
+          }
+        ]
+      }
+    },
+    {
+      "version": 30,
+      "updatedAt": "2026-02-06T13:09:08.491Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: Policy reset",
+      "policy": {
+        "rules": []
+      }
+    },
+    {
+      "version": 31,
+      "updatedAt": "2026-02-06T13:16:42.088Z",
+      "updatedBy": "main",
+      "reason": "User policy update: Policy new: block exec commands",
+      "policy": {
+        "rules": [
+          {
+            "id": "policy1",
+            "action": "deny",
+            "tool": "exec"
+          }
+        ]
+      }
+    },
+    {
+      "version": 32,
+      "updatedAt": "2026-02-06T13:18:32.632Z",
+      "updatedBy": "main",
+      "reason": "Policy reset: Policy reset",
+      "policy": {
+        "rules": []
       }
     }
   ]

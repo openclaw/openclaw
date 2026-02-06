@@ -6,7 +6,7 @@ via `/tools/invoke`.
 ## Quick Start
 
 1. Enable the ArmorIQ plugin with valid credentials (see `AIQREADME.md`).
-2. Connect WhatsApp, Slack, and Telegram.
+2. Connect Slack and Telegram.
 3. Ensure tools are allowed: `web_search`, `web_fetch`, `browser`, `read`, `write`, `message`.
 4. Run `pnpm aiq:demo setup`.
 

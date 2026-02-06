@@ -42,7 +42,9 @@
       "maxParamChars": { "type": "number" },
       "maxParamDepth": { "type": "number" },
       "maxParamKeys": { "type": "number" },
-      "maxParamItems": { "type": "number" }
+      "maxParamItems": { "type": "number" },
+      "cryptoPolicyEnabled": { "type": "boolean", "default": false },
+      "csrgEndpoint": { "type": "string", "default": "http://localhost:8000" }
     }
   }
 }
