@@ -299,6 +299,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   }
 
   const envMap: Record<string, string> = {
+    apertis: "APERTIS_API_KEY",
     openai: "OPENAI_API_KEY",
     google: "GEMINI_API_KEY",
     voyage: "VOYAGE_API_KEY",
