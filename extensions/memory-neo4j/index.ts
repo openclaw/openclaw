@@ -26,7 +26,7 @@ import {
   vectorDimsForModel,
 } from "./config.js";
 import { Embeddings } from "./embeddings.js";
-import { extractUserMessages, runSleepCycle } from "./extractor.js";
+import { extractUserMessages, stripMessageWrappers, runSleepCycle } from "./extractor.js";
 import { Neo4jMemoryClient } from "./neo4j-client.js";
 import { hybridSearch } from "./search.js";
 
@@ -735,10 +735,11 @@ const memoryNeo4jPlugin = {
                 opts.agent ? { agentId: opts.agent } : {},
               );
 
-              // Run each through the attention gate
+              // Strip channel metadata wrappers (same as the real pipeline) then gate
               const noise: Array<{ id: string; text: string; source: string }> = [];
               for (const mem of allMemories) {
-                if (!passesAttentionGate(mem.text)) {
+                const stripped = stripMessageWrappers(mem.text);
+                if (!passesAttentionGate(stripped)) {
                   noise.push(mem);
                 }
               }

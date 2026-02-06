@@ -872,24 +872,28 @@ export function extractUserMessages(messages: unknown[]): string[] {
     }
   }
 
-  // Strip injected context, channel metadata wrappers, and system prefixes
-  // so the attention gate sees only the raw user text.
-  return texts
-    .map((t) => {
-      let s = t;
-      // Injected context from memory system
-      s = s.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g, "");
-      s = s.replace(/<core-memory-refresh>[\s\S]*?<\/core-memory-refresh>\s*/g, "");
-      s = s.replace(/<system>[\s\S]*?<\/system>\s*/g, "");
-      // Media attachment preamble (appears before Telegram wrapper)
-      s = s.replace(/^\[media attached:[^\]]*\]\s*(?:To send an image[^\n]*\n?)*/i, "");
-      // System exec output blocks (may appear before Telegram wrapper)
-      s = s.replace(/^(?:System:\s*\[[^\]]*\][^\n]*\n?)+/gi, "");
-      // Telegram wrapper — may now be at start after previous strips
-      s = s.replace(/^\s*\[Telegram\s[^\]]+\]\s*/i, "");
-      // "[message_id: NNN]" suffix
-      s = s.replace(/\n?\[message_id:\s*\d+\]\s*$/i, "");
-      return s.trim();
-    })
-    .filter((t) => t.length >= 10);
+  // Strip wrappers then filter by length
+  return texts.map(stripMessageWrappers).filter((t) => t.length >= 10);
+}
+
+/**
+ * Strip injected context, channel metadata wrappers, and system prefixes
+ * so the attention gate sees only the raw user text.
+ * Exported for use by the cleanup command.
+ */
+export function stripMessageWrappers(text: string): string {
+  let s = text;
+  // Injected context from memory system
+  s = s.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g, "");
+  s = s.replace(/<core-memory-refresh>[\s\S]*?<\/core-memory-refresh>\s*/g, "");
+  s = s.replace(/<system>[\s\S]*?<\/system>\s*/g, "");
+  // Media attachment preamble (appears before Telegram wrapper)
+  s = s.replace(/^\[media attached:[^\]]*\]\s*(?:To send an image[^\n]*\n?)*/i, "");
+  // System exec output blocks (may appear before Telegram wrapper)
+  s = s.replace(/^(?:System:\s*\[[^\]]*\][^\n]*\n?)+/gi, "");
+  // Telegram wrapper — may now be at start after previous strips
+  s = s.replace(/^\s*\[Telegram\s[^\]]+\]\s*/i, "");
+  // "[message_id: NNN]" suffix
+  s = s.replace(/\n?\[message_id:\s*\d+\]\s*$/i, "");
+  return s.trim();
 }
