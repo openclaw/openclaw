@@ -186,14 +186,19 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
     const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
-    const sessionKey = buildAgentSessionKey({
+    const sessionKeyRaw = buildAgentSessionKey({
       agentId: resolvedAgentId,
       channel,
       accountId,
       peer,
       dmScope,
       identityLinks,
-    }).toLowerCase();
+    });
+    // Historically we lowercased the whole session key for stable comparison.
+    // Signal group IDs are Base64-encoded and case-sensitive; lowercasing breaks downstream actions
+    // that reconstruct targets from the session key (e.g. reactions).
+    const sessionKey =
+      channel === "signal" && peer?.kind === "group" ? sessionKeyRaw : sessionKeyRaw.toLowerCase();
     const mainSessionKey = buildAgentMainSessionKey({
       agentId: resolvedAgentId,
       mainKey: DEFAULT_MAIN_KEY,
