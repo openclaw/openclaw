@@ -6,7 +6,7 @@
   "dependencies": {
     "@lancedb/lancedb": "^0.23.0",
     "@sinclair/typebox": "0.34.48",
-    "openai": "^6.17.0"
+    "openai": "^6.18.0"
   },
   "devDependencies": {
     "openclaw": "workspace:*"
