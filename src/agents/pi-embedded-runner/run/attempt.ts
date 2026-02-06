@@ -472,7 +472,7 @@ export async function runEmbeddedAttempt(
       let clientToolCallDetected: {
         name: string;
         params: Record<string, unknown>;
-        toolCallId?: string;
+        toolCallId: string;
       } | null = null;
       const clientToolDefs = params.clientTools
         ? toClientToolDefinitions(

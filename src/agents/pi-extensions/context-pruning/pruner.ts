@@ -275,7 +275,7 @@ export async function pruneContextMessages(params: {
   const hookSessionKey =
     params.sessionKey?.trim() ||
     (params.sessionId ? `session:${params.sessionId}` : "session:unknown");
-  const emitPruneHook = async () => {
+  const emitPruneHook = () => {
     if (softTrimmedCount === 0 && hardClearedCount === 0) {
       return;
     }
@@ -288,7 +288,9 @@ export async function pruneContextMessages(params: {
         hardClearedCount,
         toolNames: prunedToolNames.size > 0 ? Array.from(prunedToolNames) : undefined,
       });
-      await triggerInternalHook(hookEvent);
+      void triggerInternalHook(hookEvent).catch(() => {
+        // Best-effort only; pruning should never fail due to hooks.
+      });
     } catch {
       // Best-effort only; pruning should never fail due to hooks.
     }
@@ -332,11 +334,11 @@ export async function pruneContextMessages(params: {
   const outputAfterSoftTrim = next ?? messages;
   ratio = totalChars / charWindow;
   if (ratio < settings.hardClearRatio) {
-    await emitPruneHook();
+    emitPruneHook();
     return outputAfterSoftTrim;
   }
   if (!settings.hardClear.enabled) {
-    await emitPruneHook();
+    emitPruneHook();
     return outputAfterSoftTrim;
   }
 
@@ -379,6 +381,6 @@ export async function pruneContextMessages(params: {
     }
   }
 
-  await emitPruneHook();
+  emitPruneHook();
   return next ?? messages;
 }

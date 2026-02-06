@@ -409,6 +409,7 @@ export async function deliverOutboundPayloads(params: {
       }
       payloadSummary.text = hookResult.content;
       payload.text = hookResult.content;
+      attemptedSendContent = payloadSummary.text;
       params.onPayload?.(payloadSummary);
       if (handler.sendPayload && payload.channelData) {
         const result = await handler.sendPayload(payload);
