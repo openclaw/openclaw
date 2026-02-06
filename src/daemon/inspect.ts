@@ -188,6 +188,12 @@ async function scanLaunchdDir(params: {
     if (marker === "openclaw" && isOpenClawGatewayLaunchdService(label, contents)) {
       continue;
     }
+    // Only flag services whose label actually belongs to the openclaw namespace.
+    // Unrelated LaunchAgents whose plist merely mentions "openclaw" in a path or
+    // script argument should not be reported as competing gateways.
+    if (marker === "openclaw" && !label.startsWith("ai.openclaw.")) {
+      continue;
+    }
     results.push({
       platform: "darwin",
       label,
