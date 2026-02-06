@@ -21,6 +21,45 @@ import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
+const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+const ANTHROPIC_DEFAULT_CONTEXT_WINDOW = 200000;
+const ANTHROPIC_DEFAULT_MAX_TOKENS = 8192;
+const ANTHROPIC_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+const ANTHROPIC_MODELS: ModelDefinitionConfig[] = [
+  {
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6",
+    reasoning: false,
+    input: ["text"],
+    cost: ANTHROPIC_DEFAULT_COST,
+    contextWindow: ANTHROPIC_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
+  },
+  {
+    id: "claude-opus-4-5",
+    name: "Claude Opus 4.5",
+    reasoning: false,
+    input: ["text"],
+    cost: ANTHROPIC_DEFAULT_COST,
+    contextWindow: ANTHROPIC_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
+  },
+  {
+    id: "claude-sonnet-4-5",
+    name: "Claude Sonnet 4.5",
+    reasoning: false,
+    input: ["text"],
+    cost: ANTHROPIC_DEFAULT_COST,
+    contextWindow: ANTHROPIC_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
+  },
+];
+
 const MINIMAX_API_BASE_URL = "https://api.minimax.chat/v1";
 const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
 const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.1";
@@ -269,6 +308,14 @@ export function normalizeProviders(params: {
   return mutated ? next : providers;
 }
 
+function buildAnthropicProvider(): ProviderConfig {
+  return {
+    baseUrl: ANTHROPIC_BASE_URL,
+    api: "anthropic-messages",
+    models: ANTHROPIC_MODELS,
+  };
+}
+
 function buildMinimaxProvider(): ProviderConfig {
   return {
     baseUrl: MINIMAX_API_BASE_URL,
@@ -410,6 +457,13 @@ export async function resolveImplicitProviders(params: {
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
+
+  const anthropicKey =
+    resolveEnvApiKeyVarName("anthropic") ??
+    resolveApiKeyFromProfiles({ provider: "anthropic", store: authStore });
+  if (anthropicKey) {
+    providers.anthropic = { ...buildAnthropicProvider(), apiKey: anthropicKey };
+  }
 
   const minimaxKey =
     resolveEnvApiKeyVarName("minimax") ??
