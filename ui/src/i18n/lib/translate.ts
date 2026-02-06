@@ -38,7 +38,16 @@ class I18nManager {
     // Lazy load translations if needed
     if (!this.translations[locale]) {
       try {
-        const module = await import(`../locales/${locale}.ts`);
+        let module;
+        if (locale === "zh-CN") {
+          module = await import("../locales/zh-CN");
+        } else if (locale === "zh-TW") {
+          module = await import("../locales/zh-TW");
+        } else if (locale === "pt-BR") {
+          module = await import("../locales/pt-BR");
+        } else {
+          return;
+        }
         this.translations[locale] = module[locale.replace("-", "_")];
       } catch (e) {
         console.error(`Failed to load locale: ${locale}`, e);
