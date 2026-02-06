@@ -13,7 +13,7 @@ const REDIRECT_URI = "http://localhost:51121/oauth-callback";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DEFAULT_PROJECT_ID = "rising-fact-p41fc";
-const DEFAULT_MODEL = "google-antigravity/claude-opus-4-5-thinking";
+const DEFAULT_MODEL = "google-antigravity/claude-opus-4-6-thinking";
 
 const SCOPES = [
   "https://www.googleapis.com/auth/cloud-platform",
