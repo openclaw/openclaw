@@ -228,6 +228,118 @@ describe("config schema - local provider", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Dimension mismatch detection tests
+// ---------------------------------------------------------------------------
+
+describe("dimension mismatch detection", () => {
+  let tmpDir: string;
+  let testDbPath: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dim-test-"));
+    testDbPath = path.join(tmpDir, "lancedb");
+  });
+
+  afterEach(async () => {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("creates table with correct dimensions on fresh DB", async () => {
+    const { MemoryDB } = await import("./index.js");
+    const db = new MemoryDB(testDbPath, 768);
+    // store triggers initialization
+    await db.store({
+      text: "test",
+      vector: Array(768).fill(0.1),
+      importance: 0.5,
+      category: "fact",
+    });
+    expect(await db.count()).toBe(1);
+  });
+
+  test("opens existing table with matching dimensions", async () => {
+    const { MemoryDB } = await import("./index.js");
+    // Create with 768 dims
+    const db1 = new MemoryDB(testDbPath, 768);
+    await db1.store({
+      text: "test",
+      vector: Array(768).fill(0.1),
+      importance: 0.5,
+      category: "fact",
+    });
+
+    // Reopen with same dims — should succeed
+    const db2 = new MemoryDB(testDbPath, 768);
+    expect(await db2.count()).toBe(1);
+  });
+
+  test("throws DimensionMismatchError when dimensions differ", async () => {
+    const { MemoryDB, DimensionMismatchError } = await import("./index.js");
+    // Create table with 1536-dim vectors
+    const db1 = new MemoryDB(testDbPath, 1536);
+    await db1.store({
+      text: "test",
+      vector: Array(1536).fill(0.1),
+      importance: 0.5,
+      category: "fact",
+    });
+
+    // Try to open with 768-dim config
+    const db2 = new MemoryDB(testDbPath, 768);
+    await expect(db2.count()).rejects.toThrow(DimensionMismatchError);
+    await expect(db2.count()).rejects.toThrow(/dimension mismatch/i);
+  });
+
+  test("initializeUnchecked skips dimension validation", async () => {
+    const { MemoryDB } = await import("./index.js");
+    // Create table with 1536-dim vectors
+    const db1 = new MemoryDB(testDbPath, 1536);
+    await db1.store({
+      text: "test",
+      vector: Array(1536).fill(0.1),
+      importance: 0.5,
+      category: "fact",
+    });
+
+    // Open unchecked with different dims — should NOT throw
+    const db2 = new MemoryDB(testDbPath, 768);
+    await db2.initializeUnchecked();
+    const entries = await db2.listAll();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].text).toBe("test");
+  });
+
+  test("recreateTable drops and recreates with new dimensions", async () => {
+    const { MemoryDB } = await import("./index.js");
+    // Create table with 1536-dim vectors and add data
+    const db1 = new MemoryDB(testDbPath, 1536);
+    await db1.store({
+      text: "old memory",
+      vector: Array(1536).fill(0.1),
+      importance: 0.5,
+      category: "fact",
+    });
+
+    // Recreate with 768-dim
+    const db2 = new MemoryDB(testDbPath, 768);
+    await db2.initializeUnchecked();
+    await db2.recreateTable();
+
+    // New table should be empty and accept 768-dim vectors
+    expect(await db2.count()).toBe(0);
+    await db2.store({
+      text: "new memory",
+      vector: Array(768).fill(0.2),
+      importance: 0.6,
+      category: "preference",
+    });
+    expect(await db2.count()).toBe(1);
+  });
+});
+
 // Live tests that require OpenAI API key and actually use LanceDB
 describeLive("memory plugin live tests", () => {
   let tmpDir: string;

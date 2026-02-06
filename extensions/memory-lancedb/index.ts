@@ -21,6 +21,24 @@ import {
 } from "./config.js";
 
 // ============================================================================
+// Errors
+// ============================================================================
+
+class DimensionMismatchError extends Error {
+  constructor(
+    public readonly expected: number,
+    public readonly actual: number,
+    public readonly dbPath: string,
+  ) {
+    super(
+      `Vector dimension mismatch: database has ${actual}-dim vectors but current config expects ${expected}-dim. ` +
+        `Run \`openclaw ltm reindex\` to re-embed all memories with the current provider.`,
+    );
+    this.name = "DimensionMismatchError";
+  }
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -83,7 +101,12 @@ class MemoryDB {
       return this.initPromise;
     }
 
-    this.initPromise = this.doInitialize();
+    this.initPromise = this.doInitialize().catch((err) => {
+      // Clear so subsequent calls re-attempt (or re-throw) rather than
+      // returning a stale rejected promise.
+      this.initPromise = null;
+      throw err;
+    });
     return this.initPromise;
   }
 
@@ -93,7 +116,11 @@ class MemoryDB {
     const tables = await this.db.tableNames();
 
     if (tables.includes(TABLE_NAME)) {
-      this.table = await this.db.openTable(TABLE_NAME);
+      const existing = await this.db.openTable(TABLE_NAME);
+      // Validate dimensions BEFORE setting this.table so a mismatch
+      // doesn't leave the instance in a half-initialized state.
+      await this.validateVectorDimension(existing);
+      this.table = existing;
     } else {
       this.table = await this.db.createTable(TABLE_NAME, [
         {
@@ -107,6 +134,82 @@ class MemoryDB {
       ]);
       await this.table.delete('id = "__schema__"');
     }
+  }
+
+  /** Check that the existing table's vector column matches the configured dimension. */
+  private async validateVectorDimension(table: lancedb.Table): Promise<void> {
+    const schema = await table.schema();
+    // Use loop instead of .find() — Arrow Schema.fields may not be a standard Array
+    let storedDim: number | undefined;
+    for (const field of schema.fields) {
+      if (field.name === "vector") {
+        const t = field.type as Record<string, unknown>;
+        if (typeof t.listSize === "number") {
+          storedDim = t.listSize;
+        } else {
+          // Fallback: parse from string representation e.g. "FixedSizeList[1536]<Float32>"
+          const match = String(field.type).match(/\[(\d+)\]/);
+          if (match) {
+            storedDim = parseInt(match[1], 10);
+          }
+        }
+        break;
+      }
+    }
+    if (storedDim !== undefined && storedDim !== this.vectorDim) {
+      throw new DimensionMismatchError(this.vectorDim, storedDim, this.dbPath);
+    }
+  }
+
+  /** Initialize without dimension validation (used by reindex to access mismatched tables). */
+  async initializeUnchecked(): Promise<void> {
+    this.db = await lancedb.connect(this.dbPath);
+    const tables = await this.db.tableNames();
+    if (tables.includes(TABLE_NAME)) {
+      this.table = await this.db.openTable(TABLE_NAME);
+    }
+  }
+
+  /** List all entries (for reindexing). Returns entries without vector data. */
+  async listAll(): Promise<
+    { id: string; text: string; importance: number; category: string; createdAt: number }[]
+  > {
+    if (!this.table) {
+      return [];
+    }
+    const rows = await this.table
+      .query()
+      .select(["id", "text", "importance", "category", "createdAt"])
+      .toArray();
+    return rows.map((row) => ({
+      id: row.id as string,
+      text: row.text as string,
+      importance: row.importance as number,
+      category: row.category as string,
+      createdAt: row.createdAt as number,
+    }));
+  }
+
+  /** Drop and recreate the table with new vector dimensions. */
+  async recreateTable(): Promise<void> {
+    if (!this.db) {
+      return;
+    }
+    const tables = await this.db.tableNames();
+    if (tables.includes(TABLE_NAME)) {
+      await this.db.dropTable(TABLE_NAME);
+    }
+    this.table = await this.db.createTable(TABLE_NAME, [
+      {
+        id: "__schema__",
+        text: "",
+        vector: Array.from({ length: this.vectorDim }).fill(0),
+        importance: 0,
+        category: "other",
+        createdAt: 0,
+      },
+    ]);
+    await this.table.delete('id = "__schema__"');
   }
 
   async store(entry: Omit<MemoryEntry, "id" | "createdAt">): Promise<MemoryEntry> {
@@ -570,6 +673,55 @@ const memoryPlugin = {
             const count = await db.count();
             console.log(`Total memories: ${count}`);
           });
+
+        memory
+          .command("reindex")
+          .description(
+            "Re-embed all memories with current provider (use after switching providers)",
+          )
+          .action(async () => {
+            // Open the old table without dimension validation
+            const oldDb = new MemoryDB(resolvedDbPath, vectorDim);
+            await oldDb.initializeUnchecked();
+
+            const entries = await oldDb.listAll();
+            if (entries.length === 0) {
+              console.log("No memories to reindex.");
+              return;
+            }
+
+            console.log(`Reindexing ${entries.length} memories with current provider...`);
+
+            // Recreate table with new dimensions
+            const newDb = new MemoryDB(resolvedDbPath, vectorDim);
+            await newDb.initializeUnchecked();
+            await newDb.recreateTable();
+
+            let success = 0;
+            let failed = 0;
+            for (const entry of entries) {
+              try {
+                const vector = await embeddings.embed(entry.text);
+                await newDb.store({
+                  text: entry.text,
+                  vector,
+                  importance: entry.importance,
+                  category: entry.category as MemoryCategory,
+                });
+                success++;
+                if (success % 10 === 0) {
+                  console.log(`  ${success}/${entries.length} done`);
+                }
+              } catch (err) {
+                failed++;
+                console.error(
+                  `  Failed to re-embed: ${entry.text.slice(0, 60)}... (${String(err)})`,
+                );
+              }
+            }
+
+            console.log(`Reindex complete: ${success} succeeded, ${failed} failed.`);
+          });
       },
       { commands: ["ltm"] },
     );
@@ -711,3 +863,4 @@ const memoryPlugin = {
 };
 
 export default memoryPlugin;
+export { DimensionMismatchError, MemoryDB };
