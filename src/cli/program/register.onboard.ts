@@ -85,6 +85,7 @@ export function registerOnboardCommand(program: Command) {
       "API key persistence mode: plaintext|ref (default: plaintext)",
     )
     .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
+<<<<<<< HEAD
     .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
 
   for (const providerFlag of ONBOARD_PROVIDER_AUTH_FLAGS) {
@@ -100,6 +101,21 @@ export function registerOnboardCommand(program: Command) {
       "--custom-compatibility <mode>",
       "Custom provider API compatibility: openai|anthropic (default: openai)",
     )
+=======
+    .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID")
+    .option("--cloudflare-ai-gateway-api-key <key>", "Cloudflare AI Gateway API key")
+    .option("--moonshot-api-key <key>", "Moonshot API key")
+    .option("--kimi-code-api-key <key>", "Kimi Coding API key")
+    .option("--gemini-api-key <key>", "Gemini API key")
+    .option("--zai-api-key <key>", "Z.AI API key")
+    .option("--xiaomi-api-key <key>", "Xiaomi API key")
+    .option("--modelscope-api-key <key>", "ModelScope API key")
+    .option("--minimax-api-key <key>", "MiniMax API key")
+    .option("--synthetic-api-key <key>", "Synthetic API key")
+    .option("--venice-api-key <key>", "Venice API key")
+    .option("--opencode-zen-api-key <key>", "OpenCode Zen API key")
+    .option("--xai-api-key <key>", "xAI API key")
+>>>>>>> fb7a30e01 (recover accidentally lost code)
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
