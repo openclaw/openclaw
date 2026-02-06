@@ -48,9 +48,9 @@ export async function fetchGeminiUsage(
       continue;
     }
 
-    // Skip internal models (chat_*, tab_*)
+    // Skip internal models (prefixed with chat_ or tab_)
     const lower = modelId.toLowerCase();
-    if (lower.includes("chat_") || lower.includes("tab_")) {
+    if (lower.startsWith("chat_") || lower.startsWith("tab_")) {
       continue;
     }
 
