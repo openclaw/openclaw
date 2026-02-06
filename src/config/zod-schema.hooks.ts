@@ -57,7 +57,7 @@ const HookConfigSchema = z
     enabled: z.boolean().optional(),
     env: z.record(z.string(), z.string()).optional(),
   })
-  .strict();
+  .passthrough();
 
 const HookInstallRecordSchema = z
   .object({
