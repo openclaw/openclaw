@@ -35,7 +35,39 @@ async function fetchMatrixMediaBuffer(params: {
     }
     return { buffer: Buffer.from(buffer) };
   } catch (err) {
-    throw new Error(`Matrix media download failed: ${String(err)}`, { cause: err });
+    // Fallback: use authenticated media endpoint (Matrix v1.11+)
+    // Servers with authenticated media enabled reject the legacy
+    // /_matrix/media/v3/download endpoint with 403.
+    const mxcMatch = params.mxcUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/);
+    if (!mxcMatch) {
+      throw new Error(`Invalid mxc URL: ${params.mxcUrl}`);
+    }
+    const [, serverName, mediaId] = mxcMatch;
+
+    const homeserverUrl = params.client.homeserverUrl.replace(/\/$/, "");
+    const authUrl = `${homeserverUrl}/_matrix/client/v1/media/download/${serverName}/${mediaId}`;
+
+    const response = await fetch(authUrl, {
+      headers: {
+        Authorization: `Bearer ${params.client.accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Authenticated media download failed: ${response.status} ${response.statusText} (original: ${String(err)})`,
+        { cause: err },
+      );
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    if (buffer.byteLength > params.maxBytes) {
+      throw new Error("Matrix media exceeds configured size limit");
+    }
+
+    return { buffer };
   }
 }
 
