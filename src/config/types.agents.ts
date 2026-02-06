@@ -17,10 +17,14 @@ export type AgentModelConfig =
       fallbacks?: string[];
     };
 
+export type AgentRole = "orchestrator" | "lead" | "specialist" | "worker";
+
 export type AgentConfig = {
   id: string;
   default?: boolean;
   name?: string;
+  /** Hierarchy role: orchestrator > lead > specialist > worker. Default: "specialist". */
+  role?: AgentRole;
   workspace?: string;
   agentDir?: string;
   model?: AgentModelConfig;

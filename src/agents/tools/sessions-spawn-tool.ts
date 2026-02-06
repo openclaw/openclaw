@@ -11,7 +11,12 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.js";
-import { resolveAgentConfig } from "../agent-scope.js";
+import {
+  canSpawnRole,
+  listAgentIds,
+  resolveAgentConfig,
+  resolveAgentRole,
+} from "../agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
@@ -141,9 +146,18 @@ export function createSessionsSpawnTool(opts?: {
       const requesterAgentId = normalizeAgentId(
         opts?.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
       );
+      // Use explicit agentId when provided, fall back to requester's agent.
       const targetAgentId = requestedAgentId
         ? normalizeAgentId(requestedAgentId)
         : requesterAgentId;
+      // Validate that the target agent is a registered agent.
+      const registeredAgentIds = listAgentIds(cfg).map((id) => id.toLowerCase());
+      if (!registeredAgentIds.includes(targetAgentId.toLowerCase())) {
+        return jsonResult({
+          status: "error",
+          error: `agentId "${targetAgentId}" is not a registered agent. Available agents: ${registeredAgentIds.join(", ")}`,
+        });
+      }
       if (targetAgentId !== requesterAgentId) {
         const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
         const allowAny = allowAgents.some((value) => value.trim() === "*");
@@ -165,6 +179,16 @@ export function createSessionsSpawnTool(opts?: {
           });
         }
       }
+      // Role-based spawn permission: requester must be same rank or higher.
+      const requesterRole = resolveAgentRole(cfg, requesterAgentId);
+      const targetRole = resolveAgentRole(cfg, targetAgentId);
+      if (!canSpawnRole(requesterRole, targetRole)) {
+        return jsonResult({
+          status: "forbidden",
+          error: `Agent "${requesterAgentId}" (${requesterRole}) cannot spawn "${targetAgentId}" (${targetRole}) — insufficient rank`,
+        });
+      }
+
       const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
       const spawnedByKey = requesterInternalKey;
       const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);

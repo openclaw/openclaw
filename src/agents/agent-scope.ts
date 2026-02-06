@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AgentRole } from "../config/types.agents.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   DEFAULT_AGENT_ID,
@@ -16,6 +17,7 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 
 type ResolvedAgentConfig = {
   name?: string;
+  role?: AgentRole;
   workspace?: string;
   agentDir?: string;
   model?: AgentEntry["model"];
@@ -107,6 +109,7 @@ export function resolveAgentConfig(
   }
   return {
     name: typeof entry.name === "string" ? entry.name : undefined,
+    role: entry.role,
     workspace: typeof entry.workspace === "string" ? entry.workspace : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
     model:
@@ -179,6 +182,24 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
     return DEFAULT_AGENT_WORKSPACE_DIR;
   }
   return path.join(os.homedir(), ".openclaw", `workspace-${id}`);
+}
+
+export const AGENT_ROLE_RANK: Record<AgentRole, number> = {
+  orchestrator: 3,
+  lead: 2,
+  specialist: 1,
+  worker: 0,
+};
+
+export const DEFAULT_AGENT_ROLE: AgentRole = "specialist";
+
+export function resolveAgentRole(cfg: OpenClawConfig, agentId: string): AgentRole {
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  return agentConfig?.role ?? cfg.agents?.defaults?.role ?? DEFAULT_AGENT_ROLE;
+}
+
+export function canSpawnRole(requesterRole: AgentRole, targetRole: AgentRole): boolean {
+  return AGENT_ROLE_RANK[requesterRole] >= AGENT_ROLE_RANK[targetRole];
 }
 
 export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
