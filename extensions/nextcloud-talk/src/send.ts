@@ -93,8 +93,10 @@ export async function sendMessageNextcloudTalk(
   }
   const bodyStr = JSON.stringify(body);
 
+  // Nextcloud Talk bot send API expects the signature over: random + message
+  // (not random + JSON request body).
   const { random, signature } = generateNextcloudTalkSignature({
-    body: bodyStr,
+    body: message,
     secret,
   });
 
