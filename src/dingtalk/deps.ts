@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 type AxiosResponseLike = {
-  data: any;
+  data: unknown;
   status?: number;
 };
 
@@ -34,7 +34,7 @@ type FfmpegInstallerLike = {
 };
 
 type DingTalkStreamClient = {
-  registerCallbackListener: (topic: string, callback: (payload: any) => Promise<void>) => void;
+  registerCallbackListener: (topic: string, callback: (payload: unknown) => Promise<void>) => void;
   socketCallBackResponse: (messageId: string, body: { success: boolean }) => void;
   connect: () => Promise<void>;
   disconnect: () => void;

@@ -29,7 +29,37 @@ import { sendDingTalkWebhookText } from "./send.js";
 
 const logger = getChildLogger({ module: "dingtalk-message" });
 
-function extractDingTalkContent(data: any): { text: string; messageType: string } {
+/** Loosely-typed DingTalk webhook payload (shape varies by message type). */
+type DingTalkPayload = Record<string, unknown> & {
+  msgtype?: string;
+  msgType?: string;
+  text?: { content?: string };
+  content?: {
+    richText?: Array<{ type?: string; text?: string }>;
+    recognition?: string;
+    fileName?: string;
+  };
+  conversationType?: string;
+  senderStaffId?: string;
+  senderId?: string;
+  senderNick?: string;
+  conversationId?: string;
+  sessionWebhook?: string;
+  isInAtList?: boolean;
+  chatbotUserId?: string;
+  atUsers?: Array<{ userId?: string }>;
+  msgId?: string;
+  messageId?: string;
+};
+
+/** Simplified logger interface compatible with DingTalk message processing. */
+type DingTalkLogger = {
+  info?: (message: string) => void;
+  warn?: (message: string) => void;
+  error?: (message: string) => void;
+};
+
+function extractDingTalkContent(data: DingTalkPayload): { text: string; messageType: string } {
   const msgtype = data.msgtype || data.msgType || "text";
   switch (msgtype) {
     case "text":
@@ -37,8 +67,8 @@ function extractDingTalkContent(data: any): { text: string; messageType: string 
     case "richText": {
       const parts = data.content?.richText || [];
       const text = parts
-        .filter((part: any) => part.type === "text")
-        .map((part: any) => part.text)
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
         .join("");
       return { text: text || "[富文本消息]", messageType: "richText" };
     }
@@ -61,8 +91,8 @@ function extractDingTalkContent(data: any): { text: string; messageType: string 
 export async function processDingTalkMessage(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  data: any;
-  log?: any;
+  data: DingTalkPayload;
+  log?: DingTalkLogger;
   resolvedConfig?: ReturnType<typeof resolveDingTalkConfig>;
 }) {
   const cfg = params.cfg;
@@ -160,7 +190,7 @@ export async function processDingTalkMessage(params: {
     const wasMentioned =
       data.isInAtList === true ||
       Boolean(
-        data.chatbotUserId && data.atUsers?.some((user: any) => user.userId === data.chatbotUserId),
+        data.chatbotUserId && data.atUsers?.some((user) => user.userId === data.chatbotUserId),
       );
     if (requireMention && !wasMentioned) {
       return;

@@ -66,8 +66,9 @@ export async function monitorDingTalkProvider(opts: {
     debug: account.config.debug || false,
   });
 
-  client.registerCallbackListener(TOPIC_ROBOT, async (res: any) => {
-    const messageId = res.headers?.messageId;
+  client.registerCallbackListener(TOPIC_ROBOT, async (res: unknown) => {
+    const msg = res as { headers?: { messageId?: string }; data?: string };
+    const messageId = msg.headers?.messageId;
     if (messageId) {
       client.socketCallBackResponse(messageId, { success: true });
     }
@@ -78,7 +79,7 @@ export async function monitorDingTalkProvider(opts: {
     opts.onInbound?.();
 
     try {
-      const data = JSON.parse(res.data);
+      const data = JSON.parse(msg.data as string);
       await processDingTalkMessage({
         cfg,
         accountId: account.accountId,

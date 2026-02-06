@@ -79,11 +79,11 @@ const MAX_VIDEO_SIZE = 20 * 1024 * 1024;
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 /** 音频文件扩展名 */
-const AUDIO_EXTENSIONS = ["mp3", "wav", "amr", "ogg", "aac", "flac", "m4a"];
+const AUDIO_EXTENSIONS = new Set(["mp3", "wav", "amr", "ogg", "aac", "flac", "m4a"]);
 
 /** 判断是否为音频文件 */
 function isAudioFile(fileType: string): boolean {
-  return AUDIO_EXTENSIONS.includes(fileType.toLowerCase());
+  return AUDIO_EXTENSIONS.has(fileType.toLowerCase());
 }
 
 type CommandResult = {
@@ -365,7 +365,7 @@ export async function processLocalImages(
   if (newBareMatches.length > 0) {
     log?.info?.(`[DingTalk][Media] 检测到 ${newBareMatches.length} 个纯文本图片路径，开始上传...`);
     // 从后往前替换，避免 index 偏移
-    for (const match of newBareMatches.reverse()) {
+    for (const match of newBareMatches.toReversed()) {
       const [fullMatch, rawPath] = match;
       log?.info?.(`[DingTalk][Media] 纯文本图片: "${fullMatch}" -> path="${rawPath}"`);
       const mediaId = await uploadMediaToDingTalk(

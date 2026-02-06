@@ -13,11 +13,12 @@ export async function probeDingTalk(
       ),
     ]);
     return { ok: Boolean(token), tokenPresent: Boolean(token) };
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
       tokenPresent: false,
-      error: err?.message ? String(err.message) : String(err),
+      error: message,
     };
   }
 }

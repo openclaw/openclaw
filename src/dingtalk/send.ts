@@ -79,7 +79,7 @@ export async function sendDingTalkWebhookText(
 ): Promise<unknown> {
   const token = await getDingTalkAccessToken(config);
   let payloadText = text;
-  const hasMarkdown = /^[#*>-]|[*_`#\[\]]/.test(text) || text.includes("\n");
+  const hasMarkdown = /^[#*>-]|[*_`#[\]]/.test(text) || text.includes("\n");
   const useMarkdown = opts.useMarkdown !== false && (opts.useMarkdown || hasMarkdown);
 
   if (useMarkdown) {
@@ -469,7 +469,7 @@ async function sendProactive(
   options: ProactiveSendOptions = {},
 ): Promise<DingTalkSendResult> {
   if (!options.msgType) {
-    const hasMarkdown = /^[#*>-]|[*_`#\[\]]/.test(content) || content.includes("\n");
+    const hasMarkdown = /^[#*>-]|[*_`#[\]]/.test(content) || content.includes("\n");
     if (hasMarkdown) {
       options.msgType = "markdown";
     }
