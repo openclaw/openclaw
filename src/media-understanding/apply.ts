@@ -390,9 +390,12 @@ async function extractFileBlocks(params: {
     // will be inlined as <file mime="text/plain">%PDF-1.7...</file> instead of being
     // properly extracted via pdfjs-dist.
     //
-    // Fix: Skip text-detection override when the original MIME is application/pdf.
-    const isPdfMime = normalizedRawMime === "application/pdf";
-    const textHint = isPdfMime
+    // Fix: Skip text-detection override when the content is a PDF (by MIME, magic, or extension).
+    const isPdf =
+      normalizedRawMime === "application/pdf" ||
+      bufferResult?.buffer?.subarray(0, 5).toString("latin1") === "%PDF-" ||
+      /\.pdf$/i.test(nameHint ?? "");
+    const textHint = isPdf
       ? undefined
       : (forcedTextMimeResolved ?? guessedDelimited ?? (textLike ? "text/plain" : undefined));
     const mimeType = sanitizeMimeType(textHint ?? normalizeMimeType(rawMime));
