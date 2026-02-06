@@ -644,7 +644,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Only abort if compaction is actually running to avoid unnecessary work.
     if (params.session.isCompacting) {
       log.debug(`unsubscribe: aborting in-flight compaction runId=${params.runId}`);
-      params.session.abortCompaction();
+      try {
+        params.session.abortCompaction();
+      } catch (err) {
+        log.warn(`unsubscribe: compaction abort failed runId=${params.runId} err=${String(err)}`);
+      }
     }
     sessionUnsubscribe();
   };

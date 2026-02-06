@@ -773,7 +773,7 @@ export async function runEmbeddedAttempt(
           // Only classify as compaction timeout if actual compaction is in-flight (not retry prompts).
           // Using isCompactionInFlight() instead of awaitingCompaction/isCompacting() avoids
           // suppressing profile rotation for genuine provider timeouts during compaction retries.
-          if (subscription.isCompactionInFlight()) {
+          if (subscription.isCompactionInFlight() || activeSession.isCompacting) {
             timedOutDuringCompaction = true;
           }
           abortRun(true);
