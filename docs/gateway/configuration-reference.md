@@ -1621,6 +1621,22 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
+      typecast: {
+        apiKey: "typecast_api_key",
+        baseHost: "https://api.typecast.ai",
+        voiceId: "tc_your_voice_id",
+        model: "ssfm-v30",
+        language: "kor",
+        emotionPreset: "normal",
+        emotionIntensity: 1.0,
+        seed: 42,
+        output: {
+          volume: 100,
+          audioPitch: 0,
+          audioTempo: 1.0,
+          audioFormat: "mp3",
+        },
+      },
     },
   },
 }
@@ -1629,7 +1645,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `auto` controls auto-TTS. `/tts off|always|inbound|tagged` overrides per session.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
 - `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
-- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+- API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`, and `TYPECAST_API_KEY`.
 
 ---
 

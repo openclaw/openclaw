@@ -1550,7 +1550,7 @@ WhatsApp 入站前缀通过 `channels.whatsapp.messagePrefix` 配置（已弃用
 
 #### `messages.tts`
 
-为出站回复启用文字转语音。开启后，OpenClaw 使用 ElevenLabs 或 OpenAI 生成音频并附加到回复中。Telegram 使用 Opus 语音消息；其他渠道发送 MP3 音频。
+为出站回复启用文字转语音。开启后，OpenClaw 使用 ElevenLabs、OpenAI、Typecast 或 Edge TTS 生成音频并附加到回复中。Telegram 使用 Opus 语音消息；其他渠道发送 MP3 音频。
 
 ```json5
 {
@@ -1587,6 +1587,19 @@ WhatsApp 入站前缀通过 `channels.whatsapp.messagePrefix` 配置（已弃用
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
+      typecast: {
+        apiKey: "typecast_api_key",
+        voiceId: "tc_your_voice_id",
+        model: "ssfm-v30",
+        language: "kor",
+        emotionPreset: "normal",
+        emotionIntensity: 1.0,
+        output: {
+          audioFormat: "mp3",
+          audioTempo: 1.0,
+          volume: 100,
+        },
+      },
     },
   },
 }
@@ -1603,10 +1616,16 @@ WhatsApp 入站前缀通过 `channels.whatsapp.messagePrefix` 配置（已弃用
   - 接受 `provider/model` 或来自 `agents.defaults.models` 的别名。
 - `modelOverrides` 启用模型驱动的覆盖如 `[[tts:...]]` 标签（默认开启）。
 - `/tts limit` 和 `/tts summary` 控制每用户的摘要设置。
-- `apiKey` 值回退到 `ELEVENLABS_API_KEY`/`XI_API_KEY` 和 `OPENAI_API_KEY`。
+- `apiKey` 值回退到 `ELEVENLABS_API_KEY`/`XI_API_KEY`、`OPENAI_API_KEY` 和 `TYPECAST_API_KEY`。
 - `elevenlabs.baseUrl` 覆盖 ElevenLabs API 基础 URL。
 - `elevenlabs.voiceSettings` 支持 `stability`/`similarityBoost`/`style`（0..1）、
   `useSpeakerBoost` 和 `speed`（0.5..2.0）。
+- `typecast.voiceId`：必需的语音 ID（`tc_xxx` 或 `uc_xxx`）。
+- `typecast.model`：`ssfm-v21` 或 `ssfm-v30`（默认 `ssfm-v30`）。
+- `typecast.language`：ISO 639-3 代码（例如 `kor`、`eng`）。未设置时自动检测。
+- `typecast.emotionPreset`：`normal|happy|sad|angry|whisper|toneup|tonedown`。
+- `typecast.emotionIntensity`：`0..2`（默认 `1.0`）。
+- `typecast.output`：`volume`（0..200）、`audioPitch`（-12..12）、`audioTempo`（0.5..2）、`audioFormat`（wav|mp3）。
 
 ### `talk`
 

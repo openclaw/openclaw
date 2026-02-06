@@ -16,12 +16,13 @@ x-i18n:
 
 # 文本转语音（TTS）
 
-OpenClaw 可以使用 ElevenLabs、OpenAI 或 Edge TTS 将出站回复转换为音频。它可以在任何 OpenClaw 能发送音频的地方工作；Telegram 会显示圆形语音消息气泡。
+OpenClaw 可以使用 ElevenLabs、OpenAI、Typecast 或 Edge TTS 将出站回复转换为音频。它可以在任何 OpenClaw 能发送音频的地方工作；Telegram 会显示圆形语音消息气泡。
 
 ## 支持的服务
 
 - **ElevenLabs**（主要或备用提供商）
 - **OpenAI**（主要或备用提供商；也用于摘要）
+- **Typecast**（主要或备用提供商；支持情感控制的 AI 语音，37+ 种语言）
 - **Edge TTS**（主要或备用提供商；使用 `node-edge-tts`，无 API 密钥时为默认）
 
 ### Edge TTS 注意事项
@@ -32,10 +33,11 @@ Edge TTS 通过 `node-edge-tts` 库使用 Microsoft Edge 的在线神经网络 T
 
 ## 可选密钥
 
-如果你想使用 OpenAI 或 ElevenLabs：
+如果你想使用 OpenAI、ElevenLabs 或 Typecast：
 
 - `ELEVENLABS_API_KEY`（或 `XI_API_KEY`）
 - `OPENAI_API_KEY`
+- `TYPECAST_API_KEY`
 
 Edge TTS **不**需要 API 密钥。如果没有找到 API 密钥，OpenClaw 默认使用 Edge TTS（除非通过 `messages.tts.edge.enabled=false` 禁用）。
 
@@ -47,6 +49,8 @@ Edge TTS **不**需要 API 密钥。如果没有找到 API 密钥，OpenClaw 默
 - [OpenAI 音频 API 参考](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs 文本转语音](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs 认证](https://elevenlabs.io/docs/api-reference/authentication)
+- [Typecast API](https://docs.typecast.ai)
+- [Typecast 语音](https://typecast.ai)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft 语音输出格式](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 
@@ -104,6 +108,33 @@ TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。完整 schema 在 [
           style: 0.0,
           useSpeakerBoost: true,
           speed: 1.0,
+        },
+      },
+    },
+  },
+}
+```
+
+### Typecast 主要，带情感控制
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "typecast",
+      typecast: {
+        apiKey: "typecast_api_key",
+        voiceId: "tc_your_voice_id",
+        model: "ssfm-v30",
+        language: "kor",
+        emotionPreset: "happy",
+        emotionIntensity: 1.2,
+        output: {
+          audioFormat: "mp3",
+          audioTempo: 1.0,
+          volume: 100,
+          audioPitch: 0,
         },
       },
     },
@@ -198,15 +229,15 @@ TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。完整 schema 在 [
   - `tagged` 仅在回复包含 `[[tts]]` 标签时发送音频。
 - `enabled`：旧版开关（doctor 将其迁移到 `auto`）。
 - `mode`：`"final"`（默认）或 `"all"`（包括工具/分块回复）。
-- `provider`：`"elevenlabs"`、`"openai"` 或 `"edge"`（自动备用）。
-- 如果 `provider` **未设置**，OpenClaw 优先选择 `openai`（如果有密钥），然后是 `elevenlabs`（如果有密钥），否则是 `edge`。
+- `provider`：`"elevenlabs"`、`"openai"`、`"typecast"` 或 `"edge"`（自动备用）。
+- 如果 `provider` **未设置**，OpenClaw 优先选择 `openai`（如果有密钥），然后是 `elevenlabs`（如果有密钥），然后是 `typecast`（如果有密钥），否则是 `edge`。
 - `summaryModel`：用于自动摘要的可选廉价模型；默认为 `agents.defaults.model.primary`。
   - 接受 `provider/model` 或配置的模型别名。
 - `modelOverrides`：允许模型发出 TTS 指令（默认开启）。
 - `maxTextLength`：TTS 输入的硬性上限（字符）。超出时 `/tts audio` 会失败。
 - `timeoutMs`：请求超时（毫秒）。
 - `prefsPath`：覆盖本地偏好 JSON 路径（提供商/限制/摘要）。
-- `apiKey` 值回退到环境变量（`ELEVENLABS_API_KEY`/`XI_API_KEY`、`OPENAI_API_KEY`）。
+- `apiKey` 值回退到环境变量（`ELEVENLABS_API_KEY`/`XI_API_KEY`、`OPENAI_API_KEY`、`TYPECAST_API_KEY`）。
 - `elevenlabs.baseUrl`：覆盖 ElevenLabs API 基础 URL。
 - `elevenlabs.voiceSettings`：
   - `stability`、`similarityBoost`、`style`：`0..1`
@@ -215,6 +246,18 @@ TTS 配置位于 `openclaw.json` 中的 `messages.tts` 下。完整 schema 在 [
 - `elevenlabs.applyTextNormalization`：`auto|on|off`
 - `elevenlabs.languageCode`：2 字母 ISO 639-1（例如 `en`、`de`）
 - `elevenlabs.seed`：整数 `0..4294967295`（尽力确定性）
+- `typecast.apiKey`：Typecast API 密钥（回退到 `TYPECAST_API_KEY`）。
+- `typecast.baseHost`：覆盖 Typecast API 基础 URL（默认 `https://api.typecast.ai`）。
+- `typecast.voiceId`：Typecast 语音 ID（必需；格式 `tc_xxx` 或 `uc_xxx`）。
+- `typecast.model`：TTS 模型（`ssfm-v21` 或 `ssfm-v30`；默认 `ssfm-v30`）。
+- `typecast.language`：ISO 639-3 语言代码（例如 `kor`、`eng`、`jpn`）。未设置时自动检测。
+- `typecast.emotionPreset`：情感预设（`normal`、`happy`、`sad`、`angry`、`whisper`、`toneup`、`tonedown`）。
+- `typecast.emotionIntensity`：情感强度 `0..2`（默认 `1.0`）。
+- `typecast.seed`：用于可重现输出的整数。
+- `typecast.output.volume`：输出音量 `0..200`（默认 `100`）。
+- `typecast.output.audioPitch`：音高调整（半音）`-12..12`（默认 `0`）。
+- `typecast.output.audioTempo`：速度倍率 `0.5..2.0`（默认 `1.0`）。
+- `typecast.output.audioFormat`：`wav` 或 `mp3`（默认 `mp3`）。
 - `edge.enabled`：允许 Edge TTS 使用（默认 `true`；无 API 密钥）。
 - `edge.voice`：Edge 神经网络语音名称（例如 `en-US-MichelleNeural`）。
 - `edge.lang`：语言代码（例如 `en-US`）。
@@ -242,7 +285,7 @@ Here you go.
 
 可用指令键（启用时）：
 
-- `provider`（`openai` | `elevenlabs` | `edge`）
+- `provider`（`openai` | `elevenlabs` | `typecast` | `edge`）
 - `voice`（OpenAI 语音）或 `voiceId`（ElevenLabs）
 - `model`（OpenAI TTS 模型或 ElevenLabs 模型 ID）
 - `stability`、`similarityBoost`、`style`、`speed`、`useSpeakerBoost`
@@ -295,9 +338,9 @@ Here you go.
 
 ## 输出格式（固定）
 
-- **Telegram**：Opus 语音消息（ElevenLabs 的 `opus_48000_64`，OpenAI 的 `opus`）。
+- **Telegram**：Opus 语音消息（ElevenLabs 的 `opus_48000_64`，OpenAI 的 `opus`，Typecast 的 `mp3`）。
   - 48kHz / 64kbps 是语音消息的良好权衡，圆形气泡所必需。
-- **其他渠道**：MP3（ElevenLabs 的 `mp3_44100_128`，OpenAI 的 `mp3`）。
+- **其他渠道**：MP3（ElevenLabs 的 `mp3_44100_128`，OpenAI 的 `mp3`，Typecast 的 `mp3`）。
   - 44.1kHz / 128kbps 是语音清晰度的默认平衡。
 - **Edge TTS**：使用 `edge.outputFormat`（默认 `audio-24khz-48kbitrate-mono-mp3`）。
   - `node-edge-tts` 接受 `outputFormat`，但并非所有格式都可从 Edge 服务获得。citeturn2search0
