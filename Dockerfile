@@ -68,8 +68,15 @@ ENV PATH="/home/node/.openclaw/bin:${PATH}"
 
 # Map the built-in `node` user/group to the host UID/GID, then ensure /app is writable.
 USER root
-RUN groupmod -g "${OPENCLAW_GID}" node && \
-    usermod -u "${OPENCLAW_UID}" -g "${OPENCLAW_GID}" node && \
+RUN set -eu; \
+    case "${OPENCLAW_GID}" in (""|*[!0-9]*|0) ;; (*) \
+      grp="$(getent group "${OPENCLAW_GID}" 2>/dev/null | cut -d: -f1 || true)"; \
+      if [ -n "$grp" ] && [ "$grp" != node ]; then usermod -g "$grp" node; else groupmod -g "${OPENCLAW_GID}" node; fi ;; \
+    esac; \
+    case "${OPENCLAW_UID}" in (""|*[!0-9]*|0) ;; (*) \
+      usr="$(getent passwd "${OPENCLAW_UID}" 2>/dev/null | cut -d: -f1 || true)"; \
+      if [ -z "$usr" ] || [ "$usr" = node ]; then usermod -u "${OPENCLAW_UID}" node; fi ;; \
+    esac; \
     chown -R node:node /app
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
