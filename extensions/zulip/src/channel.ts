@@ -41,6 +41,14 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
   meta: {
     ...meta,
   },
+  defaults: {
+    queue: {
+      // Prefer one reply per message by default (avoid "collect" coalescing).
+      mode: "followup",
+      // Keep followups snappy; users can override via messages.queue.* config.
+      debounceMs: 250,
+    },
+  },
   onboarding: zulipOnboardingAdapter,
   pairing: {
     idLabel: "zulipUserId",
@@ -55,6 +63,22 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
     reactions: true,
     media: false,
     nativeCommands: true,
+  },
+  groups: {
+    resolveRequireMention: ({ cfg, accountId }) => {
+      const account = resolveZulipAccount({ cfg, accountId });
+      return !account.alwaysReply;
+    },
+  },
+  mentions: {
+    stripPatterns: () => [
+      // Zulip user mentions in raw Markdown look like: @**Full Name**
+      "@\\\\*\\\\*[^*]+\\\\*\\\\*",
+      // Wildcard mentions.
+      "\\\\B@all\\\\b",
+      "\\\\B@everyone\\\\b",
+      "\\\\B@stream\\\\b",
+    ],
   },
   reload: { configPrefixes: ["channels.zulip"] },
   configSchema: buildChannelConfigSchema(ZulipConfigSchema),
@@ -87,6 +111,7 @@ export const zulipPlugin: ChannelPlugin<ResolvedZulipAccount> = {
       emailSource: account.emailSource,
       apiKeySource: account.apiKeySource,
       streams: account.streams,
+      alwaysReply: account.alwaysReply,
       defaultTopic: account.defaultTopic,
     }),
     resolveAllowFrom: () => [],

@@ -45,4 +45,43 @@ describe("zulipPlugin", () => {
       expect(res.to).toBe("stream:marcel-ai#general chat");
     }
   });
+
+  it("defaults to alwaysReply (no mention requirement)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        zulip: {
+          enabled: true,
+          baseUrl: "https://zulip.example.com",
+          email: "bot@example.com",
+          apiKey: "key",
+          streams: ["marcel-ai"],
+        },
+      },
+    };
+    const requireMention = zulipPlugin.groups?.resolveRequireMention?.({
+      cfg,
+      groupId: "marcel-ai",
+    });
+    expect(requireMention).toBe(false);
+  });
+
+  it("can require mentions when alwaysReply=false", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        zulip: {
+          enabled: true,
+          baseUrl: "https://zulip.example.com",
+          email: "bot@example.com",
+          apiKey: "key",
+          streams: ["marcel-ai"],
+          alwaysReply: false,
+        },
+      },
+    };
+    const requireMention = zulipPlugin.groups?.resolveRequireMention?.({
+      cfg,
+      groupId: "marcel-ai",
+    });
+    expect(requireMention).toBe(true);
+  });
 });

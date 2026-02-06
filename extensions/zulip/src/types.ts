@@ -18,6 +18,14 @@ export type ZulipAccountConfig = {
   streams?: string[];
 
   /**
+   * Reply to every message in monitored streams/topics (default: true).
+   *
+   * When false, OpenClaw may act "trigger-only" depending on global group policy
+   * and mention detection.
+   */
+  alwaysReply?: boolean;
+
+  /**
    * Default topic when target omits a topic. On zulip.dreamit.au, sending with an
    * empty topic maps to the topic name "general chat".
    */

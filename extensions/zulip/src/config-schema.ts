@@ -18,6 +18,7 @@ const ZulipAccountSchemaBase = z
     email: z.string().optional(),
     apiKey: z.string().optional(),
     streams: z.array(z.string()).optional(),
+    alwaysReply: z.boolean().optional(),
     defaultTopic: z.string().optional(),
     reactions: ReactionSchema.optional(),
     textChunkLimit: z.number().int().positive().optional(),

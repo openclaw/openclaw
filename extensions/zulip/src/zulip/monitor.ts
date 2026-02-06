@@ -347,9 +347,16 @@ export async function monitorZulipProvider(
       const sessionKey = `${baseSessionKey}:topic:${buildTopicKey(topic)}`;
 
       const to = `stream:${stream}#${topic}`;
-      const from = `zulip:stream:${stream}`;
+      const from = `zulip:channel:${stream}`;
       const senderName =
         msg.sender_full_name?.trim() || msg.sender_email?.trim() || String(msg.sender_id);
+
+      const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
+      const cleanedForMentions = content.replace(/@\*\*([^*]+)\*\*/g, "@$1");
+      const wasMentioned = core.channel.mentions.matchesMentionPatterns(
+        cleanedForMentions,
+        mentionRegexes,
+      );
 
       const body = core.channel.reply.formatInboundEnvelope({
         channel: "Zulip",
@@ -374,11 +381,15 @@ export async function monitorZulipProvider(
         ConversationLabel: `${stream}#${topic}`,
         GroupSubject: stream,
         GroupChannel: `#${stream}`,
+        GroupSystemPrompt: account.alwaysReply
+          ? "Always reply to every message in this Zulip stream/topic. If a full response isn't needed, acknowledge briefly in 1 short sentence."
+          : undefined,
         Provider: "zulip" as const,
         Surface: "zulip" as const,
         SenderName: senderName,
         SenderId: String(msg.sender_id),
         MessageSid: String(msg.id),
+        WasMentioned: wasMentioned,
         OriginatingChannel: "zulip" as const,
         OriginatingTo: to,
         Timestamp: typeof msg.timestamp === "number" ? msg.timestamp * 1000 : undefined,

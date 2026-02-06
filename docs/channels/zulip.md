@@ -49,8 +49,26 @@ Minimal config:
       // Only these streams are monitored.
       streams: ["marcel-ai"],
 
+      // Reply to every message in monitored streams/topics (default: true).
+      alwaysReply: true,
+
       // Default topic when outbound targets omit a topic.
       defaultTopic: "general chat",
+    },
+  },
+}
+```
+
+## Replying to every message
+
+Zulip defaults to replying to every message in monitored streams/topics (so it behaves like a
+chat bot, not "mention-only"). To make it trigger-only, set:
+
+```json5
+{
+  channels: {
+    zulip: {
+      alwaysReply: false,
     },
   },
 }

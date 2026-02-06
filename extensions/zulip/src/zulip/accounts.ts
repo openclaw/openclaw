@@ -25,6 +25,7 @@ export type ResolvedZulipAccount = {
   emailSource: ZulipEmailSource;
   apiKeySource: ZulipTokenSource;
   streams: string[];
+  alwaysReply: boolean;
   defaultTopic: string;
   reactions: ResolvedZulipReactions;
   textChunkLimit: number;
@@ -33,6 +34,7 @@ export type ResolvedZulipAccount = {
 
 const DEFAULT_TOPIC = "general chat";
 const DEFAULT_TEXT_CHUNK_LIMIT = 10_000;
+const DEFAULT_ALWAYS_REPLY = true;
 
 const DEFAULT_REACTIONS: ResolvedZulipReactions = {
   enabled: true,
@@ -128,6 +130,7 @@ export function resolveZulipAccount(params: {
   const apiKeySource: ZulipTokenSource = configKey ? "config" : envKey ? "env" : "none";
 
   const streams = normalizeStreamAllowlist(merged.streams);
+  const alwaysReply = merged.alwaysReply !== false && DEFAULT_ALWAYS_REPLY;
   const defaultTopic = normalizeTopic(merged.defaultTopic) || DEFAULT_TOPIC;
   const reactions = resolveReactions(merged.reactions);
   const textChunkLimit =
@@ -144,6 +147,7 @@ export function resolveZulipAccount(params: {
     emailSource,
     apiKeySource,
     streams,
+    alwaysReply,
     defaultTopic,
     reactions,
     textChunkLimit,
