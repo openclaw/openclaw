@@ -512,6 +512,23 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   if (smartAckController) {
     void smartAckController.result.then((ackText) => {
       if (ackText) {
+        // Smart ack gave the user feedback, so suppress progress messages.
+        if (progressInterval) {
+          clearInterval(progressInterval);
+          progressInterval = undefined;
+        }
+        // Delete any existing progress message since the smart ack replaces it.
+        if (progressMessageId && progressChannelId) {
+          deleteMessageDiscord(progressChannelId, progressMessageId, { rest: client.rest }).catch(
+            (err) => {
+              logVerbose(
+                `discord: failed to delete progress message after smart ack: ${String(err)}`,
+              );
+            },
+          );
+          progressMessageId = undefined;
+          progressChannelId = undefined;
+        }
         deliverDiscordReply({
           replies: [{ text: ackText }],
           target: deliverTarget,
