@@ -237,6 +237,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
 
     expect(prepared).toBeTruthy();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expectInboundContextContract(prepared!.ctxPayload as any);
     // Should be classified as DM, not channel
     expect(prepared!.isDirectMessage).toBe(true);
     // DM with dmScope: "main" should route to the main session
@@ -316,6 +318,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
 
     expect(prepared).toBeTruthy();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expectInboundContextContract(prepared!.ctxPayload as any);
     expect(prepared!.isDirectMessage).toBe(true);
     expect(prepared!.route.sessionKey).toBe("agent:main:main");
     expect(prepared!.ctxPayload.ChatType).toBe("direct");
