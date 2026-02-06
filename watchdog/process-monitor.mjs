@@ -9,6 +9,7 @@
 import { spawn, execSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
 import {
@@ -27,6 +28,136 @@ const STARTUP_GRACE_PERIOD_MS = 30_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
 const RESTART_COOLDOWN_MS = 10_000;
 const MAX_RESTARTS_PER_HOUR = 5;
+
+/**
+ * Resolve the directory where the gateway stores its ephemeral lock files.
+ * Mirrors the logic in src/config/paths.ts resolveGatewayLockDir().
+ */
+function resolveGatewayLockDir() {
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
+  return path.join(os.tmpdir(), suffix);
+}
+
+/**
+ * Remove all gateway lock files so a freshly spawned gateway can acquire its lock.
+ * Call this after killing stale gateway processes.
+ */
+function cleanupGatewayLockFiles(log) {
+  const lockDir = resolveGatewayLockDir();
+  try {
+    const files = fs.readdirSync(lockDir);
+    for (const file of files) {
+      if (file.startsWith("gateway.") && file.endsWith(".lock")) {
+        const lockPath = path.join(lockDir, file);
+        try {
+          const raw = fs.readFileSync(lockPath, "utf8");
+          const payload = JSON.parse(raw);
+          // Only remove if the owner PID is dead
+          try {
+            process.kill(payload.pid, 0);
+            // PID is alive; leave it
+          } catch {
+            // PID is dead; safe to remove
+            fs.unlinkSync(lockPath);
+            log?.(`Cleaned up stale gateway lock for dead PID ${payload.pid}`);
+          }
+        } catch {
+          // Malformed or unreadable lock; remove it
+          try {
+            fs.unlinkSync(lockPath);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+  } catch {
+    // Lock dir doesn't exist yet; nothing to clean
+  }
+}
+
+/**
+ * Resolve the path for the watchdog's own port lock file.
+ * Stored in ~/.openclaw/watchdog/ so it persists across repo checkouts.
+ */
+function resolveWatchdogLockPath(port) {
+  const home = os.homedir();
+  const lockDir = path.join(home, ".openclaw", "watchdog");
+  fs.mkdirSync(lockDir, { recursive: true });
+  return path.join(lockDir, `port-${port}.lock`);
+}
+
+/**
+ * Attempt to acquire the watchdog port lock. Returns a release function on success.
+ * Throws if another watchdog is already managing the same port.
+ */
+function acquireWatchdogLock(port, repoRoot, log) {
+  const lockPath = resolveWatchdogLockPath(port);
+
+  // Check existing lock
+  try {
+    const raw = fs.readFileSync(lockPath, "utf8");
+    const payload = JSON.parse(raw);
+    // Check if the owner is still alive
+    try {
+      process.kill(payload.pid, 0);
+      // Owner is alive; refuse to start
+      throw new Error(
+        `Another watchdog is already managing port ${port} (PID ${payload.pid}, repo ${payload.repoRoot}). ` +
+          `Kill it first or use a different port with --port.`,
+      );
+    } catch (err) {
+      if (err.code !== "ESRCH") {
+        throw err;
+      }
+      // Owner is dead; clean up stale lock
+      log?.(`Cleaned up stale watchdog lock for dead PID ${payload.pid}`);
+    }
+  } catch (err) {
+    if (err.code !== "ENOENT" && !(err instanceof SyntaxError)) {
+      throw err;
+    }
+  }
+
+  // Write our lock
+  const payload = {
+    pid: process.pid,
+    port,
+    repoRoot,
+    startedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(lockPath, JSON.stringify(payload, null, 2) + "\n");
+  log?.(`Acquired watchdog lock for port ${port} (PID ${process.pid})`);
+
+  const release = () => {
+    try {
+      // Only remove if we still own it
+      const raw = fs.readFileSync(lockPath, "utf8");
+      const current = JSON.parse(raw);
+      if (current.pid === process.pid) {
+        fs.unlinkSync(lockPath);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  // Auto-release on exit
+  process.on("exit", release);
+  process.on("SIGINT", () => {
+    release();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    release();
+    process.exit(0);
+  });
+
+  return release;
+}
+
+export { acquireWatchdogLock };
 
 export class ProcessMonitor {
   constructor(repoRoot, options = {}) {
@@ -111,6 +242,8 @@ export class ProcessMonitor {
         }
         // Give the OS a moment to release the port
         await new Promise((r) => setTimeout(r, 1000));
+        // Clean up the gateway's internal lockfiles so the new instance can start
+        cleanupGatewayLockFiles(this.onProgress);
         return true;
       }
     } catch {

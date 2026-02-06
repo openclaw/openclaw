@@ -32,7 +32,7 @@ import {
   buildCommit,
   activateBuild,
 } from "./build-manager.mjs";
-import { ProcessMonitor } from "./process-monitor.mjs";
+import { ProcessMonitor, acquireWatchdogLock } from "./process-monitor.mjs";
 
 const repoRoot = resolveRepoRoot();
 const args = process.argv.slice(2);
@@ -69,6 +69,10 @@ async function cmdBuild() {
 
 async function cmdStart() {
   const port = getPortArg();
+
+  // Prevent multiple watchdogs on the same port
+  acquireWatchdogLock(port, repoRoot, log);
+
   const monitor = new ProcessMonitor(repoRoot, {
     port,
     onProgress: log,
@@ -196,6 +200,9 @@ async function cmdRun() {
   const branch = getArgValue("--branch") ?? "main";
   const remote = getArgValue("--remote") ?? "origin";
   const pollInterval = parseInt(getArgValue("--poll") ?? "60", 10) * 1000;
+
+  // Prevent multiple watchdogs on the same port
+  acquireWatchdogLock(port, repoRoot, log);
 
   log("Watchdog starting in run mode");
   log(`Polling for updates every ${pollInterval / 1000}s on ${remote}/${branch}`);
