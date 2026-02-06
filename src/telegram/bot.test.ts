@@ -2521,7 +2521,7 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("sends tool summaries for native slash commands", async () => {
+  it("skips tool summaries for native slash commands", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
     commandSpy.mockReset();
@@ -2561,9 +2561,8 @@ describe("createTelegramBot", () => {
       match: "on",
     });
 
-    expect(sendMessageSpy).toHaveBeenCalledTimes(2);
-    expect(sendMessageSpy.mock.calls[0]?.[1]).toContain("tool update");
-    expect(sendMessageSpy.mock.calls[1]?.[1]).toContain("final reply");
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy.mock.calls[0]?.[1]).toContain("final reply");
   });
 
   it("dedupes duplicate message updates by update_id", async () => {
