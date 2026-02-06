@@ -122,4 +122,52 @@ describe("chunkMarkdown", () => {
       expect(chunk.text.length).toBeLessThanOrEqual(maxChars);
     }
   });
+
+  it("chunks with overlap never exceed maxChars", () => {
+    const chunkTokens = 400;
+    const maxChars = chunkTokens * 4;
+    // Create content with one very long line (simulates session transcript message)
+    const longLine = "word ".repeat(2000); // 10000 chars on one line
+    const chunks = chunkMarkdown(longLine, { tokens: chunkTokens, overlap: 80 });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(maxChars);
+    }
+  });
+
+  it("session-like content produces correctly-sized chunks", () => {
+    const chunkTokens = 400;
+    const maxChars = chunkTokens * 4;
+    // Simulate session transcript format with long messages
+    const userMsg = "User: " + "The quick brown fox jumps over the lazy dog. ".repeat(300);
+    const assistantMsg =
+      "Assistant: " + "Here is a detailed response with code and data. ".repeat(500);
+    const content = userMsg + "\n\n" + assistantMsg;
+    const chunks = chunkMarkdown(content, { tokens: chunkTokens, overlap: 80 });
+    expect(chunks.length).toBeGreaterThan(2);
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(maxChars);
+    }
+  });
+
+  it("does not lose content when chunking without overlap", () => {
+    const content = "x".repeat(5000);
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0 });
+    const totalChars = chunks.reduce((sum, c) => sum + c.text.length, 0);
+    // All content should be accounted for
+    expect(totalChars).toBe(content.length);
+  });
+
+  it("handles many short lines correctly with overlap", () => {
+    const chunkTokens = 100;
+    const maxChars = chunkTokens * 4; // 400 chars
+    // 100 lines of ~50 chars each = ~5000 chars total
+    const lines = Array.from({ length: 100 }, (_, i) => `Line ${i}: some content here padding.`);
+    const content = lines.join("\n");
+    const chunks = chunkMarkdown(content, { tokens: chunkTokens, overlap: 20 });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.text.length).toBeLessThanOrEqual(maxChars);
+    }
+  });
 });
