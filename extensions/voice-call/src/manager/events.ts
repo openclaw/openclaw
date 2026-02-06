@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
-
-import type { CallId, CallRecord, CallState, NormalizedEvent } from "../types.js";
-import { TerminalStates } from "../types.js";
+import type { CallRecord, CallState, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
+import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
 import { findCall } from "./lookup.js";
+import { endCall } from "./outbound.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
 import {
@@ -12,9 +12,11 @@ import {
   resolveTranscriptWaiter,
   startMaxDurationTimer,
 } from "./timers.js";
-import { endCall } from "./outbound.js";
 
-function shouldAcceptInbound(config: CallManagerContext["config"], from: string | undefined): boolean {
+function shouldAcceptInbound(
+  config: CallManagerContext["config"],
+  from: string | undefined,
+): boolean {
   const { inboundPolicy: policy, allowFrom } = config;
 
   switch (policy) {
@@ -28,11 +30,12 @@ function shouldAcceptInbound(config: CallManagerContext["config"], from: string 
 
     case "allowlist":
     case "pairing": {
-      const normalized = from?.replace(/\D/g, "") || "";
-      const allowed = (allowFrom || []).some((num) => {
-        const normalizedAllow = num.replace(/\D/g, "");
-        return normalized.endsWith(normalizedAllow) || normalizedAllow.endsWith(normalized);
-      });
+      const normalized = normalizePhoneNumber(from);
+      if (!normalized) {
+        console.log("[voice-call] Inbound call rejected: missing caller ID");
+        return false;
+      }
+      const allowed = isAllowlistedCaller(normalized, allowFrom);
       const status = allowed ? "accepted" : "rejected";
       console.log(
         `[voice-call] Inbound call ${status}: ${from} ${allowed ? "is in" : "not in"} allowlist`,
@@ -78,7 +81,9 @@ function createInboundCall(params: {
 }
 
 export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): void {
-  if (ctx.processedEventIds.has(event.id)) return;
+  if (ctx.processedEventIds.has(event.id)) {
+    return;
+  }
   ctx.processedEventIds.add(event.id);
 
   let call = findCall({
@@ -104,7 +109,9 @@ export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): v
     event.callId = call.callId;
   }
 
-  if (!call) return;
+  if (!call) {
+    return;
+  }
 
   if (event.providerCallId && !call.providerCallId) {
     call.providerCallId = event.providerCallId;
@@ -157,7 +164,9 @@ export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): v
       clearMaxDurationTimer(ctx, call.callId);
       rejectTranscriptWaiter(ctx, call.callId, `Call ended: ${event.reason}`);
       ctx.activeCalls.delete(call.callId);
-      if (call.providerCallId) ctx.providerCallIdMap.delete(call.providerCallId);
+      if (call.providerCallId) {
+        ctx.providerCallIdMap.delete(call.providerCallId);
+      }
       break;
 
     case "call.error":
@@ -168,7 +177,9 @@ export function processEvent(ctx: CallManagerContext, event: NormalizedEvent): v
         clearMaxDurationTimer(ctx, call.callId);
         rejectTranscriptWaiter(ctx, call.callId, `Call error: ${event.error}`);
         ctx.activeCalls.delete(call.callId);
-        if (call.providerCallId) ctx.providerCallIdMap.delete(call.providerCallId);
+        if (call.providerCallId) {
+          ctx.providerCallIdMap.delete(call.providerCallId);
+        }
       }
       break;
   }

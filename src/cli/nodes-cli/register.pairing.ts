@@ -1,10 +1,10 @@
 import type { Command } from "commander";
-import { defaultRuntime } from "../../runtime.js";
-import { formatAge, parsePairingList } from "./format.js";
-import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
+import { defaultRuntime } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
+import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { formatAge, parsePairingList } from "./format.js";
+import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
 
 export function registerNodesPairingCommands(nodes: Command) {
   nodesCallOpts(
@@ -13,7 +13,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .description("List pending pairing requests")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("pending", async () => {
-          const result = (await callGatewayCli("node.pair.list", opts, {})) as unknown;
+          const result = await callGatewayCli("node.pair.list", opts, {});
           const { pending } = parsePairingList(result);
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(pending, null, 2));

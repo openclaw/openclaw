@@ -6,7 +6,7 @@
  */
 
 export type ResponsePrefixContext = {
-  /** Short model name (e.g., "gpt-5.2", "claude-opus-4-5") */
+  /** Short model name (e.g., "gpt-5.2", "claude-opus-4-6") */
   model?: string;
   /** Full model ID including provider (e.g., "openai-codex/gpt-5.2") */
   modelFull?: string;
@@ -39,7 +39,9 @@ export function resolveResponsePrefixTemplate(
   template: string | undefined,
   context: ResponsePrefixContext,
 ): string | undefined {
-  if (!template) return undefined;
+  if (!template) {
+    return undefined;
+  }
 
   return template.replace(TEMPLATE_VAR_PATTERN, (match, varName: string) => {
     const normalizedVar = varName.toLowerCase();
@@ -69,12 +71,12 @@ export function resolveResponsePrefixTemplate(
  *
  * Strips:
  * - Provider prefix (e.g., "openai/" from "openai/gpt-5.2")
- * - Date suffixes (e.g., "-20251101" from "claude-opus-4-5-20251101")
+ * - Date suffixes (e.g., "-20260205" from "claude-opus-4-6-20260205")
  * - Common version suffixes (e.g., "-latest")
  *
  * @example
  * extractShortModelName("openai-codex/gpt-5.2") // "gpt-5.2"
- * extractShortModelName("claude-opus-4-5-20251101") // "claude-opus-4-5"
+ * extractShortModelName("claude-opus-4-6-20260205") // "claude-opus-4-6"
  * extractShortModelName("gpt-5.2-latest") // "gpt-5.2"
  */
 export function extractShortModelName(fullModel: string): string {
@@ -90,7 +92,9 @@ export function extractShortModelName(fullModel: string): string {
  * Check if a template string contains any template variables.
  */
 export function hasTemplateVariables(template: string | undefined): boolean {
-  if (!template) return false;
+  if (!template) {
+    return false;
+  }
   // Reset lastIndex since we're using a global regex
   TEMPLATE_VAR_PATTERN.lastIndex = 0;
   return TEMPLATE_VAR_PATTERN.test(template);

@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import { dashboardCommand } from "./dashboard.js";
 
 const mocks = vi.hoisted(() => ({
@@ -42,7 +41,7 @@ function resetRuntime() {
 
 function mockSnapshot(token = "abc") {
   mocks.readConfigFileSnapshot.mockResolvedValue({
-    path: "/tmp/moltbot.json",
+    path: "/tmp/openclaw.json",
     exists: true,
     raw: "{}",
     parsed: {},
@@ -84,10 +83,10 @@ describe("dashboardCommand", () => {
       customBindHost: undefined,
       basePath: undefined,
     });
-    expect(mocks.copyToClipboard).toHaveBeenCalledWith("http://127.0.0.1:18789/?token=abc123");
-    expect(mocks.openUrl).toHaveBeenCalledWith("http://127.0.0.1:18789/?token=abc123");
+    expect(mocks.copyToClipboard).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expect(mocks.openUrl).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(runtime.log).toHaveBeenCalledWith(
-      "Opened in your browser. Keep that tab to control Moltbot.",
+      "Opened in your browser. Keep that tab to control OpenClaw.",
     );
   });
 

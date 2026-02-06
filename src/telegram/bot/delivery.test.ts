@@ -1,7 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { Bot } from "grammy";
-
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deliverReplies } from "./delivery.js";
 
 const loadWebMedia = vi.fn();
@@ -136,6 +134,34 @@ describe("deliverReplies", () => {
       expect.any(String),
       expect.objectContaining({
         link_preview_options: { is_disabled: true },
+      }),
+    );
+  });
+
+  it("keeps message_thread_id=1 when allowed", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 4,
+      chat: { id: "123" },
+    });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverReplies({
+      replies: [{ text: "Hello" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4000,
+      thread: { id: 1, scope: "dm" },
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.any(String),
+      expect.objectContaining({
+        message_thread_id: 1,
       }),
     );
   });

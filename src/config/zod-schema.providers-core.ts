@@ -1,5 +1,11 @@
 import { z } from "zod";
-
+import {
+  normalizeTelegramCommandDescription,
+  normalizeTelegramCommandName,
+  resolveTelegramCustomCommands,
+} from "./telegram-custom-commands.js";
+import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
+import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import {
   BlockStreamingChunkSchema,
   BlockStreamingCoalesceSchema,
@@ -14,13 +20,6 @@ import {
   RetryConfigSchema,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
-import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
-import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
-import {
-  normalizeTelegramCommandDescription,
-  normalizeTelegramCommandName,
-  resolveTelegramCustomCommands,
-} from "./telegram-custom-commands.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
@@ -38,6 +37,7 @@ const TelegramCapabilitiesSchema = z.union([
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    groupPolicy: GroupPolicySchema.optional(),
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
@@ -48,6 +48,7 @@ export const TelegramTopicSchema = z
 export const TelegramGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    groupPolicy: GroupPolicySchema.optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
     skills: z.array(z.string()).optional(),
@@ -69,7 +70,9 @@ const validateTelegramCustomCommands = (
   value: { customCommands?: Array<{ command?: string; description?: string }> },
   ctx: z.RefinementCtx,
 ) => {
-  if (!value.customCommands || value.customCommands.length === 0) return;
+  if (!value.customCommands || value.customCommands.length === 0) {
+    return;
+  }
   const { issues } = resolveTelegramCustomCommands({
     commands: value.customCommands,
     checkReserved: false,
@@ -136,6 +139,7 @@ export const TelegramAccountSchemaBase = z
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     linkPreview: z.boolean().optional(),
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -163,6 +167,43 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
       'channels.telegram.dmPolicy="open" requires channels.telegram.allowFrom to include "*"',
   });
   validateTelegramCustomCommands(value, ctx);
+
+  const baseWebhookUrl = typeof value.webhookUrl === "string" ? value.webhookUrl.trim() : "";
+  const baseWebhookSecret =
+    typeof value.webhookSecret === "string" ? value.webhookSecret.trim() : "";
+  if (baseWebhookUrl && !baseWebhookSecret) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "channels.telegram.webhookUrl requires channels.telegram.webhookSecret",
+      path: ["webhookSecret"],
+    });
+  }
+  if (!value.accounts) {
+    return;
+  }
+  for (const [accountId, account] of Object.entries(value.accounts)) {
+    if (!account) {
+      continue;
+    }
+    if (account.enabled === false) {
+      continue;
+    }
+    const accountWebhookUrl =
+      typeof account.webhookUrl === "string" ? account.webhookUrl.trim() : "";
+    if (!accountWebhookUrl) {
+      continue;
+    }
+    const accountSecret =
+      typeof account.webhookSecret === "string" ? account.webhookSecret.trim() : "";
+    if (!accountSecret && !baseWebhookSecret) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "channels.telegram.accounts.*.webhookUrl requires channels.telegram.webhookSecret or channels.telegram.accounts.*.webhookSecret",
+        path: ["accounts", accountId, "webhookSecret"],
+      });
+    }
+  }
 });
 
 export const DiscordDmSchema = z
@@ -195,6 +236,7 @@ export const DiscordGuildChannelSchema = z
     enabled: z.boolean().optional(),
     users: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
+    includeThreadStarter: z.boolean().optional(),
     autoThread: z.boolean().optional(),
   })
   .strict();
@@ -252,6 +294,7 @@ export const DiscordAccountSchema = z
         events: z.boolean().optional(),
         moderation: z.boolean().optional(),
         channels: z.boolean().optional(),
+        presence: z.boolean().optional(),
       })
       .strict()
       .optional(),
@@ -275,6 +318,14 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    pluralkit: z
+      .object({
+        enabled: z.boolean().optional(),
+        token: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -345,6 +396,7 @@ export const GoogleChatAccountSchema = z
       .optional(),
     dm: GoogleChatDmSchema.optional(),
     typingIndicator: z.enum(["none", "message", "reaction"]).optional(),
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -459,6 +511,7 @@ export const SlackAccountSchema = z
     dm: SlackDmSchema.optional(),
     channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -476,12 +529,20 @@ export const SlackConfigSchema = SlackAccountSchema.extend({
       path: ["signingSecret"],
     });
   }
-  if (!value.accounts) return;
+  if (!value.accounts) {
+    return;
+  }
   for (const [accountId, account] of Object.entries(value.accounts)) {
-    if (!account) continue;
-    if (account.enabled === false) continue;
+    if (!account) {
+      continue;
+    }
+    if (account.enabled === false) {
+      continue;
+    }
     const accountMode = account.mode ?? baseMode;
-    if (accountMode !== "http") continue;
+    if (accountMode !== "http") {
+      continue;
+    }
     const accountSecret = account.signingSecret ?? value.signingSecret;
     if (!accountSecret) {
       ctx.addIssue({
@@ -534,6 +595,7 @@ export const SignalAccountSchemaBase = z
       .optional(),
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -598,6 +660,7 @@ export const IMessageAccountSchemaBase = z
       )
       .optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -677,6 +740,7 @@ export const BlueBubblesAccountSchemaBase = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    responsePrefix: z.string().optional(),
   })
   .strict();
 
@@ -747,6 +811,7 @@ export const MSTeamsConfigSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
+    mediaAuthAllowHosts: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
@@ -758,6 +823,7 @@ export const MSTeamsConfigSchema = z
     /** SharePoint site ID for file uploads in group chats/channels (e.g., "contoso.sharepoint.com,guid1,guid2") */
     sharePointSiteId: z.string().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
+    responsePrefix: z.string().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

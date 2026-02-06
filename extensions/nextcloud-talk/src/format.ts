@@ -51,25 +51,25 @@ export function formatNextcloudTalkInlineCode(code: string): string {
  * Useful for extracting plain text content.
  */
 export function stripNextcloudTalkFormatting(text: string): string {
-  return (
-    text
-      .replace(/```[\s\S]*?```/g, "")
-      .replace(/`[^`]+`/g, "")
-      .replace(/\*\*([^*]+)\*\*/g, "$1")
-      .replace(/\*([^*]+)\*/g, "$1")
-      .replace(/_([^_]+)_/g, "$1")
-      .replace(/~~([^~]+)~~/g, "$1")
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-      .replace(/\s+/g, " ")
-      .trim()
-  );
+  return text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`[^`]+`/g, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    .replace(/~~([^~]+)~~/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
  * Truncate text to a maximum length, preserving word boundaries.
  */
 export function truncateNextcloudTalkText(text: string, maxLength: number, suffix = "..."): string {
-  if (text.length <= maxLength) return text;
+  if (text.length <= maxLength) {
+    return text;
+  }
   const truncated = text.slice(0, maxLength - suffix.length);
   const lastSpace = truncated.lastIndexOf(" ");
   if (lastSpace > maxLength * 0.7) {

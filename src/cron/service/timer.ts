@@ -1,18 +1,29 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { CronJob } from "../types.js";
-import { computeJobNextRunAtMs, nextWakeAtMs, resolveJobPayloadTextForMain } from "./jobs.js";
-import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState } from "./state.js";
+import {
+  computeJobNextRunAtMs,
+  nextWakeAtMs,
+  recomputeNextRuns,
+  resolveJobPayloadTextForMain,
+} from "./jobs.js";
+import { locked } from "./locked.js";
 import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
 export function armTimer(state: CronServiceState) {
-  if (state.timer) clearTimeout(state.timer);
+  if (state.timer) {
+    clearTimeout(state.timer);
+  }
   state.timer = null;
-  if (!state.deps.cronEnabled) return;
+  if (!state.deps.cronEnabled) {
+    return;
+  }
   const nextAt = nextWakeAtMs(state);
-  if (!nextAt) return;
+  if (!nextAt) {
+    return;
+  }
   const delay = Math.max(nextAt - state.deps.nowMs(), 0);
   // Avoid TimeoutOverflowWarning when a job is far in the future.
   const clampedDelay = Math.min(delay, MAX_TIMEOUT_MS);
@@ -21,30 +32,42 @@ export function armTimer(state: CronServiceState) {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
     });
   }, clampedDelay);
-  state.timer.unref?.();
 }
 
 export async function onTimer(state: CronServiceState) {
-  if (state.running) return;
+  if (state.running) {
+    return;
+  }
   state.running = true;
   try {
     await locked(state, async () => {
-      await ensureLoaded(state);
+      // Reload persisted due-times without recomputing so runDueJobs sees
+      // the original nextRunAtMs values.  Recomputing first would advance
+      // every/cron slots past the current tick when the timer fires late (#9788).
+      await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       await runDueJobs(state);
+      recomputeNextRuns(state);
       await persist(state);
-      armTimer(state);
     });
   } finally {
     state.running = false;
+    // Always re-arm so transient errors (e.g. ENOSPC) don't kill the scheduler.
+    armTimer(state);
   }
 }
 
 export async function runDueJobs(state: CronServiceState) {
-  if (!state.store) return;
+  if (!state.store) {
+    return;
+  }
   const now = state.deps.nowMs();
   const due = state.store.jobs.filter((j) => {
-    if (!j.enabled) return false;
-    if (typeof j.state.runningAtMs === "number") return false;
+    if (!j.enabled) {
+      return false;
+    }
+    if (typeof j.state.runningAtMs === "number") {
+      return false;
+    }
     const next = j.state.nextRunAtMs;
     return typeof next === "number" && now >= next;
   });
@@ -66,12 +89,7 @@ export async function executeJob(
 
   let deleted = false;
 
-  const finish = async (
-    status: "ok" | "error" | "skipped",
-    err?: string,
-    summary?: string,
-    outputText?: string,
-  ) => {
+  const finish = async (status: "ok" | "error" | "skipped", err?: string, summary?: string) => {
     const endedAt = state.deps.nowMs();
     job.state.runningAtMs = undefined;
     job.state.lastRunAtMs = startedAt;
@@ -109,30 +127,6 @@ export async function executeJob(
       state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
       deleted = true;
       emit(state, { jobId: job.id, action: "removed" });
-    }
-
-    if (job.sessionTarget === "isolated") {
-      const prefix = job.isolation?.postToMainPrefix?.trim() || "Cron";
-      const mode = job.isolation?.postToMainMode ?? "summary";
-
-      let body = (summary ?? err ?? status).trim();
-      if (mode === "full") {
-        // Prefer full agent output if available; fall back to summary.
-        const maxCharsRaw = job.isolation?.postToMainMaxChars;
-        const maxChars = Number.isFinite(maxCharsRaw) ? Math.max(0, maxCharsRaw as number) : 8000;
-        const fullText = (outputText ?? "").trim();
-        if (fullText) {
-          body = fullText.length > maxChars ? `${fullText.slice(0, maxChars)}…` : fullText;
-        }
-      }
-
-      const statusPrefix = status === "ok" ? prefix : `${prefix} (${status})`;
-      state.deps.enqueueSystemEvent(`${statusPrefix}: ${body}`, {
-        agentId: job.agentId,
-      });
-      if (job.wakeMode === "now") {
-        state.deps.requestHeartbeatNow({ reason: `cron:${job.id}:post` });
-      }
     }
   };
 
@@ -199,10 +193,28 @@ export async function executeJob(
       job,
       message: job.payload.message,
     });
-    if (res.status === "ok") await finish("ok", undefined, res.summary, res.outputText);
-    else if (res.status === "skipped")
-      await finish("skipped", undefined, res.summary, res.outputText);
-    else await finish("error", res.error ?? "cron job failed", res.summary, res.outputText);
+
+    // Post a short summary back to the main session so the user sees
+    // the cron result without opening the isolated session.
+    const summaryText = res.summary?.trim();
+    const deliveryMode = job.delivery?.mode ?? "announce";
+    if (summaryText && deliveryMode !== "none") {
+      const prefix = "Cron";
+      const label =
+        res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
+      state.deps.enqueueSystemEvent(label, { agentId: job.agentId });
+      if (job.wakeMode === "now") {
+        state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+      }
+    }
+
+    if (res.status === "ok") {
+      await finish("ok", undefined, res.summary);
+    } else if (res.status === "skipped") {
+      await finish("skipped", undefined, res.summary);
+    } else {
+      await finish("error", res.error ?? "cron job failed", res.summary);
+    }
   } catch (err) {
     await finish("error", String(err));
   } finally {
@@ -219,7 +231,9 @@ export function wake(
   opts: { mode: "now" | "next-heartbeat"; text: string },
 ) {
   const text = opts.text.trim();
-  if (!text) return { ok: false } as const;
+  if (!text) {
+    return { ok: false } as const;
+  }
   state.deps.enqueueSystemEvent(text);
   if (opts.mode === "now") {
     state.deps.requestHeartbeatNow({ reason: "wake" });
@@ -228,7 +242,9 @@ export function wake(
 }
 
 export function stopTimer(state: CronServiceState) {
-  if (state.timer) clearTimeout(state.timer);
+  if (state.timer) {
+    clearTimeout(state.timer);
+  }
   state.timer = null;
 }
 

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
@@ -7,14 +8,15 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
-      if (!evt.payloadJSON) return;
+      if (!evt.payloadJSON) {
+        return;
+      }
       let payload: unknown;
       try {
         payload = JSON.parse(evt.payloadJSON) as unknown;
@@ -24,8 +26,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const obj =
         typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const text = typeof obj.text === "string" ? obj.text.trim() : "";
-      if (!text) return;
-      if (text.length > 20_000) return;
+      if (!text) {
+        return;
+      }
+      if (text.length > 20_000) {
+        return;
+      }
       const sessionKeyRaw = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
       const cfg = loadConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
@@ -73,7 +79,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       return;
     }
     case "agent.request": {
-      if (!evt.payloadJSON) return;
+      if (!evt.payloadJSON) {
+        return;
+      }
       type AgentDeepLink = {
         message?: string;
         sessionKey?: string | null;
@@ -91,8 +99,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         return;
       }
       const message = (link?.message ?? "").trim();
-      if (!message) return;
-      if (message.length > 20_000) return;
+      if (!message) {
+        return;
+      }
+      if (message.length > 20_000) {
+        return;
+      }
 
       const channelRaw = typeof link?.channel === "string" ? link.channel.trim() : "";
       const channel = normalizeChannelId(channelRaw) ?? undefined;
@@ -141,7 +153,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       return;
     }
     case "chat.subscribe": {
-      if (!evt.payloadJSON) return;
+      if (!evt.payloadJSON) {
+        return;
+      }
       let payload: unknown;
       try {
         payload = JSON.parse(evt.payloadJSON) as unknown;
@@ -151,12 +165,16 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const obj =
         typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
-      if (!sessionKey) return;
+      if (!sessionKey) {
+        return;
+      }
       ctx.nodeSubscribe(nodeId, sessionKey);
       return;
     }
     case "chat.unsubscribe": {
-      if (!evt.payloadJSON) return;
+      if (!evt.payloadJSON) {
+        return;
+      }
       let payload: unknown;
       try {
         payload = JSON.parse(evt.payloadJSON) as unknown;
@@ -166,14 +184,18 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const obj =
         typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const sessionKey = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
-      if (!sessionKey) return;
+      if (!sessionKey) {
+        return;
+      }
       ctx.nodeUnsubscribe(nodeId, sessionKey);
       return;
     }
     case "exec.started":
     case "exec.finished":
     case "exec.denied": {
-      if (!evt.payloadJSON) return;
+      if (!evt.payloadJSON) {
+        return;
+      }
       let payload: unknown;
       try {
         payload = JSON.parse(evt.payloadJSON) as unknown;
@@ -184,7 +206,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const sessionKey =
         typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : `node-${nodeId}`;
-      if (!sessionKey) return;
+      if (!sessionKey) {
+        return;
+      }
       const runId = typeof obj.runId === "string" ? obj.runId.trim() : "";
       const command = typeof obj.command === "string" ? obj.command.trim() : "";
       const exitCode =
@@ -198,14 +222,20 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       let text = "";
       if (evt.event === "exec.started") {
         text = `Exec started (node=${nodeId}${runId ? ` id=${runId}` : ""})`;
-        if (command) text += `: ${command}`;
+        if (command) {
+          text += `: ${command}`;
+        }
       } else if (evt.event === "exec.finished") {
         const exitLabel = timedOut ? "timeout" : `code ${exitCode ?? "?"}`;
         text = `Exec finished (node=${nodeId}${runId ? ` id=${runId}` : ""}, ${exitLabel})`;
-        if (output) text += `\n${output}`;
+        if (output) {
+          text += `\n${output}`;
+        }
       } else {
         text = `Exec denied (node=${nodeId}${runId ? ` id=${runId}` : ""}${reason ? `, ${reason}` : ""})`;
-        if (command) text += `: ${command}`;
+        if (command) {
+          text += `: ${command}`;
+        }
       }
 
       enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });

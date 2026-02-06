@@ -114,6 +114,7 @@ export class UrbitSSEClient {
         Cookie: this.cookie,
       },
       body: JSON.stringify([subscription]),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!response.ok && response.status !== 204) {
@@ -130,6 +131,7 @@ export class UrbitSSEClient {
         Cookie: this.cookie,
       },
       body: JSON.stringify(this.subscriptions),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!createResp.ok && createResp.status !== 204) {
@@ -152,6 +154,7 @@ export class UrbitSSEClient {
           json: "Opening API channel",
         },
       ]),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!pokeResp.ok && pokeResp.status !== 204) {
@@ -164,13 +167,22 @@ export class UrbitSSEClient {
   }
 
   async openStream() {
+    // Use AbortController with manual timeout so we only abort during initial connection,
+    // not after the SSE stream is established and actively streaming.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60_000);
+
     const response = await fetch(this.channelUrl, {
       method: "GET",
       headers: {
         Accept: "text/event-stream",
         Cookie: this.cookie,
       },
+      signal: controller.signal,
     });
+
+    // Clear timeout once connection established (headers received)
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       throw new Error(`Stream connection failed: ${response.status}`);
@@ -180,20 +192,26 @@ export class UrbitSSEClient {
       if (!this.aborted) {
         this.logger.error?.(`Stream error: ${String(error)}`);
         for (const { err } of this.eventHandlers.values()) {
-          if (err) err(error);
+          if (err) {
+            err(error);
+          }
         }
       }
     });
   }
 
   async processStream(body: ReadableStream<Uint8Array> | Readable | null) {
-    if (!body) return;
+    if (!body) {
+      return;
+    }
     const stream = body instanceof ReadableStream ? Readable.fromWeb(body) : body;
     let buffer = "";
 
     try {
       for await (const chunk of stream) {
-        if (this.aborted) break;
+        if (this.aborted) {
+          break;
+        }
         buffer += chunk.toString();
         let eventEnd;
         while ((eventEnd = buffer.indexOf("\n\n")) !== -1) {
@@ -221,7 +239,9 @@ export class UrbitSSEClient {
       }
     }
 
-    if (!data) return;
+    if (!data) {
+      return;
+    }
 
     try {
       const parsed = JSON.parse(data) as { id?: number; json?: unknown; response?: string };
@@ -229,7 +249,9 @@ export class UrbitSSEClient {
       if (parsed.response === "quit") {
         if (parsed.id) {
           const handlers = this.eventHandlers.get(parsed.id);
-          if (handlers?.quit) handlers.quit();
+          if (handlers?.quit) {
+            handlers.quit();
+          }
         }
         return;
       }
@@ -241,7 +263,9 @@ export class UrbitSSEClient {
         }
       } else if (parsed.json) {
         for (const { event } of this.eventHandlers.values()) {
-          if (event) event(parsed.json);
+          if (event) {
+            event(parsed.json);
+          }
         }
       }
     } catch (error) {
@@ -267,6 +291,7 @@ export class UrbitSSEClient {
         Cookie: this.cookie,
       },
       body: JSON.stringify([pokeData]),
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!response.ok && response.status !== 204) {
@@ -284,6 +309,7 @@ export class UrbitSSEClient {
       headers: {
         Cookie: this.cookie,
       },
+      signal: AbortSignal.timeout(30_000),
     });
 
     if (!response.ok) {
@@ -352,6 +378,7 @@ export class UrbitSSEClient {
           Cookie: this.cookie,
         },
         body: JSON.stringify(unsubscribes),
+        signal: AbortSignal.timeout(30_000),
       });
 
       await fetch(this.channelUrl, {
@@ -359,6 +386,7 @@ export class UrbitSSEClient {
         headers: {
           Cookie: this.cookie,
         },
+        signal: AbortSignal.timeout(30_000),
       });
     } catch (error) {
       this.logger.error?.(`Error closing channel: ${String(error)}`);

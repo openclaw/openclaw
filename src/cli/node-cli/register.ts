@@ -1,8 +1,9 @@
 import type { Command } from "commander";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { runNodeHost } from "../../node-host/runner.js";
+import { formatDocsLink } from "../../terminal/links.js";
+import { theme } from "../../terminal/theme.js";
+import { parsePort } from "../daemon-cli/shared.js";
 import {
   runNodeDaemonInstall,
   runNodeDaemonRestart,
@@ -10,7 +11,6 @@ import {
   runNodeDaemonStop,
   runNodeDaemonUninstall,
 } from "./daemon.js";
-import { parsePort } from "../daemon-cli/shared.js";
 
 function parsePortWithFallback(value: unknown, fallback: number): number {
   const parsed = parsePort(value);
@@ -23,7 +23,8 @@ export function registerNodeCli(program: Command) {
     .description("Run a headless node host (system.run/system.which)")
     .addHelpText(
       "after",
-      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.molt.bot/cli/node")}\n`,
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/node", "docs.openclaw.ai/cli/node")}\n`,
     );
 
   node

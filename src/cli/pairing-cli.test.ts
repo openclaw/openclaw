@@ -9,9 +9,15 @@ const pairingIdLabels: Record<string, string> = {
   discord: "discordUserId",
 };
 const normalizeChannelId = vi.fn((raw: string) => {
-  if (!raw) return null;
-  if (raw === "imsg") return "imessage";
-  if (["telegram", "discord", "imessage"].includes(raw)) return raw;
+  if (!raw) {
+    return null;
+  }
+  if (raw === "imsg") {
+    return "imessage";
+  }
+  if (["telegram", "discord", "imessage"].includes(raw)) {
+    return raw;
+  }
   return null;
 });
 const getPairingAdapter = vi.fn((channel: string) => ({

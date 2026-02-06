@@ -1,15 +1,14 @@
+import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { RequestClient } from "@buape/carbon";
 import { PollLayoutType } from "discord-api-types/payloads/v10";
-import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import { Routes } from "discord-api-types/v10";
-
-import { loadConfig } from "../config/config.js";
+import type { ChunkMode } from "../auto-reply/chunk.js";
 import type { RetryConfig } from "../infra/retry.js";
+import { loadConfig } from "../config/config.js";
 import { createDiscordRetryRunner, type RetryRunner } from "../infra/retry-policy.js";
 import { normalizePollDurationHours, normalizePollInput, type PollInput } from "../polls.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
-import type { ChunkMode } from "../auto-reply/chunk.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
@@ -45,7 +44,9 @@ type DiscordClientOpts = {
 
 function resolveToken(params: { explicit?: string; accountId: string; fallbackToken?: string }) {
   const explicit = normalizeDiscordToken(params.explicit);
-  if (explicit) return explicit;
+  if (explicit) {
+    return explicit;
+  }
   const fallback = normalizeDiscordToken(params.fallbackToken);
   if (!fallback) {
     throw new Error(
@@ -118,19 +119,26 @@ export async function parseAndResolveRecipient(
   const accountInfo = resolveDiscordAccount({ cfg, accountId });
 
   // First try to resolve using directory lookup (handles usernames)
-  const resolved = await resolveDiscordTarget(raw, {
-    cfg,
-    accountId: accountInfo.accountId,
-  });
+  const trimmed = raw.trim();
+  const parseOptions = {
+    ambiguousMessage: `Ambiguous Discord recipient "${trimmed}". Use "user:${trimmed}" for DMs or "channel:${trimmed}" for channel messages.`,
+  };
+
+  const resolved = await resolveDiscordTarget(
+    raw,
+    {
+      cfg,
+      accountId: accountInfo.accountId,
+    },
+    parseOptions,
+  );
 
   if (resolved) {
     return { kind: resolved.kind, id: resolved.id };
   }
 
   // Fallback to standard parsing (for channels, etc.)
-  const parsed = parseDiscordTarget(raw, {
-    ambiguousMessage: `Ambiguous Discord recipient "${raw.trim()}". Use "user:${raw.trim()}" for DMs or "channel:${raw.trim()}" for channel messages.`,
-  });
+  const parsed = parseDiscordTarget(raw, parseOptions);
 
   if (!parsed) {
     throw new Error("Recipient is required for Discord sends");
@@ -176,14 +184,18 @@ function normalizeDiscordPollInput(input: PollInput): RESTAPIPoll {
 }
 
 function getDiscordErrorCode(err: unknown) {
-  if (!err || typeof err !== "object") return undefined;
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
   const candidate =
     "code" in err && err.code !== undefined
       ? err.code
       : "rawError" in err && err.rawError && typeof err.rawError === "object"
         ? (err.rawError as { code?: unknown }).code
         : undefined;
-  if (typeof candidate === "number") return candidate;
+  if (typeof candidate === "number") {
+    return candidate;
+  }
   if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
     return Number(candidate);
   }
@@ -199,7 +211,9 @@ async function buildDiscordSendError(
     hasMedia: boolean;
   },
 ) {
-  if (err instanceof DiscordSendError) return err;
+  if (err instanceof DiscordSendError) {
+    return err;
+  }
   const code = getDiscordErrorCode(err);
   if (code === DISCORD_CANNOT_DM) {
     return new DiscordSendError(
@@ -207,7 +221,9 @@ async function buildDiscordSendError(
       { kind: "dm-blocked" },
     );
   }
-  if (code !== DISCORD_MISSING_PERMISSIONS) return err;
+  if (code !== DISCORD_MISSING_PERMISSIONS) {
+    return err;
+  }
 
   let missing: string[] = [];
   try {
@@ -281,7 +297,9 @@ async function sendDiscordText(
     maxLines: maxLinesPerMessage,
     chunkMode,
   });
-  if (!chunks.length && text) chunks.push(text);
+  if (!chunks.length && text) {
+    chunks.push(text);
+  }
   if (chunks.length === 1) {
     const res = (await request(
       () =>
@@ -337,7 +355,9 @@ async function sendDiscordMedia(
         chunkMode,
       })
     : [];
-  if (!chunks.length && text) chunks.push(text);
+  if (!chunks.length && text) {
+    chunks.push(text);
+  }
   const caption = chunks[0] ?? "";
   const messageReference = replyTo ? { message_id: replyTo, fail_if_not_exists: false } : undefined;
   const res = (await request(
@@ -358,7 +378,9 @@ async function sendDiscordMedia(
     "media",
   )) as { id: string; channel_id: string };
   for (const chunk of chunks.slice(1)) {
-    if (!chunk.trim()) continue;
+    if (!chunk.trim()) {
+      continue;
+    }
     await sendDiscordText(
       rest,
       channelId,

@@ -13,7 +13,7 @@ describe("readFirstUserMessageFromTranscript", () => {
   let storePath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-session-fs-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
@@ -159,7 +159,7 @@ describe("readLastMessagePreviewFromTranscript", () => {
   let storePath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-session-fs-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
@@ -348,7 +348,7 @@ describe("readSessionPreviewItemsFromTranscript", () => {
   let storePath: string;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "moltbot-session-preview-test-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-preview-test-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
 
@@ -381,6 +381,43 @@ describe("readSessionPreviewItemsFromTranscript", () => {
 
     expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
     expect(result[1]?.text).toContain("call weather");
+  });
+
+  test("detects tool calls from tool_use/tool_call blocks and toolName field", () => {
+    const sessionId = "preview-session-tools";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      JSON.stringify({ message: { role: "assistant", content: "Hi" } }),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          toolName: "camera",
+          content: [
+            { type: "tool_use", name: "read" },
+            { type: "tool_call", name: "write" },
+          ],
+        },
+      }),
+      JSON.stringify({ message: { role: "assistant", content: "Done" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+
+    const result = readSessionPreviewItemsFromTranscript(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      3,
+      120,
+    );
+
+    expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
+    expect(result[1]?.text).toContain("call");
+    expect(result[1]?.text).toContain("camera");
+    expect(result[1]?.text).toContain("read");
+    // Preview text may not list every tool name; it should at least hint there were multiple calls.
+    expect(result[1]?.text).toMatch(/\+\d+/);
   });
 
   test("truncates preview text to max chars", () => {

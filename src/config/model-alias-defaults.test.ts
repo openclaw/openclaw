@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "./types.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { applyModelDefaults } from "./defaults.js";
-import type { MoltbotConfig } from "./types.js";
 
 describe("applyModelDefaults", () => {
   it("adds default aliases when models are present", () => {
@@ -9,15 +9,15 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-5": {},
+            "anthropic/claude-opus-4-6": {},
             "openai/gpt-5.2": {},
           },
         },
       },
-    } satisfies MoltbotConfig;
+    } satisfies OpenClawConfig;
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("opus");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.2"]?.alias).toBe("gpt");
   });
 
@@ -30,7 +30,7 @@ describe("applyModelDefaults", () => {
           },
         },
       },
-    } satisfies MoltbotConfig;
+    } satisfies OpenClawConfig;
 
     const next = applyModelDefaults(cfg);
 
@@ -47,7 +47,7 @@ describe("applyModelDefaults", () => {
           },
         },
       },
-    } satisfies MoltbotConfig;
+    } satisfies OpenClawConfig;
 
     const next = applyModelDefaults(cfg);
 
@@ -69,7 +69,7 @@ describe("applyModelDefaults", () => {
           },
         },
       },
-    } satisfies MoltbotConfig;
+    } satisfies OpenClawConfig;
 
     const next = applyModelDefaults(cfg);
     const model = next.models?.providers?.myproxy?.models?.[0];
