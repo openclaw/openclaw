@@ -20,6 +20,9 @@ services:
       MEDIA_ROOT: /app/media
       WORKSPACE_ROOT: /app/workspace
       TMP_ROOT: /app/tmp
+      # === 記憶層強化: 持久化資料路徑 ===
+      DATA_ROOT: /app/persistent/data
+      BACKUP_ROOT: /app/persistent/backups
     volumes:
       # OpenClaw config
       - ${CLAWDBOT_CONFIG_DIR}:/home/node/.moltbot
@@ -36,6 +39,11 @@ services:
       - ${HOME}/.openclaw/media/line:/app/media/line
       # 共享臨時目錄
       - /tmp/clawd:/app/tmp
+      # === 記憶層強化: 持久化資料（不隨容器消失）===
+      # 關鍵資料：timeline.db, consciousness state
+      - ${HOME}/.openclaw/persistent/data:/app/persistent/data
+      # 備份目錄
+      - ${HOME}/.openclaw/backups:/app/persistent/backups
     ports:
       - "${CLAWDBOT_GATEWAY_PORT:-18799}:18799"
       - "${CLAWDBOT_BRIDGE_PORT:-18800}:18800"
