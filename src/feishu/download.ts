@@ -34,8 +34,16 @@ export async function downloadFeishuMessageResource(
 ): Promise<FeishuMediaRef> {
   logger.debug(`Downloading Feishu ${type}: messageId=${messageId}, fileKey=${fileKey}`);
 
+  // Map internal types to Feishu API types
+  // The API allows: image, file
+  // Audio and video are downloaded as "file"
+  let apiType = type;
+  if (type === "audio" || type === "video") {
+    apiType = "file";
+  }
+
   const res = await client.im.messageResource.get({
-    params: { type },
+    params: { type: apiType },
     path: {
       message_id: messageId,
       file_key: fileKey,

@@ -477,13 +477,13 @@ export async function processFeishuMessage(
         // Handle block replies - update streaming card with partial text
         if (streamingSession?.isActive() && info?.kind === "block" && payload.text) {
           logger.debug(`Updating streaming card with block text: ${payload.text.length} chars`);
-          await streamingSession.update(payload.text);
+          await streamingSession.update(payload.text, true);
           return;
         }
 
         // If streaming was active, close it with the final text
         if (streamingSession?.isActive() && info?.kind === "final") {
-          await streamingSession.close(payload.text);
+          await streamingSession.close();
           streamingStarted = false;
           return; // Card already contains the final text
         }
