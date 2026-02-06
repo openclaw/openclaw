@@ -67,6 +67,9 @@ export const convosPlugin: ChannelPlugin<ResolvedConvosAccount> = {
     messageToolHints: () => [
       "- Convos targets are conversation IDs (UUIDs). Use `to=<conversationId>` for `action=send`.",
       "- For reactions, use `action=react` with `conversationId`, `messageId`, and `emoji`.",
+      "- To create a new Convos group: use `action=channel-create` with optional `name`. Returns `conversationId` and `inviteUrl`.",
+      "- To join a Convos invite: use `action=channel-join` with `inviteUrl=<URL or slug>`. Returns join status.",
+      "- Note: if groupPolicy=allowlist, add the new conversationId to channels.convos.groups for the bot to respond in it.",
     ],
   },
   config: {

@@ -36,6 +36,7 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "channel-info",
   "channel-list",
   "channel-create",
+  "channel-join",
   "channel-edit",
   "channel-delete",
   "channel-move",

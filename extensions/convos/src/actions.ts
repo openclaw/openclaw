@@ -1,7 +1,4 @@
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageActionName,
-} from "openclaw/plugin-sdk";
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "openclaw/plugin-sdk";
 import { jsonResult, readStringParam, readReactionParams } from "openclaw/plugin-sdk";
 import { listConvosAccountIds, resolveConvosAccount, type CoreConfig } from "./accounts.js";
 import { getClientForAccount } from "./outbound.js";
@@ -12,7 +9,7 @@ export const convosMessageActions: ChannelMessageActionAdapter = {
     if (ids.length === 0) {
       return [];
     }
-    const actions: ChannelMessageActionName[] = ["send", "react"];
+    const actions: ChannelMessageActionName[] = ["send", "react", "channel-create", "channel-join"];
     return actions;
   },
 
@@ -40,6 +37,26 @@ export const convosMessageActions: ChannelMessageActionAdapter = {
       });
       const result = await client.react(conversationId!, messageId!, emoji, remove);
       return jsonResult({ ok: true, action: result.action, emoji });
+    }
+
+    if (action === "channel-create") {
+      const name = readStringParam(params, "name") ?? undefined;
+      const result = await client.createConversation(name);
+      return jsonResult({
+        ok: true,
+        conversationId: result.conversationId,
+        inviteUrl: result.inviteUrl,
+      });
+    }
+
+    if (action === "channel-join") {
+      const inviteUrl = readStringParam(params, "inviteUrl", { required: true });
+      const result = await client.joinConversation(inviteUrl!);
+      return jsonResult({
+        ok: true,
+        status: result.status,
+        conversationId: result.conversationId,
+      });
     }
 
     throw new Error(`Action "${action}" is not supported for Convos.`);
