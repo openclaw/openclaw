@@ -15,8 +15,8 @@ describe("DEFAULT_COMPACTION_INSTRUCTIONS", () => {
     expect(DEFAULT_COMPACTION_INSTRUCTIONS).toContain("primary language");
   });
 
-  it("contains persona preservation directive", () => {
-    expect(DEFAULT_COMPACTION_INSTRUCTIONS).toContain("persona");
+  it("contains factual content directive", () => {
+    expect(DEFAULT_COMPACTION_INSTRUCTIONS).toContain("factual content");
   });
 
   it("does not exceed MAX_INSTRUCTION_LENGTH (800 chars)", () => {
