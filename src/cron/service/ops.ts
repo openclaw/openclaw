@@ -9,7 +9,7 @@ import {
   nextWakeAtMs,
   recomputeNextRuns,
 } from "./jobs.js";
-import { locked } from "./locked.js";
+import { locked, resetStoreLock } from "./locked.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import { armTimer, emit, executeJob, stopTimer, wake } from "./timer.js";
 
@@ -36,6 +36,10 @@ export async function start(state: CronServiceState) {
 
 export function stop(state: CronServiceState) {
   stopTimer(state);
+  // Clear the module-level lock chain so the next service instance (after
+  // an in-process SIGUSR1 restart) doesn't wait on promises from the old
+  // one that may never settle (e.g. an isolated agent job killed mid-run).
+  resetStoreLock(state.deps.storePath);
 }
 
 export async function status(state: CronServiceState) {

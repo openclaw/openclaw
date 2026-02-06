@@ -8,6 +8,20 @@ const resolveChain = (promise: Promise<unknown>) =>
     () => undefined,
   );
 
+/**
+ * Reset the store-level lock chain for a given path (or all paths).
+ * Must be called when a cron service is torn down (e.g. SIGUSR1 restart)
+ * so the new service instance doesn't wait on promises from the old one
+ * that may never settle (e.g. an isolated agent job killed mid-execution).
+ */
+export function resetStoreLock(storePath?: string) {
+  if (storePath) {
+    storeLocks.delete(storePath);
+  } else {
+    storeLocks.clear();
+  }
+}
+
 export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): Promise<T> {
   const storePath = state.deps.storePath;
   const storeOp = storeLocks.get(storePath) ?? Promise.resolve();

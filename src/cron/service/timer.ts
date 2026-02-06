@@ -36,6 +36,9 @@ export function armTimer(state: CronServiceState) {
 
 export async function onTimer(state: CronServiceState) {
   if (state.running) {
+    // A previous onTimer is still executing.  Re-arm so we don't silently
+    // lose this tick — the next timer fire will pick up any due jobs.
+    armTimer(state);
     return;
   }
   state.running = true;
