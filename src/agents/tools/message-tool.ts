@@ -211,6 +211,19 @@ function buildChannelManagementSchema() {
   };
 }
 
+function buildGroupManagementSchema() {
+  return {
+    participants: Type.Optional(
+      Type.Array(Type.String(), {
+        description: "Phone numbers in E.164 format for group operations.",
+      }),
+    ),
+    groupJid: Type.Optional(Type.String({ description: "WhatsApp group JID (e.g., 123456@g.us)" })),
+    description: Type.Optional(Type.String({ description: "Group description text" })),
+    imagePath: Type.Optional(Type.String({ description: "Path to group icon image" })),
+  };
+}
+
 function buildMessageToolSchemaProps(options: { includeButtons: boolean; includeCards: boolean }) {
   return {
     ...buildRoutingSchema(),
@@ -225,6 +238,7 @@ function buildMessageToolSchemaProps(options: { includeButtons: boolean; include
     ...buildModerationSchema(),
     ...buildGatewaySchema(),
     ...buildChannelManagementSchema(),
+    ...buildGroupManagementSchema(),
   };
 }
 
