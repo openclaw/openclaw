@@ -384,9 +384,10 @@ export function sanitizeUserFacingText(text: string): string {
     return text;
   }
   const stripped = stripFinalTagsFromText(text);
-  const trimmed = stripped.trim();
+  const cleaned = stripped.replace(/^(?:[ \t]*\n)+/, "");
+  const trimmed = cleaned.trim();
   if (!trimmed) {
-    return stripped;
+    return cleaned;
   }
 
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
@@ -417,7 +418,7 @@ export function sanitizeUserFacingText(text: string): string {
     return formatRawAssistantErrorForUi(trimmed);
   }
 
-  return collapseConsecutiveDuplicateBlocks(stripped);
+  return collapseConsecutiveDuplicateBlocks(cleaned);
 }
 
 export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {

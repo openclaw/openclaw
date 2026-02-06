@@ -33,6 +33,11 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(text)).toBe("Hello there!");
   });
 
+  it("strips leading blank lines", () => {
+    expect(sanitizeUserFacingText("\n\nHello there!")).toBe("Hello there!");
+    expect(sanitizeUserFacingText("\n \n\t\nHello")).toBe("Hello");
+  });
+
   it("does not collapse distinct paragraphs", () => {
     const text = "Hello there!\n\nDifferent line.";
     expect(sanitizeUserFacingText(text)).toBe(text);
