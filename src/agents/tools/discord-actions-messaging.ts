@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { APIMessage } from "discord-api-types/v10";
 import type { DiscordActionConfig } from "../../config/config.js";
 import {
   createThreadDiscord,
@@ -25,10 +26,28 @@ import { withNormalizedTimestamp } from "../date-time.js";
 import {
   type ActionGate,
   jsonResult,
+  readBooleanParam,
   readReactionParams,
   readStringArrayParam,
   readStringParam,
 } from "./common.js";
+
+/**
+ * Compact a Discord message to essential fields only.
+ * Reduces token usage significantly for bulk message reads.
+ */
+function compactMessage(message: APIMessage): Record<string, unknown> {
+  return {
+    id: message.id,
+    content: message.content,
+    author: message.author.global_name || message.author.username,
+    authorId: message.author.id,
+    timestamp: message.timestamp,
+    ...(message.attachments?.length ? { attachments: message.attachments.length } : {}),
+    ...(message.embeds?.length ? { embeds: message.embeds.length } : {}),
+    ...(message.referenced_message ? { replyTo: message.referenced_message.id } : {}),
+  };
+}
 
 function parseDiscordMessageLink(link: string) {
   const normalized = link.trim();
@@ -206,6 +225,7 @@ export async function handleDiscordMessagingAction(
         throw new Error("Discord message reads are disabled.");
       }
       const channelId = resolveChannelId();
+      const compact = readBooleanParam(params, "compact");
       const query = {
         limit:
           typeof params.limit === "number" && Number.isFinite(params.limit)
@@ -220,7 +240,9 @@ export async function handleDiscordMessagingAction(
         : await readMessagesDiscord(channelId, query);
       return jsonResult({
         ok: true,
-        messages: messages.map((message) => normalizeMessage(message)),
+        messages: compact
+          ? messages.map((message) => compactMessage(message))
+          : messages.map((message) => normalizeMessage(message)),
       });
     }
     case "sendMessage": {

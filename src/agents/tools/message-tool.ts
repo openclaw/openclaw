@@ -132,6 +132,12 @@ function buildFetchSchema() {
     around: Type.Optional(Type.String()),
     fromMe: Type.Optional(Type.Boolean()),
     includeArchived: Type.Optional(Type.Boolean()),
+    compact: Type.Optional(
+      Type.Boolean({
+        description:
+          "Return compact messages (id, content, author, timestamp only). Reduces token usage for bulk reads.",
+      }),
+    ),
   };
 }
 
