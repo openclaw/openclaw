@@ -1230,7 +1230,7 @@
               },
               {
                 "group": "Developer workflows",
-                "pages": ["start/setup"]
+                "pages": ["start/setup", "help/submitting-a-pr", "help/submitting-an-issue"]
               },
               {
                 "group": "Docs meta",
