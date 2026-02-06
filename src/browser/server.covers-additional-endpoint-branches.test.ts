@@ -333,9 +333,6 @@ describeWithLoopback("backward compatibility (profile parameter)", () => {
     prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(testPort - 2);
 
-    prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
-    process.env.OPENCLAW_GATEWAY_PORT = String(testPort - 2);
-
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
