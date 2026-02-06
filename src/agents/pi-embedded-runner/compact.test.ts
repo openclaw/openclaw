@@ -362,6 +362,43 @@ describe("compactEmbeddedPiSessionDirect", () => {
     expect(result.reason).toContain("Unknown model");
   });
 
+  it("disables reasoning on model passed to createAgentSession", async () => {
+    mockedResolveModel.mockReturnValueOnce({
+      model: {
+        id: "test-model",
+        provider: "anthropic",
+        api: "messages",
+        contextWindow: 200000,
+        reasoning: true,
+      },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    } as never);
+    mockSession();
+
+    await compactEmbeddedPiSessionDirect(baseParams);
+
+    expect(mockedCreateAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({ reasoning: false }),
+      }),
+    );
+  });
+
+  it("passes model unchanged when reasoning is already falsy", async () => {
+    mockSession();
+
+    await compactEmbeddedPiSessionDirect(baseParams);
+
+    // Default mock model has no reasoning property
+    const callArg = mockedCreateAgentSession.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(callArg.model).toEqual(
+      expect.objectContaining({ id: "test-model", provider: "anthropic" }),
+    );
+    expect((callArg.model as Record<string, unknown>).reasoning).toBeFalsy();
+  });
+
   it("re-throws non-timeout errors from compact()", async () => {
     mockSession(async () => {
       throw new Error("LLM API error");
