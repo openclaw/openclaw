@@ -590,6 +590,15 @@ vi.mock("../cli/deps.js", async () => {
   };
 });
 
+vi.mock("../plugins/loader.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
+  return {
+    ...actual,
+    loadOpenClawPlugins: () => pluginRegistryState.registry,
+  };
+});
+
 process.env.OPENCLAW_SKIP_CHANNELS = "1";
 process.env.OPENCLAW_SKIP_CRON = "1";
 process.env.OPENCLAW_SKIP_CHANNELS = "1";

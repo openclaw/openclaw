@@ -285,7 +285,9 @@ export function onceMessage<T = unknown>(
 
 export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
   const mod = await serverModulePromise;
-  return await mod.startGatewayServer(port, opts);
+  const resolvedOpts =
+    opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
+  return await mod.startGatewayServer(port, resolvedOpts);
 }
 
 export async function startServerWithClient(token?: string, opts?: GatewayServerOptions) {
@@ -323,7 +325,30 @@ export async function startServerWithClient(token?: string, opts?: GatewayServer
   }
 
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off("open", onOpen);
+      ws.off("error", onError);
+      ws.off("close", onClose);
+    };
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: unknown) => {
+      cleanup();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+    const onClose = (code: number, reason: Buffer) => {
+      cleanup();
+      reject(new Error(`closed ${code}: ${reason.toString()}`));
+    };
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+    ws.once("close", onClose);
+  });
   return { server, ws, port, prevToken: prev };
 }
 
