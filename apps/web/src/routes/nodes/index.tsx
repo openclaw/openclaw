@@ -51,7 +51,6 @@ import type {
   ExecApprovalsAgent,
   ExecApprovalsDefaults,
   ExecApprovalsFile,
-  NodeEntry,
 } from "@/lib/api/nodes";
 
 import {
@@ -63,9 +62,7 @@ import {
   Search,
   RefreshCw,
   Check,
-  Clock,
   AlertTriangle,
-  Wifi,
   ListChecks,
 } from "lucide-react";
 

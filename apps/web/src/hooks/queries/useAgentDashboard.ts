@@ -6,7 +6,7 @@
  */
 
 import * as React from "react";
-import { useAgentStatusDashboard, type AgentHealthStatus, type AgentStatusEntry } from "@/hooks/queries/useAgentStatus";
+import { useAgentStatusDashboard, type AgentHealthStatus } from "@/hooks/queries/useAgentStatus";
 import { useAgents } from "@/hooks/queries/useAgents";
 import { useSessions } from "@/hooks/queries/useSessions";
 import { useCronJobs } from "@/hooks/queries/useCron";

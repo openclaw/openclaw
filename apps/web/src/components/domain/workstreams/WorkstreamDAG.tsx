@@ -567,7 +567,7 @@ function WorkstreamDAGInner({
     setLayoutDirection(newDirection);
 
     // Get flow with the new direction for proper handle positions
-    const flow = tasksToFlow(tasks, agents, newDirection);
+    const flow = tasksToFlow(tasks, agents, queueItems, newDirection);
 
     if (newDirection === "horizontal") {
       // For horizontal layout: swap X and Y, and scale appropriately
@@ -593,7 +593,7 @@ function WorkstreamDAGInner({
 
   const resetLayout = useCallback(() => {
     setLayoutDirection("vertical"); // Reset to vertical mode
-    const flow = tasksToFlow(tasks, agents, "vertical");
+    const flow = tasksToFlow(tasks, agents, queueItems, "vertical");
     setNodes(applySelection(flow.nodes, selectedTaskId));
     setEdges(flow.edges);
     setSelectedTask(null);
