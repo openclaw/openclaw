@@ -4,9 +4,12 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+import { createArtifactRegistry } from "../../../artifacts/artifact-registry.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { resolveStateDir } from "../../../config/paths.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -33,6 +36,7 @@ import { isTimeoutError } from "../../failover-error.js";
 import { buildHotState, enforceHotStateTokenCap } from "../../hot-state.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
+import { inferOutputRole, resolveOutputBudget } from "../../output-budget.js";
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -51,6 +55,7 @@ import {
   detectPromptRegressions,
   formatPromptMetricsLog,
 } from "../../prompt-metrics.js";
+import { validateResult } from "../../result-validator.js";
 import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
@@ -855,10 +860,30 @@ export async function runEmbeddedAttempt(
             });
           }
 
-          // Only pass images option if there are actually images to pass
-          // This avoids potential issues with models that don't expect the images parameter
+          // Resolve output budget based on role (M2: output budget enforcement)
+          const outputRole = inferOutputRole({
+            sessionKey: params.sessionKey,
+            subagentLabel: params.subagentLabel,
+          });
+          const maxTokens = outputRole
+            ? resolveOutputBudget({
+                role: outputRole,
+                configOverrides: params.config?.agents?.outputBudgets,
+              })
+            : undefined;
+
+          // Build prompt options with images and max_tokens
+          const promptOptions: { images?: ImageContent[]; max_tokens?: number } = {};
           if (imageResult.images.length > 0) {
-            await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
+            promptOptions.images = imageResult.images;
+          }
+          if (maxTokens !== undefined) {
+            promptOptions.max_tokens = maxTokens;
+          }
+
+          // Call prompt with enforced output budget
+          if (Object.keys(promptOptions).length > 0) {
+            await abortable(activeSession.prompt(effectivePrompt, promptOptions));
           } else {
             await abortable(activeSession.prompt(effectivePrompt));
           }
@@ -926,6 +951,55 @@ export async function runEmbeddedAttempt(
         .slice()
         .toReversed()
         .find((m) => m.role === "assistant");
+
+      // M2: Result validation (output budget + diff-only enforcement)
+      if (lastAssistant?.text && !promptError) {
+        try {
+          const artifactRegistry = createArtifactRegistry({
+            rootDir: path.join(resolveStateDir(process.env), "artifacts"),
+          });
+
+          const validationResult = await validateResult({
+            output: lastAssistant.text,
+            sessionKey: params.sessionKey,
+            subagentLabel: params.subagentLabel,
+            taskDescription: effectivePrompt,
+            budgetOverrides: params.config?.agents?.outputBudgets,
+            artifactRegistry,
+          });
+
+          if (!validationResult.valid) {
+            if (validationResult.reason === "budget_exceeded") {
+              log.warn(
+                `Output budget exceeded: role=${validationResult.role} ` +
+                  `actual=${validationResult.violation.actualTokens} ` +
+                  `max=${validationResult.violation.maxTokens} ` +
+                  `artifactId=${validationResult.artifactId || "none"} ` +
+                  `runId=${params.runId}`,
+              );
+              // Fallback output stored as artifact, summary returned
+              // (Not modifying message here to preserve original response for analysis)
+            } else if (validationResult.reason === "diff_only_violation") {
+              log.error(
+                `Diff-only violation: ${validationResult.diffResult.reason} ` +
+                  `suggestion=${validationResult.diffResult.suggestion} ` +
+                  `runId=${params.runId}`,
+              );
+              // Hard reject per spec - could throw here, but logging for observability first
+            }
+          } else {
+            log.debug(
+              `Result validation passed: role=${validationResult.role} ` +
+                `tokens=${validationResult.outputTokens} ` +
+                `budgetTokens=${validationResult.budgetTokens} ` +
+                `runId=${params.runId}`,
+            );
+          }
+        } catch (validationError) {
+          // Don't fail the entire run if validation has an internal error
+          log.error(`Result validation error: ${validationError} runId=${params.runId}`);
+        }
+      }
 
       const toolMetasNormalized = toolMetas
         .filter(
