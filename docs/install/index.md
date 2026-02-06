@@ -13,7 +13,7 @@ Already followed [Getting Started](/start/getting-started)? You're all set — t
 
 ## System requirements
 
-- **Node 22+** (the installer will install it if missing)
+- **[Node 22+](/install/node)** (the [installer script](#installer-script-recommended) will install it if missing)
 - macOS, Linux, or Windows
 - `pnpm` only if you build from source
 
