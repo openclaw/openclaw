@@ -804,13 +804,7 @@ function makeReactionListenerParams(overrides?: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
-    cfg: {} as ReturnType<
-      typeof import("./monitor/listeners.js").DiscordReactionListener extends {
-        handle: (d: unknown, c: unknown) => unknown;
-      }
-        ? never
-        : never
-    >,
+    cfg: {} as ReturnType<typeof import("../config/config.js").loadConfig>,
     accountId: "acc-1",
     runtime: {} as import("../runtime.js").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
