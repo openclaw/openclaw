@@ -290,7 +290,7 @@ export async function checkDepsStatus(params: {
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), Math.max(250, timeoutMs));
+  const t = setTimeout(ctrl.abort.bind(ctrl), Math.max(250, timeoutMs));
   try {
     return await fetch(url, { signal: ctrl.signal });
   } finally {

@@ -42,7 +42,7 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
       return fetchImpl(input, patchedInit);
     }
     const controller = new AbortController();
-    const onAbort = () => controller.abort();
+    const onAbort = controller.abort.bind(controller);
     if (signal.aborted) {
       controller.abort();
     } else {
