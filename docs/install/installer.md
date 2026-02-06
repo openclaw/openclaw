@@ -12,13 +12,13 @@ title: "Installer Internals"
 OpenClaw ships three installer scripts, served from `openclaw.ai`.
 
 <CardGroup cols={3}>
-  <Card title="install.sh" icon="rocket" href="#installsh">
+  <Card title="install.sh" icon="rocket" href="#install-sh">
     macOS/Linux/WSL installer. Handles Node setup, npm install (default), or git install.
   </Card>
-  <Card title="install-cli.sh" icon="terminal" href="#install-clish">
+  <Card title="install-cli.sh" icon="terminal" href="#install-cli-sh">
     Prefix-based installer for non-root environments. Installs local Node + CLI under one directory.
   </Card>
-  <Card title="install.ps1" icon="monitor" href="#installps1">
+  <Card title="install.ps1" icon="monitor" href="#install-ps1">
     Windows PowerShell installer. npm install (default) or git install.
   </Card>
 </CardGroup>
