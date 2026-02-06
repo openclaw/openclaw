@@ -34,6 +34,7 @@ export type AuthChoice =
   | "zai-global"
   | "zai-cn"
   | "xiaomi-api-key"
+  | "modelscope-api-key"
   | "minimax-cloud"
   | "minimax"
   | "minimax-api"
@@ -125,6 +126,7 @@ export type OnboardOptions = {
   geminiApiKey?: string;
   zaiApiKey?: string;
   xiaomiApiKey?: string;
+  modelscopeApiKey?: string;
   minimaxApiKey?: string;
   syntheticApiKey?: string;
   veniceApiKey?: string;

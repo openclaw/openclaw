@@ -32,6 +32,7 @@ import {
   applyMistralConfig,
   applyXaiConfig,
   applyXiaomiConfig,
+  applyModelScopeConfig,
   applyZaiConfig,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
@@ -55,6 +56,7 @@ import {
   setHuggingfaceApiKey,
   setVercelAiGatewayApiKey,
   setXiaomiApiKey,
+  setModelScopeApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
 import {
@@ -387,6 +389,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXaiConfig(nextConfig);
+  }
+
+  if (authChoice === "modelscope-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "modelscope",
+      cfg: baseConfig,
+      flagValue: opts.modelscopeApiKey,
+      flagName: "--modelscope-api-key",
+      envVar: "MODELSCOPE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setModelScopeApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "modelscope:default",
+      provider: "modelscope",
+      mode: "api_key",
+    });
+    return applyModelScopeConfig(nextConfig);
   }
 
   if (authChoice === "mistral-api-key") {

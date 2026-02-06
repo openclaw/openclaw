@@ -144,6 +144,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["xiaomi-api-key"],
   },
   {
+    value: "modelscope",
+    label: "ModelScope",
+    hint: "API key",
+    choices: ["modelscope-api-key"],
+  },
+  {
     value: "synthetic",
     label: "Synthetic",
     hint: "Anthropic-compatible (multi-model)",
@@ -268,6 +274,10 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
   {
     value: "xiaomi-api-key",
     label: "Xiaomi API key",
+  },
+  {
+    value: "modelscope-api-key",
+    label: "ModelScope API key",
   },
   {
     value: "minimax-portal",

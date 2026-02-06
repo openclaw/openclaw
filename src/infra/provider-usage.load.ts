@@ -69,6 +69,12 @@ export async function loadProviderUsageSummary(
               displayName: PROVIDER_LABELS.xiaomi,
               windows: [],
             };
+          case "modelscope":
+            return {
+              provider: "modelscope",
+              displayName: PROVIDER_LABELS.modelscope,
+              windows: [],
+            };
           case "zai":
             return await fetchZaiUsage(auth.token, timeoutMs, fetchFn);
           default:

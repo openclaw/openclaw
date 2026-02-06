@@ -127,6 +127,41 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
   return normalizeSecretInput(cred.token);
 }
 
+function resolveModelScopeApiKey(): string | undefined {
+  const envDirect = process.env.MODELSCOPE_API_KEY?.trim();
+  if (envDirect) {
+    return envDirect;
+  }
+
+  const envResolved = resolveEnvApiKey("modelscope");
+  if (envResolved?.apiKey) {
+    return envResolved.apiKey;
+  }
+
+  const cfg = loadConfig();
+  const key = getCustomProviderApiKey(cfg, "modelscope");
+  if (key) {
+    return key;
+  }
+
+  const store = ensureAuthProfileStore();
+  const apiProfile = listProfilesForProvider(store, "modelscope").find((id) => {
+    const cred = store.profiles[id];
+    return cred?.type === "api_key" || cred?.type === "token";
+  });
+  if (!apiProfile) {
+    return undefined;
+  }
+  const cred = store.profiles[apiProfile];
+  if (cred?.type === "api_key" && cred.key?.trim()) {
+    return cred.key.trim();
+  }
+  if (cred?.type === "token" && cred.token?.trim()) {
+    return cred.token.trim();
+  }
+  return undefined;
+}
+
 async function resolveOAuthToken(params: {
   provider: UsageProviderId;
   agentDir?: string;
@@ -237,6 +272,14 @@ export async function resolveProviderAuths(params: {
     }
     if (provider === "xiaomi") {
       const apiKey = resolveXiaomiApiKey();
+      if (apiKey) {
+        auths.push({ provider, token: apiKey });
+      }
+      continue;
+    }
+
+    if (provider === "modelscope") {
+      const apiKey = resolveModelScopeApiKey();
       if (apiKey) {
         auths.push({ provider, token: apiKey });
       }

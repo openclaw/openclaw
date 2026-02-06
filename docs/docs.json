@@ -108,6 +108,10 @@
       "destination": "/providers/qianfan"
     },
     {
+      "source": "/modelscope",
+      "destination": "/providers/modelscope"
+    },
+    {
       "source": "/mattermost",
       "destination": "/channels/mattermost"
     },

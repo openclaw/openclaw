@@ -27,6 +27,7 @@ const PREFERRED_PROVIDER_BY_AUTH_CHOICE: Partial<Record<AuthChoice, string>> = {
   "zai-global": "zai",
   "zai-cn": "zai",
   "xiaomi-api-key": "xiaomi",
+  "modelscope-api-key": "modelscope",
   "synthetic-api-key": "synthetic",
   "venice-api-key": "venice",
   "together-api-key": "together",
