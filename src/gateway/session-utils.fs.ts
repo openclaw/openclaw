@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
+import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
 
 export function readSessionMessages(
@@ -292,35 +293,11 @@ function extractPreviewText(message: TranscriptPreviewMessage): string | null {
 }
 
 function isToolCall(message: TranscriptPreviewMessage): boolean {
-  if (message.toolName || message.tool_name) {
-    return true;
-  }
-  if (!Array.isArray(message.content)) {
-    return false;
-  }
-  return message.content.some((entry) => {
-    if (entry?.name) {
-      return true;
-    }
-    const raw = typeof entry?.type === "string" ? entry.type.toLowerCase() : "";
-    return raw === "toolcall" || raw === "tool_call";
-  });
+  return hasToolCall(message as Record<string, unknown>);
 }
 
 function extractToolNames(message: TranscriptPreviewMessage): string[] {
-  const names: string[] = [];
-  if (Array.isArray(message.content)) {
-    for (const entry of message.content) {
-      if (typeof entry?.name === "string" && entry.name.trim()) {
-        names.push(entry.name.trim());
-      }
-    }
-  }
-  const toolName = typeof message.toolName === "string" ? message.toolName : message.tool_name;
-  if (typeof toolName === "string" && toolName.trim()) {
-    names.push(toolName.trim());
-  }
-  return names;
+  return extractToolCallNames(message as Record<string, unknown>);
 }
 
 function extractMediaSummary(message: TranscriptPreviewMessage): string | null {
