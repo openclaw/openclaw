@@ -47,7 +47,7 @@ Two pieces to blend:
 - everything else is out-of-context and retrieved via tools
 - memory writes are explicit tool calls (append/replace/insert), persisted, then re-injected next turn
 
-2. **Hindsight-style memory substrate**
+1. **Hindsight-style memory substrate**
 
 - separate what’s observed vs what’s believed vs what’s summarized
 - support retain/recall/reflect

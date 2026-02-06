@@ -33,16 +33,16 @@ Availability: internal preview. The iOS app is not publicly distributed yet.
 openclaw gateway --port 18789
 ```
 
-2. In the iOS app, open Settings and pick a discovered gateway (or enable Manual Host and enter host/port).
+1. In the iOS app, open Settings and pick a discovered gateway (or enable Manual Host and enter host/port).
 
-3. Approve the pairing request on the gateway host:
+2. Approve the pairing request on the gateway host:
 
 ```bash
 openclaw nodes pending
 openclaw nodes approve <requestId>
 ```
 
-4. Verify connection:
+1. Verify connection:
 
 ```bash
 openclaw nodes status

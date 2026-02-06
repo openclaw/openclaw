@@ -28,7 +28,7 @@ without writing custom OpenClaw code for each workflow.
 }
 ```
 
-2. Allowlist the tool (it is registered with `optional: true`):
+1. Allowlist the tool (it is registered with `optional: true`):
 
 ```json
 {

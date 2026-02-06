@@ -27,7 +27,7 @@ export ANTHROPIC_API_KEY="..."
 openclaw models status
 ```
 
-3. If the Gateway runs under systemd/launchd, prefer putting the key in
+1. If the Gateway runs under systemd/launchd, prefer putting the key in
    `~/.openclaw/.env` so the daemon can read it:
 
 ```bash

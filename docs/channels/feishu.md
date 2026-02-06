@@ -75,7 +75,7 @@ Choose **Feishu**, then enter the App ID and App Secret.
 
 Visit [Feishu Open Platform](https://open.feishu.cn/app) and sign in.
 
-Lark (global) tenants should use https://open.larksuite.com/app and set `domain: "lark"` in the Feishu config.
+Lark (global) tenants should use [https://open.larksuite.com/app](https://open.larksuite.com/app) and set `domain: "lark"` in the Feishu config.
 
 ### 2. Create an app
 
@@ -261,10 +261,12 @@ After approval, you can chat normally.
 
 - **Default**: `dmPolicy: "pairing"` (unknown users get a pairing code)
 - **Approve pairing**:
+
   ```bash
   openclaw pairing list feishu
   openclaw pairing approve feishu <CODE>
   ```
+
 - **Allowlist mode**: set `channels.feishu.allowFrom` with allowed Open IDs
 
 ### Group chats

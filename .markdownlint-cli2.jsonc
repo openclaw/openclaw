@@ -6,11 +6,6 @@
 
     "MD013": false,
     "MD025": false,
-    "MD026": false,
-    "MD029": false,
-    "MD030": false,
-    "MD031": false,
-    "MD032": false,
 
     "MD033": {
       "allowed_elements": [
@@ -48,9 +43,7 @@
       ],
     },
 
-    "MD034": false,
     "MD036": false,
-    "MD037": false,
     "MD040": false,
     "MD041": false,
     "MD046": false,

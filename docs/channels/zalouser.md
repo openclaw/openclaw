@@ -46,8 +46,8 @@ The Gateway machine must have the `zca` binary available in `PATH`.
 }
 ```
 
-4. Restart the Gateway (or finish onboarding).
-5. DM access defaults to pairing; approve the pairing code on first contact.
+1. Restart the Gateway (or finish onboarding).
+2. DM access defaults to pairing; approve the pairing code on first contact.
 
 ## What it is
 

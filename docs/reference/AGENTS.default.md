@@ -17,7 +17,7 @@ OpenClaw uses a dedicated workspace directory for the agent. Default: `~/.opencl
 mkdir -p ~/.openclaw/workspace
 ```
 
-2. Copy the default workspace templates into the workspace:
+1. Copy the default workspace templates into the workspace:
 
 ```bash
 cp docs/reference/templates/AGENTS.md ~/.openclaw/workspace/AGENTS.md
@@ -25,13 +25,13 @@ cp docs/reference/templates/SOUL.md ~/.openclaw/workspace/SOUL.md
 cp docs/reference/templates/TOOLS.md ~/.openclaw/workspace/TOOLS.md
 ```
 
-3. Optional: if you want the personal assistant skill roster, replace AGENTS.md with this file:
+1. Optional: if you want the personal assistant skill roster, replace AGENTS.md with this file:
 
 ```bash
 cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 ```
 
-4. Optional: choose a different workspace by setting `agents.defaults.workspace` (supports `~`):
+1. Optional: choose a different workspace by setting `agents.defaults.workspace` (supports `~`):
 
 ```json5
 {
