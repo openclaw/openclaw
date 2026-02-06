@@ -59,6 +59,8 @@ export type TalkConfig = {
   apiKey?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
+  /** macOS system voice for Talk fallback. "siri" uses enhanced Siri neural voice via /usr/bin/say. */
+  systemVoice?: string;
 };
 
 export type GatewayControlUiConfig = {

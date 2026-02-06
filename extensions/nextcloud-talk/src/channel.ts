@@ -28,6 +28,8 @@ import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
 
+const accountStopFns = new Map<string, () => Promise<void>>();
+
 const meta = {
   id: "nextcloud-talk",
   label: "Nextcloud Talk",
@@ -325,7 +327,15 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
         statusSink: (patch) => ctx.setStatus({ accountId: ctx.accountId, ...patch }),
       });
 
+      accountStopFns.set(account.accountId, stop);
       return { stop };
+    },
+    stopAccount: async (ctx): Promise<void> => {
+      const stopFn = accountStopFns.get(ctx.accountId);
+      if (stopFn) {
+        await stopFn();
+        accountStopFns.delete(ctx.accountId);
+      }
     },
     logoutAccount: async ({ accountId, cfg }) => {
       const nextCfg = { ...cfg } as OpenClawConfig;

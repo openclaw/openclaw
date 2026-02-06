@@ -262,23 +262,25 @@ type ThinkTaggedSplitBlock =
 
 export function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const trimmedStart = text.trimStart();
-  // Avoid false positives: only treat it as structured thinking when it begins
-  // with a think tag (common for local/OpenAI-compat providers that emulate
-  // reasoning blocks via tags).
-  if (!trimmedStart.startsWith("<")) {
-    return null;
-  }
   const openRe = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
   const closeRe = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
-  if (!openRe.test(trimmedStart)) {
+  const hasOpen = openRe.test(trimmedStart);
+  const hasClose = closeRe.test(text);
+
+  // Need at least a close tag to identify thinking content; some providers
+  // (e.g. LM Studio / Nemotron) omit the opening <think> tag entirely.
+  if (!hasClose) {
     return null;
   }
-  if (!closeRe.test(text)) {
+  // If no open tag, only proceed when the text doesn't start with '<' (to
+  // distinguish from other tag patterns that aren't thinking).
+  if (!hasOpen && trimmedStart.startsWith("<")) {
     return null;
   }
 
   const scanRe = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
-  let inThinking = false;
+  // When there's no opening tag, treat everything from the start as thinking.
+  let inThinking = !hasOpen;
   let cursor = 0;
   let thinkingStart = 0;
   const blocks: ThinkTaggedSplitBlock[] = [];

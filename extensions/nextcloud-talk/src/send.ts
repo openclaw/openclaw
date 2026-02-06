@@ -93,8 +93,10 @@ export async function sendMessageNextcloudTalk(
   }
   const bodyStr = JSON.stringify(body);
 
+  // Nextcloud verifies HMAC over (random + messageText), not (random + fullJsonBody).
+  // See BotController::getBotFromHeaders in nextcloud/spreed.
   const { random, signature } = generateNextcloudTalkSignature({
-    body: bodyStr,
+    body: message,
     secret,
   });
 
@@ -104,6 +106,7 @@ export async function sendMessageNextcloudTalk(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      Accept: "application/json",
       "OCS-APIRequest": "true",
       "X-Nextcloud-Talk-Bot-Random": random,
       "X-Nextcloud-Talk-Bot-Signature": signature,
@@ -119,7 +122,7 @@ export async function sendMessageNextcloudTalk(
     if (status === 400) {
       errorMsg = `Nextcloud Talk: bad request - ${errorBody || "invalid message format"}`;
     } else if (status === 401) {
-      errorMsg = "Nextcloud Talk: authentication failed - check bot secret";
+      errorMsg = `Nextcloud Talk: authentication failed - check bot secret (randomLen=${random.length} sigLen=${signature.length} bodyLen=${bodyStr.length} secretLen=${secret.length}${errorBody ? ` resp=${errorBody.slice(0, 200)}` : ""})`;
     } else if (status === 403) {
       errorMsg = "Nextcloud Talk: forbidden - bot may not have permission in this room";
     } else if (status === 404) {
@@ -183,8 +186,9 @@ export async function sendReactionNextcloudTalk(
   const normalizedToken = normalizeRoomToken(roomToken);
 
   const body = JSON.stringify({ reaction });
+  // Nextcloud verifies HMAC over (random + reactionText), not (random + fullJsonBody).
   const { random, signature } = generateNextcloudTalkSignature({
-    body,
+    body: reaction,
     secret,
   });
 
@@ -194,6 +198,7 @@ export async function sendReactionNextcloudTalk(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      Accept: "application/json",
       "OCS-APIRequest": "true",
       "X-Nextcloud-Talk-Bot-Random": random,
       "X-Nextcloud-Talk-Bot-Signature": signature,

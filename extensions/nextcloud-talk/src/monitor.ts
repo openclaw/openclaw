@@ -74,7 +74,7 @@ function readBody(req: IncomingMessage): Promise<string> {
 export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServerOptions): {
   server: Server;
   start: () => Promise<void>;
-  stop: () => void;
+  stop: () => Promise<void>;
 } {
   const { port, host, path, secret, onMessage, onError, abortSignal } = opts;
 
@@ -111,6 +111,11 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
       });
 
       if (!isValid) {
+        onError?.(
+          new Error(
+            `Signature verification failed: random=${headers.random.slice(0, 8)}… sig=${headers.signature.slice(0, 16)}… bodyLen=${body.length} secretLen=${secret.length}`,
+          ),
+        );
         res.writeHead(401, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Invalid signature" }));
         return;
@@ -155,12 +160,14 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     });
   };
 
-  const stop = () => {
-    server.close();
+  const stop = (): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
   };
 
   if (abortSignal) {
-    abortSignal.addEventListener("abort", stop, { once: true });
+    abortSignal.addEventListener("abort", () => void stop(), { once: true });
   }
 
   return { server, start, stop };
@@ -177,7 +184,7 @@ export type NextcloudTalkMonitorOptions = {
 
 export async function monitorNextcloudTalkProvider(
   opts: NextcloudTalkMonitorOptions,
-): Promise<{ stop: () => void }> {
+): Promise<{ stop: () => Promise<void> }> {
   const core = getNextcloudTalkRuntime();
   const cfg = opts.config ?? (core.config.loadConfig() as CoreConfig);
   const account = resolveNextcloudTalkAccount({

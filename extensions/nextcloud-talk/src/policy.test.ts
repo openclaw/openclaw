@@ -21,6 +21,24 @@ describe("nextcloud-talk policy", () => {
       ).toEqual({ allowed: true, matchKey: "user-id", matchSource: "id" });
     });
 
+    it("strips users/ prefix from sender id", () => {
+      expect(
+        resolveNextcloudTalkAllowlistMatch({
+          allowFrom: ["alice"],
+          senderId: "users/alice",
+        }),
+      ).toEqual({ allowed: true, matchKey: "alice", matchSource: "id" });
+    });
+
+    it("strips users/ prefix from allowFrom entry", () => {
+      expect(
+        resolveNextcloudTalkAllowlistMatch({
+          allowFrom: ["users/bob"],
+          senderId: "bob",
+        }),
+      ).toEqual({ allowed: true, matchKey: "bob", matchSource: "id" });
+    });
+
     it("blocks when sender id does not match", () => {
       expect(
         resolveNextcloudTalkAllowlistMatch({

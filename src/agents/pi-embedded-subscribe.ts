@@ -45,8 +45,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     deltaBuffer: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
-    blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
-    partialBlockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
+    blockState: {
+      thinking: false,
+      everThinking: false,
+      final: false,
+      inlineCode: createInlineCodeState(),
+    },
+    partialBlockState: {
+      thinking: false,
+      everThinking: false,
+      final: false,
+      inlineCode: createInlineCodeState(),
+    },
     lastStreamedAssistant: undefined,
     lastStreamedAssistantCleaned: undefined,
     emittedAssistantUpdate: false,
@@ -89,9 +99,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     replyDirectiveAccumulator.reset();
     partialReplyDirectiveAccumulator.reset();
     state.blockState.thinking = false;
+    state.blockState.everThinking = false;
     state.blockState.final = false;
     state.blockState.inlineCode = createInlineCodeState();
     state.partialBlockState.thinking = false;
+    state.partialBlockState.everThinking = false;
     state.partialBlockState.final = false;
     state.partialBlockState.inlineCode = createInlineCodeState();
     state.lastStreamedAssistant = undefined;
@@ -290,7 +302,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const stripBlockTags = (
     text: string,
-    state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
+    state: {
+      thinking: boolean;
+      everThinking?: boolean;
+      final: boolean;
+      inlineCode?: InlineCodeState;
+    },
   ): string => {
     if (!text) {
       return text;
@@ -304,22 +321,36 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     THINKING_TAG_SCAN_RE.lastIndex = 0;
     let lastIndex = 0;
     let inThinking = state.thinking;
+    let everInThinking = state.everThinking ?? false;
     for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
       const idx = match.index ?? 0;
       if (codeSpans.isInside(idx)) {
         continue;
       }
-      if (!inThinking) {
-        processed += text.slice(lastIndex, idx);
-      }
       const isClose = match[1] === "/";
-      inThinking = !isClose;
+      if (!inThinking) {
+        if (!isClose) {
+          // Opening tag: keep text before it, enter thinking mode.
+          processed += text.slice(lastIndex, idx);
+          inThinking = true;
+          everInThinking = true;
+        } else if (!everInThinking) {
+          // Close tag without ANY prior open: implicit thinking from models
+          // like Nemotron that omit the opening <think> tag. Drop text before it.
+        } else {
+          // Extra close after a completed thinking block: keep text before it.
+          processed += text.slice(lastIndex, idx);
+        }
+      } else if (isClose) {
+        inThinking = false;
+      }
       lastIndex = idx + match[0].length;
     }
     if (!inThinking) {
       processed += text.slice(lastIndex);
     }
     state.thinking = inThinking;
+    state.everThinking = everInThinking;
 
     // 2. Handle <final> blocks (stateful, strip content OUTSIDE)
     // If enforcement is disabled, we still strip the tags themselves to prevent

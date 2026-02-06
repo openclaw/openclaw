@@ -17,7 +17,8 @@ function normalizeAllowEntry(raw: string): string {
   return raw
     .trim()
     .toLowerCase()
-    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "");
+    .replace(/^(nextcloud-talk|nc-talk|nc):/i, "")
+    .replace(/^users\//, "");
 }
 
 export function normalizeNextcloudTalkAllowlist(

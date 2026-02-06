@@ -4,7 +4,6 @@
 
 .chat-thinking {
   margin-bottom: 10px;
-  padding: 10px 12px;
   border-radius: 10px;
   border: 1px dashed rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.04);
@@ -13,9 +12,44 @@
   line-height: 1.4;
 }
 
+.chat-thinking-toggle {
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-style: italic;
+  opacity: 0.7;
+  list-style: none;
+}
+
+.chat-thinking-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.chat-thinking-toggle::before {
+  content: "▸ ";
+  font-style: normal;
+}
+
+.chat-thinking[open] > .chat-thinking-toggle::before {
+  content: "▾ ";
+}
+
+.chat-thinking-toggle:hover {
+  opacity: 1;
+}
+
+.chat-thinking-content {
+  padding: 4px 12px 10px;
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
 :root[data-theme="light"] .chat-thinking {
   border-color: rgba(16, 24, 40, 0.25);
   background: rgba(16, 24, 40, 0.04);
+}
+
+:root[data-theme="light"] .chat-thinking-content {
+  border-top-color: rgba(16, 24, 40, 0.12);
 }
 
 .chat-text {

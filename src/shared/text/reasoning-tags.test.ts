@@ -88,11 +88,12 @@ describe("stripReasoningTagsFromText", () => {
       expect(stripReasoningTagsFromText(input)).toBe(input);
     });
 
-    it("strips lone closing tag outside code", () => {
+    it("strips lone closing tag outside code (Nemotron implicit-thinking)", () => {
+      // A lone </think> with no prior valid open tag triggers the Nemotron
+      // implicit-thinking path: everything before </think> is treated as
+      // hidden reasoning and dropped.
       const input = "You can start with <think and then close with </think>";
-      expect(stripReasoningTagsFromText(input)).toBe(
-        "You can start with <think and then close with",
-      );
+      expect(stripReasoningTagsFromText(input)).toBe("");
     });
 
     it("handles tags with whitespace", () => {

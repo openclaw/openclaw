@@ -94,6 +94,7 @@ export function stripReasoningTagsFromText(
   let result = "";
   let lastIndex = 0;
   let inThinking = false;
+  let everInThinking = false;
 
   for (const match of cleaned.matchAll(THINKING_TAG_RE)) {
     const idx = match.index ?? 0;
@@ -104,9 +105,17 @@ export function stripReasoningTagsFromText(
     }
 
     if (!inThinking) {
-      result += cleaned.slice(lastIndex, idx);
       if (!isClose) {
+        // Opening tag: keep text before it, enter thinking mode.
+        result += cleaned.slice(lastIndex, idx);
         inThinking = true;
+        everInThinking = true;
+      } else if (!everInThinking) {
+        // Close tag without ANY prior open: implicit thinking from models
+        // like Nemotron that omit the opening <think> tag. Drop text before it.
+      } else {
+        // Extra close after a completed thinking block: keep text before it.
+        result += cleaned.slice(lastIndex, idx);
       }
     } else if (isClose) {
       inThinking = false;
