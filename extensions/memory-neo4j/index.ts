@@ -184,19 +184,6 @@ const memoryNeo4jPlugin = {
               category?: MemoryCategory;
             };
 
-            // Attention gate — reject noise even when the agent explicitly stores
-            if (!passesAttentionGate(text)) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `Skipped: "${text.slice(0, 60)}" — too short or low-substance for long-term memory.`,
-                  },
-                ],
-                details: { action: "rejected", reason: "attention_gate" },
-              };
-            }
-
             // 1. Generate embedding
             const vector = await embeddings.embed(text);
 
@@ -726,15 +713,23 @@ const memoryNeo4jPlugin = {
             "Retroactively apply the attention gate — find and remove low-substance memories",
           )
           .option("--execute", "Actually delete (default: dry-run preview)")
+          .option("--all", "Include explicitly-stored memories (default: auto-capture only)")
           .option("--agent <id>", "Only clean up memories for a specific agent")
-          .action(async (opts: { execute?: boolean; agent?: string }) => {
+          .action(async (opts: { execute?: boolean; all?: boolean; agent?: string }) => {
             try {
               await db.ensureInitialized();
 
-              // Fetch all memories (id + text)
-              const agentFilter = opts.agent ? "WHERE m.agentId = $agentId" : "";
+              // Fetch memories — by default only auto-capture (explicit stores are trusted)
+              const conditions: string[] = [];
+              if (!opts.all) {
+                conditions.push("m.source = 'auto-capture'");
+              }
+              if (opts.agent) {
+                conditions.push("m.agentId = $agentId");
+              }
+              const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
               const allMemories = await db.runQuery<{ id: string; text: string; source: string }>(
-                `MATCH (m:Memory) ${agentFilter}
+                `MATCH (m:Memory) ${where}
                  RETURN m.id AS id, m.text AS text, COALESCE(m.source, 'unknown') AS source
                  ORDER BY m.createdAt ASC`,
                 opts.agent ? { agentId: opts.agent } : {},
