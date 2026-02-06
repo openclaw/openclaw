@@ -423,6 +423,15 @@ export function buildQianfanProvider(): ProviderConfig {
         contextWindow: QIANFAN_DEFAULT_CONTEXT_WINDOW,
         maxTokens: QIANFAN_DEFAULT_MAX_TOKENS,
       },
+      {
+        id: "ernie-5.0-thinking-preview",
+        name: "ERNIE-5.0-Thinking-Preview",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: QIANFAN_DEFAULT_COST,
+        contextWindow: 119000,
+        maxTokens: 64000,
+      },
     ],
   };
 }
