@@ -221,7 +221,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.error(
       [
         "Gateway auth is set to token, but no token is configured.",
-        "Set gateway.auth.token (or OPENCLAW_GATEWAY_TOKEN), or pass --token.",
+        "Set gateway.auth.token (or GENSPARX_GATEWAY_TOKEN/OPENCLAW_GATEWAY_TOKEN), or pass --token.",
         ...authHints,
       ]
         .filter(Boolean)
@@ -247,7 +247,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.error(
       [
         `Refusing to bind gateway to ${bind} without auth.`,
-        "Set gateway.auth.token/password (or OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD) or pass --token/--password.",
+        "Set gateway.auth.token/password (or GENSPARX_GATEWAY_TOKEN/GENSPARX_GATEWAY_PASSWORD or OPENCLAW_*) or pass --token/--password.",
         ...authHints,
       ]
         .filter(Boolean)
