@@ -37,6 +37,7 @@ export type SessionListRow = {
   lastTo?: string;
   lastAccountId?: string;
   transcriptPath?: string;
+  summary?: string;
   messages?: unknown[];
 };
 

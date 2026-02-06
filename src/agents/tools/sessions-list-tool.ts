@@ -3,6 +3,7 @@ import path from "node:path";
 import type { AnyAgentTool } from "./common.js";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { readLatestCompactionSummary } from "../../gateway/session-utils.fs.js";
 import { isSubagentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
 import {
@@ -187,6 +188,13 @@ export function createSessionsListTool(opts?: {
           lastAccountId,
           transcriptPath,
         };
+
+        if (sessionId && storePath) {
+          const compactionSummary = readLatestCompactionSummary(sessionId, storePath);
+          if (compactionSummary) {
+            row.summary = compactionSummary;
+          }
+        }
 
         if (messageLimit > 0) {
           const resolvedKey = resolveInternalSessionKey({

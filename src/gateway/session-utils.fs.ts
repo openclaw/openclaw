@@ -226,6 +226,64 @@ export function readLastMessagePreviewFromTranscript(
   return null;
 }
 
+const COMPACTION_TAIL_BYTES = 64 * 1024;
+const COMPACTION_MAX_LINES = 60;
+
+/**
+ * Read the latest compaction summary from a session transcript file.
+ * Scans the tail of the file for the most recent `type: "compaction"` entry.
+ */
+export function readLatestCompactionSummary(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): string | null {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  if (!filePath) {
+    return null;
+  }
+
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(filePath, "r");
+    const stat = fs.fstatSync(fd);
+    const size = stat.size;
+    if (size === 0) {
+      return null;
+    }
+
+    const readStart = Math.max(0, size - COMPACTION_TAIL_BYTES);
+    const readLen = Math.min(size, COMPACTION_TAIL_BYTES);
+    const buf = Buffer.alloc(readLen);
+    fs.readSync(fd, buf, 0, readLen, readStart);
+
+    const chunk = buf.toString("utf-8");
+    const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
+    const tailLines = lines.slice(-COMPACTION_MAX_LINES);
+
+    // Scan backwards for the most recent compaction entry.
+    for (let i = tailLines.length - 1; i >= 0; i--) {
+      try {
+        const parsed = JSON.parse(tailLines[i]);
+        if (parsed?.type === "compaction" && typeof parsed.summary === "string") {
+          return parsed.summary.trim() || null;
+        }
+      } catch {
+        // skip malformed
+      }
+    }
+  } catch {
+    // file error
+  } finally {
+    if (fd !== null) {
+      fs.closeSync(fd);
+    }
+  }
+  return null;
+}
+
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];
 const PREVIEW_MAX_LINES = 200;
 
