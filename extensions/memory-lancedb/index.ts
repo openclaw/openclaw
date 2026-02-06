@@ -140,6 +140,22 @@ class MemoryDB {
     await this.ensureInitialized();
     return this.table!.countRows();
   }
+
+  async findByIdPrefix(prefix: string): Promise<MemoryEntry | null> {
+    await this.ensureInitialized();
+    // Query all entries and find one starting with the prefix
+    const results = await this.table!.query().toArray();
+    const match = results.find((row) => (row.id as string).startsWith(prefix));
+    if (!match) return null;
+    return {
+      id: match.id as string,
+      text: match.text as string,
+      vector: match.vector as number[],
+      importance: match.importance as number,
+      category: match.category as MemoryEntry["category"],
+      createdAt: match.createdAt as number,
+    };
+  }
 }
 
 // ============================================================================
@@ -365,10 +381,24 @@ const memoryPlugin = {
           const { query, memoryId } = params as { query?: string; memoryId?: string };
 
           if (memoryId) {
-            await db.delete(memoryId);
+            let targetId = memoryId;
+
+            // Support partial ID matching (prefix)
+            if (memoryId.length < 36) {
+              const match = await db.findByIdPrefix(memoryId);
+              if (!match) {
+                return {
+                  content: [{ type: "text", text: `No memory found with ID prefix: ${memoryId}` }],
+                  details: { error: "not_found", prefix: memoryId },
+                };
+              }
+              targetId = match.id;
+            }
+
+            await db.delete(targetId);
             return {
-              content: [{ type: "text", text: `Memory ${memoryId} forgotten.` }],
-              details: { action: "deleted", id: memoryId },
+              content: [{ type: "text", text: `Memory ${targetId} forgotten.` }],
+              details: { action: "deleted", id: targetId },
             };
           }
 
@@ -392,7 +422,7 @@ const memoryPlugin = {
             }
 
             const list = results
-              .map((r) => `- [${r.entry.id.slice(0, 8)}] ${r.entry.text.slice(0, 60)}...`)
+              .map((r) => `- [${r.entry.id}] ${r.entry.text.slice(0, 60)}...`)
               .join("\n");
 
             // Strip vector data for serialization
