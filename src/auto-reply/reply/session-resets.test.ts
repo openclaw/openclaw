@@ -255,6 +255,107 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
   });
 });
 
+describe("initSessionState reset triggers in Slack channels", () => {
+  async function createStorePath(prefix: string): Promise<string> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    return path.join(root, "sessions.json");
+  }
+
+  async function seedSessionStore(params: {
+    storePath: string;
+    sessionKey: string;
+    sessionId: string;
+  }): Promise<void> {
+    const { saveSessionStore } = await import("../../config/sessions.js");
+    await saveSessionStore(params.storePath, {
+      [params.sessionKey]: {
+        sessionId: params.sessionId,
+        updatedAt: Date.now(),
+      },
+    });
+  }
+
+  it("Reset trigger /reset works when Slack message has a leading <@...> mention token", async () => {
+    const storePath = await createStorePath("openclaw-slack-channel-reset-");
+    const sessionKey = "agent:main:slack:channel:c1";
+    const existingSessionId = "existing-session-123";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const channelMessageCtx = {
+      Body: "<@U123> /reset",
+      RawBody: "<@U123> /reset",
+      CommandBody: "<@U123> /reset",
+      From: "slack:channel:C1",
+      To: "channel:C1",
+      ChatType: "channel",
+      SessionKey: sessionKey,
+      Provider: "slack",
+      Surface: "slack",
+      SenderId: "U123",
+      SenderName: "Owner",
+    };
+
+    const result = await initSessionState({
+      ctx: channelMessageCtx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.bodyStripped).toBe("");
+  });
+
+  it("Reset trigger /new preserves args when Slack message has a leading <@...> mention token", async () => {
+    const storePath = await createStorePath("openclaw-slack-channel-new-");
+    const sessionKey = "agent:main:slack:channel:c2";
+    const existingSessionId = "existing-session-123";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const channelMessageCtx = {
+      Body: "<@U123> /new take notes",
+      RawBody: "<@U123> /new take notes",
+      CommandBody: "<@U123> /new take notes",
+      From: "slack:channel:C2",
+      To: "channel:C2",
+      ChatType: "channel",
+      SessionKey: sessionKey,
+      Provider: "slack",
+      Surface: "slack",
+      SenderId: "U123",
+      SenderName: "Owner",
+    };
+
+    const result = await initSessionState({
+      ctx: channelMessageCtx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.bodyStripped).toBe("take notes");
+  });
+});
+
 describe("applyResetModelOverride", () => {
   it("selects a model hint and strips it from the body", async () => {
     const cfg = {} as OpenClawConfig;

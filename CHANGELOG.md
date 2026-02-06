@@ -51,6 +51,7 @@ Docs: https://docs.openclaw.ai
 - Onboarding: infer auth choice from non-interactive API key flags. (#8484) Thanks @f-trycua.
 - Security: keep untrusted channel metadata out of system prompts (Slack/Discord). Thanks @KonstantinMirin.
 - Discord: treat allowlisted senders as owner for system-prompt identity hints while keeping channel topics untrusted.
+- Slack: strip `<@...>` mention tokens before command matching so `/new` and `/reset` work when prefixed with a mention. (#9971) Thanks @ironbyte-rgb.
 - Security: enforce sandboxed media paths for message tool attachments. (#9182) Thanks @victormier.
 - Security: require explicit credentials for gateway URL overrides to prevent credential leakage. (#8113) Thanks @victormier.
 - Security: gate `whatsapp_login` tool to owner senders and default-deny non-owner contexts. (#8768) Thanks @victormier.
