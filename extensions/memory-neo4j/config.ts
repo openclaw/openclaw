@@ -195,7 +195,7 @@ export const memoryNeo4jConfigSchema = {
     if (typeof neo4jRaw.uri !== "string" || !neo4jRaw.uri) {
       throw new Error("neo4j.uri is required");
     }
-    const neo4jUri = neo4jRaw.uri as string;
+    const neo4jUri = neo4jRaw.uri;
     // Validate URI scheme — must be a valid Neo4j connection protocol
     const VALID_NEO4J_SCHEMES = [
       "bolt://",
