@@ -114,7 +114,7 @@ export type CompactEmbeddedPiSessionParams = {
 export async function compactEmbeddedPiSessionDirect(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult> {
-  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  const resolvedWorkspace = resolveUserPath(params.workspaceDir ?? process.cwd());
   const prevCwd = process.cwd();
 
   const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;

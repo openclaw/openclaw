@@ -92,7 +92,7 @@ export async function runEmbeddedPiAgent(
   return enqueueSession(() =>
     enqueueGlobal(async () => {
       const started = Date.now();
-      const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+      const resolvedWorkspace = resolveUserPath(params.workspaceDir ?? process.cwd());
       const prevCwd = process.cwd();
 
       const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;

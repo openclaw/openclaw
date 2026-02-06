@@ -51,7 +51,7 @@ export async function runCliAgent(params: {
   images?: ImageContent[];
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
-  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  const resolvedWorkspace = resolveUserPath(params.workspaceDir ?? process.cwd());
   const workspaceDir = resolvedWorkspace;
 
   const backendResolved = resolveCliBackendConfig(params.provider, params.config);

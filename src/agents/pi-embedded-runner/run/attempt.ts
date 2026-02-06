@@ -139,7 +139,7 @@ export function injectHistoryImagesIntoMessages(
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
-  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  const resolvedWorkspace = resolveUserPath(params.workspaceDir ?? process.cwd());
   const prevCwd = process.cwd();
   const runAbortController = new AbortController();
 
