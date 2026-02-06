@@ -1,0 +1,21 @@
+{
+  "warroom_dashboard": {
+    "version": "0.2",
+    "update_interval_minutes": 15,
+    "output": {
+      "chat_id": "-5135725975",
+      "message_id": "12109"
+    },
+    "created_at": "2026-02-06T15:47:00Z",
+    "last_updated": "2026-02-06T15:47:29.097978Z",
+    "monitored_chats": [
+      {
+        "id": "-5135725975",
+        "name": "思考者咖啡群",
+        "channel": "telegram",
+        "agents": [{ "id": "8090790323", "name": "杜甫" }]
+      }
+    ],
+    "agent_visibility_threshold": 30
+  }
+}

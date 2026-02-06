@@ -6781,6 +6781,101 @@ export function getCrossChannelContext({ agentId, currentChannel, minutesBack = 
 }
 
 // =============================================================================
+// Level 106: 戰情儀表板查詢 API
+// =============================================================================
+
+/**
+ * 查詢指定 chat 的最近消息
+ * @param {string} chatId - chat_id（如 "-5135725975"）
+ * @param {Object} opts
+ * @param {number} opts.limit - 最大消息數（預設 100）
+ * @param {number} opts.minutesBack - 回溯時間窗口（預設 60 分鐘）
+ * @returns {Array<{id: number, timestamp: string, direction: string, channel: string, chat_id: string, chat_name: string, sender_id: string, sender_name: string, content: string, media_type: string}>}
+ */
+export function getChatMessages(chatId, { limit = 100, minutesBack = 60 } = {}) {
+  if (!chatId) return [];
+
+  const database = getDb();
+
+  try {
+    const cutoff = new Date(Date.now() - minutesBack * 60 * 1000).toISOString();
+
+    const stmt = database.prepare(`
+      SELECT
+        id,
+        timestamp,
+        direction,
+        channel,
+        chat_id,
+        COALESCE(resolved_chat_name, chat_name) as chat_name,
+        sender_id,
+        COALESCE(resolved_sender_name, sender_name) as sender_name,
+        content,
+        media_type
+      FROM messages
+      WHERE chat_id = ?
+        AND timestamp > ?
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `);
+
+    const rows = stmt.all(chatId, cutoff, limit);
+    return rows.reverse(); // 時間正序
+  } catch (err) {
+    console.error("[time-tunnel] getChatMessages error:", err.message);
+    return [];
+  }
+}
+
+/**
+ * 查詢指定 agent 在所有 chat 的活動統計（語場存在感）
+ * @param {string} agentId - agent_id
+ * @param {Object} opts
+ * @param {number} opts.minutesBack - 回溯時間窗口（預設 120 分鐘）
+ * @returns {Array<{chat_id: string, chat_name: string, channel: string, msg_count: number, last_active: string, direction_counts: {inbound: number, outbound: number}}>}
+ */
+export function getAgentFieldPresence(agentId, { minutesBack = 120 } = {}) {
+  if (!agentId) return [];
+
+  const database = getDb();
+
+  try {
+    const cutoff = new Date(Date.now() - minutesBack * 60 * 1000).toISOString();
+
+    const stmt = database.prepare(`
+      SELECT
+        chat_id,
+        COALESCE(resolved_chat_name, chat_name) as chat_name,
+        channel,
+        COUNT(*) as msg_count,
+        MAX(timestamp) as last_active,
+        SUM(CASE WHEN direction = 'inbound' THEN 1 ELSE 0 END) as inbound_count,
+        SUM(CASE WHEN direction = 'outbound' THEN 1 ELSE 0 END) as outbound_count
+      FROM messages
+      WHERE agent_id = ?
+        AND timestamp > ?
+      GROUP BY chat_id
+      ORDER BY msg_count DESC
+    `);
+
+    return stmt.all(agentId, cutoff).map((row) => ({
+      chat_id: row.chat_id,
+      chat_name: row.chat_name,
+      channel: row.channel,
+      msg_count: row.msg_count,
+      last_active: row.last_active,
+      direction_counts: {
+        inbound: row.inbound_count,
+        outbound: row.outbound_count,
+      },
+    }));
+  } catch (err) {
+    console.error("[time-tunnel] getAgentFieldPresence error:", err.message);
+    return [];
+  }
+}
+
+// =============================================================================
 // CLI 入口
 // =============================================================================
 
