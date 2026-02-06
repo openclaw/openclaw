@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { clearNodeHealthFramesForNode } from "./node-health.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { clearNodeHealthFramesForNode } from "./node-health.js";
 
 export type NodeSession = {
   nodeId: string;

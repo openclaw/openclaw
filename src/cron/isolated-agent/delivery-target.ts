@@ -42,7 +42,7 @@ export async function resolveDeliveryTarget(
   const normalizedRequested =
     requestedChannelRaw === "last"
       ? "last"
-      : normalizeMessageChannel(requestedChannelRaw) ?? requestedChannelRaw.trim().toLowerCase();
+      : (normalizeMessageChannel(requestedChannelRaw) ?? requestedChannelRaw.trim().toLowerCase());
 
   const sessionCfg = cfg.session;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });

@@ -52,6 +52,10 @@ import {
   getHookType,
   isExternalHookSession,
 } from "../../security/external-content.js";
+import {
+  isDeliverableMessageChannel,
+  isInternalMessageChannel,
+} from "../../utils/message-channel.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
@@ -62,7 +66,6 @@ import {
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
 import { resolveCronSession } from "./session.js";
-import { isDeliverableMessageChannel, isInternalMessageChannel } from "../../utils/message-channel.js";
 
 function matchesMessagingToolDeliveryTarget(
   target: MessagingToolSend,
@@ -474,7 +477,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (!isDeliverableMessageChannel(resolvedDelivery.channel)) {
       const message = isInternalMessageChannel(resolvedDelivery.channel)
         ? "Delivering to WebChat is not supported via `openclaw agent`; use WhatsApp/Telegram or run with --deliver=false."
-        : `Unsupported channel: ${resolvedDelivery.channel}`;
+        : `Unsupported channel: ${String(resolvedDelivery.channel)}`;
       logWarn(`[cron:${params.job.id}] ${message}`);
       return {
         status: "ok",

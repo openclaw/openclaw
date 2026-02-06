@@ -8,9 +8,9 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { upsertNodeHealthFrame, type NodeHealthFrame } from "./node-health.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
-import { upsertNodeHealthFrame, type NodeHealthFrame } from "./node-health.js";
 
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
@@ -260,7 +260,10 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         ts: typeof obj.ts === "number" && Number.isFinite(obj.ts) ? obj.ts : Date.now(),
         v: typeof obj.v === "number" && Number.isFinite(obj.v) ? obj.v : undefined,
         kind: typeof obj.kind === "string" ? obj.kind : undefined,
-        data: typeof obj.data === "object" && obj.data !== null ? (obj.data as Record<string, unknown>) : {},
+        data:
+          typeof obj.data === "object" && obj.data !== null
+            ? (obj.data as Record<string, unknown>)
+            : {},
       };
 
       const stored = upsertNodeHealthFrame({ nodeId, frame });

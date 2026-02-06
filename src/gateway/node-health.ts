@@ -41,10 +41,16 @@ export function upsertNodeHealthFrame(params: { nodeId: string; frame: NodeHealt
     receivedAtMs: now,
     frame: {
       // Ensure ts is always present.
-      ts: typeof params.frame.ts === "number" && Number.isFinite(params.frame.ts) ? params.frame.ts : now,
+      ts:
+        typeof params.frame.ts === "number" && Number.isFinite(params.frame.ts)
+          ? params.frame.ts
+          : now,
       v: params.frame.v,
       kind: params.frame.kind,
-      data: typeof params.frame.data === "object" && params.frame.data !== null ? params.frame.data : {},
+      data:
+        typeof params.frame.data === "object" && params.frame.data !== null
+          ? params.frame.data
+          : {},
     },
   };
   latestByNode.set(params.nodeId, entry);
