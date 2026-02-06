@@ -24,6 +24,7 @@ import {
   createMattermostClient,
   fetchMattermostChannel,
   fetchMattermostMe,
+  fetchMattermostPost,
   fetchMattermostUser,
   normalizeMattermostBaseUrl,
   sendMattermostTyping,
@@ -299,6 +300,65 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     return fetch(input, { ...init, headers });
   };
 
+  const readResponseBufferLimited = async (res: Response, maxBytes: number): Promise<Buffer> => {
+    const contentLength = res.headers.get("content-length");
+    if (contentLength) {
+      const parsed = Number(contentLength);
+      if (Number.isFinite(parsed) && parsed > maxBytes) {
+        throw new Error(`response too large (${parsed} bytes > ${maxBytes})`);
+      }
+    }
+
+    if (!res.body) {
+      const ab = await res.arrayBuffer();
+      if (ab.byteLength > maxBytes) {
+        throw new Error(`response too large (${ab.byteLength} bytes > ${maxBytes})`);
+      }
+      return Buffer.from(ab);
+    }
+
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+      total += value.byteLength;
+      if (total > maxBytes) {
+        try {
+          await reader.cancel();
+        } catch {
+          // ignore
+        }
+        throw new Error(`response too large (${total} bytes > ${maxBytes})`);
+      }
+      chunks.push(value);
+    }
+    return Buffer.concat(
+      chunks.map((chunk) => Buffer.from(chunk)),
+      total,
+    );
+  };
+
+  const downloadMattermostFileBytes = async (
+    fileId: string,
+  ): Promise<{ buffer: Buffer; contentType?: string }> => {
+    const url = `${client.apiBaseUrl}/files/${encodeURIComponent(fileId)}`;
+    const res = await fetchWithAuth(url, { method: "GET" });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`Mattermost file download ${res.status}: ${body || res.statusText}`);
+    }
+    const contentType = res.headers.get("content-type") ?? undefined;
+    const buffer = await readResponseBufferLimited(res, mediaMaxBytes);
+    return { buffer, contentType };
+  };
+
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
   ): Promise<MattermostMediaInfo[]> => {
@@ -309,15 +369,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const out: MattermostMediaInfo[] = [];
     for (const fileId of ids) {
       try {
-        const fetched = await core.channel.media.fetchRemoteMedia({
-          url: `${client.apiBaseUrl}/files/${fileId}`,
-          fetchImpl: fetchWithAuth,
-          filePathHint: fileId,
-          maxBytes: mediaMaxBytes,
-        });
+        const fetched = await downloadMattermostFileBytes(fileId);
         const saved = await core.channel.media.saveMediaBuffer(
           fetched.buffer,
-          fetched.contentType ?? undefined,
+          fetched.contentType,
           "inbound",
           mediaMaxBytes,
         );
@@ -621,7 +676,21 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         return;
       }
     }
-    const mediaList = await resolveMattermostMedia(post.file_ids);
+
+    let fileIds = post.file_ids ?? null;
+    if (typeof post.file_ids === "undefined") {
+      const postId = post.id?.trim();
+      if (postId) {
+        try {
+          const refreshed = await fetchMattermostPost(client, postId);
+          fileIds = refreshed.file_ids ?? null;
+        } catch (err) {
+          logger.debug?.(`mattermost: post refetch failed: ${String(err)}`);
+        }
+      }
+    }
+
+    const mediaList = await resolveMattermostMedia(fileIds);
     const mediaPlaceholder = buildMattermostAttachmentPlaceholder(mediaList);
     const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
     const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();
