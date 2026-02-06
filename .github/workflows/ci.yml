@@ -5,7 +5,7 @@ on:
   pull_request:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -177,6 +177,8 @@ jobs:
 
   checks-full:
     needs:
+      - install-check
+      - secrets
       - checks-core
       - changes
     if: needs.changes.outputs.run_expensive == 'true'
@@ -529,7 +531,10 @@ jobs:
       - name: Run ${{ matrix.task }}
         run: ${{ matrix.command }}
   ios:
-    if: false # ignore iOS in CI for now
+    needs:
+      - checks-full
+      - changes
+    if: false # ignore iOS in CI for now; when enabled, keep it gated with expensive path checks
     runs-on: macos-latest
     steps:
       - name: Checkout
