@@ -254,8 +254,8 @@ export async function runPreparedReply(
     ? "To send an image back, prefer the message tool (media/path/filePath). If you must inline, use MEDIA:https://example.com/image.jpg (spaces ok, quote if needed) or a safe relative path like MEDIA:./image.jpg. Avoid absolute paths (MEDIA:/...) and ~ paths — they are blocked for security. Keep caption in the text body."
     : undefined;
 
-  // Warroom briefing (cached, ~5 min TTL)
-  const warroomBriefing = await buildWarroomBriefing(workspaceDir);
+  // Warroom briefing (cached, ~5 min TTL; directives are chat-specific)
+  const warroomBriefing = await buildWarroomBriefing(workspaceDir, sessionKey);
 
   // Build segments in canonical order
   const contextSegments: ContextSegment[] = [
