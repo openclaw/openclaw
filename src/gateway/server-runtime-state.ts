@@ -107,6 +107,9 @@ export async function createGatewayRuntimeState(params: {
     }
   }
 
+  const clients = new Set<GatewayWsClient>();
+  const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
+
   const handleHooksRequest = createGatewayHooksRequestHandler({
     deps: params.deps,
     getHooksConfig: params.hooksConfig,
@@ -126,6 +129,7 @@ export async function createGatewayRuntimeState(params: {
   for (const host of bindHosts) {
     const httpServer = createGatewayHttpServer({
       canvasHost,
+      clients,
       controlUiEnabled: params.controlUiEnabled,
       controlUiBasePath: params.controlUiBasePath,
       controlUiRoot: params.controlUiRoot,
@@ -168,12 +172,11 @@ export async function createGatewayRuntimeState(params: {
       httpServer: server,
       wss,
       canvasHost,
+      clients,
       resolvedAuth: params.resolvedAuth,
     });
   }
 
-  const clients = new Set<GatewayWsClient>();
-  const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map<string, DedupeEntry>();
   const chatRunState = createChatRunState();

@@ -41,6 +41,11 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => {
   return { ...mod, getShellPathFromLoginShell: () => null };
 });
 
+vi.mock("../plugins/tools.js", () => ({
+  resolvePluginTools: () => [],
+  getPluginToolMeta: () => undefined,
+}));
+
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
   const approvals: ExecApprovalsResolved = {
@@ -104,10 +109,22 @@ describe("createOpenClawCodingTools safeBins", () => {
     expect(execTool).toBeDefined();
 
     const marker = `safe-bins-${Date.now()}`;
-    const result = await execTool!.execute("call1", {
-      command: `echo ${marker}`,
-      workdir: tmpDir,
-    });
+    const prevShellEnvTimeoutMs = process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS;
+    process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS = "1000";
+    const result = await (async () => {
+      try {
+        return await execTool!.execute("call1", {
+          command: `echo ${marker}`,
+          workdir: tmpDir,
+        });
+      } finally {
+        if (prevShellEnvTimeoutMs === undefined) {
+          delete process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS;
+        } else {
+          process.env.OPENCLAW_SHELL_ENV_TIMEOUT_MS = prevShellEnvTimeoutMs;
+        }
+      }
+    })();
     const text = result.content.find((content) => content.type === "text")?.text ?? "";
 
     expect(result.details.status).toBe("completed");
