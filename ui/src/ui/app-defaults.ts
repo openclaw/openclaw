@@ -1,5 +1,5 @@
-import type { LogLevel } from "./types";
-import type { CronFormState } from "./ui-types";
+import type { LogLevel } from "./types.ts";
+import type { CronFormState } from "./ui-types.ts";
 
 export const DEFAULT_LOG_LEVEL_FILTERS: Record<LogLevel, boolean> = {
   trace: true,
@@ -21,13 +21,12 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   everyUnit: "minutes",
   cronExpr: "0 7 * * *",
   cronTz: "",
-  sessionTarget: "main",
+  sessionTarget: "isolated",
   wakeMode: "next-heartbeat",
-  payloadKind: "systemEvent",
+  payloadKind: "agentTurn",
   payloadText: "",
-  deliver: false,
-  channel: "last",
-  to: "",
+  deliveryMode: "announce",
+  deliveryChannel: "last",
+  deliveryTo: "",
   timeoutSeconds: "",
-  postToMainPrefix: "",
 };

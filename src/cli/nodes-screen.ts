@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
-
 import { writeBase64ToFile } from "./nodes-camera.js";
 
 export type ScreenRecordPayload = {
@@ -42,7 +41,7 @@ export function screenRecordTempPath(opts: { ext: string; tmpDir?: string; id?: 
   const tmpDir = opts.tmpDir ?? os.tmpdir();
   const id = opts.id ?? randomUUID();
   const ext = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
-  return path.join(tmpDir, `moltbot-screen-record-${id}${ext}`);
+  return path.join(tmpDir, `openclaw-screen-record-${id}${ext}`);
 }
 
 export async function writeScreenRecordToFile(filePath: string, base64: string) {

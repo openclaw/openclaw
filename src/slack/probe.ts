@@ -10,13 +10,17 @@ export type SlackProbe = {
 };
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  if (!timeoutMs || timeoutMs <= 0) return promise;
+  if (!timeoutMs || timeoutMs <= 0) {
+    return promise;
+  }
   let timer: NodeJS.Timeout | null = null;
   const timeout = new Promise<T>((_, reject) => {
     timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
   });
   return Promise.race([promise, timeout]).finally(() => {
-    if (timer) clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
   });
 }
 
@@ -24,7 +28,14 @@ export async function probeSlack(token: string, timeoutMs = 2500): Promise<Slack
   const client = createSlackWebClient(token);
   const start = Date.now();
   try {
-    const result = await withTimeout(client.auth.test(), timeoutMs);
+    const result = (await withTimeout(client.auth.test(), timeoutMs)) as {
+      ok?: boolean;
+      error?: string;
+      user_id?: string;
+      user?: string;
+      team_id?: string;
+      team?: string;
+    };
     if (!result.ok) {
       return {
         ok: false,

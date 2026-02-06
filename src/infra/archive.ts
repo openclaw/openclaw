@@ -1,7 +1,7 @@
+import JSZip from "jszip";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
-import JSZip from "jszip";
 
 export type ArchiveKind = "tar" | "zip";
 
@@ -14,8 +14,12 @@ const TAR_SUFFIXES = [".tgz", ".tar.gz", ".tar"];
 
 export function resolveArchiveKind(filePath: string): ArchiveKind | null {
   const lower = filePath.toLowerCase();
-  if (lower.endsWith(".zip")) return "zip";
-  if (TAR_SUFFIXES.some((suffix) => lower.endsWith(suffix))) return "tar";
+  if (lower.endsWith(".zip")) {
+    return "zip";
+  }
+  if (TAR_SUFFIXES.some((suffix) => lower.endsWith(suffix))) {
+    return "tar";
+  }
   return null;
 }
 
@@ -23,7 +27,9 @@ export async function resolvePackedRootDir(extractDir: string): Promise<string> 
   const direct = path.join(extractDir, "package");
   try {
     const stat = await fs.stat(direct);
-    if (stat.isDirectory()) return direct;
+    if (stat.isDirectory()) {
+      return direct;
+    }
   } catch {
     // ignore
   }
@@ -57,7 +63,9 @@ export async function withTimeout<T>(
       }),
     ]);
   } finally {
-    if (timeoutId) clearTimeout(timeoutId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 

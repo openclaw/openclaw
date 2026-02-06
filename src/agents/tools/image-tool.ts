@@ -1,17 +1,9 @@
+import { type Api, type Context, complete, type Model } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
 import path from "node:path";
-
-import {
-  type Api,
-  type AssistantMessage,
-  type Context,
-  complete,
-  type Model,
-} from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
-
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../auth-profiles.js";
@@ -20,9 +12,9 @@ import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey, resolveEnvApiKey } from "../model-auth.js";
 import { runWithImageModelFallback } from "../model-fallback.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
-import { ensureMoltbotModelsJson } from "../models-config.js";
+import { ensureOpenClawModelsJson } from "../models-config.js";
+import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { assertSandboxPath } from "../sandbox-paths.js";
-import type { AnyAgentTool } from "./common.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -38,7 +30,7 @@ export const __testing = {
   coerceImageAssistantText,
 } as const;
 
-function resolveDefaultModelRef(cfg?: MoltbotConfig): {
+function resolveDefaultModelRef(cfg?: OpenClawConfig): {
   provider: string;
   model: string;
 } {
@@ -54,7 +46,9 @@ function resolveDefaultModelRef(cfg?: MoltbotConfig): {
 }
 
 function hasAuthForProvider(params: { provider: string; agentDir: string }): boolean {
-  if (resolveEnvApiKey(params.provider)?.apiKey) return true;
+  if (resolveEnvApiKey(params.provider)?.apiKey) {
+    return true;
+  }
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
@@ -70,7 +64,7 @@ function hasAuthForProvider(params: { provider: string; agentDir: string }): boo
  *   - fall back to OpenAI/Anthropic when available
  */
 export function resolveImageModelConfigForTool(params: {
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   agentDir: string;
 }): ImageModelConfig | null {
   // Note: We intentionally do NOT gate based on primarySupportsImages here.
@@ -95,8 +89,12 @@ export function resolveImageModelConfigForTool(params: {
   const fallbacks: string[] = [];
   const addFallback = (modelRef: string | null) => {
     const ref = (modelRef ?? "").trim();
-    if (!ref) return;
-    if (fallbacks.includes(ref)) return;
+    if (!ref) {
+      return;
+    }
+    if (fallbacks.includes(ref)) {
+      return;
+    }
     fallbacks.push(ref);
   };
 
@@ -123,8 +121,12 @@ export function resolveImageModelConfigForTool(params: {
   }
 
   if (preferred?.trim()) {
-    if (openaiOk) addFallback("openai/gpt-5-mini");
-    if (anthropicOk) addFallback("anthropic/claude-opus-4-5");
+    if (openaiOk) {
+      addFallback("openai/gpt-5-mini");
+    }
+    if (anthropicOk) {
+      addFallback("anthropic/claude-opus-4-5");
+    }
     // Don't duplicate primary in fallbacks.
     const pruned = fallbacks.filter((ref) => ref !== preferred);
     return {
@@ -135,7 +137,9 @@ export function resolveImageModelConfigForTool(params: {
 
   // Cross-provider fallback when we can't pair with the primary provider.
   if (openaiOk) {
-    if (anthropicOk) addFallback("anthropic/claude-opus-4-5");
+    if (anthropicOk) {
+      addFallback("anthropic/claude-opus-4-5");
+    }
     return {
       primary: "openai/gpt-5-mini",
       ...(fallbacks.length ? { fallbacks } : {}),
@@ -148,7 +152,7 @@ export function resolveImageModelConfigForTool(params: {
   return null;
 }
 
-function pickMaxBytes(cfg?: MoltbotConfig, maxBytesMb?: number): number | undefined {
+function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undefined {
   if (typeof maxBytesMb === "number" && Number.isFinite(maxBytesMb) && maxBytesMb > 0) {
     return Math.floor(maxBytesMb * 1024 * 1024);
   }
@@ -206,7 +210,7 @@ async function resolveSandboxedImagePath(params: {
 }
 
 async function runImagePrompt(params: {
-  cfg?: MoltbotConfig;
+  cfg?: OpenClawConfig;
   agentDir: string;
   imageModelConfig: ImageModelConfig;
   modelOverride?: string;
@@ -219,7 +223,7 @@ async function runImagePrompt(params: {
   model: string;
   attempts: Array<{ provider: string; model: string; error: string }>;
 }> {
-  const effectiveCfg: MoltbotConfig | undefined = params.cfg
+  const effectiveCfg: OpenClawConfig | undefined = params.cfg
     ? {
         ...params.cfg,
         agents: {
@@ -232,7 +236,7 @@ async function runImagePrompt(params: {
       }
     : undefined;
 
-  await ensureMoltbotModelsJson(effectiveCfg, params.agentDir);
+  await ensureOpenClawModelsJson(effectiveCfg, params.agentDir);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
 
@@ -267,10 +271,10 @@ async function runImagePrompt(params: {
       }
 
       const context = buildImageContext(params.prompt, params.base64, params.mimeType);
-      const message = (await complete(model, context, {
+      const message = await complete(model, context, {
         apiKey,
         maxTokens: 512,
-      })) as AssistantMessage;
+      });
       const text = coerceImageAssistantText({
         message,
         provider: model.provider,
@@ -293,7 +297,7 @@ async function runImagePrompt(params: {
 }
 
 export function createImageTool(options?: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   agentDir?: string;
   sandboxRoot?: string;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
@@ -311,7 +315,9 @@ export function createImageTool(options?: {
     cfg: options?.config,
     agentDir,
   });
-  if (!imageModelConfig) return null;
+  if (!imageModelConfig) {
+    return null;
+  }
 
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
@@ -335,7 +341,9 @@ export function createImageTool(options?: {
       const imageRaw = imageRawInput.startsWith("@")
         ? imageRawInput.slice(1).trim()
         : imageRawInput;
-      if (!imageRaw) throw new Error("image required");
+      if (!imageRaw) {
+        throw new Error("image required");
+      }
 
       // The tool accepts file paths, file/data URLs, or http(s) URLs. In some
       // agent/model contexts, images can be referenced as pseudo-URIs like
@@ -377,8 +385,12 @@ export function createImageTool(options?: {
       }
 
       const resolvedImage = (() => {
-        if (sandboxRoot) return imageRaw;
-        if (imageRaw.startsWith("~")) return resolveUserPath(imageRaw);
+        if (sandboxRoot) {
+          return imageRaw;
+        }
+        if (imageRaw.startsWith("~")) {
+          return resolveUserPath(imageRaw);
+        }
         return imageRaw;
       })();
       const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl

@@ -30,7 +30,7 @@ ${body ?? `# ${name}\n`}
 
 describe("buildWorkspaceSkillSnapshot", () => {
   it("returns an empty snapshot when skills dirs are missing", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
 
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
@@ -42,7 +42,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
   });
 
   it("omits disable-model-invocation skills from the prompt", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
     await _writeSkill({
       dir: path.join(workspaceDir, "skills", "visible-skill"),
       name: "visible-skill",
@@ -62,7 +62,7 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
     expect(snapshot.prompt).toContain("visible-skill");
     expect(snapshot.prompt).not.toContain("hidden-skill");
-    expect(snapshot.skills.map((skill) => skill.name).sort()).toEqual([
+    expect(snapshot.skills.map((skill) => skill.name).toSorted()).toEqual([
       "hidden-skill",
       "visible-skill",
     ]);

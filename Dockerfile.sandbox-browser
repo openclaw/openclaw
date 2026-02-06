@@ -20,9 +20,9 @@ RUN apt-get update \
     xvfb \
   && rm -rf /var/lib/apt/lists/*
 
-COPY scripts/sandbox-browser-entrypoint.sh /usr/local/bin/moltbot-sandbox-browser
-RUN chmod +x /usr/local/bin/moltbot-sandbox-browser
+COPY scripts/sandbox-browser-entrypoint.sh /usr/local/bin/openclaw-sandbox-browser
+RUN chmod +x /usr/local/bin/openclaw-sandbox-browser
 
 EXPOSE 9222 5900 6080
 
-CMD ["moltbot-sandbox-browser"]
+CMD ["openclaw-sandbox-browser"]

@@ -1,5 +1,5 @@
-import { TerminalStates, type CallId } from "../types.js";
 import type { CallManagerContext } from "./context.js";
+import { TerminalStates, type CallId } from "../types.js";
 import { persistCallRecord } from "./store.js";
 
 export function clearMaxDurationTimer(ctx: CallManagerContext, callId: CallId): void {
@@ -40,7 +40,9 @@ export function startMaxDurationTimer(params: {
 
 export function clearTranscriptWaiter(ctx: CallManagerContext, callId: CallId): void {
   const waiter = ctx.transcriptWaiters.get(callId);
-  if (!waiter) return;
+  if (!waiter) {
+    return;
+  }
   clearTimeout(waiter.timeout);
   ctx.transcriptWaiters.delete(callId);
 }
@@ -51,7 +53,9 @@ export function rejectTranscriptWaiter(
   reason: string,
 ): void {
   const waiter = ctx.transcriptWaiters.get(callId);
-  if (!waiter) return;
+  if (!waiter) {
+    return;
+  }
   clearTranscriptWaiter(ctx, callId);
   waiter.reject(new Error(reason));
 }
@@ -62,15 +66,14 @@ export function resolveTranscriptWaiter(
   transcript: string,
 ): void {
   const waiter = ctx.transcriptWaiters.get(callId);
-  if (!waiter) return;
+  if (!waiter) {
+    return;
+  }
   clearTranscriptWaiter(ctx, callId);
   waiter.resolve(transcript);
 }
 
-export function waitForFinalTranscript(
-  ctx: CallManagerContext,
-  callId: CallId,
-): Promise<string> {
+export function waitForFinalTranscript(ctx: CallManagerContext, callId: CallId): Promise<string> {
   // Only allow one in-flight waiter per call.
   rejectTranscriptWaiter(ctx, callId, "Transcript waiter replaced");
 

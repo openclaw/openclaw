@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 import {
   buildExecApprovalCustomId,
   parseExecApprovalData,
   type ExecApprovalRequest,
   DiscordExecApprovalHandler,
 } from "./exec-approvals.js";
-import type { DiscordExecApprovalConfig } from "../../config/types.discord.js";
 
 describe("buildExecApprovalCustomId", () => {
   it("encodes approval id and action", () => {
@@ -49,7 +49,9 @@ describe("parseExecApprovalData", () => {
   });
 
   it("rejects null/undefined input", () => {
+    // oxlint-disable-next-line typescript/no-explicit-any
     expect(parseExecApprovalData(null as any)).toBeNull();
+    // oxlint-disable-next-line typescript/no-explicit-any
     expect(parseExecApprovalData(undefined as any)).toBeNull();
   });
 

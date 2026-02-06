@@ -41,8 +41,12 @@ function getSessionState(ref: SessionRef): SessionState {
   const key = resolveSessionKey(ref);
   const existing = sessionStates.get(key);
   if (existing) {
-    if (ref.sessionId) existing.sessionId = ref.sessionId;
-    if (ref.sessionKey) existing.sessionKey = ref.sessionKey;
+    if (ref.sessionId) {
+      existing.sessionId = ref.sessionId;
+    }
+    if (ref.sessionKey) {
+      existing.sessionKey = ref.sessionKey;
+    }
     return existing;
   }
   const created: SessionState = {
@@ -201,7 +205,9 @@ export function logSessionStateChange(
   const prevState = state.state;
   state.state = params.state;
   state.lastActivity = Date.now();
-  if (params.state === "idle") state.queueDepth = Math.max(0, state.queueDepth - 1);
+  if (params.state === "idle") {
+    state.queueDepth = Math.max(0, state.queueDepth - 1);
+  }
   if (!isProbeSession) {
     diag.debug(
       `session state: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
@@ -292,7 +298,9 @@ export function logActiveRuns() {
 let heartbeatInterval: NodeJS.Timeout | null = null;
 
 export function startDiagnosticHeartbeat() {
-  if (heartbeatInterval) return;
+  if (heartbeatInterval) {
+    return;
+  }
   heartbeatInterval = setInterval(() => {
     const now = Date.now();
     const activeCount = Array.from(sessionStates.values()).filter(
@@ -311,8 +319,12 @@ export function startDiagnosticHeartbeat() {
       activeCount > 0 ||
       waitingCount > 0 ||
       totalQueued > 0;
-    if (!hasActivity) return;
-    if (now - lastActivityAt > 120_000 && activeCount === 0 && waitingCount === 0) return;
+    if (!hasActivity) {
+      return;
+    }
+    if (now - lastActivityAt > 120_000 && activeCount === 0 && waitingCount === 0) {
+      return;
+    }
 
     diag.debug(
       `heartbeat: webhooks=${webhookStats.received}/${webhookStats.processed}/${webhookStats.errors} active=${activeCount} waiting=${waitingCount} queued=${totalQueued}`,

@@ -1,35 +1,38 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import {
-  readNumberParam,
-  readStringArrayParam,
-  readStringParam,
-} from "../../agents/tools/common.js";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { OutboundSendDeps } from "./deliver.js";
+import type { MessagePollResult, MessageSendResult } from "./message.js";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
+import {
+  readNumberParam,
+  readStringArrayParam,
+  readStringParam,
+} from "../../agents/tools/common.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
+import { extensionForMime } from "../../media/mime.js";
+import { parseSlackTarget } from "../../slack/targets.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
+import { loadWebMedia } from "../../web/media.js";
 import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
 import { applyTargetToParams } from "./channel-target.js";
-import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
-import type { OutboundSendDeps } from "./deliver.js";
-import type { MessagePollResult, MessageSendResult } from "./message.js";
+import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -38,11 +41,8 @@ import {
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
-import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
+import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
-import { loadWebMedia } from "../../web/media.js";
-import { extensionForMime } from "../../media/mime.js";
-import { parseSlackTarget } from "../../slack/targets.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -54,7 +54,7 @@ export type MessageActionRunnerGateway = {
 };
 
 export type RunMessageActionParams = {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
   defaultAccountId?: string;
@@ -63,6 +63,7 @@ export type RunMessageActionParams = {
   deps?: OutboundSendDeps;
   sessionKey?: string;
   agentId?: string;
+  sandboxRoot?: string;
   dryRun?: boolean;
   abortSignal?: AbortSignal;
 };
@@ -123,7 +124,9 @@ export function getToolResult(
 }
 
 function extractToolPayload(result: AgentToolResult<unknown>): unknown {
-  if (result.details !== undefined) return result.details;
+  if (result.details !== undefined) {
+    return result.details;
+  }
   const textBlock = Array.isArray(result.content)
     ? result.content.find(
         (block) =>
@@ -168,7 +171,7 @@ function applyCrossContextMessageDecoration({
 }
 
 async function maybeApplyCrossContextMarker(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   channel: ChannelId;
   action: ChannelMessageActionName;
   target: string;
@@ -188,7 +191,9 @@ async function maybeApplyCrossContextMarker(params: {
     toolContext: params.toolContext,
     accountId: params.accountId ?? undefined,
   });
-  if (!decoration) return params.message;
+  if (!decoration) {
+    return params.message;
+  }
   return applyCrossContextMessageDecoration({
     params: params.args,
     message: params.message,
@@ -199,11 +204,17 @@ async function maybeApplyCrossContextMarker(params: {
 
 function readBooleanParam(params: Record<string, unknown>, key: string): boolean | undefined {
   const raw = params[key];
-  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "boolean") {
+    return raw;
+  }
   if (typeof raw === "string") {
     const trimmed = raw.trim().toLowerCase();
-    if (trimmed === "true") return true;
-    if (trimmed === "false") return false;
+    if (trimmed === "true") {
+      return true;
+    }
+    if (trimmed === "false") {
+      return false;
+    }
   }
   return undefined;
 }
@@ -213,18 +224,28 @@ function resolveSlackAutoThreadId(params: {
   toolContext?: ChannelThreadingToolContext;
 }): string | undefined {
   const context = params.toolContext;
-  if (!context?.currentThreadTs || !context.currentChannelId) return undefined;
+  if (!context?.currentThreadTs || !context.currentChannelId) {
+    return undefined;
+  }
   // Only mirror auto-threading when Slack would reply in the active thread for this channel.
-  if (context.replyToMode !== "all" && context.replyToMode !== "first") return undefined;
+  if (context.replyToMode !== "all" && context.replyToMode !== "first") {
+    return undefined;
+  }
   const parsedTarget = parseSlackTarget(params.to, { defaultKind: "channel" });
-  if (!parsedTarget || parsedTarget.kind !== "channel") return undefined;
-  if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) return undefined;
-  if (context.replyToMode === "first" && context.hasRepliedRef?.value) return undefined;
+  if (!parsedTarget || parsedTarget.kind !== "channel") {
+    return undefined;
+  }
+  if (parsedTarget.id.toLowerCase() !== context.currentChannelId.toLowerCase()) {
+    return undefined;
+  }
+  if (context.replyToMode === "first" && context.hasRepliedRef?.value) {
+    return undefined;
+  }
   return context.currentThreadTs;
 }
 
 function resolveAttachmentMaxBytes(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   channel: ChannelId;
   accountId?: string | null;
 }): number | undefined {
@@ -266,14 +287,20 @@ function inferAttachmentFilename(params: {
       if (mediaHint.startsWith("file://")) {
         const filePath = fileURLToPath(mediaHint);
         const base = path.basename(filePath);
-        if (base) return base;
+        if (base) {
+          return base;
+        }
       } else if (/^https?:\/\//i.test(mediaHint)) {
         const url = new URL(mediaHint);
         const base = path.basename(url.pathname);
-        if (base) return base;
+        if (base) {
+          return base;
+        }
       } else {
         const base = path.basename(mediaHint);
-        if (base) return base;
+        if (base) {
+          return base;
+        }
       }
     } catch {
       // fall through to content-type based default
@@ -287,9 +314,13 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
   base64?: string;
   contentType?: string;
 } {
-  if (!params.base64) return { base64: params.base64, contentType: params.contentType };
+  if (!params.base64) {
+    return { base64: params.base64, contentType: params.contentType };
+  }
   const match = /^data:([^;]+);base64,(.*)$/i.exec(params.base64.trim());
-  if (!match) return { base64: params.base64, contentType: params.contentType };
+  if (!match) {
+    return { base64: params.base64, contentType: params.contentType };
+  }
   const [, mime, payload] = match;
   return {
     base64: payload,
@@ -297,15 +328,64 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
   };
 }
 
+async function normalizeSandboxMediaParams(params: {
+  args: Record<string, unknown>;
+  sandboxRoot?: string;
+}): Promise<void> {
+  const sandboxRoot = params.sandboxRoot?.trim();
+  const mediaKeys: Array<"media" | "path" | "filePath"> = ["media", "path", "filePath"];
+  for (const key of mediaKeys) {
+    const raw = readStringParam(params.args, key, { trim: false });
+    if (!raw) {
+      continue;
+    }
+    assertMediaNotDataUrl(raw);
+    if (!sandboxRoot) {
+      continue;
+    }
+    const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
+    if (normalized !== raw) {
+      params.args[key] = normalized;
+    }
+  }
+}
+
+async function normalizeSandboxMediaList(params: {
+  values: string[];
+  sandboxRoot?: string;
+}): Promise<string[]> {
+  const sandboxRoot = params.sandboxRoot?.trim();
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of params.values) {
+    const raw = value?.trim();
+    if (!raw) {
+      continue;
+    }
+    assertMediaNotDataUrl(raw);
+    const resolved = sandboxRoot
+      ? await resolveSandboxedMediaSource({ media: raw, sandboxRoot })
+      : raw;
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    normalized.push(resolved);
+  }
+  return normalized;
+}
+
 async function hydrateSetGroupIconParams(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   channel: ChannelId;
   accountId?: string | null;
   args: Record<string, unknown>;
   action: ChannelMessageActionName;
   dryRun?: boolean;
 }): Promise<void> {
-  if (params.action !== "setGroupIcon") return;
+  if (params.action !== "setGroupIcon") {
+    return;
+  }
 
   const mediaHint = readStringParam(params.args, "media", { trim: false });
   const fileHint =
@@ -355,14 +435,16 @@ async function hydrateSetGroupIconParams(params: {
 }
 
 async function hydrateSendAttachmentParams(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   channel: ChannelId;
   accountId?: string | null;
   args: Record<string, unknown>;
   action: ChannelMessageActionName;
   dryRun?: boolean;
 }): Promise<void> {
-  if (params.action !== "sendAttachment") return;
+  if (params.action !== "sendAttachment") {
+    return;
+  }
 
   const mediaHint = readStringParam(params.args, "media", { trim: false });
   const fileHint =
@@ -372,7 +454,9 @@ async function hydrateSendAttachmentParams(params: {
     readStringParam(params.args, "contentType") ?? readStringParam(params.args, "mimeType");
   const caption = readStringParam(params.args, "caption", { allowEmpty: true })?.trim();
   const message = readStringParam(params.args, "message", { allowEmpty: true })?.trim();
-  if (!caption && message) params.args.caption = message;
+  if (!caption && message) {
+    params.args.caption = message;
+  }
 
   const rawBuffer = readStringParam(params.args, "buffer", { trim: false });
   const normalized = normalizeBase64Payload({
@@ -416,7 +500,9 @@ async function hydrateSendAttachmentParams(params: {
 
 function parseButtonsParam(params: Record<string, unknown>): void {
   const raw = params.buttons;
-  if (typeof raw !== "string") return;
+  if (typeof raw !== "string") {
+    return;
+  }
   const trimmed = raw.trim();
   if (!trimmed) {
     delete params.buttons;
@@ -431,7 +517,9 @@ function parseButtonsParam(params: Record<string, unknown>): void {
 
 function parseCardParam(params: Record<string, unknown>): void {
   const raw = params.card;
-  if (typeof raw !== "string") return;
+  if (typeof raw !== "string") {
+    return;
+  }
   const trimmed = raw.trim();
   if (!trimmed) {
     delete params.card;
@@ -444,7 +532,7 @@ function parseCardParam(params: Record<string, unknown>): void {
   }
 }
 
-async function resolveChannel(cfg: MoltbotConfig, params: Record<string, unknown>) {
+async function resolveChannel(cfg: OpenClawConfig, params: Record<string, unknown>) {
   const channelHint = readStringParam(params, "channel");
   const selection = await resolveMessageChannelSelection({
     cfg,
@@ -454,7 +542,7 @@ async function resolveChannel(cfg: MoltbotConfig, params: Record<string, unknown
 }
 
 async function resolveActionTarget(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   channel: ChannelId;
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -499,7 +587,7 @@ async function resolveActionTarget(params: {
 }
 
 type ResolvedActionContext = {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   params: Record<string, unknown>;
   channel: ChannelId;
   accountId?: string | null;
@@ -511,7 +599,9 @@ type ResolvedActionContext = {
   abortSignal?: AbortSignal;
 };
 function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGateway | undefined {
-  if (!input.gateway) return undefined;
+  if (!input.gateway) {
+    return undefined;
+  }
   return {
     url: input.gateway.url,
     token: input.gateway.token,
@@ -562,7 +652,9 @@ async function handleBroadcastAction(
           channel: targetChannel,
           input: target,
         });
-        if (!resolved.ok) throw resolved.error;
+        if (!resolved.ok) {
+          throw resolved.error;
+        }
         const sendResult = await runMessageAction({
           ...input,
           action: "send",
@@ -579,7 +671,9 @@ async function handleBroadcastAction(
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });
       } catch (err) {
-        if (isAbortError(err)) throw err;
+        if (isAbortError(err)) {
+          throw err;
+        }
         results.push({
           channel: targetChannel,
           to: target,
@@ -591,7 +685,7 @@ async function handleBroadcastAction(
   }
   return {
     kind: "broadcast",
-    channel: (targetChannels[0] ?? "discord") as ChannelId,
+    channel: targetChannels[0] ?? "discord",
     action: "broadcast",
     handledBy: input.dryRun ? "dry-run" : "core",
     payload: { results },
@@ -634,23 +728,42 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       required: !mediaHint && !hasCard,
       allowEmpty: true,
     }) ?? "";
+  if (message.includes("\\n")) {
+    message = message.replaceAll("\\n", "\n");
+  }
 
   const parsed = parseReplyDirectives(message);
   const mergedMediaUrls: string[] = [];
   const seenMedia = new Set<string>();
   const pushMedia = (value?: string | null) => {
     const trimmed = value?.trim();
-    if (!trimmed) return;
-    if (seenMedia.has(trimmed)) return;
+    if (!trimmed) {
+      return;
+    }
+    if (seenMedia.has(trimmed)) {
+      return;
+    }
     seenMedia.add(trimmed);
     mergedMediaUrls.push(trimmed);
   };
   pushMedia(mediaHint);
-  for (const url of parsed.mediaUrls ?? []) pushMedia(url);
+  for (const url of parsed.mediaUrls ?? []) {
+    pushMedia(url);
+  }
   pushMedia(parsed.mediaUrl);
+
+  const normalizedMediaUrls = await normalizeSandboxMediaList({
+    values: mergedMediaUrls,
+    sandboxRoot: input.sandboxRoot,
+  });
+  mergedMediaUrls.length = 0;
+  mergedMediaUrls.push(...normalizedMediaUrls);
+
   message = parsed.text;
   params.message = message;
-  if (!params.replyTo && parsed.replyToId) params.replyTo = parsed.replyToId;
+  if (!params.replyTo && parsed.replyToId) {
+    params.replyTo = parsed.replyToId;
+  }
   if (!params.media) {
     // Use path/filePath if media not set, then fall back to parsed directives
     params.media = mergedMediaUrls[0] || undefined;
@@ -913,6 +1026,11 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+
+  await normalizeSandboxMediaParams({
+    args: params,
+    sandboxRoot: input.sandboxRoot,
+  });
 
   await hydrateSendAttachmentParams({
     cfg,

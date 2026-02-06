@@ -1,3 +1,7 @@
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { AgentDefaultsConfig } from "../../config/types.js";
+import type { CronJob } from "../types.js";
 import {
   resolveAgentConfig,
   resolveAgentDir,
@@ -8,6 +12,11 @@ import {
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
+import {
+  formatUserTime,
+  resolveUserTimeFormat,
+  resolveUserTimezone,
+} from "../../agents/date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -20,17 +29,11 @@ import {
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
-import {
-  formatUserTime,
-  resolveUserTimeFormat,
-  resolveUserTimezone,
-} from "../../agents/date-time.js";
 import {
   formatXHighModelHint,
   normalizeThinkLevel,
@@ -38,12 +41,11 @@ import {
   supportsXHighThinking,
 } from "../../auto-reply/thinking.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { MoltbotConfig } from "../../config/config.js";
 import { resolveSessionTranscriptPath, updateSessionStore } from "../../config/sessions.js";
-import type { AgentDefaultsConfig } from "../../config/types.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import { logWarn } from "../../logger.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import {
   buildSafeExternalPrompt,
@@ -51,8 +53,7 @@ import {
   getHookType,
   isExternalHookSession,
 } from "../../security/external-content.js";
-import { logWarn } from "../../logger.js";
-import type { CronJob } from "../types.js";
+import { resolveCronDeliveryPlan } from "../delivery.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
   isHeartbeatOnlyResponse,
@@ -67,14 +68,28 @@ function matchesMessagingToolDeliveryTarget(
   target: MessagingToolSend,
   delivery: { channel: string; to?: string; accountId?: string },
 ): boolean {
-  if (!delivery.to || !target.to) return false;
+  if (!delivery.to || !target.to) {
+    return false;
+  }
   const channel = delivery.channel.trim().toLowerCase();
   const provider = target.provider?.trim().toLowerCase();
-  if (provider && provider !== "message" && provider !== channel) return false;
+  if (provider && provider !== "message" && provider !== channel) {
+    return false;
+  }
   if (target.accountId && delivery.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
   return target.to === delivery.to;
+}
+
+function resolveCronDeliveryBestEffort(job: CronJob): boolean {
+  if (typeof job.delivery?.bestEffort === "boolean") {
+    return job.delivery.bestEffort;
+  }
+  if (job.payload.kind === "agentTurn" && typeof job.payload.bestEffortDeliver === "boolean") {
+    return job.payload.bestEffortDeliver;
+  }
+  return false;
 }
 
 export type RunCronAgentTurnResult = {
@@ -86,7 +101,7 @@ export type RunCronAgentTurnResult = {
 };
 
 export async function runCronIsolatedAgentTurn(params: {
-  cfg: MoltbotConfig;
+  cfg: OpenClawConfig;
   deps: CliDeps;
   job: CronJob;
   message: string;
@@ -117,7 +132,7 @@ export async function runCronIsolatedAgentTurn(params: {
   } else if (overrideModel) {
     agentCfg.model = overrideModel;
   }
-  const cfgWithAgentDefaults: MoltbotConfig = {
+  const cfgWithAgentDefaults: OpenClawConfig = {
     ...params.cfg,
     agents: Object.assign({}, params.cfg.agents, { defaults: agentCfg }),
   };
@@ -227,16 +242,12 @@ export async function runCronIsolatedAgentTurn(params: {
   });
 
   const agentPayload = params.job.payload.kind === "agentTurn" ? params.job.payload : null;
-  const deliveryMode =
-    agentPayload?.deliver === true ? "explicit" : agentPayload?.deliver === false ? "off" : "auto";
-  const hasExplicitTarget = Boolean(agentPayload?.to && agentPayload.to.trim());
-  const deliveryRequested =
-    deliveryMode === "explicit" || (deliveryMode === "auto" && hasExplicitTarget);
-  const bestEffortDeliver = agentPayload?.bestEffortDeliver === true;
+  const deliveryPlan = resolveCronDeliveryPlan(params.job);
+  const deliveryRequested = deliveryPlan.requested;
 
   const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
-    channel: agentPayload?.channel ?? "last",
-    to: agentPayload?.to,
+    channel: deliveryPlan.channel ?? "last",
+    to: deliveryPlan.to,
   });
 
   const userTimezone = resolveUserTimezone(params.cfg.agents?.defaults?.userTimezone);
@@ -261,8 +272,7 @@ export async function runCronIsolatedAgentTurn(params: {
     if (suspiciousPatterns.length > 0) {
       logWarn(
         `[security] Suspicious patterns detected in external hook content ` +
-          `(session=${baseSessionKey}, patterns=${suspiciousPatterns.length}): ` +
-          `${suspiciousPatterns.slice(0, 3).join(", ")}`,
+          `(session=${baseSessionKey}, patterns=${suspiciousPatterns.length}): ${suspiciousPatterns.slice(0, 3).join(", ")}`,
       );
     }
   }
@@ -282,6 +292,10 @@ export async function runCronIsolatedAgentTurn(params: {
   } else {
     // Internal/trusted source - use original format
     commandBody = `${base}\n${timeLine}`.trim();
+  }
+  if (deliveryRequested) {
+    commandBody =
+      `${commandBody}\n\nReturn your summary as plain text; it will be delivered automatically. If the task explicitly calls for messaging a specific external recipient, note who/where it should go instead of sending it yourself.`.trim();
   }
 
   const existingSnapshot = cronSession.sessionEntry.skillsSnapshot;
@@ -369,6 +383,8 @@ export async function runCronIsolatedAgentTurn(params: {
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,
           runId: cronSession.sessionEntry.sessionId,
+          requireExplicitMessageTarget: true,
+          disableMessageTool: deliveryRequested,
         });
       },
     });
@@ -415,13 +431,13 @@ export async function runCronIsolatedAgentTurn(params: {
   const firstText = payloads[0]?.text ?? "";
   const summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   const outputText = pickLastNonEmptyTextFromPayloads(payloads);
+  const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
   const skipHeartbeatDelivery = deliveryRequested && isHeartbeatOnlyResponse(payloads, ackMaxChars);
   const skipMessagingToolDelivery =
     deliveryRequested &&
-    deliveryMode === "auto" &&
     runResult.didSendViaMessagingTool === true &&
     (runResult.messagingToolSentTargets ?? []).some((target) =>
       matchesMessagingToolDeliveryTarget(target, {
@@ -432,22 +448,30 @@ export async function runCronIsolatedAgentTurn(params: {
     );
 
   if (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery) {
-    if (!resolvedDelivery.to) {
-      const reason =
-        resolvedDelivery.error?.message ?? "Cron delivery requires a recipient (--to).";
-      if (!bestEffortDeliver) {
+    if (resolvedDelivery.error) {
+      if (!deliveryBestEffort) {
         return {
           status: "error",
+          error: resolvedDelivery.error.message,
           summary,
           outputText,
-          error: reason,
         };
       }
-      return {
-        status: "skipped",
-        summary: `Delivery skipped (${reason}).`,
-        outputText,
-      };
+      logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
+      return { status: "ok", summary, outputText };
+    }
+    if (!resolvedDelivery.to) {
+      const message = "cron delivery target is missing";
+      if (!deliveryBestEffort) {
+        return {
+          status: "error",
+          error: message,
+          summary,
+          outputText,
+        };
+      }
+      logWarn(`[cron:${params.job.id}] ${message}`);
+      return { status: "ok", summary, outputText };
     }
     try {
       await deliverOutboundPayloads({
@@ -455,15 +479,15 @@ export async function runCronIsolatedAgentTurn(params: {
         channel: resolvedDelivery.channel,
         to: resolvedDelivery.to,
         accountId: resolvedDelivery.accountId,
+        threadId: resolvedDelivery.threadId,
         payloads,
-        bestEffort: bestEffortDeliver,
+        bestEffort: deliveryBestEffort,
         deps: createOutboundSendDeps(params.deps),
       });
     } catch (err) {
-      if (!bestEffortDeliver) {
+      if (!deliveryBestEffort) {
         return { status: "error", summary, outputText, error: String(err) };
       }
-      return { status: "ok", summary, outputText };
     }
   }
 

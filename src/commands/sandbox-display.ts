@@ -3,8 +3,8 @@
  */
 
 import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   formatAge,
   formatImageMatch,
@@ -90,7 +90,7 @@ export function displaySummary(
   if (mismatchCount > 0) {
     runtime.log(`\n⚠️  ${mismatchCount} container(s) with image mismatch detected.`);
     runtime.log(
-      `   Run '${formatCliCommand("moltbot sandbox recreate --all")}' to update all containers.`,
+      `   Run '${formatCliCommand("openclaw sandbox recreate --all")}' to update all containers.`,
     );
   }
 }

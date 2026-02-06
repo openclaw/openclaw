@@ -1,5 +1,5 @@
-import { convertMessages } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
 import type { Context, Model } from "@mariozechner/pi-ai/dist/types.js";
+import { convertMessages } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
 import { describe, expect, it } from "vitest";
 
 const asRecord = (value: unknown): Record<string, unknown> => {

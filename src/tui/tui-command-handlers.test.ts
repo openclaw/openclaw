@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { createCommandHandlers } from "./tui-command-handlers.js";
 
 describe("tui command handlers", () => {
@@ -30,6 +29,8 @@ describe("tui command handlers", () => {
       abortActive: vi.fn(),
       setActivityStatus,
       formatSessionKey: vi.fn(),
+      applySessionInfoFromPatch: vi.fn(),
+      noteLocalRunId: vi.fn(),
     });
 
     await handleCommand("/context");

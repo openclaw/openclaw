@@ -1,0 +1,9 @@
+{
+  "id": "kook",
+  "channels": ["kook"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

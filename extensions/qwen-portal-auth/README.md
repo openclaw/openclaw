@@ -1,4 +1,4 @@
-# Qwen OAuth (Clawdbot plugin)
+# Qwen OAuth (OpenClaw plugin)
 
 OAuth provider plugin for **Qwen** (free-tier OAuth).
 
@@ -7,7 +7,7 @@ OAuth provider plugin for **Qwen** (free-tier OAuth).
 Bundled plugins are disabled by default. Enable this one:
 
 ```bash
-clawdbot plugins enable qwen-portal-auth
+openclaw plugins enable qwen-portal-auth
 ```
 
 Restart the Gateway after enabling.
@@ -15,7 +15,7 @@ Restart the Gateway after enabling.
 ## Authenticate
 
 ```bash
-clawdbot models auth login --provider qwen-portal --set-default
+openclaw models auth login --provider qwen-portal --set-default
 ```
 
 ## Notes

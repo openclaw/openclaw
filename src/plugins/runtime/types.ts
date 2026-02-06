@@ -168,6 +168,14 @@ type BuildTemplateMessageFromPayload =
   typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
 type MonitorLineProvider = typeof import("../../line/monitor.js").monitorLineProvider;
 
+// KOOK channel types
+type ProbeKook = typeof import("../../kook/probe.js").probeKook;
+type SendMessageKook = typeof import("../../kook/send.js").sendMessageKook;
+type SendDirectMessageKook = typeof import("../../kook/send.js").sendDirectMessageKook;
+type MonitorKookProvider = typeof import("../../kook/monitor/provider.js").monitorKookProvider;
+type KookMessageActions =
+  typeof import("../../channels/plugins/actions/kook.js").kookMessageActions;
+
 export type RuntimeLogger = {
   debug?: (message: string) => void;
   info: (message: string) => void;
@@ -346,6 +354,13 @@ export type PluginRuntime = {
       createQuickReplyItems: CreateQuickReplyItems;
       buildTemplateMessageFromPayload: BuildTemplateMessageFromPayload;
       monitorLineProvider: MonitorLineProvider;
+    };
+    kook: {
+      probeKook: ProbeKook;
+      sendMessageKook: SendMessageKook;
+      sendDirectMessageKook: SendDirectMessageKook;
+      monitorKookProvider: MonitorKookProvider;
+      messageActions: KookMessageActions;
     };
   };
   logging: {

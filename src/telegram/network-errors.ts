@@ -36,6 +36,8 @@ const RECOVERABLE_MESSAGE_SNIPPETS = [
   "client network socket disconnected",
   "socket hang up",
   "getaddrinfo",
+  "timeout", // catch timeout messages not covered by error codes/names
+  "timed out", // grammY getUpdates returns "timed out after X seconds" (not matched by "timeout")
 ];
 
 function normalizeCode(code?: string): string {
@@ -43,17 +45,27 @@ function normalizeCode(code?: string): string {
 }
 
 function getErrorName(err: unknown): string {
-  if (!err || typeof err !== "object") return "";
+  if (!err || typeof err !== "object") {
+    return "";
+  }
   return "name" in err ? String(err.name) : "";
 }
 
 function getErrorCode(err: unknown): string | undefined {
   const direct = extractErrorCode(err);
-  if (direct) return direct;
-  if (!err || typeof err !== "object") return undefined;
+  if (direct) {
+    return direct;
+  }
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
   const errno = (err as { errno?: unknown }).errno;
-  if (typeof errno === "string") return errno;
-  if (typeof errno === "number") return String(errno);
+  if (typeof errno === "string") {
+    return errno;
+  }
+  if (typeof errno === "number") {
+    return String(errno);
+  }
   return undefined;
 }
 
@@ -64,19 +76,35 @@ function collectErrorCandidates(err: unknown): unknown[] {
 
   while (queue.length > 0) {
     const current = queue.shift();
-    if (current == null || seen.has(current)) continue;
+    if (current == null || seen.has(current)) {
+      continue;
+    }
     seen.add(current);
     candidates.push(current);
 
     if (typeof current === "object") {
       const cause = (current as { cause?: unknown }).cause;
-      if (cause && !seen.has(cause)) queue.push(cause);
+      if (cause && !seen.has(cause)) {
+        queue.push(cause);
+      }
       const reason = (current as { reason?: unknown }).reason;
-      if (reason && !seen.has(reason)) queue.push(reason);
+      if (reason && !seen.has(reason)) {
+        queue.push(reason);
+      }
       const errors = (current as { errors?: unknown }).errors;
       if (Array.isArray(errors)) {
         for (const nested of errors) {
-          if (nested && !seen.has(nested)) queue.push(nested);
+          if (nested && !seen.has(nested)) {
+            queue.push(nested);
+          }
+        }
+      }
+      // Grammy's HttpError wraps the underlying error in .error (not .cause)
+      // Only follow .error for HttpError to avoid widening the search graph
+      if (getErrorName(current) === "HttpError") {
+        const wrappedError = (current as { error?: unknown }).error;
+        if (wrappedError && !seen.has(wrappedError)) {
+          queue.push(wrappedError);
         }
       }
     }
@@ -91,7 +119,9 @@ export function isRecoverableTelegramNetworkError(
   err: unknown,
   options: { context?: TelegramNetworkErrorContext; allowMessageMatch?: boolean } = {},
 ): boolean {
-  if (!err) return false;
+  if (!err) {
+    return false;
+  }
   const allowMessageMatch =
     typeof options.allowMessageMatch === "boolean"
       ? options.allowMessageMatch
@@ -99,10 +129,14 @@ export function isRecoverableTelegramNetworkError(
 
   for (const candidate of collectErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));
-    if (code && RECOVERABLE_ERROR_CODES.has(code)) return true;
+    if (code && RECOVERABLE_ERROR_CODES.has(code)) {
+      return true;
+    }
 
     const name = getErrorName(candidate);
-    if (name && RECOVERABLE_ERROR_NAMES.has(name)) return true;
+    if (name && RECOVERABLE_ERROR_NAMES.has(name)) {
+      return true;
+    }
 
     if (allowMessageMatch) {
       const message = formatErrorMessage(candidate).toLowerCase();

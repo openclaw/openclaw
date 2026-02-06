@@ -1,9 +1,9 @@
-import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
-import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { extractReplyToTag } from "./reply-tags.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
@@ -12,7 +12,9 @@ export function applyReplyTagsToPayload(
   currentMessageId?: string,
 ): ReplyPayload {
   if (typeof payload.text !== "string") {
-    if (!payload.replyToCurrent || payload.replyToId) return payload;
+    if (!payload.replyToCurrent || payload.replyToId) {
+      return payload;
+    }
     return {
       ...payload,
       replyToId: currentMessageId?.trim() || undefined,
@@ -20,7 +22,9 @@ export function applyReplyTagsToPayload(
   }
   const shouldParseTags = payload.text.includes("[[");
   if (!shouldParseTags) {
-    if (!payload.replyToCurrent || payload.replyToId) return payload;
+    if (!payload.replyToCurrent || payload.replyToId) {
+      return payload;
+    }
     return {
       ...payload,
       replyToId: currentMessageId?.trim() || undefined,
@@ -69,7 +73,9 @@ export function filterMessagingToolDuplicates(params: {
   sentTexts: string[];
 }): ReplyPayload[] {
   const { payloads, sentTexts } = params;
-  if (sentTexts.length === 0) return payloads;
+  if (sentTexts.length === 0) {
+    return payloads;
+  }
   return payloads.filter((payload) => !isMessagingToolDuplicate(payload.text ?? "", sentTexts));
 }
 
@@ -85,17 +91,29 @@ export function shouldSuppressMessagingToolReplies(params: {
   accountId?: string;
 }): boolean {
   const provider = params.messageProvider?.trim().toLowerCase();
-  if (!provider) return false;
+  if (!provider) {
+    return false;
+  }
   const originTarget = normalizeTargetForProvider(provider, params.originatingTo);
-  if (!originTarget) return false;
+  if (!originTarget) {
+    return false;
+  }
   const originAccount = normalizeAccountId(params.accountId);
   const sentTargets = params.messagingToolSentTargets ?? [];
-  if (sentTargets.length === 0) return false;
+  if (sentTargets.length === 0) {
+    return false;
+  }
   return sentTargets.some((target) => {
-    if (!target?.provider) return false;
-    if (target.provider.trim().toLowerCase() !== provider) return false;
+    if (!target?.provider) {
+      return false;
+    }
+    if (target.provider.trim().toLowerCase() !== provider) {
+      return false;
+    }
     const targetKey = normalizeTargetForProvider(provider, target.to);
-    if (!targetKey) return false;
+    if (!targetKey) {
+      return false;
+    }
     const targetAccount = normalizeAccountId(target.accountId);
     if (originAccount && targetAccount && originAccount !== targetAccount) {
       return false;

@@ -5,10 +5,14 @@ export {
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
 export {
   applyAuthProfileConfig,
+  applyCloudflareAiGatewayConfig,
+  applyCloudflareAiGatewayProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyMoonshotConfig,
+  applyMoonshotConfigCn,
   applyMoonshotProviderConfig,
+  applyMoonshotProviderConfigCn,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
   applySyntheticConfig,
@@ -17,6 +21,8 @@ export {
   applyVeniceProviderConfig,
   applyVercelAiGatewayConfig,
   applyVercelAiGatewayProviderConfig,
+  applyXiaomiConfig,
+  applyXiaomiProviderConfig,
   applyZaiConfig,
 } from "./onboard-auth.config-core.js";
 export {
@@ -33,10 +39,12 @@ export {
   applyOpencodeZenProviderConfig,
 } from "./onboard-auth.config-opencode.js";
 export {
+  CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
+  setCloudflareAiGatewayConfig,
   setGeminiApiKey,
-  setKimiCodeApiKey,
+  setKimiCodingApiKey,
   setMinimaxApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
@@ -44,20 +52,21 @@ export {
   setSyntheticApiKey,
   setVeniceApiKey,
   setVercelAiGatewayApiKey,
+  setXiaomiApiKey,
   setZaiApiKey,
   writeOAuthCredentials,
   VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
+  XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
-  buildKimiCodeModelDefinition,
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
   buildMoonshotModelDefinition,
   DEFAULT_MINIMAX_BASE_URL,
-  KIMI_CODE_BASE_URL,
-  KIMI_CODE_MODEL_ID,
-  KIMI_CODE_MODEL_REF,
+  MOONSHOT_CN_BASE_URL,
+  KIMI_CODING_MODEL_ID,
+  KIMI_CODING_MODEL_REF,
   MINIMAX_API_BASE_URL,
   MINIMAX_HOSTED_MODEL_ID,
   MINIMAX_HOSTED_MODEL_REF,

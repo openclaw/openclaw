@@ -1,5 +1,4 @@
 import type { WebClient } from "@slack/web-api";
-
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -107,13 +106,17 @@ export async function removeOwnSlackReactions(
   const toRemove = new Set<string>();
   for (const reaction of reactions ?? []) {
     const name = reaction?.name;
-    if (!name) continue;
+    if (!name) {
+      continue;
+    }
     const users = reaction?.users ?? [];
     if (users.includes(userId)) {
       toRemove.add(name);
     }
   }
-  if (toRemove.size === 0) return [];
+  if (toRemove.size === 0) {
+    return [];
+  }
   await Promise.all(
     Array.from(toRemove, (name) =>
       client.reactions.remove({
@@ -204,7 +207,7 @@ export async function readSlackMessages(
     return {
       // conversations.replies includes the parent message; drop it for replies-only reads.
       messages: (result.messages ?? []).filter(
-        (message) => (message as SlackMessageSummary)?.ts !== opts.threadId,
+        (message: unknown) => (message as SlackMessageSummary)?.ts !== opts.threadId,
       ) as SlackMessageSummary[],
       hasMore: Boolean(result.has_more),
     };

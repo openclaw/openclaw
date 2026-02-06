@@ -2,10 +2,16 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
-  if (!schema || typeof schema !== "object") return undefined;
+  if (!schema || typeof schema !== "object") {
+    return undefined;
+  }
   const record = schema as Record<string, unknown>;
-  if (Array.isArray(record.enum)) return record.enum;
-  if ("const" in record) return [record.const];
+  if (Array.isArray(record.enum)) {
+    return record.enum;
+  }
+  if ("const" in record) {
+    return [record.const];
+  }
   const variants = Array.isArray(record.anyOf)
     ? record.anyOf
     : Array.isArray(record.oneOf)
@@ -22,8 +28,12 @@ function extractEnumValues(schema: unknown): unknown[] | undefined {
 }
 
 function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
-  if (!existing) return incoming;
-  if (!incoming) return existing;
+  if (!existing) {
+    return incoming;
+  }
+  if (!incoming) {
+    return existing;
+  }
 
   const existingEnum = extractEnumValues(existing);
   const incomingEnum = extractEnumValues(incoming);
@@ -31,14 +41,20 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
     const values = Array.from(new Set([...(existingEnum ?? []), ...(incomingEnum ?? [])]));
     const merged: Record<string, unknown> = {};
     for (const source of [existing, incoming]) {
-      if (!source || typeof source !== "object") continue;
+      if (!source || typeof source !== "object") {
+        continue;
+      }
       const record = source as Record<string, unknown>;
       for (const key of ["title", "description", "default"]) {
-        if (!(key in merged) && key in record) merged[key] = record[key];
+        if (!(key in merged) && key in record) {
+          merged[key] = record[key];
+        }
       }
     }
     const types = new Set(values.map((value) => typeof value));
-    if (types.size === 1) merged.type = Array.from(types)[0];
+    if (types.size === 1) {
+      merged.type = Array.from(types)[0];
+    }
     merged.enum = values;
     return merged;
   }
@@ -51,7 +67,9 @@ export function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
     tool.parameters && typeof tool.parameters === "object"
       ? (tool.parameters as Record<string, unknown>)
       : undefined;
-  if (!schema) return tool;
+  if (!schema) {
+    return tool;
+  }
 
   // Provider quirks:
   // - Gemini rejects several JSON Schema keywords, so we scrub those.
@@ -88,16 +106,22 @@ export function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
     : Array.isArray(schema.oneOf)
       ? "oneOf"
       : null;
-  if (!variantKey) return tool;
+  if (!variantKey) {
+    return tool;
+  }
   const variants = schema[variantKey] as unknown[];
   const mergedProperties: Record<string, unknown> = {};
   const requiredCounts = new Map<string, number>();
   let objectVariants = 0;
 
   for (const entry of variants) {
-    if (!entry || typeof entry !== "object") continue;
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
     const props = (entry as { properties?: unknown }).properties;
-    if (!props || typeof props !== "object") continue;
+    if (!props || typeof props !== "object") {
+      continue;
+    }
     objectVariants += 1;
     for (const [key, value] of Object.entries(props as Record<string, unknown>)) {
       if (!(key in mergedProperties)) {
@@ -110,7 +134,9 @@ export function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
       ? (entry as { required: unknown[] }).required
       : [];
     for (const key of required) {
-      if (typeof key !== "string") continue;
+      if (typeof key !== "string") {
+        continue;
+      }
       requiredCounts.set(key, (requiredCounts.get(key) ?? 0) + 1);
     }
   }

@@ -1,11 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
-
+import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 import { resolveBrowserConfig } from "./config.js";
 import { createBrowserProfilesService } from "./profiles-service.js";
-import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -21,11 +19,11 @@ vi.mock("./trash.js", () => ({
 }));
 
 vi.mock("./chrome.js", () => ({
-  resolveClawdUserDataDir: vi.fn(() => "/tmp/clawd-test/clawd/user-data"),
+  resolveOpenClawUserDataDir: vi.fn(() => "/tmp/openclaw-test/openclaw/user-data"),
 }));
 
 import { loadConfig, writeConfigFile } from "../config/config.js";
-import { resolveClawdUserDataDir } from "./chrome.js";
+import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { movePathToTrash } from "./trash.js";
 
 function createCtx(resolved: BrowserServerState["resolved"]) {
@@ -101,9 +99,9 @@ describe("BrowserProfilesService", () => {
 
     vi.mocked(loadConfig).mockReturnValue({
       browser: {
-        defaultProfile: "clawd",
+        defaultProfile: "openclaw",
         profiles: {
-          clawd: { cdpPort: 18800, color: "#FF4500" },
+          openclaw: { cdpPort: 18800, color: "#FF4500" },
           remote: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
         },
       },
@@ -127,18 +125,18 @@ describe("BrowserProfilesService", () => {
 
     vi.mocked(loadConfig).mockReturnValue({
       browser: {
-        defaultProfile: "clawd",
+        defaultProfile: "openclaw",
         profiles: {
-          clawd: { cdpPort: 18800, color: "#FF4500" },
+          openclaw: { cdpPort: 18800, color: "#FF4500" },
           work: { cdpPort: 18801, color: "#0066CC" },
         },
       },
     });
 
-    const tempDir = fs.mkdtempSync(path.join("/tmp", "clawd-profile-"));
+    const tempDir = fs.mkdtempSync(path.join("/tmp", "openclaw-profile-"));
     const userDataDir = path.join(tempDir, "work", "user-data");
     fs.mkdirSync(path.dirname(userDataDir), { recursive: true });
-    vi.mocked(resolveClawdUserDataDir).mockReturnValue(userDataDir);
+    vi.mocked(resolveOpenClawUserDataDir).mockReturnValue(userDataDir);
 
     const service = createBrowserProfilesService(ctx);
     const result = await service.deleteProfile("work");

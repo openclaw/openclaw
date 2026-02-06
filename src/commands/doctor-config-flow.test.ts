@@ -1,18 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 
 describe("doctor config flow", () => {
   it("preserves invalid config for doctor repairs", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".clawdbot");
+      const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "moltbot.json"),
+        path.join(configDir, "openclaw.json"),
         JSON.stringify(
           {
             gateway: { auth: { mode: "token", token: 123 } },
@@ -37,10 +35,10 @@ describe("doctor config flow", () => {
 
   it("drops unknown keys on repair", async () => {
     await withTempHome(async (home) => {
-      const configDir = path.join(home, ".clawdbot");
+      const configDir = path.join(home, ".openclaw");
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
-        path.join(configDir, "moltbot.json"),
+        path.join(configDir, "openclaw.json"),
         JSON.stringify(
           {
             bridge: { bind: "auto" },

@@ -3,7 +3,9 @@ import { runCommandWithTimeout, runExec } from "../process/exec.js";
 
 function resolveLoginctlUser(env: Record<string, string | undefined>): string | null {
   const fromEnv = env.USER?.trim() || env.LOGNAME?.trim();
-  if (fromEnv) return fromEnv;
+  if (fromEnv) {
+    return fromEnv;
+  }
   try {
     return os.userInfo().username;
   } catch {
@@ -20,7 +22,9 @@ export async function readSystemdUserLingerStatus(
   env: Record<string, string | undefined>,
 ): Promise<SystemdUserLingerStatus | null> {
   const user = resolveLoginctlUser(env);
-  if (!user) return null;
+  if (!user) {
+    return null;
+  }
   try {
     const { stdout } = await runExec("loginctl", ["show-user", user, "-p", "Linger"], {
       timeoutMs: 5_000,

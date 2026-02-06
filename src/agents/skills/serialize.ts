@@ -7,6 +7,8 @@ export async function serializeByKey<T>(key: string, task: () => Promise<T>) {
   try {
     return await next;
   } finally {
-    if (SKILLS_SYNC_QUEUE.get(key) === next) SKILLS_SYNC_QUEUE.delete(key);
+    if (SKILLS_SYNC_QUEUE.get(key) === next) {
+      SKILLS_SYNC_QUEUE.delete(key);
+    }
   }
 }

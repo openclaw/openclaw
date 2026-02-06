@@ -1,11 +1,16 @@
 import { z } from "zod";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
-import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
+import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { HexColorSchema, ModelsConfigSchema } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
-import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
+import {
+  CommandsSchema,
+  MessagesSchema,
+  SessionSchema,
+  SessionSendPolicySchema,
+} from "./zod-schema.session.js";
 
 const BrowserSnapshotDefaultsSchema = z
   .object({
@@ -27,7 +32,62 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
-export const MoltbotSchema = z
+const MemoryQmdPathSchema = z
+  .object({
+    path: z.string(),
+    name: z.string().optional(),
+    pattern: z.string().optional(),
+  })
+  .strict();
+
+const MemoryQmdSessionSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    exportDir: z.string().optional(),
+    retentionDays: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const MemoryQmdUpdateSchema = z
+  .object({
+    interval: z.string().optional(),
+    debounceMs: z.number().int().nonnegative().optional(),
+    onBoot: z.boolean().optional(),
+    embedInterval: z.string().optional(),
+  })
+  .strict();
+
+const MemoryQmdLimitsSchema = z
+  .object({
+    maxResults: z.number().int().positive().optional(),
+    maxSnippetChars: z.number().int().positive().optional(),
+    maxInjectedChars: z.number().int().positive().optional(),
+    timeoutMs: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+
+const MemoryQmdSchema = z
+  .object({
+    command: z.string().optional(),
+    includeDefaultMemory: z.boolean().optional(),
+    paths: z.array(MemoryQmdPathSchema).optional(),
+    sessions: MemoryQmdSessionSchema.optional(),
+    update: MemoryQmdUpdateSchema.optional(),
+    limits: MemoryQmdLimitsSchema.optional(),
+    scope: SessionSendPolicySchema.optional(),
+  })
+  .strict();
+
+const MemorySchema = z
+  .object({
+    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
+    citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
+    qmd: MemoryQmdSchema.optional(),
+  })
+  .strict()
+  .optional();
+
+export const OpenClawSchema = z
   .object({
     meta: z
       .object({
@@ -317,6 +377,8 @@ export const MoltbotSchema = z
           .object({
             enabled: z.boolean().optional(),
             basePath: z.string().optional(),
+            root: z.string().optional(),
+            allowedOrigins: z.array(z.string()).optional(),
             allowInsecureAuth: z.boolean().optional(),
             dangerouslyDisableDeviceAuth: z.boolean().optional(),
           })
@@ -445,6 +507,7 @@ export const MoltbotSchema = z
       })
       .strict()
       .optional(),
+    memory: MemorySchema,
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
@@ -531,15 +594,23 @@ export const MoltbotSchema = z
   .strict()
   .superRefine((cfg, ctx) => {
     const agents = cfg.agents?.list ?? [];
-    if (agents.length === 0) return;
+    if (agents.length === 0) {
+      return;
+    }
     const agentIds = new Set(agents.map((agent) => agent.id));
 
     const broadcast = cfg.broadcast;
-    if (!broadcast) return;
+    if (!broadcast) {
+      return;
+    }
 
     for (const [peerId, ids] of Object.entries(broadcast)) {
-      if (peerId === "strategy") continue;
-      if (!Array.isArray(ids)) continue;
+      if (peerId === "strategy") {
+        continue;
+      }
+      if (!Array.isArray(ids)) {
+        continue;
+      }
       for (let idx = 0; idx < ids.length; idx += 1) {
         const agentId = ids[idx];
         if (!agentIds.has(agentId)) {

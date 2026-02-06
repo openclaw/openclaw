@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
 import { runGatewayUpdate } from "./update-runner.js";
 
 type CommandResult = { stdout?: string; stderr?: string; code?: number };
@@ -22,11 +21,20 @@ function createRunner(responses: Record<string, CommandResult>) {
   return { runner, calls };
 }
 
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.stat(targetPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 describe("runGatewayUpdate", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "moltbot-update-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-"));
   });
 
   afterEach(async () => {
@@ -37,7 +45,7 @@ describe("runGatewayUpdate", () => {
     await fs.mkdir(path.join(tempDir, ".git"));
     await fs.writeFile(
       path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "moltbot", version: "1.0.0" }),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
       "utf-8",
     );
     const { runner, calls } = createRunner({
@@ -62,7 +70,7 @@ describe("runGatewayUpdate", () => {
     await fs.mkdir(path.join(tempDir, ".git"));
     await fs.writeFile(
       path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "moltbot", version: "1.0.0" }),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
       "utf-8",
     );
     const { runner, calls } = createRunner({
@@ -95,7 +103,7 @@ describe("runGatewayUpdate", () => {
     await fs.mkdir(path.join(tempDir, ".git"));
     await fs.writeFile(
       path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "moltbot", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
+      JSON.stringify({ name: "openclaw", version: "1.0.0", packageManager: "pnpm@8.0.0" }),
       "utf-8",
     );
     const stableTag = "v1.0.1-1";
@@ -113,7 +121,7 @@ describe("runGatewayUpdate", () => {
       "pnpm build": { stdout: "" },
       "pnpm ui:build": { stdout: "" },
       [`git -C ${tempDir} checkout -- dist/control-ui/`]: { stdout: "" },
-      "pnpm moltbot doctor --non-interactive": { stdout: "" },
+      "pnpm openclaw doctor --non-interactive": { stdout: "" },
     });
 
     const result = await runGatewayUpdate({
@@ -131,7 +139,7 @@ describe("runGatewayUpdate", () => {
   it("skips update when no git root", async () => {
     await fs.writeFile(
       path.join(tempDir, "package.json"),
-      JSON.stringify({ name: "moltbot", packageManager: "pnpm@8.0.0" }),
+      JSON.stringify({ name: "openclaw", packageManager: "pnpm@8.0.0" }),
       "utf-8",
     );
     await fs.writeFile(path.join(tempDir, "pnpm-lock.yaml"), "", "utf-8");
@@ -155,11 +163,11 @@ describe("runGatewayUpdate", () => {
 
   it("updates global npm installs when detected", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
-    const pkgRoot = path.join(nodeModules, "moltbot");
+    const pkgRoot = path.join(nodeModules, "openclaw");
     await fs.mkdir(pkgRoot, { recursive: true });
     await fs.writeFile(
       path.join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "moltbot", version: "1.0.0" }),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
       "utf-8",
     );
 
@@ -173,10 +181,10 @@ describe("runGatewayUpdate", () => {
       if (key === "npm root -g") {
         return { stdout: nodeModules, stderr: "", code: 0 };
       }
-      if (key === "npm i -g moltbot@latest") {
+      if (key === "npm i -g openclaw@latest") {
         await fs.writeFile(
           path.join(pkgRoot, "package.json"),
-          JSON.stringify({ name: "moltbot", version: "2.0.0" }),
+          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
           "utf-8",
         );
         return { stdout: "ok", stderr: "", code: 0 };
@@ -197,16 +205,16 @@ describe("runGatewayUpdate", () => {
     expect(result.mode).toBe("npm");
     expect(result.before?.version).toBe("1.0.0");
     expect(result.after?.version).toBe("2.0.0");
-    expect(calls.some((call) => call === "npm i -g moltbot@latest")).toBe(true);
+    expect(calls.some((call) => call === "npm i -g openclaw@latest")).toBe(true);
   });
 
-  it("updates global npm installs with tag override", async () => {
+  it("uses update channel for global npm installs when tag is omitted", async () => {
     const nodeModules = path.join(tempDir, "node_modules");
-    const pkgRoot = path.join(nodeModules, "moltbot");
+    const pkgRoot = path.join(nodeModules, "openclaw");
     await fs.mkdir(pkgRoot, { recursive: true });
     await fs.writeFile(
       path.join(pkgRoot, "package.json"),
-      JSON.stringify({ name: "moltbot", version: "1.0.0" }),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
       "utf-8",
     );
 
@@ -220,10 +228,100 @@ describe("runGatewayUpdate", () => {
       if (key === "npm root -g") {
         return { stdout: nodeModules, stderr: "", code: 0 };
       }
-      if (key === "npm i -g moltbot@beta") {
+      if (key === "npm i -g openclaw@beta") {
         await fs.writeFile(
           path.join(pkgRoot, "package.json"),
-          JSON.stringify({ name: "moltbot", version: "2.0.0" }),
+          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+          "utf-8",
+        );
+        return { stdout: "ok", stderr: "", code: 0 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runGatewayUpdate({
+      cwd: pkgRoot,
+      runCommand: async (argv, _options) => runCommand(argv),
+      timeoutMs: 5000,
+      channel: "beta",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.mode).toBe("npm");
+    expect(result.before?.version).toBe("1.0.0");
+    expect(result.after?.version).toBe("2.0.0");
+    expect(calls.some((call) => call === "npm i -g openclaw@beta")).toBe(true);
+  });
+
+  it("cleans stale npm rename dirs before global update", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    const staleDir = path.join(nodeModules, ".openclaw-stale");
+    await fs.mkdir(staleDir, { recursive: true });
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      "utf-8",
+    );
+
+    let stalePresentAtInstall = true;
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        return { stdout: nodeModules, stderr: "", code: 0 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === "npm i -g openclaw@latest") {
+        stalePresentAtInstall = await pathExists(staleDir);
+        return { stdout: "ok", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runGatewayUpdate({
+      cwd: pkgRoot,
+      runCommand: async (argv, _options) => runCommand(argv),
+      timeoutMs: 5000,
+    });
+
+    expect(result.status).toBe("ok");
+    expect(stalePresentAtInstall).toBe(false);
+    expect(await pathExists(staleDir)).toBe(false);
+  });
+
+  it("updates global npm installs with tag override", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      "utf-8",
+    );
+
+    const calls: string[] = [];
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        return { stdout: nodeModules, stderr: "", code: 0 };
+      }
+      if (key === "npm i -g openclaw@beta") {
+        await fs.writeFile(
+          path.join(pkgRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
           "utf-8",
         );
         return { stdout: "ok", stderr: "", code: 0 };
@@ -245,7 +343,7 @@ describe("runGatewayUpdate", () => {
     expect(result.mode).toBe("npm");
     expect(result.before?.version).toBe("1.0.0");
     expect(result.after?.version).toBe("2.0.0");
-    expect(calls.some((call) => call === "npm i -g moltbot@beta")).toBe(true);
+    expect(calls.some((call) => call === "npm i -g openclaw@beta")).toBe(true);
   });
 
   it("updates global bun installs when detected", async () => {
@@ -255,11 +353,11 @@ describe("runGatewayUpdate", () => {
 
     try {
       const bunGlobalRoot = path.join(bunInstall, "install", "global", "node_modules");
-      const pkgRoot = path.join(bunGlobalRoot, "moltbot");
+      const pkgRoot = path.join(bunGlobalRoot, "openclaw");
       await fs.mkdir(pkgRoot, { recursive: true });
       await fs.writeFile(
         path.join(pkgRoot, "package.json"),
-        JSON.stringify({ name: "moltbot", version: "1.0.0" }),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
         "utf-8",
       );
 
@@ -276,10 +374,10 @@ describe("runGatewayUpdate", () => {
         if (key === "pnpm root -g") {
           return { stdout: "", stderr: "", code: 1 };
         }
-        if (key === "bun add -g moltbot@latest") {
+        if (key === "bun add -g openclaw@latest") {
           await fs.writeFile(
             path.join(pkgRoot, "package.json"),
-            JSON.stringify({ name: "moltbot", version: "2.0.0" }),
+            JSON.stringify({ name: "openclaw", version: "2.0.0" }),
             "utf-8",
           );
           return { stdout: "ok", stderr: "", code: 0 };
@@ -297,14 +395,17 @@ describe("runGatewayUpdate", () => {
       expect(result.mode).toBe("bun");
       expect(result.before?.version).toBe("1.0.0");
       expect(result.after?.version).toBe("2.0.0");
-      expect(calls.some((call) => call === "bun add -g moltbot@latest")).toBe(true);
+      expect(calls.some((call) => call === "bun add -g openclaw@latest")).toBe(true);
     } finally {
-      if (oldBunInstall === undefined) delete process.env.BUN_INSTALL;
-      else process.env.BUN_INSTALL = oldBunInstall;
+      if (oldBunInstall === undefined) {
+        delete process.env.BUN_INSTALL;
+      } else {
+        process.env.BUN_INSTALL = oldBunInstall;
+      }
     }
   });
 
-  it("rejects git roots that are not a moltbot checkout", async () => {
+  it("rejects git roots that are not a openclaw checkout", async () => {
     await fs.mkdir(path.join(tempDir, ".git"));
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tempDir);
     const { runner, calls } = createRunner({
@@ -320,7 +421,7 @@ describe("runGatewayUpdate", () => {
     cwdSpy.mockRestore();
 
     expect(result.status).toBe("error");
-    expect(result.reason).toBe("not-moltbot-root");
+    expect(result.reason).toBe("not-openclaw-root");
     expect(calls.some((call) => call.includes("status --porcelain"))).toBe(false);
   });
 });

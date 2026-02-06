@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/kook",
+  "version": "2026.2.1",
+  "description": "OpenClaw KOOK channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

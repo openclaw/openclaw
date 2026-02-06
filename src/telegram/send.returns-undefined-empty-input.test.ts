@@ -596,16 +596,12 @@ describe("sendStickerTelegram", () => {
     expect(res.chatId).toBe(chatId);
   });
 
-  it("throws error when fileId is empty", async () => {
-    await expect(sendStickerTelegram("123", "", { token: "tok" })).rejects.toThrow(
-      /file_id is required/i,
-    );
-  });
-
-  it("throws error when fileId is whitespace only", async () => {
-    await expect(sendStickerTelegram("123", "   ", { token: "tok" })).rejects.toThrow(
-      /file_id is required/i,
-    );
+  it("throws error when fileId is blank", async () => {
+    for (const fileId of ["", "   "]) {
+      await expect(sendStickerTelegram("123", fileId, { token: "tok" })).rejects.toThrow(
+        /file_id is required/i,
+      );
+    }
   });
 
   it("includes message_thread_id for forum topic messages", async () => {

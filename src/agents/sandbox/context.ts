@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-
-import type { MoltbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
+import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
-import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { ensureSandboxBrowser } from "./browser.js";
@@ -12,22 +12,25 @@ import { ensureSandboxContainer } from "./docker.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
-import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 export async function resolveSandboxContext(params: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
   const rawSessionKey = params.sessionKey?.trim();
-  if (!rawSessionKey) return null;
+  if (!rawSessionKey) {
+    return null;
+  }
 
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
     sessionKey: rawSessionKey,
   });
-  if (!runtime.sandboxed) return null;
+  if (!runtime.sandboxed) {
+    return null;
+  }
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
 
@@ -96,18 +99,22 @@ export async function resolveSandboxContext(params: {
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {
-  config?: MoltbotConfig;
+  config?: OpenClawConfig;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxWorkspaceInfo | null> {
   const rawSessionKey = params.sessionKey?.trim();
-  if (!rawSessionKey) return null;
+  if (!rawSessionKey) {
+    return null;
+  }
 
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
     sessionKey: rawSessionKey,
   });
-  if (!runtime.sandboxed) return null;
+  if (!runtime.sandboxed) {
+    return null;
+  }
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
 

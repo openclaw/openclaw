@@ -28,7 +28,9 @@ export function readCache<T>(
   key: string,
 ): { value: T; cached: boolean } | null {
   const entry = cache.get(key);
-  if (!entry) return null;
+  if (!entry) {
+    return null;
+  }
   if (Date.now() > entry.expiresAt) {
     cache.delete(key);
     return null;
@@ -42,10 +44,14 @@ export function writeCache<T>(
   value: T,
   ttlMs: number,
 ) {
-  if (ttlMs <= 0) return;
+  if (ttlMs <= 0) {
+    return;
+  }
   if (cache.size >= DEFAULT_CACHE_MAX_ENTRIES) {
     const oldest = cache.keys().next();
-    if (!oldest.done) cache.delete(oldest.value);
+    if (!oldest.done) {
+      cache.delete(oldest.value);
+    }
   }
   cache.set(key, {
     value,
@@ -55,7 +61,9 @@ export function writeCache<T>(
 }
 
 export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  if (timeoutMs <= 0) return signal ?? new AbortController().signal;
+  if (timeoutMs <= 0) {
+    return signal ?? new AbortController().signal;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   if (signal) {

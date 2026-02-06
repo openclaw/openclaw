@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { MoltbotConfig } from "../../config/config.js";
-
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveOutboundTarget, resolveSessionDeliveryTarget } from "./targets.js";
 
 describe("resolveOutboundTarget", () => {
@@ -18,7 +17,7 @@ describe("resolveOutboundTarget", () => {
   });
 
   it("falls back to whatsapp allowFrom via config", () => {
-    const cfg: MoltbotConfig = {
+    const cfg: OpenClawConfig = {
       channels: { whatsapp: { allowFrom: ["+1555"] } },
     };
     const res = resolveOutboundTarget({

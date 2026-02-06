@@ -15,7 +15,9 @@ function keyFor(channel: ChannelId, accountId: string) {
 function ensureEntry(channel: ChannelId, accountId: string): ActivityEntry {
   const key = keyFor(channel, accountId);
   const existing = activity.get(key);
-  if (existing) return existing;
+  if (existing) {
+    return existing;
+  }
   const created: ActivityEntry = { inboundAt: null, outboundAt: null };
   activity.set(key, created);
   return created;
@@ -30,8 +32,12 @@ export function recordChannelActivity(params: {
   const at = typeof params.at === "number" ? params.at : Date.now();
   const accountId = params.accountId?.trim() || "default";
   const entry = ensureEntry(params.channel, accountId);
-  if (params.direction === "inbound") entry.inboundAt = at;
-  if (params.direction === "outbound") entry.outboundAt = at;
+  if (params.direction === "inbound") {
+    entry.inboundAt = at;
+  }
+  if (params.direction === "outbound") {
+    entry.outboundAt = at;
+  }
 }
 
 export function getChannelActivity(params: {

@@ -98,59 +98,59 @@ OpenProse provides a declarative syntax for defining multi-agent workflows. Prog
 
 The following features are implemented:
 
-| Feature                | Status      | Description                                    |
-| ---------------------- | ----------- | ---------------------------------------------- |
-| Comments               | Implemented | `# comment` syntax                             |
-| Single-line strings    | Implemented | `"string"` with escapes                        |
-| Simple session         | Implemented | `session "prompt"`                             |
-| Agent definitions      | Implemented | `agent name:` with model/prompt properties     |
-| Session with agent     | Implemented | `session: agent` with property overrides       |
-| Use statements         | Implemented | `use "@handle/slug" as name`                   |
-| Agent skills           | Implemented | `skills: ["skill1", "skill2"]`                 |
-| Agent permissions      | Implemented | `permissions:` block with rules                |
-| Let binding            | Implemented | `let name = session "..."`                     |
-| Const binding          | Implemented | `const name = session "..."`                   |
-| Variable reassignment  | Implemented | `name = session "..."` (for let only)          |
-| Context property       | Implemented | `context: var` or `context: [a, b, c]`         |
-| do: blocks             | Implemented | Explicit sequential blocks                     |
-| Inline sequence        | Implemented | `session "A" -> session "B"`                   |
-| Named blocks           | Implemented | `block name:` with `do name` invocation        |
-| Parallel blocks        | Implemented | `parallel:` for concurrent execution           |
-| Named parallel results | Implemented | `x = session "..."` inside parallel            |
-| Object context         | Implemented | `context: { a, b, c }` shorthand               |
-| Join strategies        | Implemented | `parallel ("first"):` or `parallel ("any"):`   |
-| Failure policies       | Implemented | `parallel (on-fail: "continue"):`              |
-| Repeat blocks          | Implemented | `repeat N:` fixed iterations                   |
-| Repeat with index      | Implemented | `repeat N as i:` with index variable           |
-| For-each blocks        | Implemented | `for item in items:` iteration                 |
-| For-each with index    | Implemented | `for item, i in items:` with index             |
-| Parallel for-each      | Implemented | `parallel for item in items:` fan-out          |
-| Unbounded loop         | Implemented | `loop:` with optional max iterations           |
-| Loop until             | Implemented | `loop until **condition**:` AI-evaluated       |
-| Loop while             | Implemented | `loop while **condition**:` AI-evaluated       |
-| Loop with index        | Implemented | `loop as i:` or `loop until ... as i:`         |
-| Map pipeline           | Implemented | `items \| map:` transform each item            |
-| Filter pipeline        | Implemented | `items \| filter:` keep matching items         |
-| Reduce pipeline        | Implemented | `items \| reduce(acc, item):` accumulate       |
-| Parallel map           | Implemented | `items \| pmap:` concurrent transform          |
-| Pipeline chaining      | Implemented | `\| filter: ... \| map: ...`                   |
-| Try/catch blocks       | Implemented | `try:` with `catch:` for error handling        |
-| Try/catch/finally      | Implemented | `finally:` for cleanup                         |
-| Error variable         | Implemented | `catch as err:` access error context           |
-| Throw statement        | Implemented | `throw` or `throw "message"`                   |
-| Retry property         | Implemented | `retry: 3` automatic retry on failure          |
-| Backoff strategy       | Implemented | `backoff: exponential` delay between retries   |
-| Input declarations     | Implemented | `input name: "description"`                    |
-| Output bindings        | Implemented | `output name = expression`                     |
-| Program invocation     | Implemented | `name(input: value)` call imported programs    |
-| Multi-line strings     | Implemented | `"""..."""` preserving whitespace              |
-| String interpolation   | Implemented | `"Hello {name}"` variable substitution         |
-| Block parameters       | Implemented | `block name(param):` with parameters           |
-| Block invocation args  | Implemented | `do name(arg)` passing arguments               |
-| Choice blocks          | Implemented | `choice **criteria**: option "label":`         |
-| If/elif/else           | Implemented | `if **condition**:` conditional branching      |
-| Persistent agents      | Implemented | `persist: true` or `persist: project`          |
-| Resume statement       | Implemented | `resume: agent` to continue with memory        |
+| Feature                | Status      | Description                                  |
+| ---------------------- | ----------- | -------------------------------------------- |
+| Comments               | Implemented | `# comment` syntax                           |
+| Single-line strings    | Implemented | `"string"` with escapes                      |
+| Simple session         | Implemented | `session "prompt"`                           |
+| Agent definitions      | Implemented | `agent name:` with model/prompt properties   |
+| Session with agent     | Implemented | `session: agent` with property overrides     |
+| Use statements         | Implemented | `use "@handle/slug" as name`                 |
+| Agent skills           | Implemented | `skills: ["skill1", "skill2"]`               |
+| Agent permissions      | Implemented | `permissions:` block with rules              |
+| Let binding            | Implemented | `let name = session "..."`                   |
+| Const binding          | Implemented | `const name = session "..."`                 |
+| Variable reassignment  | Implemented | `name = session "..."` (for let only)        |
+| Context property       | Implemented | `context: var` or `context: [a, b, c]`       |
+| do: blocks             | Implemented | Explicit sequential blocks                   |
+| Inline sequence        | Implemented | `session "A" -> session "B"`                 |
+| Named blocks           | Implemented | `block name:` with `do name` invocation      |
+| Parallel blocks        | Implemented | `parallel:` for concurrent execution         |
+| Named parallel results | Implemented | `x = session "..."` inside parallel          |
+| Object context         | Implemented | `context: { a, b, c }` shorthand             |
+| Join strategies        | Implemented | `parallel ("first"):` or `parallel ("any"):` |
+| Failure policies       | Implemented | `parallel (on-fail: "continue"):`            |
+| Repeat blocks          | Implemented | `repeat N:` fixed iterations                 |
+| Repeat with index      | Implemented | `repeat N as i:` with index variable         |
+| For-each blocks        | Implemented | `for item in items:` iteration               |
+| For-each with index    | Implemented | `for item, i in items:` with index           |
+| Parallel for-each      | Implemented | `parallel for item in items:` fan-out        |
+| Unbounded loop         | Implemented | `loop:` with optional max iterations         |
+| Loop until             | Implemented | `loop until **condition**:` AI-evaluated     |
+| Loop while             | Implemented | `loop while **condition**:` AI-evaluated     |
+| Loop with index        | Implemented | `loop as i:` or `loop until ... as i:`       |
+| Map pipeline           | Implemented | `items \| map:` transform each item          |
+| Filter pipeline        | Implemented | `items \| filter:` keep matching items       |
+| Reduce pipeline        | Implemented | `items \| reduce(acc, item):` accumulate     |
+| Parallel map           | Implemented | `items \| pmap:` concurrent transform        |
+| Pipeline chaining      | Implemented | `\| filter: ... \| map: ...`                 |
+| Try/catch blocks       | Implemented | `try:` with `catch:` for error handling      |
+| Try/catch/finally      | Implemented | `finally:` for cleanup                       |
+| Error variable         | Implemented | `catch as err:` access error context         |
+| Throw statement        | Implemented | `throw` or `throw "message"`                 |
+| Retry property         | Implemented | `retry: 3` automatic retry on failure        |
+| Backoff strategy       | Implemented | `backoff: exponential` delay between retries |
+| Input declarations     | Implemented | `input name: "description"`                  |
+| Output bindings        | Implemented | `output name = expression`                   |
+| Program invocation     | Implemented | `name(input: value)` call imported programs  |
+| Multi-line strings     | Implemented | `"""..."""` preserving whitespace            |
+| String interpolation   | Implemented | `"Hello {name}"` variable substitution       |
+| Block parameters       | Implemented | `block name(param):` with parameters         |
+| Block invocation args  | Implemented | `do name(arg)` passing arguments             |
+| Choice blocks          | Implemented | `choice **criteria**: option "label":`       |
+| If/elif/else           | Implemented | `if **condition**:` conditional branching    |
+| Persistent agents      | Implemented | `persist: true` or `persist: project`        |
+| Resume statement       | Implemented | `resume: agent` to continue with memory      |
 
 ---
 
@@ -351,6 +351,7 @@ use "@handle/slug" as alias
 ### Path Format
 
 Import paths follow the format `@handle/slug`:
+
 - `@handle` identifies the program author/organization
 - `slug` is the program name
 
@@ -413,6 +414,7 @@ input depth: "How deep to go (shallow, medium, deep)"
 ### Semantics
 
 Inputs:
+
 - Are declared at the top of the program (before executable statements)
 - Have a name and a description (for documentation)
 - Become available as variables within the program body
@@ -420,11 +422,11 @@ Inputs:
 
 ### Validation Rules
 
-| Check                  | Severity | Message                              |
-| ---------------------- | -------- | ------------------------------------ |
-| Empty input name       | Error    | Input name cannot be empty           |
-| Empty description      | Warning  | Consider adding a description        |
-| Duplicate input name   | Error    | Input already declared               |
+| Check                  | Severity | Message                                              |
+| ---------------------- | -------- | ---------------------------------------------------- |
+| Empty input name       | Error    | Input name cannot be empty                           |
+| Empty description      | Warning  | Consider adding a description                        |
+| Duplicate input name   | Error    | Input already declared                               |
 | Input after executable | Error    | Inputs must be declared before executable statements |
 
 ---
@@ -452,6 +454,7 @@ output sources = session "Extract sources"
 ### Semantics
 
 The `output` keyword:
+
 - Marks a variable as an output (visible at assignment, not just at file top)
 - Works like `let` but also registers the value as a program output
 - Can appear anywhere in the program body
@@ -459,11 +462,11 @@ The `output` keyword:
 
 ### Validation Rules
 
-| Check                  | Severity | Message                              |
-| ---------------------- | -------- | ------------------------------------ |
-| Empty output name      | Error    | Output name cannot be empty          |
-| Duplicate output name  | Error    | Output already declared              |
-| Output name conflicts  | Error    | Output name conflicts with variable  |
+| Check                 | Severity | Message                             |
+| --------------------- | -------- | ----------------------------------- |
+| Empty output name     | Error    | Output name cannot be empty         |
+| Duplicate output name | Error    | Output already declared             |
+| Output name conflicts | Error    | Output name conflicts with variable |
 
 ---
 
@@ -518,12 +521,12 @@ The imported program runs in its own execution context but shares the same VM se
 
 ### Validation Rules
 
-| Check                    | Severity | Message                              |
-| ------------------------ | -------- | ------------------------------------ |
-| Unknown program          | Error    | Program not imported                 |
-| Missing required input   | Error    | Required input not provided          |
-| Unknown input name       | Error    | Input not declared in program        |
-| Unknown output property  | Error    | Output not declared in program       |
+| Check                   | Severity | Message                        |
+| ----------------------- | -------- | ------------------------------ |
+| Unknown program         | Error    | Program not imported           |
+| Missing required input  | Error    | Required input not provided    |
+| Unknown input name      | Error    | Input not declared in program  |
+| Unknown output property | Error    | Output not declared in program |
 
 ---
 
@@ -545,13 +548,13 @@ agent name:
 
 ### Properties
 
-| Property      | Type       | Values                         | Description                           |
-| ------------- | ---------- | ------------------------------ | ------------------------------------- |
-| `model`       | identifier | `sonnet`, `opus`, `haiku`      | The Claude model to use               |
-| `prompt`      | string     | Any string                     | System prompt/context for the agent   |
-| `persist`     | value      | `true`, `project`, or STRING   | Enable persistent memory for agent    |
-| `skills`      | array      | String array                   | Skills assigned to this agent         |
-| `permissions` | block      | Permission rules               | Access control for the agent          |
+| Property      | Type       | Values                       | Description                         |
+| ------------- | ---------- | ---------------------------- | ----------------------------------- |
+| `model`       | identifier | `sonnet`, `opus`, `haiku`    | The Claude model to use             |
+| `prompt`      | string     | Any string                   | System prompt/context for the agent |
+| `persist`     | value      | `true`, `project`, or STRING | Enable persistent memory for agent  |
+| `skills`      | array      | String array                 | Skills assigned to this agent       |
+| `permissions` | block      | Permission rules             | Access control for the agent        |
 
 ### Persist Property
 
@@ -577,11 +580,11 @@ agent shared:
   prompt: "Shared across programs"
 ```
 
-| Value | Memory Location | Lifetime |
-|-------|-----------------|----------|
-| `true` | `.prose/runs/{id}/agents/{name}/` | Dies with execution |
-| `project` | `.prose/agents/{name}/` | Survives executions |
-| STRING | Specified path | User-controlled |
+| Value     | Memory Location                   | Lifetime            |
+| --------- | --------------------------------- | ------------------- |
+| `true`    | `.prose/runs/{id}/agents/{name}/` | Dies with execution |
+| `project` | `.prose/agents/{name}/`           | Survives executions |
+| STRING    | Specified path                    | User-controlled     |
 
 ### Skills Property
 
@@ -872,10 +875,10 @@ resume: agentName
 
 ### Semantics
 
-| Keyword | Behavior |
-|---------|----------|
+| Keyword    | Behavior                              |
+| ---------- | ------------------------------------- |
 | `session:` | Ignores existing memory, starts fresh |
-| `resume:` | Loads memory, continues with context |
+| `resume:`  | Loads memory, continues with context  |
 
 ### Examples
 
@@ -902,12 +905,12 @@ let review = resume: captain
 
 ### Validation Rules
 
-| Check | Severity | Message |
-|-------|----------|---------|
-| `resume:` on non-persistent agent | Error | Agent must have `persist:` property to use `resume:` |
-| `resume:` with no existing memory | Error | No memory file exists for agent; use `session:` for first invocation |
-| `session:` on persistent agent with memory | Warning | Will ignore existing memory; use `resume:` to continue |
-| Undefined agent reference | Error | Agent not defined |
+| Check                                      | Severity | Message                                                              |
+| ------------------------------------------ | -------- | -------------------------------------------------------------------- |
+| `resume:` on non-persistent agent          | Error    | Agent must have `persist:` property to use `resume:`                 |
+| `resume:` with no existing memory          | Error    | No memory file exists for agent; use `session:` for first invocation |
+| `session:` on persistent agent with memory | Warning  | Will ignore existing memory; use `resume:` to continue               |
+| Undefined agent reference                  | Error    | Agent not defined                                                    |
 
 ---
 
@@ -1047,6 +1050,7 @@ for item in items:
 **Why this constraint:** Since bindings are stored as `bindings/{name}.md`, two variables with the same name would collide on the filesystem. Rather than introduce complex scoping rules, we enforce uniqueness.
 
 **Collision scenarios this prevents:**
+
 1. Variable inside loop shadows variable outside loop
 2. Variables in different `if`/`elif`/`else` branches with same name
 3. Block parameters shadowing outer variables
@@ -2643,51 +2647,51 @@ The validator checks programs for errors and warnings before execution.
 
 ### Errors (Block Execution)
 
-| Code | Description                         |
-| ---- | ----------------------------------- |
-| E001 | Unterminated string literal         |
-| E002 | Unknown escape sequence in string   |
-| E003 | Session missing prompt or agent     |
-| E004 | Unexpected token                    |
-| E005 | Invalid syntax                      |
-| E006 | Duplicate agent definition          |
-| E007 | Undefined agent reference           |
-| E008 | Invalid model value                 |
-| E009 | Duplicate property                  |
-| E010 | Duplicate use statement             |
-| E011 | Empty use path                      |
-| E012 | Invalid use path format             |
-| E013 | Skills must be an array             |
-| E014 | Skill name must be a string         |
-| E015 | Permissions must be a block         |
-| E016 | Permission pattern must be a string |
-| E017 | `resume:` requires persistent agent |
-| E018 | `resume:` with no existing memory   |
+| Code | Description                              |
+| ---- | ---------------------------------------- |
+| E001 | Unterminated string literal              |
+| E002 | Unknown escape sequence in string        |
+| E003 | Session missing prompt or agent          |
+| E004 | Unexpected token                         |
+| E005 | Invalid syntax                           |
+| E006 | Duplicate agent definition               |
+| E007 | Undefined agent reference                |
+| E008 | Invalid model value                      |
+| E009 | Duplicate property                       |
+| E010 | Duplicate use statement                  |
+| E011 | Empty use path                           |
+| E012 | Invalid use path format                  |
+| E013 | Skills must be an array                  |
+| E014 | Skill name must be a string              |
+| E015 | Permissions must be a block              |
+| E016 | Permission pattern must be a string      |
+| E017 | `resume:` requires persistent agent      |
+| E018 | `resume:` with no existing memory        |
 | E019 | Duplicate variable name (flat namespace) |
-| E020 | Empty input name                    |
-| E021 | Duplicate input declaration         |
-| E022 | Input after executable statement    |
-| E023 | Empty output name                   |
-| E024 | Duplicate output declaration        |
-| E025 | Unknown program in invocation       |
-| E026 | Missing required input              |
-| E027 | Unknown input name in invocation    |
-| E028 | Unknown output property access      |
+| E020 | Empty input name                         |
+| E021 | Duplicate input declaration              |
+| E022 | Input after executable statement         |
+| E023 | Empty output name                        |
+| E024 | Duplicate output declaration             |
+| E025 | Unknown program in invocation            |
+| E026 | Missing required input                   |
+| E027 | Unknown input name in invocation         |
+| E028 | Unknown output property access           |
 
 ### Warnings (Non-blocking)
 
-| Code | Description                              |
-| ---- | ---------------------------------------- |
-| W001 | Empty session prompt                     |
-| W002 | Whitespace-only session prompt           |
-| W003 | Session prompt exceeds 10,000 characters |
-| W004 | Empty prompt property                    |
-| W005 | Unknown property name                    |
-| W006 | Unknown import source format             |
-| W007 | Skill not imported                       |
-| W008 | Unknown permission type                  |
-| W009 | Unknown permission value                 |
-| W010 | Empty skills array                       |
+| Code | Description                                         |
+| ---- | --------------------------------------------------- |
+| W001 | Empty session prompt                                |
+| W002 | Whitespace-only session prompt                      |
+| W003 | Session prompt exceeds 10,000 characters            |
+| W004 | Empty prompt property                               |
+| W005 | Unknown property name                               |
+| W006 | Unknown import source format                        |
+| W007 | Skill not imported                                  |
+| W008 | Unknown permission type                             |
+| W009 | Unknown permission value                            |
+| W010 | Empty skills array                                  |
 | W011 | `session:` on persistent agent with existing memory |
 
 ### Error Message Format
