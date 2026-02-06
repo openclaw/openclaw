@@ -152,6 +152,61 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("uses correct export when same module has multiple exports", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-multi-"));
+    const modPath = path.join(dir, "multi.mjs");
+    fs.writeFileSync(
+      modPath,
+      [
+        'export function fnA({ payload }) { return { kind: "wake", text: "A:" + payload.x }; }',
+        'export function fnB({ payload }) { return { kind: "wake", text: "B:" + payload.x }; }',
+      ].join("\n"),
+    );
+
+    const mappingsA = resolveHookMappings({
+      transformsDir: dir,
+      mappings: [
+        {
+          match: { path: "a" },
+          action: "agent",
+          transform: { module: "multi.mjs", export: "fnA" },
+        },
+      ],
+    });
+    const mappingsB = resolveHookMappings({
+      transformsDir: dir,
+      mappings: [
+        {
+          match: { path: "b" },
+          action: "agent",
+          transform: { module: "multi.mjs", export: "fnB" },
+        },
+      ],
+    });
+
+    const resultA = await applyHookMappings(mappingsA, {
+      payload: { x: "1" },
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/a"),
+      path: "a",
+    });
+    const resultB = await applyHookMappings(mappingsB, {
+      payload: { x: "1" },
+      headers: {},
+      url: new URL("http://127.0.0.1:18789/hooks/b"),
+      path: "b",
+    });
+
+    expect(resultA?.ok).toBe(true);
+    expect(resultB?.ok).toBe(true);
+    if (resultA?.ok && resultA.action?.kind === "wake") {
+      expect(resultA.action.text).toBe("A:1");
+    }
+    if (resultB?.ok && resultB.action?.kind === "wake") {
+      expect(resultB.action.text).toBe("B:1");
+    }
+  });
+
   it("rejects missing message", async () => {
     const mappings = resolveHookMappings({
       mappings: [{ match: { path: "noop" }, action: "agent" }],
