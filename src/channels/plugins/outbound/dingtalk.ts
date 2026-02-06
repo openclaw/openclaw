@@ -1,7 +1,7 @@
 import type { ChannelOutboundAdapter } from "../types.js";
 import { chunkMarkdownText } from "../../../auto-reply/chunk.js";
-import { parseDingTalkTarget } from "../../../dingtalk/targets.js";
 import { resolveDingTalkAccount } from "../../../dingtalk/accounts.js";
+import { parseDingTalkTarget } from "../../../dingtalk/targets.js";
 
 export const dingtalkOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -31,7 +31,7 @@ export const dingtalkOutbound: ChannelOutboundAdapter = {
       throw new Error("DingTalk not configured");
     }
     const target = parseDingTalkTarget(to ?? "");
-    const payload = mediaUrl ? mediaUrl : text ?? "";
+    const payload = mediaUrl ? mediaUrl : (text ?? "");
     const { sendDingTalkProactiveText } = await import("../../../dingtalk/send.js");
     await sendDingTalkProactiveText(
       account.config,

@@ -42,17 +42,18 @@ function resolveAccountConfig(
 }
 
 function mergeAccountConfig(cfg: OpenClawConfig, accountId: string): DingTalkAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.dingtalk ?? {}) as DingTalkAccountConfig & {
+  const { accounts: _ignored, ...base } = (cfg.channels?.dingtalk ??
+    {}) as DingTalkAccountConfig & {
     accounts?: unknown;
   };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
   return { ...base, ...account };
 }
 
-function resolveClientSecret(config?: {
-  clientSecret?: string;
-  clientSecretFile?: string;
-}): { value?: string; source?: Exclude<DingTalkTokenSource, "none"> } {
+function resolveClientSecret(config?: { clientSecret?: string; clientSecretFile?: string }): {
+  value?: string;
+  source?: Exclude<DingTalkTokenSource, "none">;
+} {
   const direct = config?.clientSecret?.trim();
   if (direct) {
     return { value: direct, source: "config" };

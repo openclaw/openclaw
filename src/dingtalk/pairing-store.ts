@@ -109,7 +109,10 @@ export async function resolveDingTalkEffectiveAllowFrom(params: {
 
   const dm = Array.from(new Set([...cfgAllowFrom, ...storeAllowFrom]));
   const group = Array.from(
-    new Set([...(cfgGroupAllowFrom.length > 0 ? cfgGroupAllowFrom : cfgAllowFrom), ...storeAllowFrom]),
+    new Set([
+      ...(cfgGroupAllowFrom.length > 0 ? cfgGroupAllowFrom : cfgAllowFrom),
+      ...storeAllowFrom,
+    ]),
   );
   return { dm, group };
 }

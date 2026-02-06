@@ -44,8 +44,7 @@ export function resolveDingTalkConfig(params: {
     enabled: firstDefined(accountCfg?.enabled, dtCfg?.enabled, true) ?? true,
     dmPolicy: firstDefined(accountCfg?.dmPolicy, dtCfg?.dmPolicy) ?? "open",
     groupPolicy:
-      firstDefined(accountCfg?.groupPolicy, dtCfg?.groupPolicy, defaults?.groupPolicy) ??
-      "open",
+      firstDefined(accountCfg?.groupPolicy, dtCfg?.groupPolicy, defaults?.groupPolicy) ?? "open",
     allowFrom: (accountCfg?.allowFrom ?? dtCfg?.allowFrom ?? []).map(String),
     groupAllowFrom: (accountCfg?.groupAllowFrom ?? dtCfg?.groupAllowFrom ?? []).map(String),
     historyLimit: firstDefined(accountCfg?.historyLimit, dtCfg?.historyLimit) ?? 10,
@@ -58,8 +57,8 @@ export function resolveDingTalkConfig(params: {
     // Media upload is always enabled for DingTalk; disable toggle removed.
     enableMediaUpload: true,
     systemPrompt: firstDefined(accountCfg?.systemPrompt, dtCfg?.systemPrompt) ?? "",
-    sessionTimeoutMs: firstDefined(accountCfg?.sessionTimeoutMs, dtCfg?.sessionTimeoutMs) ??
-      30 * 60 * 1000,
+    sessionTimeoutMs:
+      firstDefined(accountCfg?.sessionTimeoutMs, dtCfg?.sessionTimeoutMs) ?? 30 * 60 * 1000,
     aiCardTemplateId: firstDefined(accountCfg?.aiCardTemplateId, dtCfg?.aiCardTemplateId),
     groups: { ...dtCfg?.groups, ...accountCfg?.groups },
   };

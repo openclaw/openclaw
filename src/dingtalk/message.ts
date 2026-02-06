@@ -9,12 +9,13 @@ import { getChildLogger } from "../logging.js";
 import { buildAgentSessionKey } from "../routing/resolve-route.js";
 import { isSenderAllowed, normalizeAllowFromWithStore, resolveSenderAllowMatch } from "./access.js";
 import { resolveDingTalkAccount } from "./accounts.js";
+import { DingTalkStreamingSession } from "./ai-card.js";
+import { getDingTalkOapiToken } from "./auth.js";
 import {
   resolveDingTalkConfig,
   resolveDingTalkGroupConfig,
   resolveDingTalkGroupEnabled,
 } from "./config.js";
-import { readDingTalkAllowFromStore, upsertDingTalkPairingRequest } from "./pairing-store.js";
 import { upsertDingTalkKnownUser } from "./directory-store.js";
 import {
   buildDingTalkMediaSystemPrompt,
@@ -23,9 +24,8 @@ import {
   processLocalImages,
   processVideoMarkers,
 } from "./media.js";
-import { DingTalkStreamingSession } from "./ai-card.js";
+import { readDingTalkAllowFromStore, upsertDingTalkPairingRequest } from "./pairing-store.js";
 import { sendDingTalkWebhookText } from "./send.js";
-import { getDingTalkOapiToken } from "./auth.js";
 
 const logger = getChildLogger({ module: "dingtalk-message" });
 

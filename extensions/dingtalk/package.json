@@ -16,7 +16,9 @@
     "openclaw": ">=2026.2.4"
   },
   "openclaw": {
-    "extensions": ["./index.ts"],
+    "extensions": [
+      "./index.ts"
+    ],
     "channel": {
       "id": "dingtalk",
       "label": "DingTalk",
@@ -25,7 +27,11 @@
       "docsPath": "/channels/dingtalk",
       "docsLabel": "dingtalk",
       "blurb": "DingTalk bot via Stream mode with AI Card streaming.",
-      "aliases": ["dd", "ding", "dingtalk-connector"],
+      "aliases": [
+        "dd",
+        "ding",
+        "dingtalk-connector"
+      ],
       "order": 70,
       "quickstartAllowFrom": true
     },

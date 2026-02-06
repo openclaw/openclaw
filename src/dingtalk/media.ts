@@ -92,6 +92,26 @@ type CommandResult = {
   code: number | null;
 };
 
+type Logger = {
+  info?: (message: string) => void;
+  warn?: (message: string) => void;
+  error?: (message: string) => void;
+};
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
+}
+
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
 function resolveFfprobePath(ffmpegPath: string): string {
   return ffmpegPath.replace(/ffmpeg(\.exe)?$/i, "ffprobe$1");
 }
@@ -251,7 +271,7 @@ export async function uploadMediaToDingTalk(
   mediaType: "image" | "file" | "video" | "voice",
   oapiToken: string,
   maxSize: number = 20 * 1024 * 1024,
-  log?: any,
+  log?: Logger,
 ): Promise<string | null> {
   try {
     const absPath = toLocalPath(filePath);
@@ -292,8 +312,8 @@ export async function uploadMediaToDingTalk(
     }
     log?.warn?.(`[DingTalk][${mediaType}] 上传返回无 media_id: ${JSON.stringify(resp.data)}`);
     return null;
-  } catch (err: any) {
-    log?.error?.(`[DingTalk][${mediaType}] 上传失败: ${err.message}`);
+  } catch (err: unknown) {
+    log?.error?.(`[DingTalk][${mediaType}] 上传失败: ${getErrorMessage(err)}`);
     return null;
   }
 }
@@ -302,7 +322,7 @@ export async function uploadMediaToDingTalk(
 export async function processLocalImages(
   content: string,
   oapiToken: string | null,
-  log?: any,
+  log?: Logger,
 ): Promise<string> {
   if (!oapiToken) {
     log?.warn?.(`[DingTalk][Media] 无 oapiToken，跳过图片后处理`);
@@ -343,9 +363,7 @@ export async function processLocalImages(
   });
 
   if (newBareMatches.length > 0) {
-    log?.info?.(
-      `[DingTalk][Media] 检测到 ${newBareMatches.length} 个纯文本图片路径，开始上传...`,
-    );
+    log?.info?.(`[DingTalk][Media] 检测到 ${newBareMatches.length} 个纯文本图片路径，开始上传...`);
     // 从后往前替换，避免 index 偏移
     for (const match of newBareMatches.reverse()) {
       const [fullMatch, rawPath] = match;
@@ -360,7 +378,8 @@ export async function processLocalImages(
       if (mediaId) {
         const replacement = `![](${mediaId})`;
         const startIndex = match.index ?? 0;
-        result = result.slice(0, startIndex) + result.slice(startIndex).replace(fullMatch, replacement);
+        result =
+          result.slice(0, startIndex) + result.slice(startIndex).replace(fullMatch, replacement);
         log?.info?.(`[DingTalk][Media] 替换纯文本路径为图片: ${replacement}`);
       }
     }
@@ -376,10 +395,7 @@ export async function processLocalImages(
 /**
  * 提取视频元数据（时长、分辨率）
  */
-async function extractVideoMetadata(
-  filePath: string,
-  log?: any,
-): Promise<VideoMetadata | null> {
+async function extractVideoMetadata(filePath: string, log?: Logger): Promise<VideoMetadata | null> {
   try {
     const ffmpegPath = ffmpegInstaller.path;
     const ffprobePath = resolveFfprobePath(ffmpegPath);
@@ -393,29 +409,36 @@ async function extractVideoMetadata(
       return null;
     }
 
-    let metadata: any;
+    let metadata: unknown;
     try {
       metadata = JSON.parse(stdout);
-    } catch (err: any) {
-      log?.error?.(`[DingTalk][Video] 解析元数据失败: ${err.message}`);
+    } catch (err: unknown) {
+      log?.error?.(`[DingTalk][Video] 解析元数据失败: ${getErrorMessage(err)}`);
       return null;
     }
 
-    const videoStream = metadata?.streams?.find((stream: any) => stream.codec_type === "video");
-    if (!videoStream) {
+    const metadataRecord = toRecord(metadata);
+    const streams = Array.isArray(metadataRecord?.streams) ? metadataRecord.streams : [];
+    const videoStream = streams.find((stream) => {
+      const streamRecord = toRecord(stream);
+      return streamRecord?.codec_type === "video";
+    });
+    const videoStreamRecord = toRecord(videoStream);
+    if (!videoStreamRecord) {
       log?.warn?.(`[DingTalk][Video] 未找到视频流`);
       return null;
     }
 
-    const durationRaw = Number(metadata?.format?.duration ?? videoStream.duration ?? 0);
+    const formatRecord = toRecord(metadataRecord?.format);
+    const durationRaw = Number(formatRecord?.duration ?? videoStreamRecord.duration ?? 0);
     const duration = Number.isFinite(durationRaw) ? Math.floor(durationRaw) : 0;
-    const width = Number(videoStream.width ?? 0) || 0;
-    const height = Number(videoStream.height ?? 0) || 0;
+    const width = Number(videoStreamRecord.width ?? 0) || 0;
+    const height = Number(videoStreamRecord.height ?? 0) || 0;
 
     log?.info?.(`[DingTalk][Video] 元数据: duration=${duration}s, ${width}x${height}`);
     return { duration, width, height };
-  } catch (err: any) {
-    log?.error?.(`[DingTalk][Video] ffprobe 失败: ${err.message}`);
+  } catch (err: unknown) {
+    log?.error?.(`[DingTalk][Video] ffprobe 失败: ${getErrorMessage(err)}`);
     return null;
   }
 }
@@ -426,7 +449,7 @@ async function extractVideoMetadata(
 async function extractVideoThumbnail(
   videoPath: string,
   outputPath: string,
-  log?: any,
+  log?: Logger,
 ): Promise<string | null> {
   try {
     const ffmpegPath = ffmpegInstaller.path;
@@ -454,8 +477,8 @@ async function extractVideoThumbnail(
     }
     log?.info?.(`[DingTalk][Video] 封面生成成功: ${outputPath}`);
     return outputPath;
-  } catch (err: any) {
-    log?.error?.(`[DingTalk][Video] ffmpeg 失败: ${err.message}`);
+  } catch (err: unknown) {
+    log?.error?.(`[DingTalk][Video] ffmpeg 失败: ${getErrorMessage(err)}`);
     return null;
   }
 }
@@ -471,7 +494,7 @@ async function sendVideoMessage(
   picMediaId: string,
   metadata: VideoMetadata,
   oapiToken: string,
-  log?: any,
+  log?: Logger,
 ): Promise<void> {
   try {
     const fileName = path.basename(videoInfo.path);
@@ -486,9 +509,7 @@ async function sendVideoMessage(
       },
     };
 
-    log?.info?.(
-      `[DingTalk][Video] 发送视频消息: ${fileName}, payload: ${JSON.stringify(payload)}`,
-    );
+    log?.info?.(`[DingTalk][Video] 发送视频消息: ${fileName}, payload: ${JSON.stringify(payload)}`);
     const resp = await axios.post(sessionWebhook, payload, {
       headers: {
         "x-acs-dingtalk-access-token": oapiToken,
@@ -502,8 +523,8 @@ async function sendVideoMessage(
     } else {
       log?.error?.(`[DingTalk][Video] 视频消息发送失败: ${JSON.stringify(resp.data)}`);
     }
-  } catch (err: any) {
-    log?.error?.(`[DingTalk][Video] 发送失败: ${err.message}`);
+  } catch (err: unknown) {
+    log?.error?.(`[DingTalk][Video] 发送失败: ${getErrorMessage(err)}`);
   }
 }
 
@@ -519,7 +540,7 @@ export async function processVideoMarkers(
   sessionWebhook: string,
   config: { clientId: string; clientSecret: string },
   oapiToken: string | null,
-  log?: any,
+  log?: Logger,
   useProactiveApi: boolean = false,
   target?: AICardTarget,
 ): Promise<string> {
@@ -545,8 +566,8 @@ export async function processVideoMarkers(
         invalidVideos.push(videoInfo.path || "未知路径");
         log?.warn?.(`${logPrefix} 视频文件不存在: ${videoInfo.path}`);
       }
-    } catch (err: any) {
-      log?.warn?.(`${logPrefix} 解析标记失败: ${err.message}`);
+    } catch (err: unknown) {
+      log?.warn?.(`${logPrefix} 解析标记失败: ${getErrorMessage(err)}`);
     }
   }
 
@@ -579,7 +600,9 @@ export async function processVideoMarkers(
       const metadata = await extractVideoMetadata(videoInfo.path, log);
       if (!metadata) {
         log?.warn?.(`${logPrefix} 无法提取元数据: ${videoInfo.path}`);
-        statusMessages.push(`⚠️ 视频处理失败: ${fileName}（无法读取视频信息，请检查 ffmpeg 是否已安装）`);
+        statusMessages.push(
+          `⚠️ 视频处理失败: ${fileName}（无法读取视频信息，请检查 ffmpeg 是否已安装）`,
+        );
         continue;
       }
 
@@ -638,9 +661,9 @@ export async function processVideoMarkers(
 
       log?.info?.(`${logPrefix} 视频处理完成: ${fileName}`);
       statusMessages.push(`✅ 视频已发送: ${fileName}`);
-    } catch (err: any) {
-      log?.error?.(`${logPrefix} 处理视频失败: ${err.message}`);
-      statusMessages.push(`⚠️ 视频处理异常: ${fileName}（${err.message}）`);
+    } catch (err: unknown) {
+      log?.error?.(`${logPrefix} 处理视频失败: ${getErrorMessage(err)}`);
+      statusMessages.push(`⚠️ 视频处理异常: ${fileName}（${getErrorMessage(err)}）`);
     } finally {
       // 统一清理临时文件
       if (thumbnailPath) {
@@ -668,7 +691,7 @@ export async function processVideoMarkers(
  */
 function extractFileMarkers(
   content: string,
-  log?: any,
+  log?: Logger,
 ): { cleanedContent: string; fileInfos: FileInfo[] } {
   const fileInfos: FileInfo[] = [];
   const matches = [...content.matchAll(FILE_MARKER_PATTERN)];
@@ -682,8 +705,8 @@ function extractFileMarkers(
         fileInfos.push(fileInfo);
         log?.info?.(`[DingTalk][File] 提取到文件标记: ${fileInfo.fileName}`);
       }
-    } catch (err: any) {
-      log?.warn?.(`[DingTalk][File] 解析文件标记失败: ${match[1]}, 错误: ${err.message}`);
+    } catch (err: unknown) {
+      log?.warn?.(`[DingTalk][File] 解析文件标记失败: ${match[1]}, 错误: ${getErrorMessage(err)}`);
     }
   }
 
@@ -701,7 +724,7 @@ async function sendFileMessage(
   fileInfo: FileInfo,
   mediaId: string,
   oapiToken: string,
-  log?: any,
+  log?: Logger,
 ): Promise<void> {
   try {
     const fileMessage = {
@@ -727,9 +750,9 @@ async function sendFileMessage(
     } else {
       log?.error?.(`[DingTalk][File] 文件消息发送失败: ${JSON.stringify(resp.data)}`);
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     log?.error?.(
-      `[DingTalk][File] 发送文件消息异常: ${fileInfo.fileName}, 错误: ${err.message}`,
+      `[DingTalk][File] 发送文件消息异常: ${fileInfo.fileName}, 错误: ${getErrorMessage(err)}`,
     );
   }
 }
@@ -743,7 +766,7 @@ async function sendAudioMessage(
   fileInfo: FileInfo,
   mediaId: string,
   oapiToken: string,
-  log?: any,
+  log?: Logger,
 ): Promise<void> {
   try {
     // 钉钉语音消息格式
@@ -769,9 +792,9 @@ async function sendAudioMessage(
     } else {
       log?.error?.(`[DingTalk][Audio] 语音消息发送失败: ${JSON.stringify(resp.data)}`);
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     log?.error?.(
-      `[DingTalk][Audio] 发送语音消息异常: ${fileInfo.fileName}, 错误: ${err.message}`,
+      `[DingTalk][Audio] 发送语音消息异常: ${fileInfo.fileName}, 错误: ${getErrorMessage(err)}`,
     );
   }
 }
@@ -788,7 +811,7 @@ export async function processFileMarkers(
   sessionWebhook: string,
   config: { clientId: string; clientSecret: string },
   oapiToken: string | null,
-  log?: any,
+  log?: Logger,
   useProactiveApi: boolean = false,
   target?: AICardTarget,
 ): Promise<string> {
@@ -893,7 +916,7 @@ export async function sendFileProactive(
   target: AICardTarget,
   fileInfo: FileInfo,
   mediaId: string,
-  log?: any,
+  log?: Logger,
 ): Promise<void> {
   try {
     const token = await getDingTalkAccessToken(config);
@@ -929,13 +952,11 @@ export async function sendFileProactive(
     if (resp.data?.processQueryKey) {
       log?.info?.(`[DingTalk][File][Proactive] 文件消息发送成功: ${fileInfo.fileName}`);
     } else {
-      log?.warn?.(
-        `[DingTalk][File][Proactive] 文件消息发送响应异常: ${JSON.stringify(resp.data)}`,
-      );
+      log?.warn?.(`[DingTalk][File][Proactive] 文件消息发送响应异常: ${JSON.stringify(resp.data)}`);
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     log?.error?.(
-      `[DingTalk][File][Proactive] 发送文件消息失败: ${fileInfo.fileName}, 错误: ${err.message}`,
+      `[DingTalk][File][Proactive] 发送文件消息失败: ${fileInfo.fileName}, 错误: ${getErrorMessage(err)}`,
     );
   }
 }
@@ -948,7 +969,7 @@ export async function sendAudioProactive(
   target: AICardTarget,
   fileInfo: FileInfo,
   mediaId: string,
-  log?: any,
+  log?: Logger,
 ): Promise<void> {
   try {
     const token = await getDingTalkAccessToken(config);
@@ -987,9 +1008,9 @@ export async function sendAudioProactive(
         `[DingTalk][Audio][Proactive] 音频消息发送响应异常: ${JSON.stringify(resp.data)}`,
       );
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     log?.error?.(
-      `[DingTalk][Audio][Proactive] 发送音频消息失败: ${fileInfo.fileName}, 错误: ${err.message}`,
+      `[DingTalk][Audio][Proactive] 发送音频消息失败: ${fileInfo.fileName}, 错误: ${getErrorMessage(err)}`,
     );
   }
 }
@@ -1003,7 +1024,7 @@ export async function sendVideoProactive(
   videoMediaId: string,
   picMediaId: string,
   metadata: VideoMetadata,
-  log?: any,
+  log?: Logger,
 ): Promise<void> {
   try {
     const token = await getDingTalkAccessToken(config);
@@ -1044,8 +1065,8 @@ export async function sendVideoProactive(
         `[DingTalk][Video][Proactive] 视频消息发送响应异常: ${JSON.stringify(resp.data)}`,
       );
     }
-  } catch (err: any) {
-    log?.error?.(`[DingTalk][Video][Proactive] 发送视频消息失败: ${err.message}`);
+  } catch (err: unknown) {
+    log?.error?.(`[DingTalk][Video][Proactive] 发送视频消息失败: ${getErrorMessage(err)}`);
   }
 }
 
@@ -1061,7 +1082,7 @@ export async function processAudioMarkers(
   sessionWebhook: string,
   config: { clientId: string; clientSecret: string },
   oapiToken: string | null,
-  log?: any,
+  log?: Logger,
   useProactiveApi: boolean = false,
   target?: AICardTarget,
 ): Promise<string> {
@@ -1086,8 +1107,8 @@ export async function processAudioMarkers(
         invalidAudios.push(audioInfo.path || "未知路径");
         log?.warn?.(`${logPrefix} 音频文件不存在: ${audioInfo.path}`);
       }
-    } catch (err: any) {
-      log?.warn?.(`${logPrefix} 解析标记失败: ${err.message}`);
+    } catch (err: unknown) {
+      log?.warn?.(`${logPrefix} 解析标记失败: ${getErrorMessage(err)}`);
     }
   }
 
@@ -1141,9 +1162,9 @@ export async function processAudioMarkers(
       }
       statusMessages.push(`✅ 音频已发送: ${fileName}`);
       log?.info?.(`${logPrefix} 音频处理完成: ${fileName}`);
-    } catch (err: any) {
-      log?.error?.(`${logPrefix} 处理音频失败: ${err.message}`);
-      statusMessages.push(`⚠️ 音频处理异常: ${fileName}（${err.message}）`);
+    } catch (err: unknown) {
+      log?.error?.(`${logPrefix} 处理音频失败: ${getErrorMessage(err)}`);
+      statusMessages.push(`⚠️ 音频处理异常: ${fileName}（${getErrorMessage(err)}）`);
     }
   }
 

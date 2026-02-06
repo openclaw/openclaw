@@ -76,9 +76,9 @@ openclaw channels add
 2. 登录后进入 **应用开发** → **企业内部开发**
 
 3. 创建应用，在应用详情页获取 **AppKey** 和 **AppSecret**
-![获取应用凭证](../../images/dingtalk-step6-credentials.jpg)
+   ![获取应用凭证](../../images/dingtalk-step6-credentials.jpg)
 4. **应用能力** → **添加应用能力**，选择 **机器人** 类型
-![创建机器人应用](../../images/dingtalk-step1-create-app.png)
+   ![创建机器人应用](../../images/dingtalk-step1-create-app.png)
 
 5. 配置机器人的消息接收模式为 **Stream 模式**
 
@@ -279,15 +279,15 @@ openclaw pairing list dingtalk
 
 主要选项：
 
-| 配置项                                                      | 说明                       | 默认值    |
-| ----------------------------------------------------------- | -------------------------- | --------- |
-| `channels.dingtalk.enabled`                                 | 启用/禁用渠道              | `true`    |
-| `channels.dingtalk.clientId`                                | 应用 App Key（Client ID）  | -         |
-| `channels.dingtalk.clientSecret`                            | 应用 App Secret            | -         |
-| `channels.dingtalk.dmPolicy`                                | 私聊策略                   | `open`    |
-| `channels.dingtalk.allowFrom`                               | 私聊白名单（用户 ID 列表） | -         |
-| `channels.dingtalk.groupPolicy`                             | 群组策略                   | `open`    |
-| `channels.dingtalk.groupAllowFrom`                          | 群组白名单                 | -         |
+| 配置项                             | 说明                       | 默认值 |
+| ---------------------------------- | -------------------------- | ------ |
+| `channels.dingtalk.enabled`        | 启用/禁用渠道              | `true` |
+| `channels.dingtalk.clientId`       | 应用 App Key（Client ID）  | -      |
+| `channels.dingtalk.clientSecret`   | 应用 App Secret            | -      |
+| `channels.dingtalk.dmPolicy`       | 私聊策略                   | `open` |
+| `channels.dingtalk.allowFrom`      | 私聊白名单（用户 ID 列表） | -      |
+| `channels.dingtalk.groupPolicy`    | 群组策略                   | `open` |
+| `channels.dingtalk.groupAllowFrom` | 群组白名单                 | -      |
 
 ---
 

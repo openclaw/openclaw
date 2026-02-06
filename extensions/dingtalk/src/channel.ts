@@ -44,7 +44,10 @@ const buildPeerDirectoryEntries = async (params: {
   cfg: Parameters<typeof resolveDingTalkConfig>[0]["cfg"];
   accountId?: string | null;
 }) => {
-  const resolved = resolveDingTalkConfig({ cfg: params.cfg, accountId: params.accountId ?? undefined });
+  const resolved = resolveDingTalkConfig({
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+  });
   const configAllowFrom = resolved.allowFrom
     .map((entry) => String(entry).trim())
     .filter((entry) => Boolean(entry) && entry !== "*")
@@ -86,9 +89,9 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingTalkAccount> = {
   agentPrompt: {
     messageToolHints: () => [
       "- 钉钉提醒/定时主动发送前先读取当前会话接收人；优先 `deliveryContext.to`，其次 `lastTo`。两者都没有时先向用户索要 `user:<id>` 或 `group:<id>`。",
-      "- 钉钉定时任务必须使用：`job.sessionTarget=\"isolated\"` + `job.payload.kind=\"agentTurn\"` + `job.delivery.mode=\"announce\"` + `job.delivery.channel=\"dingtalk\"`，正文放 `job.payload.message`。",
-      "- 禁止使用：`job.sessionTarget=\"main\"`、`job.payload.kind=\"systemEvent\"`、`[[reply_to_current]]`、`[[reply_to:*]]`，以及把“最后联系人”等自然语言字面量当作 `to/target`。",
-      '- 面向用户的确认回复只能描述结果本身，不写实现细节。禁止输出 `isolated`、`agentTurn`、`session_status`、`deliveryContext`、`lastTo`、`channel`、`to` 等内部术语或字段名；禁止出现“使用独立会话（isolated）执行”“直接指定钉钉通道和接收人”这类说明句。',
+      '- 钉钉定时任务必须使用：`job.sessionTarget="isolated"` + `job.payload.kind="agentTurn"` + `job.delivery.mode="announce"` + `job.delivery.channel="dingtalk"`，正文放 `job.payload.message`。',
+      '- 禁止使用：`job.sessionTarget="main"`、`job.payload.kind="systemEvent"`、`[[reply_to_current]]`、`[[reply_to:*]]`，以及把“最后联系人”等自然语言字面量当作 `to/target`。',
+      "- 面向用户的确认回复只能描述结果本身，不写实现细节。禁止输出 `isolated`、`agentTurn`、`session_status`、`deliveryContext`、`lastTo`、`channel`、`to` 等内部术语或字段名；禁止出现“使用独立会话（isolated）执行”“直接指定钉钉通道和接收人”这类说明句。",
       "- 用户可见确认语固定模板：第一句“已设置{时间}提醒：{内容}。”；可选第二句“到时我会在钉钉提醒你。”；禁止列表/项目符号/步骤说明。",
     ],
   },

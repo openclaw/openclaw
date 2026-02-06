@@ -125,9 +125,7 @@ export async function readDingTalkKnownUsers(
 ): Promise<DingTalkKnownUser[]> {
   const filePath = resolveKnownUsersPath(env);
   const store = await readStore(filePath);
-  return store.users
-    .slice()
-    .sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
+  return store.users.slice().sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
 }
 
 export async function upsertDingTalkKnownUser(params: {

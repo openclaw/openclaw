@@ -6,6 +6,40 @@ const axios = loadDingTalkAxios();
 const DINGTALK_API = "https://api.dingtalk.com";
 const DEFAULT_TEMPLATE_ID = "382e4302-551d-4880-bf29-a30acfab2e71.schema";
 
+type Logger = {
+  info?: (message: string) => void;
+  warn?: (message: string) => void;
+  error?: (message: string) => void;
+};
+
+type ErrorResponse = {
+  status?: number;
+  data?: unknown;
+};
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
+}
+
+function getErrorResponse(err: unknown): ErrorResponse | undefined {
+  if (typeof err !== "object" || err === null || !("response" in err)) {
+    return undefined;
+  }
+  const response = (err as { response?: unknown }).response;
+  if (typeof response !== "object" || response === null) {
+    return undefined;
+  }
+  const statusValue = (response as { status?: unknown }).status;
+  const data = (response as { data?: unknown }).data;
+  return {
+    status: typeof statusValue === "number" ? statusValue : undefined,
+    data,
+  };
+}
+
 export type AICardTarget =
   | { type: "user"; userId: string }
   | { type: "group"; openConversationId: string };
@@ -46,7 +80,7 @@ function buildDeliverBody(cardInstanceId: string, target: AICardTarget, robotCod
 export async function createAICardForTarget(
   config: { clientId: string; clientSecret: string; aiCardTemplateId?: string },
   target: AICardTarget,
-  log?: any,
+  log?: Logger,
 ): Promise<AICardInstance | null> {
   const targetDesc =
     target.type === "group" ? `群聊 ${target.openConversationId}` : `用户 ${target.userId}`;
@@ -89,11 +123,13 @@ export async function createAICardForTarget(
     log?.info?.(`[DingTalk][AICard] 投放卡片响应: status=${deliverResp.status}`);
 
     return { cardInstanceId, accessToken: token, inputingStarted: false };
-  } catch (err: any) {
-    log?.error?.(`[DingTalk][AICard] 创建卡片失败 (${targetDesc}): ${err.message}`);
-    if (err.response) {
+  } catch (err: unknown) {
+    const errMessage = getErrorMessage(err);
+    const response = getErrorResponse(err);
+    log?.error?.(`[DingTalk][AICard] 创建卡片失败 (${targetDesc}): ${errMessage}`);
+    if (response) {
       log?.error?.(
-        `[DingTalk][AICard] 错误响应: status=${err.response.status} data=${JSON.stringify(err.response.data)}`,
+        `[DingTalk][AICard] 错误响应: status=${response.status} data=${JSON.stringify(response.data)}`,
       );
     }
     return null;
@@ -104,7 +140,7 @@ export async function streamAICard(
   card: AICardInstance,
   content: string,
   finished: boolean = false,
-  log?: any,
+  log?: Logger,
 ): Promise<void> {
   // 首次 streaming 前，先切换到 INPUTING 状态（与 Python SDK get_card_data(INPUTING) 一致）
   if (!card.inputingStarted) {
@@ -126,14 +162,19 @@ export async function streamAICard(
     );
     try {
       const statusResp = await axios.put(`${DINGTALK_API}/v1.0/card/instances`, statusBody, {
-        headers: { "x-acs-dingtalk-access-token": card.accessToken, "Content-Type": "application/json" },
+        headers: {
+          "x-acs-dingtalk-access-token": card.accessToken,
+          "Content-Type": "application/json",
+        },
       });
       log?.info?.(
         `[DingTalk][AICard] INPUTING 响应: status=${statusResp.status} data=${JSON.stringify(statusResp.data)}`,
       );
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMessage = getErrorMessage(err);
+      const response = getErrorResponse(err);
       log?.error?.(
-        `[DingTalk][AICard] INPUTING 切换失败: ${err.message}, resp=${JSON.stringify(err.response?.data)}`,
+        `[DingTalk][AICard] INPUTING 切换失败: ${errMessage}, resp=${JSON.stringify(response?.data)}`,
       );
       throw err;
     }
@@ -156,12 +197,17 @@ export async function streamAICard(
   );
   try {
     const streamResp = await axios.put(`${DINGTALK_API}/v1.0/card/streaming`, body, {
-      headers: { "x-acs-dingtalk-access-token": card.accessToken, "Content-Type": "application/json" },
+      headers: {
+        "x-acs-dingtalk-access-token": card.accessToken,
+        "Content-Type": "application/json",
+      },
     });
     log?.info?.(`[DingTalk][AICard] streaming 响应: status=${streamResp.status}`);
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errMessage = getErrorMessage(err);
+    const response = getErrorResponse(err);
     log?.error?.(
-      `[DingTalk][AICard] streaming 更新失败: ${err.message}, resp=${JSON.stringify(err.response?.data)}`,
+      `[DingTalk][AICard] streaming 更新失败: ${errMessage}, resp=${JSON.stringify(response?.data)}`,
     );
     throw err;
   }
@@ -171,7 +217,7 @@ export async function streamAICard(
 export async function finishAICard(
   card: AICardInstance,
   content: string,
-  log?: any,
+  log?: Logger,
 ): Promise<void> {
   log?.info?.(`[DingTalk][AICard] 开始 finish，最终内容长度=${content.length}`);
 
@@ -198,14 +244,19 @@ export async function finishAICard(
   );
   try {
     const finishResp = await axios.put(`${DINGTALK_API}/v1.0/card/instances`, body, {
-      headers: { "x-acs-dingtalk-access-token": card.accessToken, "Content-Type": "application/json" },
+      headers: {
+        "x-acs-dingtalk-access-token": card.accessToken,
+        "Content-Type": "application/json",
+      },
     });
     log?.info?.(
       `[DingTalk][AICard] FINISHED 响应: status=${finishResp.status} data=${JSON.stringify(finishResp.data)}`,
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
+    const errMessage = getErrorMessage(err);
+    const response = getErrorResponse(err);
     log?.error?.(
-      `[DingTalk][AICard] FINISHED 更新失败: ${err.message}, resp=${JSON.stringify(err.response?.data)}`,
+      `[DingTalk][AICard] FINISHED 更新失败: ${errMessage}, resp=${JSON.stringify(response?.data)}`,
     );
   }
 }
@@ -233,7 +284,7 @@ export class DingTalkStreamingSession {
     return Boolean(this.card);
   }
 
-  async start(log?: any): Promise<void> {
+  async start(log?: Logger): Promise<void> {
     if (this.card) {
       return;
     }
@@ -244,14 +295,14 @@ export class DingTalkStreamingSession {
     this.card = card;
   }
 
-  async update(content: string, log?: any): Promise<void> {
+  async update(content: string, log?: Logger): Promise<void> {
     if (!this.card) {
       return;
     }
     await streamAICard(this.card, content, false, log);
   }
 
-  async close(content: string, log?: any): Promise<void> {
+  async close(content: string, log?: Logger): Promise<void> {
     if (!this.card) {
       return;
     }

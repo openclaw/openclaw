@@ -1,7 +1,7 @@
 import type { AICardTarget } from "./ai-card.js";
-import { loadDingTalkAxios } from "./deps.js";
 import { createAICardForTarget, finishAICard } from "./ai-card.js";
 import { getDingTalkAccessToken, getDingTalkOapiToken } from "./auth.js";
+import { loadDingTalkAxios } from "./deps.js";
 import {
   processAudioMarkers,
   processFileMarkers,
@@ -21,10 +21,52 @@ export type DingTalkSendResult = {
   usedAICard?: boolean;
 };
 
+type Logger = {
+  info?: (message: string) => void;
+  warn?: (message: string) => void;
+  error?: (message: string) => void;
+};
+
+type ErrorResponse = {
+  status?: number;
+  data?: unknown;
+};
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
+  }
+  return String(err);
+}
+
+function getErrorResponse(err: unknown): ErrorResponse | undefined {
+  if (typeof err !== "object" || err === null || !("response" in err)) {
+    return undefined;
+  }
+  const response = (err as { response?: unknown }).response;
+  if (typeof response !== "object" || response === null) {
+    return undefined;
+  }
+  const statusValue = (response as { status?: unknown }).status;
+  const data = (response as { data?: unknown }).data;
+  return {
+    status: typeof statusValue === "number" ? statusValue : undefined,
+    data,
+  };
+}
+
+function getResponseMessage(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null) {
+    return undefined;
+  }
+  const message = (data as { message?: unknown }).message;
+  return typeof message === "string" ? message : undefined;
+}
+
 type ProactiveSendOptions = {
   msgType?: DingTalkMsgType;
   title?: string;
-  log?: any;
+  log?: Logger;
   useAICard?: boolean;
   fallbackToNormal?: boolean;
 };
@@ -42,7 +84,12 @@ export async function sendDingTalkWebhookText(
 
   if (useMarkdown) {
     const title =
-      opts.title || text.split("\n")[0]?.replace(/^[#*\s\->]+/, "").slice(0, 20) || "OpenClaw";
+      opts.title ||
+      text
+        .split("\n")[0]
+        ?.replace(/^[#*\s\->]+/, "")
+        .slice(0, 20) ||
+      "OpenClaw";
     if (opts.atUserId) {
       payloadText = `${payloadText} @${opts.atUserId}`;
     }
@@ -79,7 +126,7 @@ async function sendAICardInternal(
   config: { clientId: string; clientSecret: string; aiCardTemplateId?: string },
   target: AICardTarget,
   content: string,
-  log?: any,
+  log?: Logger,
 ): Promise<DingTalkSendResult> {
   const targetDesc =
     target.type === "group" ? `群聊 ${target.openConversationId}` : `用户 ${target.userId}`;
@@ -153,16 +200,20 @@ async function sendAICardInternal(
       `[DingTalk][AICard][Proactive] AI Card 发送成功: ${targetDesc}, cardInstanceId=${card.cardInstanceId}`,
     );
     return { ok: true, cardInstanceId: card.cardInstanceId, usedAICard: true };
-  } catch (err: any) {
-    log?.error?.(`[DingTalk][AICard][Proactive] AI Card 发送失败 (${targetDesc}): ${err.message}`);
-    if (err.response) {
+  } catch (err: unknown) {
+    const errMessage = getErrorMessage(err);
+    const response = getErrorResponse(err);
+    log?.error?.(`[DingTalk][AICard][Proactive] AI Card 发送失败 (${targetDesc}): ${errMessage}`);
+    if (response) {
       log?.error?.(
-        `[DingTalk][AICard][Proactive] 错误响应: status=${err.response.status} data=${JSON.stringify(
-          err.response.data,
-        )}`,
+        `[DingTalk][AICard][Proactive] 错误响应: status=${response.status} data=${JSON.stringify(response.data)}`,
       );
     }
-    return { ok: false, error: err.response?.data?.message || err.message, usedAICard: false };
+    return {
+      ok: false,
+      error: getResponseMessage(response?.data) || errMessage,
+      usedAICard: false,
+    };
   }
 }
 
@@ -170,7 +221,7 @@ async function sendAICardToUser(
   config: { clientId: string; clientSecret: string; aiCardTemplateId?: string },
   userId: string,
   content: string,
-  log?: any,
+  log?: Logger,
 ): Promise<DingTalkSendResult> {
   return sendAICardInternal(config, { type: "user", userId }, content, log);
 }
@@ -179,7 +230,7 @@ async function sendAICardToGroup(
   config: { clientId: string; clientSecret: string; aiCardTemplateId?: string },
   openConversationId: string,
   content: string,
-  log?: any,
+  log?: Logger,
 ): Promise<DingTalkSendResult> {
   return sendAICardInternal(config, { type: "group", openConversationId }, content, log);
 }
@@ -188,13 +239,19 @@ function buildMsgPayload(
   msgType: DingTalkMsgType,
   content: string,
   title?: string,
-): { msgKey: string; msgParam: Record<string, any> } | { error: string } {
+): { msgKey: string; msgParam: Record<string, unknown> } | { error: string } {
   switch (msgType) {
     case "markdown":
       return {
         msgKey: "sampleMarkdown",
         msgParam: {
-          title: title || content.split("\n")[0].replace(/^[#*\s\->]+/, "").slice(0, 20) || "Message",
+          title:
+            title ||
+            content
+              .split("\n")[0]
+              .replace(/^[#*\s\->]+/, "")
+              .slice(0, 20) ||
+            "Message",
           text: content,
         },
       };
@@ -234,7 +291,7 @@ async function sendNormalToUser(
   config: { clientId: string; clientSecret: string },
   userIds: string | string[],
   content: string,
-  options: { msgType?: DingTalkMsgType; title?: string; log?: any } = {},
+  options: { msgType?: DingTalkMsgType; title?: string; log?: Logger } = {},
 ): Promise<DingTalkSendResult> {
   const { msgType = "text", title, log } = options;
   const userIdArray = Array.isArray(userIds) ? userIds : [userIds];
@@ -257,10 +314,14 @@ async function sendNormalToUser(
       `[DingTalk][Normal] 发送单聊消息: userIds=${userIdArray.join(",")}, msgType=${msgType}`,
     );
 
-    const resp = await axios.post("https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend", body, {
-      headers: { "x-acs-dingtalk-access-token": token, "Content-Type": "application/json" },
-      timeout: 10_000,
-    });
+    const resp = await axios.post(
+      "https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend",
+      body,
+      {
+        headers: { "x-acs-dingtalk-access-token": token, "Content-Type": "application/json" },
+        timeout: 10_000,
+      },
+    );
 
     if (resp.data?.processQueryKey) {
       log?.info?.(`[DingTalk][Normal] 发送成功: processQueryKey=${resp.data.processQueryKey}`);
@@ -269,8 +330,8 @@ async function sendNormalToUser(
 
     log?.warn?.(`[DingTalk][Normal] 发送响应异常: ${JSON.stringify(resp.data)}`);
     return { ok: false, error: resp.data?.message || "Unknown error", usedAICard: false };
-  } catch (err: any) {
-    const errMsg = err.response?.data?.message || err.message;
+  } catch (err: unknown) {
+    const errMsg = getResponseMessage(getErrorResponse(err)?.data) || getErrorMessage(err);
     log?.error?.(`[DingTalk][Normal] 发送失败: ${errMsg}`);
     return { ok: false, error: errMsg, usedAICard: false };
   }
@@ -280,7 +341,7 @@ async function sendNormalToGroup(
   config: { clientId: string; clientSecret: string },
   openConversationId: string,
   content: string,
-  options: { msgType?: DingTalkMsgType; title?: string; log?: any } = {},
+  options: { msgType?: DingTalkMsgType; title?: string; log?: Logger } = {},
 ): Promise<DingTalkSendResult> {
   const { msgType = "text", title, log } = options;
 
@@ -314,8 +375,8 @@ async function sendNormalToGroup(
 
     log?.warn?.(`[DingTalk][Normal] 发送响应异常: ${JSON.stringify(resp.data)}`);
     return { ok: false, error: resp.data?.message || "Unknown error", usedAICard: false };
-  } catch (err: any) {
-    const errMsg = err.response?.data?.message || err.message;
+  } catch (err: unknown) {
+    const errMsg = getResponseMessage(getErrorResponse(err)?.data) || getErrorMessage(err);
     log?.error?.(`[DingTalk][Normal] 发送失败: ${errMsg}`);
     return { ok: false, error: errMsg, usedAICard: false };
   }
@@ -423,14 +484,18 @@ async function sendProactive(
     return sendToGroup(config, target.openConversationId, content, options);
   }
 
-  return { ok: false, error: "Must specify userId, userIds, or openConversationId", usedAICard: false };
+  return {
+    ok: false,
+    error: "Must specify userId, userIds, or openConversationId",
+    usedAICard: false,
+  };
 }
 
 export async function sendDingTalkProactiveText(
   config: { clientId: string; clientSecret: string; aiCardTemplateId?: string },
   target: AICardTarget,
   text: string,
-  opts?: { msgType?: DingTalkMsgType; title?: string; log?: any },
+  opts?: { msgType?: DingTalkMsgType; title?: string; log?: Logger },
 ): Promise<DingTalkSendResult> {
   const result = await sendProactive(
     config,
@@ -450,7 +515,7 @@ export async function sendDingTalkProactiveFile(
   config: { clientId: string; clientSecret: string },
   target: AICardTarget,
   payload: { mediaId: string; fileName: string; fileType: string },
-  log?: any,
+  log?: Logger,
 ): Promise<void> {
   const token = await getDingTalkAccessToken(config);
   const msgParam = {
@@ -482,7 +547,7 @@ export async function sendDingTalkProactiveAudio(
   config: { clientId: string; clientSecret: string },
   target: AICardTarget,
   payload: { mediaId: string; durationMs?: number },
-  log?: any,
+  log?: Logger,
 ): Promise<void> {
   const token = await getDingTalkAccessToken(config);
   const msgParam = {
@@ -519,7 +584,7 @@ export async function sendDingTalkProactiveVideo(
     width: number;
     height: number;
   },
-  log?: any,
+  log?: Logger,
 ): Promise<void> {
   const token = await getDingTalkAccessToken(config);
   const msgParam = {

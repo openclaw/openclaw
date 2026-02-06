@@ -76,11 +76,10 @@ Choose **DingTalk**, then enter the App Key and App Secret.
 2. Sign in and go to **Application Development** → **Enterprise Internal Development**
 
 3. Create an application, Get the **AppKey** and **AppSecret** from the app details page
-![Get credentials](../images/dingtalk-step6-credentials.jpg)
+   ![Get credentials](../images/dingtalk-step6-credentials.jpg)
 4. select **Robot** type
 
 ![Create robot app](../images/dingtalk-step1-create-app.png)
-
 
 5. Configure the message receiving mode as **Stream mode**
 
@@ -283,15 +282,15 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 
 Key options:
 
-| Setting                                                     | Description                 | Default   |
-| ----------------------------------------------------------- | --------------------------- | --------- |
-| `channels.dingtalk.enabled`                                 | Enable/disable channel      | `true`    |
-| `channels.dingtalk.clientId`                                | App Key (Client ID)         | -         |
-| `channels.dingtalk.clientSecret`                            | App Secret (Client Secret)  | -         |
-| `channels.dingtalk.dmPolicy`                                | DM policy                   | `open`    |
-| `channels.dingtalk.allowFrom`                               | DM allowlist (user ID list) | -         |
-| `channels.dingtalk.groupPolicy`                             | Group policy                | `open`    |
-| `channels.dingtalk.groupAllowFrom`                          | Group allowlist             | -         |
+| Setting                            | Description                 | Default |
+| ---------------------------------- | --------------------------- | ------- |
+| `channels.dingtalk.enabled`        | Enable/disable channel      | `true`  |
+| `channels.dingtalk.clientId`       | App Key (Client ID)         | -       |
+| `channels.dingtalk.clientSecret`   | App Secret (Client Secret)  | -       |
+| `channels.dingtalk.dmPolicy`       | DM policy                   | `open`  |
+| `channels.dingtalk.allowFrom`      | DM allowlist (user ID list) | -       |
+| `channels.dingtalk.groupPolicy`    | Group policy                | `open`  |
+| `channels.dingtalk.groupAllowFrom` | Group allowlist             | -       |
 
 ---
 
