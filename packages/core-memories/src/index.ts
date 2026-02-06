@@ -185,6 +185,20 @@ type GlobalLinksIndex = {
   lastUpdated: string;
 };
 
+type GlobalLinksLogEntry = {
+  timestamp: string;
+  session: string;
+  id: string;
+  type: string;
+  location: string;
+  layer: "flash" | "warm";
+  keywords: string[];
+};
+
+type GlobalLinksMeta = {
+  lastCompactionAt?: string;
+};
+
 export interface IndexData {
   keywords: Record<string, string[]>;
   timestamps: Record<string, string>;
@@ -213,6 +227,11 @@ function writeFileAtomicSync(filePath: string, content: string): void {
 
 function writeJsonAtomicSync(filePath: string, value: unknown): void {
   writeFileAtomicSync(filePath, JSON.stringify(value, null, 2));
+}
+
+function appendJsonlSync(filePath: string, value: unknown): void {
+  ensureDir(path.dirname(filePath));
+  fs.appendFileSync(filePath, `${JSON.stringify(value)}\n`, "utf-8");
 }
 
 function generateId(): string {
@@ -918,7 +937,15 @@ export class CoreMemories {
     const linksPath = path.join(linksDir, "index.json");
 
     if (!fs.existsSync(linksPath)) {
-      return { keywords: {}, lastUpdated: getCurrentTimestamp() };
+      // Lazily compact from JSONL if possible.
+      try {
+        this.compactGlobalLinksJsonl();
+      } catch {
+        // ignore
+      }
+      if (!fs.existsSync(linksPath)) {
+        return { keywords: {}, lastUpdated: getCurrentTimestamp() };
+      }
     }
 
     try {
@@ -947,37 +974,109 @@ export class CoreMemories {
     writeJsonAtomicSync(linksPath, index);
   }
 
-  private updateGlobalLinks(entry: FlashEntry | WarmEntry, location: string): void {
-    const session = this.resolveSessionNameForLinks();
-    const index = this.loadGlobalLinksIndex();
+  private loadGlobalLinksMeta(): GlobalLinksMeta {
+    const linksDir = this.resolveGlobalLinksDir();
+    const metaPath = path.join(linksDir, "meta.json");
+    if (!fs.existsSync(metaPath)) {
+      return {};
+    }
+    try {
+      return JSON.parse(fs.readFileSync(metaPath, "utf-8")) as GlobalLinksMeta;
+    } catch {
+      return {};
+    }
+  }
 
-    const layer: GlobalLinkRef["layer"] = location.includes("hot/warm") ? "warm" : "flash";
+  private saveGlobalLinksMeta(meta: GlobalLinksMeta): void {
+    const linksDir = this.resolveGlobalLinksDir();
+    const metaPath = path.join(linksDir, "meta.json");
+    writeJsonAtomicSync(metaPath, meta);
+  }
 
-    for (const keyword of entry.keywords) {
-      const normalized = keyword.toLowerCase();
-      const list = Array.isArray(index.keywords[normalized]) ? index.keywords[normalized] : [];
+  private compactGlobalLinksJsonl(): void {
+    const linksDir = this.resolveGlobalLinksDir();
+    const jsonlPath = path.join(linksDir, "links.jsonl");
+    if (!fs.existsSync(jsonlPath)) {
+      return;
+    }
 
-      // Dedup by (session,id)
-      if (!list.some((ref) => ref.session === session && ref.id === entry.id)) {
-        list.push({
-          session,
-          id: entry.id,
-          timestamp: entry.timestamp,
-          type: (entry as FlashEntry).type ?? (entry as WarmEntry).type ?? "",
-          location,
-          layer,
-        });
+    const raw = fs.readFileSync(jsonlPath, "utf-8");
+    const lines = raw.split(/\r?\n/).filter(Boolean);
+
+    const index: GlobalLinksIndex = { keywords: {}, lastUpdated: getCurrentTimestamp() };
+
+    for (const line of lines) {
+      let entry: GlobalLinksLogEntry;
+      try {
+        entry = JSON.parse(line) as GlobalLinksLogEntry;
+      } catch {
+        continue;
+      }
+      if (!entry || !Array.isArray(entry.keywords)) {
+        continue;
       }
 
-      // Keep the most recent refs; cap to avoid unbounded growth.
-      if (list.length > 500) {
-        index.keywords[normalized] = list.slice(-500);
-      } else {
-        index.keywords[normalized] = list;
+      for (const keyword of entry.keywords) {
+        const normalized = String(keyword).toLowerCase();
+        if (!normalized) {
+          continue;
+        }
+        const list = Array.isArray(index.keywords[normalized]) ? index.keywords[normalized] : [];
+        if (!list.some((ref) => ref.session === entry.session && ref.id === entry.id)) {
+          list.push({
+            session: entry.session,
+            id: entry.id,
+            timestamp: entry.timestamp,
+            type: entry.type,
+            location: entry.location,
+            layer: entry.layer,
+          });
+        }
+        // cap per keyword
+        if (list.length > 500) {
+          index.keywords[normalized] = list.slice(-500);
+        } else {
+          index.keywords[normalized] = list;
+        }
       }
     }
 
     this.saveGlobalLinksIndex(index);
+    this.saveGlobalLinksMeta({ lastCompactionAt: getCurrentTimestamp() });
+  }
+
+  private updateGlobalLinks(entry: FlashEntry | WarmEntry, location: string): void {
+    const session = this.resolveSessionNameForLinks();
+    const layer: GlobalLinkRef["layer"] = location.includes("hot/warm") ? "warm" : "flash";
+
+    const linksDir = this.resolveGlobalLinksDir();
+    const jsonlPath = path.join(linksDir, "links.jsonl");
+
+    const logEntry: GlobalLinksLogEntry = {
+      timestamp: entry.timestamp,
+      session,
+      id: entry.id,
+      type: (entry as FlashEntry).type ?? (entry as WarmEntry).type ?? "",
+      location,
+      layer,
+      keywords: entry.keywords.map((k) => String(k).toLowerCase()).filter(Boolean),
+    };
+
+    appendJsonlSync(jsonlPath, logEntry);
+
+    // Periodic compaction: keep queries fast without rewriting on every write.
+    try {
+      const stat = fs.statSync(jsonlPath);
+      const meta = this.loadGlobalLinksMeta();
+      const last = meta.lastCompactionAt ? new Date(meta.lastCompactionAt).getTime() : 0;
+      const due = Date.now() - last > 10 * 60 * 1000; // 10 minutes
+      const big = stat.size > 1_000_000; // 1MB
+      if (due && big) {
+        this.compactGlobalLinksJsonl();
+      }
+    } catch {
+      // ignore
+    }
   }
 
   private updateIndex(entry: FlashEntry | WarmEntry, location: string): void {
