@@ -706,13 +706,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   if (smartAckDelayTimer) {
     clearTimeout(smartAckDelayTimer);
   }
-  if (smartAckMessageId && smartAckChannelId) {
-    deleteMessageDiscord(smartAckChannelId, smartAckMessageId, { rest: client.rest }).catch(
-      (err) => {
-        logVerbose(`discord: failed to delete smart ack message: ${String(err)}`);
-      },
-    );
-  }
+  // ACK messages are intentionally kept as conversation history (not deleted).
   if (!queuedFinal) {
     if (isGuildMessage) {
       clearHistoryEntriesIfEnabled({

@@ -9,7 +9,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
-import { danger } from "../../globals.js";
+import { danger, logVerbose } from "../../globals.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import { processDiscordMessage } from "./message-handler.process.js";
 import { resolveDiscordMessageText } from "./message-utils.js";
@@ -40,6 +40,7 @@ export function createDiscordMessageHandler(params: {
   const groupPolicy = params.discordConfig?.groupPolicy ?? "open";
   const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
   const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
+  let inFlightJobs = 0;
 
   const debouncer = createInboundDebouncer<{ data: DiscordMessageEvent; client: Client }>({
     debounceMs,
@@ -85,7 +86,14 @@ export function createDiscordMessageHandler(params: {
         if (!ctx) {
           return;
         }
-        await processDiscordMessage(ctx);
+        inFlightJobs++;
+        logVerbose(`discord: job started (${inFlightJobs} in flight)`);
+        try {
+          await processDiscordMessage(ctx);
+        } finally {
+          inFlightJobs--;
+          logVerbose(`discord: job finished (${inFlightJobs} in flight)`);
+        }
         return;
       }
       const combinedBaseText = entries
@@ -129,7 +137,14 @@ export function createDiscordMessageHandler(params: {
           ctxBatch.MessageSidLast = ids[ids.length - 1];
         }
       }
-      await processDiscordMessage(ctx);
+      inFlightJobs++;
+      logVerbose(`discord: job started (${inFlightJobs} in flight, batched ${entries.length})`);
+      try {
+        await processDiscordMessage(ctx);
+      } finally {
+        inFlightJobs--;
+        logVerbose(`discord: job finished (${inFlightJobs} in flight)`);
+      }
     },
     onError: (err) => {
       params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));

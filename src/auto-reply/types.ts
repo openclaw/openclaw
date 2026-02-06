@@ -33,6 +33,8 @@ export type GetReplyOptions = {
   onToolStatus?: (info: { toolName: string; toolCallId: string }) => Promise<void> | void;
   /** Enable tool execution feedback messages (e.g. "Searching the web..."). */
   toolFeedback?: boolean;
+  /** Override tool result emission gating (bypasses verbose level check). */
+  shouldEmitToolResult?: () => boolean;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;

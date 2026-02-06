@@ -113,11 +113,13 @@ export async function runReplyAgent(params: {
     isHeartbeat,
   });
 
-  const shouldEmitToolResult = createShouldEmitToolResult({
-    sessionKey,
-    storePath,
-    resolvedVerboseLevel,
-  });
+  const shouldEmitToolResult =
+    opts?.shouldEmitToolResult ??
+    createShouldEmitToolResult({
+      sessionKey,
+      storePath,
+      resolvedVerboseLevel,
+    });
   const shouldEmitToolOutput = createShouldEmitToolOutput({
     sessionKey,
     storePath,
