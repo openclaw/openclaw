@@ -215,6 +215,8 @@
     "overrides": {
       "fast-xml-parser": "5.3.4",
       "form-data": "2.5.4",
+      "@hono/node-server>hono": "4.11.7",
+      "hono": "4.11.7",
       "qs": "6.14.2",
       "@sinclair/typebox": "0.34.48",
       "tar": "7.5.9",

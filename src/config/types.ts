@@ -9,6 +9,7 @@ export * from "./types.browser.js";
 export * from "./types.channels.js";
 export * from "./types.openclaw.js";
 export * from "./types.cron.js";
+export * from "./types.dingtalk.js";
 export * from "./types.discord.js";
 export * from "./types.googlechat.js";
 export * from "./types.gateway.js";
