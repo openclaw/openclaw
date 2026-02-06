@@ -33,4 +33,26 @@ describe("cron schedule", () => {
     const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000, anchorMs: anchor }, anchor);
     expect(next).toBe(anchor + 30_000);
   });
+
+  it("computes next run for cron expression when time has passed today (issue #10035)", () => {
+    // Current time: 2026-02-06 08:20 (Asia/Shanghai = UTC+8)
+    // = 2026-02-06 00:20 UTC
+    const nowMs = Date.parse("2026-02-06T00:20:00.000Z");
+    
+    // Cron: 30 7 * * * (07:30 Asia/Shanghai = 23:30 UTC previous day)
+    const next = computeNextRunAtMs(
+      { kind: "cron", expr: "30 7 * * *", tz: "Asia/Shanghai" },
+      nowMs,
+    );
+    
+    // Expected: tomorrow 2026-02-07 07:30 Asia/Shanghai
+    // = 2026-02-06 23:30:00 UTC
+    const expected = Date.parse("2026-02-06T23:30:00.000Z");
+    
+    // Should NOT be last year (2025-02-06)
+    const wrongYear = Date.parse("2025-02-06T23:30:00.000Z");
+    
+    expect(next).not.toBe(wrongYear);
+    expect(next).toBe(expected);
+  });
 });

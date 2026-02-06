@@ -42,5 +42,29 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     catch: false,
   });
   const next = cron.nextRun(new Date(nowMs));
-  return next ? next.getTime() : undefined;
+  if (!next) {
+    return undefined;
+  }
+  const nextMs = next.getTime();
+  
+  // Guard against croner returning a timestamp in the past (issue #10035).
+  // This can happen due to timezone/DST edge cases or croner bugs.
+  // If the returned time is more than 1 day in the past, it's likely incorrect
+  // (e.g., wrong year). Try getting the next occurrence after the buggy one.
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  if (nextMs < nowMs - ONE_DAY_MS) {
+    // Croner gave us a time significantly in the past. This is likely a bug.
+    // Use enumerate to get the next few runs and find the first valid future time.
+    const upcoming = cron.enumerate(10, new Date(nowMs));
+    for (const run of upcoming) {
+      const runMs = run.getTime();
+      if (runMs >= nowMs) {
+        return runMs;
+      }
+    }
+    // If all enumerated times are in the past, return undefined
+    return undefined;
+  }
+  
+  return nextMs;
 }
