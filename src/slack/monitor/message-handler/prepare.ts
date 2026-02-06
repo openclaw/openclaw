@@ -197,9 +197,17 @@ export async function prepareSlackMessage(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
+  // Thread-level sessions: each message in channels/groups gets its own session
+  // unless it's a reply to an existing thread (then it joins that thread's session).
+  // - For thread replies: use incomingThreadTs (the parent thread)
+  // - For new messages: use message.ts (this message becomes the thread root)
+  // - For DMs: undefined (DMs don't need thread-level sessions)
+  const canonicalThreadId = isRoomish
+    ? (threadContext.incomingThreadTs ?? message.ts)
+    : undefined;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
-    threadId: isThreadReply ? threadTs : undefined,
+    threadId: canonicalThreadId,
     parentSessionKey: isThreadReply && ctx.threadInheritParent ? baseSessionKey : undefined,
   });
   const sessionKey = threadKeys.sessionKey;
