@@ -171,6 +171,20 @@ export interface KeywordSearchResult {
   warm: WarmEntry[];
 }
 
+type GlobalLinkRef = {
+  session: string;
+  id: string;
+  timestamp: string;
+  type: string;
+  location: string;
+  layer: "flash" | "warm";
+};
+
+type GlobalLinksIndex = {
+  keywords: Record<string, GlobalLinkRef[]>;
+  lastUpdated: string;
+};
+
 export interface IndexData {
   keywords: Record<string, string[]>;
   timestamps: Record<string, string>;
@@ -879,6 +893,93 @@ export class CoreMemories {
     writeJsonAtomicSync(indexPath, index);
   }
 
+  private resolveGlobalLinksDir(): string {
+    // If memoryDir is a per-session directory like: <root>/memory/sessions/<session>
+    // then global links live at: <root>/memory/links
+    const normalized = this.memoryDir.replace(/\\/g, "/");
+    const marker = "/memory/sessions/";
+    const idx = normalized.toLowerCase().lastIndexOf(marker);
+    if (idx !== -1) {
+      const rootMemoryDir = normalized.slice(0, idx + "/memory".length);
+      return path.join(rootMemoryDir, "links");
+    }
+
+    // Fallback: global links within this memoryDir.
+    return path.join(this.memoryDir, "links");
+  }
+
+  private resolveSessionNameForLinks(): string {
+    const base = path.basename(this.memoryDir);
+    return base || "default";
+  }
+
+  private loadGlobalLinksIndex(): GlobalLinksIndex {
+    const linksDir = this.resolveGlobalLinksDir();
+    const linksPath = path.join(linksDir, "index.json");
+
+    if (!fs.existsSync(linksPath)) {
+      return { keywords: {}, lastUpdated: getCurrentTimestamp() };
+    }
+
+    try {
+      const raw = JSON.parse(fs.readFileSync(linksPath, "utf-8")) as {
+        keywords?: unknown;
+        lastUpdated?: unknown;
+      };
+
+      const keywordsRaw = raw.keywords;
+      const keywords: Record<string, GlobalLinkRef[]> =
+        keywordsRaw && typeof keywordsRaw === "object" ? (keywordsRaw as Record<string, GlobalLinkRef[]>) : {};
+
+      return {
+        keywords,
+        lastUpdated: typeof raw.lastUpdated === "string" ? raw.lastUpdated : getCurrentTimestamp(),
+      };
+    } catch {
+      return { keywords: {}, lastUpdated: getCurrentTimestamp() };
+    }
+  }
+
+  private saveGlobalLinksIndex(index: GlobalLinksIndex): void {
+    index.lastUpdated = getCurrentTimestamp();
+    const linksDir = this.resolveGlobalLinksDir();
+    const linksPath = path.join(linksDir, "index.json");
+    writeJsonAtomicSync(linksPath, index);
+  }
+
+  private updateGlobalLinks(entry: FlashEntry | WarmEntry, location: string): void {
+    const session = this.resolveSessionNameForLinks();
+    const index = this.loadGlobalLinksIndex();
+
+    const layer: GlobalLinkRef["layer"] = location.includes("hot/warm") ? "warm" : "flash";
+
+    for (const keyword of entry.keywords) {
+      const normalized = keyword.toLowerCase();
+      const list = Array.isArray(index.keywords[normalized]) ? index.keywords[normalized] : [];
+
+      // Dedup by (session,id)
+      if (!list.some((ref) => ref.session === session && ref.id === entry.id)) {
+        list.push({
+          session,
+          id: entry.id,
+          timestamp: entry.timestamp,
+          type: (entry as FlashEntry).type ?? (entry as WarmEntry).type ?? "",
+          location,
+          layer,
+        });
+      }
+
+      // Keep the most recent refs; cap to avoid unbounded growth.
+      if (list.length > 500) {
+        index.keywords[normalized] = list.slice(-500);
+      } else {
+        index.keywords[normalized] = list;
+      }
+    }
+
+    this.saveGlobalLinksIndex(index);
+  }
+
   private updateIndex(entry: FlashEntry | WarmEntry, location: string): void {
     const index = this.loadIndex();
 
@@ -894,6 +995,13 @@ export class CoreMemories {
 
     index.timestamps[entry.id] = location;
     this.saveIndex(index);
+
+    // Global link index enables fast cross-session keyword routing.
+    try {
+      this.updateGlobalLinks(entry, location);
+    } catch {
+      // Best-effort.
+    }
   }
 
   // Flash layer (0-48h)
@@ -1074,6 +1182,70 @@ export class CoreMemories {
     }
 
     return { flash, warm };
+  }
+
+  /**
+   * Cross-session keyword search.
+   * Uses the global links index to locate which per-session store(s) contain matches,
+   * then loads those session entries.
+   */
+  findByKeywordGlobal(keyword: string): {
+    refs: GlobalLinkRef[];
+    flash: FlashEntry[];
+    warm: WarmEntry[];
+  } {
+    const normalized = keyword.toLowerCase();
+    const global = this.loadGlobalLinksIndex();
+    const refs = (global.keywords[normalized] ?? []).slice(-50);
+
+    const flash: FlashEntry[] = [];
+    const warm: WarmEntry[] = [];
+
+    // Load entries directly from the referenced per-session stores.
+    // Note: refs.location is relative to that session's memoryDir.
+    for (const ref of refs) {
+      try {
+        const sessionDir = path.join(this.resolveGlobalLinksDir(), "..", "sessions", ref.session);
+        const sessionIndexPath = path.join(sessionDir, "index.json");
+        if (!fs.existsSync(sessionIndexPath)) {
+          continue;
+        }
+        const sessionIndex = JSON.parse(fs.readFileSync(sessionIndexPath, "utf-8")) as IndexData;
+        const location = sessionIndex.timestamps?.[ref.id] ?? ref.location;
+        if (!location) {
+          continue;
+        }
+
+        if (location.includes("hot/flash")) {
+          const filePath = path.join(sessionDir, location);
+          if (!fs.existsSync(filePath)) {
+            continue;
+          }
+          const data = JSON.parse(fs.readFileSync(filePath, "utf-8")) as { entries?: FlashEntry[] };
+          const match = (data.entries ?? []).find((e) => e.id === ref.id);
+          if (match) {
+            flash.push(match);
+          }
+          continue;
+        }
+
+        if (location.includes("hot/warm")) {
+          const filePath = path.join(sessionDir, location);
+          if (!fs.existsSync(filePath)) {
+            continue;
+          }
+          const data = JSON.parse(fs.readFileSync(filePath, "utf-8")) as { entries?: WarmEntry[] };
+          const match = (data.entries ?? []).find((e) => e.id === ref.id);
+          if (match) {
+            warm.push(match);
+          }
+        }
+      } catch {
+        // best-effort
+      }
+    }
+
+    return { refs, flash, warm };
   }
 
   // Session context
