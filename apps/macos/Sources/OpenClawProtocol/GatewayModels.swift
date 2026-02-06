@@ -2196,6 +2196,26 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
     }
 }
 
+public struct ExecApprovalPendingParams: Codable, Sendable {
+}
+
+public struct ExecApprovalPendingResult: Codable, Sendable {
+    public let nowms: Int
+    public let pending: [[String: AnyCodable]]
+
+    public init(
+        nowms: Int,
+        pending: [[String: AnyCodable]]
+    ) {
+        self.nowms = nowms
+        self.pending = pending
+    }
+    private enum CodingKeys: String, CodingKey {
+        case nowms = "nowMs"
+        case pending
+    }
+}
+
 public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
     public let command: String
