@@ -23,6 +23,7 @@ const log = createSubsystemLogger("tools/web-search");
 const SEARCH_PROVIDERS = ["brave", "perplexity"] as const;
 type BuiltinProvider = (typeof SEARCH_PROVIDERS)[number];
 const BUILTIN_PROVIDERS: ReadonlySet<string> = new Set<string>(SEARCH_PROVIDERS);
+const warnedCustomProviders = new Set<string>();
 
 function isBuiltinProvider(value: string): value is BuiltinProvider {
   return BUILTIN_PROVIDERS.has(value);
@@ -478,10 +479,13 @@ export function createWebSearchTool(options?: {
 
   // Non-built-in provider: skip core tool so a plugin can register web_search.
   if (!isBuiltinProvider(provider)) {
-    log.warn(
-      `web_search provider "${provider}" is not built-in; core web_search disabled. ` +
-        `A plugin must register a web_search tool for this provider to work.`,
-    );
+    if (!warnedCustomProviders.has(provider)) {
+      warnedCustomProviders.add(provider);
+      log.warn(
+        `web_search provider "${provider}" is not built-in; core web_search disabled. ` +
+          `A plugin must register a web_search tool for this provider to work.`,
+      );
+    }
     return null;
   }
 
