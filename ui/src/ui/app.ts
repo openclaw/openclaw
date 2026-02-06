@@ -232,9 +232,13 @@ export class OpenClawApp extends LitElement {
   @state() usageCostSummary: import("./types.js").CostUsageSummary | null = null;
   @state() usageError: string | null = null;
   @state() usageStartDate = (() => {
-    return new Date().toISOString().slice(0, 10);
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   })();
-  @state() usageEndDate = new Date().toISOString().slice(0, 10);
+  @state() usageEndDate = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  })();
   @state() usageSelectedSessions: string[] = [];
   @state() usageSelectedDays: string[] = [];
   @state() usageSelectedHours: number[] = [];
