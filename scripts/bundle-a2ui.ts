@@ -24,7 +24,7 @@ async function walk(entryPath: string, files: string[]) {
     st = await fs.lstat(entryPath);
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    if (err?.code) {
+    if (err?.code === "ENOENT") {
       return;
     }
     throw error;
@@ -35,7 +35,7 @@ async function walk(entryPath: string, files: string[]) {
       entries = await fs.readdir(entryPath);
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
-      if (err?.code) {
+      if (err?.code === "ENOENT") {
         return;
       }
       throw error;
@@ -80,6 +80,7 @@ function run(command: string, args: string[]) {
       cwd: ROOT_DIR,
       stdio: "inherit",
     });
+    child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) {
         resolve();
