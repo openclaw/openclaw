@@ -1,6 +1,6 @@
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import fs from "node:fs";
 import path from "node:path";
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -324,6 +324,20 @@ export async function setVeniceApiKey(
   upsertAuthProfile({
     profileId: "venice:default",
     credential: buildApiKeyCredential("venice", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
+export const APERTIS_DEFAULT_MODEL_REF = "apertis/claude-opus-4-5-20251101";
+
+export async function setApertisApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "apertis:default",
+    credential: {
+      type: "api_key",
+      provider: "apertis",
+      key,
+    },
     agentDir: resolveAuthAgentDir(agentDir),
   });
 }
