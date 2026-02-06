@@ -35,6 +35,8 @@ export type HookMappingConfig = {
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
+  /** Target agent id for this hook (defaults to the default agent). */
+  agentId?: string;
   transform?: HookMappingTransform;
 };
 
