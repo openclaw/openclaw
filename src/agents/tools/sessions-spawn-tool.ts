@@ -225,24 +225,32 @@ export function createSessionsSpawnTool(opts?: {
       const childIdem = crypto.randomUUID();
       let childRunId: string = childIdem;
       try {
+        const agentParams: Record<string, unknown> = {
+          message: task,
+          sessionKey: childSessionKey,
+          channel: requesterOrigin?.channel,
+          to: requesterOrigin?.to ?? undefined,
+          accountId: requesterOrigin?.accountId ?? undefined,
+          threadId:
+            requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+          idempotencyKey: childIdem,
+          deliver: false,
+          lane: AGENT_LANE_SUBAGENT,
+          extraSystemPrompt: childSystemPrompt,
+          thinking: thinkingOverride,
+          timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
+          label: label || undefined,
+          spawnedBy: spawnedByKey,
+          groupId: opts?.agentGroupId ?? undefined,
+          groupChannel: opts?.agentGroupChannel ?? undefined,
+          groupSpace: opts?.agentGroupSpace ?? undefined,
+        };
+        if (resolvedModel && modelApplied) {
+          agentParams.model = resolvedModel;
+        }
         const response = await callGateway<{ runId: string }>({
           method: "agent",
-          params: {
-            message: task,
-            sessionKey: childSessionKey,
-            channel: requesterOrigin?.channel,
-            idempotencyKey: childIdem,
-            deliver: false,
-            lane: AGENT_LANE_SUBAGENT,
-            extraSystemPrompt: childSystemPrompt,
-            thinking: thinkingOverride,
-            timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
-            label: label || undefined,
-            spawnedBy: spawnedByKey,
-            groupId: opts?.agentGroupId ?? undefined,
-            groupChannel: opts?.agentGroupChannel ?? undefined,
-            groupSpace: opts?.agentGroupSpace ?? undefined,
-          },
+          params: agentParams,
           timeoutMs: 10_000,
         });
         if (typeof response?.runId === "string" && response.runId) {

@@ -1,5 +1,6 @@
 import type { ClientToolDefinition } from "../../agents/pi-embedded-runner/run/params.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
+import type { SessionEntry } from "../../config/sessions.js";
 
 /** Image content block for Claude API multimodal messages. */
 export type ImageContent = {
@@ -37,6 +38,8 @@ export type AgentCommandOpts = {
   to?: string;
   sessionId?: string;
   sessionKey?: string;
+  /** Optional session entry override (used when caller already resolved session data). */
+  sessionEntry?: SessionEntry;
   thinking?: string;
   thinkingOnce?: string;
   verbose?: string;

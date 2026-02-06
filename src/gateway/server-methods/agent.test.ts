@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
+  loadGatewayModelCatalog: vi.fn(),
 }));
 
 vi.mock("../session-utils.js", () => ({
@@ -48,6 +49,13 @@ vi.mock("../../sessions/send-policy.js", () => ({
   resolveSendPolicy: () => "allow",
 }));
 
+vi.mock("../../agents/model-selection.js", () => ({
+  resolveConfiguredModelRef: () => ({ provider: "openai", model: "gpt-default" }),
+  resolveAllowedModelRef: ({ raw }: { raw: string }) => ({
+    ref: { provider: "openai", model: raw },
+  }),
+}));
+
 vi.mock("../../utils/delivery-context.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils/delivery-context.js")>(
     "../../utils/delivery-context.js",
@@ -63,9 +71,59 @@ const makeContext = (): GatewayRequestContext =>
     dedupe: new Map(),
     addChatRun: vi.fn(),
     logGateway: { info: vi.fn(), error: vi.fn() },
+    loadGatewayModelCatalog: mocks.loadGatewayModelCatalog,
   }) as unknown as GatewayRequestContext;
 
 describe("gateway agent handler", () => {
+  it("threads model override into agentCommand sessionEntry", async () => {
+    mocks.loadGatewayModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        models: [{ id: "gpt-test-a" }],
+      },
+    ]);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "existing-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "agent:main:main",
+    });
+
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      await updater(store);
+    });
+
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const respond = vi.fn();
+    await agentHandlers.agent({
+      params: {
+        message: "test",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        model: "gpt-test-a",
+        idempotencyKey: "test-idem-model",
+      },
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "3", method: "agent" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    const sessionEntry = call?.sessionEntry as Record<string, unknown> | undefined;
+    expect(sessionEntry?.modelOverride).toBe("gpt-test-a");
+    expect(sessionEntry?.providerOverride).toBe("openai");
+  });
+
   it("preserves cliSessionIds from existing session entry", async () => {
     const existingCliSessionIds = { "claude-cli": "abc-123-def" };
     const existingClaudeCliSessionId = "abc-123-def";
