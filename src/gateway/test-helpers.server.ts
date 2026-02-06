@@ -44,6 +44,7 @@ let previousConfigPath: string | undefined;
 let previousSkipBrowserControl: string | undefined;
 let previousSkipGmailWatcher: string | undefined;
 let previousSkipCanvasHost: string | undefined;
+let previousBundledPluginsDir: string | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
 
@@ -83,6 +84,7 @@ async function setupGatewayTestHome() {
   previousSkipBrowserControl = process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
   previousSkipGmailWatcher = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
   previousSkipCanvasHost = process.env.OPENCLAW_SKIP_CANVAS_HOST;
+  previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-home-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
@@ -94,6 +96,9 @@ function applyGatewaySkipEnv() {
   process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
   process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
   process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tempHome
+    ? path.join(tempHome, "openclaw-test-no-bundled-extensions")
+    : "openclaw-test-no-bundled-extensions";
 }
 
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
@@ -183,6 +188,11 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
       delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
     } else {
       process.env.OPENCLAW_SKIP_CANVAS_HOST = previousSkipCanvasHost;
+    }
+    if (previousBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
     }
   }
   if (options.restoreEnv && tempHome) {
