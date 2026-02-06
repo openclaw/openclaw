@@ -114,4 +114,33 @@ describe("simplex accounts", () => {
     } as OpenClawConfig;
     expect(resolveSimplexAccount({ cfg: cfg2, accountId: "alpha" }).enabled).toBe(false);
   });
+
+  it("requires explicit wsUrl for external mode configuration", () => {
+    const cfg = {
+      channels: {
+        simplex: {
+          accounts: {
+            alpha: {
+              connection: {
+                mode: "external",
+              },
+            },
+            beta: {
+              connection: {
+                mode: "external",
+                wsUrl: "ws://example.test:9999",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const alpha = resolveSimplexAccount({ cfg, accountId: "alpha" });
+    expect(alpha.wsUrl).toBe("ws://127.0.0.1:5225");
+    expect(alpha.configured).toBe(false);
+
+    const beta = resolveSimplexAccount({ cfg, accountId: "beta" });
+    expect(beta.configured).toBe(true);
+  });
 });

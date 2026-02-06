@@ -73,6 +73,10 @@ function resolveWsUrl(connection: SimplexConnectionConfig): string {
   return `ws://${host}:${port}`;
 }
 
+function hasExplicitWsUrl(connection: SimplexConnectionConfig): boolean {
+  return Boolean(connection.wsUrl?.trim());
+}
+
 export function resolveSimplexAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -87,7 +91,7 @@ export function resolveSimplexAccount(params: {
   const wsHost = resolveWsHost(connection);
   const wsPort = resolveWsPort(connection);
   const cliPath = connection.cliPath?.trim() || DEFAULT_CLI_PATH;
-  const configured = mode === "external" ? Boolean(wsUrl) : Boolean(cliPath);
+  const configured = mode === "external" ? hasExplicitWsUrl(connection) : Boolean(cliPath);
   return {
     accountId,
     enabled,

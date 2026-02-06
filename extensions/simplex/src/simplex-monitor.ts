@@ -573,7 +573,7 @@ async function handleSimplexEvent(params: {
       CommandBody: rawBody,
       From:
         context.chatType === "group" ? `simplex:group:${context.chatId}` : `simplex:${dmPeerId}`,
-      To: context.chatType === "group" ? `simplex:${context.chatId}` : `simplex:${dmPeerId}`,
+      To: context.chatType === "group" ? `simplex:group:${context.chatId}` : `simplex:${dmPeerId}`,
       SessionKey: route.sessionKey,
       AccountId: route.accountId,
       ChatType: context.chatType === "group" ? "group" : "direct",
@@ -591,7 +591,7 @@ async function handleSimplexEvent(params: {
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "simplex" as const,
       OriginatingTo:
-        context.chatType === "group" ? `simplex:${context.chatId}` : `simplex:${dmPeerId}`,
+        context.chatType === "group" ? `simplex:group:${context.chatId}` : `simplex:${dmPeerId}`,
     });
 
     const fileId = item.chatItem?.file?.fileId;
