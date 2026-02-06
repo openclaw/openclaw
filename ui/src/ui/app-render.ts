@@ -262,6 +262,9 @@ export function renderApp(state: AppViewState) {
                 onWhatsAppLogout: () => state.handleWhatsAppLogout(),
                 onConfigPatch: (path, value) => updateConfigFormValue(state, path, value),
                 onSimplexInvite: (mode) => state.handleSimplexInvite(mode),
+                onSimplexInviteError: (message) => {
+                  state.simplexInviteError = message;
+                },
                 onConfigSave: () => state.handleChannelConfigSave(),
                 onConfigReload: () => state.handleChannelConfigReload(),
                 onNostrProfileEdit: (accountId, profile) =>

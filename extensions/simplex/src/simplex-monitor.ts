@@ -740,7 +740,7 @@ async function dispatchInbound(params: {
     replyOptions: {
       disableBlockStreaming:
         typeof pending.account.config.blockStreaming === "boolean"
-          ? pending.account.config.blockStreaming
+          ? !pending.account.config.blockStreaming
           : undefined,
     },
   });

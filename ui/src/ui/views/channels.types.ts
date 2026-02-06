@@ -45,6 +45,7 @@ export type ChannelsProps = {
   onWhatsAppWait: () => void;
   onWhatsAppLogout: () => void;
   onSimplexInvite: (mode: "connect" | "address") => void;
+  onSimplexInviteError: (message: string | null) => void;
   onConfigPatch: (path: Array<string | number>, value: unknown) => void;
   onConfigSave: () => void;
   onConfigReload: () => void;

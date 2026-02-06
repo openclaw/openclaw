@@ -18,6 +18,20 @@ export function renderSimplexCard(params: {
   const inviteLink = props.simplexInviteLink;
   const inviteQrDataUrl = props.simplexInviteQrDataUrl;
   const inviteError = props.simplexInviteError;
+  const copyInviteLink = async (): Promise<void> => {
+    if (!inviteLink) {
+      return;
+    }
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(inviteLink);
+      props.onSimplexInviteError(null);
+    } catch (err) {
+      props.onSimplexInviteError(`Copy failed: ${String(err)}`);
+    }
+  };
 
   const renderAccountCard = (account: ChannelAccountSnapshot) => {
     const label = account.name || account.accountId;
@@ -154,7 +168,7 @@ export function renderSimplexCard(params: {
               <div class="muted">${inviteLabel}</div>
               <button
                 class="btn btn--sm"
-                @click=${() => navigator.clipboard.writeText(inviteLink)}
+                @click=${() => void copyInviteLink()}
               >
                 Copy
               </button>
