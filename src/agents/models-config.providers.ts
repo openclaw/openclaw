@@ -125,6 +125,11 @@ async function discoverOllamaModels(): Promise<ModelDefinitionConfig[]> {
         cost: OLLAMA_DEFAULT_COST,
         contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW,
         maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+        // Disable streaming by default for Ollama to avoid SDK issue #1205
+        // See: https://github.com/badlogic/pi-mono/issues/1205
+        params: {
+          streaming: false,
+        },
       };
     });
   } catch (error) {

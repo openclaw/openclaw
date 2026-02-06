@@ -3173,8 +3173,7 @@ Defaults:
 Requests must include the hook token:
 
 - `Authorization: Bearer <token>` **or**
-- `x-openclaw-token: <token>` **or**
-- `?token=<token>`
+- `x-openclaw-token: <token>`
 
 Endpoints:
 

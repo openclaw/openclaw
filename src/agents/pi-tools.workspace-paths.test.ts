@@ -13,7 +13,6 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../infra/shell-env.js")>();
   return { ...mod, getShellPathFromLoginShell: () => null };
 });
-
 async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   try {
@@ -32,12 +31,11 @@ describe("workspace path resolution", () => {
   it("reads relative paths against workspaceDir even after cwd changes", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {
-        const prevCwd = process.cwd();
         const testFile = "read.txt";
         const contents = "workspace read ok";
         await fs.writeFile(path.join(workspaceDir, testFile), contents, "utf8");
 
-        process.chdir(otherDir);
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
         try {
           const tools = createOpenClawCodingTools({ workspaceDir });
           const readTool = tools.find((tool) => tool.name === "read");
@@ -46,7 +44,7 @@ describe("workspace path resolution", () => {
           const result = await readTool?.execute("ws-read", { path: testFile });
           expect(getTextContent(result)).toContain(contents);
         } finally {
-          process.chdir(prevCwd);
+          cwdSpy.mockRestore();
         }
       });
     });
@@ -55,11 +53,10 @@ describe("workspace path resolution", () => {
   it("writes relative paths against workspaceDir even after cwd changes", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {
-        const prevCwd = process.cwd();
         const testFile = "write.txt";
         const contents = "workspace write ok";
 
-        process.chdir(otherDir);
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
         try {
           const tools = createOpenClawCodingTools({ workspaceDir });
           const writeTool = tools.find((tool) => tool.name === "write");
@@ -73,7 +70,7 @@ describe("workspace path resolution", () => {
           const written = await fs.readFile(path.join(workspaceDir, testFile), "utf8");
           expect(written).toBe(contents);
         } finally {
-          process.chdir(prevCwd);
+          cwdSpy.mockRestore();
         }
       });
     });
@@ -82,11 +79,10 @@ describe("workspace path resolution", () => {
   it("edits relative paths against workspaceDir even after cwd changes", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       await withTempDir("openclaw-cwd-", async (otherDir) => {
-        const prevCwd = process.cwd();
         const testFile = "edit.txt";
         await fs.writeFile(path.join(workspaceDir, testFile), "hello world", "utf8");
 
-        process.chdir(otherDir);
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
         try {
           const tools = createOpenClawCodingTools({ workspaceDir });
           const editTool = tools.find((tool) => tool.name === "edit");
@@ -101,7 +97,7 @@ describe("workspace path resolution", () => {
           const updated = await fs.readFile(path.join(workspaceDir, testFile), "utf8");
           expect(updated).toBe("hello openclaw");
         } finally {
-          process.chdir(prevCwd);
+          cwdSpy.mockRestore();
         }
       });
     });
