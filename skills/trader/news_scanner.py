@@ -2,13 +2,13 @@ import os
 import json
 import logging
 import requests
+import subprocess
 from datetime import datetime
 
 # --- Configuration ---
 CRED_PATH = os.path.expanduser("~/.openclaw/credentials/alpaca_credentials.json")
-GATEWAY_URL = "http://localhost:18789"
 TARGET_CHANNEL_ID = "1469273412357718048"  # #saiabets
-SYMBOLS = ["AMZN", "MSTR", "BTCUSD"]
+SYMBOLS = ["AMZN", "MSTR", "BTCUSD", "POET"]
 STATE_FILE = os.path.expanduser("~/.openclaw/workspace/memory/news_scanner_state.json")
 
 # Setup Logging
@@ -32,36 +32,53 @@ def save_state(state):
     with open(STATE_FILE, 'w') as f:
         json.dump(state, f)
 
-def find_target_session():
-    """Finds the session key for the Trader Channel."""
+def find_target_session_id_cli():
+    """Finds the session UUID via openclaw CLI."""
     try:
-        url = f"{GATEWAY_URL}/api/v1/sessions/list"
-        resp = requests.get(url, timeout=5)
-        if resp.status_code != 200:
+        cmd = ["openclaw", "sessions", "--json"]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logging.error(f"CLI sessions list failed: {result.stderr}")
             return None
-        sessions = resp.json().get("sessions", [])
+            
+        data = json.loads(result.stdout)
+        sessions = data.get("sessions", [])
+        
         for sess in sessions:
-            if TARGET_CHANNEL_ID in sess["sessionKey"]:
-                return sess["sessionKey"]
-        for sess in sessions:
-             if TARGET_CHANNEL_ID in sess.get("displayName", ""):
-                 return sess["sessionKey"]
+            key = sess.get("key", "")
+            if TARGET_CHANNEL_ID in key:
+                return sess.get("sessionId") # Return UUID, not Key
+        
+        return None
+    except Exception as e:
+        logging.error(f"Failed to resolve session via CLI: {e}")
         return None
 
 def notify_session(headline, summary, url, symbol):
-    session_key = find_target_session()
-    if not session_key:
+    session_id = find_target_session_id_cli()
+    if not session_id:
         logging.warning("No target session found.")
         return
 
     msg = f"📰 **NEWS ALERT (${symbol}):** {headline}\n_{summary}_\n{url}"
     
     try:
-        requests.post(f"{GATEWAY_URL}/api/v1/sessions/send", json={
-            "sessionKey": session_key,
-            "message": msg
-        }, timeout=5)
-        logging.info(f"Sent news to session: {headline}")
+        # Use openclaw agent command (injects directly into runtime)
+        cmd = [
+            "openclaw", "agent", 
+            "--session-id", session_id,
+            "--message", msg
+        ]
+        
+        # We run it detached/background or wait? 
+        # Waiting is safer to ensure delivery.
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            logging.info(f"Sent news to session: {headline}")
+        else:
+            logging.error(f"Failed to send via CLI: {result.stderr}")
+            
     except Exception as e:
         logging.error(f"Failed to notify: {e}")
 

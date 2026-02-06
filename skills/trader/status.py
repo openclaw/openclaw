@@ -1,40 +1,37 @@
-import json
 import os
+import json
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import GetAssetsRequest
-from alpaca.trading.enums import AssetClass
+from alpaca.trading.requests import GetOrdersRequest
+from alpaca.trading.enums import OrderStatus, QueryOrderStatus
 
-# Load credentials
 CRED_PATH = os.path.expanduser("~/.openclaw/credentials/alpaca_credentials.json")
 
-def load_creds():
-    with open(CRED_PATH, 'r') as f:
-        return json.load(f)
-
 def main():
-    creds = load_creds()
-    api_key = creds.get("APCA_API_KEY_ID")
-    secret_key = creds.get("APCA_API_SECRET_KEY")
-    paper = True # Always paper for now
-
-    trading_client = TradingClient(api_key, secret_key, paper=paper)
-
-    account = trading_client.get_account()
-
-    print(f"--- Alpaca Account Status ---")
-    print(f"ID: {account.id}")
-    print(f"Status: {account.status}")
-    print(f"Currency: {account.currency}")
-    print(f"Cash: ${account.cash}")
-    print(f"Portfolio Value: ${account.portfolio_value}")
-    print(f"Buying Power: ${account.buying_power}")
-    print(f"Daytrade Count: {account.daytrade_count}")
+    with open(CRED_PATH, 'r') as f:
+        creds = json.load(f)
     
-    if float(account.portfolio_value) < 100000:
-        print("\nNote: Portfolio is below starting paper balance ($100k).")
-    elif float(account.portfolio_value) > 100000:
-        gain = float(account.portfolio_value) - 100000
-        print(f"\nNote: Current Gain: +${gain:.2f}")
+    client = TradingClient(creds["APCA_API_KEY_ID"], creds["APCA_API_SECRET_KEY"], paper=True)
+    
+    try:
+        # Check Positions
+        positions = client.get_all_positions()
+        print(f"--- POSITIONS ({len(positions)}) ---")
+        for p in positions:
+            print(f"[{p.symbol}] {p.qty} @ ${float(p.avg_entry_price):.2f} | PnL: {p.unrealized_plpc}")
+
+        # Check Open Orders (Correct V2 Syntax)
+        request_params = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+        orders = client.get_orders(filter=request_params)
+        
+        print(f"\n--- OPEN ORDERS ({len(orders)}) ---")
+        for o in orders:
+            # Calculate value if possible
+            qty = float(o.qty) if o.qty else 0
+            # For market orders, price might be None, estimate?
+            print(f"[{o.symbol}] {o.side} {qty} shares ({o.type}) | ID: {o.id}")
+            
+    except Exception as e:
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
     main()

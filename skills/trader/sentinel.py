@@ -1,7 +1,7 @@
 import os
 import json
 import time
-import requests
+import subprocess
 import asyncio
 import logging
 from alpaca.data.live import StockDataStream
@@ -9,9 +9,8 @@ from alpaca.trading.client import TradingClient
 
 # --- Configuration ---
 CRED_PATH = os.path.expanduser("~/.openclaw/credentials/alpaca_credentials.json")
-GATEWAY_URL = "http://localhost:18789"
 TARGET_CHANNEL_ID = "1469273412357718048"  # #saiabets
-SYMBOLS = ["AMZN", "MSTR"]
+SYMBOLS = ["AMZN", "MSTR", "POET"]
 THRESHOLDS = 0.05  # +/- 5%
 
 # Setup Logging
@@ -21,46 +20,45 @@ def load_creds():
     with open(CRED_PATH, 'r') as f:
         return json.load(f)
 
-def find_target_session():
-    """Finds the session key for the Trader Channel."""
+def find_target_session_id_cli():
+    """Finds the session UUID via openclaw CLI."""
     try:
-        url = f"{GATEWAY_URL}/api/v1/sessions/list"
-        resp = requests.get(url)
-        if resp.status_code != 200:
-            logging.error(f"Failed to list sessions: {resp.text}")
+        cmd = ["openclaw", "sessions", "--json"]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            logging.error(f"CLI sessions list failed: {result.stderr}")
             return None
             
-        sessions = resp.json().get("sessions", [])
+        data = json.loads(result.stdout)
+        sessions = data.get("sessions", [])
         
-        # Priority: Exact Channel Match
         for sess in sessions:
-            if TARGET_CHANNEL_ID in sess["sessionKey"]:
-                return sess["sessionKey"]
-                
-        # Fallback: any session containing the channel ID in name/key
-        for sess in sessions:
-             if TARGET_CHANNEL_ID in sess.get("displayName", ""):
-                 return sess["sessionKey"]
-
+            key = sess.get("key", "")
+            if TARGET_CHANNEL_ID in key:
+                return sess.get("sessionId") # Return UUID
+        
         return None
     except Exception as e:
-        logging.error(f"Error finding session: {e}")
+        logging.error(f"Failed to resolve session via CLI: {e}")
         return None
 
 def notify_session(message):
-    session_key = find_target_session()
-    if not session_key:
+    session_id = find_target_session_id_cli()
+    if not session_id:
         logging.warning("No target session found. Cannot notify.")
         return
 
     try:
-        url = f"{GATEWAY_URL}/api/v1/sessions/send"
-        payload = {
-            "sessionKey": session_key,
-            "message": f"[SENTINEL ALERT] {message}"
-        }
-        requests.post(url, json=payload)
-        logging.info(f"Notified session {session_key}: {message}")
+        cmd = [
+            "openclaw", "agent", 
+            "--session-id", session_id,
+            "--message", f"[SENTINEL ALERT] {message}"
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            logging.info(f"Notified session {session_id}: {message}")
+        else:
+            logging.error(f"CLI Error: {result.stderr}")
     except Exception as e:
         logging.error(f"Failed to notify session: {e}")
 
@@ -69,14 +67,12 @@ async def run_sentinel():
     api_key = creds["APCA_API_KEY_ID"]
     secret_key = creds["APCA_API_SECRET_KEY"]
     
-    # Initialize Clients
     trade_client = TradingClient(api_key, secret_key, paper=True)
     stream = StockDataStream(api_key, secret_key)
     
-    # State tracking
     initial_prices = {}
+    last_alert_bucket = {}
     
-    # Get initial positions to track entry price
     try:
         positions = trade_client.get_all_positions()
         for p in positions:
@@ -86,9 +82,6 @@ async def run_sentinel():
     except Exception as e:
         logging.error(f"Failed to fetch positions: {e}")
         return
-
-    # If we don't have positions, fetch current price as baseline
-    # (Simplified: we only alert on existing positions for now)
     
     async def handle_trade(data):
         symbol = data.symbol
@@ -99,26 +92,39 @@ async def run_sentinel():
 
         entry = initial_prices[symbol]
         change_pct = (price - entry) / entry
+        pct_value = change_pct * 100
         
-        # Check thresholds
-        if abs(change_pct) >= THRESHOLDS:
+        # Logic: Alert every 5% step (5, 10, 15...)
+        # Calculate current bucket (e.g. 6.3% -> 5, 11% -> 10, -7% -> -5)
+        step = 5.0
+        
+        # If below first threshold, clear state and return
+        if abs(pct_value) < step:
+            if symbol in last_alert_bucket:
+                # Optional: Alert "Back to Normal"? For now, just reset silently.
+                last_alert_bucket.pop(symbol)
+            return
+
+        # Determine bucket
+        # int(6.3 / 5) * 5 = 5
+        # int(-6.3 / 5) * 5 = -5 (Wait, int(-1.2) is -1. Correct.)
+        current_bucket = int(pct_value / step) * int(step)
+        
+        # Only alert if we moved to a NEW bucket
+        last_bucket = last_alert_bucket.get(symbol, 0)
+        
+        if current_bucket != last_bucket:
+            last_alert_bucket[symbol] = current_bucket
             direction = "UP" if change_pct > 0 else "DOWN"
-            msg = f"{symbol} is {direction} {change_pct*100:.2f}% (Price: ${price}, Entry: ${entry})"
-            
-            # Simple rate limiting (in-memory) could be added here to avoid spam
-            # For now, we alert on every tick crossing. 
-            # Ideally: alert once, then mute for X mins.
+            msg = f"{symbol} hit {current_bucket}% threshold ({direction} {pct_value:.2f}%) (Price: ${price}, Entry: ${entry})"
             notify_session(msg)
-            
-            # Optional: Sleep/Cooldown logic logic would go here
-            # removing from tracking to prevent spam for this run?
-            # initial_prices.pop(symbol) 
 
-    # Subscribe
-    stream.subscribe_trades(handle_trade, *SYMBOLS)
-
-    logging.info(f"Sentinel started. Monitoring {SYMBOLS} for +/- {THRESHOLDS*100}% moves.")
-    await stream._run_forever()
+    try:
+        stream.subscribe_trades(handle_trade, *SYMBOLS)
+        logging.info(f"Sentinel started. Monitoring {SYMBOLS} for +/- {THRESHOLDS*100}% moves.")
+        await stream._run_forever()
+    except Exception as e:
+        logging.error(f"Stream error: {e}")
 
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()
