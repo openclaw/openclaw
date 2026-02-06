@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Agents: bump pi-mono packages to 0.52.5. (#9949) Thanks @gumadeiras.
+- Antigravity: update the default Antigravity OAuth model to `google-antigravity/claude-opus-4-6-thinking`. (#10720) Thanks @calvin-hpnet.
 - Memory: add native Voyage embeddings provider (including batching) for vector memory search. (#7078) Thanks @mcinteerj.
 - Models: default Anthropic model to `anthropic/claude-opus-4-6`. (#9853) Thanks @TinyTb.
 - Models/Onboarding: refresh provider defaults, update OpenAI/OpenAI Codex wizard defaults, and harden model allowlist initialization for first-time configs with matching docs/tests. (#9911) Thanks @gumadeiras.
