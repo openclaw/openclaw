@@ -286,9 +286,7 @@ export function onceMessage<T = unknown>(
 export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
   const mod = await serverModulePromise;
   const resolvedOpts =
-    process.env.VITEST && opts?.controlUiEnabled === undefined
-      ? { ...opts, controlUiEnabled: false }
-      : opts;
+    opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
   return await mod.startGatewayServer(port, resolvedOpts);
 }
 
