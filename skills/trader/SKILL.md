@@ -27,8 +27,8 @@ The trading system runs as a hybrid of manual execution and automated monitoring
     - **Logic:** Alerts if PnL varies by > +/- 5% from entry.
     - **Notification:** Sends a system event to the **Main Session** (Control Room) via Gateway API (`/api/v1/sessions/send`).
 3.  **Sentinel Operations (Monitoring):**
-    - **Launch:** Must use `nohup` and log redirection to prevent session-kill.
-    - **Command:** `nohup /home/damon/qwen-venv/bin/python3 skills/trader/sentinel.py > skills/trader/sentinel.std.log 2>&1 &`
+    - **Launch:** Must use `setsid` to break process group linkage and prevent SIGTERM on session exit.
+    - **Command:** `setsid /home/damon/qwen-venv/bin/python3 skills/trader/sentinel.py > skills/trader/sentinel.std.log 2>&1 < /dev/null &`
     - **Logs:** `sentinel.log` (App), `sentinel.std.log` (Crash/Stderr).
     - **Schedule:** Start 16:25 EET, Stop 23:05 EET (Mon-Fri).
 
