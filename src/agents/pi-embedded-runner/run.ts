@@ -3,7 +3,6 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
@@ -46,6 +45,7 @@ import {
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
+import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -92,7 +92,21 @@ export async function runEmbeddedPiAgent(
   return enqueueSession(() =>
     enqueueGlobal(async () => {
       const started = Date.now();
-      const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+      const workspaceResolution = resolveRunWorkspaceDir({
+        workspaceDir: params.workspaceDir,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        config: params.config,
+      });
+      const resolvedWorkspace = workspaceResolution.workspaceDir;
+      const redactedSessionId = redactRunIdentifier(params.sessionId);
+      const redactedSessionKey = redactRunIdentifier(params.sessionKey);
+      const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
+      if (workspaceResolution.usedFallback) {
+        log.warn(
+          `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
+        );
+      }
       const prevCwd = process.cwd();
 
       const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
@@ -333,7 +347,7 @@ export async function runEmbeddedPiAgent(
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: params.sessionFile,
-            workspaceDir: params.workspaceDir,
+            workspaceDir: resolvedWorkspace,
             agentDir,
             config: params.config,
             skillsSnapshot: params.skillsSnapshot,
@@ -345,6 +359,7 @@ export async function runEmbeddedPiAgent(
             model,
             authStorage,
             modelRegistry,
+            agentId: workspaceResolution.agentId,
             thinkLevel,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
@@ -401,7 +416,7 @@ export async function runEmbeddedPiAgent(
                   agentAccountId: params.agentAccountId,
                   authProfileId: lastProfileId,
                   sessionFile: params.sessionFile,
-                  workspaceDir: params.workspaceDir,
+                  workspaceDir: resolvedWorkspace,
                   agentDir,
                   config: params.config,
                   skillsSnapshot: params.skillsSnapshot,
