@@ -49,10 +49,22 @@ import type {
 // Text Object Builders
 // ============================================================================
 
+/**
+ * Normalize literal escape sequences in text that LLMs sometimes produce.
+ * When an LLM generates JSON tool arguments, it may emit "\\n" (literal
+ * backslash + n) instead of an actual newline character.  This helper
+ * converts those common literal escapes so Slack renders them correctly.
+ */
+function normalizeEscapes(text: string): string {
+  // Replace literal \n and \t that are NOT already a real newline/tab.
+  // The regex looks for a real backslash followed by 'n' or 't'.
+  return text.replace(/\\n/g, "\n").replace(/\\t/g, "\t");
+}
+
 export function plainText(text: string, emoji = true): PlainTextObject {
   return {
     type: "plain_text",
-    text,
+    text: normalizeEscapes(text),
     emoji,
   };
 }
@@ -60,7 +72,7 @@ export function plainText(text: string, emoji = true): PlainTextObject {
 export function mrkdwn(text: string, verbatim = false): MrkdwnObject {
   return {
     type: "mrkdwn",
-    text,
+    text: normalizeEscapes(text),
     verbatim,
   };
 }
