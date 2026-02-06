@@ -111,11 +111,13 @@ async function startAccount(ctx: {
   accountId?: string;
   cfg: CoreConfig;
   log?: { info: (msg: string) => void };
-}): Promise<{ stop: () => Promise<void> }> {
+  abortSignal?: AbortSignal;
+}): Promise<void> {
   const account = ctx.account;
   const accountId = ctx.accountId || DEFAULT_ACCOUNT_ID;
   const cfg = ctx.cfg;
   const log = ctx.log?.info || console.log;
+  const abortSignal = ctx.abortSignal;
 
   if (!account.configured || !account.jid || !account.password || !account.server) {
     throw new Error(`[XMPP] Account "${accountId}" is not properly configured`);
@@ -133,47 +135,65 @@ async function startAccount(ctx: {
   // Add to map before connecting so probe can detect client is starting
   clients.set(accountId, client);
 
-  await client.connect();
-  log(`[XMPP] Connected as ${account.jid}`);
+  try {
+    await client.connect();
+    log(`[XMPP] Connected as ${account.jid}`);
 
-  // Wait longer for session to be fully established before joining rooms
-  await new Promise((resolve) => setTimeout(resolve, 1000));
+    // Wait longer for session to be fully established before joining rooms
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
-  // Join configured MUC rooms
-  const xmppCfg = cfg.channels?.xmpp;
-  if (xmppCfg?.rooms) {
-    for (const roomJid of xmppCfg.rooms) {
-      try {
-        const nick = account.jid.split("@")[0] || "openclaw";
-        await client.joinRoom(roomJid, nick);
-        log(`[XMPP] Joined room: ${roomJid}`);
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        log(`[XMPP] Failed to join room ${roomJid}: ${errorMsg}`);
+    // Join configured MUC rooms
+    const xmppCfg = cfg.channels?.xmpp;
+    if (xmppCfg?.rooms) {
+      for (const roomJid of xmppCfg.rooms) {
+        try {
+          const nick = account.jid.split("@")[0] || "openclaw";
+          await client.joinRoom(roomJid, nick);
+          log(`[XMPP] Joined room: ${roomJid}`);
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          log(`[XMPP] Failed to join room ${roomJid}: ${errorMsg}`);
+        }
       }
     }
+
+    // Subscribe to messages
+    client.onMessage((message: XmppMessage | XmppRoomMessage) => {
+      void handleInboundMessage(accountId, message, cfg, log);
+    });
+
+    // Subscribe to presence subscription requests
+    client.onSubscriptionRequest(async (jid: string) => {
+      await handleSubscriptionRequest(accountId, jid, cfg, log, client);
+    });
+
+    log(`[XMPP] Account "${accountId}" ready, listening for messages`);
+
+    // Keep the task running until abort signal is triggered or client disconnects
+    await new Promise<void>((resolve) => {
+      const cleanup = () => {
+        abortSignal?.removeEventListener("abort", onAbort);
+        client.removeDisconnectListener(onDisconnect);
+        resolve();
+      };
+      const onAbort = () => cleanup();
+      const onDisconnect = () => cleanup();
+
+      if (abortSignal?.aborted) {
+        resolve();
+        return;
+      }
+
+      abortSignal?.addEventListener("abort", onAbort, { once: true });
+      client.onDisconnect(onDisconnect);
+    });
+  } finally {
+    // Clean up on exit
+    log(`[XMPP] Stopping account "${accountId}"`);
+    await client.disconnect().catch(() => {});
+    clients.delete(accountId);
+    log(`[XMPP] Account "${accountId}" disconnected`);
   }
-
-  // Subscribe to messages
-  client.onMessage((message: XmppMessage | XmppRoomMessage) => {
-    void handleInboundMessage(accountId, message, cfg, log);
-  });
-
-  // Subscribe to presence subscription requests
-  client.onSubscriptionRequest(async (jid: string) => {
-    await handleSubscriptionRequest(accountId, jid, cfg, log, client);
-  });
-
-  log(`[XMPP] Account "${accountId}" ready, listening for messages`);
-
-  return {
-    stop: async () => {
-      log(`[XMPP] Stopping account "${accountId}"`);
-      await client.disconnect();
-      clients.delete(accountId);
-      log(`[XMPP] Account "${accountId}" disconnected`);
-    },
-  };
 }
 
 async function handleSubscriptionRequest(
@@ -712,6 +732,7 @@ export const xmppPlugin: ChannelPlugin<ResolvedXmppAccount> = {
         accountId: ctx.accountId,
         cfg: ctx.cfg as CoreConfig,
         log: ctx.log,
+        abortSignal: ctx.abortSignal,
       }),
   },
   status: {

@@ -55,6 +55,7 @@ export class XmppClient {
   private connected = false;
   private messageHandlers: Array<(message: XmppMessage | XmppRoomMessage) => void> = [];
   private subscriptionRequestHandlers: Array<(jid: string) => void | Promise<void>> = [];
+  private disconnectListeners: Array<() => void> = [];
   private currentJid: string = "";
   private joinedRooms: Set<string> = new Set();
   private httpUploadService: string | null = null;
@@ -107,6 +108,10 @@ export class XmppClient {
       this.currentJid = "";
       this.httpUploadService = null;
       console.log(`[XMPP] Disconnected from ${this.config.jid}`);
+      // Notify disconnect listeners
+      for (const listener of this.disconnectListeners) {
+        listener();
+      }
     });
 
     // xmpp.js uses "stanza" event for all incoming stanzas
@@ -415,6 +420,17 @@ export class XmppClient {
 
   onSubscriptionRequest(handler: (jid: string) => void | Promise<void>): void {
     this.subscriptionRequestHandlers.push(handler);
+  }
+
+  onDisconnect(handler: () => void): void {
+    this.disconnectListeners.push(handler);
+  }
+
+  removeDisconnectListener(handler: () => void): void {
+    const index = this.disconnectListeners.indexOf(handler);
+    if (index !== -1) {
+      this.disconnectListeners.splice(index, 1);
+    }
   }
 
   private async handleSubscriptionRequest(jid: string): Promise<void> {
