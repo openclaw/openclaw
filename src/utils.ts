@@ -234,9 +234,12 @@ export function truncateUtf16Safe(input: string, maxLen: number): string {
 }
 
 export function resolveUserPath(input: string): string {
+  if (!input || typeof input !== "string") {
+    return process.cwd();
+  }
   const trimmed = input.trim();
   if (!trimmed) {
-    return trimmed;
+    return process.cwd();
   }
   if (trimmed.startsWith("~")) {
     const expanded = trimmed.replace(/^~(?=$|[\\/])/, os.homedir());

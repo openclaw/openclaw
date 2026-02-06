@@ -167,4 +167,20 @@ describe("resolveUserPath", () => {
   it("resolves relative paths", () => {
     expect(resolveUserPath("tmp/dir")).toBe(path.resolve("tmp/dir"));
   });
+
+  it("returns cwd for undefined input (#10089)", () => {
+    expect(resolveUserPath(undefined as unknown as string)).toBe(process.cwd());
+  });
+
+  it("returns cwd for null input (#10089)", () => {
+    expect(resolveUserPath(null as unknown as string)).toBe(process.cwd());
+  });
+
+  it("returns cwd for empty string (#10089)", () => {
+    expect(resolveUserPath("")).toBe(process.cwd());
+  });
+
+  it("returns cwd for whitespace-only string (#10089)", () => {
+    expect(resolveUserPath("   ")).toBe(process.cwd());
+  });
 });
