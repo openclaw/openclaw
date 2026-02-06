@@ -164,11 +164,21 @@ class DeviceIdentityStore(context: Context) {
   }
 
   private fun ensureEdDsaProvider() {
-    if (Security.getProvider(EdDSASecurityProvider.PROVIDER_NAME) != null) return
-    Security.addProvider(EdDSASecurityProvider())
+    if (edDsaProviderReady) return
+    synchronized(edDsaProviderLock) {
+      if (edDsaProviderReady) return
+      if (Security.getProvider(EdDSASecurityProvider.PROVIDER_NAME) == null) {
+        Security.addProvider(EdDSASecurityProvider())
+      }
+      edDsaProviderReady = Security.getProvider(EdDSASecurityProvider.PROVIDER_NAME) != null
+    }
   }
 
   companion object {
+    private val edDsaProviderLock = Any()
+
+    @Volatile private var edDsaProviderReady: Boolean = false
+
     private val ED25519_SPKI_PREFIX =
       byteArrayOf(
         0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
