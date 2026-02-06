@@ -6,8 +6,6 @@ import { createInternalHookEvent, triggerInternalHook } from "./internal-hooks.j
 let compactionTimer: NodeJS.Timeout | null = null;
 const log = createSubsystemLogger("compaction");
 
-let compactionTimer: NodeJS.Timeout | null = null;
-
 function readNumber(value: unknown, fallback: number): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
