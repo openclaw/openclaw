@@ -72,33 +72,32 @@ function createDiscordGatewayPlugin(params: {
     return new GatewayPlugin(options);
   }
 
-  let agent: HttpsProxyAgent | undefined;
   try {
-    agent = new HttpsProxyAgent(proxy);
+    const agent = new HttpsProxyAgent<string>(proxy);
+
+    params.runtime.log?.("discord: gateway proxy enabled");
+
+    class ProxyGatewayPlugin extends GatewayPlugin {
+      #proxyAgent: HttpsProxyAgent<string>;
+
+      constructor(proxyAgent: HttpsProxyAgent<string>) {
+        super(options);
+        this.#proxyAgent = proxyAgent;
+      }
+
+      createWebSocket(url?: string) {
+        if (!url) {
+          throw new Error("Gateway URL is required");
+        }
+        return new WebSocket(url, { agent: this.#proxyAgent });
+      }
+    }
+
+    return new ProxyGatewayPlugin(agent);
   } catch (err) {
     params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
     return new GatewayPlugin(options);
   }
-
-  params.runtime.log?.("discord: gateway proxy enabled");
-
-  class ProxyGatewayPlugin extends GatewayPlugin {
-    #proxyAgent: HttpsProxyAgent;
-
-    constructor(proxyAgent: HttpsProxyAgent) {
-      super(options);
-      this.#proxyAgent = proxyAgent;
-    }
-
-    createWebSocket(url?: string) {
-      if (!url) {
-        throw new Error("Gateway URL is required");
-      }
-      return new WebSocket(url, { agent: this.#proxyAgent });
-    }
-  }
-
-  return new ProxyGatewayPlugin(agent);
 }
 
 function summarizeAllowList(list?: Array<string | number>) {
