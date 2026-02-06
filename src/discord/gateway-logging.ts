@@ -8,6 +8,7 @@ const INFO_DEBUG_MARKERS = [
   "WebSocket connection closed",
   "Reconnecting with backoff",
   "Attempting resume with backoff",
+  "connection stable",
 ];
 
 const shouldPromoteGatewayDebug = (message: string) =>
