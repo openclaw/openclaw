@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ChannelMessageActionContext } from "../../types.js";
 import {
+  parseAvailableTags,
   readNumberParam,
   readStringArrayParam,
   readStringParam,
@@ -183,15 +184,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const rateLimitPerUser = readNumberParam(actionParams, "rateLimitPerUser", {
       integer: true,
     });
-    const availableTags = actionParams.availableTags as
-      | Array<{
-          id?: string;
-          name: string;
-          moderated?: boolean;
-          emoji_id?: string | null;
-          emoji_name?: string | null;
-        }>
-      | undefined;
+    const availableTags = parseAvailableTags(actionParams.availableTags);
     return await handleDiscordAction(
       {
         action: "channelEdit",

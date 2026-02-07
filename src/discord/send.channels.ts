@@ -63,7 +63,7 @@ export async function editChannelDiscord(
   }
   if (payload.availableTags !== undefined) {
     body.available_tags = payload.availableTags.map((t) => ({
-      ...(t.id && { id: t.id }),
+      ...(t.id !== undefined && { id: t.id }),
       name: t.name,
       ...(t.moderated !== undefined && { moderated: t.moderated }),
       ...(t.emoji_id !== undefined && { emoji_id: t.emoji_id }),
