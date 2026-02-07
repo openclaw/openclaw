@@ -289,7 +289,7 @@ process env is missing the key (same non-overriding rule):
 }
 ```
 
-See [/environment](/environment) for full precedence and sources.
+See [/environment](/help/environment) for full precedence and sources.
 
 ### `env.shellEnv` (optional)
 
@@ -788,7 +788,7 @@ levels in one gateway:
 - **Read-only** tools + workspace
 - **No filesystem access** (messaging/session tools only)
 
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence and
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence and
 additional examples.
 
 Full access (no sandbox):
@@ -1453,7 +1453,7 @@ working directory). The path must exist to be used.
 
 ### `agents.defaults.skipBootstrap`
 
-Disables automatic creation of the workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`).
+Disables automatic creation of the workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md`).
 
 Use this for pre-seeded deployments where your workspace files come from a repo.
 
@@ -2857,7 +2857,7 @@ Example:
 Controls plugin discovery, allow/deny, and per-plugin config. Plugins are loaded
 from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus any
 `plugins.load.paths` entries. **Config changes require a gateway restart.**
-See [/plugin](/plugin) for full usage.
+See [/plugin](/tools/plugin) for full usage.
 
 Fields:
 

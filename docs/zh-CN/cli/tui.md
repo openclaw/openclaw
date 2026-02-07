@@ -19,7 +19,7 @@ x-i18n:
 
 相关：
 
-- TUI 指南：[TUI](/tui)
+- TUI 指南：[TUI](/web/tui)
 
 ## 示例
 
