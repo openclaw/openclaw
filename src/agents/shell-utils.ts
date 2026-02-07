@@ -19,7 +19,32 @@ function resolvePowerShellPath(): string {
   return "powershell.exe";
 }
 
-export function getShellConfig(): { shell: string; args: string[] } {
+/**
+ * Auto-detect shell arguments based on the shell binary name.
+ * Used when the user configures a custom shell path but omits shellArgs.
+ */
+function detectShellArgs(shellPath: string): string[] {
+  const name = path.basename(shellPath).toLowerCase().replace(/\.exe$/, "");
+  if (name === "bash" || name === "sh" || name === "zsh") {
+    return ["-c"];
+  }
+  if (name.includes("powershell") || name === "pwsh") {
+    return ["-NoProfile", "-NonInteractive", "-Command"];
+  }
+  // Default to POSIX-style -c for unknown shells.
+  return ["-c"];
+}
+
+export function getShellConfig(overrides?: {
+  shell?: string;
+  shellArgs?: string[];
+}): { shell: string; args: string[] } {
+  // When a custom shell is configured, use it directly.
+  if (overrides?.shell) {
+    const args = overrides.shellArgs ?? detectShellArgs(overrides.shell);
+    return { shell: overrides.shell, args };
+  }
+
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write

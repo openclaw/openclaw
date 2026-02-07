@@ -161,6 +161,10 @@ export type GroupToolPolicyConfig = {
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
+  /** Custom shell binary path (e.g. "d:\\Program Files\\Git\\bin\\bash.exe"). Defaults to PowerShell on Windows, $SHELL on Unix. */
+  shell?: string;
+  /** Custom shell arguments (e.g. ["-c"]). If omitted, auto-detected based on shell binary name. */
+  shellArgs?: string[];
   /** Exec host routing (default: sandbox). */
   host?: "sandbox" | "gateway" | "node";
   /** Exec security mode (default: deny). */

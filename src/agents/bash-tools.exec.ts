@@ -164,6 +164,8 @@ type ExecProcessHandle = {
 };
 
 export type ExecToolDefaults = {
+  shell?: string;
+  shellArgs?: string[];
   host?: ExecHost;
   security?: ExecSecurity;
   ask?: ExecAsk;
@@ -424,6 +426,8 @@ async function runExecProcess(opts: {
   env: Record<string, string>;
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
+  shell?: string;
+  shellArgs?: string[];
   usePty: boolean;
   warnings: string[];
   maxOutput: number;
@@ -475,7 +479,7 @@ async function runExecProcess(opts: {
     child = spawned as ChildProcessWithoutNullStreams;
     stdin = child.stdin;
   } else if (opts.usePty) {
-    const { shell, args: shellArgs } = getShellConfig();
+    const { shell, args: shellArgs } = getShellConfig({ shell: opts.shell, shellArgs: opts.shellArgs });
     try {
       const ptyModule = (await import("@lydell/node-pty")) as unknown as {
         spawn?: PtySpawn;
@@ -542,7 +546,7 @@ async function runExecProcess(opts: {
       stdin = child.stdin;
     }
   } else {
-    const { shell, args: shellArgs } = getShellConfig();
+    const { shell, args: shellArgs } = getShellConfig({ shell: opts.shell, shellArgs: opts.shellArgs });
     const { child: spawned } = await spawnWithFallback({
       argv: [shell, ...shellArgs, opts.command],
       options: {
@@ -801,6 +805,8 @@ export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
 ): AgentTool<any, ExecToolDetails> {
+  const defaultShell = defaults?.shell;
+  const defaultShellArgs = defaults?.shellArgs;
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
     10_000,
@@ -1418,6 +1424,8 @@ export function createExecTool(
                 env,
                 sandbox: undefined,
                 containerWorkdir: null,
+                shell: defaultShell,
+                shellArgs: defaultShellArgs,
                 usePty: params.pty === true && !sandbox,
                 warnings,
                 maxOutput,
@@ -1514,6 +1522,8 @@ export function createExecTool(
         env,
         sandbox,
         containerWorkdir,
+        shell: defaultShell,
+        shellArgs: defaultShellArgs,
         usePty,
         warnings,
         maxOutput,
