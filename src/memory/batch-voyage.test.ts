@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReadableStream } from "node:stream/web";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VoyageBatchOutputLine, VoyageBatchRequest } from "./batch-voyage.js";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 
@@ -114,6 +114,10 @@ describe("runVoyageEmbeddingBatches", () => {
     const createBody = JSON.parse(fetchMock.mock.calls[1][1].body);
     expect(createBody.input_file_id).toBe("file-123");
     expect(createBody.completion_window).toBe("12h");
+    expect(createBody.request_params).toEqual({
+      model: "voyage-4-large",
+      input_type: "document",
+    });
 
     // Verify Content Fetch
     expect(fetchMock.mock.calls[3][0]).toContain("/files/file-out-999/content");

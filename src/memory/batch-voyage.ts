@@ -1,8 +1,7 @@
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
-
-import { retryAsync } from "../infra/retry.js";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
+import { retryAsync } from "../infra/retry.js";
 import { hashText, runWithConcurrency } from "./internal.js";
 
 /**
@@ -110,6 +109,7 @@ async function submitVoyageBatch(params: {
           completion_window: VOYAGE_BATCH_COMPLETION_WINDOW,
           request_params: {
             model: params.client.model,
+            input_type: "document",
           },
           metadata: {
             source: "clawdbot-memory",
