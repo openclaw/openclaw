@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import type { MemorySource } from "./schema.js";
 import {
   escapeLucene,
   validateRelationshipType,
@@ -196,5 +197,28 @@ describe("exported constants", () => {
   it("ALLOWED_RELATIONSHIP_TYPES should be a Set", () => {
     expect(ALLOWED_RELATIONSHIP_TYPES).toBeInstanceOf(Set);
     expect(ALLOWED_RELATIONSHIP_TYPES.size).toBe(7);
+  });
+});
+
+// ============================================================================
+// MemorySource Type
+// ============================================================================
+
+describe("MemorySource type", () => {
+  it("should accept 'auto-capture-assistant' as a valid MemorySource value", () => {
+    // Type-level check: this assignment should compile without error
+    const source: MemorySource = "auto-capture-assistant";
+    expect(source).toBe("auto-capture-assistant");
+  });
+
+  it("should accept all MemorySource values", () => {
+    const sources: MemorySource[] = [
+      "user",
+      "auto-capture",
+      "auto-capture-assistant",
+      "memory-watcher",
+      "import",
+    ];
+    expect(sources).toHaveLength(5);
   });
 });

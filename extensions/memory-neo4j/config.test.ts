@@ -384,6 +384,72 @@ describe("memoryNeo4jConfigSchema.parse", () => {
     });
   });
 
+  describe("autoRecallMinScore", () => {
+    it("should default autoRecallMinScore to 0.25 when not specified", () => {
+      const config = memoryNeo4jConfigSchema.parse({
+        neo4j: { uri: "bolt://localhost:7687", password: "" },
+        embedding: { provider: "ollama" },
+      });
+      expect(config.autoRecallMinScore).toBe(0.25);
+    });
+
+    it("should accept an explicit autoRecallMinScore value", () => {
+      const config = memoryNeo4jConfigSchema.parse({
+        neo4j: { uri: "bolt://localhost:7687", password: "" },
+        embedding: { provider: "ollama" },
+        autoRecallMinScore: 0.5,
+      });
+      expect(config.autoRecallMinScore).toBe(0.5);
+    });
+
+    it("should accept autoRecallMinScore of 0", () => {
+      const config = memoryNeo4jConfigSchema.parse({
+        neo4j: { uri: "bolt://localhost:7687", password: "" },
+        embedding: { provider: "ollama" },
+        autoRecallMinScore: 0,
+      });
+      expect(config.autoRecallMinScore).toBe(0);
+    });
+
+    it("should accept autoRecallMinScore of 1", () => {
+      const config = memoryNeo4jConfigSchema.parse({
+        neo4j: { uri: "bolt://localhost:7687", password: "" },
+        embedding: { provider: "ollama" },
+        autoRecallMinScore: 1,
+      });
+      expect(config.autoRecallMinScore).toBe(1);
+    });
+
+    it("should throw when autoRecallMinScore is negative", () => {
+      expect(() =>
+        memoryNeo4jConfigSchema.parse({
+          neo4j: { uri: "bolt://localhost:7687", password: "" },
+          embedding: { provider: "ollama" },
+          autoRecallMinScore: -0.1,
+        }),
+      ).toThrow("autoRecallMinScore must be between 0 and 1");
+    });
+
+    it("should throw when autoRecallMinScore is greater than 1", () => {
+      expect(() =>
+        memoryNeo4jConfigSchema.parse({
+          neo4j: { uri: "bolt://localhost:7687", password: "" },
+          embedding: { provider: "ollama" },
+          autoRecallMinScore: 1.5,
+        }),
+      ).toThrow("autoRecallMinScore must be between 0 and 1");
+    });
+
+    it("should default to 0.25 when autoRecallMinScore is a non-number type", () => {
+      const config = memoryNeo4jConfigSchema.parse({
+        neo4j: { uri: "bolt://localhost:7687", password: "" },
+        embedding: { provider: "ollama" },
+        autoRecallMinScore: "0.5",
+      });
+      expect(config.autoRecallMinScore).toBe(0.25);
+    });
+  });
+
   describe("extraction config section", () => {
     it("should parse extraction config when provided", () => {
       process.env.EXTRACTION_DUMMY = ""; // avoid env var issues

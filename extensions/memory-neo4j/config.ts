@@ -26,6 +26,7 @@ export type MemoryNeo4jConfig = {
   };
   autoCapture: boolean;
   autoRecall: boolean;
+  autoRecallMinScore: number;
   coreMemory: {
     enabled: boolean;
     maxEntries: number;
@@ -169,6 +170,15 @@ function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], la
   }
 }
 
+/** Parse autoRecallMinScore: must be a number between 0 and 1, default 0.25. */
+function parseAutoRecallMinScore(value: unknown): number {
+  if (typeof value !== "number") return 0.25;
+  if (value < 0 || value > 1) {
+    throw new Error(`autoRecallMinScore must be between 0 and 1, got: ${value}`);
+  }
+  return value;
+}
+
 /**
  * Config schema with parse method for runtime validation & transformation.
  * JSON Schema validation is handled by openclaw.plugin.json; this handles
@@ -182,7 +192,15 @@ export const memoryNeo4jConfigSchema = {
     const cfg = value as Record<string, unknown>;
     assertAllowedKeys(
       cfg,
-      ["embedding", "neo4j", "autoCapture", "autoRecall", "coreMemory", "extraction"],
+      [
+        "embedding",
+        "neo4j",
+        "autoCapture",
+        "autoRecall",
+        "autoRecallMinScore",
+        "coreMemory",
+        "extraction",
+      ],
       "memory-neo4j config",
     );
 
@@ -313,6 +331,7 @@ export const memoryNeo4jConfigSchema = {
       extraction,
       autoCapture: cfg.autoCapture !== false,
       autoRecall: cfg.autoRecall !== false,
+      autoRecallMinScore: parseAutoRecallMinScore(cfg.autoRecallMinScore),
       coreMemory: {
         enabled: coreMemoryEnabled,
         maxEntries: coreMemoryMaxEntries,

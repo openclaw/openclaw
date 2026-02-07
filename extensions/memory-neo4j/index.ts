@@ -26,7 +26,13 @@ import {
   vectorDimsForModel,
 } from "./config.js";
 import { Embeddings } from "./embeddings.js";
-import { extractUserMessages, stripMessageWrappers, runSleepCycle } from "./extractor.js";
+import {
+  extractUserMessages,
+  extractAssistantMessages,
+  stripMessageWrappers,
+  runSleepCycle,
+  rateImportance,
+} from "./extractor.js";
 import { Neo4jMemoryClient } from "./neo4j-client.js";
 import { hybridSearch } from "./search.js";
 
@@ -510,9 +516,10 @@ const memoryNeo4jPlugin = {
               console.log("\n🌙 Memory Sleep Cycle");
               console.log("═════════════════════════════════════════════════════════════");
               console.log("Seven-phase memory consolidation (Pareto-based):\n");
-              console.log("  Phase 1: Deduplication    — Merge near-duplicate memories");
+              console.log("  Phase 1:  Deduplication    — Merge near-duplicate memories");
+              console.log("  Phase 1b: Conflict Detection — Resolve contradictory memories");
               console.log(
-                "  Phase 2: Pareto Scoring   — Calculate effective scores for all memories",
+                "  Phase 2:  Pareto Scoring   — Calculate effective scores for all memories",
               );
               console.log("  Phase 3: Core Promotion   — Regular memories above threshold → core");
               console.log("  Phase 4: Core Demotion    — Core memories below threshold → regular");
@@ -584,8 +591,9 @@ const memoryNeo4jPlugin = {
                   extractionBatchSize: batchSize,
                   extractionDelayMs: delay,
                   onPhaseStart: (phase) => {
-                    const phaseNames = {
+                    const phaseNames: Record<string, string> = {
                       dedup: "Phase 1: Deduplication",
+                      conflict: "Phase 1b: Conflict Detection",
                       pareto: "Phase 2: Pareto Scoring",
                       promotion: "Phase 3: Core Promotion",
                       demotion: "Phase 4: Core Demotion",
@@ -606,6 +614,9 @@ const memoryNeo4jPlugin = {
                 console.log("─────────────────────────────────────────────────────────────");
                 console.log(
                   `   Deduplication:  ${result.dedup.clustersFound} clusters → ${result.dedup.memoriesMerged} merged`,
+                );
+                console.log(
+                  `   Conflicts:      ${result.conflict.pairsFound} pairs, ${result.conflict.resolved} resolved, ${result.conflict.invalidated} invalidated`,
                 );
                 console.log(
                   `   Pareto:         ${result.pareto.totalMemories} total (${result.pareto.coreMemories} core, ${result.pareto.regularMemories} regular)`,
@@ -786,6 +797,7 @@ const memoryNeo4jPlugin = {
     // hook below also checks for existing conversation history to avoid re-injecting core
     // memories after restarts.
     const bootstrappedSessions = new Set<string>();
+    const coreMemoryIdsBySession = new Map<string, Set<string>>();
 
     // Track mid-session refresh: maps sessionKey → tokens at last refresh
     // Used to avoid refreshing too frequently (only refresh after significant context growth)
@@ -813,6 +825,7 @@ const memoryNeo4jPlugin = {
         if (ts < cutoff) {
           bootstrappedSessions.delete(key);
           midSessionRefreshAt.delete(key);
+          coreMemoryIdsBySession.delete(key);
           sessionLastSeen.delete(key);
         }
       }
@@ -830,6 +843,7 @@ const memoryNeo4jPlugin = {
         if (ctx.sessionKey) {
           bootstrappedSessions.delete(ctx.sessionKey);
           midSessionRefreshAt.delete(ctx.sessionKey);
+          coreMemoryIdsBySession.delete(ctx.sessionKey);
           sessionLastSeen.delete(ctx.sessionKey);
           api.logger.info?.(
             `memory-neo4j: cleared bootstrap/refresh flags for session ${ctx.sessionKey} after compaction`,
@@ -846,6 +860,7 @@ const memoryNeo4jPlugin = {
       if (key) {
         bootstrappedSessions.delete(key);
         midSessionRefreshAt.delete(key);
+        coreMemoryIdsBySession.delete(key);
         sessionLastSeen.delete(key);
         api.logger.info?.(
           `memory-neo4j: cleared bootstrap/refresh flags for session=${key} (session_end)`,
@@ -932,7 +947,7 @@ const memoryNeo4jPlugin = {
             : event.prompt;
 
         try {
-          const results = await hybridSearch(
+          let results = await hybridSearch(
             db,
             embeddings,
             query,
@@ -940,6 +955,16 @@ const memoryNeo4jPlugin = {
             agentId,
             extractionConfig.enabled,
           );
+
+          // Feature 1: Filter out low-relevance results below min RRF score
+          results = results.filter((r) => r.score >= cfg.autoRecallMinScore);
+
+          // Feature 2: Deduplicate against core memories already in context
+          const sessionKey = ctx.sessionKey ?? "";
+          const coreIds = coreMemoryIdsBySession.get(sessionKey);
+          if (coreIds) {
+            results = results.filter((r) => !coreIds.has(r.id));
+          }
 
           if (results.length === 0) {
             return;
@@ -1037,6 +1062,7 @@ const memoryNeo4jPlugin = {
 
           if (sessionKey) {
             bootstrappedSessions.add(sessionKey);
+            coreMemoryIdsBySession.set(sessionKey, new Set(coreMemories.map((m) => m.id)));
             touchSession(sessionKey);
           }
           // Log at info level when actually injecting, debug for skips
@@ -1082,19 +1108,12 @@ const memoryNeo4jPlugin = {
         const sessionKey = ctx.sessionKey;
 
         try {
-          const userMessages = extractUserMessages(event.messages);
-          if (userMessages.length === 0) {
-            return;
-          }
-
-          // Phase 1: Attention gating — fast heuristic filter
-          const retained = userMessages.filter((text) => passesAttentionGate(text));
-          if (retained.length === 0) {
-            return;
-          }
-
-          // Phase 2: Short-term retention — embed, dedup, store
           let stored = 0;
+
+          // Process user messages
+          const userMessages = extractUserMessages(event.messages);
+          const retained = userMessages.filter((text) => passesAttentionGate(text));
+
           for (const text of retained) {
             try {
               const vector = await embeddings.embed(text);
@@ -1105,11 +1124,13 @@ const memoryNeo4jPlugin = {
                 continue;
               }
 
+              const importance = await rateImportance(text, extractionConfig);
+
               await db.storeMemory({
                 id: randomUUID(),
                 text,
                 embedding: vector,
-                importance: 0.5, // neutral — sleep cycle scores via Pareto
+                importance,
                 category: "other", // sleep cycle will categorize
                 source: "auto-capture",
                 extractionStatus: extractionConfig.enabled ? "pending" : "skipped",
@@ -1122,11 +1143,47 @@ const memoryNeo4jPlugin = {
             }
           }
 
+          // Process assistant messages
+          const assistantMessages = extractAssistantMessages(event.messages);
+          const retainedAssistant = assistantMessages.filter((text) =>
+            passesAssistantAttentionGate(text),
+          );
+
+          for (const text of retainedAssistant) {
+            try {
+              const vector = await embeddings.embed(text);
+
+              const existing = await db.findSimilar(vector, 0.95, 1);
+              if (existing.length > 0) {
+                continue;
+              }
+
+              const importance = await rateImportance(text, extractionConfig);
+
+              await db.storeMemory({
+                id: randomUUID(),
+                text,
+                embedding: vector,
+                importance: Math.min(importance, 0.4), // cap assistant importance slightly lower
+                category: "other",
+                source: "auto-capture-assistant",
+                extractionStatus: extractionConfig.enabled ? "pending" : "skipped",
+                agentId,
+                sessionKey,
+              });
+              stored++;
+            } catch (err) {
+              api.logger.debug?.(
+                `memory-neo4j: assistant auto-capture item failed: ${String(err)}`,
+              );
+            }
+          }
+
           if (stored > 0) {
             api.logger.info(`memory-neo4j: auto-captured ${stored} memories (attention-gated)`);
-          } else {
+          } else if (userMessages.length > 0 || assistantMessages.length > 0) {
             api.logger.info(
-              `memory-neo4j: auto-capture ran (0 stored, ${userMessages.length} user msgs, ${retained.length} passed attention gate)`,
+              `memory-neo4j: auto-capture ran (0 stored, ${userMessages.length} user msgs, ${retained.length} passed gate, ${assistantMessages.length} assistant msgs, ${retainedAssistant.length} passed gate)`,
             );
           }
         } catch (err) {
@@ -1247,8 +1304,71 @@ function passesAttentionGate(text: string): boolean {
   return true;
 }
 
+// ============================================================================
+// Assistant attention gate — stricter filter for assistant messages
+// ============================================================================
+
+/** Maximum assistant message length — shorter than user to avoid code dumps. */
+const MAX_ASSISTANT_CAPTURE_CHARS = 1000;
+
+/** Minimum word count for assistant messages — higher than user. */
+const MIN_ASSISTANT_WORD_COUNT = 10;
+
+function passesAssistantAttentionGate(text: string): boolean {
+  const trimmed = text.trim();
+
+  // Length bounds (stricter than user)
+  if (trimmed.length < MIN_CAPTURE_CHARS || trimmed.length > MAX_ASSISTANT_CAPTURE_CHARS) {
+    return false;
+  }
+
+  // Word count — higher threshold than user messages
+  const wordCount = trimmed.split(/\s+/).length;
+  if (wordCount < MIN_ASSISTANT_WORD_COUNT) {
+    return false;
+  }
+
+  // Reject messages that are mostly code (>50% inside triple-backtick fences)
+  const codeBlockRegex = /```[\s\S]*?```/g;
+  let codeChars = 0;
+  let match: RegExpExecArray | null;
+  while ((match = codeBlockRegex.exec(trimmed)) !== null) {
+    codeChars += match[0].length;
+  }
+  if (codeChars > trimmed.length * 0.5) {
+    return false;
+  }
+
+  // Reject messages that are mostly tool output
+  if (
+    trimmed.includes("<tool_result>") ||
+    trimmed.includes("<tool_use>") ||
+    trimmed.includes("<function_call>")
+  ) {
+    return false;
+  }
+
+  // Injected context from the memory system itself
+  if (trimmed.includes("<relevant-memories>") || trimmed.includes("<core-memory-refresh>")) {
+    return false;
+  }
+
+  // Noise patterns (same as user gate)
+  if (NOISE_PATTERNS.some((r) => r.test(trimmed))) {
+    return false;
+  }
+
+  // Excessive emoji (likely reaction, not substance)
+  const emojiCount = (trimmed.match(/[\u{1F300}-\u{1F9FF}]/gu) || []).length;
+  if (emojiCount > 3) {
+    return false;
+  }
+
+  return true;
+}
+
 // Exported for testing
-export { passesAttentionGate };
+export { passesAttentionGate, passesAssistantAttentionGate };
 
 // ============================================================================
 // Export
