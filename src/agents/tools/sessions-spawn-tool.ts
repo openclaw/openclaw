@@ -297,6 +297,7 @@ export function createSessionsSpawnTool(opts?: {
 
       return jsonResult({
         status: "accepted",
+        sessionKey: childSessionKey, // Backward compatibility alias
         childSessionKey,
         runId: childRunId,
         modelApplied: resolvedModel ? modelApplied : undefined,
