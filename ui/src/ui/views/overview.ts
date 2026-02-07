@@ -27,8 +27,10 @@ export function renderOverview(props: OverviewProps) {
   const snapshot = props.hello?.snapshot as
     | { uptimeMs?: number; policy?: { tickIntervalMs?: number } }
     | undefined;
-  const uptime = snapshot?.uptimeMs ? formatDurationMs(snapshot.uptimeMs) : "n/a";
-  const tick = snapshot?.policy?.tickIntervalMs ? `${snapshot.policy.tickIntervalMs}ms` : "n/a";
+  const uptime = snapshot?.uptimeMs ? formatDurationMs(snapshot.uptimeMs) : t("common.na");
+  const tick = snapshot?.policy?.tickIntervalMs
+    ? `${snapshot.policy.tickIntervalMs}ms`
+    : t("common.na");
   const authHint = (() => {
     if (props.connected || !props.lastError) {
       return null;
@@ -43,10 +45,10 @@ export function renderOverview(props: OverviewProps) {
     if (!hasToken && !hasPassword) {
       return html`
         <div class="muted" style="margin-top: 8px">
-          This gateway requires auth. Add a token or password, then click Connect.
+          ${t("overview.authHintRequired")}
           <div style="margin-top: 6px">
-            <span class="mono">openclaw dashboard --no-open</span> → open the Control UI<br />
-            <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
+            <span class="mono">${t("overview.authHintDashboardNoOpen")}</span><br />
+            <span class="mono">${t("overview.authHintDoctorSetToken")}</span>
           </div>
           <div style="margin-top: 6px">
             <a
@@ -54,8 +56,8 @@ export function renderOverview(props: OverviewProps) {
               href="https://docs.openclaw.ai/web/dashboard"
               target="_blank"
               rel="noreferrer"
-              title="Control UI auth docs (opens in new tab)"
-              >Docs: Control UI auth</a
+              title=${t("overview.authDocsTitle")}
+              >${t("overview.authDocsLink")}</a
             >
           </div>
         </div>
@@ -63,15 +65,15 @@ export function renderOverview(props: OverviewProps) {
     }
     return html`
       <div class="muted" style="margin-top: 8px">
-        Auth failed. Update the token or password in Control UI settings, then click Connect.
+        ${t("overview.authFailedHint")}
         <div style="margin-top: 6px">
           <a
             class="session-link"
             href="https://docs.openclaw.ai/web/dashboard"
             target="_blank"
             rel="noreferrer"
-            title="Control UI auth docs (opens in new tab)"
-            >Docs: Control UI auth</a
+            title=${t("overview.authDocsTitle")}
+            >${t("overview.authDocsLink")}</a
           >
         </div>
       </div>
@@ -91,11 +93,11 @@ export function renderOverview(props: OverviewProps) {
     }
     return html`
       <div class="muted" style="margin-top: 8px">
-        This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open
-        <span class="mono">http://127.0.0.1:18789</span> on the gateway host.
+        ${t("overview.insecureContextHint")}
+        <span class="mono">http://127.0.0.1:18789</span> ${t("overview.insecureContextLocalhost")}
         <div style="margin-top: 6px">
-          If you must stay on HTTP, set
-          <span class="mono">gateway.controlUi.allowInsecureAuth: true</span> (token-only).
+          ${t("overview.insecureContextAllowInsecure")}
+          <span class="mono">${t("overview.insecureContextConfigEntry")}</span> ${t("overview.insecureContextTokenOnly")}
         </div>
         <div style="margin-top: 6px">
           <a
@@ -103,8 +105,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/gateway/tailscale"
             target="_blank"
             rel="noreferrer"
-            title="Tailscale Serve docs (opens in new tab)"
-            >Docs: Tailscale Serve</a
+            title=${t("overview.tailscaleDocsTitle")}
+            >${t("overview.tailscaleDocsLink")}</a
           >
           <span class="muted"> · </span>
           <a
@@ -112,8 +114,8 @@ export function renderOverview(props: OverviewProps) {
             href="https://docs.openclaw.ai/web/control-ui#insecure-http"
             target="_blank"
             rel="noreferrer"
-            title="Insecure HTTP docs (opens in new tab)"
-            >Docs: Insecure HTTP</a
+            title=${t("overview.insecureHttpDocsTitle")}
+            >${t("overview.insecureHttpDocsLink")}</a
           >
         </div>
       </div>
@@ -199,7 +201,7 @@ export function renderOverview(props: OverviewProps) {
           <div class="stat">
             <div class="stat-label">${t("overview.lastChannelsRefresh")}</div>
             <div class="stat-value">
-              ${props.lastChannelsRefresh ? formatAgo(props.lastChannelsRefresh) : "n/a"}
+              ${props.lastChannelsRefresh ? formatAgo(props.lastChannelsRefresh) : t("common.na")}
             </div>
           </div>
         </div>
@@ -227,13 +229,13 @@ export function renderOverview(props: OverviewProps) {
       </div>
       <div class="card stat-card">
         <div class="stat-label">${t("navigation.sessions")}</div>
-        <div class="stat-value">${props.sessionsCount ?? "n/a"}</div>
+        <div class="stat-value">${props.sessionsCount ?? t("common.na")}</div>
         <div class="muted">${t("overview.sessionsSubtitle")}</div>
       </div>
       <div class="card stat-card">
         <div class="stat-label">${t("navigation.cron")}</div>
         <div class="stat-value">
-          ${props.cronEnabled == null ? "n/a" : props.cronEnabled ? t("common.enabled") : t("common.disabled")}
+          ${props.cronEnabled == null ? t("common.na") : props.cronEnabled ? t("common.enabled") : t("common.disabled")}
         </div>
         <div class="muted">${t("overview.cronNextWake")} ${formatNextRun(props.cronNext)}</div>
       </div>

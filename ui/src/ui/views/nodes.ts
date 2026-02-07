@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type {
   DevicePairingList,
   DeviceTokenSummary,
@@ -131,9 +132,9 @@ function renderDevices(props: NodesProps) {
 
 function renderPendingDevice(req: PendingDevice, props: NodesProps) {
   const name = req.displayName?.trim() || req.deviceId;
-  const age = typeof req.ts === "number" ? formatAgo(req.ts) : "n/a";
+  const age = typeof req.ts === "number" ? formatAgo(req.ts) : t("common.na");
   const role = req.role?.trim() ? `role: ${req.role}` : "role: -";
-  const repair = req.isRepair ? " · repair" : "";
+  const repair = req.isRepair ? ` · ${t("nodes.repair")}` : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
   return html`
     <div class="list-item">
@@ -565,7 +566,7 @@ function renderExecApprovals(state: ExecApprovalsState) {
         <div>
           <div class="card-title">${t("nodes.execApprovalsTitle")}</div>
           <div class="card-sub">
-            ${t("nodes.execApprovalsSubtitle")}
+            ${unsafeHTML(t("nodes.execApprovalsSubtitle"))}
           </div>
         </div>
         <button

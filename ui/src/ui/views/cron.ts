@@ -70,12 +70,12 @@ export function renderCron(props: CronProps) {
           <div class="stat">
             <div class="stat-label">${t("cron.enabled")}</div>
             <div class="stat-value">
-              ${props.status ? (props.status.enabled ? t("common.yes") : t("common.no")) : "n/a"}
+              ${props.status ? (props.status.enabled ? t("common.yes") : t("common.no")) : t("common.na")}
             </div>
           </div>
           <div class="stat">
             <div class="stat-label">${t("cron.jobs")}</div>
-            <div class="stat-value">${props.status?.jobs ?? "n/a"}</div>
+            <div class="stat-value">${props.status?.jobs ?? t("common.na")}</div>
           </div>
           <div class="stat">
             <div class="stat-label">${t("cron.nextWake")}</div>
@@ -481,13 +481,13 @@ function renderJobPayload(job: CronJob) {
 
 function formatStateRelative(ms?: number) {
   if (typeof ms !== "number" || !Number.isFinite(ms)) {
-    return "n/a";
+    return t("common.na");
   }
   return formatAgo(ms);
 }
 
 function renderJobState(job: CronJob) {
-  const status = job.state?.lastStatus ?? "n/a";
+  const status = job.state?.lastStatus ?? t("common.na");
   const statusClass =
     status === "ok"
       ? "cron-job-status-ok"

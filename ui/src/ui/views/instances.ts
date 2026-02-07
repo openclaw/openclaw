@@ -51,7 +51,7 @@ export function renderInstances(props: InstancesProps) {
 }
 
 function renderEntry(entry: PresenceEntry) {
-  const lastInput = entry.lastInputSeconds != null ? `${entry.lastInputSeconds}s ago` : "n/a";
+  const lastInput = entry.lastInputSeconds != null ? `${entry.lastInputSeconds}s` : t("common.na");
   const mode = entry.mode ?? "unknown";
   const roles = Array.isArray(entry.roles) ? entry.roles.filter(Boolean) : [];
   const scopes = Array.isArray(entry.scopes) ? entry.scopes.filter(Boolean) : [];
@@ -83,7 +83,7 @@ function renderEntry(entry: PresenceEntry) {
       <div class="list-meta">
         <div>${formatPresenceAge(entry)}</div>
         <div class="muted">${t("instances.lastInput", { time: lastInput })}</div>
-        <div class="muted">${t("instances.reason", { reason: entry.reason ?? "" })}</div>
+        <div class="muted">${t("instances.reason", { reason: entry.reason ?? t("common.na") })}</div>
       </div>
     </div>
   `;
