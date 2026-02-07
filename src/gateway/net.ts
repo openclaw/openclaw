@@ -1,4 +1,5 @@
 import net from "node:net";
+import os from "node:os";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
@@ -233,4 +234,31 @@ function isValidIPv4(host: string): boolean {
 
 export function isLoopbackHost(host: string): boolean {
   return isLoopbackAddress(host);
+}
+
+/**
+ * Pick the primary LAN IPv4 address for CLI probes in "lan" bind mode.
+ * Prefers common interface names (en0, eth0, wlan0) before falling back
+ * to any non-internal IPv4 address.
+ */
+export function pickPrimaryLanIPv4(): string | undefined {
+  const nets = os.networkInterfaces();
+  const preferredInterfaces = ["en0", "eth0", "wlan0", "enp0s3"];
+
+  for (const name of preferredInterfaces) {
+    const list = nets[name];
+    const entry = list?.find((n) => n.family === "IPv4" && !n.internal);
+    if (entry?.address) {
+      return entry.address;
+    }
+  }
+
+  for (const list of Object.values(nets)) {
+    const entry = list?.find((n) => n.family === "IPv4" && !n.internal);
+    if (entry?.address) {
+      return entry.address;
+    }
+  }
+
+  return undefined;
 }
