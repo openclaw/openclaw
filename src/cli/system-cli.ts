@@ -6,7 +6,12 @@ import { theme } from "../terminal/theme.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
-type SystemEventOpts = GatewayRpcOpts & { text?: string; mode?: string; json?: boolean };
+type SystemEventOpts = GatewayRpcOpts & {
+  text?: string;
+  mode?: string;
+  sessionKey?: string;
+  json?: boolean;
+};
 
 const normalizeWakeMode = (raw: unknown) => {
   const mode = typeof raw === "string" ? raw.trim() : "";
@@ -35,6 +40,7 @@ export function registerSystemCli(program: Command) {
       .description("Enqueue a system event and optionally trigger a heartbeat")
       .requiredOption("--text <text>", "System event text")
       .option("--mode <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
+      .option("--session-key <key>", "Target session key (default: main session)")
       .option("--json", "Output JSON", false),
   ).action(async (opts: SystemEventOpts) => {
     try {
@@ -43,7 +49,13 @@ export function registerSystemCli(program: Command) {
         throw new Error("--text is required");
       }
       const mode = normalizeWakeMode(opts.mode);
-      const result = await callGatewayFromCli("wake", opts, { mode, text }, { expectFinal: false });
+      const sessionKey = typeof opts.sessionKey === "string" ? opts.sessionKey.trim() : undefined;
+      const result = await callGatewayFromCli(
+        "wake",
+        opts,
+        { mode, text, sessionKey },
+        { expectFinal: false },
+      );
       if (opts.json) {
         defaultRuntime.log(JSON.stringify(result, null, 2));
       } else {
