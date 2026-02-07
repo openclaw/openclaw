@@ -9,6 +9,7 @@ const DEFAULT_FILTER_TIMEOUT_MS = 5000;
 
 type BufferedTool = {
   toolName: string;
+  detail?: string;
   timestamp: number;
 };
 
@@ -44,14 +45,61 @@ function parseCliResponse(stdout: string): string | null {
   }
 }
 
-function summarizeToolBatch(tools: BufferedTool[]): string {
-  const counts = new Map<string, number>();
-  for (const tool of tools) {
-    counts.set(tool.toolName, (counts.get(tool.toolName) ?? 0) + 1);
+/** Max characters for a single tool detail in the batch summary. */
+const MAX_DETAIL_LENGTH = 60;
+
+/** Keys to extract from tool input as a short detail string. */
+const DETAIL_KEYS: Record<string, string[]> = {
+  Read: ["file_path"],
+  Write: ["file_path"],
+  Edit: ["file_path"],
+  Glob: ["pattern"],
+  Grep: ["pattern"],
+  Bash: ["command"],
+  WebSearch: ["query"],
+  WebFetch: ["url"],
+  Task: ["description"],
+};
+
+function extractToolDetail(toolName: string, input?: Record<string, unknown>): string | undefined {
+  if (!input) {
+    return undefined;
   }
-  return [...counts.entries()]
-    .map(([name, count]) => (count > 1 ? `${name} (x${count})` : name))
-    .join(", ");
+  const keys = DETAIL_KEYS[toolName];
+  if (!keys) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === "string" && value.length > 0) {
+      return value.length > MAX_DETAIL_LENGTH ? value.slice(0, MAX_DETAIL_LENGTH) + "…" : value;
+    }
+  }
+  return undefined;
+}
+
+function summarizeToolBatch(tools: BufferedTool[]): string {
+  // Group by tool name, collecting details
+  const groups = new Map<string, { count: number; details: string[] }>();
+  for (const tool of tools) {
+    const group = groups.get(tool.toolName) ?? { count: 0, details: [] };
+    group.count += 1;
+    if (tool.detail) {
+      group.details.push(tool.detail);
+    }
+    groups.set(tool.toolName, group);
+  }
+  return [...groups.entries()]
+    .map(([name, group]) => {
+      const label = group.count > 1 ? `${name} (x${group.count})` : name;
+      if (group.details.length > 0) {
+        // Show up to 3 details to keep the summary manageable
+        const shown = group.details.slice(0, 3).join(", ");
+        return `${label}: ${shown}`;
+      }
+      return label;
+    })
+    .join("; ");
 }
 
 async function askHaikuToFilter(params: {
@@ -65,9 +113,14 @@ async function askHaikuToFilter(params: {
     `The user asked: "${params.userMessage}"\n\n` +
     `The agent just used these tools: ${params.toolSummary}\n\n` +
     `Rules:\n` +
-    `- If the tools are routine exploration (reading files, searching code, globbing), respond with SKIP\n` +
-    `- If the tools indicate meaningful progress (running commands, writing files, editing code, web searches, running subagents), ` +
-    `write a brief natural status update (max 8 words, e.g. "Running tests..." or "Editing the configuration...")\n` +
+    `- Consider whether the tools are directly fulfilling what the user asked for, or just background exploration.\n` +
+    `- If the user asked to read, find, search, fetch, or look up something, and the tools are doing exactly that, ` +
+    `write a brief status update describing the action.\n` +
+    `- If the tools are just background exploration the agent is doing on its own to gather context before answering ` +
+    `(e.g., reading several code files to understand a codebase), respond with SKIP.\n` +
+    `- For tools like running commands, writing files, editing code, web searches, or running subagents, ` +
+    `always write a brief status update.\n` +
+    `- Status updates should be max 8 words, in present tense (e.g. "Reading the configuration file..." or "Searching for matching files...")\n` +
     `- Only respond with SKIP or the status text, nothing else`;
 
   const args = [
@@ -110,7 +163,7 @@ export function createToolFeedbackFilter(params: {
   onUpdate: (text: string) => void;
   config?: ToolFeedbackFilterConfig;
 }): {
-  push: (tool: { toolName: string; toolCallId: string }) => void;
+  push: (tool: { toolName: string; toolCallId: string; input?: Record<string, unknown> }) => void;
   dispose: () => void;
 } {
   const bufferMs = params.config?.bufferMs ?? DEFAULT_BUFFER_MS;
@@ -164,11 +217,12 @@ export function createToolFeedbackFilter(params: {
     }
   }
 
-  function push(tool: { toolName: string; toolCallId: string }) {
+  function push(tool: { toolName: string; toolCallId: string; input?: Record<string, unknown> }) {
     if (disposed) {
       return;
     }
-    buffer.push({ toolName: tool.toolName, timestamp: Date.now() });
+    const detail = extractToolDetail(tool.toolName, tool.input);
+    buffer.push({ toolName: tool.toolName, detail, timestamp: Date.now() });
 
     // Reset debounce timer
     if (debounceTimer) {

@@ -552,7 +552,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       })
     : null;
   const onToolStatusDirect = toolFeedbackFilter
-    ? (info: { toolName: string; toolCallId: string }) => {
+    ? (info: { toolName: string; toolCallId: string; input?: Record<string, unknown> }) => {
         toolFeedbackFilter.push(info);
       }
     : undefined;

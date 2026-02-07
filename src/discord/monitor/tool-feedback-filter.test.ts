@@ -289,6 +289,144 @@ describe("createToolFeedbackFilter", () => {
     filter.dispose();
   });
 
+  it("includes tool args in batch summary when provided", async () => {
+    mockRunCommandWithTimeout.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ result: "Reading the backlog file..." }),
+      stderr: "",
+    });
+
+    const onUpdate = vi.fn();
+    const filter = createToolFeedbackFilter({
+      userMessage: "Read a random file and tell me what's in it",
+      onUpdate,
+      config: { bufferMs: 1000 },
+    });
+
+    filter.push({
+      toolName: "Glob",
+      toolCallId: "call-1",
+      input: { pattern: "**/*.md" },
+    });
+    filter.push({
+      toolName: "Read",
+      toolCallId: "call-2",
+      input: { file_path: "/home/user/git/BACKLOG.md" },
+    });
+
+    await vi.advanceTimersByTimeAsync(1100);
+
+    expect(mockRunCommandWithTimeout).toHaveBeenCalledTimes(1);
+    const cliArgs = mockRunCommandWithTimeout.mock.calls[0];
+    const promptArg = cliArgs[0].find(
+      (_: string, i: number, arr: string[]) => i > 0 && arr[i - 1] === "-p",
+    );
+    // Verify tool details are included in the prompt
+    expect(promptArg).toContain("**/*.md");
+    expect(promptArg).toContain("BACKLOG.md");
+    // Verify user message context is in the prompt
+    expect(promptArg).toContain("Read a random file");
+    expect(onUpdate).toHaveBeenCalledWith("*Reading the backlog file...*");
+    filter.dispose();
+  });
+
+  it("truncates long tool details to max length", async () => {
+    mockRunCommandWithTimeout.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ result: "SKIP" }),
+      stderr: "",
+    });
+
+    const onUpdate = vi.fn();
+    const filter = createToolFeedbackFilter({
+      userMessage: "Search something",
+      onUpdate,
+      config: { bufferMs: 500 },
+    });
+
+    const longPath =
+      "/a/very/deeply/nested/directory/structure/that/goes/on/and/on/forever/file.ts";
+    filter.push({
+      toolName: "Read",
+      toolCallId: "call-1",
+      input: { file_path: longPath },
+    });
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    const cliArgs = mockRunCommandWithTimeout.mock.calls[0];
+    const promptArg = cliArgs[0].find(
+      (_: string, i: number, arr: string[]) => i > 0 && arr[i - 1] === "-p",
+    );
+    // Long details should be truncated with ellipsis
+    expect(promptArg).toContain("…");
+    expect(promptArg).not.toContain(longPath);
+    filter.dispose();
+  });
+
+  it("includes command detail for Bash tools", async () => {
+    mockRunCommandWithTimeout.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ result: "Running npm install..." }),
+      stderr: "",
+    });
+
+    const onUpdate = vi.fn();
+    const filter = createToolFeedbackFilter({
+      userMessage: "Install the dependencies",
+      onUpdate,
+      config: { bufferMs: 500 },
+    });
+
+    filter.push({
+      toolName: "Bash",
+      toolCallId: "call-1",
+      input: { command: "npm install" },
+    });
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    const cliArgs = mockRunCommandWithTimeout.mock.calls[0];
+    const promptArg = cliArgs[0].find(
+      (_: string, i: number, arr: string[]) => i > 0 && arr[i - 1] === "-p",
+    );
+    expect(promptArg).toContain("npm install");
+    expect(onUpdate).toHaveBeenCalledWith("*Running npm install...*");
+    filter.dispose();
+  });
+
+  it("omits details for unknown tool types", async () => {
+    mockRunCommandWithTimeout.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ result: "SKIP" }),
+      stderr: "",
+    });
+
+    const onUpdate = vi.fn();
+    const filter = createToolFeedbackFilter({
+      userMessage: "Do something",
+      onUpdate,
+      config: { bufferMs: 500 },
+    });
+
+    filter.push({
+      toolName: "UnknownTool",
+      toolCallId: "call-1",
+      input: { someKey: "someValue" },
+    });
+
+    await vi.advanceTimersByTimeAsync(600);
+
+    const cliArgs = mockRunCommandWithTimeout.mock.calls[0];
+    const promptArg = cliArgs[0].find(
+      (_: string, i: number, arr: string[]) => i > 0 && arr[i - 1] === "-p",
+    );
+    // Should just have the tool name without details
+    expect(promptArg).toContain("UnknownTool");
+    expect(promptArg).not.toContain("someValue");
+    filter.dispose();
+  });
+
   it("parses plain text CLI responses (non-JSON)", async () => {
     mockRunCommandWithTimeout.mockResolvedValue({
       code: 0,
