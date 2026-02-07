@@ -1,7 +1,14 @@
 import { createJiti } from "jiti";
 import fs from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+/**
+ * OpenClaw-specific jiti cache directory. Using a dedicated path under ~/.openclaw
+ * ensures we don't interfere with other processes using /tmp/jiti.
+ */
+export const OPENCLAW_JITI_CACHE_DIR = path.join(homedir(), ".openclaw", "cache", "jiti");
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type {
@@ -210,6 +217,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const pluginSdkAlias = resolvePluginSdkAlias();
   const jiti = createJiti(import.meta.url, {
     interopDefault: true,
+    fsCache: OPENCLAW_JITI_CACHE_DIR,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
     ...(pluginSdkAlias
       ? {

@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { defaultRuntime } from "../../runtime.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
@@ -6,8 +7,22 @@ import {
   isGatewaySigusr1RestartExternallyAllowed,
 } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { OPENCLAW_JITI_CACHE_DIR } from "../../plugins/loader.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
+
+/**
+ * Clear the OpenClaw-specific jiti filesystem cache to ensure TypeScript plugins
+ * are recompiled on restart. Without this, modified plugins may not take effect.
+ */
+async function clearJitiCache(): Promise<void> {
+  try {
+    await rm(OPENCLAW_JITI_CACHE_DIR, { recursive: true, force: true });
+    gatewayLog.debug("cleared jiti cache");
+  } catch {
+    // Ignore errors - cache may not exist or may already be cleared
+  }
+}
 
 type GatewayRunSignalAction = "stop" | "restart";
 
@@ -91,8 +106,14 @@ export async function runGatewayLoop(params: {
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     // eslint-disable-next-line no-constant-condition
+    let isRestart = false;
     while (true) {
+      if (isRestart) {
+        // Clear jiti cache on restart to ensure modified TypeScript plugins are recompiled
+        await clearJitiCache();
+      }
       server = await params.start();
+      isRestart = true;
       await new Promise<void>((resolve) => {
         restartResolver = resolve;
       });
