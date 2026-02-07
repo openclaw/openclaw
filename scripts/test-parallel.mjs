@@ -39,12 +39,30 @@ const resolvedOverride =
 const parallelRuns = runs.filter((entry) => entry.name !== "gateway");
 const serialRuns = runs.filter((entry) => entry.name === "gateway");
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
-const parallelCount = Math.max(1, parallelRuns.length);
-const perRunWorkers = Math.max(1, Math.floor(localWorkers / parallelCount));
-const macCiWorkers = isCI && isMacOS ? 1 : perRunWorkers;
+const defaultUnitWorkers = localWorkers;
+const defaultExtensionsWorkers = Math.max(1, Math.min(4, Math.floor(localWorkers / 4)));
+const defaultGatewayWorkers = Math.max(1, Math.min(4, localWorkers));
+
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
 // In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.
-const maxWorkers = resolvedOverride ?? (isCI && !isMacOS ? null : macCiWorkers);
+const maxWorkersForRun = (name) => {
+  if (resolvedOverride) {
+    return resolvedOverride;
+  }
+  if (isCI && !isMacOS) {
+    return null;
+  }
+  if (isCI && isMacOS) {
+    return 1;
+  }
+  if (name === "extensions") {
+    return defaultExtensionsWorkers;
+  }
+  if (name === "gateway") {
+    return defaultGatewayWorkers;
+  }
+  return defaultUnitWorkers;
+};
 
 const WARNING_SUPPRESSION_FLAGS = [
   "--disable-warning=ExperimentalWarning",
@@ -54,6 +72,7 @@ const WARNING_SUPPRESSION_FLAGS = [
 
 const runOnce = (entry, extraArgs = []) =>
   new Promise((resolve) => {
+    const maxWorkers = maxWorkersForRun(entry.name);
     const args = maxWorkers
       ? [...entry.args, "--maxWorkers", String(maxWorkers), ...windowsCiArgs, ...extraArgs]
       : [...entry.args, ...windowsCiArgs, ...extraArgs];
