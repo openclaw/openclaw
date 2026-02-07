@@ -732,6 +732,8 @@ export function isImageDimensionErrorMessage(raw: string): boolean {
 
 export function parseImageSizeError(raw: string): {
   maxMb?: number;
+  messageIndex?: number;
+  contentIndex?: number;
   raw: string;
 } | null {
   if (!raw) {
@@ -742,8 +744,13 @@ export function parseImageSizeError(raw: string): {
     return null;
   }
   const match = raw.match(IMAGE_SIZE_ERROR_RE);
+  // Reuse the dimension path regex to extract message/content indices from
+  // error paths like "messages.189.content.1.image.source.base64: image exceeds..."
+  const pathMatch = raw.match(IMAGE_DIMENSION_PATH_RE);
   return {
     maxMb: match?.[1] ? Number.parseFloat(match[1]) : undefined,
+    messageIndex: pathMatch?.[1] ? Number.parseInt(pathMatch[1], 10) : undefined,
+    contentIndex: pathMatch?.[2] ? Number.parseInt(pathMatch[2], 10) : undefined,
     raw,
   };
 }
