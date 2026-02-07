@@ -144,6 +144,9 @@ export function renderOverview(props: OverviewProps) {
                 const v = (e.target as HTMLInputElement).value;
                 props.onSettingsChange({ ...props.settings, token: v });
               }}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === 'Enter') { e.preventDefault(); props.onConnect(); }
+              }}
               placeholder="OPENCLAW_GATEWAY_TOKEN"
             />
           </label>
@@ -156,6 +159,9 @@ export function renderOverview(props: OverviewProps) {
                 const v = (e.target as HTMLInputElement).value;
                 props.onPasswordChange(v);
               }}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === 'Enter') { e.preventDefault(); props.onConnect(); }
+              }}
               placeholder="system or shared password"
             />
           </label>
@@ -166,6 +172,9 @@ export function renderOverview(props: OverviewProps) {
               @input=${(e: Event) => {
                 const v = (e.target as HTMLInputElement).value;
                 props.onSessionKeyChange(v);
+              }}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === 'Enter') { e.preventDefault(); props.onConnect(); }
               }}
             />
           </label>
