@@ -40,18 +40,6 @@ const AUTH_CHOICE_GROUP_DEFS: {
   choices: AuthChoice[];
 }[] = [
   {
-    value: "xai",
-    label: "xAI (Grok)",
-    hint: "API key",
-    choices: ["xai-api-key"],
-  },
-  {
-    value: "qianfan",
-    label: "Qianfan",
-    hint: "API key",
-    choices: ["qianfan-api-key"],
-  },
-  {
     value: "openai",
     label: "OpenAI",
     hint: "Codex OAuth + API key",
@@ -104,6 +92,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Z.AI (GLM 4.7)",
     hint: "API key",
     choices: ["zai-api-key"],
+  },
+  {
+    value: "qianfan",
+    label: "Qianfan",
+    hint: "API key",
+    choices: ["qianfan-api-key"],
   },
   {
     value: "copilot",
