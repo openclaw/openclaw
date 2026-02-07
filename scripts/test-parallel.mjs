@@ -29,15 +29,13 @@ const shardCount = isWindowsCi
     ? shardOverride
     : 2
   : 1;
-const windowsCiArgs = isWindowsCi
-  ? ["--no-file-parallelism", "--dangerouslyIgnoreUnhandledErrors"]
-  : [];
+const windowsCiArgs = isWindowsCi ? ["--dangerouslyIgnoreUnhandledErrors"] : [];
 const passthroughArgs = process.argv.slice(2);
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
-const parallelRuns = isWindowsCi ? [] : runs.filter((entry) => entry.name !== "gateway");
-const serialRuns = isWindowsCi ? runs : runs.filter((entry) => entry.name === "gateway");
+const parallelRuns = runs.filter((entry) => entry.name !== "gateway");
+const serialRuns = runs.filter((entry) => entry.name === "gateway");
 const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
 const parallelCount = Math.max(1, parallelRuns.length);
 const perRunWorkers = Math.max(1, Math.floor(localWorkers / parallelCount));
