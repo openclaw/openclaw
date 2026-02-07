@@ -43,6 +43,7 @@ import {
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
 import { maybeRepairSandboxImages, noteSandboxScopeWarnings } from "./doctor-sandbox.js";
 import { noteSecurityWarnings } from "./doctor-security.js";
+import { noteSessionSecretsWarnings } from "./doctor-sessions-secrets.js";
 import { noteStateIntegrity, noteWorkspaceBackupTip } from "./doctor-state-integrity.js";
 import {
   detectLegacyStateMigrations,
@@ -193,6 +194,7 @@ export async function doctorCommand(
   await noteMacLaunchctlGatewayEnvOverrides(cfg);
 
   await noteSecurityWarnings(cfg);
+  await noteSessionSecretsWarnings(cfg);
 
   if (cfg.hooks?.gmail?.model?.trim()) {
     const hooksModelRef = resolveHooksGmailModel({
