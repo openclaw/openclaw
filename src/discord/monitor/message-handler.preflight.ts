@@ -382,7 +382,7 @@ export async function preflightDiscordMessage(
   // Preflight audio transcription for mention detection in guilds
   // This allows voice notes to be checked for mentions before being dropped
   let preflightTranscript: string | undefined;
-  const hasAudioAttachment = message.attachments?.some((att) =>
+  const hasAudioAttachment = message.attachments?.some((att: { contentType?: string }) =>
     att.contentType?.startsWith("audio/"),
   );
   const needsPreflightTranscription =
@@ -397,14 +397,18 @@ export async function preflightDiscordMessage(
       const { transcribeFirstAudio } = await import("../../media-understanding/audio-preflight.js");
       const audioPaths =
         message.attachments
-          ?.filter((att) => att.contentType?.startsWith("audio/"))
-          .map((att) => att.url) ?? [];
+          ?.filter((att: { contentType?: string; url: string }) =>
+            att.contentType?.startsWith("audio/"),
+          )
+          .map((att: { url: string }) => att.url) ?? [];
       if (audioPaths.length > 0) {
         const tempCtx = {
           MediaUrls: audioPaths,
           MediaTypes: message.attachments
-            ?.filter((att) => att.contentType?.startsWith("audio/"))
-            .map((att) => att.contentType)
+            ?.filter((att: { contentType?: string; url: string }) =>
+              att.contentType?.startsWith("audio/"),
+            )
+            .map((att: { contentType?: string }) => att.contentType)
             .filter(Boolean) as string[],
         };
         preflightTranscript = await transcribeFirstAudio({
