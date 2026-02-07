@@ -363,7 +363,7 @@ describe("buildAgentSystemPrompt", () => {
     }
   });
 
-  it("hints to use session_status for current date/time", () => {
+  it("hints to use session_status for current date/time with scheduling formats", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
@@ -371,6 +371,9 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("session_status");
     expect(prompt).toContain("current date");
+    expect(prompt).toContain("ISO-8601");
+    expect(prompt).toContain("Unix");
+    expect(prompt).toContain("scheduling");
   });
 
   // The system prompt intentionally does NOT include the current date/time.
