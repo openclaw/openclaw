@@ -24,6 +24,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { appendTranscriptMessage } from "../../config/sessions/transcript-raw.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -203,6 +204,30 @@ export async function runAgentTurnWithFallback(params: {
                     stream: "assistant",
                     data: { text: cliText },
                   });
+
+                  // Write user + assistant to session transcript for CLI backends.
+                  // Embedded providers use SessionManager which handles this automatically.
+                  if (params.sessionKey) {
+                    const sessionEntry = params.getActiveSessionEntry();
+                    const sessionId = sessionEntry?.sessionId ?? params.followupRun.run.sessionId;
+                    const sessionFile =
+                      sessionEntry?.sessionFile ?? params.followupRun.run.sessionFile;
+                    appendTranscriptMessage({
+                      message: params.commandBody,
+                      role: "user",
+                      sessionId,
+                      storePath: params.storePath,
+                      sessionFile,
+                      createIfMissing: true,
+                    });
+                    appendTranscriptMessage({
+                      message: cliText,
+                      role: "assistant",
+                      sessionId,
+                      storePath: params.storePath,
+                      sessionFile,
+                    });
+                  }
                 }
 
                 emitAgentEvent({
