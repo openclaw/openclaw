@@ -58,6 +58,8 @@ type RegistryDevice = {
   area_id: string;
   model: string;
   manufacturer: string;
+  identifiers?: string[][];
+  via_device_id?: string;
 };
 
 type RegistryEntity = {
@@ -69,6 +71,10 @@ type RegistryEntity = {
   name: string;
   disabled_by?: string | null;
   original_name?: string;
+  original_device_class?: string;
+  config_entry_id?: string;
+  entity_category?: string | null;
+  device_class?: string | null;
 };
 
 type InventoryEntity = {
@@ -85,6 +91,15 @@ type InventoryEntity = {
   model: string;
   integration: string;
   platform: string;
+  state?: string;
+  device_class?: string | null;
+  original_device_class?: string;
+  config_entry_id?: string;
+  entity_category?: string | null;
+  disabled_by?: string | null;
+  unique_id?: string;
+  device_identifiers?: string[][];
+  via_device_id?: string;
   attributes: Record<string, unknown>;
   capabilities_hints?: Record<string, unknown>;
   services: string[];
@@ -118,6 +133,8 @@ type SemanticResolution = {
   recommended_primary: string;
   recommended_fallbacks: string[];
   smoke_test_safe: boolean;
+  preferred_control_entity?: string;
+  entity_fingerprint?: Record<string, unknown>;
   source: "override" | "inferred";
   ambiguity: { ok: boolean; reason?: string; needs_override?: boolean };
 };
@@ -140,6 +157,8 @@ const STATES_CACHE_TTL_MS = 1500;
 const SEMANTIC_DATA_DIR = `${process.env.HOME ?? "/home/node"}/.openclaw/homeassistant`;
 const SEMANTIC_OVERRIDES_PATH = `${SEMANTIC_DATA_DIR}/semantic_overrides.json`;
 const SEMANTIC_STATS_PATH = `${SEMANTIC_DATA_DIR}/semantic_stats.json`;
+const SEMANTIC_LEARNED_PATH = `${SEMANTIC_DATA_DIR}/semantic_learned.json`;
+const LEARNED_SUCCESS_THRESHOLD = 3;
 const SENSITIVE_KEYS = ["token", "authorization", "secret", "password", "apikey", "bearer", "key"];
 const DEFAULT_HELPER_DOMAINS = [
   "input_boolean",
@@ -2779,6 +2798,7 @@ const buildFallbackInventoryEntity = (entityId: string, state?: HaState): Invent
 
 const buildSemanticAssessment = async (entityIds: string[]) => {
   const overrides = await loadSemanticOverrides();
+  const learnedMap = await loadLearnedSemanticMap();
   const snapshot = await fetchInventorySnapshot().catch(() => null);
   const byId: Record<string, SemanticResult> = {};
   const hints: string[] = [];
@@ -2805,16 +2825,17 @@ const buildSemanticAssessment = async (entityIds: string[]) => {
 const SEMANTIC_TYPE_KEYWORDS: Record<string, string[]> = {
   light: ["light", "lamp", "led", "bulb", "svjetlo", "svjetla", "lampa"],
   fan: ["fan", "vent", "blower", "ventilator", "prana", "ventilacija"],
-  outlet: ["outlet", "plug", "socket", "uticnica", "utičnica"],
-  pump: ["pump", "pumpe", "pumpa"],
+  ventilation: ["ventilacija", "ispuh", "odsis", "napa", "hood", "exhaust", "extractor", "lufter", "abzug"],
+  outlet: ["outlet", "plug", "socket", "uticnica", "utičnica", "steckdose"],
+  pump: ["pump", "pumpe", "pumpa", "circulation", "cirkulacija"],
   heater: ["heater", "radijator", "grijanje", "grijac", "grijač", "radiator"],
   boiler: ["boiler", "bojler", "water heater"],
   tv: ["tv", "television", "televizor"],
   speaker: ["speaker", "sonos", "audio", "sound", "music", "zvucnik", "zvučnik"],
-  climate: ["climate", "thermostat", "klima", "ac", "air", "heat", "cool"],
+  climate: ["climate", "thermostat", "klima", "ac", "air", "heat", "cool", "heizung"],
   cover: ["cover", "blind", "shade", "curtain", "shutter", "roleta", "rolete", "zavjesa"],
   lock: ["lock", "brava", "zakljucaj", "zaključaj"],
-  vacuum: ["vacuum", "usis", "robot"],
+  vacuum: ["vacuum", "usis", "usisavač", "robot"],
   alarm: ["alarm", "sirena", "siren", "security"],
 };
 
@@ -2859,6 +2880,7 @@ const recommendActions = (input: {
   const primaryCandidates: Record<string, string[]> = {
     light: ["light.turn_on"],
     fan: ["fan.set_percentage", "fan.set_preset_mode", "fan.turn_on"],
+    ventilation: ["fan.set_percentage", "fan.turn_on"],
     outlet: ["switch.turn_on"],
     pump: ["switch.turn_on"],
     heater: ["climate.set_temperature", "switch.turn_on"],
@@ -2896,6 +2918,7 @@ const buildSemanticResolution = (input: {
   entity: InventoryEntity;
   deviceEntities: InventoryEntity[];
   overrides: SemanticOverrideStore;
+  learnedMap: Record<string, LearnedSemanticEntry>;
   servicesByDomain: Record<string, string[]>;
 }): SemanticResolution => {
   const deviceOverride = input.entity.device_id
@@ -2903,6 +2926,30 @@ const buildSemanticResolution = (input: {
     : undefined;
   const entityOverride = input.overrides.entity_overrides[input.entity.entity_id];
   const override = entityOverride ?? deviceOverride;
+  const learned = input.learnedMap[input.entity.entity_id];
+  if (!override?.semantic_type && learned && learned.success_count >= LEARNED_SUCCESS_THRESHOLD) {
+    const semanticType = learned.semantic_type || input.entity.domain;
+    const controlModel = learned.control_model || deriveControlModel(input.entity);
+    const { primary, fallbacks } = recommendActions({
+      semanticType,
+      controlModel,
+      domain: input.entity.domain,
+      servicesByDomain: input.servicesByDomain,
+    });
+    return {
+      semantic_type: semanticType,
+      control_model: controlModel,
+      confidence: 0.85,
+      reasons: [`learned:${learned.success_count}`, learned.last_intent ?? ""].filter(Boolean),
+      recommended_primary: primary,
+      recommended_fallbacks: fallbacks,
+      smoke_test_safe: false,
+      preferred_control_entity: input.entity.entity_id,
+      entity_fingerprint: buildEntityFingerprint(input.entity),
+      source: "inferred",
+      ambiguity: { ok: true },
+    };
+  }
   if (override?.semantic_type || override?.control_model) {
     const semanticType = override.semantic_type ?? input.entity.domain;
     const controlModel = override.control_model ?? deriveControlModel(input.entity);
@@ -2924,6 +2971,8 @@ const buildSemanticResolution = (input: {
       recommended_primary: primary,
       recommended_fallbacks: fallbacks,
       smoke_test_safe: Boolean(override.smoke_test_safe ?? false),
+      preferred_control_entity: input.entity.entity_id,
+      entity_fingerprint: buildEntityFingerprint(input.entity),
       source: "override",
       ambiguity: { ok: true },
     };
@@ -2935,24 +2984,46 @@ const buildSemanticResolution = (input: {
     deviceName: input.entity.device_name,
   });
   const entityText = normalizeName(
-    `${input.entity.entity_id} ${input.entity.friendly_name} ${input.entity.original_name}`,
+    `${input.entity.entity_id} ${input.entity.friendly_name} ${input.entity.original_name} ${input.entity.state ?? ""}`,
   );
   const deviceText = normalizeName(
     `${input.entity.device_name} ${input.entity.manufacturer} ${input.entity.model} ${input.entity.integration}`,
   );
+  const areaText = normalizeName(input.entity.area_name ?? "");
+  const tokenBag = new Set([
+    ...tokenizeText(entityText),
+    ...tokenizeText(deviceText),
+    ...tokenizeText(areaText),
+    ...tokenizeText(String(input.entity.device_class ?? "")),
+    ...tokenizeText(String(input.entity.original_device_class ?? "")),
+  ]);
   for (const [type, tokens] of Object.entries(SEMANTIC_TYPE_KEYWORDS)) {
     for (const token of tokens) {
-      if (entityText.includes(token)) {
+      if (tokenBag.has(normalizeName(token)) || entityText.includes(token)) {
         scores[type] = scores[type] ?? { score: 0, reasons: [] };
         scores[type].score += 6;
         scores[type].reasons.push(`name:${token}`);
       }
-      if (deviceText.includes(token)) {
+      if (deviceText.includes(token) || areaText.includes(token)) {
         scores[type] = scores[type] ?? { score: 0, reasons: [] };
         scores[type].score += 4;
         scores[type].reasons.push(`device:${token}`);
       }
     }
+  }
+  for (const [type, tokens] of Object.entries(NEGATIVE_SEMANTIC_TOKENS)) {
+    for (const token of tokens) {
+      if (tokenBag.has(normalizeName(token)) || entityText.includes(token)) {
+        scores[type] = scores[type] ?? { score: 0, reasons: [] };
+        scores[type].score -= 4;
+        scores[type].reasons.push(`negative:${token}`);
+      }
+    }
+  }
+  if (["fan", "climate", "light", "vacuum", "cover", "media_player"].includes(input.entity.domain)) {
+    scores[input.entity.domain] = scores[input.entity.domain] ?? { score: 0, reasons: [] };
+    scores[input.entity.domain].score += 12;
+    scores[input.entity.domain].reasons.push("domain_prior");
   }
   const colocatedDomains = new Set(input.deviceEntities.map((entry) => entry.domain));
   if (input.entity.domain === "switch" && (colocatedDomains.has("fan") || entityText.includes("fan"))) {
@@ -2972,7 +3043,13 @@ const buildSemanticResolution = (input: {
   const topScore = top?.[1].score ?? 0;
   const secondScore = second?.[1].score ?? 0;
   const confidence = topScore === 0 ? 0 : topScore / Math.max(topScore + secondScore, topScore);
-  const semanticType = top?.[0] ?? input.entity.domain;
+  let semanticType = top?.[0] ?? input.entity.domain;
+  if (input.entity.domain === "switch" && semanticType === "switch") {
+    semanticType = "generic_switch";
+  }
+  if (semanticType === "ventilation") {
+    semanticType = "fan";
+  }
   const controlModel = deriveControlModel(input.entity);
   const { primary, fallbacks } = recommendActions({
     semanticType,
@@ -2989,6 +3066,8 @@ const buildSemanticResolution = (input: {
     recommended_primary: primary,
     recommended_fallbacks: fallbacks,
     smoke_test_safe: false,
+    preferred_control_entity: input.entity.entity_id,
+    entity_fingerprint: buildEntityFingerprint(input.entity),
     source: "inferred",
     ambiguity: ambiguous
       ? { ok: false, reason: "low_confidence", needs_override: true }
@@ -2996,8 +3075,48 @@ const buildSemanticResolution = (input: {
   };
 };
 
+const buildEntityFingerprint = (entity: InventoryEntity) => ({
+  entity_id: entity.entity_id,
+  domain: entity.domain,
+  state: entity.state ?? null,
+  friendly_name: entity.friendly_name,
+  original_name: entity.original_name,
+  device_class: entity.device_class ?? null,
+  original_device_class: entity.original_device_class ?? null,
+  platform: entity.platform ?? null,
+  integration: entity.integration ?? null,
+  config_entry_id: entity.config_entry_id ?? null,
+  entity_category: entity.entity_category ?? null,
+  unique_id: entity.unique_id ?? null,
+  disabled_by: entity.disabled_by ?? null,
+  device_id: entity.device_id ?? null,
+  device_name: entity.device_name ?? null,
+  manufacturer: entity.manufacturer ?? null,
+  model: entity.model ?? null,
+  identifiers: entity.device_identifiers ?? [],
+  via_device_id: entity.via_device_id ?? null,
+  area_id: entity.area_id ?? null,
+  area_name: entity.area_name ?? null,
+  capabilities_hints: entity.capabilities_hints ?? {},
+});
+
+const NEGATIVE_SEMANTIC_TOKENS: Record<string, string[]> = {
+  fan: ["tv", "speaker", "audio", "media", "music"],
+  ventilation: ["tv", "speaker", "audio", "media", "music"],
+  outlet: ["tv", "speaker"],
+  pump: ["tv", "speaker"],
+  light: ["sensor", "battery", "rssi"],
+};
+
+const tokenizeText = (value: string) =>
+  normalizeName(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter(Boolean);
+
 const buildSemanticMapFromSnapshot = async (snapshot: Awaited<ReturnType<typeof fetchInventorySnapshot>>) => {
   const overrides = await loadSemanticOverrides();
+  const learnedMap = await loadLearnedSemanticMap();
   const devices: Record<string, InventoryEntity[]> = {};
   for (const entity of Object.values(snapshot.entities)) {
     const deviceId = entity.device_id || "unknown";
@@ -3012,10 +3131,11 @@ const buildSemanticMapFromSnapshot = async (snapshot: Awaited<ReturnType<typeof 
       entity,
       deviceEntities,
       overrides,
+      learnedMap,
       servicesByDomain: snapshot.services_by_domain ?? {},
     });
     byEntity[entity.entity_id] = resolution;
-    if (!resolution.ambiguity.ok && resolution.ambiguity.needs_override) {
+    if (!resolution.ambiguity.ok && resolution.ambiguity.needs_override && SEMANTIC_RISKY_TYPES.has(resolution.semantic_type)) {
       needsOverride.push({
         entity_id: entity.entity_id,
         reason: resolution.ambiguity.reason ?? "low_confidence",
@@ -3037,6 +3157,32 @@ const buildSemanticMapFromSnapshot = async (snapshot: Awaited<ReturnType<typeof 
     if (!primary) continue;
     byDevice[deviceId] = byEntity[primary.entity_id];
   }
+  const priorityDomains = ["fan", "climate", "light", "vacuum", "media_player", "cover", "switch"];
+  for (const [deviceId, entityList] of Object.entries(devices)) {
+    const candidates = entityList
+      .map((entry) => byEntity[entry.entity_id])
+      .filter(Boolean);
+    if (candidates.length === 0) continue;
+    const sorted = candidates.sort((a, b) => {
+      const aIndex = priorityDomains.indexOf(a.entity_fingerprint?.domain as string);
+      const bIndex = priorityDomains.indexOf(b.entity_fingerprint?.domain as string);
+      const aPriority = aIndex === -1 ? 999 : aIndex;
+      const bPriority = bIndex === -1 ? 999 : bIndex;
+      if (aPriority !== bPriority) return aPriority - bPriority;
+      return b.confidence - a.confidence;
+    });
+    const preferred = sorted[0]?.entity_fingerprint?.entity_id;
+    if (!preferred) continue;
+    for (const entry of entityList) {
+      const resolution = byEntity[entry.entity_id];
+      if (resolution) {
+        resolution.preferred_control_entity = preferred;
+      }
+    }
+    if (byDevice[deviceId]) {
+      byDevice[deviceId].preferred_control_entity = preferred;
+    }
+  }
   return { by_entity: byEntity, by_device: byDevice, needs_override: needsOverride };
 };
 
@@ -3046,6 +3192,15 @@ type SemanticActionStats = {
   last_success_ts?: string;
   last_fail_ts?: string;
   last_reason?: string;
+};
+
+type LearnedSemanticEntry = {
+  semantic_type: string;
+  control_model: string;
+  success_count: number;
+  last_success_ts?: string;
+  last_failure_ts?: string;
+  last_intent?: string;
 };
 
 const loadSemanticStats = async () => {
@@ -3083,9 +3238,58 @@ const updateSemanticStats = async (key: string, ok: boolean, reason: string) => 
   return current;
 };
 
+const loadLearnedSemanticMap = async () => {
+  try {
+    await ensureSemanticDataDir();
+    const raw = await readFile(SEMANTIC_LEARNED_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      return parsed as Record<string, LearnedSemanticEntry>;
+    }
+  } catch {
+    // ignore
+  }
+  return {} as Record<string, LearnedSemanticEntry>;
+};
+
+const saveLearnedSemanticMap = async (map: Record<string, LearnedSemanticEntry>) => {
+  await ensureSemanticDataDir();
+  await writeFile(SEMANTIC_LEARNED_PATH, JSON.stringify(map, null, 2));
+};
+
+const updateLearnedSemanticMap = async (input: {
+  entityId: string;
+  semanticType: string;
+  controlModel: string;
+  intentLabel: string;
+  ok: boolean;
+}) => {
+  const map = await loadLearnedSemanticMap();
+  const entry = map[input.entityId] ?? {
+    semantic_type: input.semanticType,
+    control_model: input.controlModel,
+    success_count: 0,
+  };
+  if (input.ok) {
+    entry.semantic_type = input.semanticType;
+    entry.control_model = input.controlModel;
+    entry.success_count += 1;
+    entry.last_success_ts = new Date().toISOString();
+    entry.last_intent = input.intentLabel;
+  } else {
+    entry.last_failure_ts = new Date().toISOString();
+    entry.last_intent = input.intentLabel;
+  }
+  map[input.entityId] = entry;
+  await saveLearnedSemanticMap(map);
+  return entry;
+};
+
 const resolveTargetFromSnapshot = (input: {
   snapshot: Awaited<ReturnType<typeof fetchInventorySnapshot>>;
   target: { entity_id?: string; name?: string; area?: string; device_id?: string; domain?: string };
+  semanticMap?: Record<string, SemanticResolution>;
+  intentProperty?: string;
 }) => {
   if (input.target.entity_id && input.snapshot.entities[input.target.entity_id]) {
     return input.snapshot.entities[input.target.entity_id];
@@ -3104,7 +3308,30 @@ const resolveTargetFromSnapshot = (input: {
     return haystack.includes(normalizedQuery);
   });
   if (candidates.length === 0) return null;
-  return candidates[0];
+  if (!input.semanticMap) return candidates[0];
+  const intent = normalizeName(input.intentProperty ?? "");
+  const scored = candidates.map((entity) => {
+    const semantic = input.semanticMap?.[entity.entity_id];
+    let score = semantic?.confidence ?? 0;
+    if (intent === "brightness" && entity.domain === "light") {
+      score += entity.attributes?.brightness !== undefined ? 0.2 : 0;
+    }
+    if (intent === "color" && entity.domain === "light") {
+      score += Array.isArray(entity.attributes?.supported_color_modes) ? 0.2 : 0;
+    }
+    if (intent === "volume" && entity.domain === "media_player") {
+      score += entity.attributes?.volume_level !== undefined ? 0.2 : 0;
+    }
+    if (intent === "temperature" && entity.domain === "climate") {
+      score += entity.attributes?.temperature !== undefined ? 0.2 : 0;
+    }
+    if (intent === "percentage" && (entity.domain === "fan" || entity.domain === "cover")) {
+      score += entity.attributes?.percentage !== undefined || entity.attributes?.current_position !== undefined ? 0.2 : 0;
+    }
+    return { entity, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.entity ?? candidates[0];
 };
 
 const buildUniversalPlan = (input: {
@@ -3196,6 +3423,64 @@ const buildUniversalPlan = (input: {
   }
 
   return { domain, service, payload, fallbacks };
+};
+
+const buildSafeProbePlan = (entity: InventoryEntity, state: HaState | null) => {
+  const domain = entity.domain;
+  const attrs = (state?.attributes ?? {}) as Record<string, unknown>;
+  if (domain === "fan") {
+    const percentage = toNumberLoose(attrs["percentage"]);
+    if (percentage !== undefined) {
+      return { intent: { action: "set", property: "percentage", value: percentage }, data: {} };
+    }
+    const current = state?.state === "on" ? "turn_on" : "turn_off";
+    return { intent: { action: current }, data: {} };
+  }
+  if (domain === "climate") {
+    const temp = toNumberLoose(attrs["temperature"] ?? attrs["current_temperature"]);
+    if (temp !== undefined) {
+      return { intent: { action: "set", property: "temperature", value: temp }, data: {} };
+    }
+    const hvac = safeString(attrs["hvac_mode"]);
+    if (hvac) {
+      return { intent: { action: "set", property: "hvac_mode", value: hvac }, data: {} };
+    }
+    return { intent: { action: "turn_on" }, data: {} };
+  }
+  if (domain === "vacuum") {
+    const stateValue = safeString(state?.state ?? "");
+    if (["cleaning", "returning", "docked", "idle", "paused"].includes(stateValue)) {
+      return { intent: { action: "pause" }, data: {} };
+    }
+    return { intent: { action: "stop" }, data: {} };
+  }
+  if (domain === "switch" || domain === "input_boolean") {
+    const current = state?.state === "on" ? "turn_on" : "turn_off";
+    return { intent: { action: current }, data: {} };
+  }
+  if (domain === "cover") {
+    const position = toNumberLoose(attrs["current_position"]);
+    if (position !== undefined) {
+      return { intent: { action: "set", property: "position", value: position }, data: {} };
+    }
+    return { intent: { action: "stop" }, data: {} };
+  }
+  if (domain === "light") {
+    const brightness = toNumberLoose(attrs["brightness"]);
+    if (brightness !== undefined) {
+      return { intent: { action: "set", property: "brightness", value: brightness }, data: {} };
+    }
+    const current = state?.state === "on" ? "turn_on" : "turn_off";
+    return { intent: { action: current }, data: {} };
+  }
+  if (domain === "media_player") {
+    const volume = toNumberLoose(attrs["volume_level"]);
+    if (volume !== undefined) {
+      return { intent: { action: "set", property: "volume", value: Math.round(volume * 100) }, data: {} };
+    }
+    return { intent: { action: "pause" }, data: {} };
+  }
+  return { intent: { action: "turn_on" }, data: {} };
 };
 
 const coerceLightListFields = (fields?: string[]) => {
@@ -3435,6 +3720,8 @@ const buildRegistrySnapshot = async () => {
     area_id: safeString(device["area_id"]),
     model: safeString(device["model"]),
     manufacturer: safeString(device["manufacturer"]),
+    identifiers: Array.isArray(device["identifiers"]) ? (device["identifiers"] as string[][]) : [],
+    via_device_id: safeString(device["via_device_id"]),
   }));
   const entities: RegistryEntity[] = (entitiesRes.result as Array<Record<string, unknown>>).map((entity) => ({
     entity_id: safeString(entity["entity_id"]),
@@ -3445,6 +3732,10 @@ const buildRegistrySnapshot = async () => {
     name: safeString(entity["name"]),
     disabled_by: safeString(entity["disabled_by"]) || null,
     original_name: safeString(entity["original_name"]),
+    original_device_class: safeString(entity["original_device_class"]),
+    config_entry_id: safeString(entity["config_entry_id"]),
+    entity_category: safeString(entity["entity_category"]) || null,
+    device_class: safeString(entity["device_class"]) || null,
   }));
 
   const states = statesRes.data as HaState[];
@@ -3515,6 +3806,8 @@ const fetchInventorySnapshot = async () => {
     area_id: safeString(device["area_id"]),
     model: safeString(device["model"]),
     manufacturer: safeString(device["manufacturer"]),
+    identifiers: Array.isArray(device["identifiers"]) ? (device["identifiers"] as string[][]) : [],
+    via_device_id: safeString(device["via_device_id"]),
   }));
   const entities: RegistryEntity[] = (entitiesRes.result as Array<Record<string, unknown>>).map((entity) => ({
     entity_id: safeString(entity["entity_id"]),
@@ -3525,6 +3818,10 @@ const fetchInventorySnapshot = async () => {
     name: safeString(entity["name"]),
     disabled_by: safeString(entity["disabled_by"]) || null,
     original_name: safeString(entity["original_name"]),
+    original_device_class: safeString(entity["original_device_class"]),
+    config_entry_id: safeString(entity["config_entry_id"]),
+    entity_category: safeString(entity["entity_category"]) || null,
+    device_class: safeString(entity["device_class"]) || null,
   }));
 
   const states = statesRes.data as HaState[];
@@ -3559,6 +3856,15 @@ const fetchInventorySnapshot = async () => {
       model: device?.model ?? "",
       integration: entity.platform ?? "",
       platform: entity.platform ?? "",
+      state: state?.state ?? undefined,
+      device_class: safeString(state?.attributes?.["device_class"] ?? entity.device_class) || null,
+      original_device_class: entity.original_device_class ?? "",
+      config_entry_id: entity.config_entry_id ?? "",
+      entity_category: entity.entity_category ?? null,
+      disabled_by: entity.disabled_by ?? null,
+      unique_id: entity.unique_id ?? "",
+      device_identifiers: device?.identifiers ?? [],
+      via_device_id: device?.via_device_id ?? "",
       attributes: (state?.attributes ?? {}) as Record<string, unknown>,
       capabilities_hints: buildCapabilityHints(domain, (state?.attributes ?? {}) as Record<string, unknown>),
       services: Object.keys(services[domain] ?? {}),
@@ -3985,6 +4291,8 @@ const normalizeFanCall = (input: { service: string; payload: Record<string, unkn
       }
     } else {
       unsupported.push("percentage");
+      fallback = { reason: "capability_missing:percentage", requested: percentInput, applied: "turn_on" };
+      service = "turn_on";
     }
   } else if (presetInput) {
     const matched = matchOption(presetModes, presetInput);
@@ -4032,6 +4340,11 @@ const normalizeSwitchCall = (input: {
 
   const stateInput = safeString(payload.state ?? payload.action ?? "");
   const fanInput = safeString(payload.fan ?? payload.fan_state ?? "");
+  const percentInput = payload.percentage ?? payload.speed ?? payload.brightness;
+  if (percentInput !== undefined) {
+    unsupported.push("percentage");
+    fallback = { reason: "capability_missing:percentage", requested: percentInput };
+  }
   if (stateInput) {
     const normalized = normalizeName(stateInput);
     if (["on", "start"].includes(normalized)) service = "turn_on";
@@ -6681,6 +6994,7 @@ const registerTools = (api: OpenClawPluginApi) => {
             );
           }
           const overrides = await loadSemanticOverrides();
+          const learnedMap = await loadLearnedSemanticMap();
           const deviceEntities = Object.values(snapshot.entities).filter(
             (entry) => entry.device_id && entry.device_id === target.device_id,
           );
@@ -6688,6 +7002,7 @@ const registerTools = (api: OpenClawPluginApi) => {
             entity: target,
             deviceEntities,
             overrides,
+            learnedMap,
             servicesByDomain: snapshot.services_by_domain ?? {},
           });
           await traceToolCall({
@@ -6803,6 +7118,7 @@ const registerTools = (api: OpenClawPluginApi) => {
           intent: { type: "object", additionalProperties: true },
           data: { type: "object", additionalProperties: true },
           dry_run: { type: "boolean" },
+          safe_probe: { type: "boolean" },
           force_confirm: { type: "boolean" },
         },
         required: ["target"],
@@ -6814,6 +7130,7 @@ const registerTools = (api: OpenClawPluginApi) => {
           intent?: { action?: string; value?: unknown; property?: string };
           data?: Record<string, unknown>;
           dry_run?: boolean;
+          safe_probe?: boolean;
           force_confirm?: boolean;
         },
       ) {
@@ -6830,8 +7147,11 @@ const registerTools = (api: OpenClawPluginApi) => {
             );
           }
           const snapshot = await fetchInventorySnapshot();
+          const semanticMap = await buildSemanticMapFromSnapshot(snapshot);
           const target = resolveTargetFromSnapshot({
             snapshot,
+            semanticMap: semanticMap.by_entity,
+            intentProperty: params.intent?.property ?? "",
             target: {
               entity_id: params.target.entity_id,
               name: params.target.name,
@@ -6846,6 +7166,7 @@ const registerTools = (api: OpenClawPluginApi) => {
             );
           }
           const overrides = await loadSemanticOverrides();
+          const learnedMap = await loadLearnedSemanticMap();
           const deviceEntities = Object.values(snapshot.entities).filter(
             (entry) => entry.device_id && entry.device_id === target.device_id,
           );
@@ -6853,9 +7174,10 @@ const registerTools = (api: OpenClawPluginApi) => {
             entity: target,
             deviceEntities,
             overrides,
+            learnedMap,
             servicesByDomain: snapshot.services_by_domain ?? {},
           });
-          if (SEMANTIC_RISKY_TYPES.has(resolution.semantic_type) && !params.force_confirm) {
+          if (SEMANTIC_RISKY_TYPES.has(resolution.semantic_type) && !params.force_confirm && !params.safe_probe) {
             return textResult(
               JSON.stringify(
                 {
@@ -6873,8 +7195,14 @@ const registerTools = (api: OpenClawPluginApi) => {
             );
           }
 
-          const intent = params.intent ?? {};
-          const data = params.data ?? {};
+          const currentState = await fetchEntityState(target.entity_id);
+          let intent = params.intent ?? {};
+          let data = params.data ?? {};
+          if (params.safe_probe) {
+            const safeProbe = buildSafeProbePlan(target, currentState);
+            intent = safeProbe.intent;
+            data = { ...data, ...safeProbe.data };
+          }
           const plan = buildUniversalPlan({ entity: target, resolution, intent, data });
           const basePayload = buildServicePayload({ entity_id: [target.entity_id] }, plan.payload);
           const normalized = await normalizeFriendlyServiceCall({
@@ -6892,6 +7220,13 @@ const registerTools = (api: OpenClawPluginApi) => {
             unsupported: normalized.unsupported ?? [],
             normalization_fallback: normalized.fallback ?? null,
           };
+          const capabilityMismatch: string[] = [];
+          if (primary.unsupported.length > 0) {
+            capabilityMismatch.push(`unsupported:${primary.unsupported.join(",")}`);
+          }
+          if (primary.normalization_fallback?.reason) {
+            capabilityMismatch.push(`fallback:${String(primary.normalization_fallback.reason)}`);
+          }
           if (primary.domain === "light" && primary.service === "turn_on") {
             const servicesRes = await fetchServices();
             const fields = servicesRes.ok ? getServiceFields(servicesRes.data, "light", "turn_on") : {};
@@ -6923,6 +7258,7 @@ const registerTools = (api: OpenClawPluginApi) => {
                   semantic: resolution,
                   plan: primary,
                   fallbacks: plan.fallbacks,
+                  capability_mismatch: capabilityMismatch,
                 },
                 null,
                 2,
@@ -6931,7 +7267,7 @@ const registerTools = (api: OpenClawPluginApi) => {
           }
 
           const attempts: Array<Record<string, unknown>> = [];
-          const beforeState = await fetchEntityState(target.entity_id);
+          const beforeState = currentState ?? (await fetchEntityState(target.entity_id));
           let result = await executeServiceCallWithVerification({
             domain: primary.domain,
             service: primary.service,
@@ -6984,8 +7320,17 @@ const registerTools = (api: OpenClawPluginApi) => {
           const reliability =
             Math.round(((resolution.confidence + capabilityScore + levelScore) / 3) * 100) / 100;
 
+          const intentLabel = `${normalizeName(intent.action ?? "")}:${normalizeName(intent.property ?? "")}`;
           const statsKey = `${target.entity_id}:${primary.domain}.${primary.service}`;
-          const stats = await updateSemanticStats(statsKey, result.verification.ok, result.verification.reason);
+          const statsReason = capabilityMismatch.length > 0 ? `capability_mismatch:${capabilityMismatch.join("|")}` : result.verification.reason;
+          const stats = await updateSemanticStats(statsKey, result.verification.ok, statsReason);
+          const learned = await updateLearnedSemanticMap({
+            entityId: target.entity_id,
+            semanticType: resolution.semantic_type,
+            controlModel: resolution.control_model,
+            intentLabel,
+            ok: result.verification.ok,
+          });
 
           const restorePlan: Record<string, unknown> | null = (() => {
             if (!beforeState) return null;
@@ -7037,6 +7382,8 @@ const registerTools = (api: OpenClawPluginApi) => {
                   stats,
                 },
                 restore_plan: restorePlan,
+                capability_mismatch: capabilityMismatch,
+                learned,
               },
               null,
               2,

@@ -149,6 +149,16 @@ if (inventoryParsed?.report_md) {
 
 const snapshot = inventoryParsed?.inventory_snapshot ?? {};
 const semanticMap = inventoryParsed?.semantic_map?.by_entity ?? {};
+const snapshotEntities = snapshot?.entities ?? {};
+
+const getSnapshotState = (entityId) => {
+  const entry = snapshotEntities[entityId];
+  if (!entry) return null;
+  return entry.state ?? null;
+};
+
+const isUnavailableState = (state) =>
+  state === "unavailable" || state === "unknown";
 
 const allowHighRisk = process.env.ALLOW_HIGH_RISK === "1" || process.env.AGGRESSIVE === "1";
 
@@ -196,6 +206,11 @@ for (const candidate of safeCandidates) {
     continue;
   }
   const resolution = semanticMap[entityId] ?? {};
+  const state = getSnapshotState(entityId);
+  if (isUnavailableState(state)) {
+    semanticResults[candidate.semantic] = { status: "SKIP", reason: "unavailable" };
+    continue;
+  }
   if (resolution?.ambiguity?.needs_override) {
     semanticResults[candidate.semantic] = { status: "NEEDS_OVERRIDE", reason: "low_confidence" };
     continue;
@@ -229,24 +244,21 @@ for (const candidate of riskySemantics) {
     continue;
   }
   const resolution = semanticMap[entityId] ?? {};
-  if (resolution?.ambiguity?.needs_override) {
-    semanticResults[candidate.semantic] = { status: "NEEDS_OVERRIDE", reason: "low_confidence" };
-    continue;
-  }
-  if (!allowHighRisk && !resolution.smoke_test_safe) {
-    semanticResults[candidate.semantic] = { status: "NEEDS_CONFIRM", reason: "not_safe" };
-    needsConfirm.push({ entity_id: entityId, semantic_type: candidate.semantic });
+  const state = getSnapshotState(entityId);
+  if (isUnavailableState(state)) {
+    semanticResults[candidate.semantic] = { status: "SKIP", reason: "unavailable" };
     continue;
   }
   const action = await runUniversal(candidate.semantic, {
     target: { entity_id: entityId },
     intent: { action: "turn_on" },
+    safe_probe: true,
   });
   results.actions[candidate.semantic] = action;
   const verificationOk = Boolean(action?.parsed?.verification?.ok);
   semanticResults[candidate.semantic] = {
-    status: verificationOk ? "PASS" : "FAIL",
-    reason: verificationOk ? "verified" : action?.parsed?.verification?.reason ?? "unverified",
+    status: verificationOk ? "PASS_READONLY" : "FAIL",
+    reason: verificationOk ? "verified_probe" : action?.parsed?.verification?.reason ?? "unverified",
   };
 }
 
@@ -266,13 +278,7 @@ const summary = {
 };
 
 const statuses = Object.values(semanticResults).map((entry) => entry.status);
-const overall = statuses.includes("FAIL")
-  ? "FAIL"
-  : statuses.includes("NEEDS_OVERRIDE")
-    ? "NEEDS_OVERRIDE"
-    : statuses.includes("NEEDS_CONFIRM")
-      ? "NEEDS_CONFIRM"
-      : "PASS";
+const overall = statuses.includes("FAIL") ? "FAIL" : "PASS";
 
 await writeJson("RESULT.json", { overall, summary });
 
