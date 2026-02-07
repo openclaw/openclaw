@@ -1,8 +1,8 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import express from "express";
-
 import type { ResolvedBrowserConfig } from "./config.js";
+import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import {
   type BrowserServerState,
@@ -34,7 +34,9 @@ export async function startBrowserBridgeServer(params: {
   if (authToken) {
     app.use((req, res, next) => {
       const auth = String(req.headers.authorization ?? "").trim();
-      if (auth === `Bearer ${authToken}`) return next();
+      if (auth === `Bearer ${authToken}`) {
+        return next();
+      }
       res.status(401).send("Unauthorized");
     });
   }
@@ -50,7 +52,7 @@ export async function startBrowserBridgeServer(params: {
     getState: () => state,
     onEnsureAttachTarget: params.onEnsureAttachTarget,
   });
-  registerBrowserRoutes(app, ctx);
+  registerBrowserRoutes(app as unknown as BrowserRouteRegistrar, ctx);
 
   const server = await new Promise<Server>((resolve, reject) => {
     const s = app.listen(port, host, () => resolve(s));
@@ -61,11 +63,9 @@ export async function startBrowserBridgeServer(params: {
   const resolvedPort = address?.port ?? port;
   state.server = server;
   state.port = resolvedPort;
-  state.resolved.controlHost = host;
   state.resolved.controlPort = resolvedPort;
-  state.resolved.controlUrl = `http://${host}:${resolvedPort}`;
 
-  const baseUrl = state.resolved.controlUrl;
+  const baseUrl = `http://${host}:${resolvedPort}`;
   return { server, port: resolvedPort, baseUrl, state };
 }
 

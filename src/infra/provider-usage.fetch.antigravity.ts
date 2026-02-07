@@ -1,7 +1,7 @@
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 import { logDebug } from "../logger.js";
 import { fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
-import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type LoadCodeAssistResponse = {
   availablePromptCredits?: number | string;
@@ -46,19 +46,27 @@ const METADATA = {
 };
 
 function parseNumber(value: number | string | undefined): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
   if (typeof value === "string") {
     const parsed = Number.parseFloat(value);
-    if (Number.isFinite(parsed)) return parsed;
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
   }
   return undefined;
 }
 
 function parseEpochMs(isoString: string | undefined): number | undefined {
-  if (!isoString?.trim()) return undefined;
+  if (!isoString?.trim()) {
+    return undefined;
+  }
   try {
     const ms = Date.parse(isoString);
-    if (Number.isFinite(ms)) return ms;
+    if (Number.isFinite(ms)) {
+      return ms;
+    }
   } catch {
     // ignore parse errors
   }
@@ -69,7 +77,9 @@ async function parseErrorMessage(res: Response): Promise<string> {
   try {
     const data = (await res.json()) as { error?: { message?: string } };
     const message = data?.error?.message?.trim();
-    if (message) return message;
+    if (message) {
+      return message;
+    }
   } catch {
     // ignore parse errors
   }
@@ -79,36 +89,52 @@ async function parseErrorMessage(res: Response): Promise<string> {
 function extractCredits(data: LoadCodeAssistResponse): CreditsInfo | undefined {
   const available = parseNumber(data.availablePromptCredits);
   const monthly = parseNumber(data.planInfo?.monthlyPromptCredits);
-  if (available === undefined || monthly === undefined || monthly <= 0) return undefined;
+  if (available === undefined || monthly === undefined || monthly <= 0) {
+    return undefined;
+  }
   return { available, monthly };
 }
 
 function extractPlanInfo(data: LoadCodeAssistResponse): string | undefined {
   const tierName = data.currentTier?.name?.trim();
-  if (tierName) return tierName;
+  if (tierName) {
+    return tierName;
+  }
   const planType = data.planType?.trim();
-  if (planType) return planType;
+  if (planType) {
+    return planType;
+  }
   return undefined;
 }
 
 function extractProjectId(data: LoadCodeAssistResponse): string | undefined {
   const project = data.cloudaicompanionProject;
-  if (!project) return undefined;
-  if (typeof project === "string") return project.trim() ? project : undefined;
+  if (!project) {
+    return undefined;
+  }
+  if (typeof project === "string") {
+    return project.trim() ? project : undefined;
+  }
   const projectId = typeof project.id === "string" ? project.id.trim() : undefined;
   return projectId || undefined;
 }
 
 function extractModelQuotas(data: FetchAvailableModelsResponse): Map<string, ModelQuota> {
   const result = new Map<string, ModelQuota>();
-  if (!data.models || typeof data.models !== "object") return result;
+  if (!data.models || typeof data.models !== "object") {
+    return result;
+  }
 
   for (const [modelId, modelInfo] of Object.entries(data.models)) {
     const quotaInfo = modelInfo.quotaInfo;
-    if (!quotaInfo) continue;
+    if (!quotaInfo) {
+      continue;
+    }
 
     const remainingFraction = parseNumber(quotaInfo.remainingFraction);
-    if (remainingFraction === undefined) continue;
+    if (remainingFraction === undefined) {
+      continue;
+    }
 
     const resetTime = parseEpochMs(quotaInfo.resetTime);
     result.set(modelId, { remainingFraction, resetTime });
@@ -145,7 +171,9 @@ function buildUsageWindows(opts: {
 
       const usedPercent = clampPercent((1 - quota.remainingFraction) * 100);
       const window: UsageWindow = { label: modelId, usedPercent };
-      if (quota.resetTime) window.resetAt = quota.resetTime;
+      if (quota.resetTime) {
+        window.resetAt = quota.resetTime;
+      }
       modelWindows.push(window);
     }
 
@@ -251,7 +279,9 @@ export async function fetchAntigravityUsage(
       }
     }
   } catch {
-    if (!lastError) lastError = "Network error";
+    if (!lastError) {
+      lastError = "Network error";
+    }
   }
 
   // Build windows from available data

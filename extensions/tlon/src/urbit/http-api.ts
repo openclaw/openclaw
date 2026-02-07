@@ -3,7 +3,9 @@ import { Urbit } from "@urbit/http-api";
 let patched = false;
 
 export function ensureUrbitConnectPatched() {
-  if (patched) return;
+  if (patched) {
+    return;
+  }
   patched = true;
   Urbit.prototype.connect = async function patchedConnect() {
     const resp = await fetch(`${this.url}/~/login`, {

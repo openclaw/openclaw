@@ -6,7 +6,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
-import type { GroupToolPolicyConfig } from "./types.tools.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type WhatsAppActionConfig = {
   reactions?: boolean;
@@ -27,9 +27,17 @@ export type WhatsAppConfig = {
   sendReadReceipts?: boolean;
   /**
    * Inbound message prefix (WhatsApp only).
-   * Default: `[{agents.list[].identity.name}]` (or `[clawdbot]`) when allowFrom is empty, else `""`.
+   * Default: `[{agents.list[].identity.name}]` (or `[openclaw]`) when allowFrom is empty, else `""`.
    */
   messagePrefix?: string;
+  /**
+   * Per-channel outbound response prefix override.
+   *
+   * When set, this takes precedence over the global `messages.responsePrefix`.
+   * Use `""` to explicitly disable a global prefix for this channel.
+   * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
+   */
+  responsePrefix?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
   /**
@@ -70,6 +78,7 @@ export type WhatsAppConfig = {
     {
       requireMention?: boolean;
       tools?: GroupToolPolicyConfig;
+      toolsBySender?: GroupToolPolicyBySenderConfig;
     }
   >;
   /** Acknowledgment reaction sent immediately upon message receipt. */
@@ -108,6 +117,8 @@ export type WhatsAppAccountConfig = {
   sendReadReceipts?: boolean;
   /** Inbound message prefix override for this account (WhatsApp only). */
   messagePrefix?: string;
+  /** Per-account outbound response prefix override (takes precedence over channel and global). */
+  responsePrefix?: string;
   /** Override auth directory (Baileys multi-file auth state). */
   authDir?: string;
   /** Direct message access policy (default: pairing). */
@@ -135,6 +146,7 @@ export type WhatsAppAccountConfig = {
     {
       requireMention?: boolean;
       tools?: GroupToolPolicyConfig;
+      toolsBySender?: GroupToolPolicyBySenderConfig;
     }
   >;
   /** Acknowledgment reaction sent immediately upon message receipt. */

@@ -1,29 +1,32 @@
 ---
-summary: "CLI reference for `clawdbot directory` (self, peers, groups)"
+summary: "CLI reference for `openclaw directory` (self, peers, groups)"
 read_when:
   - You want to look up contacts/groups/self ids for a channel
   - You are developing a channel directory adapter
+title: "directory"
 ---
 
-# `clawdbot directory`
+# `openclaw directory`
 
 Directory lookups for channels that support it (contacts/peers, groups, and “me”).
 
 ## Common flags
+
 - `--channel <name>`: channel id/alias (required when multiple channels are configured; auto when only one is configured)
 - `--account <id>`: account id (default: channel default)
 - `--json`: output JSON
 
 ## Notes
-- `directory` is meant to help you find IDs you can paste into other commands (especially `clawdbot message send --target ...`).
+
+- `directory` is meant to help you find IDs you can paste into other commands (especially `openclaw message send --target ...`).
 - For many channels, results are config-backed (allowlists / configured groups) rather than a live provider directory.
 - Default output is `id` (and sometimes `name`) separated by a tab; use `--json` for scripting.
 
 ## Using results with `message send`
 
 ```bash
-clawdbot directory peers list --channel slack --query "U0"
-clawdbot message send --channel slack --target user:U012ABCDEF --message "hello"
+openclaw directory peers list --channel slack --query "U0"
+openclaw message send --channel slack --target user:U012ABCDEF --message "hello"
 ```
 
 ## ID formats (by channel)
@@ -40,21 +43,21 @@ clawdbot message send --channel slack --target user:U012ABCDEF --message "hello"
 ## Self (“me”)
 
 ```bash
-clawdbot directory self --channel zalouser
+openclaw directory self --channel zalouser
 ```
 
 ## Peers (contacts/users)
 
 ```bash
-clawdbot directory peers list --channel zalouser
-clawdbot directory peers list --channel zalouser --query "name"
-clawdbot directory peers list --channel zalouser --limit 50
+openclaw directory peers list --channel zalouser
+openclaw directory peers list --channel zalouser --query "name"
+openclaw directory peers list --channel zalouser --limit 50
 ```
 
 ## Groups
 
 ```bash
-clawdbot directory groups list --channel zalouser
-clawdbot directory groups list --channel zalouser --query "work"
-clawdbot directory groups members --channel zalouser --group-id <id>
+openclaw directory groups list --channel zalouser
+openclaw directory groups list --channel zalouser --query "work"
+openclaw directory groups members --channel zalouser --group-id <id>
 ```

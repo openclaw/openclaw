@@ -2,7 +2,9 @@
 summary: "WebSocket gateway architecture, components, and client flows"
 read_when:
   - Working on gateway protocol, clients, or transports
+title: "Gateway Architecture"
 ---
+
 # Gateway architecture
 
 Last updated: 2026-01-22
@@ -22,26 +24,31 @@ Last updated: 2026-01-22
 ## Components and flows
 
 ### Gateway (daemon)
+
 - Maintains provider connections.
 - Exposes a typed WS API (requests, responses, server‑push events).
 - Validates inbound frames against JSON Schema.
 - Emits events like `agent`, `chat`, `presence`, `health`, `heartbeat`, `cron`.
 
 ### Clients (mac app / CLI / web admin)
+
 - One WS connection per client.
 - Send requests (`health`, `status`, `send`, `agent`, `system-presence`).
 - Subscribe to events (`tick`, `agent`, `presence`, `shutdown`).
 
 ### Nodes (macOS / iOS / Android / headless)
+
 - Connect to the **same WS server** with `role: node`.
 - Provide a device identity in `connect`; pairing is **device‑based** (role `node`) and
   approval lives in the device pairing store.
 - Expose commands like `canvas.*`, `camera.*`, `screen.record`, `location.get`.
 
 Protocol details:
+
 - [Gateway protocol](/gateway/protocol)
 
 ### WebChat
+
 - Static UI that uses the Gateway WS API for chat history and sends.
 - In remote setups, connects through the same SSH/Tailscale tunnel as other
   clients.
@@ -72,7 +79,7 @@ Client                    Gateway
 - After handshake:
   - Requests: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
   - Events: `{type:"event", event, payload, seq?, stateVersion?}`
-- If `CLAWDBOT_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
+- If `OPENCLAW_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token`
   must match or the socket closes.
 - Idempotency keys are required for side‑effecting methods (`send`, `agent`) to
   safely retry; the server keeps a short‑lived dedupe cache.
@@ -103,15 +110,17 @@ Details: [Gateway protocol](/gateway/protocol), [Pairing](/start/pairing),
 
 - Preferred: Tailscale or VPN.
 - Alternative: SSH tunnel
+
   ```bash
   ssh -N -L 18789:127.0.0.1:18789 user@host
   ```
+
 - The same handshake + auth token apply over the tunnel.
 - TLS + optional pinning can be enabled for WS in remote setups.
 
 ## Operations snapshot
 
-- Start: `clawdbot gateway` (foreground, logs to stdout).
+- Start: `openclaw gateway` (foreground, logs to stdout).
 - Health: `health` over WS (also included in `hello-ok`).
 - Supervision: launchd/systemd for auto‑restart.
 

@@ -8,16 +8,22 @@ function stripWhatsAppTargetPrefixes(value: string): string {
   for (;;) {
     const before = candidate;
     candidate = candidate.replace(/^whatsapp:/i, "").trim();
-    if (candidate === before) return candidate;
+    if (candidate === before) {
+      return candidate;
+    }
   }
 }
 
 export function isWhatsAppGroupJid(value: string): boolean {
   const candidate = stripWhatsAppTargetPrefixes(value);
   const lower = candidate.toLowerCase();
-  if (!lower.endsWith("@g.us")) return false;
+  if (!lower.endsWith("@g.us")) {
+    return false;
+  }
   const localPart = candidate.slice(0, candidate.length - "@g.us".length);
-  if (!localPart || localPart.includes("@")) return false;
+  if (!localPart || localPart.includes("@")) {
+    return false;
+  }
   return /^[0-9]+(-[0-9]+)*$/.test(localPart);
 }
 
@@ -36,15 +42,21 @@ export function isWhatsAppUserTarget(value: string): boolean {
  */
 function extractUserJidPhone(jid: string): string | null {
   const userMatch = jid.match(WHATSAPP_USER_JID_RE);
-  if (userMatch) return userMatch[1];
+  if (userMatch) {
+    return userMatch[1];
+  }
   const lidMatch = jid.match(WHATSAPP_LID_RE);
-  if (lidMatch) return lidMatch[1];
+  if (lidMatch) {
+    return lidMatch[1];
+  }
   return null;
 }
 
 export function normalizeWhatsAppTarget(value: string): string | null {
   const candidate = stripWhatsAppTargetPrefixes(value);
-  if (!candidate) return null;
+  if (!candidate) {
+    return null;
+  }
   if (isWhatsAppGroupJid(candidate)) {
     const localPart = candidate.slice(0, candidate.length - "@g.us".length);
     return `${localPart}@g.us`;
@@ -52,13 +64,17 @@ export function normalizeWhatsAppTarget(value: string): string | null {
   // Handle user JIDs (e.g. "41796666864:0@s.whatsapp.net")
   if (isWhatsAppUserTarget(candidate)) {
     const phone = extractUserJidPhone(candidate);
-    if (!phone) return null;
+    if (!phone) {
+      return null;
+    }
     const normalized = normalizeE164(phone);
     return normalized.length > 1 ? normalized : null;
   }
   // If the caller passed a JID-ish string that we don't understand, fail fast.
   // Otherwise normalizeE164 would happily treat "group:120@g.us" as a phone number.
-  if (candidate.includes("@")) return null;
+  if (candidate.includes("@")) {
+    return null;
+  }
   const normalized = normalizeE164(candidate);
   return normalized.length > 1 ? normalized : null;
 }

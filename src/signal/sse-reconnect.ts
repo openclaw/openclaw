@@ -1,7 +1,7 @@
-import { logVerbose, shouldLogVerbose } from "../globals.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
-import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { type SignalSseEvent, streamSignalEvents } from "./client.js";
 
 const DEFAULT_RECONNECT_POLICY: BackoffPolicy = {
@@ -35,7 +35,9 @@ export async function runSignalSseLoop({
   let reconnectAttempts = 0;
 
   const logReconnectVerbose = (message: string) => {
-    if (!shouldLogVerbose()) return;
+    if (!shouldLogVerbose()) {
+      return;
+    }
     logVerbose(message);
   };
 
@@ -50,13 +52,17 @@ export async function runSignalSseLoop({
           onEvent(event);
         },
       });
-      if (abortSignal?.aborted) return;
+      if (abortSignal?.aborted) {
+        return;
+      }
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
       logReconnectVerbose(`Signal SSE stream ended, reconnecting in ${delayMs / 1000}s...`);
       await sleepWithAbort(delayMs, abortSignal);
     } catch (err) {
-      if (abortSignal?.aborted) return;
+      if (abortSignal?.aborted) {
+        return;
+      }
       runtime.error?.(`Signal SSE stream error: ${String(err)}`);
       reconnectAttempts += 1;
       const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
@@ -64,7 +70,9 @@ export async function runSignalSseLoop({
       try {
         await sleepWithAbort(delayMs, abortSignal);
       } catch (sleepErr) {
-        if (abortSignal?.aborted) return;
+        if (abortSignal?.aborted) {
+          return;
+        }
         throw sleepErr;
       }
     }

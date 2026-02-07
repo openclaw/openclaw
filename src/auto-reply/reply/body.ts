@@ -26,7 +26,9 @@ export async function applySessionHints(params: {
         const sessionKey = params.sessionKey;
         await updateSessionStore(params.storePath, (store) => {
           const entry = store[sessionKey] ?? params.sessionEntry;
-          if (!entry) return;
+          if (!entry) {
+            return;
+          }
           store[sessionKey] = {
             ...entry,
             abortedLastRun: false,

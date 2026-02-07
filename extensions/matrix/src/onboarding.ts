@@ -5,17 +5,18 @@ import {
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
-} from "clawdbot/plugin-sdk";
+} from "openclaw/plugin-sdk";
+import type { CoreConfig, DmPolicy } from "./types.js";
 import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
-import { listMatrixDirectoryPeersLive } from "./directory-live.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
-import type { CoreConfig, DmPolicy } from "./types.js";
+import { resolveMatrixTargets } from "./resolve-targets.js";
 
 const channel = "matrix" as const;
 
 function setMatrixDmPolicy(cfg: CoreConfig, policy: DmPolicy) {
-  const allowFrom = policy === "open" ? addWildcardAllowFrom(cfg.channels?.matrix?.dm?.allowFrom) : undefined;
+  const allowFrom =
+    policy === "open" ? addWildcardAllowFrom(cfg.channels?.matrix?.dm?.allowFrom) : undefined;
   return {
     ...cfg,
     channels: {
@@ -64,14 +65,16 @@ async function promptMatrixAllowFrom(params: {
 
   while (true) {
     const entry = await prompter.text({
-      message: "Matrix allowFrom (username or user id)",
+      message: "Matrix allowFrom (full @user:server; display name only if unique)",
       placeholder: "@user:server",
       initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
       validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
     });
     const parts = parseInput(String(entry));
     const resolvedIds: string[] = [];
-    let unresolved: string[] = [];
+    const pending: string[] = [];
+    const unresolved: string[] = [];
+    const unresolvedNotes: string[] = [];
 
     for (const part of parts) {
       if (isFullUserId(part)) {
@@ -82,28 +85,33 @@ async function promptMatrixAllowFrom(params: {
         unresolved.push(part);
         continue;
       }
-      const results = await listMatrixDirectoryPeersLive({
+      pending.push(part);
+    }
+
+    if (pending.length > 0) {
+      const results = await resolveMatrixTargets({
         cfg,
-        query: part,
-        limit: 5,
+        inputs: pending,
+        kind: "user",
       }).catch(() => []);
-      const match = results.find((result) => result.id);
-      if (match?.id) {
-        resolvedIds.push(match.id);
-        if (results.length > 1) {
-          await prompter.note(
-            `Multiple matches for "${part}", using ${match.id}.`,
-            "Matrix allowlist",
-          );
+      for (const result of results) {
+        if (result?.resolved && result.id) {
+          resolvedIds.push(result.id);
+          continue;
         }
-      } else {
-        unresolved.push(part);
+        if (result?.input) {
+          unresolved.push(result.input);
+          if (result.note) {
+            unresolvedNotes.push(`${result.input}: ${result.note}`);
+          }
+        }
       }
     }
 
     if (unresolved.length > 0) {
+      const details = unresolvedNotes.length > 0 ? unresolvedNotes : unresolved;
       await prompter.note(
-        `Could not resolve: ${unresolved.join(", ")}. Use full @user:server IDs.`,
+        `Could not resolve:\n${details.join("\n")}\nUse full @user:server IDs.`,
         "Matrix allowlist",
       );
       continue;
@@ -185,7 +193,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
         `Matrix: ${configured ? "configured" : "needs homeserver + access token or password"}`,
       ],
       selectionHint: !sdkReady
-        ? "install matrix-bot-sdk"
+        ? "install @vector-im/matrix-bot-sdk"
         : configured
           ? "configured"
           : "needs auth",
@@ -248,8 +256,12 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: existing.homeserver ?? envHomeserver,
         validate: (value) => {
           const raw = String(value ?? "").trim();
-          if (!raw) return "Required";
-          if (!/^https?:\/\//i.test(raw)) return "Use a full URL (https://...)";
+          if (!raw) {
+            return "Required";
+          }
+          if (!/^https?:\/\//i.test(raw)) {
+            return "Use a full URL (https://...)";
+          }
           return undefined;
         },
       }),
@@ -273,13 +285,13 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
 
     if (!accessToken && !password) {
       // Ask auth method FIRST before asking for user ID
-      const authMode = (await prompter.select({
+      const authMode = await prompter.select({
         message: "Matrix auth method",
         options: [
           { value: "token", label: "Access token (user ID fetched automatically)" },
           { value: "password", label: "Password (requires user ID)" },
         ],
-      })) as "token" | "password";
+      });
 
       if (authMode === "token") {
         accessToken = String(
@@ -299,9 +311,15 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
             initialValue: existing.userId ?? envUserId,
             validate: (value) => {
               const raw = String(value ?? "").trim();
-              if (!raw) return "Required";
-              if (!raw.startsWith("@")) return "Matrix user IDs should start with @";
-              if (!raw.includes(":")) return "Matrix user IDs should include a server (:server)";
+              if (!raw) {
+                return "Required";
+              }
+              if (!raw.startsWith("@")) {
+                return "Matrix user IDs should start with @";
+              }
+              if (!raw.includes(":")) {
+                return "Matrix user IDs should include a server (:server)";
+              }
               return undefined;
             },
           }),
@@ -318,7 +336,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
     const deviceName = String(
       await prompter.text({
         message: "Matrix device name (optional)",
-        initialValue: existing.deviceName ?? "Clawdbot Gateway",
+        initialValue: existing.deviceName ?? "OpenClaw Gateway",
       }),
     ).trim();
 
@@ -369,7 +387,9 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
             const unresolved: string[] = [];
             for (const entry of accessConfig.entries) {
               const trimmed = entry.trim();
-              if (!trimmed) continue;
+              if (!trimmed) {
+                continue;
+              }
               const cleaned = trimmed.replace(/^(room|channel):/i, "").trim();
               if (cleaned.startsWith("!") && cleaned.includes(":")) {
                 resolvedIds.push(cleaned);
@@ -390,10 +410,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
                 unresolved.push(entry);
               }
             }
-            roomKeys = [
-              ...resolvedIds,
-              ...unresolved.map((entry) => entry.trim()).filter(Boolean),
-            ];
+            roomKeys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
             if (resolvedIds.length > 0 || unresolved.length > 0) {
               await prompter.note(
                 [

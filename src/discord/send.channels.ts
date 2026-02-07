@@ -1,6 +1,5 @@
 import type { APIChannel } from "discord-api-types/v10";
 import { Routes } from "discord-api-types/v10";
-import { resolveDiscordRest } from "./send.shared.js";
 import type {
   DiscordChannelCreate,
   DiscordChannelEdit,
@@ -8,6 +7,7 @@ import type {
   DiscordChannelPermissionSet,
   DiscordReactOpts,
 } from "./send.types.js";
+import { resolveDiscordRest } from "./send.shared.js";
 
 export async function createChannelDiscord(
   payload: DiscordChannelCreate,
@@ -17,11 +17,21 @@ export async function createChannelDiscord(
   const body: Record<string, unknown> = {
     name: payload.name,
   };
-  if (payload.type !== undefined) body.type = payload.type;
-  if (payload.parentId) body.parent_id = payload.parentId;
-  if (payload.topic) body.topic = payload.topic;
-  if (payload.position !== undefined) body.position = payload.position;
-  if (payload.nsfw !== undefined) body.nsfw = payload.nsfw;
+  if (payload.type !== undefined) {
+    body.type = payload.type;
+  }
+  if (payload.parentId) {
+    body.parent_id = payload.parentId;
+  }
+  if (payload.topic) {
+    body.topic = payload.topic;
+  }
+  if (payload.position !== undefined) {
+    body.position = payload.position;
+  }
+  if (payload.nsfw !== undefined) {
+    body.nsfw = payload.nsfw;
+  }
   return (await rest.post(Routes.guildChannels(payload.guildId), {
     body,
   })) as APIChannel;
@@ -33,12 +43,24 @@ export async function editChannelDiscord(
 ): Promise<APIChannel> {
   const rest = resolveDiscordRest(opts);
   const body: Record<string, unknown> = {};
-  if (payload.name !== undefined) body.name = payload.name;
-  if (payload.topic !== undefined) body.topic = payload.topic;
-  if (payload.position !== undefined) body.position = payload.position;
-  if (payload.parentId !== undefined) body.parent_id = payload.parentId;
-  if (payload.nsfw !== undefined) body.nsfw = payload.nsfw;
-  if (payload.rateLimitPerUser !== undefined) body.rate_limit_per_user = payload.rateLimitPerUser;
+  if (payload.name !== undefined) {
+    body.name = payload.name;
+  }
+  if (payload.topic !== undefined) {
+    body.topic = payload.topic;
+  }
+  if (payload.position !== undefined) {
+    body.position = payload.position;
+  }
+  if (payload.parentId !== undefined) {
+    body.parent_id = payload.parentId;
+  }
+  if (payload.nsfw !== undefined) {
+    body.nsfw = payload.nsfw;
+  }
+  if (payload.rateLimitPerUser !== undefined) {
+    body.rate_limit_per_user = payload.rateLimitPerUser;
+  }
   return (await rest.patch(Routes.channel(payload.channelId), {
     body,
   })) as APIChannel;
@@ -71,8 +93,12 @@ export async function setChannelPermissionDiscord(
   const body: Record<string, unknown> = {
     type: payload.targetType,
   };
-  if (payload.allow !== undefined) body.allow = payload.allow;
-  if (payload.deny !== undefined) body.deny = payload.deny;
+  if (payload.allow !== undefined) {
+    body.allow = payload.allow;
+  }
+  if (payload.deny !== undefined) {
+    body.deny = payload.deny;
+  }
   await rest.put(`/channels/${payload.channelId}/permissions/${payload.targetId}`, { body });
   return { ok: true };
 }

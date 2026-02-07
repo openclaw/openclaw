@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
@@ -7,12 +7,14 @@ import { resolveQueueSettings } from "./queue.js";
 
 export function maybeHandleQueueDirective(params: {
   directives: InlineDirectives;
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   channel: string;
   sessionEntry?: SessionEntry;
 }): ReplyPayload | undefined {
   const { directives } = params;
-  if (!directives.hasQueueDirective) return undefined;
+  if (!directives.hasQueueDirective) {
+    return undefined;
+  }
 
   const wantsStatus =
     !directives.queueMode &&

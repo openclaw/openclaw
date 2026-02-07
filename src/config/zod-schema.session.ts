@@ -1,5 +1,4 @@
 import { z } from "zod";
-
 import {
   GroupChatSchema,
   InboundDebounceSchema,
@@ -16,11 +15,41 @@ const SessionResetConfigSchema = z
   })
   .strict();
 
+export const SessionSendPolicySchema = z
+  .object({
+    default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
+    rules: z
+      .array(
+        z
+          .object({
+            action: z.union([z.literal("allow"), z.literal("deny")]),
+            match: z
+              .object({
+                channel: z.string().optional(),
+                chatType: z
+                  .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
+                  .optional(),
+                keyPrefix: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+  })
+  .strict();
+
 export const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
     dmScope: z
-      .union([z.literal("main"), z.literal("per-peer"), z.literal("per-channel-peer")])
+      .union([
+        z.literal("main"),
+        z.literal("per-peer"),
+        z.literal("per-channel-peer"),
+        z.literal("per-account-channel-peer"),
+      ])
       .optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
@@ -46,31 +75,7 @@ export const SessionSchema = z
       ])
       .optional(),
     mainKey: z.string().optional(),
-    sendPolicy: z
-      .object({
-        default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
-        rules: z
-          .array(
-            z
-              .object({
-                action: z.union([z.literal("allow"), z.literal("deny")]),
-                match: z
-                  .object({
-                    channel: z.string().optional(),
-                    chatType: z
-                      .union([z.literal("direct"), z.literal("group"), z.literal("channel")])
-                      .optional(),
-                    keyPrefix: z.string().optional(),
-                  })
-                  .strict()
-                  .optional(),
-              })
-              .strict(),
-          )
-          .optional(),
-      })
-      .strict()
-      .optional(),
+    sendPolicy: SessionSendPolicySchema.optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),
@@ -107,6 +112,7 @@ export const CommandsSchema = z
     debug: z.boolean().optional(),
     restart: z.boolean().optional(),
     useAccessGroups: z.boolean().optional(),
+    ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   })
   .strict()
   .optional()

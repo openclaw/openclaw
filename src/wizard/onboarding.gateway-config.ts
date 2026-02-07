@@ -1,7 +1,5 @@
-import { randomToken } from "../commands/onboard-helpers.js";
 import type { GatewayAuthChoice } from "../commands/onboard-types.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { findTailscaleBinary } from "../infra/tailscale.js";
+import type { GatewayBindMode, GatewayTailscaleMode, OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
   GatewayWizardSettings,
@@ -9,11 +7,13 @@ import type {
   WizardFlow,
 } from "./onboarding.types.js";
 import type { WizardPrompter } from "./prompts.js";
+import { normalizeGatewayTokenInput, randomToken } from "../commands/onboard-helpers.js";
+import { findTailscaleBinary } from "../infra/tailscale.js";
 
 type ConfigureGatewayOptions = {
   flow: WizardFlow;
-  baseConfig: ClawdbotConfig;
-  nextConfig: ClawdbotConfig;
+  baseConfig: OpenClawConfig;
+  nextConfig: OpenClawConfig;
   localPort: number;
   quickstartGateway: QuickstartGatewayDefaults;
   prompter: WizardPrompter;
@@ -21,7 +21,7 @@ type ConfigureGatewayOptions = {
 };
 
 type ConfigureGatewayResult = {
-  nextConfig: ClawdbotConfig;
+  nextConfig: OpenClawConfig;
   settings: GatewayWizardSettings;
 };
 
@@ -45,10 +45,10 @@ export async function configureGatewayForOnboarding(
           10,
         );
 
-  let bind = (
+  let bind: GatewayWizardSettings["bind"] =
     flow === "quickstart"
       ? quickstartGateway.bind
-      : ((await prompter.select({
+      : await prompter.select<GatewayWizardSettings["bind"]>({
           message: "Gateway bind",
           options: [
             { value: "loopback", label: "Loopback (127.0.0.1)" },
@@ -57,8 +57,7 @@ export async function configureGatewayForOnboarding(
             { value: "auto", label: "Auto (Loopback → LAN)" },
             { value: "custom", label: "Custom IP" },
           ],
-        })) as "loopback" | "lan" | "auto" | "custom" | "tailnet")
-  ) as "loopback" | "lan" | "auto" | "custom" | "tailnet";
+        });
 
   let customBindHost = quickstartGateway.customBindHost;
   if (bind === "custom") {
@@ -69,17 +68,22 @@ export async function configureGatewayForOnboarding(
         placeholder: "192.168.1.100",
         initialValue: customBindHost ?? "",
         validate: (value) => {
-          if (!value) return "IP address is required for custom bind mode";
+          if (!value) {
+            return "IP address is required for custom bind mode";
+          }
           const trimmed = value.trim();
           const parts = trimmed.split(".");
-          if (parts.length !== 4) return "Invalid IPv4 address (e.g., 192.168.1.100)";
+          if (parts.length !== 4) {
+            return "Invalid IPv4 address (e.g., 192.168.1.100)";
+          }
           if (
             parts.every((part) => {
               const n = parseInt(part, 10);
               return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
             })
-          )
+          ) {
             return undefined;
+          }
           return "Invalid IPv4 address (each octet must be 0-255)";
         },
       });
@@ -87,17 +91,12 @@ export async function configureGatewayForOnboarding(
     }
   }
 
-  let authMode = (
+  let authMode =
     flow === "quickstart"
       ? quickstartGateway.authMode
       : ((await prompter.select({
           message: "Gateway auth",
           options: [
-            {
-              value: "off",
-              label: "Off (loopback only)",
-              hint: "Not recommended unless you fully trust local processes",
-            },
             {
               value: "token",
               label: "Token",
@@ -106,13 +105,12 @@ export async function configureGatewayForOnboarding(
             { value: "password", label: "Password" },
           ],
           initialValue: "token",
-        })) as GatewayAuthChoice)
-  ) as GatewayAuthChoice;
+        })) as GatewayAuthChoice);
 
-  const tailscaleMode = (
+  const tailscaleMode: GatewayWizardSettings["tailscaleMode"] =
     flow === "quickstart"
       ? quickstartGateway.tailscaleMode
-      : ((await prompter.select({
+      : await prompter.select<GatewayWizardSettings["tailscaleMode"]>({
           message: "Tailscale exposure",
           options: [
             { value: "off", label: "Off", hint: "No Tailscale exposure" },
@@ -127,8 +125,7 @@ export async function configureGatewayForOnboarding(
               hint: "Public HTTPS via Tailscale Funnel (internet)",
             },
           ],
-        })) as "off" | "serve" | "funnel")
-  ) as "off" | "serve" | "funnel";
+        });
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
   if (tailscaleMode !== "off") {
@@ -150,7 +147,7 @@ export async function configureGatewayForOnboarding(
   let tailscaleResetOnExit = flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(
-      ["Docs:", "https://docs.clawd.bot/gateway/tailscale", "https://docs.clawd.bot/web"].join(
+      ["Docs:", "https://docs.openclaw.ai/gateway/tailscale", "https://docs.openclaw.ai/web"].join(
         "\n",
       ),
       "Tailscale",
@@ -165,17 +162,11 @@ export async function configureGatewayForOnboarding(
 
   // Safety + constraints:
   // - Tailscale wants bind=loopback so we never expose a non-loopback server + tailscale serve/funnel at once.
-  // - Auth off only allowed for bind=loopback.
   // - Funnel requires password auth.
   if (tailscaleMode !== "off" && bind !== "loopback") {
     await prompter.note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
     bind = "loopback";
     customBindHost = undefined;
-  }
-
-  if (authMode === "off" && bind !== "loopback") {
-    await prompter.note("Non-loopback bind requires auth. Switching to token auth.", "Note");
-    authMode = "token";
   }
 
   if (tailscaleMode === "funnel" && authMode !== "password") {
@@ -193,7 +184,7 @@ export async function configureGatewayForOnboarding(
         placeholder: "Needed for multi-machine or non-loopback access",
         initialValue: quickstartGateway.token ?? "",
       });
-      gatewayToken = String(tokenInput).trim() || randomToken();
+      gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
     }
   }
 
@@ -235,11 +226,11 @@ export async function configureGatewayForOnboarding(
     gateway: {
       ...nextConfig.gateway,
       port,
-      bind,
+      bind: bind as GatewayBindMode,
       ...(bind === "custom" && customBindHost ? { customBindHost } : {}),
       tailscale: {
         ...nextConfig.gateway?.tailscale,
-        mode: tailscaleMode,
+        mode: tailscaleMode as GatewayTailscaleMode,
         resetOnExit: tailscaleResetOnExit,
       },
     },
@@ -249,11 +240,11 @@ export async function configureGatewayForOnboarding(
     nextConfig,
     settings: {
       port,
-      bind,
+      bind: bind as GatewayBindMode,
       customBindHost: bind === "custom" ? customBindHost : undefined,
       authMode,
       gatewayToken,
-      tailscaleMode,
+      tailscaleMode: tailscaleMode as GatewayTailscaleMode,
       tailscaleResetOnExit,
     },
   };

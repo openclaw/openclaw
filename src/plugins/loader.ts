@@ -1,37 +1,36 @@
+import { createJiti } from "jiti";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti";
-
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import type {
+  OpenClawPluginDefinition,
+  OpenClawPluginModule,
+  PluginDiagnostic,
+  PluginLogger,
+} from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
-import { discoverClawdbotPlugins } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { clearPluginCommands } from "./commands.js";
 import {
   normalizePluginsConfig,
   resolveEnableState,
   resolveMemorySlotDecision,
   type NormalizedPluginsConfig,
 } from "./config-state.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
-import { clearPluginCommands } from "./commands.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import { createPluginRuntime } from "./runtime/index.js";
 import { setActivePluginRegistry } from "./runtime.js";
+import { createPluginRuntime } from "./runtime/index.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
-import type {
-  ClawdbotPluginDefinition,
-  ClawdbotPluginModule,
-  PluginDiagnostic,
-  PluginLogger,
-} from "./types.js";
 
 export type PluginLoadResult = PluginRegistry;
 
 export type PluginLoadOptions = {
-  config?: ClawdbotConfig;
+  config?: OpenClawConfig;
   workspaceDir?: string;
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
@@ -46,20 +45,26 @@ const defaultLogger = () => createSubsystemLogger("plugins");
 const resolvePluginSdkAlias = (): string | null => {
   try {
     const modulePath = fileURLToPath(import.meta.url);
-    const isDistRuntime = modulePath.split(path.sep).includes("dist");
-    const preferDist = process.env.VITEST || process.env.NODE_ENV === "test" || isDistRuntime;
+    const isProduction = process.env.NODE_ENV === "production";
+    const isTest = process.env.VITEST || process.env.NODE_ENV === "test";
     let cursor = path.dirname(modulePath);
     for (let i = 0; i < 6; i += 1) {
       const srcCandidate = path.join(cursor, "src", "plugin-sdk", "index.ts");
       const distCandidate = path.join(cursor, "dist", "plugin-sdk", "index.js");
-      const orderedCandidates = preferDist
-        ? [distCandidate, srcCandidate]
+      const orderedCandidates = isProduction
+        ? isTest
+          ? [distCandidate, srcCandidate]
+          : [distCandidate]
         : [srcCandidate, distCandidate];
       for (const candidate of orderedCandidates) {
-        if (fs.existsSync(candidate)) return candidate;
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
       }
       const parent = path.dirname(cursor);
-      if (parent === cursor) break;
+      if (parent === cursor) {
+        break;
+      }
       cursor = parent;
     }
   } catch {
@@ -98,8 +103,8 @@ function validatePluginConfig(params: {
 }
 
 function resolvePluginModuleExport(moduleExport: unknown): {
-  definition?: ClawdbotPluginDefinition;
-  register?: ClawdbotPluginDefinition["register"];
+  definition?: OpenClawPluginDefinition;
+  register?: OpenClawPluginDefinition["register"];
 } {
   const resolved =
     moduleExport &&
@@ -109,11 +114,11 @@ function resolvePluginModuleExport(moduleExport: unknown): {
       : moduleExport;
   if (typeof resolved === "function") {
     return {
-      register: resolved as ClawdbotPluginDefinition["register"],
+      register: resolved as OpenClawPluginDefinition["register"],
     };
   }
   if (resolved && typeof resolved === "object") {
-    const def = resolved as ClawdbotPluginDefinition;
+    const def = resolved as OpenClawPluginDefinition;
     const register = def.register ?? def.activate;
     return { definition: def, register };
   }
@@ -161,7 +166,7 @@ function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnost
   diagnostics.push(...append);
 }
 
-export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   const cfg = options.config ?? {};
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
@@ -189,7 +194,7 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
     coreGatewayHandlers: options.coreGatewayHandlers as Record<string, GatewayRequestHandler>,
   });
 
-  const discovery = discoverClawdbotPlugins({
+  const discovery = discoverOpenClawPlugins({
     workspaceDir: options.workspaceDir,
     extraPaths: normalized.loadPaths,
   });
@@ -206,7 +211,11 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
   const jiti = createJiti(import.meta.url, {
     interopDefault: true,
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-    ...(pluginSdkAlias ? { alias: { "clawdbot/plugin-sdk": pluginSdkAlias } } : {}),
+    ...(pluginSdkAlias
+      ? {
+          alias: { "openclaw/plugin-sdk": pluginSdkAlias },
+        }
+      : {}),
   });
 
   const manifestByRoot = new Map(
@@ -282,9 +291,9 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
-    let mod: ClawdbotPluginModule | null = null;
+    let mod: OpenClawPluginModule | null = null;
     try {
-      mod = jiti(candidate.source) as ClawdbotPluginModule;
+      mod = jiti(candidate.source) as OpenClawPluginModule;
     } catch (err) {
       logger.error(`[plugins] ${record.id} failed to load from ${record.source}: ${String(err)}`);
       record.status = "error";
@@ -401,7 +410,7 @@ export function loadClawdbotPlugins(options: PluginLoadOptions = {}): PluginRegi
 
     try {
       const result = register(api);
-      if (result && typeof (result as Promise<void>).then === "function") {
+      if (result && typeof result.then === "function") {
         registry.diagnostics.push({
           level: "warn",
           pluginId: record.id,

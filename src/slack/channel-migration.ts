@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { SlackChannelConfig } from "../config/types.slack.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
@@ -13,15 +13,21 @@ export type SlackChannelMigrationResult = {
 };
 
 function resolveAccountChannels(
-  cfg: ClawdbotConfig,
+  cfg: OpenClawConfig,
   accountId?: string | null,
 ): { channels?: SlackChannels } {
-  if (!accountId) return {};
+  if (!accountId) {
+    return {};
+  }
   const normalized = normalizeAccountId(accountId);
   const accounts = cfg.channels?.slack?.accounts;
-  if (!accounts || typeof accounts !== "object") return {};
+  if (!accounts || typeof accounts !== "object") {
+    return {};
+  }
   const exact = accounts[normalized];
-  if (exact?.channels) return { channels: exact.channels };
+  if (exact?.channels) {
+    return { channels: exact.channels };
+  }
   const matchKey = Object.keys(accounts).find(
     (key) => key.toLowerCase() === normalized.toLowerCase(),
   );
@@ -33,17 +39,25 @@ export function migrateSlackChannelsInPlace(
   oldChannelId: string,
   newChannelId: string,
 ): { migrated: boolean; skippedExisting: boolean } {
-  if (!channels) return { migrated: false, skippedExisting: false };
-  if (oldChannelId === newChannelId) return { migrated: false, skippedExisting: false };
-  if (!Object.hasOwn(channels, oldChannelId)) return { migrated: false, skippedExisting: false };
-  if (Object.hasOwn(channels, newChannelId)) return { migrated: false, skippedExisting: true };
+  if (!channels) {
+    return { migrated: false, skippedExisting: false };
+  }
+  if (oldChannelId === newChannelId) {
+    return { migrated: false, skippedExisting: false };
+  }
+  if (!Object.hasOwn(channels, oldChannelId)) {
+    return { migrated: false, skippedExisting: false };
+  }
+  if (Object.hasOwn(channels, newChannelId)) {
+    return { migrated: false, skippedExisting: true };
+  }
   channels[newChannelId] = channels[oldChannelId];
   delete channels[oldChannelId];
   return { migrated: true, skippedExisting: false };
 }
 
 export function migrateSlackChannelConfig(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   accountId?: string | null;
   oldChannelId: string;
   newChannelId: string;
@@ -63,7 +77,9 @@ export function migrateSlackChannelConfig(params: {
       migrated = true;
       scopes.push("account");
     }
-    if (result.skippedExisting) skippedExisting = true;
+    if (result.skippedExisting) {
+      skippedExisting = true;
+    }
   }
 
   const globalChannels = params.cfg.channels?.slack?.channels;
@@ -77,7 +93,9 @@ export function migrateSlackChannelConfig(params: {
       migrated = true;
       scopes.push("global");
     }
-    if (result.skippedExisting) skippedExisting = true;
+    if (result.skippedExisting) {
+      skippedExisting = true;
+    }
   }
 
   return { migrated, skippedExisting, scopes };

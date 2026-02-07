@@ -30,6 +30,7 @@ vi.mock("grammy", () => ({
     on = onSpy;
     command = vi.fn();
     stop = stopSpy;
+    catch = vi.fn();
     constructor(public token: string) {}
   },
   InputFile: class {},
@@ -76,9 +77,9 @@ vi.mock("../config/sessions.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./pairing-store.js", () => ({
-  readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
-  upsertTelegramPairingRequest: vi.fn(async () => ({
+vi.mock("../pairing/pairing-store.js", () => ({
+  readChannelAllowFromStore: vi.fn(async () => [] as string[]),
+  upsertChannelPairingRequest: vi.fn(async () => ({
     code: "PAIRCODE",
     created: true,
   })),
@@ -122,7 +123,7 @@ describe("telegram inbound media", () => {
             horizontal_accuracy: 12,
           },
         },
-        me: { username: "clawdbot_bot" },
+        me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "unused" }),
       });
 
@@ -165,7 +166,7 @@ describe("telegram inbound media", () => {
             location: { latitude: 48.858844, longitude: 2.294351 },
           },
         },
-        me: { username: "clawdbot_bot" },
+        me: { username: "openclaw_bot" },
         getFile: async () => ({ file_path: "unused" }),
       });
 

@@ -1,31 +1,32 @@
-import { loadChatHistory } from "./controllers/chat";
-import { loadDevices } from "./controllers/devices";
-import { loadNodes } from "./controllers/nodes";
-import { loadAgents } from "./controllers/agents";
-import type { GatewayEventFrame, GatewayHelloOk } from "./gateway";
-import { GatewayBrowserClient } from "./gateway";
-import type { EventLogEntry } from "./app-events";
-import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } from "./types";
-import type { Tab } from "./navigation";
-import type { UiSettings } from "./storage";
-import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream";
-import { flushChatQueueForEvent } from "./app-chat";
+import type { EventLogEntry } from "./app-events.ts";
+import type { OpenClawApp } from "./app.ts";
+import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
+import type { Tab } from "./navigation.ts";
+import type { UiSettings } from "./storage.ts";
+import type { AgentsListResult, PresenceEntry, HealthSnapshot, StatusSummary } from "./types.ts";
+import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
 import {
   applySettings,
   loadCron,
   refreshActiveTab,
   setLastActiveSessionKey,
-} from "./app-settings";
-import { handleChatEvent, type ChatEventPayload } from "./controllers/chat";
+} from "./app-settings.ts";
+import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
+import { loadAgents } from "./controllers/agents.ts";
+import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
+import { loadChatHistory } from "./controllers/chat.ts";
+import { handleChatEvent, type ChatEventPayload } from "./controllers/chat.ts";
+import { loadDevices } from "./controllers/devices.ts";
 import {
   addExecApproval,
   parseExecApprovalRequested,
   parseExecApprovalResolved,
   removeExecApproval,
-} from "./controllers/exec-approval";
-import type { ClawdbotApp } from "./app";
-import type { ExecApprovalRequest } from "./controllers/exec-approval";
-import { loadAssistantIdentity } from "./controllers/assistant-identity";
+} from "./controllers/exec-approval.ts";
+import { loadNodes } from "./controllers/nodes.ts";
+import { loadSessions } from "./controllers/sessions.ts";
+import { GatewayBrowserClient } from "./gateway.ts";
 
 type GatewayHost = {
   settings: UiSettings;
@@ -50,6 +51,7 @@ type GatewayHost = {
   assistantAgentId: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
 };
@@ -67,21 +69,26 @@ function normalizeSessionKeyForDefaults(
 ): string {
   const raw = (value ?? "").trim();
   const mainSessionKey = defaults.mainSessionKey?.trim();
-  if (!mainSessionKey) return raw;
-  if (!raw) return mainSessionKey;
+  if (!mainSessionKey) {
+    return raw;
+  }
+  if (!raw) {
+    return mainSessionKey;
+  }
   const mainKey = defaults.mainKey?.trim() || "main";
   const defaultAgentId = defaults.defaultAgentId?.trim();
   const isAlias =
     raw === "main" ||
     raw === mainKey ||
     (defaultAgentId &&
-      (raw === `agent:${defaultAgentId}:main` ||
-        raw === `agent:${defaultAgentId}:${mainKey}`));
+      (raw === `agent:${defaultAgentId}:main` || raw === `agent:${defaultAgentId}:${mainKey}`));
   return isAlias ? mainSessionKey : raw;
 }
 
 function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnapshot) {
-  if (!defaults?.mainSessionKey) return;
+  if (!defaults?.mainSessionKey) {
+    return;
+  }
   const resolvedSessionKey = normalizeSessionKeyForDefaults(host.sessionKey, defaults);
   const resolvedSettingsSessionKey = normalizeSessionKeyForDefaults(
     host.settings.sessionKey,
@@ -120,17 +127,23 @@ export function connectGateway(host: GatewayHost) {
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
-    clientName: "clawdbot-control-ui",
+    clientName: "openclaw-control-ui",
     mode: "webchat",
     onHello: (hello) => {
       host.connected = true;
       host.lastError = null;
       host.hello = hello;
       applySnapshot(host, hello);
-      void loadAssistantIdentity(host as unknown as ClawdbotApp);
-      void loadAgents(host as unknown as ClawdbotApp);
-      void loadNodes(host as unknown as ClawdbotApp, { quiet: true });
-      void loadDevices(host as unknown as ClawdbotApp, { quiet: true });
+      // Reset orphaned chat run state from before disconnect.
+      // Any in-flight run's final event was lost during the disconnect window.
+      host.chatRunId = null;
+      (host as unknown as { chatStream: string | null }).chatStream = null;
+      (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
+      resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      void loadAssistantIdentity(host as unknown as OpenClawApp);
+      void loadAgents(host as unknown as OpenClawApp);
+      void loadNodes(host as unknown as OpenClawApp, { quiet: true });
+      void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
     },
     onClose: ({ code, reason }) => {
@@ -166,7 +179,9 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "agent") {
-    if (host.onboarding) return;
+    if (host.onboarding) {
+      return;
+    }
     handleAgentEvent(
       host as unknown as Parameters<typeof handleAgentEvent>[0],
       evt.payload as AgentEventPayload | undefined,
@@ -182,14 +197,23 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
         payload.sessionKey,
       );
     }
-    const state = handleChatEvent(host as unknown as ClawdbotApp, payload);
+    const state = handleChatEvent(host as unknown as OpenClawApp, payload);
     if (state === "final" || state === "error" || state === "aborted") {
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-      void flushChatQueueForEvent(
-        host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
-      );
+      void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
+      const runId = payload?.runId;
+      if (runId && host.refreshSessionsAfterChat.has(runId)) {
+        host.refreshSessionsAfterChat.delete(runId);
+        if (state === "final") {
+          void loadSessions(host as unknown as OpenClawApp, {
+            activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+          });
+        }
+      }
     }
-    if (state === "final") void loadChatHistory(host as unknown as ClawdbotApp);
+    if (state === "final") {
+      void loadChatHistory(host as unknown as OpenClawApp);
+    }
     return;
   }
 
@@ -208,7 +232,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "device.pair.requested" || evt.event === "device.pair.resolved") {
-    void loadDevices(host as unknown as ClawdbotApp, { quiet: true });
+    void loadDevices(host as unknown as OpenClawApp, { quiet: true });
   }
 
   if (evt.event === "exec.approval.requested") {

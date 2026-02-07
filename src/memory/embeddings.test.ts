@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(),
   requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
-    if (auth?.apiKey) return auth.apiKey;
+    if (auth?.apiKey) {
+      return auth.apiKey;
+    }
     throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`);
   },
 }));
@@ -193,6 +196,13 @@ describe("embedding provider auto selection", () => {
   });
 
   it("uses gemini when openai is missing", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ embedding: { values: [1, 2, 3] } }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
     const { createEmbeddingProvider } = await import("./embeddings.js");
     const authModule = await import("../agents/model-auth.js");
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
@@ -214,6 +224,44 @@ describe("embedding provider auto selection", () => {
 
     expect(result.requestedProvider).toBe("auto");
     expect(result.provider.id).toBe("gemini");
+    await result.provider.embedQuery("hello");
+    const [url] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe(
+      `https://generativelanguage.googleapis.com/v1beta/models/${DEFAULT_GEMINI_EMBEDDING_MODEL}:embedContent`,
+    );
+  });
+
+  it("keeps explicit model when openai is selected", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
+    })) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+    const authModule = await import("../agents/model-auth.js");
+    vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
+      if (provider === "openai") {
+        return { apiKey: "openai-key", source: "env: OPENAI_API_KEY", mode: "api-key" };
+      }
+      throw new Error(`Unexpected provider ${provider}`);
+    });
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "auto",
+      model: "text-embedding-3-small",
+      fallback: "none",
+    });
+
+    expect(result.requestedProvider).toBe("auto");
+    expect(result.provider.id).toBe("openai");
+    await result.provider.embedQuery("hello");
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.openai.com/v1/embeddings");
+    const payload = JSON.parse(String(init?.body ?? "{}")) as { model?: string };
+    expect(payload.model).toBe("text-embedding-3-small");
   });
 });
 
@@ -276,5 +324,159 @@ describe("embedding provider local fallback", () => {
         fallback: "none",
       }),
     ).rejects.toThrow(/optional dependency node-llama-cpp/i);
+  });
+});
+
+describe("local embedding normalization", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.doUnmock("./node-llama.js");
+  });
+
+  it("normalizes local embeddings to magnitude ~1.0", async () => {
+    const unnormalizedVector = [2.35, 3.45, 0.63, 4.3, 1.2, 5.1, 2.8, 3.9];
+
+    vi.doMock("./node-llama.js", () => ({
+      importNodeLlamaCpp: async () => ({
+        getLlama: async () => ({
+          loadModel: vi.fn().mockResolvedValue({
+            createEmbeddingContext: vi.fn().mockResolvedValue({
+              getEmbeddingFor: vi.fn().mockResolvedValue({
+                vector: new Float32Array(unnormalizedVector),
+              }),
+            }),
+          }),
+        }),
+        resolveModelFile: async () => "/fake/model.gguf",
+        LlamaLogLevel: { error: 0 },
+      }),
+    }));
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const embedding = await result.provider.embedQuery("test query");
+
+    const magnitude = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
+
+    expect(magnitude).toBeCloseTo(1.0, 5);
+  });
+
+  it("handles zero vector without division by zero", async () => {
+    const zeroVector = [0, 0, 0, 0];
+
+    vi.doMock("./node-llama.js", () => ({
+      importNodeLlamaCpp: async () => ({
+        getLlama: async () => ({
+          loadModel: vi.fn().mockResolvedValue({
+            createEmbeddingContext: vi.fn().mockResolvedValue({
+              getEmbeddingFor: vi.fn().mockResolvedValue({
+                vector: new Float32Array(zeroVector),
+              }),
+            }),
+          }),
+        }),
+        resolveModelFile: async () => "/fake/model.gguf",
+        LlamaLogLevel: { error: 0 },
+      }),
+    }));
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const embedding = await result.provider.embedQuery("test");
+
+    expect(embedding).toEqual([0, 0, 0, 0]);
+    expect(embedding.every((value) => Number.isFinite(value))).toBe(true);
+  });
+
+  it("sanitizes non-finite values before normalization", async () => {
+    const nonFiniteVector = [1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+
+    vi.doMock("./node-llama.js", () => ({
+      importNodeLlamaCpp: async () => ({
+        getLlama: async () => ({
+          loadModel: vi.fn().mockResolvedValue({
+            createEmbeddingContext: vi.fn().mockResolvedValue({
+              getEmbeddingFor: vi.fn().mockResolvedValue({
+                vector: new Float32Array(nonFiniteVector),
+              }),
+            }),
+          }),
+        }),
+        resolveModelFile: async () => "/fake/model.gguf",
+        LlamaLogLevel: { error: 0 },
+      }),
+    }));
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const embedding = await result.provider.embedQuery("test");
+
+    expect(embedding).toEqual([1, 0, 0, 0]);
+    expect(embedding.every((value) => Number.isFinite(value))).toBe(true);
+  });
+
+  it("normalizes batch embeddings to magnitude ~1.0", async () => {
+    const unnormalizedVectors = [
+      [2.35, 3.45, 0.63, 4.3],
+      [10.0, 0.0, 0.0, 0.0],
+      [1.0, 1.0, 1.0, 1.0],
+    ];
+
+    vi.doMock("./node-llama.js", () => ({
+      importNodeLlamaCpp: async () => ({
+        getLlama: async () => ({
+          loadModel: vi.fn().mockResolvedValue({
+            createEmbeddingContext: vi.fn().mockResolvedValue({
+              getEmbeddingFor: vi
+                .fn()
+                .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[0]) })
+                .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[1]) })
+                .mockResolvedValueOnce({ vector: new Float32Array(unnormalizedVectors[2]) }),
+            }),
+          }),
+        }),
+        resolveModelFile: async () => "/fake/model.gguf",
+        LlamaLogLevel: { error: 0 },
+      }),
+    }));
+
+    const { createEmbeddingProvider } = await import("./embeddings.js");
+
+    const result = await createEmbeddingProvider({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const embeddings = await result.provider.embedBatch(["text1", "text2", "text3"]);
+
+    for (const embedding of embeddings) {
+      const magnitude = Math.sqrt(embedding.reduce((sum, x) => sum + x * x, 0));
+      expect(magnitude).toBeCloseTo(1.0, 5);
+    }
   });
 });

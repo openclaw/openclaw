@@ -7,11 +7,11 @@ import process from "node:process";
 const args = process.argv.slice(2);
 const env = { ...process.env };
 const cwd = process.cwd();
-const compiler = env.CLAWDBOT_TS_COMPILER === "tsc" ? "tsc" : "tsgo";
-const projectArgs = ["--project", "tsconfig.json"];
+const compiler = "tsdown";
+const compilerArgs = ["exec", compiler, "--no-clean"];
 
 const distRoot = path.join(cwd, "dist");
-const distEntry = path.join(distRoot, "entry.js");
+const distEntry = path.join(distRoot, "/entry.js");
 const buildStampPath = path.join(distRoot, ".buildstamp");
 const srcRoot = path.join(cwd, "src");
 const configFiles = [path.join(cwd, "tsconfig.json"), path.join(cwd, "package.json")];
@@ -26,7 +26,9 @@ const statMtime = (filePath) => {
 
 const isExcludedSource = (filePath) => {
   const relativePath = path.relative(srcRoot, filePath);
-  if (relativePath.startsWith("..")) return false;
+  if (relativePath.startsWith("..")) {
+    return false;
+  }
   return (
     relativePath.endsWith(".test.ts") ||
     relativePath.endsWith(".test.tsx") ||
@@ -39,7 +41,9 @@ const findLatestMtime = (dirPath, shouldSkip) => {
   const queue = [dirPath];
   while (queue.length > 0) {
     const current = queue.pop();
-    if (!current) continue;
+    if (!current) {
+      continue;
+    }
     let entries = [];
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
@@ -52,10 +56,16 @@ const findLatestMtime = (dirPath, shouldSkip) => {
         queue.push(fullPath);
         continue;
       }
-      if (!entry.isFile()) continue;
-      if (shouldSkip?.(fullPath)) continue;
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (shouldSkip?.(fullPath)) {
+        continue;
+      }
       const mtime = statMtime(fullPath);
-      if (mtime == null) continue;
+      if (mtime == null) {
+        continue;
+      }
       if (latest == null || mtime > latest) {
         latest = mtime;
       }
@@ -65,28 +75,40 @@ const findLatestMtime = (dirPath, shouldSkip) => {
 };
 
 const shouldBuild = () => {
-  if (env.CLAWDBOT_FORCE_BUILD === "1") return true;
+  if (env.OPENCLAW_FORCE_BUILD === "1") {
+    return true;
+  }
   const stampMtime = statMtime(buildStampPath);
-  if (stampMtime == null) return true;
-  if (statMtime(distEntry) == null) return true;
+  if (stampMtime == null) {
+    return true;
+  }
+  if (statMtime(distEntry) == null) {
+    return true;
+  }
 
   for (const filePath of configFiles) {
     const mtime = statMtime(filePath);
-    if (mtime != null && mtime > stampMtime) return true;
+    if (mtime != null && mtime > stampMtime) {
+      return true;
+    }
   }
 
   const srcMtime = findLatestMtime(srcRoot, isExcludedSource);
-  if (srcMtime != null && srcMtime > stampMtime) return true;
+  if (srcMtime != null && srcMtime > stampMtime) {
+    return true;
+  }
   return false;
 };
 
 const logRunner = (message) => {
-  if (env.CLAWDBOT_RUNNER_LOG === "0") return;
-  process.stderr.write(`[clawdbot] ${message}\n`);
+  if (env.OPENCLAW_RUNNER_LOG === "0") {
+    return;
+  }
+  process.stderr.write(`[openclaw] ${message}\n`);
 };
 
 const runNode = () => {
-  const nodeProcess = spawn(process.execPath, ["dist/entry.js", ...args], {
+  const nodeProcess = spawn(process.execPath, ["openclaw.mjs", ...args], {
     cwd,
     env,
     stdio: "inherit",
@@ -95,7 +117,6 @@ const runNode = () => {
   nodeProcess.on("exit", (exitCode, exitSignal) => {
     if (exitSignal) {
       process.exit(1);
-      return;
     }
     process.exit(exitCode ?? 1);
   });
@@ -115,10 +136,9 @@ if (!shouldBuild()) {
   runNode();
 } else {
   logRunner("Building TypeScript (dist is stale).");
-  const pnpmArgs = ["exec", compiler, ...projectArgs];
   const buildCmd = process.platform === "win32" ? "cmd.exe" : "pnpm";
   const buildArgs =
-    process.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...pnpmArgs] : pnpmArgs;
+    process.platform === "win32" ? ["/d", "/s", "/c", "pnpm", ...compilerArgs] : compilerArgs;
   const build = spawn(buildCmd, buildArgs, {
     cwd,
     env,
@@ -128,11 +148,9 @@ if (!shouldBuild()) {
   build.on("exit", (code, signal) => {
     if (signal) {
       process.exit(1);
-      return;
     }
     if (code !== 0 && code !== null) {
       process.exit(code);
-      return;
     }
     writeBuildStamp();
     runNode();

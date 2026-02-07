@@ -1,16 +1,17 @@
-import type { ClawdbotConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { ensureModelAllowlistEntry } from "./model-allowlist.js";
 
 export async function applyDefaultModelChoice(params: {
-  config: ClawdbotConfig;
+  config: OpenClawConfig;
   setDefaultModel: boolean;
   defaultModel: string;
-  applyDefaultConfig: (config: ClawdbotConfig) => ClawdbotConfig;
-  applyProviderConfig: (config: ClawdbotConfig) => ClawdbotConfig;
+  applyDefaultConfig: (config: OpenClawConfig) => OpenClawConfig;
+  applyProviderConfig: (config: OpenClawConfig) => OpenClawConfig;
   noteDefault?: string;
   noteAgentModel: (model: string) => Promise<void>;
   prompter: WizardPrompter;
-}): Promise<{ config: ClawdbotConfig; agentModelOverride?: string }> {
+}): Promise<{ config: OpenClawConfig; agentModelOverride?: string }> {
   if (params.setDefaultModel) {
     const next = params.applyDefaultConfig(params.config);
     if (params.noteDefault) {
@@ -20,6 +21,10 @@ export async function applyDefaultModelChoice(params: {
   }
 
   const next = params.applyProviderConfig(params.config);
+  const nextWithModel = ensureModelAllowlistEntry({
+    cfg: next,
+    modelRef: params.defaultModel,
+  });
   await params.noteAgentModel(params.defaultModel);
-  return { config: next, agentModelOverride: params.defaultModel };
+  return { config: nextWithModel, agentModelOverride: params.defaultModel };
 }

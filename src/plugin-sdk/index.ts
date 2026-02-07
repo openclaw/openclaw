@@ -59,15 +59,20 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {
-  ClawdbotPluginApi,
-  ClawdbotPluginService,
-  ClawdbotPluginServiceContext,
+  OpenClawPluginApi,
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
 } from "../plugins/types.js";
+export type {
+  GatewayRequestHandler,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "../gateway/server-methods/types.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export { normalizePluginHttpPath } from "../plugins/http-path.js";
 export { registerPluginHttpRoute } from "../plugins/http-registry.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
-export type { ClawdbotConfig } from "../config/config.js";
+export type { OpenClawConfig } from "../config/config.js";
 export type { ChannelDock } from "../channels/dock.js";
 export { getChatChannelMeta } from "../channels/registry.js";
 export type {
@@ -76,6 +81,7 @@ export type {
   DmConfig,
   GroupPolicy,
   GroupToolPolicyConfig,
+  GroupToolPolicyBySenderConfig,
   MarkdownConfig,
   MarkdownTableMode,
   GoogleChatAccountConfig,
@@ -116,6 +122,7 @@ export { resolveAckReaction } from "../agents/identity.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export type { ChunkMode } from "../auto-reply/chunk.js";
 export { SILENT_REPLY_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
+export { resolveToolsBySender } from "../config/group-policy.js";
 export {
   buildPendingHistoryContextFromMap,
   clearHistoryEntries,
@@ -141,7 +148,7 @@ export {
   shouldAckReactionForWhatsApp,
 } from "../channels/ack-reactions.js";
 export { createTypingCallbacks } from "../channels/typing.js";
-export { createReplyPrefixContext } from "../channels/reply-prefix.js";
+export { createReplyPrefixContext, createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { logAckFailure, logInboundDrop, logTypingFailure } from "../channels/logging.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export type { NormalizedLocation } from "../channels/location.js";
@@ -299,6 +306,7 @@ export {
   normalizeTelegramMessagingTarget,
 } from "../channels/plugins/normalize/telegram.js";
 export { collectTelegramStatusIssues } from "../channels/plugins/status-issues/telegram.js";
+export { type TelegramProbe } from "../telegram/probe.js";
 
 // Channel: Signal
 export {

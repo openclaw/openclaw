@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../config/config.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
@@ -11,15 +13,14 @@ import {
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { note } from "../terminal/note.js";
+import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
+import { note } from "../terminal/note.js";
 
 export async function maybeRepairAnthropicOAuthProfileId(
-  cfg: ClawdbotConfig,
+  cfg: OpenClawConfig,
   prompter: DoctorPrompter,
-): Promise<ClawdbotConfig> {
+): Promise<OpenClawConfig> {
   const store = ensureAuthProfileStore();
   const repair = repairOAuthProfileIdMismatch({
     cfg,
@@ -27,15 +28,175 @@ export async function maybeRepairAnthropicOAuthProfileId(
     provider: "anthropic",
     legacyProfileId: "anthropic:default",
   });
-  if (!repair.migrated || repair.changes.length === 0) return cfg;
+  if (!repair.migrated || repair.changes.length === 0) {
+    return cfg;
+  }
 
   note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
   const apply = await prompter.confirm({
     message: "Update Anthropic OAuth profile id in config now?",
     initialValue: true,
   });
-  if (!apply) return cfg;
+  if (!apply) {
+    return cfg;
+  }
   return repair.config;
+}
+
+function pruneAuthOrder(
+  order: Record<string, string[]> | undefined,
+  profileIds: Set<string>,
+): { next: Record<string, string[]> | undefined; changed: boolean } {
+  if (!order) {
+    return { next: order, changed: false };
+  }
+  let changed = false;
+  const next: Record<string, string[]> = {};
+  for (const [provider, list] of Object.entries(order)) {
+    const filtered = list.filter((id) => !profileIds.has(id));
+    if (filtered.length !== list.length) {
+      changed = true;
+    }
+    if (filtered.length > 0) {
+      next[provider] = filtered;
+    }
+  }
+  return { next: Object.keys(next).length > 0 ? next : undefined, changed };
+}
+
+function pruneAuthProfiles(
+  cfg: OpenClawConfig,
+  profileIds: Set<string>,
+): { next: OpenClawConfig; changed: boolean } {
+  const profiles = cfg.auth?.profiles;
+  const order = cfg.auth?.order;
+  const nextProfiles = profiles ? { ...profiles } : undefined;
+  let changed = false;
+
+  if (nextProfiles) {
+    for (const id of profileIds) {
+      if (id in nextProfiles) {
+        delete nextProfiles[id];
+        changed = true;
+      }
+    }
+  }
+
+  const prunedOrder = pruneAuthOrder(order, profileIds);
+  if (prunedOrder.changed) {
+    changed = true;
+  }
+
+  if (!changed) {
+    return { next: cfg, changed: false };
+  }
+
+  const nextAuth =
+    nextProfiles || prunedOrder.next
+      ? {
+          ...cfg.auth,
+          profiles: nextProfiles && Object.keys(nextProfiles).length > 0 ? nextProfiles : undefined,
+          order: prunedOrder.next,
+        }
+      : undefined;
+
+  return {
+    next: {
+      ...cfg,
+      auth: nextAuth,
+    },
+    changed: true,
+  };
+}
+
+export async function maybeRemoveDeprecatedCliAuthProfiles(
+  cfg: OpenClawConfig,
+  prompter: DoctorPrompter,
+): Promise<OpenClawConfig> {
+  const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
+  const deprecated = new Set<string>();
+  if (store.profiles[CLAUDE_CLI_PROFILE_ID] || cfg.auth?.profiles?.[CLAUDE_CLI_PROFILE_ID]) {
+    deprecated.add(CLAUDE_CLI_PROFILE_ID);
+  }
+  if (store.profiles[CODEX_CLI_PROFILE_ID] || cfg.auth?.profiles?.[CODEX_CLI_PROFILE_ID]) {
+    deprecated.add(CODEX_CLI_PROFILE_ID);
+  }
+
+  if (deprecated.size === 0) {
+    return cfg;
+  }
+
+  const lines = ["Deprecated external CLI auth profiles detected (no longer supported):"];
+  if (deprecated.has(CLAUDE_CLI_PROFILE_ID)) {
+    lines.push(
+      `- ${CLAUDE_CLI_PROFILE_ID} (Anthropic): use setup-token → ${formatCliCommand("openclaw models auth setup-token")}`,
+    );
+  }
+  if (deprecated.has(CODEX_CLI_PROFILE_ID)) {
+    lines.push(
+      `- ${CODEX_CLI_PROFILE_ID} (OpenAI Codex): use OAuth → ${formatCliCommand(
+        "openclaw models auth login --provider openai-codex",
+      )}`,
+    );
+  }
+  note(lines.join("\n"), "Auth profiles");
+
+  const shouldRemove = await prompter.confirmRepair({
+    message: "Remove deprecated CLI auth profiles now?",
+    initialValue: true,
+  });
+  if (!shouldRemove) {
+    return cfg;
+  }
+
+  await updateAuthProfileStoreWithLock({
+    updater: (nextStore) => {
+      let mutated = false;
+      for (const id of deprecated) {
+        if (nextStore.profiles[id]) {
+          delete nextStore.profiles[id];
+          mutated = true;
+        }
+        if (nextStore.usageStats?.[id]) {
+          delete nextStore.usageStats[id];
+          mutated = true;
+        }
+      }
+      if (nextStore.order) {
+        for (const [provider, list] of Object.entries(nextStore.order)) {
+          const filtered = list.filter((id) => !deprecated.has(id));
+          if (filtered.length !== list.length) {
+            mutated = true;
+            if (filtered.length > 0) {
+              nextStore.order[provider] = filtered;
+            } else {
+              delete nextStore.order[provider];
+            }
+          }
+        }
+      }
+      if (nextStore.lastGood) {
+        for (const [provider, profileId] of Object.entries(nextStore.lastGood)) {
+          if (deprecated.has(profileId)) {
+            delete nextStore.lastGood[provider];
+            mutated = true;
+          }
+        }
+      }
+      return mutated;
+    },
+  });
+
+  const pruned = pruneAuthProfiles(cfg, deprecated);
+  if (pruned.changed) {
+    note(
+      Array.from(deprecated.values())
+        .map((id) => `- removed ${id} from config`)
+        .join("\n"),
+      "Doctor changes",
+    );
+  }
+  return pruned.next;
 }
 
 type AuthIssue = {
@@ -47,12 +208,16 @@ type AuthIssue = {
 
 function formatAuthIssueHint(issue: AuthIssue): string | null {
   if (issue.provider === "anthropic" && issue.profileId === CLAUDE_CLI_PROFILE_ID) {
-    return "Run `claude setup-token` on the gateway host.";
+    return `Deprecated profile. Use ${formatCliCommand("openclaw models auth setup-token")} or ${formatCliCommand(
+      "openclaw configure",
+    )}.`;
   }
   if (issue.provider === "openai-codex" && issue.profileId === CODEX_CLI_PROFILE_ID) {
-    return `Run \`codex login\` (or \`${formatCliCommand("clawdbot configure")}\` → OpenAI Codex OAuth).`;
+    return `Deprecated profile. Use ${formatCliCommand(
+      "openclaw models auth login --provider openai-codex",
+    )} or ${formatCliCommand("openclaw configure")}.`;
   }
-  return `Re-auth via \`${formatCliCommand("clawdbot configure")}\` or \`${formatCliCommand("clawdbot onboard")}\`.`;
+  return `Re-auth via \`${formatCliCommand("openclaw configure")}\` or \`${formatCliCommand("openclaw onboard")}\`.`;
 }
 
 function formatAuthIssueLine(issue: AuthIssue): string {
@@ -63,7 +228,7 @@ function formatAuthIssueLine(issue: AuthIssue): string {
 }
 
 export async function noteAuthProfileHealth(params: {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   prompter: DoctorPrompter;
   allowKeychainPrompt: boolean;
 }): Promise<void> {
@@ -75,7 +240,9 @@ export async function noteAuthProfileHealth(params: {
     const out: string[] = [];
     for (const profileId of Object.keys(store.usageStats ?? {})) {
       const until = resolveProfileUnusableUntilForDisplay(store, profileId);
-      if (!until || now >= until) continue;
+      if (!until || now >= until) {
+        continue;
+      }
       const stats = store.usageStats?.[profileId];
       const remaining = formatRemainingShort(until - now);
       const kind =
@@ -110,7 +277,9 @@ export async function noteAuthProfileHealth(params: {
     );
 
   let issues = findIssues();
-  if (issues.length === 0) return;
+  if (issues.length === 0) {
+    return;
+  }
 
   const shouldRefresh = await params.prompter.confirmRepair({
     message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",

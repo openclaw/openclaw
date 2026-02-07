@@ -16,9 +16,8 @@ vi.mock("@buape/carbon", () => ({
   MessageCreateListener: class {},
   MessageReactionAddListener: class {},
   MessageReactionRemoveListener: class {},
-  Row: class {
-    constructor(_components: unknown[]) {}
-  },
+  PresenceUpdateListener: class {},
+  Row: class {},
 }));
 
 vi.mock("../auto-reply/dispatch.js", async (importOriginal) => {
@@ -60,10 +59,10 @@ describe("discord native commands", () => {
         defaults: {
           model: "anthropic/claude-opus-4-5",
           humanDelay: { mode: "off" },
-          workspace: "/tmp/clawd",
+          workspace: "/tmp/openclaw",
         },
       },
-      session: { store: "/tmp/clawdbot-sessions.json" },
+      session: { store: "/tmp/openclaw-sessions.json" },
       discord: { dm: { enabled: true, policy: "open" } },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 

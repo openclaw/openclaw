@@ -1,9 +1,11 @@
 ---
-summary: "Use OpenCode Zen (curated models) with Clawdbot"
+summary: "Use OpenCode Zen (curated models) with OpenClaw"
 read_when:
   - You want OpenCode Zen for model access
   - You want a curated list of coding-friendly models
+title: "OpenCode Zen"
 ---
+
 # OpenCode Zen
 
 OpenCode Zen is a **curated list of models** recommended by the OpenCode team for coding agents.
@@ -13,9 +15,9 @@ Zen is currently in beta.
 ## CLI setup
 
 ```bash
-clawdbot onboard --auth-choice opencode-zen
+openclaw onboard --auth-choice opencode-zen
 # or non-interactive
-clawdbot onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
+openclaw onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
 ```
 
 ## Config snippet
@@ -23,7 +25,7 @@ clawdbot onboard --opencode-zen-api-key "$OPENCODE_API_KEY"
 ```json5
 {
   env: { OPENCODE_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "opencode/claude-opus-4-5" } } }
+  agents: { defaults: { model: { primary: "opencode/claude-opus-4-6" } } },
 }
 ```
 

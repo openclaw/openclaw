@@ -1,11 +1,9 @@
-import { createServer } from "node:http";
-
 import { webhookCallback } from "grammy";
-import type { ClawdbotConfig } from "../config/config.js";
+import { createServer } from "node:http";
+import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
 import {
   logWebhookError,
   logWebhookProcessed,
@@ -13,13 +11,15 @@ import {
   startDiagnosticHeartbeat,
   stopDiagnosticHeartbeat,
 } from "../logging/diagnostic.js";
+import { defaultRuntime } from "../runtime.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 
 export async function startTelegramWebhook(opts: {
   token: string;
   accountId?: string;
-  config?: ClawdbotConfig;
+  config?: OpenClawConfig;
   path?: string;
   port?: number;
   host?: string;
@@ -67,8 +67,8 @@ export async function startTelegramWebhook(opts: {
       logWebhookReceived({ channel: "telegram", updateType: "telegram-post" });
     }
     const handled = handler(req, res);
-    if (handled && typeof (handled as Promise<void>).catch === "function") {
-      void (handled as Promise<void>)
+    if (handled && typeof handled.catch === "function") {
+      void handled
         .then(() => {
           if (diagnosticsEnabled) {
             logWebhookProcessed({
@@ -88,7 +88,9 @@ export async function startTelegramWebhook(opts: {
             });
           }
           runtime.log?.(`webhook handler failed: ${errMsg}`);
-          if (!res.headersSent) res.writeHead(500);
+          if (!res.headersSent) {
+            res.writeHead(500);
+          }
           res.end();
         });
     }
@@ -97,9 +99,14 @@ export async function startTelegramWebhook(opts: {
   const publicUrl =
     opts.publicUrl ?? `http://${host === "0.0.0.0" ? "localhost" : host}:${port}${path}`;
 
-  await bot.api.setWebhook(publicUrl, {
-    secret_token: opts.secret,
-    allowed_updates: resolveTelegramAllowedUpdates(),
+  await withTelegramApiErrorLogging({
+    operation: "setWebhook",
+    runtime,
+    fn: () =>
+      bot.api.setWebhook(publicUrl, {
+        secret_token: opts.secret,
+        allowed_updates: resolveTelegramAllowedUpdates(),
+      }),
   });
 
   await new Promise<void>((resolve) => server.listen(port, host, resolve));

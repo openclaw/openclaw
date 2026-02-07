@@ -1,5 +1,5 @@
-import type { ClawdbotConfig } from "../../config/config.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -20,45 +20,45 @@ import type {
 } from "./types.core.js";
 
 export type ChannelSetupAdapter = {
-  resolveAccountId?: (params: { cfg: ClawdbotConfig; accountId?: string }) => string;
+  resolveAccountId?: (params: { cfg: OpenClawConfig; accountId?: string }) => string;
   applyAccountName?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId: string;
     name?: string;
-  }) => ClawdbotConfig;
+  }) => OpenClawConfig;
   applyAccountConfig: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId: string;
     input: ChannelSetupInput;
-  }) => ClawdbotConfig;
+  }) => OpenClawConfig;
   validateInput?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId: string;
     input: ChannelSetupInput;
   }) => string | null;
 };
 
 export type ChannelConfigAdapter<ResolvedAccount> = {
-  listAccountIds: (cfg: ClawdbotConfig) => string[];
-  resolveAccount: (cfg: ClawdbotConfig, accountId?: string | null) => ResolvedAccount;
-  defaultAccountId?: (cfg: ClawdbotConfig) => string;
+  listAccountIds: (cfg: OpenClawConfig) => string[];
+  resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
+  defaultAccountId?: (cfg: OpenClawConfig) => string;
   setAccountEnabled?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId: string;
     enabled: boolean;
-  }) => ClawdbotConfig;
-  deleteAccount?: (params: { cfg: ClawdbotConfig; accountId: string }) => ClawdbotConfig;
-  isEnabled?: (account: ResolvedAccount, cfg: ClawdbotConfig) => boolean;
-  disabledReason?: (account: ResolvedAccount, cfg: ClawdbotConfig) => string;
-  isConfigured?: (account: ResolvedAccount, cfg: ClawdbotConfig) => boolean | Promise<boolean>;
-  unconfiguredReason?: (account: ResolvedAccount, cfg: ClawdbotConfig) => string;
-  describeAccount?: (account: ResolvedAccount, cfg: ClawdbotConfig) => ChannelAccountSnapshot;
+  }) => OpenClawConfig;
+  deleteAccount?: (params: { cfg: OpenClawConfig; accountId: string }) => OpenClawConfig;
+  isEnabled?: (account: ResolvedAccount, cfg: OpenClawConfig) => boolean;
+  disabledReason?: (account: ResolvedAccount, cfg: OpenClawConfig) => string;
+  isConfigured?: (account: ResolvedAccount, cfg: OpenClawConfig) => boolean | Promise<boolean>;
+  unconfiguredReason?: (account: ResolvedAccount, cfg: OpenClawConfig) => string;
+  describeAccount?: (account: ResolvedAccount, cfg: OpenClawConfig) => ChannelAccountSnapshot;
   resolveAllowFrom?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[] | undefined;
   formatAllowFrom?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
     allowFrom: Array<string | number>;
   }) => string[];
@@ -71,7 +71,7 @@ export type ChannelGroupAdapter = {
 };
 
 export type ChannelOutboundContext = {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   to: string;
   text: string;
   mediaUrl?: string;
@@ -93,7 +93,7 @@ export type ChannelOutboundAdapter = {
   textChunkLimit?: number;
   pollMaxOptions?: number;
   resolveTarget?: (params: {
-    cfg?: ClawdbotConfig;
+    cfg?: OpenClawConfig;
     to?: string;
     allowFrom?: string[];
     accountId?: string | null;
@@ -105,41 +105,41 @@ export type ChannelOutboundAdapter = {
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
 };
 
-export type ChannelStatusAdapter<ResolvedAccount> = {
+export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unknown> = {
   defaultRuntime?: ChannelAccountSnapshot;
   buildChannelSummary?: (params: {
     account: ResolvedAccount;
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     defaultAccountId: string;
     snapshot: ChannelAccountSnapshot;
   }) => Record<string, unknown> | Promise<Record<string, unknown>>;
   probeAccount?: (params: {
     account: ResolvedAccount;
     timeoutMs: number;
-    cfg: ClawdbotConfig;
-  }) => Promise<unknown>;
+    cfg: OpenClawConfig;
+  }) => Promise<Probe>;
   auditAccount?: (params: {
     account: ResolvedAccount;
     timeoutMs: number;
-    cfg: ClawdbotConfig;
-    probe?: unknown;
-  }) => Promise<unknown>;
+    cfg: OpenClawConfig;
+    probe?: Probe;
+  }) => Promise<Audit>;
   buildAccountSnapshot?: (params: {
     account: ResolvedAccount;
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     runtime?: ChannelAccountSnapshot;
-    probe?: unknown;
-    audit?: unknown;
+    probe?: Probe;
+    audit?: Audit;
   }) => ChannelAccountSnapshot | Promise<ChannelAccountSnapshot>;
   logSelfId?: (params: {
     account: ResolvedAccount;
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     runtime: RuntimeEnv;
     includeChannelPrefix?: boolean;
   }) => void;
   resolveAccountState?: (params: {
     account: ResolvedAccount;
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     configured: boolean;
     enabled: boolean;
   }) => ChannelAccountState;
@@ -147,7 +147,7 @@ export type ChannelStatusAdapter<ResolvedAccount> = {
 };
 
 export type ChannelGatewayContext<ResolvedAccount = unknown> = {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   accountId: string;
   account: ResolvedAccount;
   runtime: RuntimeEnv;
@@ -174,7 +174,7 @@ export type ChannelLoginWithQrWaitResult = {
 };
 
 export type ChannelLogoutContext<ResolvedAccount = unknown> = {
-  cfg: ClawdbotConfig;
+  cfg: OpenClawConfig;
   accountId: string;
   account: ResolvedAccount;
   runtime: RuntimeEnv;
@@ -185,7 +185,7 @@ export type ChannelPairingAdapter = {
   idLabel: string;
   normalizeAllowEntry?: (entry: string) => string;
   notifyApproval?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     id: string;
     runtime?: RuntimeEnv;
   }) => Promise<void>;
@@ -209,7 +209,7 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
 
 export type ChannelAuthAdapter = {
   login?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
     runtime: RuntimeEnv;
     verbose?: boolean;
@@ -219,11 +219,11 @@ export type ChannelAuthAdapter = {
 
 export type ChannelHeartbeatAdapter = {
   checkReady?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
     deps?: ChannelHeartbeatDeps;
   }) => Promise<{ ok: boolean; reason: string }>;
-  resolveRecipients?: (params: { cfg: ClawdbotConfig; opts?: { to?: string; all?: boolean } }) => {
+  resolveRecipients?: (params: { cfg: OpenClawConfig; opts?: { to?: string; all?: boolean } }) => {
     recipients: string[];
     source: string;
   };
@@ -231,40 +231,40 @@ export type ChannelHeartbeatAdapter = {
 
 export type ChannelDirectoryAdapter = {
   self?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
     runtime: RuntimeEnv;
   }) => Promise<ChannelDirectoryEntry | null>;
   listPeers?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
     query?: string | null;
     limit?: number | null;
     runtime: RuntimeEnv;
   }) => Promise<ChannelDirectoryEntry[]>;
   listPeersLive?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
     query?: string | null;
     limit?: number | null;
     runtime: RuntimeEnv;
   }) => Promise<ChannelDirectoryEntry[]>;
   listGroups?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
     query?: string | null;
     limit?: number | null;
     runtime: RuntimeEnv;
   }) => Promise<ChannelDirectoryEntry[]>;
   listGroupsLive?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
     query?: string | null;
     limit?: number | null;
     runtime: RuntimeEnv;
   }) => Promise<ChannelDirectoryEntry[]>;
   listGroupMembers?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
     groupId: string;
     limit?: number | null;
@@ -284,7 +284,7 @@ export type ChannelResolveResult = {
 
 export type ChannelResolverAdapter = {
   resolveTargets: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
     inputs: string[];
     kind: ChannelResolveKind;
@@ -294,7 +294,7 @@ export type ChannelResolverAdapter = {
 
 export type ChannelElevatedAdapter = {
   allowFromFallback?: (params: {
-    cfg: ClawdbotConfig;
+    cfg: OpenClawConfig;
     accountId?: string | null;
   }) => Array<string | number> | undefined;
 };

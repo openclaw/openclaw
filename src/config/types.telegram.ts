@@ -9,12 +9,20 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
-import type { GroupToolPolicyConfig } from "./types.tools.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type TelegramActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
   deleteMessage?: boolean;
+  editMessage?: boolean;
+  /** Enable sticker actions (send and search). */
+  sticker?: boolean;
+};
+
+export type TelegramNetworkConfig = {
+  /** Override Node's autoSelectFamily behavior (true = enable, false = disable). */
+  autoSelectFamily?: boolean;
 };
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
@@ -95,6 +103,8 @@ export type TelegramAccountConfig = {
   timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */
   retry?: OutboundRetryConfig;
+  /** Network transport overrides for Telegram. */
+  network?: TelegramNetworkConfig;
   proxy?: string;
   webhookUrl?: string;
   webhookSecret?: string;
@@ -120,10 +130,20 @@ export type TelegramAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
+  /**
+   * Per-channel outbound response prefix override.
+   *
+   * When set, this takes precedence over the global `messages.responsePrefix`.
+   * Use `""` to explicitly disable a global prefix for this channel.
+   * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
+   */
+  responsePrefix?: string;
 };
 
 export type TelegramTopicConfig = {
   requireMention?: boolean;
+  /** Per-topic override for group message policy (open|disabled|allowlist). */
+  groupPolicy?: GroupPolicy;
   /** If specified, only load these skills for this topic. Omit = all skills; empty = no skills. */
   skills?: string[];
   /** If false, disable the bot for this topic. */
@@ -136,8 +156,11 @@ export type TelegramTopicConfig = {
 
 export type TelegramGroupConfig = {
   requireMention?: boolean;
+  /** Per-group override for group message policy (open|disabled|allowlist). */
+  groupPolicy?: GroupPolicy;
   /** Optional tool policy overrides for this group. */
   tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** If specified, only load these skills for this group (when no topic). Omit = all skills; empty = no skills. */
   skills?: string[];
   /** Per-topic configuration (key is message_thread_id as string) */

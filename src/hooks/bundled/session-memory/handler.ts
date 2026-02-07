@@ -6,27 +6,32 @@
  */
 
 import fs from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
-import type { ClawdbotConfig } from "../../../config/config.js";
-import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import type { OpenClawConfig } from "../../../config/config.js";
 import type { HookHandler } from "../../hooks.js";
+import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
+import { resolveHookConfig } from "../../config.js";
+
+const log = createSubsystemLogger("hooks/session-memory");
 
 /**
  * Read recent messages from session file for slug generation
  */
-async function getRecentSessionContent(sessionFilePath: string): Promise<string | null> {
+async function getRecentSessionContent(
+  sessionFilePath: string,
+  messageCount: number = 15,
+): Promise<string | null> {
   try {
     const content = await fs.readFile(sessionFilePath, "utf-8");
     const lines = content.trim().split("\n");
 
-    // Get last 15 lines (recent conversation)
-    const recentLines = lines.slice(-15);
-
-    // Parse JSONL and extract messages
-    const messages: string[] = [];
-    for (const line of recentLines) {
+    // Parse JSONL and extract user/assistant messages first
+    const allMessages: string[] = [];
+    for (const line of lines) {
       try {
         const entry = JSON.parse(line);
         // Session files have entries with type="message" containing a nested message object
@@ -36,10 +41,11 @@ async function getRecentSessionContent(sessionFilePath: string): Promise<string 
           if ((role === "user" || role === "assistant") && msg.content) {
             // Extract text content
             const text = Array.isArray(msg.content)
-              ? msg.content.find((c: any) => c.type === "text")?.text
+              ? // oxlint-disable-next-line typescript/no-explicit-any
+                msg.content.find((c: any) => c.type === "text")?.text
               : msg.content;
             if (text && !text.startsWith("/")) {
-              messages.push(`${role}: ${text}`);
+              allMessages.push(`${role}: ${text}`);
             }
           }
         }
@@ -48,7 +54,9 @@ async function getRecentSessionContent(sessionFilePath: string): Promise<string 
       }
     }
 
-    return messages.join("\n");
+    // Then slice to get exactly messageCount messages
+    const recentMessages = allMessages.slice(-messageCount);
+    return recentMessages.join("\n");
   } catch {
     return null;
   }
@@ -64,14 +72,14 @@ const saveSessionToMemory: HookHandler = async (event) => {
   }
 
   try {
-    console.log("[session-memory] Hook triggered for /new command");
+    log.debug("Hook triggered for /new command");
 
     const context = event.context || {};
-    const cfg = context.cfg as ClawdbotConfig | undefined;
+    const cfg = context.cfg as OpenClawConfig | undefined;
     const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
     const workspaceDir = cfg
       ? resolveAgentWorkspaceDir(cfg, agentId)
-      : path.join(os.homedir(), "clawd");
+      : path.join(os.homedir(), ".openclaw", "workspace");
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
@@ -87,53 +95,64 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const currentSessionId = sessionEntry.sessionId as string;
     const currentSessionFile = sessionEntry.sessionFile as string;
 
-    console.log("[session-memory] Current sessionId:", currentSessionId);
-    console.log("[session-memory] Current sessionFile:", currentSessionFile);
-    console.log("[session-memory] cfg present:", !!cfg);
+    log.debug("Session context resolved", {
+      sessionId: currentSessionId,
+      sessionFile: currentSessionFile,
+      hasCfg: Boolean(cfg),
+    });
 
     const sessionFile = currentSessionFile || undefined;
+
+    // Read message count from hook config (default: 15)
+    const hookConfig = resolveHookConfig(cfg, "session-memory");
+    const messageCount =
+      typeof hookConfig?.messages === "number" && hookConfig.messages > 0
+        ? hookConfig.messages
+        : 15;
 
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
     if (sessionFile) {
       // Get recent conversation content
-      sessionContent = await getRecentSessionContent(sessionFile);
-      console.log("[session-memory] sessionContent length:", sessionContent?.length || 0);
+      sessionContent = await getRecentSessionContent(sessionFile, messageCount);
+      log.debug("Session content loaded", {
+        length: sessionContent?.length ?? 0,
+        messageCount,
+      });
 
       if (sessionContent && cfg) {
-        console.log("[session-memory] Calling generateSlugViaLLM...");
+        log.debug("Calling generateSlugViaLLM...");
         // Dynamically import the LLM slug generator (avoids module caching issues)
         // When compiled, handler is at dist/hooks/bundled/session-memory/handler.js
         // Going up ../.. puts us at dist/hooks/, so just add llm-slug-generator.js
-        const clawdbotRoot = path.resolve(
-          path.dirname(import.meta.url.replace("file://", "")),
-          "../..",
-        );
-        const slugGenPath = path.join(clawdbotRoot, "llm-slug-generator.js");
+        const openclawRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+        const slugGenPath = path.join(openclawRoot, "llm-slug-generator.js");
         const { generateSlugViaLLM } = await import(slugGenPath);
 
         // Use LLM to generate a descriptive slug
         slug = await generateSlugViaLLM({ sessionContent, cfg });
-        console.log("[session-memory] Generated slug:", slug);
+        log.debug("Generated slug", { slug });
       }
     }
 
     // If no slug, use timestamp
     if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1]!.split(".")[0]!.replace(/:/g, "");
+      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
       slug = timeSlug.slice(0, 4); // HHMM
-      console.log("[session-memory] Using fallback timestamp slug:", slug);
+      log.debug("Using fallback timestamp slug", { slug });
     }
 
     // Create filename with date and slug
     const filename = `${dateStr}-${slug}.md`;
     const memoryFilePath = path.join(memoryDir, filename);
-    console.log("[session-memory] Generated filename:", filename);
-    console.log("[session-memory] Full path:", memoryFilePath);
+    log.debug("Memory file path resolved", {
+      filename,
+      path: memoryFilePath.replace(os.homedir(), "~"),
+    });
 
     // Format time as HH:MM:SS UTC
-    const timeStr = now.toISOString().split("T")[1]!.split(".")[0];
+    const timeStr = now.toISOString().split("T")[1].split(".")[0];
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
@@ -158,16 +177,21 @@ const saveSessionToMemory: HookHandler = async (event) => {
 
     // Write to new memory file
     await fs.writeFile(memoryFilePath, entry, "utf-8");
-    console.log("[session-memory] Memory file written successfully");
+    log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = memoryFilePath.replace(os.homedir(), "~");
-    console.log(`[session-memory] Session context saved to ${relPath}`);
+    log.info(`Session context saved to ${relPath}`);
   } catch (err) {
-    console.error(
-      "[session-memory] Failed to save session memory:",
-      err instanceof Error ? err.message : String(err),
-    );
+    if (err instanceof Error) {
+      log.error("Failed to save session memory", {
+        errorName: err.name,
+        errorMessage: err.message,
+        stack: err.stack,
+      });
+    } else {
+      log.error("Failed to save session memory", { error: String(err) });
+    }
   }
 };
 

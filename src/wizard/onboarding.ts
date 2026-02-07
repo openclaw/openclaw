@@ -1,11 +1,21 @@
+import type {
+  GatewayAuthChoice,
+  OnboardMode,
+  OnboardOptions,
+  ResetScope,
+} from "../commands/onboard-types.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { promptAuthChoiceGrouped } from "../commands/auth-choice-prompt.js";
 import {
   applyAuthChoice,
   resolvePreferredProviderForAuthChoice,
   warnIfModelConfigLooksOff,
 } from "../commands/auth-choice.js";
-import { promptAuthChoiceGrouped } from "../commands/auth-choice-prompt.js";
 import { applyPrimaryModel, promptDefaultModel } from "../commands/model-picker.js";
 import { setupChannels } from "../commands/onboard-channels.js";
 import {
@@ -17,17 +27,9 @@ import {
   probeGatewayReachable,
   summarizeExistingConfig,
 } from "../commands/onboard-helpers.js";
+import { setupInternalHooks } from "../commands/onboard-hooks.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
-import { setupInternalHooks } from "../commands/onboard-hooks.js";
-import type {
-  GatewayAuthChoice,
-  OnboardMode,
-  OnboardOptions,
-  ResetScope,
-} from "../commands/onboard-types.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { ClawdbotConfig } from "../config/config.js";
 import {
   DEFAULT_GATEWAY_PORT,
   readConfigFileSnapshot,
@@ -35,28 +37,42 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { finalizeOnboardingWizard } from "./onboarding.finalize.js";
 import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
-import type { QuickstartGatewayDefaults, WizardFlow } from "./onboarding.types.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
 async function requireRiskAcknowledgement(params: {
   opts: OnboardOptions;
   prompter: WizardPrompter;
 }) {
-  if (params.opts.acceptRisk === true) return;
+  if (params.opts.acceptRisk === true) {
+    return;
+  }
 
   await params.prompter.note(
     [
-      "Please read: https://docs.clawd.bot/security",
+      "Security warning — please read.",
       "",
-      "Clawdbot agents can run commands, read/write files, and act through any tools you enable. They can only send messages on channels you configure (for example, an account you log in on this machine, or a bot account like Slack/Discord).",
+      "OpenClaw is a hobby project and still in beta. Expect sharp edges.",
+      "This bot can read files and run actions if tools are enabled.",
+      "A bad prompt can trick it into doing unsafe things.",
       "",
-      "If you’re new to this, start with the sandbox and least privilege. It helps limit what an agent can do if it’s tricked or makes a mistake.",
-      "Learn more: https://docs.clawd.bot/sandboxing",
+      "If you’re not comfortable with basic security and access control, don’t run OpenClaw.",
+      "Ask someone experienced to help before enabling tools or exposing it to the internet.",
+      "",
+      "Recommended baseline:",
+      "- Pairing/allowlists + mention gating.",
+      "- Sandbox + least-privilege tools.",
+      "- Keep secrets out of the agent’s reachable filesystem.",
+      "- Use the strongest available model for any bot with tools or untrusted inboxes.",
+      "",
+      "Run regularly:",
+      "openclaw security audit --deep",
+      "openclaw security audit --fix",
+      "",
+      "Must read: https://docs.openclaw.ai/gateway/security",
     ].join("\n"),
     "Security",
   );
@@ -76,11 +92,11 @@ export async function runOnboardingWizard(
   prompter: WizardPrompter,
 ) {
   printWizardHeader(runtime);
-  await prompter.intro("Clawdbot onboarding");
+  await prompter.intro("OpenClaw onboarding");
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();
-  let baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
+  let baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
 
   if (snapshot.exists && !snapshot.valid) {
     await prompter.note(summarizeExistingConfig(baseConfig), "Invalid config");
@@ -89,19 +105,19 @@ export async function runOnboardingWizard(
         [
           ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
           "",
-          "Docs: https://docs.clawd.bot/gateway/configuration",
+          "Docs: https://docs.openclaw.ai/gateway/configuration",
         ].join("\n"),
         "Config issues",
       );
     }
     await prompter.outro(
-      `Config invalid. Run \`${formatCliCommand("clawdbot doctor")}\` to repair it, then re-run onboarding.`,
+      `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run onboarding.`,
     );
     runtime.exit(1);
     return;
   }
 
-  const quickstartHint = `Configure details later via ${formatCliCommand("clawdbot configure")}.`;
+  const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
   const manualHint = "Configure port, network, Tailscale, and auth options.";
   const explicitFlowRaw = opts.flow?.trim();
   const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
@@ -120,14 +136,14 @@ export async function runOnboardingWizard(
       : undefined;
   let flow: WizardFlow =
     explicitFlow ??
-    ((await prompter.select({
+    (await prompter.select({
       message: "Onboarding mode",
       options: [
         { value: "quickstart", label: "QuickStart", hint: quickstartHint },
         { value: "advanced", label: "Manual", hint: manualHint },
       ],
       initialValue: "quickstart",
-    })) as "quickstart" | "advanced");
+    }));
 
   if (opts.mode === "remote" && flow === "quickstart") {
     await prompter.note(
@@ -140,14 +156,14 @@ export async function runOnboardingWizard(
   if (snapshot.exists) {
     await prompter.note(summarizeExistingConfig(baseConfig), "Existing config detected");
 
-    const action = (await prompter.select({
+    const action = await prompter.select({
       message: "Config handling",
       options: [
         { value: "keep", label: "Use existing values" },
         { value: "modify", label: "Update values" },
         { value: "reset", label: "Reset" },
       ],
-    })) as "keep" | "modify" | "reset";
+    });
 
     if (action === "reset") {
       const workspaceDefault = baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE;
@@ -223,20 +239,33 @@ export async function runOnboardingWizard(
 
   if (flow === "quickstart") {
     const formatBind = (value: "loopback" | "lan" | "auto" | "custom" | "tailnet") => {
-      if (value === "loopback") return "Loopback (127.0.0.1)";
-      if (value === "lan") return "LAN";
-      if (value === "custom") return "Custom IP";
-      if (value === "tailnet") return "Tailnet (Tailscale IP)";
+      if (value === "loopback") {
+        return "Loopback (127.0.0.1)";
+      }
+      if (value === "lan") {
+        return "LAN";
+      }
+      if (value === "custom") {
+        return "Custom IP";
+      }
+      if (value === "tailnet") {
+        return "Tailnet (Tailscale IP)";
+      }
       return "Auto";
     };
     const formatAuth = (value: GatewayAuthChoice) => {
-      if (value === "off") return "Off (loopback only)";
-      if (value === "token") return "Token (default)";
+      if (value === "token") {
+        return "Token (default)";
+      }
       return "Password";
     };
     const formatTailscale = (value: "off" | "serve" | "funnel") => {
-      if (value === "off") return "Off";
-      if (value === "serve") return "Serve";
+      if (value === "off") {
+        return "Off";
+      }
+      if (value === "serve") {
+        return "Serve";
+      }
       return "Funnel";
     };
     const quickstartLines = quickstartGateway.hasExisting
@@ -265,8 +294,8 @@ export async function runOnboardingWizard(
   const localUrl = `ws://127.0.0.1:${localPort}`;
   const localProbe = await probeGatewayReachable({
     url: localUrl,
-    token: baseConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-    password: baseConfig.gateway?.auth?.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD,
+    token: baseConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
+    password: baseConfig.gateway?.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
   });
   const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
   const remoteProbe = remoteUrl
@@ -322,7 +351,7 @@ export async function runOnboardingWizard(
 
   const workspaceDir = resolveUserPath(workspaceInput.trim() || DEFAULT_WORKSPACE);
 
-  let nextConfig: ClawdbotConfig = {
+  let nextConfig: OpenClawConfig = {
     ...baseConfig,
     agents: {
       ...baseConfig.agents,
@@ -347,7 +376,6 @@ export async function runOnboardingWizard(
       prompter,
       store: authStore,
       includeSkip: true,
-      includeClaudeCliIfMissing: true,
     }));
 
   const authResult = await applyAuthChoice({
@@ -426,7 +454,7 @@ export async function runOnboardingWizard(
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
 
-  await finalizeOnboardingWizard({
+  const { launchedTui } = await finalizeOnboardingWizard({
     flow,
     opts,
     baseConfig,
@@ -436,4 +464,7 @@ export async function runOnboardingWizard(
     prompter,
     runtime,
   });
+  if (launchedTui) {
+    return;
+  }
 }

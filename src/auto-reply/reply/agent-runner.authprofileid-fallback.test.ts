@@ -62,7 +62,7 @@ function createBaseRun(params: { runOverrides?: Partial<FollowupRun["run"]> }) {
       skillsSnapshot: {},
       provider: "anthropic",
       model: "claude-opus",
-      authProfileId: "anthropic:clawd",
+      authProfileId: "anthropic:openclaw",
       authProfileIdSource: "manual",
       thinkLevel: "low",
       verboseLevel: "off",
@@ -105,7 +105,7 @@ describe("authProfileId fallback scoping", () => {
       runOverrides: {
         provider: "anthropic",
         model: "claude-opus",
-        authProfileId: "anthropic:clawd",
+        authProfileId: "anthropic:openclaw",
         authProfileIdSource: "manual",
       },
     });

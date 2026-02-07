@@ -14,6 +14,7 @@ export type AgentEventPayload = {
 export type AgentRunContext = {
   sessionKey?: string;
   verboseLevel?: VerboseLevel;
+  isHeartbeat?: boolean;
 };
 
 // Keep per-run counters so streams stay strictly monotonic per runId.
@@ -22,7 +23,9 @@ const listeners = new Set<(evt: AgentEventPayload) => void>();
 const runContextById = new Map<string, AgentRunContext>();
 
 export function registerAgentRunContext(runId: string, context: AgentRunContext) {
-  if (!runId) return;
+  if (!runId) {
+    return;
+  }
   const existing = runContextById.get(runId);
   if (!existing) {
     runContextById.set(runId, { ...context });
@@ -33,6 +36,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
+  }
+  if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
+    existing.isHeartbeat = context.isHeartbeat;
   }
 }
 

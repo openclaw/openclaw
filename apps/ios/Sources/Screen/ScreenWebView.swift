@@ -1,4 +1,4 @@
-import ClawdbotKit
+import OpenClawKit
 import SwiftUI
 import WebKit
 

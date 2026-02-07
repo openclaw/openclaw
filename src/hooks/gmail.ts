@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
-
 import {
-  type ClawdbotConfig,
+  type OpenClawConfig,
   DEFAULT_GATEWAY_PORT,
   type HooksGmailTailscaleMode,
   resolveGatewayPort,
@@ -71,7 +70,9 @@ export function mergeHookPresets(existing: string[] | undefined, preset: string)
 
 export function normalizeHooksPath(raw?: string): string {
   const base = raw?.trim() || DEFAULT_HOOKS_PATH;
-  if (base === "/") return DEFAULT_HOOKS_PATH;
+  if (base === "/") {
+    return DEFAULT_HOOKS_PATH;
+  }
   const withSlash = base.startsWith("/") ? base : `/${base}`;
   return withSlash.replace(/\/+$/, "");
 }
@@ -80,7 +81,9 @@ export function normalizeServePath(raw?: string): string {
   const base = raw?.trim() || DEFAULT_GMAIL_SERVE_PATH;
   // Tailscale funnel/serve strips the set-path prefix before proxying.
   // To accept requests at /<path> externally, gog must listen on "/".
-  if (base === "/") return "/";
+  if (base === "/") {
+    return "/";
+  }
   const withSlash = base.startsWith("/") ? base : `/${base}`;
   return withSlash.replace(/\/+$/, "");
 }
@@ -95,7 +98,7 @@ export function buildDefaultHookUrl(
 }
 
 export function resolveGmailHookRuntimeConfig(
-  cfg: ClawdbotConfig,
+  cfg: OpenClawConfig,
   overrides: GmailHookOverrides,
 ): { ok: true; value: GmailHookRuntimeConfig } | { ok: false; error: string } {
   const hooks = cfg.hooks;
@@ -253,7 +256,9 @@ export function buildTopicPath(projectId: string, topicName: string): string {
 
 export function parseTopicPath(topic: string): { projectId: string; topicName: string } | null {
   const match = topic.trim().match(/^projects\/([^/]+)\/topics\/([^/]+)$/i);
-  if (!match) return null;
+  if (!match) {
+    return null;
+  }
   return { projectId: match[1] ?? "", topicName: match[2] ?? "" };
 }
 

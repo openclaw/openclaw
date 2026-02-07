@@ -1,10 +1,9 @@
 import { vi } from "vitest";
-
 import type { MockBaileysSocket } from "../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../test/mocks/baileys.js";
 
 // Use globalThis to store the mock config so it survives vi.mock hoisting
-const CONFIG_KEY = Symbol.for("clawdbot:testConfigMock");
+const CONFIG_KEY = Symbol.for("openclaw:testConfigMock");
 const DEFAULT_CONFIG = {
   channels: {
     whatsapp: {
@@ -37,7 +36,9 @@ vi.mock("../config/config.js", async (importOriginal) => {
     ...actual,
     loadConfig: () => {
       const getter = (globalThis as Record<symbol, unknown>)[CONFIG_KEY];
-      if (typeof getter === "function") return getter();
+      if (typeof getter === "function") {
+        return getter();
+      }
       return DEFAULT_CONFIG;
     },
   };
@@ -54,7 +55,7 @@ vi.mock("../media/store.js", () => ({
 
 vi.mock("@whiskeysockets/baileys", () => {
   const created = createMockBaileys();
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("clawdbot:lastSocket")] =
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     created.lastSocket;
   return created.mod;
 });
@@ -64,27 +65,29 @@ vi.mock("qrcode-terminal", () => ({
   generate: vi.fn(),
 }));
 
-export const baileys =
-  (await import("@whiskeysockets/baileys")) as unknown as typeof import("@whiskeysockets/baileys") & {
-    makeWASocket: ReturnType<typeof vi.fn>;
-    useMultiFileAuthState: ReturnType<typeof vi.fn>;
-    fetchLatestBaileysVersion: ReturnType<typeof vi.fn>;
-    makeCacheableSignalKeyStore: ReturnType<typeof vi.fn>;
-  };
+export const baileys = await import("@whiskeysockets/baileys");
 
 export function resetBaileysMocks() {
   const recreated = createMockBaileys();
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("clawdbot:lastSocket")] =
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")] =
     recreated.lastSocket;
-  baileys.makeWASocket.mockImplementation(recreated.mod.makeWASocket);
-  baileys.useMultiFileAuthState.mockImplementation(recreated.mod.useMultiFileAuthState);
-  baileys.fetchLatestBaileysVersion.mockImplementation(recreated.mod.fetchLatestBaileysVersion);
-  baileys.makeCacheableSignalKeyStore.mockImplementation(recreated.mod.makeCacheableSignalKeyStore);
+  // @ts-expect-error
+  baileys.makeWASocket = vi.fn(recreated.mod.makeWASocket);
+  // @ts-expect-error
+  baileys.useMultiFileAuthState = vi.fn(recreated.mod.useMultiFileAuthState);
+  // @ts-expect-error
+  baileys.fetchLatestBaileysVersion = vi.fn(recreated.mod.fetchLatestBaileysVersion);
+  // @ts-expect-error
+  baileys.makeCacheableSignalKeyStore = vi.fn(recreated.mod.makeCacheableSignalKeyStore);
 }
 
 export function getLastSocket(): MockBaileysSocket {
-  const getter = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("clawdbot:lastSocket")];
-  if (typeof getter === "function") return (getter as () => MockBaileysSocket)();
-  if (!getter) throw new Error("Baileys mock not initialized");
+  const getter = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw:lastSocket")];
+  if (typeof getter === "function") {
+    return (getter as () => MockBaileysSocket)();
+  }
+  if (!getter) {
+    throw new Error("Baileys mock not initialized");
+  }
   throw new Error("Invalid Baileys socket getter");
 }

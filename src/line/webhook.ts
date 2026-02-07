@@ -1,8 +1,8 @@
-import type { Request, Response, NextFunction } from "express";
-import crypto from "node:crypto";
 import type { WebhookRequestBody } from "@line/bot-sdk";
-import { logVerbose, danger } from "../globals.js";
+import type { Request, Response, NextFunction } from "express";
 import type { RuntimeEnv } from "../runtime.js";
+import { logVerbose, danger } from "../globals.js";
+import { validateLineSignature } from "./signature.js";
 
 export interface LineWebhookOptions {
   channelSecret: string;
@@ -10,16 +10,13 @@ export interface LineWebhookOptions {
   runtime?: RuntimeEnv;
 }
 
-function validateSignature(body: string, signature: string, channelSecret: string): boolean {
-  const hash = crypto.createHmac("SHA256", channelSecret).update(body).digest("base64");
-  return hash === signature;
-}
-
 function readRawBody(req: Request): string | null {
   const rawBody =
     (req as { rawBody?: string | Buffer }).rawBody ??
     (typeof req.body === "string" || Buffer.isBuffer(req.body) ? req.body : null);
-  if (!rawBody) return null;
+  if (!rawBody) {
+    return null;
+  }
   return Buffer.isBuffer(rawBody) ? rawBody.toString("utf-8") : rawBody;
 }
 
@@ -34,7 +31,9 @@ function parseWebhookBody(req: Request, rawBody: string): WebhookRequestBody | n
   }
 }
 
-export function createLineWebhookMiddleware(options: LineWebhookOptions) {
+export function createLineWebhookMiddleware(
+  options: LineWebhookOptions,
+): (req: Request, res: Response, _next: NextFunction) => Promise<void> {
   const { channelSecret, onEvents, runtime } = options;
 
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
@@ -52,7 +51,7 @@ export function createLineWebhookMiddleware(options: LineWebhookOptions) {
         return;
       }
 
-      if (!validateSignature(rawBody, signature, channelSecret)) {
+      if (!validateLineSignature(rawBody, signature, channelSecret)) {
         logVerbose("line: webhook signature validation failed");
         res.status(401).json({ error: "Invalid signature" });
         return;
@@ -90,7 +89,10 @@ export interface StartLineWebhookOptions {
   path?: string;
 }
 
-export function startLineWebhook(options: StartLineWebhookOptions) {
+export function startLineWebhook(options: StartLineWebhookOptions): {
+  path: string;
+  handler: (req: Request, res: Response, _next: NextFunction) => Promise<void>;
+} {
   const path = options.path ?? "/line/webhook";
   const middleware = createLineWebhookMiddleware({
     channelSecret: options.channelSecret,

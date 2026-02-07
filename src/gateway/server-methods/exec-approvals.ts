@@ -1,3 +1,4 @@
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   ensureExecApprovals,
   normalizeExecApprovals,
@@ -17,11 +18,12 @@ import {
   validateExecApprovalsSetParams,
 } from "../protocol/index.js";
 import { respondUnavailableOnThrow, safeParseJson } from "./nodes.helpers.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function resolveBaseHash(params: unknown): string | null {
   const raw = (params as { baseHash?: unknown })?.baseHash;
-  if (typeof raw !== "string") return null;
+  if (typeof raw !== "string") {
+    return null;
+  }
   const trimmed = raw.trim();
   return trimmed ? trimmed : null;
 }
@@ -31,7 +33,9 @@ function requireApprovalsBaseHash(
   snapshot: ExecApprovalsSnapshot,
   respond: RespondFn,
 ): boolean {
-  if (!snapshot.exists) return true;
+  if (!snapshot.exists) {
+    return true;
+  }
   if (!snapshot.hash) {
     respond(
       false,

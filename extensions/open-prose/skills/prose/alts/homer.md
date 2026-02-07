@@ -28,55 +28,55 @@ An alternative register for OpenProse that draws from Greek epic poetry—the Il
 
 ### Core Constructs
 
-| Functional | Homeric | Reference |
-|------------|---------|-----------|
-| `agent` | `hero` | The one who acts, who strives |
-| `session` | `trial` | Each task is a labor, a test |
-| `parallel` | `host` | An army moving as one |
-| `block` | `book` | A division of the epic |
+| Functional | Homeric | Reference                     |
+| ---------- | ------- | ----------------------------- |
+| `agent`    | `hero`  | The one who acts, who strives |
+| `session`  | `trial` | Each task is a labor, a test  |
+| `parallel` | `host`  | An army moving as one         |
+| `block`    | `book`  | A division of the epic        |
 
 ### Composition & Binding
 
-| Functional | Homeric | Reference |
-|------------|---------|-----------|
-| `use` | `invoke` | "Sing, O Muse..." — calling upon |
-| `input` | `omen` | Signs from the gods, the given portent |
-| `output` | `glory` | Kleos — the glory won, what endures |
-| `let` | `decree` | Fate declared, spoken into being |
-| `const` | `fate` | Moira — unchangeable destiny |
-| `context` | `tidings` | News carried by herald or messenger |
+| Functional | Homeric   | Reference                              |
+| ---------- | --------- | -------------------------------------- |
+| `use`      | `invoke`  | "Sing, O Muse..." — calling upon       |
+| `input`    | `omen`    | Signs from the gods, the given portent |
+| `output`   | `glory`   | Kleos — the glory won, what endures    |
+| `let`      | `decree`  | Fate declared, spoken into being       |
+| `const`    | `fate`    | Moira — unchangeable destiny           |
+| `context`  | `tidings` | News carried by herald or messenger    |
 
 ### Control Flow
 
-| Functional | Homeric | Reference |
-|------------|---------|-----------|
-| `repeat N` | `N labors` | The labors of Heracles |
-| `for...in` | `for each...among` | Among the host |
-| `loop` | `ordeal` | Repeated trial, suffering that continues |
-| `until` | `until` | Unchanged |
-| `while` | `while` | Unchanged |
-| `choice` | `crossroads` | Where fates diverge |
-| `option` | `path` | One road of many |
-| `if` | `should` | Epic conditional |
-| `elif` | `or should` | Continued conditional |
-| `else` | `otherwise` | The alternative fate |
+| Functional | Homeric            | Reference                                |
+| ---------- | ------------------ | ---------------------------------------- |
+| `repeat N` | `N labors`         | The labors of Heracles                   |
+| `for...in` | `for each...among` | Among the host                           |
+| `loop`     | `ordeal`           | Repeated trial, suffering that continues |
+| `until`    | `until`            | Unchanged                                |
+| `while`    | `while`            | Unchanged                                |
+| `choice`   | `crossroads`       | Where fates diverge                      |
+| `option`   | `path`             | One road of many                         |
+| `if`       | `should`           | Epic conditional                         |
+| `elif`     | `or should`        | Continued conditional                    |
+| `else`     | `otherwise`        | The alternative fate                     |
 
 ### Error Handling
 
-| Functional | Homeric | Reference |
-|------------|---------|-----------|
-| `try` | `venture` | Setting forth on the journey |
-| `catch` | `should ruin come` | Até — divine ruin, disaster |
-| `finally` | `in the end` | The inevitable conclusion |
-| `throw` | `lament` | The hero's cry of anguish |
-| `retry` | `persist` | Enduring, trying again |
+| Functional | Homeric            | Reference                    |
+| ---------- | ------------------ | ---------------------------- |
+| `try`      | `venture`          | Setting forth on the journey |
+| `catch`    | `should ruin come` | Até — divine ruin, disaster  |
+| `finally`  | `in the end`       | The inevitable conclusion    |
+| `throw`    | `lament`           | The hero's cry of anguish    |
+| `retry`    | `persist`          | Enduring, trying again       |
 
 ### Session Properties
 
-| Functional | Homeric | Reference |
-|------------|---------|-----------|
-| `prompt` | `charge` | The quest given |
-| `model` | `muse` | Which muse inspires |
+| Functional | Homeric  | Reference           |
+| ---------- | -------- | ------------------- |
+| `prompt`   | `charge` | The quest given     |
+| `model`    | `muse`   | Which muse inspires |
 
 ### Unchanged
 
@@ -296,14 +296,14 @@ fate config = { muse: "opus", persist: 3 }
 
 ## Key Homeric Concepts
 
-| Term | Meaning | Used for |
-|------|---------|----------|
-| Kleos | Glory, fame that outlives you | `output` → `glory` |
-| Moira | Fate, one's allotted portion | `const` → `fate` |
-| Até | Divine ruin, blindness sent by gods | `catch` → `should ruin come` |
-| Nostos | The return journey | (not used, but could be `finally`) |
-| Xenia | Guest-friendship, hospitality | (not used) |
-| Muse | Divine inspiration | `model` → `muse` |
+| Term   | Meaning                             | Used for                           |
+| ------ | ----------------------------------- | ---------------------------------- |
+| Kleos  | Glory, fame that outlives you       | `output` → `glory`                 |
+| Moira  | Fate, one's allotted portion        | `const` → `fate`                   |
+| Até    | Divine ruin, blindness sent by gods | `catch` → `should ruin come`       |
+| Nostos | The return journey                  | (not used, but could be `finally`) |
+| Xenia  | Guest-friendship, hospitality       | (not used)                         |
+| Muse   | Divine inspiration                  | `model` → `muse`                   |
 
 ---
 
@@ -311,27 +311,27 @@ fate config = { muse: "opus", persist: 3 }
 
 ### For `hero` (agent)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `champion` | More medieval than Homeric |
-| `warrior` | Too martial, not all tasks are battles |
-| `wanderer` | Too passive |
+| Keyword    | Rejected because                       |
+| ---------- | -------------------------------------- |
+| `champion` | More medieval than Homeric             |
+| `warrior`  | Too martial, not all tasks are battles |
+| `wanderer` | Too passive                            |
 
 ### For `trial` (session)
 
-| Keyword | Rejected because |
-|---------|------------------|
+| Keyword | Rejected because                        |
+| ------- | --------------------------------------- |
 | `labor` | Good but reserved for `repeat N labors` |
-| `quest` | More medieval/RPG |
-| `task` | Too plain |
+| `quest` | More medieval/RPG                       |
+| `task`  | Too plain                               |
 
 ### For `host` (parallel)
 
-| Keyword | Rejected because |
-|---------|------------------|
-| `army` | Too specifically martial |
-| `fleet` | Only works for naval metaphors |
-| `phalanx` | Too technical |
+| Keyword   | Rejected because               |
+| --------- | ------------------------------ |
+| `army`    | Too specifically martial       |
+| `fleet`   | Only works for naval metaphors |
+| `phalanx` | Too technical                  |
 
 ---
 

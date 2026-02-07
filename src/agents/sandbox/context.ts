@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
-
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
+import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath } from "../../utils.js";
 import { syncSkillsToWorkspace } from "../skills.js";
@@ -11,22 +12,25 @@ import { ensureSandboxContainer } from "./docker.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
-import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 export async function resolveSandboxContext(params: {
-  config?: ClawdbotConfig;
+  config?: OpenClawConfig;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
   const rawSessionKey = params.sessionKey?.trim();
-  if (!rawSessionKey) return null;
+  if (!rawSessionKey) {
+    return null;
+  }
 
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
     sessionKey: rawSessionKey,
   });
-  if (!runtime.sandboxed) return null;
+  if (!runtime.sandboxed) {
+    return null;
+  }
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
 
@@ -69,11 +73,14 @@ export async function resolveSandboxContext(params: {
     cfg,
   });
 
+  const evaluateEnabled =
+    params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
   const browser = await ensureSandboxBrowser({
     scopeKey,
     workspaceDir,
     agentWorkspaceDir,
     cfg,
+    evaluateEnabled,
   });
 
   return {
@@ -87,26 +94,27 @@ export async function resolveSandboxContext(params: {
     docker: cfg.docker,
     tools: cfg.tools,
     browserAllowHostControl: cfg.browser.allowHostControl,
-    browserAllowedControlUrls: cfg.browser.allowedControlUrls,
-    browserAllowedControlHosts: cfg.browser.allowedControlHosts,
-    browserAllowedControlPorts: cfg.browser.allowedControlPorts,
     browser: browser ?? undefined,
   };
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {
-  config?: ClawdbotConfig;
+  config?: OpenClawConfig;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxWorkspaceInfo | null> {
   const rawSessionKey = params.sessionKey?.trim();
-  if (!rawSessionKey) return null;
+  if (!rawSessionKey) {
+    return null;
+  }
 
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
     sessionKey: rawSessionKey,
   });
-  if (!runtime.sandboxed) return null;
+  if (!runtime.sandboxed) {
+    return null;
+  }
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
 

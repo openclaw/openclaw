@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
+import type { ChatCommandDefinition } from "./commands-registry.types.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildCommandText,
   buildCommandTextFromArgs,
@@ -15,9 +17,6 @@ import {
   serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
-import type { ChatCommandDefinition } from "./commands-registry.types.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 beforeEach(() => {
   setActivePluginRegistry(createTestRegistry([]));
@@ -147,21 +146,21 @@ describe("commands registry", () => {
   });
 
   it("normalizes telegram-style command mentions for the current bot", () => {
-    expect(normalizeCommandBody("/help@clawdbot", { botUsername: "clawdbot" })).toBe("/help");
+    expect(normalizeCommandBody("/help@openclaw", { botUsername: "openclaw" })).toBe("/help");
     expect(
-      normalizeCommandBody("/help@clawdbot args", {
-        botUsername: "clawdbot",
+      normalizeCommandBody("/help@openclaw args", {
+        botUsername: "openclaw",
       }),
     ).toBe("/help args");
     expect(
-      normalizeCommandBody("/help@clawdbot: args", {
-        botUsername: "clawdbot",
+      normalizeCommandBody("/help@openclaw: args", {
+        botUsername: "openclaw",
       }),
     ).toBe("/help args");
   });
 
   it("keeps telegram-style command mentions for other bots", () => {
-    expect(normalizeCommandBody("/help@otherbot", { botUsername: "clawdbot" })).toBe(
+    expect(normalizeCommandBody("/help@otherbot", { botUsername: "openclaw" })).toBe(
       "/help@otherbot",
     );
   });
@@ -229,7 +228,12 @@ describe("commands registry args", () => {
 
     const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
     expect(menu?.arg.name).toBe("mode");
-    expect(menu?.choices).toEqual(["off", "tokens", "full", "cost"]);
+    expect(menu?.choices).toEqual([
+      { label: "off", value: "off" },
+      { label: "tokens", value: "tokens" },
+      { label: "full", value: "full" },
+      { label: "cost", value: "cost" },
+    ]);
   });
 
   it("does not show menus when arg already provided", () => {
@@ -284,7 +288,10 @@ describe("commands registry args", () => {
 
     const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
     expect(menu?.arg.name).toBe("level");
-    expect(menu?.choices).toEqual(["low", "high"]);
+    expect(menu?.choices).toEqual([
+      { label: "low", value: "low" },
+      { label: "high", value: "high" },
+    ]);
     expect(seen?.commandKey).toBe("think");
     expect(seen?.argName).toBe("level");
     expect(seen?.provider).toBeTruthy();

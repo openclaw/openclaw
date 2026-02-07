@@ -30,7 +30,9 @@ export function createMSTeamsConversationStoreMemory(
     },
     findByUserId: async (id) => {
       const target = id.trim();
-      if (!target) return null;
+      if (!target) {
+        return null;
+      }
       for (const [conversationId, reference] of map.entries()) {
         if (reference.user?.aadObjectId === target) {
           return { conversationId, reference };

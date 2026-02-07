@@ -20,15 +20,17 @@ type ExecDirectiveParse = {
 
 function normalizeExecHost(value?: string): ExecHost | undefined {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node")
+  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
     return normalized;
+  }
   return undefined;
 }
 
 function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
   const normalized = value?.trim().toLowerCase();
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full")
+  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
     return normalized;
+  }
   return undefined;
 }
 
@@ -48,10 +50,14 @@ function parseExecDirectiveArgs(raw: string): Omit<
 } {
   let i = 0;
   const len = raw.length;
-  while (i < len && /\s/.test(raw[i])) i += 1;
+  while (i < len && /\s/.test(raw[i])) {
+    i += 1;
+  }
   if (raw[i] === ":") {
     i += 1;
-    while (i < len && /\s/.test(raw[i])) i += 1;
+    while (i < len && /\s/.test(raw[i])) {
+      i += 1;
+    }
   }
   let consumed = i;
   let execHost: ExecHost | undefined;
@@ -69,12 +75,20 @@ function parseExecDirectiveArgs(raw: string): Omit<
   let invalidNode = false;
 
   const takeToken = (): string | null => {
-    if (i >= len) return null;
+    if (i >= len) {
+      return null;
+    }
     const start = i;
-    while (i < len && !/\s/.test(raw[i])) i += 1;
-    if (start === i) return null;
+    while (i < len && !/\s/.test(raw[i])) {
+      i += 1;
+    }
+    if (start === i) {
+      return null;
+    }
     const token = raw.slice(start, i);
-    while (i < len && /\s/.test(raw[i])) i += 1;
+    while (i < len && /\s/.test(raw[i])) {
+      i += 1;
+    }
     return token;
   };
 
@@ -82,23 +96,33 @@ function parseExecDirectiveArgs(raw: string): Omit<
     const eq = token.indexOf("=");
     const colon = token.indexOf(":");
     const idx = eq === -1 ? colon : colon === -1 ? eq : Math.min(eq, colon);
-    if (idx === -1) return null;
+    if (idx === -1) {
+      return null;
+    }
     const key = token.slice(0, idx).trim().toLowerCase();
     const value = token.slice(idx + 1).trim();
-    if (!key) return null;
+    if (!key) {
+      return null;
+    }
     return { key, value };
   };
 
   while (i < len) {
     const token = takeToken();
-    if (!token) break;
+    if (!token) {
+      break;
+    }
     const parsed = splitToken(token);
-    if (!parsed) break;
+    if (!parsed) {
+      break;
+    }
     const { key, value } = parsed;
     if (key === "host") {
       rawExecHost = value;
       execHost = normalizeExecHost(value);
-      if (!execHost) invalidHost = true;
+      if (!execHost) {
+        invalidHost = true;
+      }
       hasExecOptions = true;
       consumed = i;
       continue;
@@ -106,7 +130,9 @@ function parseExecDirectiveArgs(raw: string): Omit<
     if (key === "security") {
       rawExecSecurity = value;
       execSecurity = normalizeExecSecurity(value);
-      if (!execSecurity) invalidSecurity = true;
+      if (!execSecurity) {
+        invalidSecurity = true;
+      }
       hasExecOptions = true;
       consumed = i;
       continue;
@@ -114,7 +140,9 @@ function parseExecDirectiveArgs(raw: string): Omit<
     if (key === "ask") {
       rawExecAsk = value;
       execAsk = normalizeExecAsk(value);
-      if (!execAsk) invalidAsk = true;
+      if (!execAsk) {
+        invalidAsk = true;
+      }
       hasExecOptions = true;
       consumed = i;
       continue;

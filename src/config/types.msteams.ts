@@ -6,7 +6,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
-import type { GroupToolPolicyConfig } from "./types.tools.js";
+import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type MSTeamsWebhookConfig = {
   /** Port for the webhook server. Default: 3978. */
@@ -24,6 +24,7 @@ export type MSTeamsChannelConfig = {
   requireMention?: boolean;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Reply style: "thread" replies to the message, "top-level" posts a new message. */
   replyStyle?: MSTeamsReplyStyle;
 };
@@ -34,6 +35,7 @@ export type MSTeamsTeamConfig = {
   requireMention?: boolean;
   /** Default tool policy for channels in this team. */
   tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Default reply style for channels in this team. */
   replyStyle?: MSTeamsReplyStyle;
   /** Per-channel overrides. Key is conversation ID (e.g., "19:...@thread.tacv2"). */
@@ -81,6 +83,11 @@ export type MSTeamsConfig = {
    * Use ["*"] to allow any host (not recommended).
    */
   mediaAllowHosts?: Array<string>;
+  /**
+   * Allowed host suffixes for attaching Authorization headers to inbound media retries.
+   * Use specific hosts only; avoid multi-tenant suffixes.
+   */
+  mediaAuthAllowHosts?: Array<string>;
   /** Default: require @mention to respond in channels/groups. */
   requireMention?: boolean;
   /** Max group/channel messages to keep as history context (0 disables). */
@@ -99,4 +106,6 @@ export type MSTeamsConfig = {
   sharePointSiteId?: string;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };

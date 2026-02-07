@@ -3,23 +3,24 @@ summary: "Perplexity Sonar setup for web_search"
 read_when:
   - You want to use Perplexity Sonar for web search
   - You need PERPLEXITY_API_KEY or OpenRouter setup
+title: "Perplexity Sonar"
 ---
 
 # Perplexity Sonar
 
-Clawdbot can use Perplexity Sonar for the `web_search` tool. You can connect
+OpenClaw can use Perplexity Sonar for the `web_search` tool. You can connect
 through Perplexity’s direct API or via OpenRouter.
 
 ## API options
 
 ### Perplexity (direct)
 
-- Base URL: https://api.perplexity.ai
+- Base URL: [https://api.perplexity.ai](https://api.perplexity.ai)
 - Environment variable: `PERPLEXITY_API_KEY`
 
 ### OpenRouter (alternative)
 
-- Base URL: https://openrouter.ai/api/v1
+- Base URL: [https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)
 - Environment variable: `OPENROUTER_API_KEY`
 - Supports prepaid/crypto credits.
 
@@ -34,11 +35,11 @@ through Perplexity’s direct API or via OpenRouter.
         perplexity: {
           apiKey: "pplx-...",
           baseUrl: "https://api.perplexity.ai",
-          model: "perplexity/sonar-pro"
-        }
-      }
-    }
-  }
+          model: "perplexity/sonar-pro",
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -52,11 +53,11 @@ through Perplexity’s direct API or via OpenRouter.
         provider: "perplexity",
         perplexity: {
           apiKey: "pplx-...",
-          baseUrl: "https://api.perplexity.ai"
-        }
-      }
-    }
-  }
+          baseUrl: "https://api.perplexity.ai",
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -64,7 +65,7 @@ If both `PERPLEXITY_API_KEY` and `OPENROUTER_API_KEY` are set, set
 `tools.web.search.perplexity.baseUrl` (or `tools.web.search.perplexity.apiKey`)
 to disambiguate.
 
-If no base URL is set, Clawdbot chooses a default based on the API key source:
+If no base URL is set, OpenClaw chooses a default based on the API key source:
 
 - `PERPLEXITY_API_KEY` or `pplx-...` → direct Perplexity (`https://api.perplexity.ai`)
 - `OPENROUTER_API_KEY` or `sk-or-...` → OpenRouter (`https://openrouter.ai/api/v1`)

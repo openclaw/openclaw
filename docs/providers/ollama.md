@@ -1,20 +1,24 @@
 ---
-summary: "Run Clawdbot with Ollama (local LLM runtime)"
+summary: "Run OpenClaw with Ollama (local LLM runtime)"
 read_when:
-  - You want to run Clawdbot with local models via Ollama
+  - You want to run OpenClaw with local models via Ollama
   - You need Ollama setup and configuration guidance
+title: "Ollama"
 ---
+
 # Ollama
 
-Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. Clawdbot integrates with Ollama's OpenAI-compatible API and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
+Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's OpenAI-compatible API and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
 ## Quick start
 
-1) Install Ollama: https://ollama.ai
+1. Install Ollama: [https://ollama.ai](https://ollama.ai)
 
-2) Pull a model:
+2. Pull a model:
 
 ```bash
+ollama pull gpt-oss:20b
+# or
 ollama pull llama3.3
 # or
 ollama pull qwen2.5-coder:32b
@@ -22,31 +26,31 @@ ollama pull qwen2.5-coder:32b
 ollama pull deepseek-r1:32b
 ```
 
-3) Enable Ollama for Clawdbot (any value works; Ollama doesn't require a real key):
+3. Enable Ollama for OpenClaw (any value works; Ollama doesn't require a real key):
 
 ```bash
 # Set environment variable
 export OLLAMA_API_KEY="ollama-local"
 
 # Or configure in your config file
-clawdbot config set models.providers.ollama.apiKey "ollama-local"
+openclaw config set models.providers.ollama.apiKey "ollama-local"
 ```
 
-4) Use Ollama models:
+4. Use Ollama models:
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "ollama/llama3.3" }
-    }
-  }
+      model: { primary: "ollama/gpt-oss:20b" },
+    },
+  },
 }
 ```
 
 ## Model discovery (implicit provider)
 
-When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models.providers.ollama`, Clawdbot discovers models from the local Ollama instance at `http://127.0.0.1:11434`:
+When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models.providers.ollama`, OpenClaw discovers models from the local Ollama instance at `http://127.0.0.1:11434`:
 
 - Queries `/api/tags` and `/api/show`
 - Keeps only models that report `tools` capability
@@ -61,7 +65,7 @@ To see what models are available:
 
 ```bash
 ollama list
-clawdbot models list
+openclaw models list
 ```
 
 To add a new model, simply pull it with Ollama:
@@ -87,6 +91,7 @@ export OLLAMA_API_KEY="ollama-local"
 ### Explicit setup (manual models)
 
 Use explicit config when:
+
 - Ollama runs on another host/port.
 - You want to force specific context windows or model lists.
 - You want to include models that do not report tool support.
@@ -102,8 +107,8 @@ Use explicit config when:
         api: "openai-completions",
         models: [
           {
-            id: "llama3.3",
-            name: "Llama 3.3",
+            id: "gpt-oss:20b",
+            name: "GPT-OSS 20B",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -117,7 +122,7 @@ Use explicit config when:
 }
 ```
 
-If `OLLAMA_API_KEY` is set, you can omit `apiKey` in the provider entry and Clawdbot will fill it for availability checks.
+If `OLLAMA_API_KEY` is set, you can omit `apiKey` in the provider entry and OpenClaw will fill it for availability checks.
 
 ### Custom base URL (explicit config)
 
@@ -129,10 +134,10 @@ If Ollama is running on a different host or port (explicit config disables auto-
     providers: {
       ollama: {
         apiKey: "ollama-local",
-        baseUrl: "http://ollama-host:11434/v1"
-      }
-    }
-  }
+        baseUrl: "http://ollama-host:11434/v1",
+      },
+    },
+  },
 }
 ```
 
@@ -145,11 +150,11 @@ Once configured, all your Ollama models are available:
   agents: {
     defaults: {
       model: {
-        primary: "ollama/llama3.3",
-        fallback: ["ollama/qwen2.5-coder:32b"]
-      }
-    }
-  }
+        primary: "ollama/gpt-oss:20b",
+        fallbacks: ["ollama/llama3.3", "ollama/qwen2.5-coder:32b"],
+      },
+    },
+  },
 }
 ```
 
@@ -157,7 +162,7 @@ Once configured, all your Ollama models are available:
 
 ### Reasoning models
 
-Clawdbot marks models as reasoning-capable when Ollama reports `thinking` in `/api/show`:
+OpenClaw marks models as reasoning-capable when Ollama reports `thinking` in `/api/show`:
 
 ```bash
 ollama pull deepseek-r1:32b
@@ -167,9 +172,51 @@ ollama pull deepseek-r1:32b
 
 Ollama is free and runs locally, so all model costs are set to $0.
 
+### Streaming Configuration
+
+Due to a [known issue](https://github.com/badlogic/pi-mono/issues/1205) in the underlying SDK with Ollama's response format, **streaming is disabled by default** for Ollama models. This prevents corrupted responses when using tool-capable models.
+
+When streaming is disabled, responses are delivered all at once (non-streaming mode), which avoids the issue where interleaved content/reasoning deltas cause garbled output.
+
+#### Re-enable Streaming (Advanced)
+
+If you want to re-enable streaming for Ollama (may cause issues with tool-capable models):
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "ollama/gpt-oss:20b": {
+          streaming: true,
+        },
+      },
+    },
+  },
+}
+```
+
+#### Disable Streaming for Other Providers
+
+You can also disable streaming for any provider if needed:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-4": {
+          streaming: false,
+        },
+      },
+    },
+  },
+}
+```
+
 ### Context windows
 
-For auto-discovered models, Clawdbot uses the context window reported by Ollama when available, otherwise it defaults to `8192`. You can override `contextWindow` and `maxTokens` in explicit provider config.
+For auto-discovered models, OpenClaw uses the context window reported by Ollama when available, otherwise it defaults to `8192`. You can override `contextWindow` and `maxTokens` in explicit provider config.
 
 ## Troubleshooting
 
@@ -189,7 +236,8 @@ curl http://localhost:11434/api/tags
 
 ### No models available
 
-Clawdbot only auto-discovers models that report tool support. If your model isn't listed, either:
+OpenClaw only auto-discovers models that report tool support. If your model isn't listed, either:
+
 - Pull a tool-capable model, or
 - Define the model explicitly in `models.providers.ollama`.
 
@@ -197,7 +245,8 @@ To add models:
 
 ```bash
 ollama list  # See what's installed
-ollama pull llama3.3  # Pull a model
+ollama pull gpt-oss:20b  # Pull a tool-capable model
+ollama pull llama3.3     # Or another model
 ```
 
 ### Connection refused
@@ -211,6 +260,15 @@ ps aux | grep ollama
 # Or restart Ollama
 ollama serve
 ```
+
+### Corrupted responses or tool names in output
+
+If you see garbled responses containing tool names (like `sessions_send`, `memory_get`) or fragmented text when using Ollama models, this is due to an upstream SDK issue with streaming responses. **This is fixed by default** in the latest OpenClaw version by disabling streaming for Ollama models.
+
+If you manually enabled streaming and experience this issue:
+
+1. Remove the `streaming: true` configuration from your Ollama model entries, or
+2. Explicitly set `streaming: false` for Ollama models (see [Streaming Configuration](#streaming-configuration))
 
 ## See Also
 

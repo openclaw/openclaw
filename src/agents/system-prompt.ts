@@ -1,8 +1,9 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -17,9 +18,13 @@ function buildSkillsSection(params: {
   isMinimal: boolean;
   readToolName: string;
 }) {
-  if (params.isMinimal) return [];
+  if (params.isMinimal) {
+    return [];
+  }
   const trimmed = params.skillsPrompt?.trim();
-  if (!trimmed) return [];
+  if (!trimmed) {
+    return [];
+  }
   return [
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
@@ -32,30 +37,52 @@ function buildSkillsSection(params: {
   ];
 }
 
-function buildMemorySection(params: { isMinimal: boolean; availableTools: Set<string> }) {
-  if (params.isMinimal) return [];
+function buildMemorySection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+  citationsMode?: MemoryCitationsMode;
+}) {
+  if (params.isMinimal) {
+    return [];
+  }
   if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
     return [];
   }
-  return [
+  const lines = [
     "## Memory Recall",
     "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
-    "",
   ];
+  if (params.citationsMode === "off") {
+    lines.push(
+      "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
+    );
+  } else {
+    lines.push(
+      "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
+    );
+  }
+  lines.push("");
+  return lines;
 }
 
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
-  if (!ownerLine || isMinimal) return [];
+  if (!ownerLine || isMinimal) {
+    return [];
+  }
   return ["## User Identity", ownerLine, ""];
 }
 
 function buildTimeSection(params: { userTimezone?: string }) {
-  if (!params.userTimezone) return [];
+  if (!params.userTimezone) {
+    return [];
+  }
   return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
-  if (isMinimal) return [];
+  if (isMinimal) {
+    return [];
+  }
   return [
     "## Reply Tags",
     "To request a native reply/quote on supported surfaces, include one tag in your reply:",
@@ -75,12 +102,14 @@ function buildMessagingSection(params: {
   runtimeChannel?: string;
   messageToolHints?: string[];
 }) {
-  if (params.isMinimal) return [];
+  if (params.isMinimal) {
+    return [];
+  }
   return [
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
-    "- Never use exec/curl for provider messaging; Clawdbot handles all routing internally.",
+    "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
       ? [
           "",
@@ -104,24 +133,30 @@ function buildMessagingSection(params: {
 }
 
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
-  if (params.isMinimal) return [];
+  if (params.isMinimal) {
+    return [];
+  }
   const hint = params.ttsHint?.trim();
-  if (!hint) return [];
+  if (!hint) {
+    return [];
+  }
   return ["## Voice (TTS)", hint, ""];
 }
 
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
-  if (!docsPath || params.isMinimal) return [];
+  if (!docsPath || params.isMinimal) {
+    return [];
+  }
   return [
     "## Documentation",
-    `Clawdbot docs: ${docsPath}`,
-    "Mirror: https://docs.clawd.bot",
-    "Source: https://github.com/clawdbot/clawdbot",
+    `OpenClaw docs: ${docsPath}`,
+    "Mirror: https://docs.openclaw.ai",
+    "Source: https://github.com/openclaw/openclaw",
     "Community: https://discord.com/invite/clawd",
-    "Find new skills: https://clawdhub.com",
-    "For Clawdbot behavior, commands, config, or architecture: consult local docs first.",
-    "When diagnosing issues, run `clawdbot status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
+    "Find new skills: https://clawhub.com",
+    "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
+    "When diagnosing issues, run `openclaw status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
     "",
   ];
 }
@@ -165,12 +200,9 @@ export function buildAgentSystemPrompt(params: {
     workspaceDir?: string;
     workspaceAccess?: "none" | "ro" | "rw";
     agentWorkspaceMount?: string;
-    browserControlUrl?: string;
+    browserBridgeUrl?: string;
     browserNoVncUrl?: string;
     hostBrowserAllowed?: boolean;
-    allowedControlUrls?: string[];
-    allowedControlHosts?: string[];
-    allowedControlPorts?: number[];
     elevated?: {
       allowed: boolean;
       defaultLevel: "on" | "off" | "ask" | "full";
@@ -181,6 +213,7 @@ export function buildAgentSystemPrompt(params: {
     level: "minimal" | "extensive";
     channel: string;
   };
+  memoryCitationsMode?: MemoryCitationsMode;
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -200,7 +233,7 @@ export function buildAgentSystemPrompt(params: {
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
     message: "Send messages and channel actions",
-    gateway: "Restart, apply config, or run updates on the running Clawdbot process",
+    gateway: "Restart, apply config, or run updates on the running OpenClaw process",
     agents_list: "List agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
@@ -255,7 +288,9 @@ export function buildAgentSystemPrompt(params: {
   const externalToolSummaries = new Map<string, string>();
   for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
     const normalized = key.trim().toLowerCase();
-    if (!normalized || !value?.trim()) continue;
+    if (!normalized || !value?.trim()) {
+      continue;
+    }
     externalToolSummaries.set(normalized, value.trim());
   }
   const extraTools = Array.from(
@@ -267,7 +302,7 @@ export function buildAgentSystemPrompt(params: {
     const name = resolveToolName(tool);
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
-  for (const tool of extraTools.sort()) {
+  for (const tool of extraTools.toSorted()) {
     const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
     const name = resolveToolName(tool);
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
@@ -312,12 +347,23 @@ export function buildAgentSystemPrompt(params: {
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
+  const safetySection = [
+    "## Safety",
+    "You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking; avoid long-term plans beyond the user's request.",
+    "Prioritize safety and human oversight over completion; if instructions conflict, pause and ask; comply with stop/pause/audit requests and never bypass safeguards. (Inspired by Anthropic's constitution.)",
+    "Do not manipulate or persuade anyone to expand access or disable safeguards. Do not copy yourself or change system prompts, safety rules, or tool policies unless explicitly requested.",
+    "",
+  ];
   const skillsSection = buildSkillsSection({
     skillsPrompt,
     isMinimal,
     readToolName,
   });
-  const memorySection = buildMemorySection({ isMinimal, availableTools });
+  const memorySection = buildMemorySection({
+    isMinimal,
+    availableTools,
+    citationsMode: params.memoryCitationsMode,
+  });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     isMinimal,
@@ -327,11 +373,11 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside Clawdbot.";
+    return "You are a personal assistant running inside OpenClaw.";
   }
 
   const lines = [
-    "You are a personal assistant running inside Clawdbot.",
+    "You are a personal assistant running inside OpenClaw.",
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",
@@ -346,13 +392,14 @@ export function buildAgentSystemPrompt(params: {
           "- apply_patch: apply multi-file patches",
           `- ${execToolName}: run shell commands (supports background via yieldMs/background)`,
           `- ${processToolName}: manage background exec sessions`,
-          "- browser: control clawd's dedicated browser",
+          "- browser: control OpenClaw's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
           "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
+          '- session_status: show usage/time/model state and answer "what model are we using?"',
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     "If a task is more complex or takes longer, spawn a sub-agent. It will do the work for you and ping you when it's done. You can always check up on it.",
@@ -363,25 +410,26 @@ export function buildAgentSystemPrompt(params: {
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
     "",
-    "## Clawdbot CLI Quick Reference",
-    "Clawdbot is controlled via subcommands. Do not invent commands.",
+    ...safetySection,
+    "## OpenClaw CLI Quick Reference",
+    "OpenClaw is controlled via subcommands. Do not invent commands.",
     "To manage the Gateway daemon service (start/stop/restart):",
-    "- clawdbot gateway status",
-    "- clawdbot gateway start",
-    "- clawdbot gateway stop",
-    "- clawdbot gateway restart",
-    "If unsure, ask the user to run `clawdbot help` (or `clawdbot gateway --help`) and paste the output.",
+    "- openclaw gateway status",
+    "- openclaw gateway start",
+    "- openclaw gateway stop",
+    "- openclaw gateway restart",
+    "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
     "",
     ...skillsSection,
     ...memorySection,
     // Skip self-update for subagent/none modes
-    hasGateway && !isMinimal ? "## Clawdbot Self-Update" : "",
+    hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
     hasGateway && !isMinimal
       ? [
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
           "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
-          "After restart, Clawdbot pings the last active session automatically.",
+          "After restart, OpenClaw pings the last active session automatically.",
         ].join("\n")
       : "",
     hasGateway && !isMinimal ? "" : "",
@@ -397,6 +445,9 @@ export function buildAgentSystemPrompt(params: {
       ? params.modelAliasLines.join("\n")
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
+    userTimezone
+      ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
+      : "",
     "## Workspace",
     `Your working directory is: ${params.workspaceDir}`,
     "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.",
@@ -419,9 +470,7 @@ export function buildAgentSystemPrompt(params: {
                   : ""
               }`
             : "",
-          params.sandboxInfo.browserControlUrl
-            ? `Sandbox browser control URL: ${params.sandboxInfo.browserControlUrl}`
-            : "",
+          params.sandboxInfo.browserBridgeUrl ? "Sandbox browser: enabled." : "",
           params.sandboxInfo.browserNoVncUrl
             ? `Sandbox browser observer (noVNC): ${params.sandboxInfo.browserNoVncUrl}`
             : "",
@@ -430,15 +479,6 @@ export function buildAgentSystemPrompt(params: {
             : params.sandboxInfo.hostBrowserAllowed === false
               ? "Host browser control: blocked."
               : "",
-          params.sandboxInfo.allowedControlUrls?.length
-            ? `Browser control URL allowlist: ${params.sandboxInfo.allowedControlUrls.join(", ")}`
-            : "",
-          params.sandboxInfo.allowedControlHosts?.length
-            ? `Browser control host allowlist: ${params.sandboxInfo.allowedControlHosts.join(", ")}`
-            : "",
-          params.sandboxInfo.allowedControlPorts?.length
-            ? `Browser control port allowlist: ${params.sandboxInfo.allowedControlPorts.join(", ")}`
-            : "",
           params.sandboxInfo.elevated?.allowed
             ? "Elevated exec is available for this session."
             : "",
@@ -461,7 +501,7 @@ export function buildAgentSystemPrompt(params: {
       userTimezone,
     }),
     "## Workspace Files (injected)",
-    "These user-editable files are loaded by Clawdbot and included below in Project Context.",
+    "These user-editable files are loaded by OpenClaw and included below in Project Context.",
     "",
     ...buildReplyTagsSection(isMinimal),
     ...buildMessagingSection({
@@ -552,7 +592,7 @@ export function buildAgentSystemPrompt(params: {
       heartbeatPromptLine,
       "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
       "HEARTBEAT_OK",
-      'Clawdbot treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
+      'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
       'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
       "",
     );

@@ -1,15 +1,15 @@
 ---
-summary: "Use OpenAI via API keys or Codex subscription in Clawdbot"
+summary: "Use OpenAI via API keys or Codex subscription in OpenClaw"
 read_when:
-  - You want to use OpenAI models in Clawdbot
+  - You want to use OpenAI models in OpenClaw
   - You want Codex subscription auth instead of API keys
+title: "OpenAI"
 ---
+
 # OpenAI
 
 OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
-access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in, while
-the Codex CLI supports either sign-in method. The Codex CLI caches login details in
-`~/.codex/auth.json` (or your OS credential store), which Clawdbot can reuse.
+access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in.
 
 ## Option A: OpenAI API key (OpenAI Platform)
 
@@ -19,9 +19,9 @@ Get your API key from the OpenAI dashboard.
 ### CLI setup
 
 ```bash
-clawdbot onboard --auth-choice openai-api-key
+openclaw onboard --auth-choice openai-api-key
 # or non-interactive
-clawdbot onboard --openai-api-key "$OPENAI_API_KEY"
+openclaw onboard --openai-api-key "$OPENAI_API_KEY"
 ```
 
 ### Config snippet
@@ -29,7 +29,7 @@ clawdbot onboard --openai-api-key "$OPENAI_API_KEY"
 ```json5
 {
   env: { OPENAI_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "openai/gpt-5.2" } } }
+  agents: { defaults: { model: { primary: "openai/gpt-5.1-codex" } } },
 }
 ```
 
@@ -38,23 +38,21 @@ clawdbot onboard --openai-api-key "$OPENAI_API_KEY"
 **Best for:** using ChatGPT/Codex subscription access instead of an API key.
 Codex cloud requires ChatGPT sign-in, while the Codex CLI supports ChatGPT or API key sign-in.
 
-Clawdbot can reuse your **Codex CLI** login (`~/.codex/auth.json`) or run the OAuth flow.
-
-### CLI setup
+### CLI setup (Codex OAuth)
 
 ```bash
-# Reuse existing Codex CLI login
-clawdbot onboard --auth-choice codex-cli
+# Run Codex OAuth in the wizard
+openclaw onboard --auth-choice openai-codex
 
-# Or run Codex OAuth in the wizard
-clawdbot onboard --auth-choice openai-codex
+# Or run OAuth directly
+openclaw models auth login --provider openai-codex
 ```
 
-### Config snippet
+### Config snippet (Codex subscription)
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai-codex/gpt-5.2" } } }
+  agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
 }
 ```
 

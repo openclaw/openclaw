@@ -2,12 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE_NAME="clawdbot-gateway-network-e2e"
+IMAGE_NAME="openclaw-gateway-network-e2e"
 
 PORT="18789"
 TOKEN="e2e-$(date +%s)-$$"
-NET_NAME="clawdbot-net-e2e-$$"
-GW_NAME="clawdbot-gateway-e2e-$$"
+NET_NAME="openclaw-net-e2e-$$"
+GW_NAME="openclaw-gateway-e2e-$$"
 
 cleanup() {
   docker rm -f "$GW_NAME" >/dev/null 2>&1 || true
@@ -25,21 +25,49 @@ echo "Starting gateway container..."
 	docker run --rm -d \
 	  --name "$GW_NAME" \
 	  --network "$NET_NAME" \
-	  -e "CLAWDBOT_GATEWAY_TOKEN=$TOKEN" \
-	  -e "CLAWDBOT_SKIP_CHANNELS=1" \
-	  -e "CLAWDBOT_SKIP_GMAIL_WATCHER=1" \
-	  -e "CLAWDBOT_SKIP_CRON=1" \
-	  -e "CLAWDBOT_SKIP_CANVAS_HOST=1" \
+	  -e "OPENCLAW_GATEWAY_TOKEN=$TOKEN" \
+	  -e "OPENCLAW_SKIP_CHANNELS=1" \
+	  -e "OPENCLAW_SKIP_GMAIL_WATCHER=1" \
+	  -e "OPENCLAW_SKIP_CRON=1" \
+	  -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
 	  "$IMAGE_NAME" \
   bash -lc "node dist/index.js gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1"
 
 echo "Waiting for gateway to come up..."
-for _ in $(seq 1 20); do
+ready=0
+for _ in $(seq 1 40); do
+  if docker exec "$GW_NAME" bash -lc "node --input-type=module -e '
+    import net from \"node:net\";
+    const socket = net.createConnection({ host: \"127.0.0.1\", port: $PORT });
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      process.exit(1);
+    }, 400);
+    socket.on(\"connect\", () => {
+      clearTimeout(timeout);
+      socket.end();
+      process.exit(0);
+    });
+    socket.on(\"error\", () => {
+      clearTimeout(timeout);
+      process.exit(1);
+    });
+  ' >/dev/null 2>&1"; then
+    ready=1
+    break
+  fi
   if docker exec "$GW_NAME" bash -lc "grep -q \"listening on ws://\" /tmp/gateway-net-e2e.log"; then
+    ready=1
     break
   fi
   sleep 0.5
 done
+
+if [ "$ready" -ne 1 ]; then
+  echo "Gateway failed to start"
+  docker exec "$GW_NAME" bash -lc "tail -n 80 /tmp/gateway-net-e2e.log" || true
+  exit 1
+fi
 
 docker exec "$GW_NAME" bash -lc "tail -n 50 /tmp/gateway-net-e2e.log"
 

@@ -1,5 +1,5 @@
-import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import type { MessagingToolSend } from "../pi-embedded-messaging.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
@@ -20,7 +20,7 @@ export type EmbeddedPiRunMeta = {
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
   error?: {
-    kind: "context_overflow" | "compaction_failure" | "role_ordering";
+    kind: "context_overflow" | "compaction_failure" | "role_ordering" | "image_size";
     message: string;
   };
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
@@ -69,12 +69,9 @@ export type EmbeddedSandboxInfo = {
   workspaceDir?: string;
   workspaceAccess?: "none" | "ro" | "rw";
   agentWorkspaceMount?: string;
-  browserControlUrl?: string;
+  browserBridgeUrl?: string;
   browserNoVncUrl?: string;
   hostBrowserAllowed?: boolean;
-  allowedControlUrls?: string[];
-  allowedControlHosts?: string[];
-  allowedControlPorts?: number[];
   elevated?: {
     allowed: boolean;
     defaultLevel: "on" | "off" | "ask" | "full";

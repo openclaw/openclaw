@@ -1,6 +1,5 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-import type { PluginRuntime } from "clawdbot/plugin-sdk";
 import { setMatrixRuntime } from "../../runtime.js";
 import { downloadMatrixMedia } from "./media.js";
 
@@ -29,7 +28,7 @@ describe("downloadMatrixMedia", () => {
     const client = {
       crypto: { decryptMedia },
       mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
-    } as unknown as import("matrix-bot-sdk").MatrixClient;
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
 
     const file = {
       url: "mxc://example/file",
@@ -70,7 +69,7 @@ describe("downloadMatrixMedia", () => {
     const client = {
       crypto: { decryptMedia },
       mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
-    } as unknown as import("matrix-bot-sdk").MatrixClient;
+    } as unknown as import("@vector-im/matrix-bot-sdk").MatrixClient;
 
     const file = {
       url: "mxc://example/file",

@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import type { ClawdbotConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { buildParseArgv, getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { resolveActionArgs } from "./helpers.js";
@@ -13,16 +13,20 @@ type SubCliEntry = {
 };
 
 const shouldRegisterPrimaryOnly = (argv: string[]) => {
-  if (isTruthyEnvValue(process.env.CLAWDBOT_DISABLE_LAZY_SUBCOMMANDS)) return false;
-  if (hasHelpOrVersion(argv)) return false;
+  if (isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS)) {
+    return false;
+  }
+  if (hasHelpOrVersion(argv)) {
+    return false;
+  }
   return true;
 };
 
 const shouldEagerRegisterSubcommands = (_argv: string[]) => {
-  return isTruthyEnvValue(process.env.CLAWDBOT_DISABLE_LAZY_SUBCOMMANDS);
+  return isTruthyEnvValue(process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS);
 };
 
-const loadConfig = async (): Promise<ClawdbotConfig> => {
+const loadConfig = async (): Promise<OpenClawConfig> => {
   const mod = await import("../../config/config.js");
   return mod.loadConfig();
 };
@@ -168,6 +172,11 @@ const entries: SubCliEntry[] = [
     name: "pairing",
     description: "Pairing helpers",
     register: async (program) => {
+      // Initialize plugins before registering pairing CLI.
+      // The pairing CLI calls listPairingChannels() at registration time,
+      // which requires the plugin registry to be populated with channel plugins.
+      const { registerPluginCliCommands } = await import("../../plugins/cli.js");
+      registerPluginCliCommands(program, await loadConfig());
       const mod = await import("../pairing-cli.js");
       mod.registerPairingCli(program);
     },
@@ -222,7 +231,19 @@ const entries: SubCliEntry[] = [
       mod.registerUpdateCli(program);
     },
   },
+  {
+    name: "completion",
+    description: "Generate shell completion script",
+    register: async (program) => {
+      const mod = await import("../completion-cli.js");
+      mod.registerCompletionCli(program);
+    },
+  },
 ];
+
+export function getSubCliEntries(): SubCliEntry[] {
+  return entries;
+}
 
 function removeCommand(program: Command, command: Command) {
   const commands = program.commands as Command[];
@@ -234,9 +255,13 @@ function removeCommand(program: Command, command: Command) {
 
 export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
   const entry = entries.find((candidate) => candidate.name === name);
-  if (!entry) return false;
+  if (!entry) {
+    return false;
+  }
   const existing = program.commands.find((cmd) => cmd.name() === entry.name);
-  if (existing) removeCommand(program, existing);
+  if (existing) {
+    removeCommand(program, existing);
+  }
   await entry.register(program);
   return true;
 }

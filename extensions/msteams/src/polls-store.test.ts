@@ -1,14 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
-import { createMSTeamsPollStoreFs } from "./polls.js";
 import { createMSTeamsPollStoreMemory } from "./polls-store-memory.js";
+import { createMSTeamsPollStoreFs } from "./polls.js";
 
 const createFsStore = async () => {
-  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "clawdbot-msteams-polls-"));
+  const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
   return createMSTeamsPollStoreFs({ stateDir });
 };
 

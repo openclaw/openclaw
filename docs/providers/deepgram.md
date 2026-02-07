@@ -3,37 +3,41 @@ summary: "Deepgram transcription for inbound voice notes"
 read_when:
   - You want Deepgram speech-to-text for audio attachments
   - You need a quick Deepgram config example
+title: "Deepgram"
 ---
+
 # Deepgram (Audio Transcription)
 
-Deepgram is a speech-to-text API. In Clawdbot it is used for **inbound audio/voice note
+Deepgram is a speech-to-text API. In OpenClaw it is used for **inbound audio/voice note
 transcription** via `tools.media.audio`.
 
-When enabled, Clawdbot uploads the audio file to Deepgram and injects the transcript
+When enabled, OpenClaw uploads the audio file to Deepgram and injects the transcript
 into the reply pipeline (`{{Transcript}}` + `[Audio]` block). This is **not streaming**;
 it uses the pre-recorded transcription endpoint.
 
-Website: https://deepgram.com  
-Docs: https://developers.deepgram.com
+Website: [https://deepgram.com](https://deepgram.com)  
+Docs: [https://developers.deepgram.com](https://developers.deepgram.com)
 
 ## Quick start
 
-1) Set your API key:
+1. Set your API key:
+
 ```
 DEEPGRAM_API_KEY=dg_...
 ```
 
-2) Enable the provider:
+2. Enable the provider:
+
 ```json5
 {
   tools: {
     media: {
       audio: {
         enabled: true,
-        models: [{ provider: "deepgram", model: "nova-3" }]
-      }
-    }
-  }
+        models: [{ provider: "deepgram", model: "nova-3" }],
+      },
+    },
+  },
 }
 ```
 
@@ -46,22 +50,22 @@ DEEPGRAM_API_KEY=dg_...
 - `tools.media.audio.providerOptions.deepgram.smart_format`: enable smart formatting (optional)
 
 Example with language:
+
 ```json5
 {
   tools: {
     media: {
       audio: {
         enabled: true,
-        models: [
-          { provider: "deepgram", model: "nova-3", language: "en" }
-        ]
-      }
-    }
-  }
+        models: [{ provider: "deepgram", model: "nova-3", language: "en" }],
+      },
+    },
+  },
 }
 ```
 
 Example with Deepgram options:
+
 ```json5
 {
   tools: {
@@ -72,13 +76,13 @@ Example with Deepgram options:
           deepgram: {
             detect_language: true,
             punctuate: true,
-            smart_format: true
-          }
+            smart_format: true,
+          },
         },
-        models: [{ provider: "deepgram", model: "nova-3" }]
-      }
-    }
-  }
+        models: [{ provider: "deepgram", model: "nova-3" }],
+      },
+    },
+  },
 }
 ```
 

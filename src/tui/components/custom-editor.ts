@@ -1,11 +1,4 @@
-import {
-  Editor,
-  type EditorOptions,
-  type EditorTheme,
-  type TUI,
-  Key,
-  matchesKey,
-} from "@mariozechner/pi-tui";
+import { Editor, Key, matchesKey } from "@mariozechner/pi-tui";
 
 export class CustomEditor extends Editor {
   onEscape?: () => void;
@@ -19,9 +12,6 @@ export class CustomEditor extends Editor {
   onShiftTab?: () => void;
   onAltEnter?: () => void;
 
-  constructor(tui: TUI, theme: EditorTheme, options?: EditorOptions) {
-    super(tui, theme, options);
-  }
   handleInput(data: string): void {
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
       this.onAltEnter();
