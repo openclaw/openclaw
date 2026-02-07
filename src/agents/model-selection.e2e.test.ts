@@ -134,6 +134,56 @@ describe("model-selection", () => {
       });
       expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-4" });
     });
+
+    it("should strip @profile suffix from provider/model input", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "nvidia/moonshotai/kimi-k2.5@nvidia:default",
+        defaultProvider: "anthropic",
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "nvidia",
+        model: "moonshotai/kimi-k2.5",
+      });
+    });
+
+    it("should strip @profile suffix from single-segment model input", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "gpt-5@myprofile",
+        defaultProvider: "openai",
+      });
+      expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-5" });
+    });
+
+    it("should strip @profile suffix with colon in profile name", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "google/gemini-flash-latest@google:bevfresh",
+        defaultProvider: "anthropic",
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "google",
+        model: "gemini-flash-latest",
+      });
+    });
+
+    it("should resolve alias with @profile suffix", () => {
+      const index = {
+        byAlias: new Map([
+          ["kimi", { alias: "kimi", ref: { provider: "nvidia", model: "moonshotai/kimi-k2.5" } }],
+        ]),
+        byKey: new Map(),
+      };
+
+      const resolved = resolveModelRefFromString({
+        raw: "kimi@nvidia:default",
+        defaultProvider: "openai",
+        aliasIndex: index,
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "nvidia",
+        model: "moonshotai/kimi-k2.5",
+      });
+      expect(resolved?.alias).toBe("kimi");
+    });
   });
 
   describe("resolveConfiguredModelRef", () => {
