@@ -228,10 +228,10 @@ const cortexPlugin: OpenClawPlugin = {
       episodicMemoryTurns: rawConfig.episodicMemoryTurns ?? 20, // Working memory turns to pin
       // PHASE 2: Hot Memory Tier
       hotTierSize: rawConfig.hotTierSize ?? 100,
-      // PHASE 2: Token Budget System
-      maxContextTokens: rawConfig.maxContextTokens ?? 2000,
-      relevanceThreshold: rawConfig.relevanceThreshold ?? 0.5,
-      truncateOldMemoriesTo: rawConfig.truncateOldMemoriesTo ?? 200,
+      // PHASE 2: Token Budget System (lowered defaults to prevent context overflow)
+      maxContextTokens: rawConfig.maxContextTokens ?? 500,
+      relevanceThreshold: rawConfig.relevanceThreshold ?? 0.65,
+      truncateOldMemoriesTo: rawConfig.truncateOldMemoriesTo ?? 120,
       // PHASE 2: Delta Sync & Prefetch
       deltaSyncEnabled: rawConfig.deltaSyncEnabled ?? true,
       prefetchEnabled: rawConfig.prefetchEnabled ?? true,
