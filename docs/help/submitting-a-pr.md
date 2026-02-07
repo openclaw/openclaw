@@ -3,212 +3,396 @@ summary: "How to submit a high signal PR"
 title: "Submitting a PR"
 ---
 
-# Submitting a PR
-
-Good PRs make it easy for reviewers to understand intent, verify behavior, and land changes safely. This guide focuses on high-signal, low-noise submissions that work well with both human review and LLM-assisted review.
+Good PRs are easy to review: reviewers should quickly know the intent, verify behavior, and land changes safely. This guide covers concise, high-signal submissions for human and LLM review.
 
 ## What makes a good PR
 
-- [ ] Clear intent: explain the problem, why it matters, and what the change does.
-- [ ] Tight scope: keep changes focused and avoid drive-by refactors.
-- [ ] Behavior summary: call out user-visible changes, config changes, and defaults.
-- [ ] Tests: list what ran, what was skipped, and why.
-- [ ] Evidence: include logs, screenshots, or short recordings for UI or workflows.
-- [ ] Code word: include “lobster-biscuit” somewhere in the PR description to confirm you read this guide.
-- [ ] Baseline checks: run the relevant `pnpm` commands for this repo and fix failures before opening the PR.
-- [ ] Due diligence: search the codebase for existing functionality and check GitHub for related issues or prior fixes.
-- [ ] Grounded in reality: claims should be backed by evidence, reproduction, or direct observation.
-- [ ] Title guidance: use a verb + scope + outcome (for example `Docs: add PR and issue templates`).
+- [ ] Explain the problem, why it matters, and the change.
+- [ ] Keep changes focused. Avoid broad refactors.
+- [ ] Summarize user-visible/config/default changes.
+- [ ] List test coverage, skips, and reasons.
+- [ ] Add evidence: logs, screenshots, or recordings (UI/UX).
+- [ ] Code word: put “lobster-biscuit” in the PR description if you read this guide.
+- [ ] Run/fix relevant `pnpm` commands before creating PR.
+- [ ] Search codebase and GitHub for related functionality/issues/fixes.
+- [ ] Base claims on evidence or observation.
+- [ ] Good title: verb + scope + outcome (e.g., `Docs: add PR and issue templates`).
 
-Guideline: concision > grammar. Be terse if it makes review faster.
+Be concise; concise review > grammar. Omit any non-applicable sections.
 
-Baseline validation commands (run as appropriate for the change, and fix failures before submitting):
+### Baseline validation commands (run/fix failures for your change)
 
 - `pnpm lint`
 - `pnpm check`
 - `pnpm build`
 - `pnpm test`
-- If you touch protocol code: `pnpm protocol:check`
+- Protocol changes: `pnpm protocol:check`
 
 ## Progressive disclosure
 
-Use a short top section, then deeper details as needed.
+- Top: summary/intent
+- Next: changes/risks
+- Next: test/verification
+- Last: implementation/evidence
 
-1. Summary and intent
-2. Behavior changes and risks
-3. Tests and verification
-4. Implementation details and evidence
+## Common PR types: specifics
 
-This keeps review fast while preserving deep context for anyone who needs it.
-
-## Common PR types and expectations
-
-- [ ] Fix: include clear repro, root cause summary, and verification steps.
-- [ ] Feature: include use cases, behavior changes, and screenshots or demos when UI is involved.
-- [ ] Refactor: explicitly state “no behavior change” and list what moved or was simplified.
-- [ ] Chore/Maintenance: note why it matters (build time, CI stability, dependency hygiene).
-- [ ] Docs: include before/after context and link to the updated page. Run `pnpm format`.
-- [ ] Test: explain the gap it covers and how it prevents regressions.
-- [ ] Perf: include baseline and after metrics, plus how they were measured.
-- [ ] UX/UI: include screenshots or short recordings and any accessibility impact.
-- [ ] Infra/Build: call out affected environments and how to validate.
-- [ ] Security: include threat or risk summary, repro steps, and verification plan. Avoid sensitive data in public logs.
-- [ ] Security: keep reports grounded in reality; avoid speculative claims.
+- [ ] Fix: Add repro, root cause, verification.
+- [ ] Feature: Add use cases, behavior/demos/screenshots (UI).
+- [ ] Refactor: State "no behavior change", list what moved/simplified.
+- [ ] Chore: State why (e.g., build time, CI, dependencies).
+- [ ] Docs: Before/after context, link updated page, run `pnpm format`.
+- [ ] Test: What gap is covered; how it prevents regressions.
+- [ ] Perf: Add before/after metrics, and how measured.
+- [ ] UX/UI: Screenshots/video, note accessibility impact.
+- [ ] Infra/Build: Environments/validation.
+- [ ] Security: Summarize risk, repro, verification, no sensitive data. Grounded claims only.
 
 ## Checklist
 
-- [ ] Problem and intent are clear
-- [ ] Scope is focused
-- [ ] Behavior changes are listed
-- [ ] Tests are listed with results
-- [ ] Evidence is attached when needed
-- [ ] No secrets or private data
-- [ ] Grounded in reality: no guesswork or invented context.
+- [ ] Clear problem/intent
+- [ ] Focused scope
+- [ ] List behavior changes
+- [ ] List and result of tests
+- [ ] Manual test steps (when applicable)
+- [ ] No secrets/private data
+- [ ] Evidence-based
 
-## Template
+## General PR Template
 
 ```md
-## Summary
+#### Summary
 
-## Behavior Changes
+#### Behavior Changes
 
-## Codebase and GitHub Search
+#### Codebase and GitHub Search
 
-## Tests
+#### Tests
 
-## Evidence
+#### Manual Testing (omit if N/A)
+
+### Prerequisites
+
+-
+
+### Steps
+
+1.
+2.
+
+#### Evidence (omit if N/A)
+
+**Sign-Off**
+
+- Models used:
+- Submitter effort (self-reported):
+- Agent notes (optional, cite evidence):
 ```
 
-## Templates by PR type
+## PR Type templates (replace with your type)
 
 ### Fix
 
 ```md
-## Summary
+#### Summary
 
-## Repro Steps
+#### Repro Steps
 
-## Root Cause
+#### Root Cause
 
-## Behavior Changes
+#### Behavior Changes
 
-## Tests
+#### Tests
 
-## Evidence
+#### Manual Testing (omit if N/A)
+
+### Prerequisites
+
+-
+
+### Steps
+
+1.
+2.
+
+#### Evidence (omit if N/A)
+
+**Sign-Off**
+
+- Models used:
+- Submitter effort:
+- Agent notes:
 ```
 
 ### Feature
 
 ```md
-## Summary
+#### Summary
 
-## Use Cases
+#### Use Cases
 
-## Behavior Changes
+#### Behavior Changes
 
-## Existing Functionality Check
+#### Existing Functionality Check
 
-I searched the codebase for existing functionality before implementing this.
+- [ ] I searched the codebase for existing functionality.
+      Searches performed (1-3 bullets):
+  -
+  -
 
-## Tests
+#### Tests
 
-## Evidence
+#### Manual Testing (omit if N/A)
+
+### Prerequisites
+
+-
+
+### Steps
+
+1.
+2.
+
+#### Evidence (omit if N/A)
+
+**Sign-Off**
+
+- Models used:
+- Submitter effort:
+- Agent notes:
 ```
 
 ### Refactor
 
 ```md
-## Summary
+#### Summary
 
-## Scope
+#### Scope
 
-## No Behavior Change Statement
+#### No Behavior Change Statement
 
-## Tests
+#### Tests
+
+#### Manual Testing (omit if N/A)
+
+### Prerequisites
+
+-
+
+### Steps
+
+1.
+2.
+
+#### Evidence (omit if N/A)
+
+**Sign-Off**
+
+- Models used:
+- Submitter effort:
+- Agent notes:
 ```
 
 ### Chore/Maintenance
 
 ```md
-## Summary
+#### Summary
 
-## Why This Matters
+#### Why This Matters
 
-## Tests
+#### Tests
+
+#### Manual Testing (omit if N/A)
+
+### Prerequisites
+
+-
+
+### Steps
+
+1.
+2.
+
+#### Evidence (omit if N/A)
+
+**Sign-Off**
+
+- Models used:
+- Submitter effort:
+- Agent notes:
 ```
 
 ### Docs
 
 ```md
-## Summary
+#### Summary
 
-## Pages Updated
+#### Pages Updated
 
-## Screenshots or Before/After
+#### Before/After
 
-## Formatting
+#### Formatting
 
 pnpm format
+
+#### Evidence (omit if N/A)
+
+**Sign-Off**
+
+- Models used:
+- Submitter effort:
+- Agent notes:
 ```
 
 ### Test
 
 ```md
-## Summary
+#### Summary
 
-## Gap Covered
+#### Gap Covered
 
-## Tests
+#### Tests
+
+#### Manual Testing (omit if N/A)
+
+### Prerequisites
+
+-
+
+### Steps
+
+1.
+2.
+
+#### Evidence (omit if N/A)
+
+**Sign-Off**
+
+- Models used:
+- Submitter effort:
+- Agent notes:
 ```
 
 ### Perf
 
 ```md
-## Summary
+#### Summary
 
-## Baseline
+#### Baseline
 
-## After
+#### After
 
-## Measurement Method
+#### Measurement Method
 
-## Tests
+#### Tests
+
+#### Manual Testing (omit if N/A)
+
+### Prerequisites
+
+-
+
+### Steps
+
+1.
+2.
+
+#### Evidence (omit if N/A)
+
+**Sign-Off**
+
+- Models used:
+- Submitter effort:
+- Agent notes:
 ```
 
 ### UX/UI
 
 ```md
-## Summary
+#### Summary
 
-## Screenshots or Video
+#### Screenshots or Video
 
-## Accessibility Impact
+#### Accessibility Impact
 
-## Tests
+#### Tests
+
+#### Manual Testing
+
+### Prerequisites
+
+-
+
+### Steps
+
+1.
+2. **Sign-Off**
+
+- Models used:
+- Submitter effort:
+- Agent notes:
 ```
 
 ### Infra/Build
 
 ```md
-## Summary
+#### Summary
 
-## Environments Affected
+#### Environments Affected
 
-## Validation Steps
+#### Validation Steps
+
+#### Manual Testing (omit if N/A)
+
+### Prerequisites
+
+-
+
+### Steps
+
+1.
+2.
+
+#### Evidence (omit if N/A)
+
+**Sign-Off**
+
+- Models used:
+- Submitter effort:
+- Agent notes:
 ```
 
 ### Security
 
 ```md
-## Summary
+#### Summary
 
-## Risk Summary
+#### Risk Summary
 
-## Repro Steps
+#### Repro Steps
 
-## Mitigation or Fix
+#### Mitigation or Fix
 
-## Verification
+#### Verification
 
-## Tests
+#### Tests
+
+#### Manual Testing (omit if N/A)
+
+### Prerequisites
+
+-
+
+### Steps
+
+1.
+2.
+
+#### Evidence (omit if N/A)
+
+**Sign-Off**
+
+- Models used:
+- Submitter effort:
+- Agent notes:
 ```

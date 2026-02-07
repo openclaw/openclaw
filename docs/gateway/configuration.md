@@ -1453,7 +1453,7 @@ working directory). The path must exist to be used.
 
 ### `agents.defaults.skipBootstrap`
 
-Disables automatic creation of the workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`).
+Disables automatic creation of the workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, and `BOOTSTRAP.md`).
 
 Use this for pre-seeded deployments where your workspace files come from a repo.
 
