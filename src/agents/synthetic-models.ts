@@ -100,7 +100,7 @@ export const SYNTHETIC_MODEL_CATALOG = [
     maxTokens: 8192,
   },
   {
-    id: "hf:moonshotai/MiniMax-M2.1",
+    id: "hf:MiniMaxAI/MiniMax-M2.1",
     name: "MiniMax M2.1",
     reasoning: true,
     input: ["text"],
