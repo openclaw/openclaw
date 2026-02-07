@@ -191,7 +191,7 @@ function createAnthropicServerSideCompactionWrapper(
     const extraBody = {
       ...existingExtraBodyObj,
       context_management: {
-        ...(existingCtxMgmt ?? {}),
+        ...existingCtxMgmt,
         edits: [...existingEdits, { type: strategy }],
       },
     };
