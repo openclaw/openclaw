@@ -474,6 +474,7 @@ public struct AgentParams: Codable, Sendable {
     public let replyto: String?
     public let sessionid: String?
     public let sessionkey: String?
+    public let model: String?
     public let thinking: String?
     public let deliver: Bool?
     public let attachments: [AnyCodable]?
@@ -499,6 +500,7 @@ public struct AgentParams: Codable, Sendable {
         replyto: String?,
         sessionid: String?,
         sessionkey: String?,
+        model: String?,
         thinking: String?,
         deliver: Bool?,
         attachments: [AnyCodable]?,
@@ -523,6 +525,7 @@ public struct AgentParams: Codable, Sendable {
         self.replyto = replyto
         self.sessionid = sessionid
         self.sessionkey = sessionkey
+        self.model = model
         self.thinking = thinking
         self.deliver = deliver
         self.attachments = attachments
@@ -548,6 +551,7 @@ public struct AgentParams: Codable, Sendable {
         case replyto = "replyTo"
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
+        case model
         case thinking
         case deliver
         case attachments

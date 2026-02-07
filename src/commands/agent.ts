@@ -142,6 +142,7 @@ export async function agentCommand(
     sessionId: opts.sessionId,
     sessionKey: opts.sessionKey,
     agentId: agentIdOverride,
+    sessionEntry: opts.sessionEntry,
   });
 
   const {

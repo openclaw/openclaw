@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayRequestHandlers } from "./types.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveAllowedModelRef, resolveConfiguredModelRef } from "../../agents/model-selection.js";
 import { agentCommand } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -17,6 +19,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import {
@@ -63,6 +66,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       replyTo?: string;
       sessionId?: string;
       sessionKey?: string;
+      model?: string;
       thinking?: string;
       deliver?: boolean;
       attachments?: Array<{
@@ -92,6 +96,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     const groupChannelRaw =
       typeof request.groupChannel === "string" ? request.groupChannel.trim() : "";
     const groupSpaceRaw = typeof request.groupSpace === "string" ? request.groupSpace.trim() : "";
+    const modelOverrideRaw = typeof request.model === "string" ? request.model.trim() : "";
+    const modelOverride = modelOverrideRaw || undefined;
     let resolvedGroupId: string | undefined = groupIdRaw || undefined;
     let resolvedGroupChannel: string | undefined = groupChannelRaw || undefined;
     let resolvedGroupSpace: string | undefined = groupSpaceRaw || undefined;
@@ -261,6 +267,42 @@ export const agentHandlers: GatewayRequestHandlers = {
         cliSessionIds: entry?.cliSessionIds,
         claudeCliSessionId: entry?.claudeCliSessionId,
       };
+      if (modelOverride) {
+        const resolvedDefault = resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+        });
+        let catalog: Awaited<ReturnType<typeof context.loadGatewayModelCatalog>>;
+        try {
+          catalog = await context.loadGatewayModelCatalog();
+        } catch (err) {
+          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+          return;
+        }
+        const resolved = resolveAllowedModelRef({
+          cfg,
+          catalog,
+          raw: modelOverride,
+          defaultProvider: resolvedDefault.provider,
+          defaultModel: resolvedDefault.model,
+        });
+        if ("error" in resolved) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
+          return;
+        }
+        const isDefault =
+          resolved.ref.provider === resolvedDefault.provider &&
+          resolved.ref.model === resolvedDefault.model;
+        applyModelOverrideToSessionEntry({
+          entry: nextEntry,
+          selection: {
+            provider: resolved.ref.provider,
+            model: resolved.ref.model,
+            isDefault,
+          },
+        });
+      }
       sessionEntry = nextEntry;
       const sendPolicy = resolveSendPolicy({
         cfg,
@@ -368,6 +410,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         to: resolvedTo,
         sessionId: resolvedSessionId,
         sessionKey: requestedSessionKey,
+        sessionEntry,
         thinking: request.thinking,
         deliver,
         deliveryTargetMode,
