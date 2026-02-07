@@ -1,9 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import {
-  estimateTokens,
-  type ExtensionAPI,
-  type FileOperations,
-} from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, type FileOperations } from "@mariozechner/pi-coding-agent";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
@@ -23,10 +19,6 @@ const TURN_PREFIX_INSTRUCTIONS =
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
-const TOOL_RESULT_TRUNCATION_NOTICE = "[Tool output truncated for compaction]";
-const TOOL_RESULT_MAX_TOKEN_SHARE = 0.02;
-const TOOL_RESULT_MIN_TOKENS = 400;
-const TOOL_RESULT_MIN_CHARS = 2000;
 
 type ToolFailure = {
   toolCallId: string;
