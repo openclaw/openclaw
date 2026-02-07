@@ -517,4 +517,13 @@
 
 ---
 
-*Last updated: 2026-02-07 14:06*
+### 최근 커밋 (자동 동기화)
+<!-- AUTO:subrepo-commits:START -->
+- `061a648 docs: I020 — Product Registration Module implementation status (28/32, 87.5%) (02-07)`
+- `7588b5c docs: T018 — Web UI Product Registration E2E Test (7/7 PASS) (02-07)`
+- `4b30043 refactor(D020): split monolithic product dialogs into reusable sub-components (02-07)`
+- `9ebf4d7 feat: mark PRODUCT_OPTIONS_FALLBACK as deprecated, API-driven product lists already active (02-07)`
+- `9062570 refactor: extract image_storage service from product_images router (02-07)`
+<!-- AUTO:subrepo-commits:END -->
+
+*Last updated: 2026-02-07*
