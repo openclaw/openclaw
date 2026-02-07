@@ -1049,7 +1049,11 @@ export function createExecTool(
         }
         const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
 
-        const nodeEnv = params.env ? { ...params.env } : undefined;
+        const nodeEnv = params.env
+          ? { ...agentEnvVars, ...params.env }
+          : Object.keys(agentEnvVars).length > 0
+            ? { ...agentEnvVars }
+            : undefined;
 
         if (nodeEnv) {
           applyPathPrepend(nodeEnv, defaultPathPrepend, { requireExisting: true });
