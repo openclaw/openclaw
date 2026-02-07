@@ -519,11 +519,11 @@
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `9ce2b34 docs: I029 pipeline result viewer implementation + T019 deploy verification + STATUS update (02-07)`
 - `486914c feat(web): export PipelineTimeline from products index, build passes (T5) (02-07)`
 - `0286d6c fix: correct Lead.interest_product_ids field name in pipeline-status endpoint (02-07)`
 - `1da4b62 feat(web): add AIResultsViewer component with copy/usp/translation cards (T3) (02-07)`
 - `149d15f feat(web): add PipelineTimeline component (T2) (02-07)`
-- `2e022ae feat(web): add AI Results API functions + React Query hooks (T1) (02-07)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-07*
