@@ -72,3 +72,106 @@ export const ConnectorSearchSchema = Type.Object({
     }),
   ),
 });
+
+// ============================================================================
+// Filesystem Tool Schemas (for S3-backed project virtual disk)
+// ============================================================================
+
+export const FsReadSchema = Type.Object({
+  path: Type.String({
+    description:
+      "Relative path to the file within the project (e.g., 'documents/report.md', 'config.json')",
+  }),
+  start_line: Type.Optional(
+    Type.Number({
+      description:
+        "Line number to start reading from (1-indexed). If omitted, reads from the beginning.",
+    }),
+  ),
+  end_line: Type.Optional(
+    Type.Number({
+      description: "Line number to stop reading at (inclusive). If omitted, reads to the end.",
+    }),
+  ),
+});
+
+export const FsWriteSchema = Type.Object({
+  path: Type.String({
+    description:
+      "Relative path to the file within the project (e.g., 'documents/report.md', 'data/config.json')",
+  }),
+  content: Type.String({
+    description:
+      "Content to write to the file. This will create a new file or overwrite an existing one.",
+  }),
+});
+
+export const FsEditSchema = Type.Object({
+  path: Type.String({
+    description: "Relative path to the file within the project",
+  }),
+  old_content: Type.String({
+    description:
+      "The exact content to find in the file. Must match exactly (including whitespace).",
+  }),
+  new_content: Type.String({
+    description: "The new content to replace the old content with.",
+  }),
+  replace_all: Type.Optional(
+    Type.Boolean({
+      description:
+        "If true, replaces all occurrences. If false (default), replaces only the first occurrence.",
+    }),
+  ),
+});
+
+export const FsDeleteSchema = Type.Object({
+  path: Type.String({
+    description: "Relative path to the file to delete within the project",
+  }),
+});
+
+export const FsListSchema = Type.Object({
+  path: Type.Optional(
+    Type.String({
+      description:
+        "Relative path to the directory to list. If omitted, lists the project root directory.",
+    }),
+  ),
+  recursive: Type.Optional(
+    Type.Boolean({
+      description:
+        "If true, lists all files recursively. If false (default), lists only immediate children.",
+    }),
+  ),
+});
+
+export const FsMkdirSchema = Type.Object({
+  path: Type.String({
+    description: "Relative path of the directory to create within the project",
+  }),
+});
+
+export const FsRmdirSchema = Type.Object({
+  path: Type.String({
+    description: "Relative path of the directory to delete within the project",
+  }),
+  recursive: Type.Optional(
+    Type.Boolean({
+      description:
+        "If true, deletes the directory and all its contents. If false (default), fails if directory is not empty.",
+    }),
+  ),
+});
+
+export const FsExistsSchema = Type.Object({
+  path: Type.String({
+    description: "Relative path to check for existence within the project",
+  }),
+});
+
+export const FsStatSchema = Type.Object({
+  path: Type.String({
+    description: "Relative path to get metadata for within the project",
+  }),
+});

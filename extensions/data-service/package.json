@@ -3,6 +3,9 @@
   "version": "2026.2.3",
   "description": "OpenClaw Data-Service connector tools plugin",
   "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.985.0"
+  },
   "devDependencies": {
     "openclaw": "workspace:*"
   },

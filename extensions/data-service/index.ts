@@ -1,7 +1,8 @@
 /**
  * Data-Service Connector Plugin for OpenClaw
  *
- * Provides 7 connector tools for accessing 70+ external service integrations.
+ * Provides 7 connector tools for accessing 70+ external service integrations,
+ * plus 9 filesystem tools for S3-backed project virtual disks.
  *
  * ## Wexa Coworker Web Integration
  *
@@ -17,6 +18,7 @@
  *   sessionKey: "user-123-session-abc",
  *   orgId: "org_wexa",
  *   userId: "user_123",
+ *   projectId: "project_456", // Required for filesystem tools
  * });
  *
  * // 2. Call the agent with the same sessionKey
@@ -33,14 +35,18 @@
  *
  * ### Gateway Methods:
  *
- * - `data-service.setContext` — Set orgId/userId for a session (REQUIRED before agent calls)
+ * - `data-service.setContext` — Set orgId/userId/projectId for a session (REQUIRED before agent calls)
  * - `data-service.clearContext` — Clear context when session ends
  * - `data-service.status` — Get plugin status
  *
  * ### Environment Variables:
  *
- * - `DATA_SERVICE_URL` — Base URL for the Data-Service API (required to enable plugin)
+ * - `DATA_SERVICE_URL` — Base URL for the Data-Service API (required to enable connector tools)
  * - `DATA_SERVICE_SERVER_KEY` — Server key for system-level API calls
+ * - `S3_BUCKET` — S3 bucket name (required to enable filesystem tools)
+ * - `S3_REGION` — AWS region (default: us-east-1)
+ * - `AWS_ACCESS_KEY_ID` — AWS access key (optional, uses default credential chain)
+ * - `AWS_SECRET_ACCESS_KEY` — AWS secret key (optional, uses default credential chain)
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
@@ -53,9 +59,10 @@ import {
   clearCurrentSessionKey,
   getSessionContextCount,
 } from "./src/request-context.js";
+import { createFilesystemTools, FILESYSTEM_TOOL_NAMES } from "./src/tool-filesystem.js";
 
-/** Tool names registered by this plugin */
-const TOOL_NAMES = [
+/** Connector tool names registered by this plugin */
+const CONNECTOR_TOOL_NAMES = [
   "connector_search",
   "connector_execute",
   "connector_list",
@@ -64,6 +71,9 @@ const TOOL_NAMES = [
   "connector_lookup",
   "user_connectors",
 ] as const;
+
+/** All tool names registered by this plugin */
+const TOOL_NAMES = [...CONNECTOR_TOOL_NAMES, ...FILESYSTEM_TOOL_NAMES] as const;
 
 /** Confirmation guidance prepended to the agent prompt */
 const CONFIRMATION_GUIDANCE = `## Connector Tools — Operating Rules
@@ -148,10 +158,45 @@ const CONFIRMATION_GUIDANCE = `## Connector Tools — Operating Rules
 - **If an action fails, clearly explain:** what you tried, what error occurred, and what the user can do.
 `;
 
+/** Filesystem guidance prepended to the agent prompt when S3 is enabled */
+const FILESYSTEM_GUIDANCE = `## Project Filesystem — Operating Rules
+
+### Virtual Disk
+Each project has an isolated virtual disk stored in S3. All file operations are automatically scoped to the current project.
+- Files are stored at: s3://{bucket}/{orgId}/{projectId}/
+- You can only access files within the current project
+- Path traversal (..) is not allowed
+- All paths are relative to the project root
+
+### Available Operations
+| Tool | Description |
+|------|-------------|
+| \`fs_read\` | Read file contents (entire file or specific lines) |
+| \`fs_write\` | Create or overwrite a file |
+| \`fs_edit\` | Find and replace content in a file |
+| \`fs_delete\` | Delete a file |
+| \`fs_list\` | List files and directories |
+| \`fs_mkdir\` | Create a directory |
+| \`fs_rmdir\` | Delete a directory |
+| \`fs_exists\` | Check if a path exists |
+| \`fs_stat\` | Get file metadata (size, modified date) |
+
+### Best Practices
+1. **Explore first**: Use \`fs_list\` to understand the project structure before reading/writing files.
+2. **Read before edit**: Use \`fs_read\` to see exact file content before using \`fs_edit\`.
+3. **Use line ranges**: For large files, use \`fs_read\` with \`start_line\` and \`end_line\` parameters.
+4. **Prefer edit over write**: Use \`fs_edit\` for small changes instead of rewriting entire files.
+5. **Confirm deletions**: Always confirm with the user before deleting files or directories.
+
+### PULL vs PUSH for Filesystem
+- **PULL (safe)**: \`fs_read\`, \`fs_list\`, \`fs_exists\`, \`fs_stat\` — execute immediately
+- **PUSH (confirm first)**: \`fs_write\`, \`fs_edit\`, \`fs_delete\`, \`fs_mkdir\`, \`fs_rmdir\` — show preview and get user confirmation
+`;
+
 const dataServicePlugin = {
   id: "data-service",
   name: "Data-Service Connectors",
-  description: "Access 70+ external service integrations through the Wexa Data-Service API",
+  description: "Access 70+ external service integrations and S3-backed project filesystem",
 
   register(api: OpenClawPluginApi) {
     // Capture plugin config from the api object (available at registration time)
@@ -160,25 +205,35 @@ const dataServicePlugin = {
     // Register tool factory -- plugin loader calls this with context at agent start
     api.registerTool(
       () => {
-        if (!dsConfig.enabled) {
-          return null;
-        }
-        return createDataServiceTools(dsConfig);
+        // Collect all tools based on configuration
+        const connectorTools = dsConfig.enabled ? createDataServiceTools(dsConfig) : [];
+        const fsTools = dsConfig.s3?.enabled ? createFilesystemTools(dsConfig) : [];
+        const allTools = [...connectorTools, ...fsTools];
+
+        return allTools.length > 0 ? allTools : null;
       },
       { names: [...TOOL_NAMES] },
     );
 
     // Inject confirmation workflow guidance into the agent's system prompt
-    api.registerHook(
-      "before_agent_start",
-      () => {
-        return { prependContext: CONFIRMATION_GUIDANCE };
-      },
-      {
-        name: "data-service-confirmation-guidance",
-        description: "Injects connector confirmation workflow into system prompt",
-      },
-    );
+    api.on("before_agent_start", () => {
+      const parts: string[] = [];
+
+      // Add connector guidance if enabled
+      if (dsConfig.enabled) {
+        parts.push(CONFIRMATION_GUIDANCE);
+      }
+
+      // Add filesystem guidance if S3 is enabled
+      if (dsConfig.s3?.enabled) {
+        parts.push(FILESYSTEM_GUIDANCE);
+      }
+
+      if (parts.length > 0) {
+        return { prependContext: parts.join("\n\n") };
+      }
+      return {};
+    });
 
     // Set current session key before each tool call so tools can look up context
     api.on("before_tool_call", (_event, ctx) => {
@@ -307,14 +362,22 @@ const dataServicePlugin = {
     api.registerGatewayMethod("data-service.status", ({ respond }) => {
       respond(true, {
         status: "ok",
-        enabled: dsConfig.enabled,
-        url: dsConfig.url,
-        hasServerKey: !!dsConfig.serverKey,
+        connectors: {
+          enabled: dsConfig.enabled,
+          url: dsConfig.url,
+          hasServerKey: !!dsConfig.serverKey,
+          tools: [...CONNECTOR_TOOL_NAMES],
+        },
+        filesystem: {
+          enabled: dsConfig.s3?.enabled ?? false,
+          bucket: dsConfig.s3?.bucket,
+          region: dsConfig.s3?.region,
+          tools: dsConfig.s3?.enabled ? [...FILESYSTEM_TOOL_NAMES] : [],
+        },
         activeSessions: getSessionContextCount(),
-        tools: [...TOOL_NAMES],
         integration: {
           required:
-            "Call data-service.setContext with sessionKey, orgId, userId before agent calls",
+            "Call data-service.setContext with sessionKey, orgId, userId (and projectId for filesystem) before agent calls",
           documentation: "See plugin header comments for full integration guide",
         },
       });
