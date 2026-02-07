@@ -31,14 +31,12 @@ export class SynologyNasWebhookSender {
         throw new Error(`HTTP ${response.status}: ${await response.text()}`);
       }
     } catch (error) {
-      throw new Error(`Failed to send to Synology Chat: ${formatErrorMessage(error)}`);
+      throw new Error(`Failed to send to Synology Chat: ${formatErrorMessage(error)}`, {
+        cause: error,
+      });
     }
   }
 }
 
-// 保留原始類別以向後兼容
-export class SynologyWebhookSender extends SynologyNasWebhookSender {
-  constructor(webhookUrl: string) {
-    super(webhookUrl);
-  }
-}
+// Keep original class for backward compatibility
+export class SynologyWebhookSender extends SynologyNasWebhookSender {}

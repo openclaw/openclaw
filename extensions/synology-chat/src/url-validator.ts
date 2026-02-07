@@ -6,7 +6,7 @@ export function validateNasIncomingWebhookUrl(url: string | undefined): string |
   try {
     const parsed = new URL(url);
 
-    // 基本驗證
+    // Basic validation
     if (!["http:", "https:"].includes(parsed.protocol)) {
       return "NAS Incoming Webhook URL must use HTTP or HTTPS";
     }
@@ -15,45 +15,56 @@ export function validateNasIncomingWebhookUrl(url: string | undefined): string |
       return "NAS Incoming Webhook URL must have a hostname";
     }
 
-    return null; // 驗證通過
-  } catch (error) {
+    return null; // Validation passed
+  } catch {
     return "Invalid URL format";
   }
 }
 
-// 同時保留原函數以向後兼容
+// Keep original function for backward compatibility
 export function validateWebhookUrl(url: string | undefined): string | null {
   return validateNasIncomingWebhookUrl(url);
 }
 
-// 從配置載入時的驗證
+// Validation when loading from configuration
 export function loadAndValidateNasIncomingWebhookUrl(
-  config: any,
+  config: unknown,
   accountId: string,
 ): string | null {
-  // 直接從配置中提取 nasIncomingWebhookUrl (優先) 或 webhookUrl (向後兼容)
-  const synologyChatConfig = config.channels?.["synology-chat"];
-  let accountConfig: any;
+  // Extract nasIncomingWebhookUrl (priority) or webhookUrl (backward compatibility) from config
+  const synologyChatConfig =
+    config && typeof config === "object" && config !== null && "channels" in config
+      ? ((config as { channels?: Record<string, unknown> }).channels?.["synology-chat"] as
+          | Record<string, unknown>
+          | undefined)
+      : undefined;
+
+  let accountConfig: Record<string, unknown> | undefined;
 
   if (accountId === "default" || accountId === "main") {
     accountConfig = synologyChatConfig;
   } else {
-    accountConfig = synologyChatConfig?.accounts?.[accountId];
+    accountConfig =
+      synologyChatConfig &&
+      typeof synologyChatConfig === "object" &&
+      "accounts" in synologyChatConfig
+        ? (synologyChatConfig.accounts as Record<string, Record<string, unknown>>)?.[accountId]
+        : undefined;
   }
 
-  // 優先使用 nasIncomingWebhookUrl，否則使用 webhookUrl
+  // Prefer nasIncomingWebhookUrl, fallback to webhookUrl
   const url = accountConfig?.nasIncomingWebhookUrl || accountConfig?.webhookUrl;
 
-  const error = validateNasIncomingWebhookUrl(url);
+  const error = validateNasIncomingWebhookUrl(typeof url === "string" ? url : undefined);
   if (error) {
     console.error(`[Synology Chat] Invalid NAS incoming webhook URL: ${error}`);
     return null;
   }
 
-  return url!;
+  return typeof url === "string" ? url : null;
 }
 
-// 向後兼容的函數
-export function loadAndValidateWebhookUrl(config: any, accountId: string): string | null {
+// Backward compatibility function
+export function loadAndValidateWebhookUrl(config: unknown, accountId: string): string | null {
   return loadAndValidateNasIncomingWebhookUrl(config, accountId);
 }
