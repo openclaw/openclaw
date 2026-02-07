@@ -1,0 +1,10 @@
+{
+  "id": "skill-guard",
+  "name": "Skill Guard",
+  "description": "Store-based integrity verification and sideload scanning for Skills.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -22,6 +22,7 @@ import {
   resolveOpenClawMetadata,
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
+import { getSkillLoadGuard } from "./load-guard.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 
@@ -168,6 +169,21 @@ function loadSkillEntries(
   }
   for (const skill of workspaceSkills) {
     merged.set(skill.name, skill);
+  }
+
+  // --- Skill Guard: evaluate loaded skills before building entries ---
+  const guard = getSkillLoadGuard();
+  if (guard) {
+    const verdict = guard.evaluate(merged);
+    for (const name of verdict.blocked) {
+      skillsLogger.warn(`skill blocked by guard: ${name}`);
+      merged.delete(name);
+    }
+    if (verdict.warnings) {
+      for (const w of verdict.warnings) {
+        skillsLogger.info(`skill guard warning [${w.name}]: ${w.message}`);
+      }
+    }
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values()).map((skill) => {

@@ -541,6 +541,28 @@ export const OpenClawSchema = z
               .strict(),
           )
           .optional(),
+        guard: z
+          .object({
+            enabled: z.boolean().optional(),
+            trustedStores: z
+              .array(
+                z
+                  .object({
+                    name: z.string().optional(),
+                    url: z.string(),
+                    apiKey: z.string().optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
+            sideloadPolicy: z
+              .union([z.literal("warn"), z.literal("block-critical"), z.literal("block-all")])
+              .optional(),
+            syncIntervalSeconds: z.number().int().min(10).optional(),
+            auditLog: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

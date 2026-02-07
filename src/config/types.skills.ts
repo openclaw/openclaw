@@ -22,10 +22,36 @@ export type SkillsInstallConfig = {
   nodeManager?: "npm" | "pnpm" | "yarn" | "bun";
 };
 
+export type SkillStoreConfig = {
+  /** Display name for the store (used in logs and UI). */
+  name?: string;
+  /** Manifest API base URL for this trusted store. */
+  url: string;
+  /** Optional API key (supports `${ENV_VAR}` substitution). */
+  apiKey?: string;
+};
+
+export type SkillGuardSideloadPolicy = "warn" | "block-critical" | "block-all";
+
+export type SkillGuardConfig = {
+  /** Master switch, defaults to true when the guard section is present. */
+  enabled?: boolean;
+  /** Ordered list of trusted Skill Store endpoints. */
+  trustedStores?: SkillStoreConfig[];
+  /** Policy for sideloaded (non-store) skills. Defaults to "block-critical". */
+  sideloadPolicy?: SkillGuardSideloadPolicy;
+  /** Manifest sync interval in seconds. Defaults to 300. */
+  syncIntervalSeconds?: number;
+  /** Enable audit logging. Defaults to true. */
+  auditLog?: boolean;
+};
+
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   entries?: Record<string, SkillConfig>;
+  /** Skill Guard store verification configuration. */
+  guard?: SkillGuardConfig;
 };
