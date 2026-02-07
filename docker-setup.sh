@@ -11,17 +11,22 @@ EOF
 }
 
 build_only=false
-for arg in "$@"; do
-  case "$arg" in
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     --help|-h)
       usage
       exit 0
       ;;
     --build-only)
       build_only=true
+      shift
+      ;;
+    --)
+      shift
+      break
       ;;
     *)
-      echo "Unknown argument: $arg" >&2
+      echo "Unknown argument: $1" >&2
       usage >&2
       exit 2
       ;;
