@@ -4,18 +4,22 @@ import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition
 import { truncateToolNameForOpenAI } from "./tool-policy.js";
 
 describe("pi tool definition adapter", () => {
+  type TestExecute = (
+    toolCallId: string,
+    params: unknown,
+    arg3?: unknown,
+    arg4?: unknown,
+    arg5?: unknown,
+  ) => Promise<{ details: Record<string, unknown> }>;
+
   const executeTool = async (
-    execute: unknown,
+    toolDef: {
+      execute: unknown;
+    },
     toolCallId: string,
     params: Record<string, unknown>,
   ) => {
-    const run = execute as (
-      toolCallId: string,
-      params: unknown,
-      arg3?: unknown,
-      arg4?: unknown,
-      arg5?: unknown,
-    ) => Promise<{ details: Record<string, unknown> }>;
+    const run = toolDef.execute as TestExecute;
     return await run(toolCallId, params, undefined, undefined, undefined);
   };
 
@@ -31,7 +35,11 @@ describe("pi tool definition adapter", () => {
     };
 
     const defs = toToolDefinitions([tool]);
-    const result = await executeTool(defs[0].execute, "call1", {});
+    const [def] = defs;
+    if (!def) {
+      throw new Error("Expected tool definition");
+    }
+    const result = await executeTool(def, "call1", {});
 
     expect(result.details).toMatchObject({
       status: "error",
@@ -53,7 +61,11 @@ describe("pi tool definition adapter", () => {
     };
 
     const defs = toToolDefinitions([tool]);
-    const result = await executeTool(defs[0].execute, "call2", {});
+    const [def] = defs;
+    if (!def) {
+      throw new Error("Expected tool definition");
+    }
+    const result = await executeTool(def, "call2", {});
 
     expect(result.details).toMatchObject({
       status: "error",
@@ -78,10 +90,15 @@ describe("pi tool definition adapter", () => {
       callbackToolName = toolName;
     });
 
-    const expectedApiName = truncateToolNameForOpenAI(originalName);
-    expect(defs[0].name).toBe(expectedApiName);
+    const [def] = defs;
+    if (!def) {
+      throw new Error("Expected tool definition");
+    }
 
-    const result = await executeTool(defs[0].execute, "call3", {});
+    const expectedApiName = truncateToolNameForOpenAI(originalName);
+    expect(def.name).toBe(expectedApiName);
+
+    const result = await executeTool(def, "call3", {});
 
     expect(callbackToolName).toBe(expectedApiName);
     expect(result.details).toMatchObject({
