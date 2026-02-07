@@ -1,4 +1,4 @@
-import { emptyPluginConfigSchema } from "clawdbot/plugin-sdk";
+import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 
 const PROVIDER_ID = "ollama";
 const PROVIDER_LABEL = "Ollama (Local)";
