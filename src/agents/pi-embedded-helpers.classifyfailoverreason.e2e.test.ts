@@ -39,6 +39,21 @@ describe("classifyFailoverReason", () => {
     ).toBeNull();
     expect(classifyFailoverReason("image exceeds 5 MB maximum")).toBeNull();
   });
+  it("does not false-positive on 429 embedded in file paths", () => {
+    // Regression: mkdtemp can generate suffixes like "429gnJ", and the error
+    // message includes the full path.  The bare /429/ regex (no word boundary)
+    // matched the substring, misclassifying auth errors as rate_limit.
+    expect(
+      classifyFailoverReason(
+        'No API key found for provider "openai". Auth store: /tmp/openclaw-agent-429gnJ/auth-profiles.json',
+      ),
+    ).toBe("auth");
+    expect(
+      classifyFailoverReason(
+        'No API key found for provider "openai". Auth store: C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\openclaw-agent-429gnJ\\auth-profiles.json',
+      ),
+    ).toBe("auth");
+  });
   it("classifies OpenAI usage limit errors as rate_limit", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
       "rate_limit",
