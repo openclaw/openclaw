@@ -2,7 +2,7 @@ import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
-import type { IntentContext, SkillDefinition } from "./prompt-engine/types.js";
+import type { IntentContext, SkillDefinition, SkillLibrary } from "./prompt-engine/types.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { SkillInjector } from "./prompt-engine/injector.js";
@@ -166,7 +166,7 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
   ];
 }
 
-function selectSkillsForContext(library: unknown, context: IntentContext): SkillDefinition[] {
+function selectSkillsForContext(library: SkillLibrary, context: IntentContext): SkillDefinition[] {
   const skills: SkillDefinition[] = [];
   const coreSkill = SkillsLoader.findSkill(library, "Context_Audit_&_Triage");
   if (coreSkill) skills.push(coreSkill);
