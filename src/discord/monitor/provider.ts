@@ -633,6 +633,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     });
   }
 
+  // Notify allowlisted users that the bot is online.
+  await sendLifecycleDM(client.rest, allowFrom, "*Back online.*").catch(() => {});
+
   const gateway = client.getPlugin<GatewayPlugin>("gateway");
   if (gateway) {
     registerGateway(account.accountId, gateway);
@@ -703,6 +706,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
     });
   } finally {
+    // Notify allowlisted users before cleanup (best-effort, 3s timeout).
+    await sendLifecycleDM(client.rest, allowFrom, "*Shutting down...*").catch(() => {});
     unregisterGateway(account.accountId);
     stopGatewayLogging();
     if (helloTimeoutId) {
@@ -729,4 +734,43 @@ async function clearDiscordNativeCommands(params: {
   } catch (err) {
     params.runtime.error?.(danger(`discord: failed to clear native commands: ${String(err)}`));
   }
+}
+
+/**
+ * Send an italicized lifecycle DM (startup/shutdown) to all allowlisted users.
+ * Best-effort with a timeout so it never blocks startup or delays shutdown.
+ */
+async function sendLifecycleDM(
+  rest: Client["rest"],
+  allowFrom: Array<string | number> | undefined,
+  message: string,
+  timeoutMs = 3000,
+): Promise<void> {
+  if (!allowFrom?.length) {
+    return;
+  }
+  // Filter to Discord snowflake IDs (resolved user IDs are 17-22 digit numbers).
+  const userIds = allowFrom.map(String).filter((id) => /^\d{15,22}$/.test(id));
+  if (userIds.length === 0) {
+    return;
+  }
+
+  const send = async () => {
+    for (const userId of userIds) {
+      try {
+        const dmChannel = (await rest.post(Routes.userChannels(), {
+          body: { recipient_id: userId },
+        })) as { id: string };
+        if (dmChannel?.id) {
+          await rest.post(Routes.channelMessages(dmChannel.id), {
+            body: { content: message },
+          });
+        }
+      } catch {
+        // Best-effort; don't block lifecycle events.
+      }
+    }
+  };
+
+  await Promise.race([send(), new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))]);
 }
