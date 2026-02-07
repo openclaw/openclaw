@@ -709,11 +709,13 @@ function extractMaiossKanbanColumns(memoryText: string): KanbanColumns {
 function extractBeautyKanbanColumns(memoryText: string): KanbanColumns {
   const columns: KanbanColumns = {};
 
-  // Done: "🔵 완료" section checked items, most recent 5
-  // The heading may have a date suffix like "🔵 완료 (2026-02-03)"
+  // -----------------------------------------------------------------------
+  // Done: Collect [x] items from multiple sources (most recent 8)
+  // -----------------------------------------------------------------------
   const doneItems: string[] = [];
+
+  // Source 1: "🔵 완료" section (legacy, e.g. "🔵 완료 (2026-02-03)")
   const nextActionText = extractSectionContent(memoryText, "다음 액션") ?? "";
-  // Find any heading starting with "🔵 완료" (with or without date)
   const completedHeadingMatch = nextActionText.match(
     /^###\s+(🔵\s+완료(?:\s*\([^)]+\))?)\s*$/m,
   );
@@ -725,18 +727,55 @@ function extractBeautyKanbanColumns(memoryText: string): KanbanColumns {
       3,
     );
     if (completedSection) {
-      const allChecked = completedSection
+      const checked = completedSection
         .split("\n")
         .filter((line) => /^\s*-\s*\[x\]/i.test(line));
-      doneItems.push(...allChecked.slice(-5));
+      doneItems.push(...checked);
     }
   }
-  columns["✅ Done"] = doneItems;
 
-  // In Progress: currently empty — placeholder
+  // Source 2: Date sections (### 2026-MM-DD) — bold [x] items (key milestones)
+  const dateSectionPattern = /^###\s+2026-\d{2}-\d{2}/gm;
+  let dateMatch: RegExpExecArray | null;
+  while ((dateMatch = dateSectionPattern.exec(memoryText)) !== null) {
+    const startIdx = dateMatch.index;
+    const rest = memoryText.slice(startIdx + dateMatch[0].length);
+    const nextHeading = rest.search(/^#{1,3}\s/m);
+    const sectionText =
+      nextHeading === -1 ? rest : rest.slice(0, nextHeading);
+    const checked = sectionText
+      .split("\n")
+      .filter((line) => /^\s*-\s*\[x\]\s+\*\*/.test(line));
+    doneItems.push(...checked);
+  }
+
+  // Source 3: "🎊" milestone lines (e.g. Admin v1.0.0)
+  const milestoneLines = memoryText
+    .split("\n")
+    .filter((line) => /^###\s+🎊/.test(line));
+  for (const ml of milestoneLines) {
+    doneItems.push(`- [x] ${ml.replace(/^#+\s*/, "")}`);
+  }
+
+  // Deduplicate by trimmed text, keep last 8
+  const seen = new Set<string>();
+  const uniqueDone = doneItems.filter((item) => {
+    const key = item.replace(/^\s*-\s*\[x\]\s*/i, "").trim();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  columns["✅ Done"] = uniqueDone.slice(-8);
+
+  // -----------------------------------------------------------------------
+  // In Progress: currently empty placeholder
+  // -----------------------------------------------------------------------
   columns["🔄 In Progress"] = [];
 
-  // Todo: "🟢 다음 단계" unchecked items
+  // -----------------------------------------------------------------------
+  // Todo: "🟢 다음 단계" unchecked + Phase C/D style unchecked items
+  // -----------------------------------------------------------------------
+  const todoItems: string[] = [];
   const nextActionSection = extractSectionContent(memoryText, "다음 액션");
   if (nextActionSection) {
     const nextSection = extractSectionContent(
@@ -745,15 +784,33 @@ function extractBeautyKanbanColumns(memoryText: string): KanbanColumns {
       3,
     );
     if (nextSection) {
-      columns["📋 Todo"] = extractCheckboxItems(nextSection, true);
-    } else {
-      columns["📋 Todo"] = [];
+      todoItems.push(...extractCheckboxItems(nextSection, true));
     }
-  } else {
-    columns["📋 Todo"] = [];
   }
 
+  // Capture unchecked [ ] items that are Phase/pending tasks from date sections
+  const allLines = memoryText.split("\n");
+  for (const line of allLines) {
+    if (
+      /^\s*-\s*\[\s\]\s+\*\*Phase\s+[C-Z]/i.test(line) ||
+      /^\s*-\s*\[\s\]\s+\*\*.*⏳/.test(line)
+    ) {
+      todoItems.push(line.trim());
+    }
+  }
+
+  // Deduplicate
+  const seenTodo = new Set<string>();
+  columns["📋 Todo"] = todoItems.filter((item) => {
+    const key = item.replace(/^\s*-\s*\[\s?\]\s*/i, "").trim();
+    if (seenTodo.has(key)) return false;
+    seenTodo.add(key);
+    return true;
+  });
+
+  // -----------------------------------------------------------------------
   // Waiting (지니): "🟡 지니 액션 필요" unchecked items
+  // -----------------------------------------------------------------------
   if (nextActionSection) {
     const jiniSection = extractSectionContent(
       `## dummy\n${nextActionSection}`,
@@ -769,10 +826,11 @@ function extractBeautyKanbanColumns(memoryText: string): KanbanColumns {
     columns["🟡 Waiting (지니)"] = [];
   }
 
+  // -----------------------------------------------------------------------
   // Blocked: detect Zalo and other blocking patterns
+  // -----------------------------------------------------------------------
   const blockedItems: string[] = [];
   const blockPatterns = /대기|차단|blocked|⚠️.*필요|번호 필요/i;
-  const allLines = memoryText.split("\n");
   for (const line of allLines) {
     if (blockPatterns.test(line) && /^\s*-\s*\[\s\]/.test(line)) {
       blockedItems.push(line.trim());
