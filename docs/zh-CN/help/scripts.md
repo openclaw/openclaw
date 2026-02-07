@@ -9,7 +9,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: bfedc3c123c4a43b351f793e2137568786f90732723da5fd223c2a088bc59e43
-  source_path: scripts.md
+  source_path: help/scripts.md
   workflow: 15
 ---
 

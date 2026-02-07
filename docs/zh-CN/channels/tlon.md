@@ -34,7 +34,7 @@ openclaw plugins install @openclaw/tlon
 openclaw plugins install ./extensions/tlon
 ```
 
-详情：[插件](/plugin)
+详情：[插件](/tools/plugin)
 
 ## 设置
 

@@ -9,7 +9,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: 318f1048451a1910b70522e2f7f9dfc87084de26d9e3938a29d372eed32244a8
-  source_path: bedrock.md
+  source_path: providers/bedrock.md
   workflow: 15
 ---
 

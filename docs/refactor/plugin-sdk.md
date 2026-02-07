@@ -211,4 +211,4 @@ Notes:
 - New connector templates depend only on SDK + runtime.
 - External plugins can be developed and updated without core source access.
 
-Related docs: [Plugins](/plugin), [Channels](/channels/index), [Configuration](/gateway/configuration).
+Related docs: [Plugins](/tools/plugin), [Channels](/channels/index), [Configuration](/gateway/configuration).

@@ -8,7 +8,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: b727a053edf51f6e7b5c0c324c2fc9c9789a9796c37f622418bd555e8b5a0ec4
-  source_path: concepts/groups.md
+  source_path: channels/groups.md
   workflow: 15
 ---
 
@@ -376,4 +376,4 @@ requireMention? 是 -> 被提及? 否 -> 仅存储为上下文
 
 ## WhatsApp 特定内容
 
-参见[群消息](/concepts/group-messages)了解 WhatsApp 专有行为（历史注入、提及处理详情）。
+参见[群消息](/channels/group-messages)了解 WhatsApp 专有行为（历史注入、提及处理详情）。
