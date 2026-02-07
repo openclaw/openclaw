@@ -29,7 +29,6 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
-import { resolveHeartbeatPrompt } from "./heartbeat-runner.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import {
   resolveHeartbeatDeliveryTarget,
@@ -39,7 +38,15 @@ import {
 const log = createSubsystemLogger("idle-reminder");
 
 const DEFAULT_IDLE_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
-const MAX_REMIND_COUNT = 3;
+const MAX_REMIND_COUNT = 1;
+
+/** Build the idle reminder prompt, embedding the agent's last reply for context. */
+function buildIdleReminderPrompt(lastReplyText: string): string {
+  const replyBlock = lastReplyText.trim()
+    ? `Here is your previous last reply:\n"""\n${lastReplyText.trim()}\n"""\n\n`
+    : "";
+  return `${replyBlock}Check if there's anything you should follow up on with the user. Say it, then DO it — words without action = nothing happened. If nothing to follow up, reply HEARTBEAT_OK.`;
+}
 
 type IdleReminderState = {
   sessionKey: string;
@@ -50,6 +57,8 @@ type IdleReminderState = {
   count: number;
   /** Byte offset of transcript file when timer started / last checked. */
   lastTranscriptSize: number;
+  /** The agent's last reply text that triggered this idle cycle. */
+  lastReplyText: string;
 };
 
 // Track active idle reminders per session
@@ -65,6 +74,8 @@ export function startIdleReminder(params: {
   /** @deprecated No longer used in v2 — kept for callsite compat. */
   updatedAt?: number;
   timeoutMs?: number;
+  /** The agent's last reply text — included in the idle reminder prompt. */
+  lastReplyText?: string;
 }): void {
   const { sessionKey, timeoutMs = DEFAULT_IDLE_TIMEOUT_MS } = params;
   const storePath = params.storePath ?? resolveStorePath(undefined, {});
@@ -85,6 +96,7 @@ export function startIdleReminder(params: {
     timeoutMs,
     count: 0,
     lastTranscriptSize,
+    lastReplyText: params.lastReplyText ?? "",
   };
 
   state.timer = setTimeout(() => {
@@ -255,7 +267,7 @@ async function checkAndMaybeRemind(sessionKey: string): Promise<void> {
   });
 
   try {
-    await sendSimulatedHeartbeat(sessionKey, state.storePath);
+    await sendSimulatedHeartbeat(sessionKey, state.storePath, state.lastReplyText);
   } catch (err) {
     log.error("simulated heartbeat failed", { sessionKey, error: String(err) });
   }
@@ -278,7 +290,11 @@ async function checkAndMaybeRemind(sessionKey: string): Promise<void> {
 // Simulated heartbeat: getReplyFromConfig + deliverOutboundPayloads
 // ---------------------------------------------------------------------------
 
-async function sendSimulatedHeartbeat(sessionKey: string, storePath: string): Promise<void> {
+async function sendSimulatedHeartbeat(
+  sessionKey: string,
+  storePath: string,
+  lastReplyText: string,
+): Promise<void> {
   const cfg: OpenClawConfig = loadConfig();
   const store = loadSessionStore(storePath);
   const entry = store[sessionKey];
@@ -296,8 +312,8 @@ async function sendSimulatedHeartbeat(sessionKey: string, storePath: string): Pr
 
   const { sender } = resolveHeartbeatSenderContext({ cfg, entry, delivery });
 
-  // Build MsgContext with heartbeat prompt
-  const prompt = resolveHeartbeatPrompt(cfg);
+  // Build idle reminder prompt with agent's last reply for context
+  const prompt = buildIdleReminderPrompt(lastReplyText);
   const ctx = {
     Body: prompt,
     From: sender,

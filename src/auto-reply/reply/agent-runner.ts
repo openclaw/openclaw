@@ -722,7 +722,11 @@ export async function runReplyAgent(params: {
     // Start idle reminder for non-heartbeat runs with actual payloads
     // This triggers a simulated heartbeat if the agent goes idle after responding
     if (!isHeartbeat && sessionKey && storePath && finalPayloads.length > 0) {
-      startIdleReminder({ sessionKey, storePath });
+      const lastReplyText = finalPayloads
+        .map((p) => p.text ?? "")
+        .filter(Boolean)
+        .join("\n");
+      startIdleReminder({ sessionKey, storePath, lastReplyText });
     }
 
     return finalizeWithFollowup(
