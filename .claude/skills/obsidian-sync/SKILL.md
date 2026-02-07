@@ -105,12 +105,12 @@ fi
 | 🔴 Blocked | "대기/차단/미제공" 패턴 + CAVD API 상태 |
 
 ### MAIBEAUTY
-| 컬럼 | 소스 |
-|------|------|
-| ✅ Done | `🔵 완료` 섹션 `- [x]` (최근 5개) |
-| 📋 Todo | `🟢 다음 단계` `- [ ]` 항목 |
-| 🟡 Waiting (지니) | `🟡 지니 액션 필요` `- [ ]` 항목 |
-| 🔴 Blocked | Zalo 관련 차단 패턴 |
+| 컬럼 | 소스 | 비고 |
+|------|------|------|
+| ✅ Done | 3가지 소스 합산 (최근 8개) | ① `🔵 완료` 섹션 `- [x]`, ② 날짜 섹션(`### 2026-MM-DD`) 볼드 `- [x] **...**`, ③ `### 🎊` 마일스톤 |
+| 📋 Todo | `🟢 다음 단계` `- [ ]` + `Phase C/D` 패턴 | 날짜 섹션의 `⏳` 항목도 포함 |
+| 🟡 Waiting (지니) | `🟡 지니 액션 필요` `- [ ]` 항목 | |
+| 🔴 Blocked | Zalo 관련 차단 패턴 | "대기/차단/⚠️ 필요/번호 필요" |
 
 ## Sub-repo Config
 
@@ -129,6 +129,7 @@ fi
 | vault not found | 경로 불일치 | 환경변수 `MAIBOT_OBSIDIAN_VAULT` 설정 또는 `resolveVaultPath()` 수정 |
 | push 실패 | 네트워크/충돌 | 다음 커밋 시 자동 재시도, 수동: `git push origin main` |
 | memory 파싱 실패 | 섹션 헤딩 변경 | 해당 extractor 함수의 헤딩 문자열 수정 |
+| Kanban Done 항목 누락 | memory 구조 변경 (새 섹션 추가) | extractor가 읽는 소스 확인 — MAIOSS: `### ✅` 마일스톤, MAIBEAUTY: 3가지 소스(🔵완료 + 날짜섹션 + 🎊마일스톤) |
 
 ## Activation
 
