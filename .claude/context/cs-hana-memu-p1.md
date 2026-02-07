@@ -12,8 +12,11 @@
 - [x] `src/memory/index.ts` - types.ts 내보내기 추가
 - [x] `src/agents/proactive-memory.test.ts` - 유닛 테스트 (8 tests)
 
-## 미완료
-- [ ] 커밋 (사용자 승인 대기)
+## 커밋
+- `4f7c9f026` feat: implement memU P1 with proactive memory and type classification
+
+## 리뷰
+- 예린 코드 리뷰 통과 (PASS)
 
 ## 테스트 결과
 - `pnpm vitest run src/hooks/bundled/session-memory/handler.test.ts`: 9 tests passed
@@ -71,6 +74,7 @@ date: 2026-02-04
 - src/memory/index.ts
 
 ## 다음 단계
-1. 코드 리뷰 (예린)
-2. 커밋
-3. 수동 테스트
+- [x] 코드 리뷰 (예린) — 완료
+- [x] 커밋 — `4f7c9f026`
+- [ ] 수동 테스트
+- [ ] main 머지

@@ -1,9 +1,9 @@
-# Handoff: Gateway Auth Rate Limiting → HANA
+# Handoff: Gateway Auth Rate Limiting → hayun
 
 ## 작업
 src/gateway/auth.ts에 인증 실패 rate limiting 구현 + 테스트
 
-## 조사 완료 (MIRU)
+## 조사 완료 (minseo)
 - 현재 auth.ts에 rate limiting 없음 — 실패 시 즉시 연결 종료만 수행
 - 기존 패턴 2개 확인:
   1. Auth Profile Cooldown (`src/agents/auth-profiles/usage.ts:70-76`) — 지수 백오프
@@ -29,5 +29,5 @@ src/gateway/auth.ts에 인증 실패 rate limiting 구현 + 테스트
 - `src/gateway/server/ws-connection/message-handler.ts:569-624` (현재 실패 처리)
 
 ## 완료 후
-- YURI에게 리뷰 요청
-- SENA에게 보고
+- yerin에게 리뷰 요청
+- sujin에게 보고
