@@ -20,22 +20,35 @@ import type { SessionEntry } from "../../config/sessions.js";
 const MODEL_PICK_MAX = 20;
 
 let cachedModelCatalog: ModelCatalogEntry[] | null = null;
-let catalogLoading: Promise<void> | null = null;
+let catalogLoading: Promise<ModelCatalogEntry[]> | null = null;
 
-function ensureModelCatalog(cfg: OpenClawConfig) {
-  if (cachedModelCatalog || catalogLoading) {
-    return;
+async function loadModelCatalogCached(cfg: OpenClawConfig): Promise<ModelCatalogEntry[]> {
+  if (cachedModelCatalog) {
+    return cachedModelCatalog;
   }
+
+  if (catalogLoading) {
+    await catalogLoading;
+    return cachedModelCatalog ?? [];
+  }
+
   catalogLoading = loadModelCatalog({ config: cfg })
     .then((catalog) => {
       if (catalog.length > 0) {
         cachedModelCatalog = catalog;
       }
+      return catalog;
     })
-    .catch(() => undefined)
+    .catch(() => [])
     .finally(() => {
       catalogLoading = null;
     });
+
+  return await catalogLoading;
+}
+
+function ensureModelCatalog(cfg: OpenClawConfig) {
+  void loadModelCatalogCached(cfg);
 }
 
 function listPickerChoices(params: {
@@ -121,7 +134,7 @@ export const handleModelSetCommand: CommandHandler = async (params, allowTextCom
     cfg: params.cfg,
     defaultProvider: resolvedDefault.provider,
   });
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const catalog = await loadModelCatalogCached(params.cfg);
   const allowed = buildAllowedModelSet({
     cfg: params.cfg,
     catalog,
