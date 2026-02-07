@@ -481,26 +481,36 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   // When the full handler is enabled it already has a gateway connection;
   // otherwise create a lazy one so forwarder-sent buttons still work.
   let lazyResolverClient: GatewayClient | null = null;
-  let lazyResolverReady: Promise<void> | null = null;
+  let lazyConnected = false;
+  const connectWaiters: Array<() => void> = [];
   const resolveApproval = execApprovalsHandler
     ? (id: string, decision: ExecApprovalDecision) =>
         execApprovalsHandler.resolveApproval(id, decision)
     : async (id: string, decision: ExecApprovalDecision): Promise<boolean> => {
         if (!lazyResolverClient) {
-          lazyResolverReady = new Promise<void>((resolve) => {
-            lazyResolverClient = new GatewayClient({
-              url: "ws://127.0.0.1:18789",
-              clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-              clientDisplayName: "Discord Approval Button",
-              mode: GATEWAY_CLIENT_MODES.BACKEND,
-              scopes: ["operator.approvals"],
-              onHelloOk: () => resolve(),
-              onConnectError: () => resolve(),
-            });
-            lazyResolverClient.start();
+          lazyResolverClient = new GatewayClient({
+            url: "ws://127.0.0.1:18789",
+            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            clientDisplayName: "Discord Approval Button",
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+            scopes: ["operator.approvals"],
+            onHelloOk: () => {
+              lazyConnected = true;
+              for (const w of connectWaiters.splice(0)) w();
+            },
+            onClose: () => {
+              lazyConnected = false;
+            },
           });
+          lazyResolverClient.start();
         }
-        await lazyResolverReady;
+        // Wait for connection if not yet connected (with 5s timeout)
+        if (!lazyConnected) {
+          await Promise.race([
+            new Promise<void>((r) => connectWaiters.push(r)),
+            new Promise<void>((r) => setTimeout(r, 5000)),
+          ]);
+        }
         try {
           await lazyResolverClient!.request("exec.approval.resolve", { id, decision });
           return true;
