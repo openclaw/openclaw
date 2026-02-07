@@ -6,6 +6,10 @@ import type {
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import {
+  buildExecApprovalComponents,
+  formatExecApprovalEmbed,
+} from "../discord/monitor/exec-approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -291,17 +295,12 @@ export function createExecApprovalForwarder(
     }
 
     const text = buildRequestMessage(request, nowMs());
+    const embed = formatExecApprovalEmbed(request);
+    const components = buildExecApprovalComponents(request.id);
     const channelData: Record<string, unknown> = {
       discord: {
-        execApproval: {
-          id: request.id,
-          command: request.request.command,
-          cwd: request.request.cwd,
-          host: request.request.host,
-          agentId: request.request.agentId,
-          security: request.request.security,
-          expiresAtMs: request.expiresAtMs,
-        },
+        embeds: [embed],
+        components,
       },
     };
     await deliverToTargets({
