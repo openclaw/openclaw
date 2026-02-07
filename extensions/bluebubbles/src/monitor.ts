@@ -2288,6 +2288,11 @@ async function processMessage(
           if (!baseUrl || !password) {
             return;
           }
+          // Skip typing indicator for tapback/reaction messages to avoid lingering
+          // indicator when agent returns NO_REPLY (fixes #11189)
+          if (isTapbackMessage) {
+            return;
+          }
           streamingActive = true;
           clearTypingRestartTimer();
           try {
