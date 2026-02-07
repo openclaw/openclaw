@@ -9,6 +9,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { ChannelMuxConfig } from "./types.mux.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type DiscordDmConfig = {
@@ -213,6 +214,8 @@ export type DiscordAccountConfig = {
   activityType?: 0 | 1 | 2 | 3 | 4 | 5;
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
+  /** Optional mux transport override for this account/channel. */
+  mux?: ChannelMuxConfig;
 };
 
 export type DiscordConfig = {

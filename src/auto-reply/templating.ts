@@ -137,6 +137,11 @@ export type MsgContext = {
    */
   OriginatingTo?: string;
   /**
+   * Provider-specific payload passthrough from transport layers (e.g. mux/webhooks).
+   * Consumers may parse this, but transports must not mutate it.
+   */
+  ChannelData?: Record<string, unknown>;
+  /**
    * Messages from hooks to be included in the response.
    * Used for hook confirmation messages like "Session context saved to memory".
    */

@@ -29,6 +29,14 @@ export const handleHelpCommand: CommandHandler = async (params, allowTextCommand
   };
 };
 
+function resolveEffectiveSurface(params: Parameters<CommandHandler>[0]): string | undefined {
+  const surface = params.ctx.Surface;
+  if (surface === "mux" && params.ctx.Provider === "telegram") {
+    return "telegram";
+  }
+  return surface;
+}
+
 export const handleCommandsListCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -48,7 +56,7 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
       cfg: params.cfg,
       agentIds: params.agentId ? [params.agentId] : undefined,
     });
-  const surface = params.ctx.Surface;
+  const surface = resolveEffectiveSurface(params);
 
   if (surface === "telegram") {
     const result = buildCommandsMessagePaginated(params.cfg, skillCommands, {

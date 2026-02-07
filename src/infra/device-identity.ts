@@ -26,6 +26,8 @@ function ensureDir(filePath: string) {
 }
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+const ED25519_PKCS8_SEED_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
+const DEVICE_IDENTITY_MASTER_KEY_INFO = "openclaw-device-identity-v1";
 
 function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
@@ -56,6 +58,26 @@ function fingerprintPublicKey(publicKeyPem: string): string {
 
 function generateIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const deviceId = fingerprintPublicKey(publicKeyPem);
+  return { deviceId, publicKeyPem, privateKeyPem };
+}
+
+function deriveIdentityFromMasterKey(masterKey: string): DeviceIdentity {
+  // MASTER_KEY is an operator-controlled secret in some deployments (for example Phala CVM).
+  // When present, derive a stable Ed25519 keypair so accidental deletion of device.json doesn't
+  // permanently change the instance identity (and break mux pairings / device auth tokens).
+  const seed = Buffer.from(
+    crypto.hkdfSync("sha256", masterKey, "", DEVICE_IDENTITY_MASTER_KEY_INFO, 32),
+  );
+  if (seed.length !== 32) {
+    throw new Error("failed to derive ed25519 seed");
+  }
+  // Ed25519 private keys are encoded as PKCS#8 with the 32-byte seed appended.
+  const pkcs8 = Buffer.concat([ED25519_PKCS8_SEED_PREFIX, seed]);
+  const privateKey = crypto.createPrivateKey({ key: pkcs8, format: "der", type: "pkcs8" });
+  const publicKey = crypto.createPublicKey(privateKey);
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
   const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
   const deviceId = fingerprintPublicKey(publicKeyPem);
@@ -104,7 +126,8 @@ export function loadOrCreateDeviceIdentity(
     // fall through to regenerate
   }
 
-  const identity = generateIdentity();
+  const masterKey = typeof process.env.MASTER_KEY === "string" ? process.env.MASTER_KEY.trim() : "";
+  const identity = masterKey ? deriveIdentityFromMasterKey(masterKey) : generateIdentity();
   ensureDir(filePath);
   const stored: StoredIdentity = {
     version: 1,

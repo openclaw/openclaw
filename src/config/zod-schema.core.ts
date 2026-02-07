@@ -342,6 +342,14 @@ export const RetryConfigSchema = z
   .strict()
   .optional();
 
+export const ChannelMuxSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    timeoutMs: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 export const QueueModeBySurfaceSchema = z
   .object({
     whatsapp: QueueModeSchema.optional(),

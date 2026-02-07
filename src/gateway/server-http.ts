@@ -50,6 +50,7 @@ import {
 } from "./hooks.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
+import { handleMuxInboundHttpRequest } from "./mux-http.js";
 import { isPrivateOrLoopbackAddress, resolveGatewayClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
@@ -493,6 +494,9 @@ export function createGatewayHttpServer(opts: {
           rateLimiter,
         })
       ) {
+        return;
+      }
+      if (await handleMuxInboundHttpRequest(req, res)) {
         return;
       }
       if (await handleSlackHttpRequest(req, res)) {

@@ -182,3 +182,11 @@ export async function sendPollWhatsApp(
     throw err;
   }
 }
+
+export async function sendTypingWhatsApp(
+  to: string,
+  options: { accountId?: string },
+): Promise<void> {
+  const { listener: active } = requireActiveWebListener(options.accountId);
+  await active.sendComposingTo(to);
+}

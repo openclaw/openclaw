@@ -6,6 +6,7 @@ import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { startMuxRuntimeRegistrationLoop } from "../channels/plugins/outbound/mux.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import {
@@ -101,6 +102,7 @@ const logReload = log.child("reload");
 const logHooks = log.child("hooks");
 const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
+const logMux = log.child("mux");
 const gatewayRuntime = runtimeForLogger(log);
 const canvasRuntime = runtimeForLogger(logCanvas);
 
@@ -373,6 +375,11 @@ export async function startGatewayServer(
     log,
     logHooks,
     logPlugins,
+  });
+
+  const stopMuxRegistration = startMuxRuntimeRegistrationLoop({
+    cfg: cfgAtStart,
+    log: logMux,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   const nodeRegistry = new NodeRegistry();
@@ -715,6 +722,7 @@ export async function startGatewayServer(
 
   return {
     close: async (opts) => {
+      stopMuxRegistration();
       // Run gateway_stop plugin hook before shutdown
       await runGlobalGatewayStopSafely({
         event: { reason: opts?.reason ?? "gateway stopping" },

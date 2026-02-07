@@ -9,6 +9,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { ChannelMuxConfig } from "./types.mux.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type TelegramActionConfig = {
@@ -116,6 +117,8 @@ export type TelegramAccountConfig = {
   webhookHost?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
+  /** Optional mux transport override for this account/channel. */
+  mux?: ChannelMuxConfig;
   /**
    * Controls which user reactions trigger notifications:
    * - "off" (default): ignore all reactions

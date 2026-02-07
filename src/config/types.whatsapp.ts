@@ -6,6 +6,7 @@ import type {
 } from "./types.base.js";
 import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
+import type { ChannelMuxConfig } from "./types.mux.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type WhatsAppActionConfig = {
@@ -101,6 +102,8 @@ export type WhatsAppConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Optional mux transport override for this account/channel. */
+  mux?: ChannelMuxConfig;
 };
 
 export type WhatsAppAccountConfig = {
@@ -149,4 +152,6 @@ export type WhatsAppAccountConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this account. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Optional mux transport override for this account/channel. */
+  mux?: ChannelMuxConfig;
 };

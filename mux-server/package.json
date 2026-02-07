@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/mux-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --import tsx src/server.ts",
+    "smoke": "bash ./scripts/smoke.sh",
+    "start": "node --import tsx src/server.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

@@ -1,0 +1,63 @@
+name: openclaw-mux-local
+
+services:
+  openclaw:
+    build:
+      context: ../..
+      dockerfile: phala-deploy/Dockerfile
+    image: openclaw/local-phala:dev
+    container_name: openclaw-local-e2e
+    privileged: true
+    ports:
+      - "127.0.0.1:1022:22"
+      - "127.0.0.1:18789:18789"
+    environment:
+      NODE_ENV: production
+      MASTER_KEY: ${MASTER_KEY:-local-mux-e2e-master-key}
+      REDPILL_API_KEY: ${REDPILL_API_KEY:-}
+      OPENCLAW_RAW_STREAM: ${OPENCLAW_RAW_STREAM:-}
+      OPENCLAW_ANTHROPIC_PAYLOAD_LOG: ${OPENCLAW_ANTHROPIC_PAYLOAD_LOG:-}
+    volumes:
+      - openclaw_data:/data
+      - openclaw_docker_data:/var/lib/docker
+    restart: unless-stopped
+
+  mux-server:
+    build:
+      context: ../..
+      dockerfile: mux-server/Dockerfile
+    image: openclaw/mux-server-local:dev
+    container_name: mux-server-local-e2e
+    depends_on:
+      openclaw:
+        condition: service_started
+    ports:
+      - "127.0.0.1:18891:18891"
+    environment:
+      MUX_HOST: 0.0.0.0
+      MUX_PORT: 18891
+      MUX_DB_PATH: /data/mux-server.sqlite
+      MUX_LOG_PATH: /data/mux-server.log
+      # Shared register key used by OpenClaw instances to obtain runtime JWT auth.
+      MUX_REGISTER_KEY: ${MUX_REGISTER_KEY:-local-mux-e2e-register-key}
+      # Local-only admin token for control-plane endpoints (for example pairing token issuance).
+      MUX_ADMIN_TOKEN: ${MUX_ADMIN_TOKEN:-local-mux-e2e-admin-token}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      MUX_WHATSAPP_ACCOUNT_ID: default
+      MUX_WHATSAPP_AUTH_DIR: /wa-auth/default
+      MUX_OPENCLAW_ACCOUNT_ID: mux
+      MUX_TELEGRAM_BOOTSTRAP_LATEST: "true"
+      MUX_DISCORD_BOOTSTRAP_LATEST: "true"
+      MUX_TELEGRAM_INBOUND_MEDIA_MAX_BYTES: "5000000"
+      MUX_DISCORD_INBOUND_MEDIA_MAX_BYTES: "5000000"
+      MUX_WHATSAPP_INBOUND_MEDIA_MAX_BYTES: "5000000"
+    volumes:
+      - mux_data:/data
+      - ./state/wa-auth:/wa-auth
+    restart: unless-stopped
+
+volumes:
+  openclaw_data:
+  openclaw_docker_data:
+  mux_data:

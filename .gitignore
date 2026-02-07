@@ -89,6 +89,17 @@ USER.md
 /local/
 package-lock.json
 phala-deploy/secrets/
+mux-server/logs/
+
+mux-server/data/
+
+# local operator env
+.global.env
+.project.env
+.env.rollout
+.env.rollout-targets
+.rv.json
+.claude/
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig

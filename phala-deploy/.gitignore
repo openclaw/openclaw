@@ -1,0 +1,16 @@
+# phala-deploy local secrets/state (NEVER COMMIT)
+secrets/
+.onboarding/
+backup/
+
+# local rollout env (operator-specific)
+.env.rollout
+.env.rollout-targets
+
+# local tarball artifact (built by build-pin-image.sh)
+openclaw.tgz
+
+# local mux e2e state
+local-mux-e2e/.env.local
+local-mux-e2e/state/
+

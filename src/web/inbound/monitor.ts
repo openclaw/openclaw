@@ -9,7 +9,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { jidToE164, resolveJidToE164 } from "../../utils.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
-import { checkInboundAccessControl } from "./access-control.js";
+import { checkInboundAccessControl, type InboundAccessControlResult } from "./access-control.js";
 import { isRecentInboundMessage } from "./dedupe.js";
 import {
   describeReplyContext,
@@ -27,6 +27,25 @@ export async function monitorWebInbox(options: {
   accountId: string;
   authDir: string;
   onMessage: (msg: WebInboundMessage) => Promise<void>;
+  /**
+   * Optional access-control resolver override.
+   * Defaults to checkInboundAccessControl.
+   */
+  resolveAccessControl?: (params: {
+    accountId: string;
+    from: string;
+    selfE164: string | null;
+    senderE164: string | null;
+    group: boolean;
+    pushName?: string;
+    isFromMe: boolean;
+    messageTimestampMs?: number;
+    connectedAtMs?: number;
+    sock: {
+      sendMessage: (jid: string, content: { text: string }) => Promise<unknown>;
+    };
+    remoteJid: string;
+  }) => Promise<InboundAccessControlResult>;
   mediaMaxMb?: number;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
@@ -199,7 +218,8 @@ export async function monitorWebInbox(options: {
         ? Number(msg.messageTimestamp) * 1000
         : undefined;
 
-      const access = await checkInboundAccessControl({
+      const resolveAccessControl = options.resolveAccessControl ?? checkInboundAccessControl;
+      const access = await resolveAccessControl({
         accountId: options.accountId,
         from,
         selfE164,

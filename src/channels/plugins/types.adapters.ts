@@ -73,6 +73,8 @@ export type ChannelGroupAdapter = {
 
 export type ChannelOutboundContext = {
   cfg: OpenClawConfig;
+  /** Logical session key used for mux-routed outbound authorization. */
+  sessionKey?: string | null;
   to: string;
   text: string;
   mediaUrl?: string;

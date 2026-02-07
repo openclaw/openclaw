@@ -34,4 +34,34 @@ describe("device identity state dir defaults", () => {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("derives a stable identity from MASTER_KEY when identity file is missing", async () => {
+    const originalMasterKey = process.env.MASTER_KEY;
+    process.env.MASTER_KEY = "test-master-key";
+
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-identity-state-"));
+    const stateDir = path.join(tempRoot, "state");
+    setStateDirEnv(stateDir);
+    vi.resetModules();
+
+    try {
+      const { loadOrCreateDeviceIdentity } = await import("./device-identity.js");
+      const identity1 = loadOrCreateDeviceIdentity();
+
+      const identityPath = path.join(stateDir, "identity", "device.json");
+      await fs.unlink(identityPath);
+
+      const identity2 = loadOrCreateDeviceIdentity();
+      expect(identity2.deviceId).toBe(identity1.deviceId);
+      expect(identity2.publicKeyPem).toBe(identity1.publicKeyPem);
+      expect(identity2.privateKeyPem).toBe(identity1.privateKeyPem);
+    } finally {
+      if (originalMasterKey === undefined) {
+        delete process.env.MASTER_KEY;
+      } else {
+        process.env.MASTER_KEY = originalMasterKey;
+      }
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  });
 });

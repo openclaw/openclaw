@@ -1,0 +1,33 @@
+services:
+  mux-server:
+    image: h4x3rotab/openclaw-mux@sha256:6ee929b1159259b1b896132ca45bcd75e7568644c4be350f927aa5f0c5dd9952
+    container_name: mux-server
+    ports:
+      - "1022:22"
+      - "18891:18891"
+    environment:
+      MUX_HOST: 0.0.0.0
+      MUX_PORT: 18891
+      MUX_DB_PATH: /data/mux/mux-server.sqlite
+      MUX_LOG_PATH: /dev/stdout
+      MUX_IDEMPOTENCY_TTL_MS: 600000
+      # Shared key used only for POST /v1/instances/register (runtime JWT minting).
+      MUX_REGISTER_KEY: ${MUX_REGISTER_KEY:?set MUX_REGISTER_KEY}
+      # Enables control-plane pairing token issuance (`POST /v1/admin/pairings/token`).
+      MUX_ADMIN_TOKEN: ${MUX_ADMIN_TOKEN:?set MUX_ADMIN_TOKEN}
+      MUX_OPENCLAW_ACCOUNT_ID: "mux"
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:?set DISCORD_BOT_TOKEN}
+      MUX_TELEGRAM_BOOTSTRAP_LATEST: "true"
+      MUX_DISCORD_BOOTSTRAP_LATEST: "true"
+      MUX_WHATSAPP_ACCOUNT_ID: "default"
+      MUX_WHATSAPP_AUTH_DIR: "/root/.openclaw/credentials/whatsapp/default"
+    volumes:
+      - /home/root/.ssh:/root/.ssh:ro
+      - mux_data:/data
+      - mux_credentials:/root/.openclaw/credentials
+    restart: unless-stopped
+
+volumes:
+  mux_data:
+  mux_credentials:

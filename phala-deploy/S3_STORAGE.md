@@ -46,6 +46,7 @@ MASTER_KEY (one secret to back up)
 ```
 
 This means:
+
 - **One secret** to manage, back up, and rotate
 - Keys are deterministic — same `MASTER_KEY` always produces the same derived keys
 - The gateway auth token is stable across container restarts (not random each boot)
@@ -75,24 +76,25 @@ You can also set `RCLONE_CRYPT_PASSWORD` directly (without `MASTER_KEY`) for man
 
 ## Environment variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `MASTER_KEY` | Recommended | — | Master secret. Derives crypt passwords + gateway token. |
-| `S3_BUCKET` | Yes (for S3) | — | Bucket name. Presence enables S3 mode. |
-| `S3_ENDPOINT` | Yes (for S3) | — | S3 endpoint URL |
-| `AWS_ACCESS_KEY_ID` | Yes (for S3) | — | S3 access key |
-| `AWS_SECRET_ACCESS_KEY` | Yes (for S3) | — | S3 secret key |
-| `S3_PROVIDER` | No | `Other` | rclone provider hint (`Cloudflare`, `AWS`, `Minio`) |
-| `S3_PREFIX` | No | `openclaw-state` | Key prefix inside the bucket |
-| `S3_REGION` | No | `us-east-1` | S3 region |
-| `RCLONE_CRYPT_PASSWORD` | No | derived | Override derived crypt password (must be rclone-obscured) |
-| `RCLONE_CRYPT_PASSWORD2` | No | derived | Override derived crypt salt (must be rclone-obscured) |
+| Variable                 | Required     | Default          | Description                                               |
+| ------------------------ | ------------ | ---------------- | --------------------------------------------------------- |
+| `MASTER_KEY`             | Recommended  | —                | Master secret. Derives crypt passwords + gateway token.   |
+| `S3_BUCKET`              | Yes (for S3) | —                | Bucket name. Presence enables S3 mode.                    |
+| `S3_ENDPOINT`            | Yes (for S3) | —                | S3 endpoint URL                                           |
+| `AWS_ACCESS_KEY_ID`      | Yes (for S3) | —                | S3 access key                                             |
+| `AWS_SECRET_ACCESS_KEY`  | Yes (for S3) | —                | S3 secret key                                             |
+| `S3_PROVIDER`            | No           | `Other`          | rclone provider hint (`Cloudflare`, `AWS`, `Minio`)       |
+| `S3_PREFIX`              | No           | `openclaw-state` | Key prefix inside the bucket                              |
+| `S3_REGION`              | No           | `us-east-1`      | S3 region                                                 |
+| `RCLONE_CRYPT_PASSWORD`  | No           | derived          | Override derived crypt password (must be rclone-obscured) |
+| `RCLONE_CRYPT_PASSWORD2` | No           | derived          | Override derived crypt salt (must be rclone-obscured)     |
 
 ## Setup
 
 ### 1. Create an S3 bucket
 
 For Cloudflare R2:
+
 - Dashboard > R2 > Create bucket
 - Create an API token with **Object Read & Write** scoped to the bucket
 
@@ -104,9 +106,19 @@ head -c 32 /dev/urandom | base64
 
 Save this value securely. If you lose it, the encrypted data on S3 is unrecoverable.
 
-### 3. Create a secrets file
+### 3. Prepare deploy env vars
 
-Save credentials to `phala-deploy/secrets/.env` (gitignored):
+Preferred (vault-backed):
+
+```sh
+rv-exec --dotenv /tmp/deploy.env \
+  MASTER_KEY REDPILL_API_KEY \
+  S3_BUCKET S3_ENDPOINT S3_PROVIDER S3_REGION \
+  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
+  -- bash -lc 'test -s /tmp/deploy.env && echo "deploy env ready: /tmp/deploy.env"'
+```
+
+Legacy fallback (local-only): save credentials to `phala-deploy/secrets/.env` (gitignored):
 
 ```env
 MASTER_KEY=your-base64-master-key
@@ -126,7 +138,7 @@ For local testing:
 ```sh
 docker build -f phala-deploy/Dockerfile -t openclaw-cvm:test .
 docker run -d --name openclaw --privileged \
-  --env-file phala-deploy/secrets/.env \
+  --env-file /tmp/deploy.env \
   -e OPENCLAW_STATE_DIR=/data/openclaw \
   -e NODE_ENV=production \
   -p 18789:18789 \
@@ -176,6 +188,7 @@ In FUSE mount mode, there is no data loss — all writes are flushed to S3 withi
 ## Encryption details
 
 rclone crypt uses:
+
 - **NaCl SecretBox** (XSalsa20 + Poly1305) for file contents
 - **EME** (ECB-Mix-ECB) wide-block encryption for filenames
 - Standard filename encryption with encrypted directory names

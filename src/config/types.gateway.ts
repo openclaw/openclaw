@@ -249,10 +249,30 @@ export type GatewayHttpResponsesImagesConfig = {
 export type GatewayHttpEndpointsConfig = {
   chatCompletions?: GatewayHttpChatCompletionsConfig;
   responses?: GatewayHttpResponsesConfig;
+  mux?: GatewayHttpMuxConfig;
 };
 
 export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
+};
+
+export type GatewayHttpMuxConfig = {
+  /** Enable mux inbound HTTP endpoint (`POST /v1/mux/inbound`). */
+  enabled?: boolean;
+  /** Base URL for outbound mux sends (for example, http://mux.local:8080). */
+  baseUrl?: string;
+  /**
+   * Shared registration key used by OpenClaw instances to register with mux and
+   * obtain runtime JWT credentials.
+   */
+  registerKey?: string;
+  /**
+   * Public URL that mux should call for inbound delivery (for example,
+   * https://openclaw.example.com/v1/mux/inbound).
+   */
+  inboundUrl?: string;
+  /** Max inbound payload bytes. Default: 10MB. */
+  maxBodyBytes?: number;
 };
 
 export type GatewayNodesConfig = {
