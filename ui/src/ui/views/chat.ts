@@ -224,6 +224,16 @@ export function renderChat(props: ChatProps) {
         buildChatItems(props),
         (item) => item.key,
         (item) => {
+          if (item.kind === "divider") {
+            return html`
+              <div class="chat-divider" role="separator" data-ts=${String(item.timestamp)}>
+                <span class="chat-divider__line"></span>
+                <span class="chat-divider__label">${item.label}</span>
+                <span class="chat-divider__line"></span>
+              </div>
+            `;
+          }
+
           if (item.kind === "reading-indicator") {
             return renderReadingIndicatorGroup(assistantIdentity);
           }
@@ -477,6 +487,20 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   for (let i = historyStart; i < history.length; i++) {
     const msg = history[i];
     const normalized = normalizeMessage(msg);
+    const raw = msg as Record<string, unknown>;
+    const marker = raw.__openclaw as Record<string, unknown> | undefined;
+    if (marker && marker.kind === "compaction") {
+      items.push({
+        kind: "divider",
+        key:
+          typeof marker.id === "string"
+            ? `divider:compaction:${marker.id}`
+            : `divider:compaction:${normalized.timestamp}:${i}`,
+        label: "Compaction",
+        timestamp: normalized.timestamp ?? Date.now(),
+      });
+      continue;
+    }
 
     if (!props.showThinking && normalized.role.toLowerCase() === "toolresult") {
       continue;
