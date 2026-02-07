@@ -35,39 +35,53 @@ async function fetchMatrixMediaBuffer(params: {
     }
     return { buffer: Buffer.from(buffer) };
   } catch (err) {
-    // Fallback: use authenticated media endpoint (Matrix v1.11+)
-    // Servers with authenticated media enabled reject the legacy
-    // /_matrix/media/v3/download endpoint with 403.
+    // Only fallback on HTTP 403 – servers with authenticated media
+    // (Matrix v1.11+) reject the legacy /_matrix/media/v3/download
+    // endpoint with 403.
+    const statusCode =
+      err && typeof err === "object" && "statusCode" in err
+        ? (err as { statusCode: number }).statusCode
+        : undefined;
+    if (statusCode !== 403) {
+      throw err;
+    }
+
     const mxcMatch = params.mxcUrl.match(/^mxc:\/\/([^/]+)\/(.+)$/);
     if (!mxcMatch) {
-      throw new Error(`Invalid mxc URL: ${params.mxcUrl}`);
+      throw new Error(`Invalid mxc URL: ${params.mxcUrl}`, { cause: err });
     }
     const [, serverName, mediaId] = mxcMatch;
 
     const homeserverUrl = params.client.homeserverUrl.replace(/\/$/, "");
-    const authUrl = `${homeserverUrl}/_matrix/client/v1/media/download/${serverName}/${mediaId}`;
+    const authUrl = `${homeserverUrl}/_matrix/client/v1/media/download/${encodeURIComponent(serverName)}/${encodeURIComponent(mediaId)}`;
 
-    const response = await fetch(authUrl, {
-      headers: {
-        Authorization: `Bearer ${params.client.accessToken}`,
-      },
-    });
+    try {
+      const response = await fetch(authUrl, {
+        headers: {
+          Authorization: `Bearer ${params.client.accessToken}`,
+        },
+      });
 
-    if (!response.ok) {
+      if (!response.ok) {
+        throw new Error(
+          `Authenticated media download failed: ${response.status} ${response.statusText}`,
+        );
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      if (buffer.byteLength > params.maxBytes) {
+        throw new Error("Matrix media exceeds configured size limit");
+      }
+
+      return { buffer };
+    } catch (fallbackErr) {
       throw new Error(
-        `Authenticated media download failed: ${response.status} ${response.statusText} (original: ${String(err)})`,
-        { cause: err },
+        "Matrix authenticated media fallback failed",
+        { cause: fallbackErr },
       );
     }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    if (buffer.byteLength > params.maxBytes) {
-      throw new Error("Matrix media exceeds configured size limit");
-    }
-
-    return { buffer };
   }
 }
 
