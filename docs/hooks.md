@@ -647,6 +647,20 @@ Rather than:
 metadata: { "openclaw": { "events": ["command"] } } # General - more overhead
 ```
 
+## Plugin hook registration
+
+If you're registering hooks **from a plugin** (not from a `HOOK.md` + `handler.ts`
+directory), there are two different API methods — and choosing the wrong one
+means your handler silently never fires.
+
+- **`api.on(event, handler)`** — registers a typed hook that **actually
+  executes** when the event fires. This is what you want.
+- **`api.registerHook(events, handler, opts)`** — registers hook **metadata**
+  for UI/diagnostics only. The handler is **not** called by the hook runner.
+
+See [Plugins → Registering typed hooks](/plugin#registering-typed-hooks-inline)
+for full details, code examples, and the common pitfalls.
+
 ## Debugging
 
 ### Enable Hook Logging
