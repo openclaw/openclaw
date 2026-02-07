@@ -380,7 +380,7 @@
           },
           "provider": {
             "type": "string",
-            "enum": ["openai", "elevenlabs", "edge"]
+            "enum": ["openai", "elevenlabs", "edge", "minimax"]
           },
           "summaryModel": {
             "type": "string"
@@ -524,6 +524,42 @@
                 "type": "integer",
                 "minimum": 1000,
                 "maximum": 120000
+              }
+            }
+          },
+          "minimax": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "apiKey": {
+                "type": "string"
+              },
+              "baseUrl": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              },
+              "voiceId": {
+                "type": "string"
+              },
+              "speed": {
+                "type": "number",
+                "minimum": 0.5,
+                "maximum": 2
+              },
+              "vol": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 10
+              },
+              "pitch": {
+                "type": "integer",
+                "minimum": -12,
+                "maximum": 12
+              },
+              "languageBoost": {
+                "type": "string"
               }
             }
           },

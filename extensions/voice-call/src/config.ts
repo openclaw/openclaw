@@ -77,7 +77,7 @@ export const SttConfigSchema = z
   .default({ provider: "openai", model: "whisper-1" });
 export type SttConfig = z.infer<typeof SttConfigSchema>;
 
-export const TtsProviderSchema = z.enum(["openai", "elevenlabs", "edge"]);
+export const TtsProviderSchema = z.enum(["openai", "elevenlabs", "edge", "minimax"]);
 export const TtsModeSchema = z.enum(["final", "all"]);
 export const TtsAutoSchema = z.enum(["off", "always", "inbound", "tagged"]);
 
@@ -143,6 +143,19 @@ export const TtsConfigSchema = z
         saveSubtitles: z.boolean().optional(),
         proxy: z.string().optional(),
         timeoutMs: z.number().int().min(1000).max(120000).optional(),
+      })
+      .strict()
+      .optional(),
+    minimax: z
+      .object({
+        apiKey: z.string().optional(),
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
+        voiceId: z.string().optional(),
+        speed: z.number().min(0.5).max(2).optional(),
+        vol: z.number().min(0).max(10).optional(),
+        pitch: z.number().int().min(-12).max(12).optional(),
+        languageBoost: z.string().optional(),
       })
       .strict()
       .optional(),
