@@ -166,7 +166,7 @@ Example (allow only file tools + browser):
 ## Plugins + tools
 
 Plugins can register **additional tools** (and CLI commands) beyond the core set.
-See [Plugins](/plugin) for install + config, and [Skills](/tools/skills) for how
+See [Plugins](/tools/plugin) for install + config, and [Skills](/tools/skills) for how
 tool usage guidance is injected into prompts. Some plugins ship their own skills
 alongside tools (for example, the voice-call plugin).
 

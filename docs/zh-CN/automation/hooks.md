@@ -9,7 +9,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: 853227a0f1abd20790b425fa64dda60efc6b5f93c1b13ecd2dcb788268f71d79
-  source_path: hooks.md
+  source_path: automation/hooks.md
   workflow: 15
 ---
 
@@ -24,7 +24,7 @@ Hooks 是在事件发生时运行的小脚本。有两种类型：
 - **Hooks**（本页）：当智能体事件触发时在 Gateway 网关内运行，如 `/new`、`/reset`、`/stop` 或生命周期事件。
 - **Webhooks**：外部 HTTP webhooks，让其他系统触发 OpenClaw 中的工作。参见 [Webhook Hooks](/automation/webhook) 或使用 `openclaw webhooks` 获取 Gmail 助手命令。
 
-Hooks 也可以捆绑在插件中；参见 [插件](/plugin#plugin-hooks)。
+Hooks 也可以捆绑在插件中；参见 [插件](/tools/plugin#plugin-hooks)。
 
 常见用途：
 

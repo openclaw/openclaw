@@ -10,7 +10,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: eaeb4035912c49413e012177cf0bd28b348130d30d3317674418dca728229b70
-  source_path: broadcast-groups.md
+  source_path: channels/broadcast-groups.md
   workflow: 15
 ---
 
@@ -444,6 +444,6 @@ interface OpenClawConfig {
 
 ## 另请参阅
 
-- [多智能体配置](/multi-agent-sandbox-tools)
-- [路由配置](/concepts/channel-routing)
+- [多智能体配置](/tools/multi-agent-sandbox-tools)
+- [路由配置](/channels/channel-routing)
 - [会话管理](/concepts/sessions)

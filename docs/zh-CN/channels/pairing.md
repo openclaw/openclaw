@@ -10,7 +10,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: c46a5c39f289c8fd0783baacd927f550c3d3ae8889a7bc7de133b795f16fa08a
-  source_path: start/pairing.md
+  source_path: channels/pairing.md
   workflow: 15
 ---
 
