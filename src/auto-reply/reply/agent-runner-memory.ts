@@ -15,7 +15,9 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { defaultRuntime } from "../../runtime.js";
 import { buildThreadingToolContext, resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import {
   resolveMemoryFlushContextWindowTokens,
@@ -37,10 +39,15 @@ export async function runMemoryFlushIfNeeded(params: {
   sessionKey?: string;
   storePath?: string;
   isHeartbeat: boolean;
-}): Promise<SessionEntry | undefined> {
+}): Promise<{ entry: SessionEntry | undefined; hookMessages: string[] }> {
   const memoryFlushSettings = resolveMemoryFlushSettings(params.cfg);
   if (!memoryFlushSettings) {
-    return params.sessionEntry;
+    return {
+      entry:
+        params.sessionEntry ??
+        (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined),
+      hookMessages: [],
+    };
   }
 
   const memoryFlushWritable = (() => {
@@ -58,15 +65,17 @@ export async function runMemoryFlushIfNeeded(params: {
     return sandboxCfg.workspaceAccess === "rw";
   })();
 
+  const entryForFlush =
+    params.sessionEntry ??
+    (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+
   const shouldFlushMemory =
     memoryFlushSettings &&
     memoryFlushWritable &&
     !params.isHeartbeat &&
     !isCliProvider(params.followupRun.run.provider, params.cfg) &&
     shouldRunMemoryFlush({
-      entry:
-        params.sessionEntry ??
-        (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined),
+      entry: entryForFlush,
       contextWindowTokens: resolveMemoryFlushContextWindowTokens({
         modelId: params.followupRun.run.model ?? params.defaultModel,
         agentCfgContextTokens: params.agentCfgContextTokens,
@@ -76,7 +85,32 @@ export async function runMemoryFlushIfNeeded(params: {
     });
 
   if (!shouldFlushMemory) {
-    return params.sessionEntry;
+    return { entry: entryForFlush, hookMessages: [] };
+  }
+
+  // Lifecycle hook: Memory Flush Start
+  // IMPORTANT: This fires BEFORE the flush runs. Hook consumers should treat this as
+  // "flush starting" not "flush completed". Session state reflects pre-flush snapshot.
+  // Only fires when sessionKey is present (agent lifecycle event requires session context)
+  let flushHookMessages: string[] = [];
+  if (params.sessionKey) {
+    // Report the same totalTokens that triggered shouldRunMemoryFlush decision.
+    // Omit contextTokensUsed if not available rather than defaulting to 0.
+    const context: Record<string, unknown> = {
+      sessionId: params.followupRun.run.sessionId,
+      reason: "context_limit",
+      phase: "start", // Explicit phase: this hook fires before flush runs
+    };
+    if (entryForFlush?.totalTokens !== undefined) {
+      context.contextTokensUsed = entryForFlush.totalTokens;
+    }
+    const hookEvent = createInternalHookEvent("agent", "flush", params.sessionKey, context);
+    try {
+      await triggerInternalHook(hookEvent);
+      flushHookMessages = hookEvent.messages;
+    } catch (err) {
+      defaultRuntime.error(`agent:flush hook failed: ${String(err)}`);
+    }
   }
 
   let activeSessionEntry = params.sessionEntry;
@@ -176,6 +210,33 @@ export async function runMemoryFlushIfNeeded(params: {
       if (typeof nextCount === "number") {
         memoryFlushCompactionCount = nextCount;
       }
+
+      // Lifecycle hook: Session Compaction
+      // Emit after compaction completes during memory flush
+      if (params.sessionKey) {
+        try {
+          const context: Record<string, unknown> = {
+            sessionId: params.followupRun.run.sessionId,
+            trigger: "memory_flush",
+          };
+          if (typeof nextCount === "number") {
+            context.compactionCount = nextCount;
+          }
+          if (activeSessionEntry?.totalTokens !== undefined) {
+            context.contextTokensUsed = activeSessionEntry.totalTokens;
+          }
+          const hookEvent = createInternalHookEvent(
+            "session",
+            "compaction",
+            params.sessionKey,
+            context,
+          );
+          await triggerInternalHook(hookEvent);
+          flushHookMessages.push(...hookEvent.messages);
+        } catch (err) {
+          defaultRuntime.error(`session:compaction hook failed: ${String(err)}`);
+        }
+      }
     }
     if (params.storePath && params.sessionKey) {
       try {
@@ -198,5 +259,5 @@ export async function runMemoryFlushIfNeeded(params: {
     logVerbose(`memory flush run failed: ${String(err)}`);
   }
 
-  return activeSessionEntry;
+  return { entry: activeSessionEntry, hookMessages: flushHookMessages };
 }

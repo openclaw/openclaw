@@ -157,6 +157,8 @@ export async function getReplyFromConfig(
     isGroup,
     triggerBodyNormalized,
     bodyStripped,
+    resetReason,
+    resetDetails,
   } = sessionState;
 
   await applyResetModelOverride({
@@ -278,6 +280,82 @@ export async function getReplyFromConfig(
   }
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+
+  // Fire session lifecycle hooks AFTER commands execute (commands run on the old session)
+  if (isNewSession && previousSessionEntry && sessionKey && resetReason) {
+    const { createInternalHookEvent, triggerInternalHook } =
+      await import("../../hooks/internal-hooks.js");
+    const { routeReply } = await import("./route-reply.js");
+
+    const hookMessages: string[] = [];
+
+    // Guard each clone individually for best-effort hook context
+    let clonedSessionEntry: typeof sessionEntry | undefined;
+    try {
+      clonedSessionEntry = structuredClone(sessionEntry);
+    } catch {
+      clonedSessionEntry = undefined;
+    }
+    let clonedPreviousEntry: typeof previousSessionEntry | undefined;
+    try {
+      clonedPreviousEntry = structuredClone(previousSessionEntry);
+    } catch {
+      clonedPreviousEntry = undefined;
+    }
+
+    try {
+      // Fire session:end hook (for the OLD session)
+      const endEvent = createInternalHookEvent("session", "end", sessionKey, {
+        sessionId: previousSessionEntry.sessionId,
+        sessionEntry: clonedPreviousEntry,
+        newSessionEntry: clonedSessionEntry,
+        reason: resetReason,
+        ...resetDetails,
+      });
+      await triggerInternalHook(endEvent);
+      hookMessages.push(...endEvent.messages);
+    } catch (err) {
+      defaultRuntime.error(`session:end hook failed: ${String(err)}`);
+    }
+
+    try {
+      // Fire session:reset hook (transition from old to new session)
+      const resetEvent = createInternalHookEvent("session", "reset", sessionKey, {
+        oldSessionId: previousSessionEntry.sessionId,
+        newSessionId: sessionId,
+        previousSessionEntry: clonedPreviousEntry,
+        sessionEntry: clonedSessionEntry,
+        reason: resetReason,
+        ...resetDetails,
+      });
+      await triggerInternalHook(resetEvent);
+      hookMessages.push(...resetEvent.messages);
+    } catch (err) {
+      defaultRuntime.error(`session:reset hook failed: ${String(err)}`);
+    }
+
+    // Send hook messages immediately if present
+    if (hookMessages.length > 0) {
+      const channel = finalized.OriginatingChannel || finalized.Surface || finalized.Provider;
+      const to = finalized.OriginatingTo || finalized.To || finalized.From;
+      if (channel && to) {
+        try {
+          const hookReply = { text: hookMessages.join("\n\n") };
+          await routeReply({
+            payload: hookReply,
+            channel,
+            to,
+            sessionKey,
+            accountId: finalized.AccountId,
+            threadId: finalized.MessageThreadId,
+            cfg,
+          });
+        } catch (err) {
+          defaultRuntime.error(`Failed to deliver session lifecycle hook messages: ${String(err)}`);
+        }
+      }
+    }
+  }
 
   await stageSandboxMedia({
     ctx,

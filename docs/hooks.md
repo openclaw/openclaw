@@ -230,9 +230,88 @@ Triggered when agent commands are issued:
 - **`command:reset`**: When `/reset` command is issued
 - **`command:stop`**: When `/stop` command is issued
 
+### Session Events
+
+Triggered during session lifecycle when session persistence is enabled (requires a valid `sessionKey`):
+
+- **`session:start`**: When a new persisted session begins (user-initiated or auto-recovery; non-persisted flows do not fire this hook)
+- **`session:end`**: When a persisted session is terminated (all reset types: user-initiated, idle timeout, daily reset, auto-recovery)
+- **`session:reset`**: Emitted after `session:end` during all resets to provide transition context
+
+**Context for `session:start`**:
+
+- `sessionId`: The new session ID
+
+**Context for `session:end`**:
+
+- `sessionId`: The ending session's ID
+- `sessionEntry`: Full session entry for the ending session (includes updatedAt, compactionCount, thinkingLevel, modelOverride, etc.)
+- `newSessionEntry`: Full session entry for the new session that's replacing it
+- `reason`: Reset reason - one of: `"user_command"`, `"idle_timeout"`, `"daily_reset"`, `"compaction_failure"`, `"role_ordering_conflict"`
+- Additional reason-specific fields:
+  - For `user_command`: `trigger`, `previousSessionId`, `previousUpdatedAt`
+  - For `idle_timeout`: `idleSeconds`, `idleExpiresAt`, `previousSessionId`, `previousUpdatedAt`
+  - For `daily_reset`: `dailyResetAt`, `previousSessionId`, `previousUpdatedAt`
+  - For `compaction_failure`: `failureReason`, `previousSessionId`, `previousUpdatedAt`
+  - For `role_ordering_conflict`: `conflictReason`, `previousSessionId`, `previousUpdatedAt`
+
+**Context for `session:reset`**:
+
+- `oldSessionId`: The previous session's ID
+- `newSessionId`: The new session's ID
+- `previousSessionEntry`: Full session entry for the old session
+- `sessionEntry`: Full session entry for the new session
+- `reason`: Reset reason (same values as `session:end`)
+- Additional reason-specific fields (same as `session:end`)
+
+**Note:** While current implementation guards ensure these IDs and entries are present when events fire, hooks should handle missing values defensively.
+
+**Lifecycle patterns**:
+
+- **User-initiated reset** (`/new` or `/reset`): `command:new` or `command:reset` fires immediately → `session:end` → `session:reset` fire if an existing session is being replaced → `session:start` fires during the agent turn (if session key exists)
+- **Idle timeout reset**: `session:end` → `session:reset` fire when session expires due to inactivity → `session:start` fires during the agent turn
+- **Daily reset**: `session:end` → `session:reset` fire when session expires based on daily reset hour → `session:start` fires during the agent turn
+- **Auto-recovery reset** (compaction failure, role-ordering conflict): `session:end` → `session:reset` fire during the reset if a persisted session entry exists → `session:start` fires when the agent turn runs
+
+**Session maintenance events**:
+
+- **`session:compaction`**: After session history is compacted to fit within context limits (fires after compaction completes)
+
+**Context for `session:compaction` includes**:
+
+- `sessionId`: Current session ID
+- `trigger`: What triggered the compaction - `"auto_compaction"` (inline compaction during agent turn) or `"memory_flush"` (compaction during memory flush operation)
+- `compactionCount` (optional): Updated compaction count after increment
+- `contextTokensUsed` (optional): Total tokens in session before compaction
+
+**Note:** This event fires whenever compaction actually occurs. In contrast, `agent:flush` fires when memory flush **starts** (before it runs), regardless of whether compaction happens during the flush.
+
 ### Agent Events
 
+Triggered during agent execution when session persistence is enabled (requires a valid `sessionKey`):
+
 - **`agent:bootstrap`**: Before workspace bootstrap files are injected (hooks may mutate `context.bootstrapFiles`)
+- **`agent:reply`**: After each agent turn completes with user input or assistant output (requires at least one of `input` or `output` to be non-empty; does not fire for completely empty turns; hooks may add messages)
+- **`agent:flush`**: When memory flush starts (before the flush operation runs; context nearing token limit)
+
+**Context for `agent:reply` includes**:
+
+- `sessionId`: Current session ID
+- `input`: User's input message (may be empty string when only output is present)
+- `output`: Assistant's response (may be empty string when only input is present)
+- `turnId`: Unique turn identifier
+- `senderId`: ID of the message sender
+
+**Note:** Hooks can add messages to `event.messages` which will be prepended to the agent's response. When multiple lifecycle hooks fire during a single turn, their messages are generally prepended in the order the hooks execute, with later-executing hooks appearing first in the final output. The exact ordering may vary depending on the execution path (e.g., early returns vs normal completion).
+
+**Hook message delivery:** Hook messages are delivered on a best-effort basis. In non-persisted flows (no session key), messages will be sent to the user but may not be persisted to transcripts. Command hooks (`command:new`, `command:reset`, `command:stop`) always fire regardless of persistence, but message delivery depends on routing context availability.
+
+**Context for `agent:flush` includes**:
+
+- `sessionId`: Current session ID
+- `phase`: `"start"` (hook fires before flush runs; session state reflects pre-flush snapshot)
+- `contextTokensUsed` (optional): Last persisted token count that triggered the flush (best-effort; omitted if unavailable)
+- `reason`: Reason for flush (e.g., "context_limit")
 
 ### Gateway Events
 
@@ -250,11 +329,11 @@ These hooks are not event-stream listeners; they let plugins synchronously adjus
 
 Planned event types:
 
-- **`session:start`**: When a new session begins
-- **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
 - **`message:sent`**: When a message is sent
 - **`message:received`**: When a message is received
+
+**Note**: Previously planned `session:start` and `session:end` events are now implemented (see Session Events above). Additionally, `session:reset` was added to track session transitions.
 
 ## Creating Custom Hooks
 

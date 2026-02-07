@@ -18,6 +18,8 @@ import {
   updateSessionStore,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
@@ -43,6 +45,46 @@ import { persistSessionUsageUpdate } from "./session-usage.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+/**
+ * Converts hook messages to ReplyPayload objects
+ */
+function hookMessagesToPayloads(messages: string[]): ReplyPayload[] {
+  return messages.map((text) => ({ text }));
+}
+
+/**
+ * Prepends hook messages to an existing payload (or creates new payload if undefined)
+ * @returns Updated payload with hook messages prepended
+ */
+function prependHookMessages(
+  messages: string[],
+  existingPayload: ReplyPayload | ReplyPayload[] | undefined,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (messages.length === 0) {
+    return existingPayload;
+  }
+
+  const hookPayloads = hookMessagesToPayloads(messages);
+
+  if (!existingPayload) {
+    return hookPayloads;
+  }
+
+  const payloadArray = Array.isArray(existingPayload) ? existingPayload : [existingPayload];
+  return [...hookPayloads, ...payloadArray];
+}
+
+/**
+ * Prepends hook messages to a payload array
+ * @returns Updated array with hook messages prepended
+ */
+function prependHookMessagesToArray(messages: string[], payloads: ReplyPayload[]): ReplyPayload[] {
+  if (messages.length === 0) {
+    return payloads;
+  }
+  return [...hookMessagesToPayloads(messages), ...payloads];
+}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -105,6 +147,9 @@ export async function runReplyAgent(params: {
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
+
+  // Generate unique turn identifier for this agent run
+  const turnId = crypto.randomUUID();
 
   const isHeartbeat = opts?.isHeartbeat === true;
   const typingSignals = createTypingSignaler({
@@ -199,7 +244,7 @@ export async function runReplyAgent(params: {
 
   await typingSignals.signalRunStart();
 
-  activeSessionEntry = await runMemoryFlushIfNeeded({
+  const memoryFlushResult = await runMemoryFlushIfNeeded({
     cfg,
     followupRun,
     sessionCtx,
@@ -213,6 +258,10 @@ export async function runReplyAgent(params: {
     storePath,
     isHeartbeat,
   });
+  activeSessionEntry = memoryFlushResult.entry;
+  const memoryFlushHookMessages = memoryFlushResult.hookMessages;
+  const sessionResetHookMessages: string[] = [];
+  let agentReplyEmitted = false;
 
   const runFollowupTurn = createFollowupRunner({
     opts,
@@ -231,20 +280,29 @@ export async function runReplyAgent(params: {
     failureLabel: string;
     buildLogMessage: (nextSessionId: string) => string;
     cleanupTranscripts?: boolean;
+    reason?: string;
+    reasonDetails?: Record<string, unknown>;
   };
   const resetSession = async ({
     failureLabel,
     buildLogMessage,
     cleanupTranscripts,
-  }: SessionResetOptions): Promise<boolean> => {
+    reason,
+    reasonDetails,
+  }: SessionResetOptions): Promise<{ success: boolean; hookMessages: string[] }> => {
     if (!sessionKey || !activeSessionStore || !storePath) {
-      return false;
+      return { success: false, hookMessages: [] };
     }
-    const prevEntry = activeSessionStore[sessionKey] ?? activeSessionEntry;
+    const prevEntryFromStore = activeSessionStore[sessionKey];
+    const prevEntry = prevEntryFromStore ?? activeSessionEntry;
     if (!prevEntry) {
-      return false;
+      return { success: false, hookMessages: [] };
     }
-    const prevSessionId = cleanupTranscripts ? prevEntry.sessionId : undefined;
+    const prevSessionId = prevEntry.sessionId;
+    if (!prevSessionId) {
+      defaultRuntime.error(`Cannot reset session ${sessionKey}: missing prevSessionId`);
+      return { success: false, hookMessages: [] };
+    }
     const nextSessionId = crypto.randomUUID();
     const nextEntry: SessionEntry = {
       ...prevEntry,
@@ -260,7 +318,6 @@ export async function runReplyAgent(params: {
       sessionCtx.MessageThreadId,
     );
     nextEntry.sessionFile = nextSessionFile;
-    activeSessionStore[sessionKey] = nextEntry;
     try {
       await updateSessionStore(storePath, (store) => {
         store[sessionKey] = nextEntry;
@@ -269,42 +326,112 @@ export async function runReplyAgent(params: {
       defaultRuntime.error(
         `Failed to persist session reset after ${failureLabel} (${sessionKey}): ${String(err)}`,
       );
+      return { success: false, hookMessages: [] };
     }
+    // Only update in-memory state after successful persistence
+    activeSessionStore[sessionKey] = nextEntry;
     followupRun.run.sessionId = nextSessionId;
     followupRun.run.sessionFile = nextSessionFile;
     activeSessionEntry = nextEntry;
     activeIsNewSession = true;
-    defaultRuntime.error(buildLogMessage(nextSessionId));
+    logVerbose(buildLogMessage(nextSessionId));
     if (cleanupTranscripts && prevSessionId) {
       const transcriptCandidates = new Set<string>();
       const resolved = resolveSessionFilePath(prevSessionId, prevEntry, { agentId });
       if (resolved) {
         transcriptCandidates.add(resolved);
       }
+      // Add both thread-scoped and non-thread-scoped paths to ensure cleanup
       transcriptCandidates.add(resolveSessionTranscriptPath(prevSessionId, agentId));
+      transcriptCandidates.add(
+        resolveSessionTranscriptPath(prevSessionId, agentId, sessionCtx.MessageThreadId),
+      );
+      let deletedCount = 0;
       for (const candidate of transcriptCandidates) {
         try {
-          fs.unlinkSync(candidate);
-        } catch {
-          // Best-effort cleanup.
+          await fs.promises.unlink(candidate);
+          deletedCount++;
+        } catch (err) {
+          // Best-effort cleanup - only log unexpected failures (skip ENOENT)
+          if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+            defaultRuntime.error(
+              `Failed to delete transcript ${candidate}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
         }
       }
+      if (deletedCount > 0) {
+        logVerbose(`Cleaned up ${deletedCount} transcript(s) for session ${prevSessionId}`);
+      }
     }
-    return true;
+
+    // Lifecycle hooks: Session End / Reset
+    // Note: session:start will be emitted later in the response block to avoid duplicates
+    // Only emit when prevEntryFromStore exists (persisted session lifecycle)
+    const collectedHookMessages: string[] = [];
+
+    if (prevEntryFromStore) {
+      // 1. Session End (for the OLD session)
+      try {
+        const hookEvent = createInternalHookEvent("session", "end", sessionKey, {
+          sessionId: prevEntryFromStore.sessionId,
+          reason: reason ?? "auto_recovery",
+          ...reasonDetails,
+        });
+        await triggerInternalHook(hookEvent);
+        collectedHookMessages.push(...hookEvent.messages);
+      } catch (err) {
+        defaultRuntime.error(`session:end hook failed: ${String(err)}`);
+      }
+
+      // 2. Session Reset (Transition)
+      try {
+        // Guard clone for best-effort hook context
+        let clonedPrevEntry: SessionEntry | undefined;
+        try {
+          clonedPrevEntry = structuredClone(prevEntryFromStore);
+        } catch {
+          clonedPrevEntry = undefined;
+        }
+        const resetEvent = createInternalHookEvent("session", "reset", sessionKey, {
+          oldSessionId: prevEntryFromStore.sessionId,
+          newSessionId: nextSessionId,
+          previousSessionEntry: clonedPrevEntry,
+          reason: reason ?? "auto_recovery",
+          ...reasonDetails,
+        });
+        await triggerInternalHook(resetEvent);
+        collectedHookMessages.push(...resetEvent.messages);
+      } catch (err) {
+        defaultRuntime.error(`session:reset hook failed: ${String(err)}`);
+      }
+    }
+
+    return { success: true, hookMessages: collectedHookMessages };
   };
-  const resetSessionAfterCompactionFailure = async (reason: string): Promise<boolean> =>
-    resetSession({
+  const resetSessionAfterCompactionFailure = async (reason: string): Promise<boolean> => {
+    const result = await resetSession({
       failureLabel: "compaction failure",
       buildLogMessage: (nextSessionId) =>
         `Auto-compaction failed (${reason}). Restarting session ${sessionKey} -> ${nextSessionId} and retrying.`,
+      reason: "compaction_failure",
+      reasonDetails: { failureReason: reason },
     });
-  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> =>
-    resetSession({
+    sessionResetHookMessages.push(...result.hookMessages);
+    return result.success;
+  };
+  const resetSessionAfterRoleOrderingConflict = async (reason: string): Promise<boolean> => {
+    const result = await resetSession({
       failureLabel: "role ordering conflict",
       buildLogMessage: (nextSessionId) =>
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
+      reason: "role_ordering_conflict",
+      reasonDetails: { conflictReason: reason },
     });
+    sessionResetHookMessages.push(...result.hookMessages);
+    return result.success;
+  };
   try {
     const runStartedAt = Date.now();
     const runOutcome = await runAgentTurnWithFallback({
@@ -332,7 +459,68 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
-      return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
+      // Emit hooks for final outcomes (e.g., after session reset due to compaction failure or role ordering conflict)
+      let finalPayload: ReplyPayload | ReplyPayload[] | undefined = runOutcome.payload;
+
+      // Session Start: emit if this is a new session (including after reset)
+      if (activeIsNewSession && sessionKey) {
+        try {
+          const hookEvent = createInternalHookEvent("session", "start", sessionKey, {
+            sessionId: followupRun.run.sessionId,
+          });
+          await triggerInternalHook(hookEvent);
+          activeIsNewSession = false;
+          finalPayload = prependHookMessages(hookEvent.messages, finalPayload);
+        } catch (err) {
+          defaultRuntime.error(`session:start hook failed: ${String(err)}`);
+          activeIsNewSession = false;
+        }
+      }
+
+      // Agent Reply: emit if there's user input or assistant output
+      if (!agentReplyEmitted && sessionKey && (commandBody || runOutcome.payload)) {
+        const payloads = runOutcome.payload
+          ? Array.isArray(runOutcome.payload)
+            ? runOutcome.payload
+            : [runOutcome.payload]
+          : [];
+        const outputParts: string[] = [];
+        for (const p of payloads) {
+          if (p.text) {
+            outputParts.push(p.text);
+          } else if (p.mediaUrl) {
+            outputParts.push(`[media: ${p.mediaUrl}]`);
+          } else if (p.mediaUrls && p.mediaUrls.length > 0) {
+            outputParts.push(`[media: ${p.mediaUrls.join(", ")}]`);
+          }
+        }
+        const assistantOutput = outputParts.join("\n");
+
+        if (commandBody || assistantOutput) {
+          try {
+            const hookEvent = createInternalHookEvent("agent", "reply", sessionKey, {
+              sessionId: followupRun.run.sessionId,
+              input: commandBody,
+              output: assistantOutput,
+              turnId,
+              senderId: sessionCtx.SenderId,
+            });
+            await triggerInternalHook(hookEvent);
+            agentReplyEmitted = true;
+            finalPayload = prependHookMessages(hookEvent.messages, finalPayload);
+          } catch (err) {
+            defaultRuntime.error(`agent:reply hook failed: ${String(err)}`);
+            agentReplyEmitted = true;
+          }
+        }
+      }
+
+      // Hook message ordering: reverse chronological (newest event first)
+      // Produces: sessionReset → memoryFlush (sessionReset is more recent)
+      finalPayload = prependHookMessages(memoryFlushHookMessages, finalPayload);
+      finalPayload = prependHookMessages(sessionResetHookMessages, finalPayload);
+
+      return finalizeWithFollowup(finalPayload, queueKey, runFollowupTurn);
     }
 
     const { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
@@ -399,7 +587,49 @@ export async function runReplyAgent(params: {
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
     if (payloadArray.length === 0) {
-      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      // Emit hooks even when there's no output (agent turn completed)
+      let finalPayload: ReplyPayload | ReplyPayload[] | undefined;
+
+      // Session Start: emit if this is a new session
+      if (activeIsNewSession && sessionKey) {
+        try {
+          const hookEvent = createInternalHookEvent("session", "start", sessionKey, {
+            sessionId: followupRun.run.sessionId,
+          });
+          await triggerInternalHook(hookEvent);
+          activeIsNewSession = false;
+          finalPayload = prependHookMessages(hookEvent.messages, finalPayload);
+        } catch (err) {
+          defaultRuntime.error(`session:start hook failed: ${String(err)}`);
+          activeIsNewSession = false;
+        }
+      }
+
+      // Agent Reply: emit if there was user input (turn completed even with no output)
+      if (!agentReplyEmitted && sessionKey && commandBody) {
+        try {
+          const hookEvent = createInternalHookEvent("agent", "reply", sessionKey, {
+            sessionId: followupRun.run.sessionId,
+            input: commandBody,
+            output: "",
+            turnId,
+            senderId: sessionCtx.SenderId,
+          });
+          await triggerInternalHook(hookEvent);
+          agentReplyEmitted = true;
+          finalPayload = prependHookMessages(hookEvent.messages, finalPayload);
+        } catch (err) {
+          defaultRuntime.error(`agent:reply hook failed: ${String(err)}`);
+          agentReplyEmitted = true;
+        }
+      }
+
+      // Hook message ordering: reverse chronological (newest event first)
+      // Produces: sessionReset → memoryFlush (sessionReset is more recent)
+      finalPayload = prependHookMessages(memoryFlushHookMessages, finalPayload);
+      finalPayload = prependHookMessages(sessionResetHookMessages, finalPayload);
+
+      return finalizeWithFollowup(finalPayload, queueKey, runFollowupTurn);
     }
 
     const payloadResult = buildReplyPayloads({
@@ -422,7 +652,49 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     if (replyPayloads.length === 0) {
-      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      // Emit hooks even when there's no output after filtering (agent turn completed)
+      let finalPayload: ReplyPayload | ReplyPayload[] | undefined;
+
+      // Session Start: emit if this is a new session
+      if (activeIsNewSession && sessionKey) {
+        try {
+          const hookEvent = createInternalHookEvent("session", "start", sessionKey, {
+            sessionId: followupRun.run.sessionId,
+          });
+          await triggerInternalHook(hookEvent);
+          activeIsNewSession = false;
+          finalPayload = prependHookMessages(hookEvent.messages, finalPayload);
+        } catch (err) {
+          defaultRuntime.error(`session:start hook failed: ${String(err)}`);
+          activeIsNewSession = false;
+        }
+      }
+
+      // Agent Reply: emit if there was user input (turn completed even with no output)
+      if (!agentReplyEmitted && sessionKey && commandBody) {
+        try {
+          const hookEvent = createInternalHookEvent("agent", "reply", sessionKey, {
+            sessionId: followupRun.run.sessionId,
+            input: commandBody,
+            output: "",
+            turnId,
+            senderId: sessionCtx.SenderId,
+          });
+          await triggerInternalHook(hookEvent);
+          agentReplyEmitted = true;
+          finalPayload = prependHookMessages(hookEvent.messages, finalPayload);
+        } catch (err) {
+          defaultRuntime.error(`agent:reply hook failed: ${String(err)}`);
+          agentReplyEmitted = true;
+        }
+      }
+
+      // Hook message ordering: reverse chronological (newest event first)
+      // Produces: sessionReset → memoryFlush (sessionReset is more recent)
+      finalPayload = prependHookMessages(memoryFlushHookMessages, finalPayload);
+      finalPayload = prependHookMessages(sessionResetHookMessages, finalPayload);
+
+      return finalizeWithFollowup(finalPayload, queueKey, runFollowupTurn);
     }
 
     await signalTypingIfNeeded(replyPayloads, typingSignals);
@@ -494,6 +766,9 @@ export async function runReplyAgent(params: {
     // If verbose is enabled and this is a new session, prepend a session hint.
     let finalPayloads = replyPayloads;
     const verboseEnabled = resolvedVerboseLevel !== "off";
+
+    // Track verbose hints to prepend after all hooks
+    let compactionHint: string | undefined;
     if (autoCompactionCompleted) {
       const count = await incrementCompactionCount({
         sessionEntry: activeSessionEntry,
@@ -501,16 +776,104 @@ export async function runReplyAgent(params: {
         sessionKey,
         storePath,
       });
+
+      // Lifecycle hook: Session Compaction
+      // Emit after auto-compaction completes during an agent turn
+      if (sessionKey) {
+        try {
+          const context: Record<string, unknown> = {
+            sessionId: followupRun.run.sessionId,
+            trigger: "auto_compaction",
+          };
+          if (typeof count === "number") {
+            context.compactionCount = count;
+          }
+          if (activeSessionEntry?.totalTokens !== undefined) {
+            context.contextTokensUsed = activeSessionEntry.totalTokens;
+          }
+          const hookEvent = createInternalHookEvent("session", "compaction", sessionKey, context);
+          await triggerInternalHook(hookEvent);
+          finalPayloads = prependHookMessagesToArray(hookEvent.messages, finalPayloads);
+        } catch (err) {
+          defaultRuntime.error(`session:compaction hook failed: ${String(err)}`);
+        }
+      }
+
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        finalPayloads = [{ text: `🧹 Auto-compaction complete${suffix}.` }, ...finalPayloads];
+        compactionHint = `🧹 Auto-compaction complete${suffix}.`;
       }
     }
-    if (verboseEnabled && activeIsNewSession) {
+
+    // Prepend verbose hints first (before hooks), so hooks end up at the top of the final output
+    // Order: verbose hints below hooks, above agent output
+    if (activeIsNewSession && verboseEnabled) {
       finalPayloads = [{ text: `🧭 New session: ${followupRun.run.sessionId}` }, ...finalPayloads];
     }
+    if (compactionHint) {
+      finalPayloads = [{ text: compactionHint }, ...finalPayloads];
+    }
+
+    // Hook message ordering: reverse chronological (newest event first)
+    // After these prepends: sessionReset → memoryFlush → [verbose hints] → (rest)
+    // Later, sessionStart and agentReply will prepend, producing final: agentReply → sessionStart → sessionReset → memoryFlush → [verbose hints]
+    finalPayloads = prependHookMessagesToArray(memoryFlushHookMessages, finalPayloads);
+    finalPayloads = prependHookMessagesToArray(sessionResetHookMessages, finalPayloads);
+
+    // Lifecycle hook: Session Start
+    // Emit unconditionally for new sessions (both initial and after reset)
+    if (activeIsNewSession && sessionKey) {
+      try {
+        const hookEvent = createInternalHookEvent("session", "start", sessionKey, {
+          sessionId: followupRun.run.sessionId,
+        });
+        await triggerInternalHook(hookEvent);
+        activeIsNewSession = false;
+        finalPayloads = prependHookMessagesToArray(hookEvent.messages, finalPayloads);
+      } catch (err) {
+        defaultRuntime.error(`session:start hook failed: ${String(err)}`);
+        activeIsNewSession = false;
+      }
+    }
+
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+
+    // Lifecycle hook: Turn End
+    // Capture the final exchange for memory indexing
+    // We only emit if there is actual content involved (input or output).
+    // Extract output from RAW reply payloads (before hook/system text additions)
+    // to avoid hooks seeing their own injected content or causing feedback loops
+    const outputParts: string[] = [];
+    const rawPayloads = Array.isArray(replyPayloads) ? replyPayloads : [replyPayloads];
+    for (const p of rawPayloads) {
+      if (p.text) {
+        outputParts.push(p.text);
+      } else if (p.mediaUrl) {
+        outputParts.push(`[media: ${p.mediaUrl}]`);
+      } else if (p.mediaUrls && p.mediaUrls.length > 0) {
+        outputParts.push(`[media: ${p.mediaUrls.join(", ")}]`);
+      }
+    }
+    const assistantOutput = outputParts.join("\n");
+
+    if (!agentReplyEmitted && sessionKey && (commandBody || assistantOutput)) {
+      try {
+        const hookEvent = createInternalHookEvent("agent", "reply", sessionKey, {
+          sessionId: followupRun.run.sessionId,
+          input: commandBody,
+          output: assistantOutput,
+          turnId,
+          senderId: sessionCtx.SenderId,
+        });
+        await triggerInternalHook(hookEvent);
+        agentReplyEmitted = true;
+        finalPayloads = prependHookMessagesToArray(hookEvent.messages, finalPayloads);
+      } catch (err) {
+        defaultRuntime.error(`agent:reply hook failed: ${String(err)}`);
+        agentReplyEmitted = true;
+      }
     }
 
     return finalizeWithFollowup(

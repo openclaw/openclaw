@@ -11,6 +11,7 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -269,6 +270,34 @@ export function createFollowupRunner(params: {
           sessionKey,
           storePath,
         });
+
+        // Lifecycle hook: Session Compaction
+        // Emit after auto-compaction completes during a followup turn
+        if (sessionKey) {
+          try {
+            const context: Record<string, unknown> = {
+              sessionId: queued.run.sessionId,
+              trigger: "auto_compaction",
+            };
+            if (typeof count === "number") {
+              context.compactionCount = count;
+            }
+            if (sessionEntry?.totalTokens !== undefined) {
+              context.contextTokensUsed = sessionEntry.totalTokens;
+            }
+            const hookEvent = createInternalHookEvent("session", "compaction", sessionKey, context);
+            await triggerInternalHook(hookEvent);
+            // Prepend hook messages to the front of finalPayloads
+            if (hookEvent.messages.length > 0) {
+              for (let i = hookEvent.messages.length - 1; i >= 0; i--) {
+                finalPayloads.unshift({ text: hookEvent.messages[i] });
+              }
+            }
+          } catch (err) {
+            defaultRuntime.error(`session:compaction hook failed: ${String(err)}`);
+          }
+        }
+
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           finalPayloads.unshift({
