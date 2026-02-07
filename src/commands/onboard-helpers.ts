@@ -179,16 +179,24 @@ export async function detectBrowserOpenSupport(): Promise<BrowserOpenSupport> {
   return { ok: true, command: resolved.command };
 }
 
-export function formatControlUiSshHint(params: { port: number; basePath?: string }): string {
+export function formatControlUiSshHint(params: {
+  port: number;
+  basePath?: string;
+  token?: string;
+}): string {
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
   const localUrl = `http://localhost:${params.port}${uiPath}`;
+  const authedUrl = params.token
+    ? `${localUrl}#token=${encodeURIComponent(params.token)}`
+    : undefined;
   const sshTarget = resolveSshTargetHint();
   return [
     "No GUI detected. Open from your computer:",
     `ssh -N -L ${params.port}:127.0.0.1:${params.port} ${sshTarget}`,
     "Then open:",
     localUrl,
+    authedUrl,
     "Docs:",
     "https://docs.openclaw.ai/gateway/remote",
     "https://docs.openclaw.ai/web/control-ui",
