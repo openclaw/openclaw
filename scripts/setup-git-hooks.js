@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_HOOKS_PATH = "git-hooks";
 const PRE_COMMIT_HOOK = "pre-commit";
+const POST_COMMIT_HOOK = "post-commit";
 
 function getRepoRoot() {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -75,6 +76,7 @@ function setupGitHooks({
   }
 
   ensureExecutable(path.join(repoRoot, hooksPath, PRE_COMMIT_HOOK));
+  ensureExecutable(path.join(repoRoot, hooksPath, POST_COMMIT_HOOK));
 
   return { ok: true };
 }
@@ -82,6 +84,7 @@ function setupGitHooks({
 export {
   DEFAULT_HOOKS_PATH,
   PRE_COMMIT_HOOK,
+  POST_COMMIT_HOOK,
   ensureExecutable,
   getRepoRoot,
   isGitAvailable,

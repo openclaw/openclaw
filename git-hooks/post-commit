@@ -1,0 +1,15 @@
+#!/bin/sh
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+[ -z "$ROOT" ] && exit 0
+
+# Check if any memory files were changed in this commit
+CHANGED=$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | grep -E '^(MEMORY\.md|memory/)' || true)
+[ -z "$CHANGED" ] && exit 0
+
+# Check node is available
+command -v node >/dev/null 2>&1 || exit 0
+
+# Run sync in background so it doesn't block git
+node --import tsx "$ROOT/scripts/sync-obsidian-dashboards.ts" $CHANGED &
+
+exit 0

@@ -188,8 +188,8 @@
 | Phase 2 | Week 2 | CRM + 대시보드 (MVP) | 29h | ✅ 완료 |
 | Phase 3 | Week 3 | 콘텐츠 모듈 | 30h | ✅ 완료 (2026-02-07) |
 | Phase 4 | Week 4 | 마케팅 모듈 | 35h | ✅ 완료 (2026-02-07) |
-| Phase 5 | Week 5 | 가격 모니터링 + 완성 | 34h | ⬜ 대기 |
-| **Total** | **5주** | **전체 Admin** | **148h** | **4/5 완료** |
+| Phase 5 | Week 5 | 가격 모니터링 + 완성 | 34h | ✅ 완료 (2026-02-07) |
+| **Total** | **5주** | **전체 Admin** | **148h** | **🎊 5/5 완료! v1.0.0** |
 
 ### n8n 연동
 - 기존 워크플로우(WF-POC-01~03) 100% 재활용
@@ -495,7 +495,26 @@
   - Railway API 전수 검증: 인증, 제품, 콘텐츠, 캠페인, 통계 전부 정상
 - [x] **배포 완료**: git push (2 commits) + Railway 재배포 + GitHub Pages 자동배포
 - [x] **문서화**: T015 (라이브 테스트), I027 (Phase 3+4 구현 기록)
+- [x] **Phase 5 — 가격 모니터링 + 전체 완성** (서브에이전트, ~11분)
+  - `GET /pricing/summary` 대시보드 위젯 API 신규
+  - PricingSummaryCard 위젯 (4열 반응형 그리드)
+  - 중복 라우트 버그 수정 (`/pricing/trend/aggregated`)
+  - `PricingDashboardSummary` + `ScanStatusResponse.queued_at` 스키마 보강
+  - 경쟁사 3개 등록 (Shopee/Lazada/TikTok)
+  - 모바일 반응형: 사이드바 햄버거, 반응형 그리드
+  - 사이드바 7개 메뉴 전부 정상 확인
+  - 에러/로딩/빈 상태 처리 전수 확인
+  - **v0.1.0 → v1.0.0** 버전 업데이트
+- [x] **라이브 테스트 (T016)** → 10/10 PASS (100%)
+- [x] **배포 완료**: git push (2 commits) + Railway 재배포 + GitHub Pages 자동배포
+- [x] **문서화**: T016 (Phase 5 테스트), I028 (Phase 5 구현 기록)
+
+### 🎊 MAIBEAUTY Admin v1.0.0 — Feature Complete (2026-02-07)
+- **Phase 1~5 전체 완료**
+- **URL**: https://jini92.github.io/MAIBEAUTY/
+- **API**: https://maibeauty-api-production.up.railway.app
+- **7개 모듈**: 대시보드, CRM 리드, 제품 관리, 콘텐츠, 마케팅, 가격 모니터링, 설정
 
 ---
 
-*Last updated: 2026-02-07 13:34*
+*Last updated: 2026-02-07 14:06*
