@@ -107,13 +107,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
   const hasAudio = mediaList.some((m) => m.contentType?.startsWith("audio/"));
   let earlyTypingInterval: ReturnType<typeof setInterval> | undefined;
   if (hasAudio) {
-    // Start typing immediately
-    sendTyping({ client, channelId: message.channelId }).catch((err) => {
+    // Start typing immediately (fire-and-forget to avoid blocking)
+    void sendTyping({ rest: client.rest, channelId: message.channelId }).catch((err) => {
       logVerbose(`discord: early audio typing failed: ${String(err)}`);
     });
     // Start a loop that sends typing every 6 seconds (Discord clears after 10s)
     earlyTypingInterval = setInterval(() => {
-      sendTyping({ client, channelId: message.channelId }).catch((err) => {
+      void sendTyping({ rest: client.rest, channelId: message.channelId }).catch((err) => {
         logVerbose(`discord: early audio typing loop failed: ${String(err)}`);
       });
     }, 6000);
@@ -423,7 +423,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
           clearInterval(earlyTypingInterval);
           earlyTypingInterval = undefined;
         }
-        return sendTyping({ client, channelId: typingChannelId });
+        return sendTyping({ rest: client.rest, channelId: typingChannelId });
       },
       onStartError: (err) => {
         logTypingFailure({
@@ -490,6 +490,10 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         statusMessageId = result.messageId !== "unknown" ? result.messageId : undefined;
         statusChannelId = result.channelId;
       }
+      // Reinforce typing after status message updates. Sending a new message
+      // clears Discord's typing indicator, and edits can cause brief drops.
+      // Fire-and-forget to avoid blocking the status update flow.
+      void sendTyping({ rest: client.rest, channelId: typingChannelId }).catch(() => {});
     } catch (err) {
       logVerbose(`discord: status message update failed: ${String(err)}`);
     } finally {
