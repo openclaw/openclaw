@@ -184,6 +184,176 @@ describe("stripOversizedImageFromSession", () => {
     expect(stripped).toBe(false);
   });
 
+  it("follows context path in branched sessions (skips dead branches)", async () => {
+    const entries = [
+      { type: "session", version: 1, cwd: "/tmp" },
+      {
+        type: "message",
+        id: "a",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "Hello" }] },
+      },
+      {
+        type: "message",
+        id: "b",
+        parentId: "a",
+        message: { role: "assistant", content: [{ type: "text", text: "Hi" }] },
+      },
+      // Dead branch (c is NOT on the active path — leaf is e, path is a→b→d→e)
+      {
+        type: "message",
+        id: "c",
+        parentId: "b",
+        message: { role: "user", content: [{ type: "text", text: "Dead branch" }] },
+      },
+      // Active branch
+      {
+        type: "message",
+        id: "d",
+        parentId: "b",
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "Active branch" },
+            { type: "image", data: "bigimage", mimeType: "image/png" },
+          ],
+        },
+      },
+      {
+        type: "message",
+        id: "e",
+        parentId: "d",
+        message: { role: "assistant", content: [{ type: "text", text: "Got it" }] },
+      },
+    ];
+    const file = writeSessionSync(entries);
+
+    // Context path: a→b→d→e. API messages: [a, b, d, e].
+    // Index 2 = msg_d (active branch user message with image), NOT msg_c.
+    const stripped = await stripOversizedImageFromSession(file, 2, 1);
+    expect(stripped).toBe(true);
+
+    const raw = await fsAsync.readFile(file, "utf-8");
+    const lines = raw
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+
+    // msg_d is at file index 4 (session=0, a=1, b=2, c=3, d=4, e=5)
+    const msgD = lines[4];
+    expect(msgD.id).toBe("d");
+    expect(msgD.message.content[1].type).toBe("text");
+    expect(msgD.message.content[1].text).toContain("omitted");
+
+    // msg_c (dead branch) should be untouched
+    const msgC = lines[3];
+    expect(msgC.id).toBe("c");
+    expect(msgC.message.content[0].text).toBe("Dead branch");
+  });
+
+  it("accounts for compaction synthetic message when mapping API index", async () => {
+    const entries = [
+      { type: "session", version: 1, cwd: "/tmp" },
+      // Summarized away (before firstKeptEntryId)
+      {
+        type: "message",
+        id: "a",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "Old msg" }] },
+      },
+      {
+        type: "message",
+        id: "b",
+        parentId: "a",
+        message: { role: "assistant", content: [{ type: "text", text: "Old reply" }] },
+      },
+      // Kept message
+      {
+        type: "message",
+        id: "c",
+        parentId: "b",
+        message: { role: "user", content: [{ type: "text", text: "Kept msg" }] },
+      },
+      // Compaction (keeps from msg_c onwards)
+      {
+        type: "compaction",
+        id: "comp",
+        parentId: "c",
+        summary: "Earlier conversation about greetings",
+        firstKeptEntryId: "c",
+      },
+      // Post-compaction messages
+      {
+        type: "message",
+        id: "d",
+        parentId: "comp",
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "New message" },
+            { type: "image", data: "bigimage", mimeType: "image/png" },
+          ],
+        },
+      },
+      {
+        type: "message",
+        id: "e",
+        parentId: "d",
+        message: { role: "assistant", content: [{ type: "text", text: "I see" }] },
+      },
+    ];
+    const file = writeSessionSync(entries);
+
+    // API messages: [synthetic_summary(0), c(1), d(2), e(3)]
+    // Index 2 = msg_d (has image). Without compaction offset, flat-order
+    // would map index 2 to msg_c (wrong).
+    const stripped = await stripOversizedImageFromSession(file, 2, 1);
+    expect(stripped).toBe(true);
+
+    const raw = await fsAsync.readFile(file, "utf-8");
+    const lines = raw
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+
+    // msg_d is at file index 5 (session=0, a=1, b=2, c=3, comp=4, d=5, e=6)
+    const msgD = lines[5];
+    expect(msgD.id).toBe("d");
+    expect(msgD.message.content[1].type).toBe("text");
+    expect(msgD.message.content[1].text).toContain("omitted");
+  });
+
+  it("returns false when API index targets compaction synthetic summary", async () => {
+    const entries = [
+      { type: "session", version: 1, cwd: "/tmp" },
+      {
+        type: "message",
+        id: "a",
+        parentId: null,
+        message: { role: "user", content: [{ type: "text", text: "Hello" }] },
+      },
+      {
+        type: "compaction",
+        id: "comp",
+        parentId: "a",
+        summary: "Greeting",
+        firstKeptEntryId: "a",
+      },
+      {
+        type: "message",
+        id: "b",
+        parentId: "comp",
+        message: { role: "user", content: [{ type: "text", text: "After compaction" }] },
+      },
+    ];
+    const file = writeSessionSync(entries);
+
+    // API messages: [synthetic_summary(0), a(1), b(2)]
+    // Index 0 = synthetic → can't strip from it
+    const stripped = await stripOversizedImageFromSession(file, 0, 0);
+    expect(stripped).toBe(false);
+  });
+
   it("strips all images from a message when contentIndex is undefined", async () => {
     const entries = [
       { type: "session", version: 1, cwd: "/tmp" },
