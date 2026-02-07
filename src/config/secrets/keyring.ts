@@ -1,17 +1,12 @@
 /**
- * OS Keyring / macOS Keychain provider.
+ * OS Keyring secrets provider — cross-platform native credential storage.
  *
- * Uses the macOS `security` CLI to store and retrieve secrets from a dedicated
- * OpenClaw keychain. On other platforms, falls back to a "not implemented" error
- * with guidance on what's needed.
+ * Supported platforms:
+ * - **macOS**: Uses the `security` CLI with a dedicated OpenClaw keychain
+ * - **Linux**: Uses `secret-tool` (libsecret / GNOME Keyring / KDE Wallet via D-Bus Secret Service API)
+ * - **Windows**: Not yet implemented (Credential Manager). Contributions welcome.
  *
- * macOS implementation:
- * - Uses a dedicated keychain file (`~/Library/Keychains/openclaw.keychain-db`)
- * - Secrets stored as generic password items with account="openclaw"
- * - Keychain must be unlocked before use (password defaults to empty string)
- *
- * Linux/Windows: not yet implemented. Contributions welcome.
- * Potential approaches: libsecret (Linux), Windows Credential Manager, or `keytar` npm package.
+ * No external npm dependencies — uses platform-native CLIs only.
  */
 
 import { execFile } from "node:child_process";
@@ -36,53 +31,81 @@ export interface KeyringSecretsProviderOptions {
    */
   keychainPassword?: string;
 
-  /** Account name used for keychain items. Defaults to "openclaw". */
+  /**
+   * Account/service name used for keyring items.
+   * Defaults to "openclaw".
+   * On macOS: used as the `-a` (account) parameter.
+   * On Linux: used as the `service` attribute for secret-tool.
+   */
   account?: string;
 }
 
 /**
- * Creates a macOS Keychain secrets provider.
- *
- * Resolves secrets by looking up generic password items in the OpenClaw keychain
- * using the `security` CLI.
+ * Creates a platform-native keyring secrets provider.
  *
  * @example
  * ```json5
  * {
  *   "secrets": {
- *     "provider": "keyring",
- *     "keyring": { "keychainPath": "~/Library/Keychains/openclaw.keychain-db" }
+ *     "provider": "keyring"
+ *     // Optional: "keyring": { "account": "openclaw" }
  *   },
  *   "channels": {
  *     "slack": { "botToken": "$secret{slack-bot-token}" }
  *   }
  * }
  * ```
+ *
+ * Setup (one-time):
+ *
+ * macOS:
+ * ```bash
+ * security create-keychain -p '' ~/Library/Keychains/openclaw.keychain-db
+ * security add-generic-password -a openclaw -s slack-bot-token -w "xoxb-..." ~/Library/Keychains/openclaw.keychain-db
+ * ```
+ *
+ * Linux:
+ * ```bash
+ * echo -n "xoxb-..." | secret-tool store --label="openclaw: slack-bot-token" service openclaw key slack-bot-token
+ * ```
  */
 export function createKeyringSecretsProvider(
   options: KeyringSecretsProviderOptions = {},
 ): SecretsProvider {
   const os = platform();
+  const account = options.account ?? "openclaw";
 
-  if (os !== "darwin") {
-    return {
-      name: "keyring",
-      async resolve(_secretName: string): Promise<string> {
-        throw new Error(
-          `OS keyring secrets provider is only implemented for macOS (darwin). ` +
-            `Current platform: ${os}. ` +
-            `Contributions welcome for Linux (libsecret) and Windows (Credential Manager) — ` +
-            `see src/config/secrets/keyring.ts`,
-        );
-      },
-    };
+  if (os === "darwin") {
+    return createMacOSProvider(options, account);
   }
 
-  const account = options.account ?? "openclaw";
+  if (os === "linux") {
+    return createLinuxProvider(account);
+  }
+
+  return {
+    name: "keyring",
+    async resolve(_secretName: string): Promise<string> {
+      throw new Error(
+        `OS keyring secrets provider is not implemented for platform: ${os}. ` +
+          `Supported: macOS (security CLI), Linux (secret-tool / libsecret). ` +
+          `Contributions welcome for Windows (Credential Manager) — see src/config/secrets/keyring.ts`,
+      );
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// macOS implementation — uses `security` CLI with dedicated keychain
+// ---------------------------------------------------------------------------
+
+function createMacOSProvider(
+  options: KeyringSecretsProviderOptions,
+  account: string,
+): SecretsProvider {
   const keychainPath =
     options.keychainPath ?? path.join(homedir(), "Library", "Keychains", "openclaw.keychain-db");
   const keychainPassword = options.keychainPassword ?? "";
-
   let unlocked = false;
 
   async function ensureUnlocked(): Promise<void> {
@@ -105,7 +128,6 @@ export function createKeyringSecretsProvider(
 
     async resolve(secretName: string): Promise<string> {
       await ensureUnlocked();
-
       try {
         const { stdout } = await execFileAsync("security", [
           "find-generic-password",
@@ -116,7 +138,6 @@ export function createKeyringSecretsProvider(
           "-w",
           keychainPath,
         ]);
-        // stdout includes a trailing newline
         return stdout.trimEnd();
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -131,13 +152,71 @@ export function createKeyringSecretsProvider(
     },
 
     async dispose(): Promise<void> {
-      // Lock the keychain when done (security best practice)
       try {
         await execFileAsync("security", ["lock-keychain", keychainPath]);
       } catch {
-        // Best effort — don't throw on cleanup
+        // Best effort
       }
       unlocked = false;
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Linux implementation — uses `secret-tool` (libsecret / D-Bus Secret Service)
+// ---------------------------------------------------------------------------
+
+function createLinuxProvider(account: string): SecretsProvider {
+  /** Check that secret-tool is available (cached after first call). */
+  let checked = false;
+
+  async function ensureSecretTool(): Promise<void> {
+    if (checked) return;
+    try {
+      await execFileAsync("which", ["secret-tool"]);
+      checked = true;
+    } catch {
+      throw new Error(
+        `secret-tool not found. Install libsecret to use the keyring provider on Linux:\n` +
+          `  Arch/CachyOS: sudo pacman -S libsecret\n` +
+          `  Ubuntu/Debian: sudo apt install libsecret-tools\n` +
+          `  Fedora: sudo dnf install libsecret`,
+      );
+    }
+  }
+
+  return {
+    name: "keyring",
+
+    async resolve(secretName: string): Promise<string> {
+      await ensureSecretTool();
+      try {
+        const { stdout } = await execFileAsync("secret-tool", [
+          "lookup",
+          "service",
+          account,
+          "key",
+          secretName,
+        ]);
+        const value = stdout.trimEnd();
+        if (!value) {
+          throw new Error("empty");
+        }
+        return value;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("empty") || msg.includes("exit code")) {
+          throw new Error(
+            `Secret "${secretName}" not found in keyring. ` +
+              `Add it with: echo -n "VALUE" | secret-tool store --label="openclaw: ${secretName}" service ${account} key ${secretName}`,
+          );
+        }
+        throw new Error(`Failed to retrieve secret "${secretName}" from keyring: ${msg}`);
+      }
+    },
+
+    async dispose(): Promise<void> {
+      // No cleanup needed for libsecret — D-Bus handles lifecycle
     },
   };
 }
