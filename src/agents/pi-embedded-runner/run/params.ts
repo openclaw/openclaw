@@ -68,6 +68,8 @@ export type RunEmbeddedPiAgentParams = {
   model?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  /** Agent-level model fallbacks override (from agents.{agentId}.model.fallbacks). */
+  fallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
