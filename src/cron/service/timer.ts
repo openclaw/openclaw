@@ -27,10 +27,12 @@ export function armTimer(state: CronServiceState) {
   const delay = Math.max(nextAt - state.deps.nowMs(), 0);
   // Avoid TimeoutOverflowWarning when a job is far in the future.
   const clampedDelay = Math.min(delay, MAX_TIMEOUT_MS);
-  state.timer = setTimeout(() => {
-    void onTimer(state).catch((err) => {
+  state.timer = setTimeout(async () => {
+    try {
+      await onTimer(state);
+    } catch (err) {
       state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
-    });
+    }
   }, clampedDelay);
 }
 

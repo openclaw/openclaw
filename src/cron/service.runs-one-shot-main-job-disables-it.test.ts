@@ -17,7 +17,20 @@ async function makeStorePath() {
   return {
     storePath: path.join(dir, "cron", "jobs.json"),
     cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
+      // On some runners, cron timers/background persists can race cleanup.
+      // Be a bit tolerant to avoid flaky ENOTEMPTY failures.
+      for (let i = 0; i < 5; i++) {
+        try {
+          await fs.rm(dir, { recursive: true, force: true });
+          return;
+        } catch (err) {
+          if (i === 4) {
+            throw err;
+          }
+          // Avoid waiting on real timers (tests use fake timers)
+          await Promise.resolve();
+        }
+      }
     },
   };
 }
