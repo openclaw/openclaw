@@ -52,6 +52,7 @@ import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import { stripOversizedImageFromSession } from "./strip-oversized-image.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -485,6 +486,15 @@ export async function runEmbeddedPiAgent(
             // Handle image size errors with a user-friendly message (no retry needed)
             const imageSizeError = parseImageSizeError(errorText);
             if (imageSizeError) {
+              // Strip the oversized image from the session file so it doesn't
+              // cause an infinite retry loop on subsequent messages.
+              if (imageSizeError.messageIndex !== undefined && params.sessionFile) {
+                await stripOversizedImageFromSession(
+                  params.sessionFile,
+                  imageSizeError.messageIndex,
+                  imageSizeError.contentIndex,
+                );
+              }
               const maxMb = imageSizeError.maxMb;
               const maxMbLabel =
                 typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
@@ -589,6 +599,14 @@ export async function runEmbeddedPiAgent(
             log.warn(
               `Profile ${lastProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
             );
+            // Strip the rejected image from the session to prevent infinite retry loops.
+            if (imageDimensionError.messageIndex !== undefined && params.sessionFile) {
+              await stripOversizedImageFromSession(
+                params.sessionFile,
+                imageDimensionError.messageIndex,
+                imageDimensionError.contentIndex,
+              );
+            }
           }
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
