@@ -27,6 +27,21 @@ OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
 
+# The container runs as 'node' (uid 1000, gid 1000).  Host-created directories
+# are often owned by root, which causes EACCES errors inside the container.
+# Align ownership so the container user can read/write config and workspace.
+CONTAINER_UID="${OPENCLAW_CONTAINER_UID:-1000}"
+CONTAINER_GID="${OPENCLAW_CONTAINER_GID:-1000}"
+if [[ "$(id -u)" -eq 0 ]]; then
+  chown "$CONTAINER_UID:$CONTAINER_GID" "$OPENCLAW_CONFIG_DIR"
+  chown "$CONTAINER_UID:$CONTAINER_GID" "$OPENCLAW_WORKSPACE_DIR"
+else
+  # Non-root host user: attempt chown but don't fail — the directories may
+  # already have the right ownership if created by the same uid.
+  chown "$CONTAINER_UID:$CONTAINER_GID" "$OPENCLAW_CONFIG_DIR" 2>/dev/null || true
+  chown "$CONTAINER_UID:$CONTAINER_GID" "$OPENCLAW_WORKSPACE_DIR" 2>/dev/null || true
+fi
+
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
 export OPENCLAW_GATEWAY_PORT="${OPENCLAW_GATEWAY_PORT:-18789}"
