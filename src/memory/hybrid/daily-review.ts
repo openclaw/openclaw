@@ -66,6 +66,7 @@ export function isDailyReviewEnabled(cfg: OpenClawConfig): boolean {
  */
 export function generateDailyReviewReminder(
   cfg: OpenClawConfig,
+  agentId: string,
   date: Date = new Date(),
 ): {
   message: string;
@@ -80,7 +81,7 @@ export function generateDailyReviewReminder(
   const message = renderDailyReviewMessage(dailyReview.message, date);
   const dateStr = formatDate(date);
 
-  const workspaceDir = resolveAgentWorkspaceDir(cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const dailyLogPath = `${workspaceDir}/memory/${dateStr}.md`;
 
   return {
@@ -95,9 +96,10 @@ export function generateDailyReviewReminder(
  */
 export function logDailyReviewReminder(
   cfg: OpenClawConfig,
+  agentId: string,
   date: Date = new Date(),
 ): void {
-  const reminder = generateDailyReviewReminder(cfg, date);
+  const reminder = generateDailyReviewReminder(cfg, agentId, date);
   if (!reminder) {
     return;
   }
@@ -112,9 +114,10 @@ export function logDailyReviewReminder(
  */
 export function formatDailyReviewForChannel(
   cfg: OpenClawConfig,
+  agentId: string,
   date: Date = new Date(),
 ): { text: string } | null {
-  const reminder = generateDailyReviewReminder(cfg, date);
+  const reminder = generateDailyReviewReminder(cfg, agentId, date);
   if (!reminder) {
     return null;
   }

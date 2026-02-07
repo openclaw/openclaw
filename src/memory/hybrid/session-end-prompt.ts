@@ -60,8 +60,13 @@ export function shouldPromptForMemory(
 
   const config = resolveSessionEndPromptConfig(cfg);
   const sessionMinutes = sessionDurationMs / (1000 * 60);
+  const qualifies = sessionMinutes >= config.minDurationMinutes;
 
-  return sessionMinutes >= config.minDurationMinutes;
+  if (qualifies) {
+    log.debug(`Session qualifies for memory prompt (${sessionMinutes.toFixed(1)}m >= ${config.minDurationMinutes}m min)`);
+  }
+
+  return qualifies;
 }
 
 /**
@@ -69,6 +74,7 @@ export function shouldPromptForMemory(
  */
 export function generateSessionEndPrompt(
   cfg: OpenClawConfig,
+  agentId: string,
   date: Date = new Date(),
 ): {
   message: string;
@@ -82,7 +88,7 @@ export function generateSessionEndPrompt(
   const dateStr = formatDate(date);
   const message = config.message.replace(/\{\{date\}\}/g, dateStr);
 
-  const workspaceDir = resolveAgentWorkspaceDir(cfg);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const dailyLogPath = `${workspaceDir}/memory/${dateStr}.md`;
 
   return {
@@ -96,6 +102,7 @@ export function generateSessionEndPrompt(
  */
 export function formatSessionEndPromptForUser(
   cfg: OpenClawConfig,
+  agentId: string,
   sessionDurationMs: number,
   date: Date = new Date(),
 ): { text: string; qualifies: boolean } {
@@ -108,7 +115,7 @@ export function formatSessionEndPromptForUser(
     };
   }
 
-  const prompt = generateSessionEndPrompt(cfg, date);
+  const prompt = generateSessionEndPrompt(cfg, agentId, date);
   return {
     text: prompt?.message ?? "",
     qualifies: true,
