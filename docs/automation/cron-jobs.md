@@ -17,6 +17,8 @@ the right time, and can optionally deliver output back to a chat.
 If you want _“run this every morning”_ or _“poke the agent in 20 minutes”_,
 cron is the mechanism.
 
+Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
+
 ## TL;DR
 
 - Cron runs **inside the Gateway** (not inside the model).

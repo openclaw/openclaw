@@ -168,6 +168,32 @@ Config:
 - Groups: `signal:group:<groupId>`.
 - Usernames: `username:<name>` (if supported by your Signal account).
 
+## Troubleshooting
+
+Run this ladder first:
+
+```bash
+openclaw status
+openclaw gateway status
+openclaw logs --follow
+openclaw doctor
+openclaw channels status --probe
+```
+
+Then confirm DM pairing state if needed:
+
+```bash
+openclaw pairing list signal
+```
+
+Common failures:
+
+- Daemon reachable but no replies: verify account/daemon settings (`httpUrl`, `account`) and receive mode.
+- DMs ignored: sender is pending pairing approval.
+- Group messages ignored: group sender/mention gating blocks delivery.
+
+For triage flow: [/channels/troubleshooting](/channels/troubleshooting).
+
 ## Configuration reference (Signal)
 
 Full configuration: [Configuration](/gateway/configuration)
