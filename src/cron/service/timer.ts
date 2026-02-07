@@ -39,13 +39,63 @@ export async function onTimer(state: CronServiceState) {
     return;
   }
   state.running = true;
+
+  // IMPORTANT: do not hold the cron store lock across long-running job execution.
+  // Jobs can take minutes (agent turns / heartbeat wakes). Holding the lock blocks
+  // cron RPCs like list/status for the full duration.
   try {
-    await locked(state, async () => {
-      // Reload persisted due-times without recomputing so runDueJobs sees
-      // the original nextRunAtMs values.  Recomputing first would advance
-      // every/cron slots past the current tick when the timer fires late (#9788).
+    const now = state.deps.nowMs();
+
+    // Phase 1: under lock, load store, identify due jobs, mark them running, persist.
+    const dueIds = await locked(state, async () => {
+      // Reload persisted due-times without recomputing so we see the original
+      // nextRunAtMs values. Recomputing first would advance every/cron slots past
+      // the current tick when the timer fires late (#9788).
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-      await runDueJobs(state);
+      if (!state.store) {
+        return [] as string[];
+      }
+
+      const due = state.store.jobs.filter((j) => {
+        if (!j.enabled) {
+          return false;
+        }
+        if (typeof j.state.runningAtMs === "number") {
+          return false;
+        }
+        const next = j.state.nextRunAtMs;
+        return typeof next === "number" && now >= next;
+      });
+
+      for (const job of due) {
+        const startedAt = state.deps.nowMs();
+        job.state.runningAtMs = startedAt;
+        job.state.lastError = undefined;
+        emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+      }
+
+      await persist(state);
+      return due.map((j) => j.id);
+    });
+
+    // Phase 2: outside lock, execute jobs.
+    // After each job finishes, persist under lock so list/status reflect completion
+    // and so a crash/restart doesn't leave long-lived runningAtMs states.
+    for (const id of dueIds) {
+      const job = state.store?.jobs.find((j) => j.id === id);
+      if (!job) {
+        continue;
+      }
+      await executeJob(state, job, now, { forced: false, alreadyMarkedRunning: true });
+      await locked(state, async () => {
+        // Do NOT reload here; we want to persist the in-memory mutations from executeJob.
+        await persist(state);
+      });
+    }
+
+    // Phase 3: under lock, recompute schedule + persist.
+    await locked(state, async () => {
+      await ensureLoaded(state);
       recomputeNextRuns(state);
       await persist(state);
     });
@@ -80,12 +130,16 @@ export async function executeJob(
   state: CronServiceState,
   job: CronJob,
   nowMs: number,
-  opts: { forced: boolean },
+  opts: { forced: boolean; alreadyMarkedRunning?: boolean },
 ) {
-  const startedAt = state.deps.nowMs();
-  job.state.runningAtMs = startedAt;
-  job.state.lastError = undefined;
-  emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+  const startedAt =
+    typeof job.state.runningAtMs === "number" ? job.state.runningAtMs : state.deps.nowMs();
+
+  if (!opts.alreadyMarkedRunning) {
+    job.state.runningAtMs = startedAt;
+    job.state.lastError = undefined;
+    emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+  }
 
   let deleted = false;
 

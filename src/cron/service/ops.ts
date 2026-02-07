@@ -122,16 +122,47 @@ export async function remove(state: CronServiceState, id: string) {
 }
 
 export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
-  return await locked(state, async () => {
+  // IMPORTANT: do not hold the cron store lock across long-running job execution.
+  // Otherwise, cron.list/status/etc will block for the full duration.
+
+  const forced = mode === "force";
+
+  // Phase 1: under lock, validate + mark running + persist.
+  const start:
+    | { ok: true; ran: false; reason: "not-due" }
+    | { ok: true; ran: true; nowMs: number } = await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state);
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
-    const due = isJobDue(job, now, { forced: mode === "force" });
+    const due = isJobDue(job, now, { forced });
     if (!due) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
-    await executeJob(state, job, now, { forced: mode === "force" });
+
+    const startedAt = state.deps.nowMs();
+    job.state.runningAtMs = startedAt;
+    job.state.lastError = undefined;
+    emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
+
+    await persist(state);
+    armTimer(state);
+    return { ok: true, ran: true, nowMs: now } as const;
+  });
+
+  if (!start.ran) {
+    return start;
+  }
+
+  // Phase 2: outside lock, execute.
+  const job = state.store?.jobs.find((j) => j.id === id);
+  if (job) {
+    await executeJob(state, job, start.nowMs, { forced, alreadyMarkedRunning: true });
+  }
+
+  // Phase 3: under lock, persist updated job state + re-arm.
+  return await locked(state, async () => {
+    // Do NOT force reload; we want to persist the in-memory mutations from executeJob.
     await persist(state);
     armTimer(state);
     return { ok: true, ran: true } as const;
