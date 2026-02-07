@@ -7,9 +7,13 @@ const distDir = path.join(rootDir, "dist");
 const cliDir = path.join(distDir, "cli");
 
 const findCandidates = () =>
-  fs
-    .readdirSync(distDir)
-    .filter((entry) => entry.startsWith("daemon-cli-") && entry.endsWith(".js"));
+  fs.readdirSync(distDir).filter((entry) => {
+    if (!entry.startsWith("daemon-cli-")) {
+      return false;
+    }
+    // tsdown can emit either .js or .mjs depending on bundler settings/runtime.
+    return entry.endsWith(".js") || entry.endsWith(".mjs");
+  });
 
 // In rare cases, build output can land slightly after this script starts (depending on FS timing).
 // Retry briefly to avoid flaky builds.
