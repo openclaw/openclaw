@@ -31,6 +31,7 @@ export function buildEmbeddedRunPayloads(params: {
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
   inlineToolResultsAllowed: boolean;
+  didSendViaMessagingTool?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -199,8 +200,12 @@ export function buildEmbeddedRunPayloads(params: {
           : false,
       );
     const lastAssistantWasToolUse = params.lastAssistant?.stopReason === "toolUse";
+    // Consider messaging tool sends as user-facing replies even if the final assistant
+    // response is NO_REPLY or SILENT_REPLY. This prevents tool error leakage when the
+    // agent has already delivered messages via the message tool during the workflow.
     const hasUserFacingReply =
-      replyItems.length > 0 && !lastAssistantHasToolCalls && !lastAssistantWasToolUse;
+      (replyItems.length > 0 && !lastAssistantHasToolCalls && !lastAssistantWasToolUse) ||
+      Boolean(params.didSendViaMessagingTool);
     // Check if this is a recoverable/internal tool error that shouldn't be shown to users
     // when there's already a user-facing reply (the model should have retried).
     const errorLower = (params.lastToolError.error ?? "").toLowerCase();

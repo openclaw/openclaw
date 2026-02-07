@@ -48,6 +48,23 @@ describe("isAbortError", () => {
   it("returns false for plain objects without AbortError name", () => {
     expect(isAbortError({ message: "plain object" })).toBe(false);
   });
+
+  it("returns true for DOMException with ABORT_ERR code", () => {
+    // Simulate DOMException-style AbortError
+    const error = { name: "AbortError", code: "ABORT_ERR", message: "Aborted" };
+    expect(isAbortError(error)).toBe(true);
+  });
+
+  it("returns true for error with code 20 (AbortError)", () => {
+    const error = { code: "20", message: "Aborted" };
+    expect(isAbortError(error)).toBe(true);
+  });
+
+  it("returns true for stringified AbortError", () => {
+    // Sometimes errors come from different realms/contexts
+    const error = { toString: () => "AbortError: The user aborted a request." };
+    expect(isAbortError(error)).toBe(true);
+  });
 });
 
 describe("isTransientNetworkError", () => {
@@ -124,5 +141,28 @@ describe("isTransientNetworkError", () => {
   it("returns false for AggregateError with only non-network errors", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
+  });
+
+  it("returns true for WebSocket close code 1006 (abnormal closure)", () => {
+    const error = { closeCode: 1006, message: "Connection closed abnormally" };
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for additional undici error codes", () => {
+    const additionalCodes = [
+      "UND_ERR_ABORTED",
+      "UND_ERR_REQ_RETRY",
+      "UND_ERR_RESPONSE_STATUS_CODE",
+    ];
+    for (const code of additionalCodes) {
+      const error = Object.assign(new Error("test"), { code });
+      expect(isTransientNetworkError(error), `code: ${code}`).toBe(true);
+    }
+  });
+
+  it("returns true for fetch failed error without proper TypeError instance", () => {
+    // Simulate cross-realm errors where instanceof check fails
+    const error = { message: "fetch failed", name: "TypeError" };
+    expect(isTransientNetworkError(error)).toBe(true);
   });
 });

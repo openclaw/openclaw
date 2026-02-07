@@ -244,4 +244,22 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.isError).toBe(true);
     expect(payloads[0]?.text).toContain("connection timeout");
   });
+
+  it("suppresses tool errors when messaging tool sent messages", () => {
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: [],
+      lastAssistant: undefined,
+      lastToolError: { toolName: "exec", error: "command not found: ghswitch" },
+      sessionKey: "session:discord",
+      inlineToolResultsAllowed: false,
+      verboseLevel: "off",
+      reasoningLevel: "off",
+      toolResultFormat: "plain",
+      didSendViaMessagingTool: true,
+    });
+
+    // Tool errors should be suppressed when messages were sent via messaging tool
+    expect(payloads).toHaveLength(0);
+  });
 });

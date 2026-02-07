@@ -33,7 +33,13 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "UND_ERR_SOCKET",
   "UND_ERR_HEADERS_TIMEOUT",
   "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_ABORTED",
+  "UND_ERR_REQ_RETRY",
+  "UND_ERR_RESPONSE_STATUS_CODE",
 ]);
+
+// WebSocket close codes that indicate transient failures
+const TRANSIENT_WS_CLOSE_CODES = new Set([1006]);
 
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
@@ -58,15 +64,35 @@ export function isAbortError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
   }
+
+  // Check for AbortError name (handles both Error and DOMException)
   const name = "name" in err ? String(err.name) : "";
   if (name === "AbortError") {
     return true;
   }
+
   // Check for "This operation was aborted" message from Node's undici
   const message = "message" in err && typeof err.message === "string" ? err.message : "";
   if (message === "This operation was aborted") {
     return true;
   }
+
+  // Check for DOMException-style AbortError (has code 20 or ABORT_ERR)
+  const code = "code" in err ? String(err.code) : "";
+  if (code === "ABORT_ERR" || code === "20") {
+    return true;
+  }
+
+  // Check error string representation for AbortError patterns
+  // Use toString() if available, otherwise fall back to String() for objects
+  const errString =
+    typeof (err as { toString?: unknown }).toString === "function"
+      ? (err as { toString(): string }).toString()
+      : "";
+  if (errString.includes("AbortError") || errString.includes("This operation was aborted")) {
+    return true;
+  }
+
   return false;
 }
 
@@ -95,12 +121,35 @@ export function isTransientNetworkError(err: unknown): boolean {
   }
 
   // "fetch failed" TypeError from undici (Node's native fetch)
-  if (err instanceof TypeError && err.message === "fetch failed") {
+  // Check both instanceof and string representation to handle cross-realm errors
+  const errorMessage =
+    err instanceof Error
+      ? err.message
+      : typeof (err as { message?: unknown }).message === "string"
+        ? (err as { message: string }).message
+        : "";
+  const errorName =
+    err instanceof Error
+      ? err.name
+      : typeof (err as { name?: unknown }).name === "string"
+        ? (err as { name: string }).name
+        : "";
+  const isTypeError = err instanceof TypeError || errorName === "TypeError";
+  const hasFetchFailedMessage = errorMessage === "fetch failed";
+  if (isTypeError && hasFetchFailedMessage) {
     const cause = getErrorCause(err);
     if (cause) {
       return isTransientNetworkError(cause);
     }
     return true;
+  }
+
+  // Check for WebSocket close errors with transient codes
+  if (typeof err === "object" && err !== null) {
+    const closeCode = (err as { closeCode?: number }).closeCode;
+    if (typeof closeCode === "number" && TRANSIENT_WS_CLOSE_CODES.has(closeCode)) {
+      return true;
+    }
   }
 
   // Check the cause chain recursively
