@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
+
+beforeEach(() => {
+  runEmbeddedPiAgentMock.mockReset();
+});
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: async ({
@@ -134,6 +138,47 @@ describe("createFollowupRunner compaction", () => {
 });
 
 describe("createFollowupRunner messaging tool dedupe", () => {
+  it("preserves Slack thread tool context for followup runs", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    const queued = {
+      ...baseQueuedRun("slack"),
+      originatingChannel: "slack" as const,
+      originatingChatType: "channel",
+      originatingAccountId: "primary",
+      originatingTo: "channel:C1",
+      originatingThreadId: "1770432765.123469",
+      run: {
+        ...baseQueuedRun("slack").run,
+        config: {
+          channels: {
+            slack: {
+              // Even if configured "off", followup runs should keep tool sends in the active thread.
+              replyToMode: "off",
+            },
+          },
+        },
+      },
+    } as FollowupRun;
+
+    await runner(queued);
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(call.currentChannelId).toBe("C1");
+    expect(call.currentThreadTs).toBe("1770432765.123469");
+    expect(call.replyToMode).toBe("all");
+    expect(call.hasRepliedRef).toMatchObject({ value: false });
+  });
+
   it("drops payloads already sent via messaging tool", async () => {
     const onBlockReply = vi.fn(async () => {});
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
