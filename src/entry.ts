@@ -44,6 +44,13 @@ function ensureExperimentalWarningSuppressed(): boolean {
 
   // Respawn guard (and keep recursion bounded if something goes wrong).
   process.env.OPENCLAW_NODE_OPTIONS_READY = "1";
+
+  // Set parent shim title based on the subcommand (e.g. "openclaw-gateway-shim").
+  const subcommand = process.argv.slice(2).find((arg) => !arg.startsWith("-"));
+  if (subcommand) {
+    process.title = `openclaw-${subcommand}-shim`;
+  }
+
   // Pass flag as a Node CLI option, not via NODE_OPTIONS (--disable-warning is disallowed in NODE_OPTIONS).
   const child = spawn(
     process.execPath,
