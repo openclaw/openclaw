@@ -45,11 +45,14 @@ export function resolveExtraParams(params: {
 
 type CacheRetention = "none" | "short" | "long";
 type EffortLevel = "low" | "medium" | "high" | "max";
+type AdaptiveThinking = { type: "adaptive" };
 type ExtendedStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: CacheRetention;
   openaiWsWarmup?: boolean;
-  /** Claude Opus 4.6+ effort parameter for adaptive thinking. */
-  effort?: EffortLevel;
+  /** Claude Opus 4.6+ adaptive thinking mode. */
+  thinking?: AdaptiveThinking;
+  /** Claude Opus 4.6+ effort parameter for adaptive thinking depth. */
+  output_config?: { effort: EffortLevel };
 };
 
 /**
@@ -106,19 +109,26 @@ function resolveCacheRetention(
 }
 
 /**
- * Resolve effort level from extraParams (Claude Opus 4.6+ only).
+ * Resolve adaptive thinking config from extraParams (Claude Opus 4.6+ only).
  * Only applies to Anthropic provider.
+ *
+ * Claude Opus 4.6 uses adaptive thinking mode with effort parameter:
+ * - thinking: { type: "adaptive" }
+ * - output_config: { effort: "low" | "medium" | "high" | "max" }
  */
-function resolveEffortLevel(
+function resolveAdaptiveThinking(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
-): EffortLevel | undefined {
+): { thinking: AdaptiveThinking; effort: EffortLevel } | undefined {
   if (provider !== "anthropic") {
     return undefined;
   }
   const val = extraParams?.effort;
   if (val === "low" || val === "medium" || val === "high" || val === "max") {
-    return val;
+    return {
+      thinking: { type: "adaptive" },
+      effort: val,
+    };
   }
   return undefined;
 }
@@ -153,9 +163,11 @@ function createStreamFnWithExtraParams(
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
   }
-  const effort = resolveEffortLevel(extraParams, provider);
-  if (effort) {
-    streamParams.effort = effort;
+  // Claude Opus 4.6+ adaptive thinking with effort parameter
+  const adaptiveThinking = resolveAdaptiveThinking(extraParams, provider);
+  if (adaptiveThinking) {
+    streamParams.thinking = adaptiveThinking.thinking;
+    streamParams.output_config = { effort: adaptiveThinking.effort };
   }
 
   // Extract OpenRouter provider routing preferences from extraParams.provider.
