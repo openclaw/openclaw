@@ -24,6 +24,7 @@ import {
 import {
   type ActionGate,
   jsonResult,
+  parseAvailableTags,
   readNumberParam,
   readStringArrayParam,
   readStringParam,
@@ -322,6 +323,7 @@ export async function handleDiscordGuildAction(
       const rateLimitPerUser = readNumberParam(params, "rateLimitPerUser", {
         integer: true,
       });
+      const availableTags = parseAvailableTags(params.availableTags);
       const channel = accountId
         ? await editChannelDiscord(
             {
@@ -332,6 +334,7 @@ export async function handleDiscordGuildAction(
               parentId,
               nsfw,
               rateLimitPerUser: rateLimitPerUser ?? undefined,
+              availableTags,
             },
             { accountId },
           )
@@ -343,6 +346,7 @@ export async function handleDiscordGuildAction(
             parentId,
             nsfw,
             rateLimitPerUser: rateLimitPerUser ?? undefined,
+            availableTags,
           });
       return jsonResult({ ok: true, channel });
     }
