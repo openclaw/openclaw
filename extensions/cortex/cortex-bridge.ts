@@ -661,7 +661,8 @@ export class MemoryIndexCache {
 }
 
 export class CortexBridge {
-  private memoryDir: string;
+  private memoryDir: string;  // Data directory for stm.json, embeddings, etc.
+  private pythonScriptsDir: string;  // Directory containing Python scripts
   private pythonPath: string;
   private embeddingsUrl: string;
 
@@ -687,12 +688,17 @@ export class CortexBridge {
 
   constructor(options?: {
     memoryDir?: string;
+    pythonScriptsDir?: string;
     pythonPath?: string;
     embeddingsUrl?: string;
     hotTierSize?: number;
     tokenBudget?: Partial<TokenBudgetConfig>;
   }) {
     this.memoryDir = options?.memoryDir ?? join(homedir(), ".openclaw", "workspace", "memory");
+    // Python scripts are in the extension's python/ directory
+    // Use import.meta.url to find the extension directory
+    const extensionDir = new URL(".", import.meta.url).pathname;
+    this.pythonScriptsDir = options?.pythonScriptsDir ?? join(extensionDir, "python");
     this.pythonPath = options?.pythonPath ?? "python3";
     this.embeddingsUrl = options?.embeddingsUrl ?? "http://localhost:8030";
 
@@ -983,9 +989,9 @@ export class CortexBridge {
    */
   async isAvailable(): Promise<boolean> {
     try {
-      await access(join(this.memoryDir, "stm_manager.py"), constants.R_OK);
-      await access(join(this.memoryDir, "embeddings_manager.py"), constants.R_OK);
-      await access(join(this.memoryDir, "collections_manager.py"), constants.R_OK);
+      await access(join(this.pythonScriptsDir, "stm_manager.py"), constants.R_OK);
+      await access(join(this.pythonScriptsDir, "embeddings_manager.py"), constants.R_OK);
+      await access(join(this.pythonScriptsDir, "collections_manager.py"), constants.R_OK);
       return true;
     } catch {
       return false;
@@ -994,12 +1000,17 @@ export class CortexBridge {
 
   /**
    * Run a Python script and return JSON result
+   * Scripts are loaded from pythonScriptsDir, data is read/written to memoryDir
    */
   private async runPython(code: string): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const proc = spawn(this.pythonPath, ["-c", code], {
-        cwd: this.memoryDir,
-        env: { ...process.env, PYTHONPATH: this.memoryDir },
+        cwd: this.pythonScriptsDir,
+        env: {
+          ...process.env,
+          PYTHONPATH: this.pythonScriptsDir,
+          CORTEX_DATA_DIR: this.memoryDir,  // Tell Python where to store data
+        },
       });
 
       let stdout = "";
@@ -1059,7 +1070,7 @@ export class CortexBridge {
     const code = `
 import json
 import sys
-sys.path.insert(0, '${this.memoryDir}')
+sys.path.insert(0, '${this.pythonScriptsDir}')
 from stm_manager import add_to_stm
 result = add_to_stm(${JSON.stringify(content)}, categories=${categoriesJson}, importance=${importance})
 print(json.dumps(result))
@@ -1093,7 +1104,7 @@ print(json.dumps(result))
     const code = `
 import json
 import sys
-sys.path.insert(0, '${this.memoryDir}')
+sys.path.insert(0, '${this.pythonScriptsDir}')
 from stm_manager import get_recent
 result = get_recent(limit=${limit}, category=${singleCat ? JSON.stringify(singleCat) : "None"})
 print(json.dumps(result))
@@ -1136,7 +1147,7 @@ print(json.dumps(result))
     const code = `
 import json
 import sys
-sys.path.insert(0, '${this.memoryDir}')
+sys.path.insert(0, '${this.pythonScriptsDir}')
 from embeddings_manager import search_memories, init_db
 init_db()
 result = search_memories(
@@ -1185,7 +1196,7 @@ print(json.dumps(result))
     const code = `
 import json
 import sys
-sys.path.insert(0, '${this.memoryDir}')
+sys.path.insert(0, '${this.pythonScriptsDir}')
 from embeddings_manager import add_memory, init_db
 init_db()
 result = add_memory(
@@ -1206,7 +1217,7 @@ print(json.dumps(result))
     const code = `
 import json
 import sys
-sys.path.insert(0, '${this.memoryDir}')
+sys.path.insert(0, '${this.pythonScriptsDir}')
 from embeddings_manager import stats, init_db
 init_db()
 result = stats()
@@ -1254,7 +1265,7 @@ print(json.dumps(result))
     const code = `
 import json
 import sys
-sys.path.insert(0, '${this.memoryDir}')
+sys.path.insert(0, '${this.pythonScriptsDir}')
 from embeddings_manager import sync_from_stm, sync_from_collections, init_db
 init_db()
 stm_count = sync_from_stm()
@@ -1270,7 +1281,7 @@ print(json.dumps({"stm": stm_count, "collections": col_count}))
   async runMaintenance(mode: "nightly" | "weekly" = "nightly"): Promise<string> {
     const code = `
 import sys
-sys.path.insert(0, '${this.memoryDir}')
+sys.path.insert(0, '${this.pythonScriptsDir}')
 from maintenance import main
 result = main(["${mode}"])
 print(result or "OK")

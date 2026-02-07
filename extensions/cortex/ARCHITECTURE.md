@@ -79,10 +79,12 @@ Where:
 - `keywordScore`: Term overlap + exact phrase bonus
 - `recencyScore`: `exp(-ageHours / 48)`
 - `importanceScore`: Normalized 1-3 scale
-- `categoryBonus`: +0.2 if query category matches item category
+- `categoryBonus`: +0.1 base + 0.1 per matching category
 
-**Categories detected**:
+**Categories**: Loaded dynamically from `categories.json`. Default includes:
 - `trading`, `moltbook`, `coding`, `meta`, `learning`, `personal`, `system`, `general`
+
+**PHASE 3**: Multi-category support - memories can belong to multiple categories simultaneously.
 
 ### 3. Semantic Memory (Long-term)
 
@@ -215,26 +217,77 @@ Manage episodic working memory.
 
 ### `cortex_add`
 
-Store memory with importance rating.
+Store memory with importance rating. **PHASE 3: Multi-category support.**
 
 | Parameter | Description |
 |-----------|-------------|
 | `content` | Memory text |
-| `category` | Optional category override |
+| `category` | Single category (deprecated, use categories) |
+| `categories` | Array of categories (e.g., `["technical", "trading"]`) |
 | `importance` | 1.0 (routine) to 3.0 (critical) |
 
 ### `cortex_stm`
 
-View recent short-term memory.
+View recent short-term memory. **PHASE 3: Multi-category support.**
 
 | Parameter | Description |
 |-----------|-------------|
 | `limit` | Max items (default: 10) |
-| `category` | Filter by category |
+| `category` | Filter by single category |
+| `categories` | Filter by multiple categories (any match) |
 
 ### `cortex_stats`
 
-Show memory system statistics.
+Show memory system statistics (RAM cache, hot tier, token budget).
+
+### `cortex_dedupe` (PHASE 3)
+
+Find and handle duplicate memories.
+
+| Parameter | Description |
+|-----------|-------------|
+| `category` | Scope to single category |
+| `categories` | Scope to multiple categories |
+| `similarity_threshold` | Content similarity 0-1 (default: 0.95) |
+| `action` | `report`, `merge`, or `delete_older` |
+
+**Actions**:
+- `report`: List duplicate groups without changes
+- `merge`: Keep newest, sum access_counts, keep highest importance
+- `delete_older`: Keep most recent, remove duplicates
+
+### `cortex_update` (PHASE 3)
+
+Update memory importance or categories.
+
+| Parameter | Description |
+|-----------|-------------|
+| `memory_id` | Memory ID, timestamp, or content snippet |
+| `importance` | New importance score 1.0-3.0 |
+| `categories` | New categories array |
+
+### `cortex_edit` (PHASE 3)
+
+Edit or append to existing memory content.
+
+| Parameter | Description |
+|-----------|-------------|
+| `memory_id` | Memory ID or content snippet to match |
+| `append` | Content to add to existing memory |
+| `replace` | New content to replace memory |
+
+Content changes trigger automatic re-embedding via GPU daemon.
+
+### `cortex_move` (PHASE 3)
+
+Move memory to different categories.
+
+| Parameter | Description |
+|-----------|-------------|
+| `memory_id` | Memory ID or content snippet to match |
+| `to_categories` | New categories array (replaces existing) |
+
+No re-embedding needed (content unchanged).
 
 ## Multi-Agent Context Sharing
 
@@ -263,17 +316,36 @@ Cortex enables context sharing across agents through:
 
 ## File Layout
 
+### Source Code (in repo)
+```
+extensions/cortex/
+├── index.ts                    # Plugin entry point, tools, hooks
+├── cortex-bridge.ts            # TypeScript-Python bridge
+├── ARCHITECTURE.md             # This file
+├── openclaw.plugin.json        # Plugin manifest
+└── python/                     # Python backend (PHASE 3: moved to repo)
+    ├── stm_manager.py          # STM operations
+    ├── embeddings_daemon.py    # GPU server (flask)
+    ├── embeddings_manager.py   # Python embedding operations
+    ├── collections_manager.py  # Collections operations
+    ├── local_embeddings.py     # sentence-transformers wrapper
+    ├── maintenance.py          # Cleanup and sync
+    └── ...
+```
+
+### Data Files (in user home)
 ```
 ~/.openclaw/workspace/memory/
-├── stm.json                    # Short-term memory
+├── stm.json                    # Short-term memory data
 ├── working_memory.json         # Pinned items
-├── embeddings.db               # SQLite vector store
-├── embeddings_daemon.py        # GPU server
-├── embeddings_manager.py       # Python embedding operations
-├── stm_manager.py              # STM operations
-├── collections_manager.py      # Collections operations
-└── maintenance.py              # Cleanup and sync
+├── categories.json             # Dynamic category definitions
+├── .local_embeddings.db        # SQLite vector store (GPU daemon)
+├── .embeddings.db              # SQLite vector store (fallback)
+└── collections/                # Collection files by category
 ```
+
+Python scripts use the `CORTEX_DATA_DIR` environment variable to locate data files.
+The TypeScript bridge sets this automatically when spawning Python processes.
 
 ## Troubleshooting
 
@@ -283,9 +355,9 @@ Cortex enables context sharing across agents through:
 # Check if daemon is running
 curl http://localhost:8030/health
 
-# Start daemon manually
-cd ~/.openclaw/workspace/memory
-python3 embeddings_daemon.py
+# Start daemon manually (set data dir)
+cd /path/to/helios/extensions/cortex/python
+CORTEX_DATA_DIR=~/.openclaw/workspace/memory python3 embeddings_daemon.py
 ```
 
 ### STM not matching expected items
@@ -302,4 +374,4 @@ python3 embeddings_daemon.py
 ---
 
 **Last Updated**: 2026-02-07
-**Cortex Version**: 1.0.0
+**Cortex Version**: 2.0.0 (Phase 3 - Multi-category, Dedup, Edit tools)
