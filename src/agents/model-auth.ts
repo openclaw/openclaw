@@ -12,6 +12,7 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import { getLogger } from "../logging/logger.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
@@ -187,7 +188,9 @@ export async function resolveApiKeyForProvider(params: {
           mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
         };
       }
-    } catch {}
+    } catch (err) {
+      getLogger().debug(`auth profile resolution failed for ${candidate}: ${err}`);
+    }
   }
 
   const envResolved = resolveEnvApiKey(provider);
