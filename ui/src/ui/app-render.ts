@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
+import type { OpenClawApp } from "./app.ts";
 import type { UsageState } from "./controllers/usage.ts";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
 import { refreshChatAvatar } from "./app-chat.ts";
@@ -1125,6 +1126,7 @@ export function renderApp(state: AppViewState) {
                 onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
                 onCloseSidebar: () => state.handleCloseSidebar(),
                 onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
+                onButtonClick: (text: string, payload: string) => state.handleSendChat(payload),
                 assistantName: state.assistantName,
                 assistantAvatar: state.assistantAvatar,
               })

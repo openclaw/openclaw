@@ -17,6 +17,12 @@ type ImageBlock = {
   alt?: string;
 };
 
+type Button = {
+  text: string;
+  callback_data?: string;
+  url?: string;
+};
+
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -52,6 +58,19 @@ function extractImages(message: unknown): ImageBlock[] {
   }
 
   return images;
+}
+
+function extractButtons(message: unknown): Button[][] {
+  const m = message as Record<string, unknown>;
+  // Support both Telegram-style `reply_markup.inline_keyboard` (raw) or OpenClaw normalized `buttons`
+  if (Array.isArray(m.buttons)) {
+    return m.buttons as Button[][];
+  }
+  const replyMarkup = m.reply_markup as { inline_keyboard?: Button[][] } | undefined;
+  if (Array.isArray(replyMarkup?.inline_keyboard)) {
+    return replyMarkup!.inline_keyboard;
+  }
+  return [];
 }
 
 export function renderReadingIndicatorGroup(assistant?: AssistantIdentity) {
@@ -107,6 +126,7 @@ export function renderMessageGroup(
   group: MessageGroup,
   opts: {
     onOpenSidebar?: (content: string) => void;
+    onButtonClick?: (text: string, payload: string) => void;
     showReasoning: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
@@ -142,6 +162,7 @@ export function renderMessageGroup(
               showReasoning: opts.showReasoning,
             },
             opts.onOpenSidebar,
+            opts.onButtonClick,
           ),
         )}
         <div class="chat-group-footer">
@@ -215,10 +236,48 @@ function renderMessageImages(images: ImageBlock[]) {
   `;
 }
 
+function renderMessageButtons(
+  buttonRows: Button[][],
+  onButtonClick?: (text: string, payload: string) => void,
+) {
+  if (buttonRows.length === 0) {
+    return nothing;
+  }
+
+  return html`
+    <div class="chat-message-buttons">
+      ${buttonRows.map(
+        (row) => html`
+          <div class="chat-message-buttons-row">
+            ${row.map(
+              (btn) => html`
+                <button
+                  class="btn btn-sm chat-message-button"
+                  type="button"
+                  @click=${() => {
+                    if (btn.url) {
+                      window.open(btn.url, "_blank");
+                    } else if (btn.callback_data && onButtonClick) {
+                      onButtonClick(btn.text, btn.callback_data);
+                    }
+                  }}
+                >
+                  ${btn.text}
+                </button>
+              `,
+            )}
+          </div>
+        `,
+      )}
+    </div>
+  `;
+}
+
 function renderGroupedMessage(
   message: unknown,
   opts: { isStreaming: boolean; showReasoning: boolean },
   onOpenSidebar?: (content: string) => void,
+  onButtonClick?: (text: string, payload: string) => void,
 ) {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
@@ -233,6 +292,8 @@ function renderGroupedMessage(
   const hasToolCards = toolCards.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;
+  const buttons = extractButtons(message);
+  const hasButtons = buttons.length > 0;
 
   const extractedText = extractTextCached(message);
   const extractedThinking =
@@ -255,7 +316,7 @@ function renderGroupedMessage(
     return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
-  if (!markdown && !hasToolCards && !hasImages) {
+  if (!markdown && !hasToolCards && !hasImages && !hasButtons) {
     return nothing;
   }
 
@@ -275,6 +336,7 @@ function renderGroupedMessage(
           ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
           : nothing
       }
+      ${renderMessageButtons(buttons, onButtonClick)}
       ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
     </div>
   `;

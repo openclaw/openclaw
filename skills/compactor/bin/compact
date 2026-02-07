@@ -1,85 +1,18 @@
-#!/usr/bin/env node
+#!/usr/bin/env bash
+# Shim to display content for agent compaction
+if [ -z "$1" ]; then
+  echo "Usage: openclaw compact <file>"
+  exit 1
+fi
 
-import { GoogleGenerativeAI } from "@google/generative-ai";
-import minimist from "minimist";
-import fs from "fs";
-import path from "path";
+if [ ! -f "$1" ]; then
+    echo "Error: File '$1' not found."
+    exit 1
+fi
 
-// Parse args
-const argv = minimist(process.argv.slice(2));
-
-async function readInput() {
-  // If file argument provided
-  if (argv._.length > 0) {
-    const filePath = argv._[0];
-    return fs.readFileSync(filePath, "utf-8");
-  }
-
-  // Otherwise read from stdin
-  if (process.stdin.isTTY) {
-    console.error("Usage: compact <file> or cat <file> | compact");
-    process.exit(1);
-  }
-
-  const chunks = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf-8");
-}
-
-async function main() {
-  const apiKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.error("Error: GOOGLE_API_KEY or GEMINI_API_KEY environment variable is required.");
-    process.exit(1);
-  }
-
-  const transcript = await readInput();
-  if (!transcript.trim()) {
-    console.error("Error: Empty transcript.");
-    process.exit(1);
-  }
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  // Use Gemini 1.5 Flash as requested (or a suitable alias if 'gemini-1.5-flash' isn't exact, but it usually is)
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-  const prompt = `
-You are a "Compactor". Your goal is to compress conversation transcripts into high-density Markdown summaries.
-
-**Input Context:**
-A conversation session log (transcript).
-
-**Rules:**
-1.  **KEEP**: 
-    -   User Decisions (what they explicitly chose).
-    -   Key Information (facts, data, credentials, paths provided).
-    -   Final Outcomes (what was actually built, written, or solved).
-2.  **DISCARD**: 
-    -   Chit-chat / Pleasantries.
-    -   Intermediate thinking steps (internal reasoning logs).
-    -   Failed attempts/Errors that were eventually corrected (unless the failure is the final state).
-    -   Repetitive acknowledgments.
-
-**Output Format:**
--   Provide a strictly Markdown formatted summary.
--   Use clear headers or bullet points.
--   Be concise.
-
-**Transcript:**
-${transcript}
-`;
-
-  try {
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
-    console.log(text);
-  } catch (error) {
-    console.error("Error calling Gemini:", error.message);
-    process.exit(1);
-  }
-}
-
-main();
+echo "=== BEGIN CONTENT: $1 ==="
+cat "$1"
+echo "=== END CONTENT: $1 ==="
+echo ""
+echo "INSTRUCTION FOR AGENT:"
+echo "Please compress the content above using the rules in SKILL.md."

@@ -67,6 +67,7 @@ export type ChatProps = {
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
+  onButtonClick?: (text: string, payload: string) => void;
   onChatScroll?: (event: Event) => void;
 };
 
@@ -240,6 +241,7 @@ export function renderChat(props: ChatProps) {
           if (item.kind === "group") {
             return renderMessageGroup(item, {
               onOpenSidebar: props.onOpenSidebar,
+              onButtonClick: props.onButtonClick,
               showReasoning,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,

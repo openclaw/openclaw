@@ -2080,3 +2080,35 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ===========================================
+   Inline Buttons (Chat)
+   =========================================== */
+
+.chat-message-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.chat-message-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: var(--text);
+  cursor: pointer;
+  transition: all var(--duration-fast) ease;
+}
+
+.chat-message-button:hover {
+  border-color: var(--accent);
+  background: var(--bg-hover);
+  color: var(--accent);
+  transform: translateY(-1px);
+}

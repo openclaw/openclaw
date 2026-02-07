@@ -50,6 +50,12 @@ Docs: https://docs.openclaw.ai
 - **Failover Optimization**: Limit conversation history to 5 turns after auth rotation
 - Added strict runtime validation for routing.json with Zod schema
 
+### Refactors
+
+- **Compactor Skill**: Rewrote compactor skill to use native agent reasoning instead of external dependencies.
+- **Skills Search**: Added robustness to path resolution in search script.
+- **Skills Workspace**: Dry-up logic for skill filtering and prompt injection.
+
 ### Improvements
 
 - Extracted `FAILOVER_HISTORY_LIMIT` constant for better maintainability
