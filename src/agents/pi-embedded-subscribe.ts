@@ -6,6 +6,7 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
+import { repairMalformedReasoningTags } from "../shared/text/reasoning-tags.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   isMessagingToolDuplicateNormalized,
@@ -366,28 +367,30 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return text;
     }
 
+    // Repair malformed sequences (e.g. unclosed <think> before <final>)
+    const repaired = repairMalformedReasoningTags(text);
     const inlineStateStart = state.inlineCode ?? createInlineCodeState();
-    const codeSpans = buildCodeSpanIndex(text, inlineStateStart);
+    const codeSpans = buildCodeSpanIndex(repaired, inlineStateStart);
 
     // 1. Handle <think> blocks (stateful, strip content inside)
     let processed = "";
     THINKING_TAG_SCAN_RE.lastIndex = 0;
     let lastIndex = 0;
     let inThinking = state.thinking;
-    for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
+    for (const match of repaired.matchAll(THINKING_TAG_SCAN_RE)) {
       const idx = match.index ?? 0;
       if (codeSpans.isInside(idx)) {
         continue;
       }
       if (!inThinking) {
-        processed += text.slice(lastIndex, idx);
+        processed += repaired.slice(lastIndex, idx);
       }
       const isClose = match[1] === "/";
       inThinking = !isClose;
       lastIndex = idx + match[0].length;
     }
     if (!inThinking) {
-      processed += text.slice(lastIndex);
+      processed += repaired.slice(lastIndex);
     }
     state.thinking = inThinking;
 

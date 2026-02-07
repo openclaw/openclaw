@@ -47,6 +47,46 @@ function applyTrim(value: string, mode: ReasoningTagTrim): string {
   return value.trim();
 }
 
+/**
+ * Repair malformed reasoning tag sequences where `<think>` is opened but never
+ * closed before a `<final>` block begins.  Inserts `</think>` immediately
+ * before the first `<final>` so both blocks are properly delimited.
+ *
+ * Without this repair, an unclosed `<think>` causes all subsequent content
+ * (including the `<final>` reply) to be swallowed in strict mode.
+ */
+export function repairMalformedReasoningTags(text: string): string {
+  if (!text) {
+    return text;
+  }
+
+  const thinkOpenMatch = text.match(/<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i);
+  const finalOpenMatch = text.match(/<\s*final\b[^<>]*>/i);
+
+  if (
+    !thinkOpenMatch ||
+    !finalOpenMatch ||
+    thinkOpenMatch.index === undefined ||
+    finalOpenMatch.index === undefined
+  ) {
+    return text;
+  }
+
+  // Only repair when <think> appears before <final>
+  if (thinkOpenMatch.index >= finalOpenMatch.index) {
+    return text;
+  }
+
+  // Check whether a </think> already exists between <think> and <final>
+  const between = text.slice(thinkOpenMatch.index + thinkOpenMatch[0].length, finalOpenMatch.index);
+  if (/<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i.test(between)) {
+    return text; // properly closed — no repair needed
+  }
+
+  // Insert </think> right before <final>
+  return text.slice(0, finalOpenMatch.index) + "</think>" + text.slice(finalOpenMatch.index);
+}
+
 export function stripReasoningTagsFromText(
   text: string,
   options?: {
@@ -64,7 +104,7 @@ export function stripReasoningTagsFromText(
   const mode = options?.mode ?? "strict";
   const trimMode = options?.trim ?? "both";
 
-  let cleaned = text;
+  let cleaned = repairMalformedReasoningTags(text);
   if (FINAL_TAG_RE.test(cleaned)) {
     FINAL_TAG_RE.lastIndex = 0;
     const finalMatches: Array<{ start: number; length: number; inCode: boolean }> = [];
