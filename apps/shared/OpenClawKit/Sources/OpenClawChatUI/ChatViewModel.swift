@@ -166,6 +166,11 @@ public final class OpenClawChatViewModel {
             }
 
             let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
+            // Adopt the canonical session key returned by the gateway so push events match.
+            // The gateway resolves aliases (e.g. "main" → "agent:main:main").
+            if !payload.sessionKey.isEmpty, payload.sessionKey != self.sessionKey {
+                self.sessionKey = payload.sessionKey
+            }
             self.messages = Self.decodeMessages(payload.messages ?? [])
             self.sessionId = payload.sessionId
             if let level = payload.thinkingLevel, !level.isEmpty {
@@ -213,10 +218,19 @@ public final class OpenClawChatViewModel {
         return "\(message.role)|\(timestamp)|\(text)"
     }
 
+    private static let resetTriggers: Set<String> = ["/new", "/reset", "/clear"]
+
     private func performSend() async {
         guard !self.isSending else { return }
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !self.attachments.isEmpty else { return }
+
+        // Intercept reset triggers — reset the session instead of sending as a message.
+        if Self.resetTriggers.contains(trimmed.lowercased()) {
+            self.input = ""
+            await self.performReset()
+            return
+        }
 
         guard self.healthOK else {
             self.errorText = "Gateway health not OK; cannot send"
@@ -329,6 +343,20 @@ public final class OpenClawChatViewModel {
         guard !next.isEmpty else { return }
         guard next != self.sessionKey else { return }
         self.sessionKey = next
+        await self.bootstrap()
+    }
+
+    private func performReset() async {
+        self.isLoading = true
+        self.errorText = nil
+        defer { self.isLoading = false }
+        do {
+            try await self.transport.resetSession(sessionKey: self.sessionKey)
+        } catch {
+            chatUILogger.error("session reset failed \(error.localizedDescription, privacy: .public)")
+            self.errorText = error.localizedDescription
+            return
+        }
         await self.bootstrap()
     }
 
