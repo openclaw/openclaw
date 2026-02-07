@@ -77,25 +77,57 @@ async function readErrorBodySnippet(res: Response, maxChars = 200): Promise<stri
   }
 }
 
+const MEDIA_FETCH_MAX_RETRIES = 3;
+const MEDIA_FETCH_BASE_DELAY_MS = 1000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export async function fetchRemoteMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
   const { url, fetchImpl, filePathHint, maxBytes, maxRedirects, ssrfPolicy, lookupFn } = options;
 
   let res: Response;
   let finalUrl = url;
   let release: (() => Promise<void>) | null = null;
-  try {
-    const result = await fetchWithSsrFGuard({
-      url,
-      fetchImpl,
-      maxRedirects,
-      policy: ssrfPolicy,
-      lookupFn,
-    });
-    res = result.response;
-    finalUrl = result.finalUrl;
-    release = result.release;
-  } catch (err) {
-    throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}: ${String(err)}`);
+  let lastErr: unknown;
+
+  for (let attempt = 0; attempt <= MEDIA_FETCH_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = MEDIA_FETCH_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      console.warn(
+        `[media-fetch] Retry ${attempt}/${MEDIA_FETCH_MAX_RETRIES} for ${url} after ${delay}ms`,
+      );
+      await sleep(delay);
+    }
+    try {
+      const result = await fetchWithSsrFGuard({
+        url,
+        fetchImpl,
+        maxRedirects,
+        policy: ssrfPolicy,
+        lookupFn,
+      });
+      res = result.response;
+      finalUrl = result.finalUrl;
+      release = result.release;
+      lastErr = undefined;
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (release) {
+        try {
+          await release();
+        } catch {
+          /* ignore cleanup errors */
+        }
+        release = null;
+      }
+    }
+  }
+
+  if (lastErr) {
+    throw new MediaFetchError("fetch_failed", `Failed to fetch media from ${url}: ${String(lastErr)}`);
   }
 
   try {
