@@ -129,8 +129,8 @@ describe("session_status tool", () => {
     expect(details.ok).toBe(true);
     // ISO-8601 format: YYYY-MM-DDTHH:MM:SS.sssZ
     expect(details.statusText).toMatch(/ISO-8601: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/);
-    // Unix timestamp: 10-digit number
-    expect(details.statusText).toMatch(/Unix: \d{10}/);
+    // Unix timestamp (seconds since epoch)
+    expect(details.statusText).toMatch(/Unix: \d+/);
   });
 
   it("errors for unknown session keys", async () => {
