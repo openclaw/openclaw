@@ -16,6 +16,7 @@ import type {
   DelegationReview,
   DelegationState,
 } from "./delegation-types.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { AGENT_ROLE_RANK } from "./agent-scope.js";
 import { loadAllDelegationRecords, saveDelegationRecord } from "./delegation-storage.js";
 
@@ -120,6 +121,17 @@ export function registerDelegation(params: {
 
   delegations.set(id, record);
   persist(record);
+  emitAgentEvent({
+    runId: id,
+    stream: "delegation",
+    data: {
+      phase: "delegation-created",
+      delegationId: id,
+      fromAgentId: params.fromAgentId,
+      toAgentId: params.toAgentId,
+    },
+    sessionKey: params.fromSessionKey,
+  });
   return record;
 }
 
@@ -182,6 +194,12 @@ export function reviewDelegation(id: string, review: DelegationReview): Delegati
   });
 
   persist(record);
+  emitAgentEvent({
+    runId: id,
+    stream: "delegation",
+    data: { phase: "delegation-reviewed", delegationId: id, decision: review.decision },
+    sessionKey: record.fromSessionKey,
+  });
   return record;
 }
 
@@ -205,6 +223,12 @@ export function completeDelegation(id: string, result: DelegationResult): Delega
   });
 
   persist(record);
+  emitAgentEvent({
+    runId: id,
+    stream: "delegation",
+    data: { phase: "delegation-completed", delegationId: id, status: result.status },
+    sessionKey: record.fromSessionKey,
+  });
   return record;
 }
 
@@ -230,6 +254,12 @@ export function redirectDelegation(
   });
 
   persist(record);
+  emitAgentEvent({
+    runId: id,
+    stream: "delegation",
+    data: { phase: "delegation-redirected", delegationId: id, redirectTo: redirectTo.agentId },
+    sessionKey: record.fromSessionKey,
+  });
   return record;
 }
 

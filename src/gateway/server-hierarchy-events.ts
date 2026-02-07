@@ -399,7 +399,23 @@ export function initHierarchyEventBroadcaster(broadcast: HierarchyBroadcast) {
   }
 
   listenerStop = onAgentEvent((evt) => {
-    if (!evt || evt.stream !== "lifecycle") {
+    if (!evt) {
+      return;
+    }
+
+    // Delegation and collaboration events trigger a full snapshot rebuild
+    if (evt.stream === "delegation" || evt.stream === "collaboration") {
+      const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "unknown";
+      broadcastHierarchyEvent({
+        type: phase as HierarchyEventType,
+        timestamp: Date.now(),
+        runId: evt.runId,
+        sessionKey: evt.sessionKey,
+      });
+      return;
+    }
+
+    if (evt.stream !== "lifecycle") {
       return;
     }
 

@@ -5,7 +5,7 @@ import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
-import { resolveAgentConfig, resolveAgentRole } from "./agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveAgentRole } from "./agent-scope.js";
 import { resolveAgentIdentity } from "./identity.js";
 
 /**
@@ -263,60 +263,103 @@ function buildTeamContext(agentId: string | undefined, cfgOverride?: OpenClawCon
   }
   const cfg = cfgOverride ?? loadConfig();
 
+  // Build the full directory of all agents
+  const allAgentIds = listAgentIds(cfg).filter((id) => id !== agentId);
+  if (allAgentIds.length === 0) {
+    return [];
+  }
+
+  // Identify direct reports (for delegation)
   const agentConfig = resolveAgentConfig(cfg, agentId);
   const allowAgents = agentConfig?.subagents?.allowAgents ?? [];
-  if (allowAgents.length === 0) {
-    return [];
-  }
-  // Wildcard means "any agent" — roster would be too large to enumerate
-  if (allowAgents.length === 1 && allowAgents[0]?.trim() === "*") {
-    return [];
+  const isWildcard = allowAgents.length === 1 && allowAgents[0]?.trim() === "*";
+  const directReportSet = new Set<string>();
+  if (!isWildcard) {
+    for (const subId of allowAgents) {
+      const trimmed = subId.trim();
+      if (trimmed && trimmed !== "*") {
+        directReportSet.add(trimmed);
+      }
+    }
   }
 
-  const teammates: string[] = [];
-  for (const subId of allowAgents) {
-    const trimmed = subId.trim();
-    if (!trimmed || trimmed === "*") {
+  const sections: string[] = [""];
+
+  // Section 1: Direct reports (for delegation)
+  if (directReportSet.size > 0 || isWildcard) {
+    sections.push("## Your Direct Reports (for delegation)");
+    if (isWildcard) {
+      sections.push("You can delegate to **any agent** in the organization.");
+    } else {
+      for (const subId of directReportSet) {
+        const identity = resolveAgentIdentity(cfg, subId);
+        const role = resolveAgentRole(cfg, subId);
+        const name = identity?.name ?? subId;
+        sections.push(`- **${name}** (${subId}) — ${role}`);
+      }
+    }
+    sections.push("");
+  }
+
+  // Section 2: All specialists directory (for consultation)
+  sections.push("## All Specialists (for consultation)");
+  sections.push(
+    "You can consult **any specialist** via `sessions_send` for information, analysis, or expertise — regardless of hierarchy.",
+  );
+  sections.push("");
+  for (const otherId of allAgentIds) {
+    if (directReportSet.has(otherId)) {
       continue;
     }
-    const identity = resolveAgentIdentity(cfg, trimmed);
-    const role = resolveAgentRole(cfg, trimmed);
-    const name = identity?.name ?? trimmed;
-    teammates.push(`- **${name}** (${trimmed}) — ${role}`);
+    const identity = resolveAgentIdentity(cfg, otherId);
+    const role = resolveAgentRole(cfg, otherId);
+    const name = identity?.name ?? otherId;
+    sections.push(`- **${name}** (${otherId}) — ${role}`);
+  }
+  sections.push("");
+
+  // Guidance sections
+  sections.push("## When to Consult Another Specialist");
+  sections.push("Use `sessions_send` to consult any agent when you need:");
+  sections.push("- **Expert opinion** on a domain outside your specialty");
+  sections.push("- **Technical analysis** (security review, performance assessment, UX feedback)");
+  sections.push("- **Information** about ongoing work in another domain");
+  sections.push("- **Validation** of your approach from a different perspective");
+  sections.push(
+    "Consultations do NOT break the chain of command. You remain responsible for your deliverables.",
+  );
+  sections.push("");
+
+  if (directReportSet.size > 0 || isWildcard) {
+    sections.push("## When to Form a Team (Debate)");
+    sections.push("For tasks that require **architectural decisions or cross-domain trade-offs**:");
+    sections.push(
+      "1. Use **collaboration** tool with action `session.init` and relevant agents (2-4 members)",
+    );
+    sections.push("2. Each member publishes proposals, challenges, and agreements");
+    sections.push("3. Moderator (you or a lead) finalizes the decision with `decision.finalize`");
+    sections.push("4. Then delegate implementation sub-tasks based on the consensus");
+    sections.push("");
+
+    sections.push("## When to Delegate Directly");
+    sections.push("For tasks with **clear execution paths** that don't need debate:");
+    sections.push("1. Split into independent sub-tasks (max **5**)");
+    sections.push("2. Use **sessions_spawn** with the target `agentId` for each sub-task");
+    sections.push("3. Each sub-task should have clear scope and acceptance criteria");
+    sections.push("4. Delegate to the agent whose domain best matches");
+    sections.push("");
+
+    sections.push("## Delegation Rules");
+    sections.push("- Maximum **5** sub-tasks per assignment");
+    sections.push("- Simple tasks (single domain) — handle directly, no delegation");
+    sections.push("- Always match sub-task to the agent with the right expertise");
+    sections.push(
+      "- After debate, reference the decision in each delegated sub-task (pass `debateSessionKey`)",
+    );
+    sections.push("");
   }
 
-  if (teammates.length === 0) {
-    return [];
-  }
-
-  return [
-    "",
-    "## Your Team",
-    ...teammates,
-    "",
-    "## When to Form a Team (Debate)",
-    "For tasks that require **architectural decisions or cross-domain trade-offs**:",
-    "1. Use **collaboration** tool with action `session.init` and relevant agents (2-4 members)",
-    "2. Each member publishes proposals, challenges, and agreements",
-    "3. Moderator (you or a lead) finalizes the decision with `decision.finalize`",
-    "4. Then delegate implementation sub-tasks based on the consensus",
-    "",
-    "Examples: API design choices, database schema decisions, security architecture, UX vs performance trade-offs.",
-    "",
-    "## When to Delegate Directly",
-    "For tasks with **clear execution paths** that don't need debate:",
-    "1. Split into independent sub-tasks (max **5**)",
-    "2. Use **sessions_spawn** with the target `agentId` for each sub-task",
-    "3. Each sub-task should have clear scope and acceptance criteria",
-    "4. Delegate to the agent whose domain best matches",
-    "",
-    "## Rules",
-    "- Maximum **5** sub-tasks per assignment",
-    "- Simple tasks (single domain) — handle directly, no delegation",
-    "- Always match sub-task to the agent with the right expertise",
-    "- After debate, reference the decision in each delegated sub-task (pass `debateSessionKey`)",
-    "",
-  ];
+  return sections;
 }
 
 export function buildAgentSystemPrompt(params: {

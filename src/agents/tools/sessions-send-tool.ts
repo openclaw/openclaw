@@ -13,6 +13,8 @@ import {
   type GatewayMessageChannel,
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
+import { resolveAgentRole } from "../agent-scope.js";
+import { registerDelegation } from "../delegation-registry.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -244,6 +246,27 @@ export function createSessionsSendTool(opts?: {
             error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
             sessionKey: displayKey,
           });
+        }
+      }
+
+      // Register cross-agent communication as a delegation record for graph visibility
+      if (isCrossAgent && requesterAgentId && targetAgentId) {
+        try {
+          const cfg2 = loadConfig();
+          const fromRole = resolveAgentRole(cfg2, requesterAgentId);
+          const toRole = resolveAgentRole(cfg2, targetAgentId);
+          registerDelegation({
+            fromAgentId: requesterAgentId,
+            fromSessionKey: requesterInternalKey ?? `agent:${requesterAgentId}:main`,
+            fromRole,
+            toAgentId: targetAgentId,
+            toSessionKey: resolvedKey,
+            toRole,
+            task: `[message] ${message.slice(0, 150)}`,
+            priority: "normal",
+          });
+        } catch {
+          // Non-critical — don't fail the send
         }
       }
 
