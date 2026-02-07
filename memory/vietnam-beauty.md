@@ -519,11 +519,11 @@
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
-- `061a648 docs: I020 — Product Registration Module implementation status (28/32, 87.5%) (02-07)`
-- `7588b5c docs: T018 — Web UI Product Registration E2E Test (7/7 PASS) (02-07)`
-- `4b30043 refactor(D020): split monolithic product dialogs into reusable sub-components (02-07)`
-- `9ebf4d7 feat: mark PRODUCT_OPTIONS_FALLBACK as deprecated, API-driven product lists already active (02-07)`
-- `9062570 refactor: extract image_storage service from product_images router (02-07)`
+- `486914c feat(web): export PipelineTimeline from products index, build passes (T5) (02-07)`
+- `0286d6c fix: correct Lead.interest_product_ids field name in pipeline-status endpoint (02-07)`
+- `1da4b62 feat(web): add AIResultsViewer component with copy/usp/translation cards (T3) (02-07)`
+- `149d15f feat(web): add PipelineTimeline component (T2) (02-07)`
+- `2e022ae feat(web): add AI Results API functions + React Query hooks (T1) (02-07)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-07*
