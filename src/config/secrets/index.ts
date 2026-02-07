@@ -6,6 +6,8 @@ export {
   MissingSecretError,
   SecretsProviderError,
 } from "./resolve.js";
+export { createGcpSecretsProvider } from "./gcp.js";
+export { createEnvSecretsProvider } from "./env.js";
 export { createAwsSecretsProvider } from "./aws.js";
 export { createOnePasswordSecretsProvider } from "./onepassword.js";
 export { createKeyringSecretsProvider } from "./keyring.js";

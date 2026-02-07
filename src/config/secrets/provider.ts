@@ -30,24 +30,55 @@ export interface SecretsProvider {
   dispose?(): Promise<void>;
 }
 
+/** Default timeout for individual secret resolution (30 seconds). */
+const DEFAULT_RESOLVE_TIMEOUT_MS = 30_000;
+
+/** Maximum concurrent secret resolutions to avoid rate limiting. */
+const DEFAULT_MAX_CONCURRENCY = 5;
+
+/** Wrap a promise with a timeout. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error(`Secret resolution timed out after ${ms}ms: ${label}`)),
+        ms,
+      ),
+    ),
+  ]);
+}
+
 /**
- * Default batch resolver that calls `resolve()` for each name.
+ * Default batch resolver that calls `resolve()` for each name with
+ * concurrency limiting and per-call timeouts.
+ *
  * Used when a provider does not implement `resolveAll`.
  *
- * **Note:** All names are resolved concurrently via `Promise.all`. Providers
- * with rate limits should implement `resolveAll` directly to control concurrency.
+ * - Concurrency: max 5 simultaneous requests (avoids rate limiting).
+ * - Timeout: 30s per secret (avoids hanging on unresponsive providers).
+ *
+ * Providers with custom batching needs should implement `resolveAll` directly.
  */
 export async function defaultResolveAll(
   provider: SecretsProvider,
   secretNames: string[],
 ): Promise<Map<string, string>> {
   const results = new Map<string, string>();
-  // Resolve in parallel for better performance
-  const entries = await Promise.all(
-    secretNames.map(async (name) => [name, await provider.resolve(name)] as const),
-  );
-  for (const [name, value] of entries) {
-    results.set(name, value);
+
+  // Process in batches to limit concurrency
+  for (let i = 0; i < secretNames.length; i += DEFAULT_MAX_CONCURRENCY) {
+    const batch = secretNames.slice(i, i + DEFAULT_MAX_CONCURRENCY);
+    const entries = await Promise.all(
+      batch.map(async (name) => {
+        const value = await withTimeout(provider.resolve(name), DEFAULT_RESOLVE_TIMEOUT_MS, name);
+        return [name, value] as const;
+      }),
+    );
+    for (const [name, value] of entries) {
+      results.set(name, value);
+    }
   }
+
   return results;
 }

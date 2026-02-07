@@ -38,6 +38,9 @@ import { createVaultSecretsProvider } from "./vault.js";
 /** Pattern for valid secret names: alphanumeric, hyphens, underscores, dots. */
 const SECRET_NAME_PATTERN = /^[a-zA-Z0-9_.-]+$/;
 
+/** Config keys to skip during secret resolution (avoids circular deps). */
+const DEFAULT_SKIP_KEYS: ReadonlySet<string> = new Set(["secrets"]);
+
 export class MissingSecretError extends Error {
   constructor(
     public readonly secretName: string,
@@ -84,7 +87,9 @@ function tokenizeSecretString(value: string): SecretToken[] {
     if (char !== "$") {
       // Scan forward for the next '$' to batch literal chars
       let j = i + 1;
-      while (j < value.length && value[j] !== "$") j++;
+      while (j < value.length && value[j] !== "$") {
+        j++;
+      }
       tokens.push({ type: "literal", text: value.slice(i, j) });
       i = j;
       continue;
@@ -136,7 +141,9 @@ function collectSecretRefs(
   refs: Map<string, string[]>,
 ): void {
   if (typeof value === "string") {
-    if (!value.includes("$secret{")) return;
+    if (!value.includes("$secret{")) {
+      return;
+    }
     for (const token of tokenizeSecretString(value)) {
       if (token.type === "ref") {
         const existing = refs.get(token.name);
@@ -159,7 +166,9 @@ function collectSecretRefs(
 
   if (isPlainObject(value)) {
     for (const [key, val] of Object.entries(value)) {
-      if (path === "" && skipKeys.has(key)) continue;
+      if (path === "" && skipKeys.has(key)) {
+        continue;
+      }
       const childPath = path ? `${path}.${key}` : key;
       collectSecretRefs(val, childPath, skipKeys, refs);
     }
@@ -175,7 +184,9 @@ function substituteSecretString(
   resolved: Map<string, string>,
   configPath: string,
 ): string {
-  if (!value.includes("$secret{")) return value;
+  if (!value.includes("$secret{")) {
+    return value;
+  }
 
   const chunks: string[] = [];
   for (const token of tokenizeSecretString(value)) {
@@ -268,14 +279,19 @@ function createProvider(config: SecretsConfig, env?: NodeJS.ProcessEnv): Secrets
  * Returns the list of `$secret{...}` patterns found (e.g. `["$secret{MY_KEY}"]`).
  * Useful for sync code paths that cannot resolve secrets.
  */
-export function detectUnresolvedSecretRefs(config: unknown): string[] {
+export function detectUnresolvedSecretRefs(
+  config: unknown,
+  skipKeys: ReadonlySet<string> = DEFAULT_SKIP_KEYS,
+): string[] {
   const refs: string[] = [];
-  walk(config);
+  walk(config, "");
   return refs;
 
-  function walk(value: unknown): void {
+  function walk(value: unknown, parentKey: string): void {
     if (typeof value === "string") {
-      if (!value.includes("$secret{")) return;
+      if (!value.includes("$secret{")) {
+        return;
+      }
       for (const token of tokenizeSecretString(value)) {
         if (token.type === "ref") {
           refs.push(`$secret{${token.name}}`);
@@ -284,11 +300,19 @@ export function detectUnresolvedSecretRefs(config: unknown): string[] {
       return;
     }
     if (Array.isArray(value)) {
-      for (const item of value) walk(item);
+      for (const item of value) {
+        walk(item, parentKey);
+      }
       return;
     }
     if (isPlainObject(value)) {
-      for (const val of Object.values(value)) walk(val);
+      for (const [key, val] of Object.entries(value)) {
+        // Skip the secrets config block at root level (same as collectSecretRefs)
+        if (parentKey === "" && skipKeys.has(key)) {
+          continue;
+        }
+        walk(val, key);
+      }
     }
   }
 }
@@ -340,21 +364,31 @@ export async function resolveConfigSecrets(
   if (refs.size === 0) {
     resolved = new Map();
   } else {
-    // Create provider and resolve all secrets
+    // Create provider, resolve all secrets, and dispose when done
     const provider = createProvider(secretsConfig, env);
-    const secretNames = Array.from(refs.keys());
+    try {
+      const secretNames = Array.from(refs.keys());
 
-    if (provider.resolveAll) {
-      resolved = await provider.resolveAll(secretNames);
-    } else {
-      resolved = await defaultResolveAll(provider, secretNames);
-    }
+      if (provider.resolveAll) {
+        resolved = await provider.resolveAll(secretNames);
+      } else {
+        resolved = await defaultResolveAll(provider, secretNames);
+      }
 
-    // Verify all secrets were resolved
-    for (const name of secretNames) {
-      if (!resolved.has(name)) {
-        const paths = refs.get(name)!;
-        throw new MissingSecretError(name, paths[0]);
+      // Verify all secrets were resolved
+      for (const name of secretNames) {
+        if (!resolved.has(name)) {
+          const paths = refs.get(name)!;
+          throw new MissingSecretError(name, paths[0]);
+        }
+      }
+    } finally {
+      // Always dispose provider (e.g., lock macOS keychain).
+      // Best-effort: don't let a dispose error mask the primary error.
+      try {
+        await provider.dispose?.();
+      } catch {
+        // Swallow dispose errors — the primary error (if any) is more important.
       }
     }
   }

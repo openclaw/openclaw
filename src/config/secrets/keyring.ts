@@ -103,15 +103,37 @@ function createMacOSProvider(
   options: KeyringSecretsProviderOptions,
   account: string,
 ): SecretsProvider {
-  const keychainPath =
+  const rawKeychainPath =
     options.keychainPath ?? path.join(homedir(), "Library", "Keychains", "openclaw.keychain-db");
+  // Expand ~ to home directory so users can use ~/Library/... in config
+  const keychainPath = rawKeychainPath.startsWith("~/")
+    ? path.join(homedir(), rawKeychainPath.slice(2))
+    : rawKeychainPath;
   const keychainPassword = options.keychainPassword ?? "";
   let unlocked = false;
 
   async function ensureUnlocked(): Promise<void> {
-    if (unlocked) return;
+    if (unlocked) {
+      return;
+    }
     try {
-      await execFileAsync("security", ["unlock-keychain", "-p", keychainPassword, keychainPath]);
+      // Pass password via stdin to avoid exposing it in process arguments (ps aux).
+      // The `security unlock-keychain` command reads from stdin when no -p flag is given.
+      const child = execFile("security", ["unlock-keychain", keychainPath]);
+      if (child.stdin) {
+        child.stdin.write(keychainPassword + "\n");
+        child.stdin.end();
+      }
+      await new Promise<void>((resolve, reject) => {
+        child.on("close", (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`security unlock-keychain exited with code ${code}`));
+          }
+        });
+        child.on("error", reject);
+      });
       unlocked = true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -119,6 +141,7 @@ function createMacOSProvider(
         `Failed to unlock keychain at ${keychainPath}: ${msg}. ` +
           `Make sure the keychain exists (security create-keychain -p '' ${keychainPath}) ` +
           `and the password is correct.`,
+        { cause: err },
       );
     }
   }
@@ -145,9 +168,12 @@ function createMacOSProvider(
           throw new Error(
             `Secret "${secretName}" not found in keychain at ${keychainPath}. ` +
               `Add it with: security add-generic-password -a ${account} -s ${secretName} -w "VALUE" ${keychainPath}`,
+            { cause: err },
           );
         }
-        throw new Error(`Failed to retrieve secret "${secretName}" from keychain: ${msg}`);
+        throw new Error(`Failed to retrieve secret "${secretName}" from keychain: ${msg}`, {
+          cause: err,
+        });
       }
     },
 
@@ -171,7 +197,9 @@ function createLinuxProvider(account: string): SecretsProvider {
   let checked = false;
 
   async function ensureSecretTool(): Promise<void> {
-    if (checked) return;
+    if (checked) {
+      return;
+    }
     try {
       await execFileAsync("which", ["secret-tool"]);
       checked = true;
@@ -209,9 +237,12 @@ function createLinuxProvider(account: string): SecretsProvider {
           throw new Error(
             `Secret "${secretName}" not found in keyring. ` +
               `Add it with: echo -n "VALUE" | secret-tool store --label="openclaw: ${secretName}" service ${account} key ${secretName}`,
+            { cause: err },
           );
         }
-        throw new Error(`Failed to retrieve secret "${secretName}" from keyring: ${msg}`);
+        throw new Error(`Failed to retrieve secret "${secretName}" from keyring: ${msg}`, {
+          cause: err,
+        });
       }
     },
 

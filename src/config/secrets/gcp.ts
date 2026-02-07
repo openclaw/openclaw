@@ -89,10 +89,17 @@ export function createGcpSecretsProvider(options: GcpSecretsProviderOptions = {}
             secretName,
           );
         }
-        const value =
-          typeof payload === "string"
-            ? payload
-            : Buffer.from(payload as Uint8Array).toString("utf-8");
+        let value: string;
+        if (typeof payload === "string") {
+          value = payload;
+        } else if (payload instanceof Uint8Array || Buffer.isBuffer(payload)) {
+          value = Buffer.from(payload).toString("utf-8");
+        } else {
+          throw new GcpSecretsProviderError(
+            `Secret "${secretName}" has unexpected payload type: ${typeof payload}`,
+            secretName,
+          );
+        }
         cache.set(secretName, value);
         return value;
       } catch (err) {
@@ -104,6 +111,12 @@ export function createGcpSecretsProvider(options: GcpSecretsProviderOptions = {}
           secretName,
         );
       }
+    },
+
+    async dispose(): Promise<void> {
+      // Clear cached secret values from memory
+      cache.clear();
+      client = null;
     },
   };
 }

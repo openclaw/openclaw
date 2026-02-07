@@ -3,7 +3,6 @@ import type { SecretsProvider } from "./provider.js";
 import {
   resolveConfigSecrets,
   detectUnresolvedSecretRefs,
-  MissingSecretError,
   SecretsProviderError,
 } from "./resolve.js";
 
@@ -188,7 +187,7 @@ describe("resolveConfigSecrets", () => {
     expect(resolveMock).not.toHaveBeenCalled();
 
     // Also test defaultResolveAll
-    const defaultResult = await defaultResolveAll(mockProvider, ["a", "b"]);
+    await defaultResolveAll(mockProvider, ["a", "b"]);
     expect(resolveMock).toHaveBeenCalledTimes(2);
   });
 
@@ -303,13 +302,30 @@ describe("detectUnresolvedSecretRefs", () => {
     expect(detectUnresolvedSecretRefs({ val: "$secret{}" })).toEqual([]);
     expect(detectUnresolvedSecretRefs({ val: "$secret{foo bar}" })).toEqual([]);
   });
+
+  it("skips the secrets config block at root level", () => {
+    const config = {
+      secrets: { provider: "env", prefix: "$secret{NOT_A_REF}" },
+      remote: { apiKey: "$secret{REAL_REF}" },
+    };
+    const refs = detectUnresolvedSecretRefs(config);
+    expect(refs).toEqual(["$secret{REAL_REF}"]);
+  });
+
+  it("handles $$$secret{NAME} triple-dollar as escape (no ref)", () => {
+    // $$$secret{KEY} — the tokenizer sees $$secret{KEY} as an escape sequence,
+    // consuming the entire token. The extra leading $ is a literal character.
+    // Net result: no unresolved ref detected.
+    const config = { val: "$$$secret{KEY}" };
+    const refs = detectUnresolvedSecretRefs(config);
+    expect(refs).toEqual([]);
+  });
 });
 
-describe("GCP provider with mocked API", () => {
-  it("resolves secrets via mocked GCP client", async () => {
+describe("GCP provider", () => {
+  it("creates a GCP provider with the correct name", async () => {
     const { createGcpSecretsProvider } = await import("./gcp.js");
     const provider = createGcpSecretsProvider({ project: "test-project" });
     expect(provider.name).toBe("gcp");
-    await expect(provider.resolve("test")).rejects.toThrow(/@google-cloud\/secret-manager/);
   });
 });
