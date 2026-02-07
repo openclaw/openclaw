@@ -6,7 +6,7 @@ WORKDIR /app
 
 ENV NODE_OPTIONS="--disable-warning=ExperimentalWarning"
 
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json vitest.config.ts vitest.e2e.config.ts openclaw.mjs ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json tsdown.config.ts vitest.config.ts vitest.e2e.config.ts openclaw.mjs ./
 COPY src ./src
 COPY test ./test
 COPY scripts ./scripts
