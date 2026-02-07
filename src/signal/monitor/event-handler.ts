@@ -722,6 +722,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               timestamp: dataMessage.timestamp,
               originalFilename: firstAtt.filename ?? undefined,
             });
+            // 同時更新 media cache，讓引用消息可以找到
+            cacheMedia(dataMessage.timestamp, {
+              path: fetched.path,
+              contentType: fetched.contentType ?? firstAtt.contentType ?? undefined,
+            });
             logVerbose(`signal: pre-cached attachment for group ${groupId} from ${senderDisplay}`);
           }
         } catch (err) {
@@ -744,6 +749,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               groupId,
               senderId: senderAllowId,
               timestamp: dataMessage.timestamp,
+            });
+            // 同時更新 media cache，讓引用消息可以找到
+            cacheMedia(dataMessage.timestamp, {
+              path: stickerFetched.path,
+              contentType: stickerFetched.contentType ?? stk.contentType ?? "image/webp",
             });
             logVerbose(`signal: pre-cached sticker for group ${groupId} from ${senderDisplay}`);
           }
