@@ -147,10 +147,26 @@ export async function handleInlineActions(params: {
           })
         : [];
 
+  // For skill commands, reconstruct a normalised body that preserves multi-line
+  // input. commandBodyNormalized truncates at the first newline (correct for
+  // built-in commands) but drops multi-line args for skill commands like
+  // "/my_skill FEEDBACK:\nline2\nline3".
+  //
+  // We take the command name from the (already-normalised, bot-mention-stripped)
+  // commandBodyNormalized and graft the remaining lines from rawBodyNormalized
+  // back onto it.
+  const skillCommandBody = (() => {
+    const raw = command.rawBodyNormalized;
+    const normalised = command.commandBodyNormalized;
+    const newlineIdx = raw.indexOf("\n");
+    if (newlineIdx === -1) return normalised; // single-line, no difference
+    // Append everything after the first newline to the normalised first line
+    return normalised + "\n" + raw.slice(newlineIdx + 1);
+  })();
   const skillInvocation =
     allowTextCommands && skillCommands.length > 0
       ? resolveSkillCommandInvocation({
-          commandBodyNormalized: command.commandBodyNormalized,
+          commandBodyNormalized: skillCommandBody,
           skillCommands,
         })
       : null;
