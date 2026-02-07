@@ -42,14 +42,18 @@ async function isPocketServerHealthy(baseUrl: string): Promise<boolean> {
  */
 export async function noteTtsConfigWarnings(cfg: OpenClawConfig): Promise<void> {
   const ttsConfig = cfg.messages?.tts;
-  if (!ttsConfig) return;
+  if (!ttsConfig) {
+    return;
+  }
 
   const pocket = ttsConfig.pocket;
   const isPocketProvider = ttsConfig.provider === "pocket";
   const isPocketEnabled = pocket?.enabled !== false; // defaults to true
 
   // Only check pocket if it's relevant
-  if (!isPocketProvider && !isPocketEnabled) return;
+  if (!isPocketProvider && !isPocketEnabled) {
+    return;
+  }
 
   const warnings: string[] = [];
 

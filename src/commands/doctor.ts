@@ -49,11 +49,11 @@ import {
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 } from "./doctor-state-migrations.js";
+import { noteTtsConfigWarnings } from "./doctor-tts.js";
 import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 import { maybeOfferUpdateBeforeDoctor } from "./doctor-update.js";
 import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
 import { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } from "./doctor-workspace.js";
-import { noteTtsConfigWarnings } from "./doctor-tts.js";
 import { applyWizardMetadata, printWizardHeader, randomToken } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 

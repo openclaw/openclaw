@@ -11,6 +11,7 @@ read_when:
 [Pocket TTS](https://github.com/kyutai-labs/pocket-tts) is a local, CPU-only text-to-speech engine from Kyutai Labs. It runs entirely on your machine with no API keys required.
 
 **Highlights:**
+
 - ~100M parameter model, runs on CPU
 - ~200ms latency to first audio chunk
 - 6× realtime on MacBook Air M4
@@ -44,11 +45,11 @@ pocket-tts serve --voice alba
     tts: {
       provider: "pocket",
       pocket: {
-        baseUrl: "http://localhost:8000",  // default
-        voice: "alba"                       // default
-      }
-    }
-  }
+        baseUrl: "http://localhost:8000", // default
+        voice: "alba", // default
+      },
+    },
+  },
 }
 ```
 
@@ -62,16 +63,16 @@ pocket-tts serve --voice alba
 
 Pocket TTS includes 8 built-in voices (Les Misérables characters):
 
-| Voice | Description |
-|-------|-------------|
-| `alba` | Default voice |
-| `marius` | Male voice |
-| `javert` | Male voice |
-| `jean` | Male voice |
-| `fantine` | Female voice |
-| `cosette` | Female voice |
-| `eponine` | Female voice |
-| `azelma` | Female voice |
+| Voice     | Description   |
+| --------- | ------------- |
+| `alba`    | Default voice |
+| `marius`  | Male voice    |
+| `javert`  | Male voice    |
+| `jean`    | Male voice    |
+| `fantine` | Female voice  |
+| `cosette` | Female voice  |
+| `eponine` | Female voice  |
+| `azelma`  | Female voice  |
 
 ## Custom voices
 
@@ -90,10 +91,10 @@ Use `hf://` URLs to load voices from HuggingFace:
   messages: {
     tts: {
       pocket: {
-        voice: "hf://kyutai/tts-voices/mimi_16khz.wav"
-      }
-    }
-  }
+        voice: "hf://kyutai/tts-voices/mimi_16khz.wav",
+      },
+    },
+  },
 }
 ```
 
@@ -108,10 +109,10 @@ Point to any WAV file hosted online:
   messages: {
     tts: {
       pocket: {
-        voice: "https://example.com/my-voice.wav"
-      }
-    }
-  }
+        voice: "https://example.com/my-voice.wav",
+      },
+    },
+  },
 }
 ```
 
@@ -134,15 +135,15 @@ pocket-tts serve --voice /path/to/your-voice.wav
 {
   messages: {
     tts: {
-      provider: "pocket",      // Use pocket as primary provider
+      provider: "pocket", // Use pocket as primary provider
       pocket: {
-        enabled: true,         // Enable/disable pocket (default: true)
-        baseUrl: "http://localhost:8000",  // Server URL (also used for auto-start binding)
-        voice: "alba",         // Voice name or URL
-        autoStart: false       // Auto-start server if not running (default: false)
-      }
-    }
-  }
+        enabled: true, // Enable/disable pocket (default: true)
+        baseUrl: "http://localhost:8000", // Server URL (also used for auto-start binding)
+        voice: "alba", // Voice name or URL
+        autoStart: false, // Auto-start server if not running (default: false)
+      },
+    },
+  },
 }
 ```
 
@@ -156,16 +157,17 @@ OpenClaw can automatically start `pocket-tts serve` when it's not running:
     tts: {
       provider: "pocket",
       pocket: {
-        baseUrl: "http://localhost:8000",  // Host/port derived from this URL
-        autoStart: true,                    // Spawn server automatically
-        voice: "alba"                       // Voice to use when starting
-      }
-    }
-  }
+        baseUrl: "http://localhost:8000", // Host/port derived from this URL
+        autoStart: true, // Spawn server automatically
+        voice: "alba", // Voice to use when starting
+      },
+    },
+  },
 }
 ```
 
 **How it works:**
+
 1. OpenClaw checks `/health` endpoint
 2. If server is down and `autoStart: true`, spawns `pocket-tts serve`
 3. Host and port are derived from `baseUrl` (e.g., `http://localhost:9000` → `--host localhost --port 9000`)
@@ -190,6 +192,7 @@ pocket-tts serve --voice alba
 OpenClaw tries providers in order: **OpenAI → ElevenLabs → Edge → Pocket**
 
 When Pocket TTS is configured but the server isn't running:
+
 1. If `autoStart: true`, OpenClaw tries to start the server
 2. If that fails (or `autoStart: false`), falls back to next provider
 
@@ -208,20 +211,20 @@ To use Pocket first (before cloud providers):
 {
   messages: {
     tts: {
-      provider: "pocket"  // Try pocket first, fall back to others
-    }
-  }
+      provider: "pocket", // Try pocket first, fall back to others
+    },
+  },
 }
 ```
 
 ## Comparison with other providers
 
-| Provider | API Key | Latency | Cost | Offline | Output |
-|----------|---------|---------|------|---------|--------|
-| Pocket TTS | No | ~200ms | Free | Yes | WAV |
-| Edge TTS | No | ~500ms | Free | No | MP3 |
-| OpenAI | Yes | ~300ms | $0.015/1K chars | No | MP3/WAV |
-| ElevenLabs | Yes | ~400ms | $0.30/1K chars | No | MP3 |
+| Provider   | API Key | Latency | Cost            | Offline | Output  |
+| ---------- | ------- | ------- | --------------- | ------- | ------- |
+| Pocket TTS | No      | ~200ms  | Free            | Yes     | WAV     |
+| Edge TTS   | No      | ~500ms  | Free            | No      | MP3     |
+| OpenAI     | Yes     | ~300ms  | $0.015/1K chars | No      | MP3/WAV |
+| ElevenLabs | Yes     | ~400ms  | $0.30/1K chars  | No      | MP3     |
 
 **Note:** Pocket TTS outputs WAV format (uncompressed). File sizes are ~5-10x larger than MP3 (~100KB vs ~15KB for short phrases). Most messaging platforms handle this fine.
 
@@ -273,12 +276,12 @@ Subsequent requests are fast (~200ms).
 
 If you see a voice validation warning, check your voice format:
 
-| Format | Example | Supported |
-|--------|---------|-----------|
-| Built-in name | `alba` | ✅ |
-| HuggingFace URL | `hf://kyutai/tts-voices/mimi_16khz.wav` | ✅ |
-| HTTP/HTTPS URL | `https://example.com/voice.wav` | ✅ |
-| Local file path | `/path/to/voice.wav` | ❌ (use `--voice` flag when starting server) |
+| Format          | Example                                 | Supported                                    |
+| --------------- | --------------------------------------- | -------------------------------------------- |
+| Built-in name   | `alba`                                  | ✅                                           |
+| HuggingFace URL | `hf://kyutai/tts-voices/mimi_16khz.wav` | ✅                                           |
+| HTTP/HTTPS URL  | `https://example.com/voice.wav`         | ✅                                           |
+| Local file path | `/path/to/voice.wav`                    | ❌ (use `--voice` flag when starting server) |
 
 **Note:** OpenClaw warns about unrecognized voices but still sends them to the server. The server gives the authoritative error if the voice is truly invalid.
 

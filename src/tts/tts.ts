@@ -541,8 +541,12 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 }
 
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
-  if (provider === "edge") return config.edge.enabled;
-  if (provider === "pocket") return config.pocket.enabled;
+  if (provider === "edge") {
+    return config.edge.enabled;
+  }
+  if (provider === "pocket") {
+    return config.pocket.enabled;
+  }
   return Boolean(resolveTtsApiKey(config, provider));
 }
 
@@ -556,7 +560,9 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
 
 function normalizePocketBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim();
-  if (!trimmed) return DEFAULT_POCKET_BASE_URL;
+  if (!trimmed) {
+    return DEFAULT_POCKET_BASE_URL;
+  }
   return trimmed.replace(/\/+$/, "");
 }
 
@@ -573,9 +579,13 @@ function parsePocketBaseUrl(baseUrl: string): { host: string; port: number } {
 }
 
 function isValidPocketVoice(voice: string): boolean {
-  if (!voice) return false;
+  if (!voice) {
+    return false;
+  }
   // Built-in voices
-  if (POCKET_VOICES.includes(voice as (typeof POCKET_VOICES)[number])) return true;
+  if (POCKET_VOICES.includes(voice as (typeof POCKET_VOICES)[number])) {
+    return true;
+  }
   // URL-based voices (http://, https://, hf://)
   if (voice.startsWith("http://") || voice.startsWith("https://") || voice.startsWith("hf://")) {
     return true;
@@ -722,7 +732,9 @@ async function startPocketServer(config: ResolvedTtsConfig["pocket"]): Promise<b
       // Capture stderr for debugging
       pocketProcess.stderr?.on("data", (data: Buffer) => {
         const msg = data.toString().trim();
-        if (msg) logVerbose(`TTS: pocket-tts: ${msg}`);
+        if (msg) {
+          logVerbose(`TTS: pocket-tts: ${msg}`);
+        }
       });
 
       // Wait for server to become healthy (up to 30s for model loading)
@@ -788,7 +800,9 @@ function stopPocketServer(): void {
 let pocketHandlersRegistered = false;
 
 function registerPocketCleanupHandlers(): void {
-  if (pocketHandlersRegistered) return;
+  if (pocketHandlersRegistered) {
+    return;
+  }
   pocketHandlersRegistered = true;
   // Clean up on process exit (don't call process.exit - let OpenClaw handle graceful shutdown)
   process.on("exit", stopPocketServer);
