@@ -1,9 +1,9 @@
-# Repository Guidelines
+# 仓库指南
 
-- Repo: https://github.com/openclaw/openclaw
-- GitHub issues/comments/PR comments: use literal multiline strings or `-F - <<'EOF'` (or $'...') for real newlines; never embed "\\n".
+- 仓库地址：https://github.com/openclaw/openclaw
+- GitHub issues/comments/PR 评论：使用字面多行字符串或 `-F - <<'EOF'`（或 `$'...'`）来换行；不要嵌入 "\\n"。
 
-## Project Structure & Module Organization
+## 项目结构与模块组织
 
 - Source code: `src/` (CLI wiring in `src/cli`, commands in `src/commands`, web provider in `src/provider-web.ts`, infra in `src/infra`, media pipeline in `src/media`).
 - Tests: colocated `*.test.ts`.
@@ -17,7 +17,7 @@
   - Extensions (channel plugins): `extensions/*` (e.g. `extensions/msteams`, `extensions/matrix`, `extensions/zalo`, `extensions/zalouser`, `extensions/voice-call`)
 - When adding channels/extensions/apps/docs, update `.github/labeler.yml` and create matching GitHub labels (use existing channel/extension label colors).
 
-## Docs Linking (Mintlify)
+## 文档链接（Mintlify）
 
 - Docs are hosted on Mintlify (docs.openclaw.ai).
 - Internal doc links in `docs/**/*.md`: root-relative, no `.md`/`.mdx` (example: `[Config](/configuration)`).
@@ -29,26 +29,26 @@
 - README (GitHub): keep absolute docs URLs (`https://docs.openclaw.ai/...`) so links work on GitHub.
 - Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.
 
-## Docs i18n (zh-CN)
+## 文档国际化（zh-CN）
 
-- `docs/zh-CN/**` is generated; do not edit unless the user explicitly asks.
-- Pipeline: update English docs → adjust glossary (`docs/.i18n/glossary.zh-CN.json`) → run `scripts/docs-i18n` → apply targeted fixes only if instructed.
-- Translation memory: `docs/.i18n/zh-CN.tm.jsonl` (generated).
-- See `docs/.i18n/README.md`.
-- The pipeline can be slow/inefficient; if it’s dragging, ping @jospalmbier on Discord instead of hacking around it.
+- `docs/zh-CN/**` 是生成的；除非用户明确要求，否则不要编辑。
+- 流程：更新英文文档 → 调整词汇表（`docs/.i18n/glossary.zh-CN.json`）→ 运行 `scripts/docs-i18n` → 仅在收到指示时进行定向修复。
+- 翻译记忆：`docs/.i18n/zh-CN.tm.jsonl`（生成的）。
+- 参见 `docs/.i18n/README.md`。
+- 该流程可能较慢/低效；如果拖延太久，在 Discord 上联系 @jospalmbier，而不是自己想办法绕过。
 
-## exe.dev VM ops (general)
+## exe.dev 虚拟机操作（通用）
 
-- Access: stable path is `ssh exe.dev` then `ssh vm-name` (assume SSH key already set).
-- SSH flaky: use exe.dev web terminal or Shelley (web agent); keep a tmux session for long ops.
-- Update: `sudo npm i -g openclaw@latest` (global install needs root on `/usr/lib/node_modules`).
-- Config: use `openclaw config set ...`; ensure `gateway.mode=local` is set.
-- Discord: store raw token only (no `DISCORD_BOT_TOKEN=` prefix).
-- Restart: stop old gateway and run:
+- 访问：稳定路径是 `ssh exe.dev` 然后 `ssh vm-name`（假设 SSH 密钥已配置）。
+- SSH 不稳定：使用 exe.dev Web 终端或 Shelley（Web 代理）；为长时间操作保持 tmux 会话。
+- 更新：`sudo npm i -g openclaw@latest`（全局安装需要 `/usr/lib/node_modules` 的 root 权限）。
+- 配置：使用 `openclaw config set ...`；确保设置了 `gateway.mode=local`。
+- Discord：仅存储原始 token（不要加 `DISCORD_BOT_TOKEN=` 前缀）。
+- 重启：停止旧网关并运行：
   `pkill -9 -f openclaw-gateway || true; nohup openclaw gateway run --bind loopback --port 18789 --force > /tmp/openclaw-gateway.log 2>&1 &`
-- Verify: `openclaw channels status --probe`, `ss -ltnp | rg 18789`, `tail -n 120 /tmp/openclaw-gateway.log`.
+- 验证：`openclaw channels status --probe`、`ss -ltnp | rg 18789`、`tail -n 120 /tmp/openclaw-gateway.log`。
 
-## Build, Test, and Development Commands
+## 构建、测试和开发命令
 
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
 - Install deps: `pnpm install`
@@ -66,22 +66,22 @@
 - Format fix: `pnpm format:fix` (oxfmt --write)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
 
-## Coding Style & Naming Conventions
+## 代码风格与命名规范
 
-- Language: TypeScript (ESM). Prefer strict typing; avoid `any`.
-- Formatting/linting via Oxlint and Oxfmt; run `pnpm check` before commits.
-- Add brief code comments for tricky or non-obvious logic.
-- Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
-- Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
-- Naming: use **OpenClaw** for product/app/docs headings; use `openclaw` for CLI command, package/binary, paths, and config keys.
+- 语言：TypeScript（ESM）。优先使用严格类型；避免 `any`。
+- 格式化/代码检查通过 Oxlint 和 Oxfmt；提交前运行 `pnpm check`。
+- 为复杂或不易理解的逻辑添加简要代码注释。
+- 保持文件简洁；提取辅助函数而不是创建"V2"副本。使用现有模式处理 CLI 选项和通过 `createDefaultDeps` 进行依赖注入。
+- 目标将文件保持在约 700 行以内；仅为指导方针（非硬性规则）。当有助于提高清晰度或可测试性时进行拆分/重构。
+- 命名：产品/应用/文档标题使用 **OpenClaw**；CLI 命令、包/二进制文件、路径和配置键使用 `openclaw`。
 
-## Release Channels (Naming)
+## 发布渠道（命名）
 
-- stable: tagged releases only (e.g. `vYYYY.M.D`), npm dist-tag `latest`.
-- beta: prerelease tags `vYYYY.M.D-beta.N`, npm dist-tag `beta` (may ship without macOS app).
-- dev: moving head on `main` (no tag; git checkout main).
+- stable：仅限标签发布（例如 `vYYYY.M.D`），npm dist-tag `latest`。
+- beta：预发布标签 `vYYYY.M.D-beta.N`，npm dist-tag `beta`（可能不包含 macOS 应用）。
+- dev：`main` 分支的最新提交（无标签；git checkout main）。
 
-## Testing Guidelines
+## 测试指南
 
 - Framework: Vitest with V8 coverage thresholds (70% lines/branches/functions/statements).
 - Naming: match source names with `*.test.ts`; e2e in `*.e2e.test.ts`.
@@ -104,27 +104,27 @@
 - Issue submission templates (canonical): `.github/ISSUE_TEMPLATE/`
 - **MUST READ BEFORE SUBMITTING PR OR ISSUE:** [Agent Submission Control Policy](.agents/AGENT_SUBMISSION_CONTROL_POLICY.md)
 
-## Shorthand Commands
+## 简写命令
 
-- `sync`: if working tree is dirty, commit all changes (pick a sensible Conventional Commit message), then `git pull --rebase`; if rebase conflicts and cannot resolve, stop; otherwise `git push`.
+- `sync`：如果工作树有未提交更改，提交所有更改（选择合理的 Conventional Commit 消息），然后 `git pull --rebase`；如果 rebase 冲突且无法解决，停止；否则 `git push`。
 
-## Git Notes
+### PR Workflow (Review vs Land)
 
 - If `git branch -d/-D <branch>` is policy-blocked, delete the local ref directly: `git update-ref -d refs/heads/<branch>`.
 
-## Security & Configuration Tips
+## 安全与配置提示
 
-- Web provider stores creds at `~/.openclaw/credentials/`; rerun `openclaw login` if logged out.
-- Pi sessions live under `~/.openclaw/sessions/` by default; the base directory is not configurable.
-- Environment variables: see `~/.profile`.
-- Never commit or publish real phone numbers, videos, or live configuration values. Use obviously fake placeholders in docs, tests, and examples.
-- Release flow: always read `docs/reference/RELEASING.md` and `docs/platforms/mac/release.md` before any release work; do not ask routine questions once those docs answer them.
+- Web 提供者将凭证存储在 `~/.openclaw/credentials/`；如果登出，重新运行 `openclaw login`。
+- Pi 会话默认位于 `~/.openclaw/sessions/`；基础目录不可配置。
+- 环境变量：参见 `~/.profile`。
+- 永远不要提交或发布真实电话号码、视频或实际配置值。在文档、测试和示例中使用明显的假占位符。
+- 发布流程：在进行任何发布工作前，始终阅读 `docs/reference/RELEASING.md` 和 `docs/platforms/mac/release.md`；这些文档已回答的例行问题不要再问。
 
-## Troubleshooting
+## 故障排查
 
-- Rebrand/migration issues or legacy config/service warnings: run `openclaw doctor` (see `docs/gateway/doctor.md`).
+- 品牌重塑/迁移问题或遗留配置/服务警告：运行 `openclaw doctor`（参见 `docs/gateway/doctor.md`）。
 
-## Agent-Specific Notes
+## Agent 专属注意事项
 
 - Vocabulary: "makeup" = "mac app".
 - Never edit `node_modules` (global/Homebrew/npm/git installs too). Updates overwrite. Skill notes go in `tools.md` or `AGENTS.md`.
@@ -175,11 +175,11 @@
 - For manual `openclaw message send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
 - Release guardrails: do not change version numbers without operator’s explicit consent; always ask permission before running any npm publish/release step.
 
-## NPM + 1Password (publish/verify)
+## NPM + 1Password（发布/验证）
 
-- Use the 1password skill; all `op` commands must run inside a fresh tmux session.
-- Sign in: `eval "$(op signin --account my.1password.com)"` (app unlocked + integration on).
-- OTP: `op read 'op://Private/Npmjs/one-time password?attribute=otp'`.
-- Publish: `npm publish --access public --otp="<otp>"` (run from the package dir).
-- Verify without local npmrc side effects: `npm view <pkg> version --userconfig "$(mktemp)"`.
-- Kill the tmux session after publish.
+- 使用 1password 技能；所有 `op` 命令必须在新的 tmux 会话中运行。
+- 登录：`eval "$(op signin --account my.1password.com)"`（应用已解锁 + 集成已开启）。
+- OTP：`op read 'op://Private/Npmjs/one-time password?attribute=otp'`。
+- 发布：`npm publish --access public --otp="<otp>"`（从包目录运行）。
+- 验证（无本地 npmrc 副作用）：`npm view <pkg> version --userconfig "$(mktemp)"`。
+- 发布后终止 tmux 会话。
