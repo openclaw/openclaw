@@ -337,4 +337,4 @@ Prefer `chat_guid` for stable routing:
 - OpenClaw auto-hides known-broken actions based on the BlueBubbles server's macOS version. If edit still appears on macOS 26 (Tahoe), disable it manually with `channels.bluebubbles.actions.edit=false`.
 - For status/health info: `openclaw status --all` or `openclaw status --deep`.
 
-For general channel workflow reference, see [Channels](/channels) and the [Plugins](/plugins) guide.
+For general channel workflow reference, see [Channels](/channels) and the [Plugins](/plugin) guide.
