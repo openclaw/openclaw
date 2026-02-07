@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CONFIG_PATH } from "../config/config.js";
+import { resolveConfigPath } from "../config/config.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resetTestPluginRegistry, setTestPluginRegistry, testState } from "./test-helpers.mocks.js";
 import { installGatewayTestHooks, getFreePort, startGatewayServer } from "./test-helpers.server.js";
@@ -91,9 +91,11 @@ describe("POST /tools/invoke", () => {
       list: [{ id: "main" }],
     } as any;
 
-    await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
+    // Use dynamic path resolution to respect test isolation (HOME override)
+    const configPath = resolveConfigPath();
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
-      CONFIG_PATH,
+      configPath,
       JSON.stringify({ tools: { alsoAllow: ["agents_list"] } }, null, 2),
       "utf-8",
     );
