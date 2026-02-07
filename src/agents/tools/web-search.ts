@@ -416,7 +416,15 @@ async function runBochaSearch(params: {
   apiKey: string;
   baseUrl: string;
   timeoutSeconds: number;
-}): Promise<{ results: Array<{ title: string; url: string; description: string; siteName?: string; published?: string }> }> {
+}): Promise<{
+  results: Array<{
+    title: string;
+    url: string;
+    description: string;
+    siteName?: string;
+    published?: string;
+  }>;
+}> {
   // Normalize: treat baseUrl as a base and ensure the search path is appended
   const endpoint = new URL("/v1/web-search", params.baseUrl.replace(/\/$/, "")).toString();
   const res = await fetch(endpoint, {

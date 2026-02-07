@@ -482,10 +482,8 @@ const FIELD_HELP: Record<string, string> = {
     "Perplexity base URL override (default: https://openrouter.ai/api/v1 or https://api.perplexity.ai).",
   "tools.web.search.perplexity.model":
     'Perplexity model override (default: "perplexity/sonar-pro").',
-  "tools.web.search.bocha.apiKey":
-    "Bocha Search API key (fallback: BOCHA_API_KEY env var).",
-  "tools.web.search.bocha.baseUrl":
-    "Bocha base URL override (default: https://api.bocha.cn).",
+  "tools.web.search.bocha.apiKey": "Bocha Search API key (fallback: BOCHA_API_KEY env var).",
+  "tools.web.search.bocha.baseUrl": "Bocha base URL override (default: https://api.bocha.cn).",
   "tools.web.fetch.enabled": "Enable the web_fetch tool (lightweight HTTP fetch).",
   "tools.web.fetch.maxChars": "Max characters returned by web_fetch (truncated).",
   "tools.web.fetch.maxCharsCap":
