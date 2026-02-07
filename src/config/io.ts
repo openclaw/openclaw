@@ -250,7 +250,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       // $secret{} resolution is async-only. Detect any unresolved refs and throw a clear error.
       const unresolvedSecretRefs = detectUnresolvedSecretRefs(substituted);
       if (unresolvedSecretRefs.length > 0) {
-        throw new Error(
+        throw new SecretsProviderError(
           `Config contains ${unresolvedSecretRefs[0]} references but secrets can only be resolved in async mode. ` +
             `Use readConfigFileSnapshot() or ensure the gateway starts with async config loading.`,
         );
