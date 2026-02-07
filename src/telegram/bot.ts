@@ -128,6 +128,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     network: telegramCfg.network,
   });
   const shouldProvideFetch = Boolean(fetchImpl);
+  // grammY's ApiClientOptions types still track `node-fetch` types; Node 22+ global fetch
+  // (undici) is structurally compatible at runtime but not assignable in TS.
+  const fetchForClient = fetchImpl as unknown as NonNullable<ApiClientOptions["fetch"]>;
   const timeoutSeconds =
     typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
       ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
@@ -135,7 +138,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const client: ApiClientOptions | undefined =
     shouldProvideFetch || timeoutSeconds
       ? {
-          ...(shouldProvideFetch && fetchImpl ? { fetch: fetchImpl } : {}),
+          ...(shouldProvideFetch && fetchImpl ? { fetch: fetchForClient } : {}),
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
