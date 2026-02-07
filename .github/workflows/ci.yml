@@ -2,7 +2,12 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
 
 jobs:
   install-check:
@@ -185,7 +190,9 @@ jobs:
     runs-on: blacksmith-4vcpu-windows-2025
     env:
       NODE_OPTIONS: --max-old-space-size=4096
-      CLAWDBOT_TEST_WORKERS: 1
+      # Keep total concurrency predictable on the 4 vCPU runner:
+      # `scripts/test-parallel.mjs` runs some vitest suites in parallel processes.
+      OPENCLAW_TEST_WORKERS: 2
     defaults:
       run:
         shell: bash
@@ -207,6 +214,25 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: false
+
+      - name: Try to exclude workspace from Windows Defender (best-effort)
+        shell: pwsh
+        run: |
+          $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
+          if (-not $cmd) {
+            Write-Host "Add-MpPreference not available, skipping Defender exclusions."
+            exit 0
+          }
+
+          try {
+            # Defender sometimes intercepts process spawning (vitest workers). If this fails
+            # (eg hardened images), keep going and rely on worker limiting above.
+            Add-MpPreference -ExclusionPath "$env:GITHUB_WORKSPACE" -ErrorAction Stop
+            Add-MpPreference -ExclusionProcess "node.exe" -ErrorAction Stop
+            Write-Host "Defender exclusions applied."
+          } catch {
+            Write-Warning "Failed to apply Defender exclusions, continuing. $($_.Exception.Message)"
+          }
 
       - name: Checkout submodules (retry)
         run: |
@@ -269,15 +295,13 @@ jobs:
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         run: ${{ matrix.command }}
 
-  checks-macos:
+  # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
+  # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
+  # running 4 separate jobs per PR (as before) starved the queue. One job
+  # per PR allows 5 PRs to run macOS checks simultaneously.
+  macos:
     if: github.event_name == 'pull_request'
     runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - task: test
-            command: pnpm test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -297,6 +321,7 @@ jobs:
           done
           exit 1
 
+      # --- Node/pnpm setup (for TS tests) ---
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -336,71 +361,20 @@ jobs:
           pnpm -v
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
-      - name: Run ${{ matrix.task }}
+      # --- Run all checks sequentially (fast gates first) ---
+      - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-        run: ${{ matrix.command }}
+        run: pnpm test
 
-  macos-app:
-    if: github.event_name == 'pull_request'
-    runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - task: lint
-            command: |
-              swiftlint --config .swiftlint.yml
-              swiftformat --lint apps/macos/Sources --config .swiftformat
-          - task: build
-            command: |
-              set -euo pipefail
-              for attempt in 1 2 3; do
-                if swift build --package-path apps/macos --configuration release; then
-                  exit 0
-                fi
-                echo "swift build failed (attempt $attempt/3). Retrying…"
-                sleep $((attempt * 20))
-              done
-              exit 1
-          - task: test
-            command: |
-              set -euo pipefail
-              for attempt in 1 2 3; do
-                if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
-                  exit 0
-                fi
-                echo "swift test failed (attempt $attempt/3). Retrying…"
-                sleep $((attempt * 20))
-              done
-              exit 1
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - name: Checkout submodules (retry)
-        run: |
-          set -euo pipefail
-          git submodule sync --recursive
-          for attempt in 1 2 3 4 5; do
-            if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
-              exit 0
-            fi
-            echo "Submodule update failed (attempt $attempt/5). Retrying…"
-            sleep $((attempt * 10))
-          done
-          exit 1
-
+      # --- Xcode/Swift setup ---
       - name: Select Xcode 26.1
         run: |
           sudo xcode-select -s /Applications/Xcode_26.1.app
           xcodebuild -version
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
-        run: |
-          brew install xcodegen swiftlint swiftformat
+        run: brew install xcodegen swiftlint swiftformat
 
       - name: Show toolchain
         run: |
@@ -408,8 +382,35 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Run ${{ matrix.task }}
-        run: ${{ matrix.command }}
+      - name: Swift lint
+        run: |
+          swiftlint --config .swiftlint.yml
+          swiftformat --lint apps/macos/Sources --config .swiftformat
+
+      - name: Swift build (release)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift build --package-path apps/macos --configuration release; then
+              exit 0
+            fi
+            echo "swift build failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
+
+      - name: Swift test
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
+              exit 0
+            fi
+            echo "swift test failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
+
   ios:
     if: false # ignore iOS in CI for now
     runs-on: macos-latest
