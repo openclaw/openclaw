@@ -5,7 +5,6 @@
  * requireMention, persistent media cache, pre-cache, agent media cache) live here.
  * Upstream files only need minimal hook calls into this module.
  */
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -15,7 +14,6 @@ import type {
 } from "./event-handler.types.js";
 import { logVerbose } from "../../globals.js";
 import { mediaKindFromMime } from "../../media/constants.js";
-import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { resolveConfigDir } from "../../utils.js";
 
 // ── Extended types (not modifying upstream types) ────────────────────────────
@@ -96,210 +94,16 @@ export type SignalEnhancementDeps = Pick<
   }) => Promise<{ path: string; contentType?: string } | null>;
 };
 
-// ── Agent media cache (persistent, per-agent, LRU eviction) ─────────────────
+// ── Pre-cache uses upstream's inbound/ directory directly ────────────────────
 //
-// Files: ~/.openclaw/media/inbound/signal/{agentId}/{uuid}.{ext}
-// Index: ~/.openclaw/media/inbound/signal/{agentId}/cache-index.json
-// Config: ~/.openclaw/media/inbound/signal/cache-config.json
-//   { "defaults": { "maxSizeGB": 5 }, "agents": { "<id>": { "maxSizeGB": 2 } } }
+// fetchAttachment/fetchSticker both call saveMediaBuffer → ~/.openclaw/media/inbound/
+// Files there are NOT TTL-cleaned (cleanup only targets ~/.openclaw/media/ root).
+// We just record the path in signal-media-cache.json for later lookup.
+//
+// For stickers fetched via RPC that don't go through fetchAttachment,
+// we save to a fallback dir: ~/.openclaw/media/inbound/signal_precache/
 
-const AGENT_CACHE_BASE = path.join(resolveConfigDir(), "media", "inbound", "signal");
-const CACHE_CONFIG_PATH = path.join(AGENT_CACHE_BASE, "cache-config.json");
-const CACHE_INDEX_FILE = "cache-index.json";
-const DEFAULT_MAX_SIZE_GB = 5;
-
-type CacheConfig = {
-  defaults?: { maxSizeGB?: number };
-  agents?: Record<string, { maxSizeGB?: number }>;
-};
-
-type AgentCacheEntry = {
-  id: string;
-  path: string;
-  contentType?: string;
-  size: number;
-  savedAt: number;
-  channel: string;
-  groupId?: string;
-  senderId?: string;
-  timestamp?: number;
-};
-
-type AgentCacheIndex = {
-  entries: AgentCacheEntry[];
-  totalSize: number;
-};
-
-// In-memory caches
-const cacheIndexMap = new Map<string, AgentCacheIndex>();
-let cacheConfig: CacheConfig | null = null;
-
-function resolveAgentCacheDir(agentId: string): string {
-  return path.join(AGENT_CACHE_BASE, agentId);
-}
-
-function resolveAgentCacheIndexPath(agentId: string): string {
-  return path.join(resolveAgentCacheDir(agentId), CACHE_INDEX_FILE);
-}
-
-async function loadCacheConfig(): Promise<CacheConfig> {
-  if (cacheConfig) {
-    return cacheConfig;
-  }
-  try {
-    const content = await fs.readFile(CACHE_CONFIG_PATH, "utf-8");
-    cacheConfig = JSON.parse(content) as CacheConfig;
-  } catch {
-    cacheConfig = {};
-  }
-  return cacheConfig;
-}
-
-function getMaxSizeBytes(config: CacheConfig, agentId: string): number {
-  const agentGB = config.agents?.[agentId]?.maxSizeGB;
-  const defaultGB = config.defaults?.maxSizeGB ?? DEFAULT_MAX_SIZE_GB;
-  return (agentGB ?? defaultGB) * 1024 * 1024 * 1024;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes}B`;
-  }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)}KB`;
-  }
-  if (bytes < 1024 * 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-  }
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)}GB`;
-}
-
-async function loadAgentCacheIndex(agentId: string): Promise<AgentCacheIndex> {
-  const cached = cacheIndexMap.get(agentId);
-  if (cached) {
-    return cached;
-  }
-  const indexPath = resolveAgentCacheIndexPath(agentId);
-  try {
-    const content = await fs.readFile(indexPath, "utf-8");
-    const index = JSON.parse(content) as AgentCacheIndex;
-    cacheIndexMap.set(agentId, index);
-    logVerbose(
-      `agent media cache loaded: agentId=${agentId} entries=${index.entries.length} size=${formatBytes(index.totalSize)}`,
-    );
-    return index;
-  } catch {
-    const emptyIndex: AgentCacheIndex = { entries: [], totalSize: 0 };
-    cacheIndexMap.set(agentId, emptyIndex);
-    return emptyIndex;
-  }
-}
-
-async function saveAgentCacheIndex(agentId: string, index: AgentCacheIndex): Promise<void> {
-  const cacheDir = resolveAgentCacheDir(agentId);
-  await fs.mkdir(cacheDir, { recursive: true });
-  await fs.writeFile(resolveAgentCacheIndexPath(agentId), JSON.stringify(index, null, 2));
-}
-
-/** LRU eviction: delete oldest entries until totalSize <= targetSize */
-async function evictOldEntries(
-  agentId: string,
-  index: AgentCacheIndex,
-  targetSize: number,
-): Promise<void> {
-  const sorted = [...index.entries].toSorted((a, b) => a.savedAt - b.savedAt);
-  while (index.totalSize > targetSize && sorted.length > 0) {
-    const oldest = sorted.shift();
-    if (!oldest) {
-      break;
-    }
-    try {
-      await fs.unlink(oldest.path);
-      logVerbose(`agent media cache evict: deleted ${oldest.path} (${formatBytes(oldest.size)})`);
-    } catch {
-      // File may already be deleted
-    }
-    index.totalSize -= oldest.size;
-    const idx = index.entries.findIndex((e) => e.id === oldest.id);
-    if (idx >= 0) {
-      index.entries.splice(idx, 1);
-    }
-  }
-}
-
-function sanitizeFilename(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return trimmed
-    .replace(/[^\p{L}\p{N}._-]+/gu, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_|_$/g, "")
-    .slice(0, 60);
-}
-
-/** Save media buffer to agent cache with LRU eviction. */
-async function saveToAgentCache(params: {
-  agentId: string;
-  buffer: Buffer;
-  contentType?: string;
-  channel: string;
-  groupId?: string;
-  senderId?: string;
-  timestamp?: number;
-  originalFilename?: string;
-}): Promise<{ path: string; contentType?: string } | null> {
-  const { agentId, buffer, contentType, channel, groupId, senderId, timestamp, originalFilename } =
-    params;
-  if (!buffer || buffer.length === 0) {
-    return null;
-  }
-
-  const config = await loadCacheConfig();
-  const maxSizeBytes = getMaxSizeBytes(config, agentId);
-  const index = await loadAgentCacheIndex(agentId);
-  const cacheDir = resolveAgentCacheDir(agentId);
-  await fs.mkdir(cacheDir, { recursive: true });
-
-  // Evict if adding this file would exceed limit
-  if (index.totalSize + buffer.length > maxSizeBytes) {
-    const target = maxSizeBytes - buffer.length - 100 * 1024 * 1024; // 100MB headroom
-    await evictOldEntries(agentId, index, Math.max(0, target));
-  }
-
-  const id = crypto.randomUUID();
-  const ext = contentType?.split("/")[1]?.split(";")[0] ?? "bin";
-  const filename = originalFilename
-    ? `${sanitizeFilename(originalFilename)}---${id}.${ext}`
-    : `${id}.${ext}`;
-  const filePath = path.join(cacheDir, filename);
-
-  try {
-    await fs.writeFile(filePath, buffer);
-    const entry: AgentCacheEntry = {
-      id,
-      path: filePath,
-      contentType,
-      size: buffer.length,
-      savedAt: Date.now(),
-      channel,
-      groupId,
-      senderId,
-      timestamp,
-    };
-    index.entries.push(entry);
-    index.totalSize += buffer.length;
-    await saveAgentCacheIndex(agentId, index);
-    logVerbose(
-      `agent media cache saved: agentId=${agentId} path=${filePath} size=${formatBytes(buffer.length)}`,
-    );
-    return { path: filePath, contentType };
-  } catch (err) {
-    logVerbose(`agent media cache save failed: ${String(err)}`);
-    return null;
-  }
-}
+const PRECACHE_DIR = path.join(resolveConfigDir(), "media", "inbound", "signal_precache");
 
 // ── Persistent media lookup cache (timestamp → path index) ──────────────────
 
@@ -386,6 +190,20 @@ function getCachedMedia(
     return { path: entry.path, contentType: entry.contentType };
   }
   return null;
+}
+
+/** Save a buffer to the pre-cache fallback dir when it didn't land in upstream inbound/. */
+export async function saveToPrecache(
+  buffer: Buffer,
+  contentType?: string,
+): Promise<{ path: string; contentType?: string }> {
+  await fs.mkdir(PRECACHE_DIR, { recursive: true });
+  const ext = contentType?.split("/")[1]?.split(";")[0] ?? "bin";
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const filePath = path.join(PRECACHE_DIR, filename);
+  await fs.writeFile(filePath, buffer);
+  logVerbose(`signal: saved to precache fallback: ${filePath}`);
+  return { path: filePath, contentType };
 }
 
 // ── Sticker fetch helper ────────────────────────────────────────────────────
@@ -524,7 +342,7 @@ export async function preCacheGroupMedia(params: {
   groupId?: string;
   deps: SignalEnhancementDeps;
 }): Promise<void> {
-  const { senderRecipient, senderAllowId, groupId, deps } = params;
+  const { senderRecipient, groupId, deps } = params;
   const enhanced = asEnhanced(params.dataMessage);
   if (!enhanced) {
     return;
@@ -535,14 +353,7 @@ export async function preCacheGroupMedia(params: {
     return;
   }
 
-  const routeForCache = resolveAgentRoute({
-    cfg: deps.cfg,
-    channel: "signal",
-    accountId: deps.accountId,
-    peer: { kind: "group", id: groupId ?? "unknown" },
-  });
-
-  // Cache normal attachment
+  // Pre-cache normal attachment (fetchAttachment saves to upstream inbound/)
   const firstAtt = enhanced.attachments?.[0];
   if (firstAtt?.id) {
     try {
@@ -555,17 +366,6 @@ export async function preCacheGroupMedia(params: {
         maxBytes: deps.mediaMaxBytes,
       });
       if (fetched) {
-        const buffer = await fs.readFile(fetched.path);
-        await saveToAgentCache({
-          agentId: routeForCache.agentId,
-          buffer,
-          contentType: fetched.contentType ?? firstAtt.contentType ?? undefined,
-          channel: "signal",
-          groupId,
-          senderId: senderAllowId,
-          timestamp: enhanced.timestamp,
-          originalFilename: firstAtt.filename ?? undefined,
-        });
         cacheMedia(enhanced.timestamp, {
           path: fetched.path,
           contentType: fetched.contentType ?? firstAtt.contentType ?? undefined,
@@ -577,7 +377,7 @@ export async function preCacheGroupMedia(params: {
     }
   }
 
-  // Cache sticker
+  // Pre-cache sticker (fetchSticker saves to upstream inbound/)
   const stk = enhanced.sticker;
   if (stk) {
     try {
@@ -588,16 +388,6 @@ export async function preCacheGroupMedia(params: {
         deps,
       });
       if (stickerFetched) {
-        const buffer = await fs.readFile(stickerFetched.path);
-        await saveToAgentCache({
-          agentId: routeForCache.agentId,
-          buffer,
-          contentType: stickerFetched.contentType ?? stk.contentType ?? "image/webp",
-          channel: "signal",
-          groupId,
-          senderId: senderAllowId,
-          timestamp: enhanced.timestamp,
-        });
         cacheMedia(enhanced.timestamp, {
           path: stickerFetched.path,
           contentType: stickerFetched.contentType ?? stk.contentType ?? "image/webp",
