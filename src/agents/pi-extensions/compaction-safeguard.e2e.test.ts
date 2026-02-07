@@ -36,7 +36,7 @@ describe("compaction-safeguard tool failures", () => {
         isError: true,
         details: { status: "failed", exitCode: 1 },
         content: [{ type: "text", text: "ENOENT: missing file" }],
-        timestamp: Date.now(),
+        timestamp: 0,
       },
       {
         role: "toolResult",
@@ -44,7 +44,7 @@ describe("compaction-safeguard tool failures", () => {
         toolName: "read",
         isError: false,
         content: [{ type: "text", text: "ok" }],
-        timestamp: Date.now(),
+        timestamp: 0,
       },
     ];
 
@@ -65,7 +65,7 @@ describe("compaction-safeguard tool failures", () => {
         isError: true,
         details: { exitCode: 2 },
         content: [],
-        timestamp: Date.now(),
+        timestamp: 0,
       },
       {
         role: "toolResult",
@@ -73,7 +73,7 @@ describe("compaction-safeguard tool failures", () => {
         toolName: "exec",
         isError: true,
         content: [{ type: "text", text: "ignored" }],
-        timestamp: Date.now(),
+        timestamp: 0,
       },
     ];
 
@@ -91,7 +91,7 @@ describe("compaction-safeguard tool failures", () => {
       toolName: "exec",
       isError: true,
       content: [{ type: "text", text: `error ${idx}` }],
-      timestamp: Date.now(),
+      timestamp: 0,
     }));
 
     const failures = collectToolFailures(messages);
@@ -108,7 +108,7 @@ describe("compaction-safeguard tool failures", () => {
         toolName: "exec",
         isError: false,
         content: [{ type: "text", text: "ok" }],
-        timestamp: Date.now(),
+        timestamp: 0,
       },
     ];
 
@@ -124,11 +124,11 @@ describe("computeAdaptiveChunkRatio", () => {
   it("returns BASE_CHUNK_RATIO for normal messages", () => {
     // Small messages: 1000 tokens each, well under 10% of context
     const messages: AgentMessage[] = [
-      { role: "user", content: "x".repeat(1000), timestamp: Date.now() },
+      { role: "user", content: "x".repeat(1000), timestamp: 0 },
       {
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(1000) }],
-        timestamp: Date.now(),
+        timestamp: 0,
       } as unknown as AgentMessage,
     ];
 
@@ -139,11 +139,11 @@ describe("computeAdaptiveChunkRatio", () => {
   it("reduces ratio when average message > 10% of context", () => {
     // Large messages: ~50K tokens each (25% of context)
     const messages: AgentMessage[] = [
-      { role: "user", content: "x".repeat(50_000 * 4), timestamp: Date.now() },
+      { role: "user", content: "x".repeat(50_000 * 4), timestamp: 0 },
       {
         role: "assistant",
         content: [{ type: "text", text: "y".repeat(50_000 * 4) }],
-        timestamp: Date.now(),
+        timestamp: 0,
       } as unknown as AgentMessage,
     ];
 
@@ -155,7 +155,7 @@ describe("computeAdaptiveChunkRatio", () => {
   it("respects MIN_CHUNK_RATIO floor", () => {
     // Very large messages that would push ratio below minimum
     const messages: AgentMessage[] = [
-      { role: "user", content: "x".repeat(150_000 * 4), timestamp: Date.now() },
+      { role: "user", content: "x".repeat(150_000 * 4), timestamp: 0 },
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -170,7 +170,7 @@ describe("computeAdaptiveChunkRatio", () => {
   it("handles single huge message", () => {
     // Single massive message
     const messages: AgentMessage[] = [
-      { role: "user", content: "x".repeat(180_000 * 4), timestamp: Date.now() },
+      { role: "user", content: "x".repeat(180_000 * 4), timestamp: 0 },
     ];
 
     const ratio = computeAdaptiveChunkRatio(messages, CONTEXT_WINDOW);
@@ -186,7 +186,7 @@ describe("isOversizedForSummary", () => {
     const msg: AgentMessage = {
       role: "user",
       content: "Hello, world!",
-      timestamp: Date.now(),
+      timestamp: 0,
     };
 
     expect(isOversizedForSummary(msg, CONTEXT_WINDOW)).toBe(false);
@@ -198,7 +198,7 @@ describe("isOversizedForSummary", () => {
     const msg: AgentMessage = {
       role: "user",
       content: "x".repeat(120_000 * 4),
-      timestamp: Date.now(),
+      timestamp: 0,
     };
 
     expect(isOversizedForSummary(msg, CONTEXT_WINDOW)).toBe(true);
@@ -211,7 +211,7 @@ describe("isOversizedForSummary", () => {
     const msg: AgentMessage = {
       role: "user",
       content: "x".repeat(Math.floor(halfContextChars * 4)),
-      timestamp: Date.now(),
+      timestamp: 0,
     };
 
     // With safety margin applied, this should be at the boundary
@@ -348,7 +348,7 @@ describe("compaction-safeguard cancels on failure (#10332)", () => {
       {
         preparation: {
           ...makeMinimalPreparation(),
-          messagesToSummarize: [{ role: "user", content: "hello", timestamp: Date.now() }],
+          messagesToSummarize: [{ role: "user", content: "hello", timestamp: 0 }],
         },
         customInstructions: undefined,
         signal: undefined,
