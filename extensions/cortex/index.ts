@@ -160,18 +160,34 @@ class CategoryManager {
     }
   }
 
+  /**
+   * Detect single category (backward compat)
+   */
   detectCategory(content: string): string {
+    const cats = this.detectCategories(content);
+    return cats[0];
+  }
+
+  /**
+   * Detect multiple categories from content
+   * PHASE 3: Multi-category support
+   */
+  detectCategories(content: string): string[] {
     if (!this.loaded) {
-      return "general";
+      return ["general"];
     }
 
     const lowerContent = content.toLowerCase();
+    const matched: string[] = [];
+
     for (const [category, pattern] of this.patterns) {
       if (pattern.test(lowerContent)) {
-        return category;
+        matched.push(category);
       }
     }
-    return "general";
+
+    // Return matched categories or default to general
+    return matched.length > 0 ? matched : ["general"];
   }
 
   getCategories(): string[] {
@@ -195,6 +211,17 @@ function detectCategory(content: string): string {
     return "general";
   }
   return categoryManager.detectCategory(content);
+}
+
+/**
+ * Detect multiple categories from content
+ * PHASE 3: Multi-category support
+ */
+function detectCategories(content: string): string[] {
+  if (!categoryManager) {
+    return ["general"];
+  }
+  return categoryManager.detectCategories(content);
 }
 
 function detectImportance(content: string): number {
@@ -238,6 +265,7 @@ function shouldCapture(content: string): boolean {
 /**
  * Check if STM items match a query with improved relevance scoring.
  * Now includes: temporal decay, importance weighting, fuzzy matching, category boosting.
+ * PHASE 3: Multi-category support
  */
 function matchSTMItems(items: STMItem[], query: string, temporalWeight = 0.4, importanceWeight = 0.3): Array<STMItem & { matchScore: number }> {
   const queryTerms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
@@ -245,8 +273,8 @@ function matchSTMItems(items: STMItem[], query: string, temporalWeight = 0.4, im
     return [];
   }
 
-  // Detect query category for boosting
-  const queryCategory = detectCategory(query);
+  // Detect query categories for boosting (multi-category support)
+  const queryCategories = detectCategories(query);
 
   const matches: Array<STMItem & { matchScore: number }> = [];
 
@@ -281,8 +309,11 @@ function matchSTMItems(items: STMItem[], query: string, temporalWeight = 0.4, im
     // Importance score (normalized to 0-1, assuming 1-3 scale)
     const normalizedImportance = (item.importance - 1) / 2;
 
-    // Category match bonus
-    const categoryBonus = item.category === queryCategory ? 0.2 : 0;
+    // Category match bonus (PHASE 3: multi-category support)
+    // Bonus scales with number of matching categories
+    const itemCategories = item.categories ?? (item.category ? [item.category] : ["general"]);
+    const matchingCats = queryCategories.filter(qc => itemCategories.includes(qc));
+    const categoryBonus = matchingCats.length > 0 ? 0.1 + (matchingCats.length * 0.1) : 0;
 
     // Combined score with weights
     const relevanceWeight = 1 - temporalWeight - importanceWeight;
@@ -669,17 +700,23 @@ const cortexPlugin: OpenClawPlugin = {
 
     // =========================================================================
     // Tool: cortex_add - Explicit memory storage with importance
+    // PHASE 3: Multi-category support
     // =========================================================================
     api.registerTool(
       {
         name: "cortex_add",
         description:
-          "Store an important memory in Cortex STM. Use for significant insights, decisions, lessons learned, or preferences. Auto-detects category from content keywords. Use cortex_list_categories to see available categories. Importance: 1.0=routine, 2.0=notable, 3.0=critical.",
+          "Store an important memory in Cortex STM. Use for significant insights, decisions, lessons learned, or preferences. Auto-detects categories from content keywords. Use cortex_list_categories to see available categories. Importance: 1.0=routine, 2.0=notable, 3.0=critical. Supports multiple categories.",
         parameters: Type.Object({
           content: Type.String({ description: "Memory content to store" }),
           category: Type.Optional(
             Type.String({
-              description: "Category name (use cortex_list_categories to see options, or let auto-detect)",
+              description: "Single category (deprecated, use categories array instead)",
+            }),
+          ),
+          categories: Type.Optional(
+            Type.Array(Type.String(), {
+              description: "Array of categories for this memory (e.g., ['technical', 'preferences'])",
             }),
           ),
           importance: Type.Optional(
@@ -687,7 +724,7 @@ const cortexPlugin: OpenClawPlugin = {
           ),
         }),
         async execute(_toolCallId, params) {
-          const p = params as { content: string; category?: string; importance?: number };
+          const p = params as { content: string; category?: string; categories?: string[]; importance?: number };
 
           try {
             const available = await bridge.isAvailable();
@@ -698,16 +735,17 @@ const cortexPlugin: OpenClawPlugin = {
               };
             }
 
-            const category = p.category ?? detectCategory(p.content);
+            // PHASE 3: Multi-category support - prefer categories array, fall back to single category, then auto-detect
+            const categories = p.categories ?? (p.category ? [p.category] : detectCategories(p.content));
             const importance = p.importance ?? detectImportance(p.content);
 
             // Add to STM (fast path for recent recall)
-            await bridge.addToSTM(p.content, category, importance);
+            await bridge.addToSTM(p.content, categories, importance);
 
             // Also add to embeddings for semantic search
             const memId = await bridge.addMemory(p.content, {
               source: "agent",
-              category,
+              categories,
               importance,
             });
 
@@ -715,10 +753,10 @@ const cortexPlugin: OpenClawPlugin = {
               content: [
                 {
                   type: "text",
-                  text: `Memory stored in Cortex: [${category}] importance=${importance.toFixed(1)}`,
+                  text: `Memory stored in Cortex: [${categories.join(", ")}] importance=${importance.toFixed(1)}`,
                 },
               ],
-              details: { id: memId, category, importance },
+              details: { id: memId, categories, importance },
             };
           } catch (err) {
             return {
@@ -733,18 +771,20 @@ const cortexPlugin: OpenClawPlugin = {
 
     // =========================================================================
     // Tool: cortex_stm - Quick view of recent short-term memory
+    // PHASE 3: Multi-category support
     // =========================================================================
     api.registerTool(
       {
         name: "cortex_stm",
         description:
-          "View recent items from Cortex short-term memory (STM). Shows the last N significant events with O(1) access. Use to quickly recall recent context without full search.",
+          "View recent items from Cortex short-term memory (STM). Shows the last N significant events with O(1) access. Use to quickly recall recent context without full search. Supports filtering by multiple categories.",
         parameters: Type.Object({
           limit: Type.Optional(Type.Number({ description: "Max items to show (default: 10)" })),
-          category: Type.Optional(Type.String({ description: "Filter by category" })),
+          category: Type.Optional(Type.String({ description: "Filter by category (single)" })),
+          categories: Type.Optional(Type.Array(Type.String(), { description: "Filter by multiple categories" })),
         }),
         async execute(_toolCallId, params) {
-          const p = params as { limit?: number; category?: string };
+          const p = params as { limit?: number; category?: string; categories?: string[] };
 
           try {
             const available = await bridge.isAvailable();
@@ -755,7 +795,9 @@ const cortexPlugin: OpenClawPlugin = {
               };
             }
 
-            const items = await bridge.getRecentSTM(p.limit ?? 10, p.category);
+            // PHASE 3: Support both single category and categories array
+            const filterCats = p.categories ?? (p.category ? [p.category] : undefined);
+            const items = await bridge.getRecentSTM(p.limit ?? 10, filterCats);
 
             return {
               content: [
@@ -766,7 +808,9 @@ const cortexPlugin: OpenClawPlugin = {
                         .map((i) => {
                           const age = calculateRecencyScore(i.timestamp);
                           const ageLabel = age > 0.9 ? "now" : age > 0.5 ? "recent" : "older";
-                          return `[${i.category}] (imp=${i.importance.toFixed(1)}, ${ageLabel}) ${i.content.slice(0, 150)}`;
+                          // PHASE 3: Display all categories
+                          const cats = i.categories ?? (i.category ? [i.category] : ["general"]);
+                          return `[${cats.join(", ")}] (imp=${i.importance.toFixed(1)}, ${ageLabel}) ${i.content.slice(0, 150)}`;
                         })
                         .join("\n")
                     : "STM is empty.",
@@ -857,6 +901,408 @@ const cortexPlugin: OpenClawPlugin = {
         },
       },
       { names: ["cortex_stats"] },
+    );
+
+    // =========================================================================
+    // Tool: cortex_dedupe - Deduplication (Priority 2)
+    // =========================================================================
+    api.registerTool(
+      {
+        name: "cortex_dedupe",
+        description:
+          "Find and handle duplicate memories in Cortex. Use 'report' to list duplicates, 'merge' to combine them (keeps newest, sums access counts), or 'delete_older' to remove older duplicates.",
+        parameters: Type.Object({
+          category: Type.Optional(Type.String({ description: "Limit deduplication to this category" })),
+          categories: Type.Optional(Type.Array(Type.String(), { description: "Limit to multiple categories" })),
+          similarity_threshold: Type.Optional(
+            Type.Number({ description: "Content similarity threshold 0-1 (default: 0.95 = nearly identical)" }),
+          ),
+          action: Type.Union([
+            Type.Literal("report"),
+            Type.Literal("merge"),
+            Type.Literal("delete_older"),
+          ], { description: "Action: 'report', 'merge', or 'delete_older'" }),
+        }),
+        async execute(_toolCallId, params) {
+          const p = params as {
+            category?: string;
+            categories?: string[];
+            similarity_threshold?: number;
+            action: "report" | "merge" | "delete_older";
+          };
+
+          try {
+            const available = await bridge.isAvailable();
+            if (!available) {
+              return {
+                content: [{ type: "text", text: "Cortex memory system not available" }],
+                details: { error: "unavailable" },
+              };
+            }
+
+            const _threshold = p.similarity_threshold ?? 0.95; // Reserved for future semantic dedup
+            const filterCats = p.categories ?? (p.category ? [p.category] : undefined);
+
+            // Get all STM items
+            const stmItems = await bridge.getRecentSTM(config.stmCapacity);
+
+            // Filter by category if specified
+            const items = filterCats
+              ? stmItems.filter(item => {
+                  const itemCats = item.categories ?? (item.category ? [item.category] : ["general"]);
+                  return filterCats.some(fc => itemCats.includes(fc));
+                })
+              : stmItems;
+
+            // Find duplicates using content hash (first 100 chars lowercase)
+            const groups = new Map<string, Array<STMItem & { index: number }>>();
+            for (let i = 0; i < items.length; i++) {
+              const key = items[i].content.slice(0, 100).toLowerCase().trim();
+              if (!groups.has(key)) {
+                groups.set(key, []);
+              }
+              groups.get(key)!.push({ ...items[i], index: i });
+            }
+
+            // Filter to only groups with duplicates
+            const duplicateGroups = Array.from(groups.values()).filter(g => g.length > 1);
+
+            if (duplicateGroups.length === 0) {
+              return {
+                content: [{ type: "text", text: "No duplicates found." }],
+                details: { duplicates: 0 },
+              };
+            }
+
+            if (p.action === "report") {
+              const report = duplicateGroups.map((group, i) => {
+                const cats = group[0].categories ?? (group[0].category ? [group[0].category] : ["general"]);
+                return `Group ${i + 1} (${group.length} items, [${cats.join(",")}]):\n` +
+                  group.map(item => `  - [${formatTimeDelta(item.timestamp)}] ${item.content.slice(0, 60)}...`).join("\n");
+              }).join("\n\n");
+
+              return {
+                content: [{ type: "text", text: `Found ${duplicateGroups.length} duplicate groups:\n\n${report}` }],
+                details: { groups: duplicateGroups.length, total_duplicates: duplicateGroups.reduce((s, g) => s + g.length - 1, 0) },
+              };
+            }
+
+            if (p.action === "merge" || p.action === "delete_older") {
+              // Load full STM for modification
+              const stmData = await bridge.loadSTMDirect();
+              const allItems = stmData.short_term_memory;
+              let removed = 0;
+
+              for (const group of duplicateGroups) {
+                // Sort by timestamp (newest first)
+                group.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+                const keeper = group[0];
+                const toRemove = group.slice(1);
+
+                if (p.action === "merge") {
+                  // Sum access counts into keeper
+                  const totalAccess = group.reduce((sum, item) => sum + (item.access_count || 0), 0);
+                  const maxImportance = Math.max(...group.map(item => item.importance || 1));
+                  keeper.access_count = totalAccess;
+                  keeper.importance = maxImportance;
+                }
+
+                // Remove older duplicates
+                for (const item of toRemove) {
+                  const idx = allItems.findIndex(
+                    i => i.content === item.content && i.timestamp === item.timestamp
+                  );
+                  if (idx !== -1) {
+                    allItems.splice(idx, 1);
+                    removed++;
+                  }
+                }
+              }
+
+              // Save modified STM
+              stmData.short_term_memory = allItems;
+              const stmPath = join(homedir(), ".openclaw", "workspace", "memory", "stm.json");
+              await writeFile(stmPath, JSON.stringify(stmData, null, 2));
+
+              return {
+                content: [{ type: "text", text: `${p.action === "merge" ? "Merged" : "Deleted"} ${removed} duplicate memories from ${duplicateGroups.length} groups.` }],
+                details: { action: p.action, removed, groups: duplicateGroups.length },
+              };
+            }
+
+            // Exhaustive check - should never reach here
+            const _exhaustiveCheck: never = p.action;
+            return {
+              content: [{ type: "text", text: `Unknown action: ${String(_exhaustiveCheck)}` }],
+              details: { error: "unknown action" },
+            };
+          } catch (err) {
+            return {
+              content: [{ type: "text", text: `Cortex dedupe error: ${err}` }],
+              details: { error: String(err) },
+            };
+          }
+        },
+      },
+      { names: ["cortex_dedupe"] },
+    );
+
+    // =========================================================================
+    // Tool: cortex_update - Importance adjustment (Priority 3)
+    // =========================================================================
+    api.registerTool(
+      {
+        name: "cortex_update",
+        description:
+          "Update a memory's importance score or categories. Use to promote important memories or reclassify them.",
+        parameters: Type.Object({
+          memory_id: Type.String({ description: "Memory ID (from cortex_stm or search results)" }),
+          importance: Type.Optional(Type.Number({ description: "New importance score 1.0-3.0" })),
+          categories: Type.Optional(Type.Array(Type.String(), { description: "New categories array" })),
+        }),
+        async execute(_toolCallId, params) {
+          const p = params as { memory_id: string; importance?: number; categories?: string[] };
+
+          try {
+            const available = await bridge.isAvailable();
+            if (!available) {
+              return {
+                content: [{ type: "text", text: "Cortex memory system not available" }],
+                details: { error: "unavailable" },
+              };
+            }
+
+            if (!p.importance && !p.categories) {
+              return {
+                content: [{ type: "text", text: "Must provide importance or categories to update" }],
+                details: { error: "no_changes" },
+              };
+            }
+
+            // Load and update STM
+            const stmData = await bridge.loadSTMDirect();
+            const stmItems = stmData.short_term_memory;
+            let found = false;
+            let updatedItem: STMItem | null = null;
+
+            for (const item of stmItems) {
+              // Match by content hash since STM doesn't have IDs
+              const itemId = `stm-${item.content.slice(0, 20)}-${item.timestamp}`;
+              if (p.memory_id === itemId || p.memory_id === item.timestamp || item.content.includes(p.memory_id)) {
+                if (p.importance !== undefined) {
+                  item.importance = p.importance;
+                }
+                if (p.categories) {
+                  item.categories = p.categories;
+                  item.category = p.categories[0];
+                }
+                found = true;
+                updatedItem = item;
+                break;
+              }
+            }
+
+            if (found && updatedItem) {
+              const stmPath = join(homedir(), ".openclaw", "workspace", "memory", "stm.json");
+              await writeFile(stmPath, JSON.stringify(stmData, null, 2));
+
+              const cats = updatedItem.categories ?? (updatedItem.category ? [updatedItem.category] : ["general"]);
+              return {
+                content: [{
+                  type: "text",
+                  text: `Updated memory: importance=${updatedItem.importance.toFixed(1)}, categories=[${cats.join(", ")}]`,
+                }],
+                details: { updated: true, importance: updatedItem.importance, categories: cats },
+              };
+            }
+
+            return {
+              content: [{ type: "text", text: `Memory not found: ${p.memory_id}` }],
+              details: { error: "not_found" },
+            };
+          } catch (err) {
+            return {
+              content: [{ type: "text", text: `Cortex update error: ${err}` }],
+              details: { error: String(err) },
+            };
+          }
+        },
+      },
+      { names: ["cortex_update"] },
+    );
+
+    // =========================================================================
+    // Tool: cortex_edit - Memory edit/append (Priority 4)
+    // =========================================================================
+    api.registerTool(
+      {
+        name: "cortex_edit",
+        description:
+          "Edit or append to an existing memory. Use 'append' to add to existing content, or 'replace' to overwrite entirely. Content changes trigger re-embedding.",
+        parameters: Type.Object({
+          memory_id: Type.String({ description: "Memory ID or content snippet to match" }),
+          append: Type.Optional(Type.String({ description: "Content to append to existing memory" })),
+          replace: Type.Optional(Type.String({ description: "New content to replace existing memory" })),
+        }),
+        async execute(_toolCallId, params) {
+          const p = params as { memory_id: string; append?: string; replace?: string };
+
+          try {
+            const available = await bridge.isAvailable();
+            if (!available) {
+              return {
+                content: [{ type: "text", text: "Cortex memory system not available" }],
+                details: { error: "unavailable" },
+              };
+            }
+
+            if (!p.append && !p.replace) {
+              return {
+                content: [{ type: "text", text: "Must provide append or replace content" }],
+                details: { error: "no_changes" },
+              };
+            }
+
+            // Load and update STM
+            const stmData = await bridge.loadSTMDirect();
+            const stmItems = stmData.short_term_memory;
+            let found = false;
+            let updatedItem: STMItem | null = null;
+
+            for (const item of stmItems) {
+              // Match by content snippet or timestamp
+              if (p.memory_id === item.timestamp || item.content.includes(p.memory_id)) {
+                const oldContent = item.content;
+
+                if (p.replace) {
+                  item.content = p.replace;
+                } else if (p.append) {
+                  item.content = `${item.content}\n\n[Updated ${new Date().toISOString()}]: ${p.append}`;
+                }
+
+                // Update timestamp to reflect modification
+                item.timestamp = new Date().toISOString();
+
+                found = true;
+                updatedItem = item;
+
+                // If content changed significantly, re-embed
+                if (oldContent !== item.content) {
+                  const daemonAvailable = await bridge.isEmbeddingsDaemonAvailable();
+                  if (daemonAvailable) {
+                    const cats = item.categories ?? (item.category ? [item.category] : ["general"]);
+                    await bridge.storeMemoryFast(item.content, {
+                      categories: cats,
+                      importance: item.importance,
+                    });
+                  }
+                }
+                break;
+              }
+            }
+
+            if (found && updatedItem) {
+              const stmPath = join(homedir(), ".openclaw", "workspace", "memory", "stm.json");
+              await writeFile(stmPath, JSON.stringify(stmData, null, 2));
+
+              return {
+                content: [{
+                  type: "text",
+                  text: `Memory ${p.replace ? "replaced" : "appended"}: ${updatedItem.content.slice(0, 100)}...`,
+                }],
+                details: { action: p.replace ? "replace" : "append", content_length: updatedItem.content.length },
+              };
+            }
+
+            return {
+              content: [{ type: "text", text: `Memory not found: ${p.memory_id}` }],
+              details: { error: "not_found" },
+            };
+          } catch (err) {
+            return {
+              content: [{ type: "text", text: `Cortex edit error: ${err}` }],
+              details: { error: String(err) },
+            };
+          }
+        },
+      },
+      { names: ["cortex_edit"] },
+    );
+
+    // =========================================================================
+    // Tool: cortex_move - Move between categories (Priority 5)
+    // =========================================================================
+    api.registerTool(
+      {
+        name: "cortex_move",
+        description:
+          "Move a memory to different categories. Replaces existing categories with new ones. No re-embedding needed.",
+        parameters: Type.Object({
+          memory_id: Type.String({ description: "Memory ID or content snippet to match" }),
+          to_categories: Type.Array(Type.String(), { description: "New categories to assign" }),
+        }),
+        async execute(_toolCallId, params) {
+          const p = params as { memory_id: string; to_categories: string[] };
+
+          try {
+            const available = await bridge.isAvailable();
+            if (!available) {
+              return {
+                content: [{ type: "text", text: "Cortex memory system not available" }],
+                details: { error: "unavailable" },
+              };
+            }
+
+            if (!p.to_categories || p.to_categories.length === 0) {
+              return {
+                content: [{ type: "text", text: "Must provide at least one category" }],
+                details: { error: "no_categories" },
+              };
+            }
+
+            // Load and update STM
+            const stmData = await bridge.loadSTMDirect();
+            const stmItems = stmData.short_term_memory;
+            let found = false;
+            let oldCategories: string[] = [];
+
+            for (const item of stmItems) {
+              // Match by content snippet or timestamp
+              if (p.memory_id === item.timestamp || item.content.includes(p.memory_id)) {
+                oldCategories = item.categories ?? (item.category ? [item.category] : ["general"]);
+                item.categories = p.to_categories;
+                item.category = p.to_categories[0];
+                found = true;
+                break;
+              }
+            }
+
+            if (found) {
+              const stmPath = join(homedir(), ".openclaw", "workspace", "memory", "stm.json");
+              await writeFile(stmPath, JSON.stringify(stmData, null, 2));
+
+              return {
+                content: [{
+                  type: "text",
+                  text: `Moved memory from [${oldCategories.join(", ")}] to [${p.to_categories.join(", ")}]`,
+                }],
+                details: { from_categories: oldCategories, to_categories: p.to_categories },
+              };
+            }
+
+            return {
+              content: [{ type: "text", text: `Memory not found: ${p.memory_id}` }],
+              details: { error: "not_found" },
+            };
+          } catch (err) {
+            return {
+              content: [{ type: "text", text: `Cortex move error: ${err}` }],
+              details: { error: String(err) },
+            };
+          }
+        },
+      },
+      { names: ["cortex_move"] },
     );
 
     // =========================================================================
@@ -1087,7 +1533,9 @@ const cortexPlugin: OpenClawPlugin = {
               // Track for dedup across tiers
               injectedContentKeys.add(m.content.slice(0, 100).toLowerCase().trim());
 
-              return `- [${m.category ?? "hot"}/${timeDelta}/access=${Math.round(accessCount)}] ${m.content.slice(0, config.truncateOldMemoriesTo)}`;
+              // PHASE 3: Multi-category display
+              const cats = m.categories ?? (m.category ? [m.category] : ["hot"]);
+              return `- [${cats.join(",")}/${timeDelta}/access=${Math.round(accessCount)}] ${m.content.slice(0, config.truncateOldMemoriesTo)}`;
             }).join("\n");
             const hotTokens = estimateTokens(hotContext);
 
@@ -1123,7 +1571,9 @@ const cortexPlugin: OpenClawPlugin = {
             // Track for dedup
             injectedContentKeys.add(m.content.slice(0, 100).toLowerCase().trim());
 
-            return `- [${m.category}/${timeDelta}] ${m.content.slice(0, config.truncateOldMemoriesTo)}`;
+            // PHASE 3: Multi-category display
+            const cats = m.categories ?? (m.category ? [m.category] : ["general"]);
+            return `- [${cats.join(",")}/${timeDelta}] ${m.content.slice(0, config.truncateOldMemoriesTo)}`;
           }).join("\n");
           const stmTokens = estimateTokens(stmContext);
 
@@ -1154,7 +1604,9 @@ const cortexPlugin: OpenClawPlugin = {
               const semanticContext = uniqueResults.map((r) => {
                 // Track for dedup
                 injectedContentKeys.add(r.content.slice(0, 100).toLowerCase().trim());
-                return `- [${r.category ?? "general"}/tokens=${r.tokens}] ${r.finalContent}`;
+                // PHASE 3: Multi-category display
+                const cats = r.categories ?? (r.category ? [r.category] : ["general"]);
+                return `- [${cats.join(",")}/${r.tokens}tok] ${r.finalContent}`;
               }).join("\n");
               contextParts.push(`<semantic-memory hint="related knowledge (token-budgeted)">\n${semanticContext}\n</semantic-memory>`);
               usedTokens += uniqueResults.reduce((sum, r) => sum + r.tokens, 0);
@@ -1163,11 +1615,15 @@ const cortexPlugin: OpenClawPlugin = {
         }
 
         // PHASE 2 IMPROVEMENT #6: Category diversity - ensure breadth
+        // PHASE 3: Multi-category support
         // Check if we're missing any active categories and add one memory from each
         const injectedCategories = new Set<string>();
-        // Collect categories from what we've already injected
+        // Collect categories from what we've already injected (handle multi-category)
         for (const match of stmMatches) {
-          injectedCategories.add(match.category);
+          const matchCats = match.categories ?? (match.category ? [match.category] : ["general"]);
+          for (const cat of matchCats) {
+            injectedCategories.add(cat);
+          }
         }
 
         const diversityBudget = tokenBudget - usedTokens;

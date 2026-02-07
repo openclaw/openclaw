@@ -18,7 +18,8 @@ export interface CortexMemory {
   id: string;
   content: string;
   source: string;
-  category: string | null;
+  categories: string[];  // Multi-category support (Phase 3)
+  category?: string | null;  // Deprecated: kept for backward compat, use categories
   timestamp: string;
   importance: number;
   access_count: number;
@@ -26,6 +27,32 @@ export interface CortexMemory {
   recency_score?: number;
   semantic_score?: number;
   embedding?: number[]; // Cached embedding vector
+}
+
+/**
+ * Normalize category input to array format.
+ * Handles: string, string[], null, undefined
+ */
+export function normalizeCategories(input: string | string[] | null | undefined): string[] {
+  if (!input) {
+    return ["general"];
+  }
+  if (Array.isArray(input)) {
+    return input.length > 0 ? input : ["general"];
+  }
+  return [input];
+}
+
+/**
+ * Check if item categories match any of the query categories.
+ * Used for filtering memories by category.
+ */
+export function categoriesMatch(itemCats: string[], queryCats: string | string[] | null | undefined): boolean {
+  if (!queryCats) {
+    return true;  // No filter means match all
+  }
+  const queryArray = normalizeCategories(queryCats);
+  return itemCats.some(cat => queryArray.includes(cat));
 }
 
 export interface CortexSearchOptions {
@@ -55,7 +82,8 @@ export function estimateTokens(text: string): number {
 export interface STMItem {
   content: string;
   timestamp: string;
-  category: string;
+  categories: string[];  // Multi-category support (Phase 3)
+  category?: string;  // Deprecated: kept for backward compat, use categories
   importance: number;
   access_count: number;
 }
@@ -306,14 +334,20 @@ export class MemoryIndexCache {
     this.accessRanking.clear();
 
     for (const memory of memories) {
-      this.memories.set(memory.id, memory);
+      // Normalize categories (handle old single-category format)
+      const normalizedMemory = {
+        ...memory,
+        categories: normalizeCategories(memory.categories ?? memory.category),
+      };
+      this.memories.set(memory.id, normalizedMemory);
 
-      // Index by category
-      const category = memory.category ?? "general";
-      if (!this.byCategory.has(category)) {
-        this.byCategory.set(category, new Set());
+      // Index by all categories (multi-category support)
+      for (const category of normalizedMemory.categories) {
+        if (!this.byCategory.has(category)) {
+          this.byCategory.set(category, new Set());
+        }
+        this.byCategory.get(category)!.add(memory.id);
       }
-      this.byCategory.get(category)!.add(memory.id);
 
       // Calculate access ranking (recency × access_count × importance)
       const recency = this.calculateRecency(memory.timestamp);
@@ -334,13 +368,20 @@ export class MemoryIndexCache {
   }
 
   add(memory: CortexMemory): void {
-    this.memories.set(memory.id, memory);
+    // Normalize categories (handle old single-category format)
+    const normalizedMemory = {
+      ...memory,
+      categories: normalizeCategories(memory.categories ?? memory.category),
+    };
+    this.memories.set(memory.id, normalizedMemory);
 
-    const category = memory.category ?? "general";
-    if (!this.byCategory.has(category)) {
-      this.byCategory.set(category, new Set());
+    // Index by all categories (multi-category support)
+    for (const category of normalizedMemory.categories) {
+      if (!this.byCategory.has(category)) {
+        this.byCategory.set(category, new Set());
+      }
+      this.byCategory.get(category)!.add(memory.id);
     }
-    this.byCategory.get(category)!.add(memory.id);
 
     const recency = this.calculateRecency(memory.timestamp);
     const score = recency * (memory.access_count + 1) * memory.importance;
@@ -878,12 +919,14 @@ export class CortexBridge {
   /**
    * Store memory using the GPU embeddings daemon (fast path)
    * With write-through to RAM cache
+   * PHASE 3: Multi-category support
    */
   async storeMemoryFast(
     content: string,
-    options: { category?: string; importance?: number } = {}
+    options: { category?: string; categories?: string | string[]; importance?: number } = {}
   ): Promise<string> {
-    const { category, importance = 1.0 } = options;
+    const { importance = 1.0 } = options;
+    const normalizedCats = normalizeCategories(options.categories ?? options.category);
     const timestamp = new Date().toISOString();
     const id = `mem-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -892,18 +935,19 @@ export class CortexBridge {
       id,
       content,
       source: "agent",
-      category: category ?? null,
+      categories: normalizedCats,
+      category: normalizedCats[0],  // Keep for backward compat
       timestamp,
       importance,
       access_count: 0,
     });
 
-    // Then persist to daemon/SQLite
+    // Then persist to daemon/SQLite (send categories as JSON array)
     try {
       const response = await fetch(`${this.embeddingsUrl}/store`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, category, importance, timestamp }),
+        body: JSON.stringify({ content, categories: normalizedCats, importance, timestamp }),
         signal: AbortSignal.timeout(5000),
       });
 
@@ -915,7 +959,7 @@ export class CortexBridge {
       return data.id;
     } catch {
       // Fall back to Python-based storage
-      return this.addMemory(content, { category, importance });
+      return this.addMemory(content, { categories: normalizedCats, importance });
     }
   }
 
@@ -988,12 +1032,15 @@ export class CortexBridge {
   /**
    * Add to short-term memory
    * PHASE 1: Now with 50,000 item capacity
+   * PHASE 3: Multi-category support
    */
-  async addToSTM(content: string, category?: string, importance: number = 1.0): Promise<STMItem> {
+  async addToSTM(content: string, categories?: string | string[], importance: number = 1.0): Promise<STMItem> {
+    const normalizedCats = normalizeCategories(categories);
     const item: STMItem = {
       content,
       timestamp: new Date().toISOString(),
-      category: category ?? "general",
+      categories: normalizedCats,
+      category: normalizedCats[0],  // Keep for backward compat
       importance,
       access_count: 0,
     };
@@ -1007,13 +1054,14 @@ export class CortexBridge {
       }
     }
 
-    // Persist via Python
+    // Persist via Python - send categories as JSON array
+    const categoriesJson = JSON.stringify(normalizedCats);
     const code = `
 import json
 import sys
 sys.path.insert(0, '${this.memoryDir}')
 from stm_manager import add_to_stm
-result = add_to_stm(${JSON.stringify(content)}, category=${category ? JSON.stringify(category) : "None"}, importance=${importance})
+result = add_to_stm(${JSON.stringify(content)}, categories=${categoriesJson}, importance=${importance})
 print(json.dumps(result))
 `;
     return (await this.runPython(code)) as STMItem;
@@ -1022,38 +1070,54 @@ print(json.dumps(result))
   /**
    * Get recent items from STM
    * PHASE 1: Uses RAM cache when available (microsecond access)
+   * PHASE 3: Multi-category filtering support
    */
-  async getRecentSTM(limit: number = 10, category?: string): Promise<STMItem[]> {
+  async getRecentSTM(limit: number = 10, category?: string | string[]): Promise<STMItem[]> {
     // Check RAM cache first
     const cacheAge = Date.now() - this.stmCacheTime;
     if (this.stmCache && cacheAge < this.stmCacheTTL) {
       let items = this.stmCache;
       if (category) {
-        items = items.filter(i => i.category === category);
+        // Normalize both item and query categories for comparison
+        items = items.filter(i => {
+          const itemCats = i.categories ?? (i.category ? [i.category] : ["general"]);
+          return categoriesMatch(itemCats, category);
+        });
       }
       return items.slice(-limit).toReversed();
     }
 
     // Cache miss or stale - refresh from disk
+    // For Python, send single category for backward compat (multi-cat filtering happens in JS)
+    const singleCat = Array.isArray(category) ? category[0] : category;
     const code = `
 import json
 import sys
 sys.path.insert(0, '${this.memoryDir}')
 from stm_manager import get_recent
-result = get_recent(limit=${limit}, category=${category ? JSON.stringify(category) : "None"})
+result = get_recent(limit=${limit}, category=${singleCat ? JSON.stringify(singleCat) : "None"})
 print(json.dumps(result))
 `;
     const result = (await this.runPython(code)) as STMItem[];
+
+    // Normalize categories in results
+    const normalizedResult = result.map(item => ({
+      ...item,
+      categories: item.categories ?? (item.category ? [item.category] : ["general"]),
+    }));
 
     // Update cache
     if (!category) {
       // Only cache full results
       const stmData = await this.loadSTMDirect();
-      this.stmCache = stmData.short_term_memory;
+      this.stmCache = stmData.short_term_memory.map(item => ({
+        ...item,
+        categories: item.categories ?? (item.category ? [item.category] : ["general"]),
+      }));
       this.stmCacheTime = Date.now();
     }
 
-    return result;
+    return normalizedResult;
   }
 
   /**
@@ -1089,16 +1153,19 @@ print(json.dumps(result))
 
   /**
    * Add memory to embeddings database
+   * PHASE 3: Multi-category support
    */
   async addMemory(
     content: string,
     options: {
       source?: string;
-      category?: string;
+      category?: string;  // Deprecated: use categories
+      categories?: string | string[];
       importance?: number;
     } = {},
   ): Promise<string> {
-    const { source = "agent", category, importance = 1.0 } = options;
+    const { source = "agent", importance = 1.0 } = options;
+    const normalizedCats = normalizeCategories(options.categories ?? options.category);
 
     // Add to RAM cache
     const id = `mem-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -1106,12 +1173,15 @@ print(json.dumps(result))
       id,
       content,
       source,
-      category: category ?? null,
+      categories: normalizedCats,
+      category: normalizedCats[0],  // Keep for backward compat
       timestamp: new Date().toISOString(),
       importance,
       access_count: 0,
     });
 
+    // For Python, send categories as JSON array
+    const categoriesJson = JSON.stringify(normalizedCats);
     const code = `
 import json
 import sys
@@ -1121,7 +1191,7 @@ init_db()
 result = add_memory(
     ${JSON.stringify(content)},
     source=${JSON.stringify(source)},
-    category=${category ? JSON.stringify(category) : "None"},
+    categories=${categoriesJson},
     importance=${importance}
 )
 print(json.dumps(result))
