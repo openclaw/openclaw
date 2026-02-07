@@ -187,7 +187,11 @@ export function chunkMarkdown(
     if (!firstEntry || !lastEntry) {
       return;
     }
-    const text = current.map((entry) => entry.line).join("\n");
+    let text = current.map((entry) => entry.line).join("\n");
+    // Safety net: if overlap carry caused text to exceed maxChars, truncate
+    if (text.length > maxChars) {
+      text = text.slice(0, maxChars);
+    }
     const startLine = firstEntry.lineNo;
     const endLine = lastEntry.lineNo;
     chunks.push({
@@ -206,14 +210,20 @@ export function chunkMarkdown(
     }
     let acc = 0;
     const kept: Array<{ line: string; lineNo: number }> = [];
+    // Cap overlap to half of maxChars so the next chunk cannot exceed maxChars
+    const overlapCap = Math.min(overlapChars, Math.floor(maxChars / 2));
     for (let i = current.length - 1; i >= 0; i -= 1) {
       const entry = current[i];
       if (!entry) {
         continue;
       }
-      acc += entry.line.length + 1;
+      const entrySize = entry.line.length + 1;
+      if (acc + entrySize > overlapCap && kept.length > 0) {
+        break;
+      }
+      acc += entrySize;
       kept.unshift(entry);
-      if (acc >= overlapChars) {
+      if (acc >= overlapCap) {
         break;
       }
     }

@@ -41,6 +41,45 @@ function normalizeSessionText(value: string): string {
     .trim();
 }
 
+/**
+ * Break long lines at sentence boundaries for better chunk coherence.
+ * Lines shorter than maxLineLength are returned unchanged.
+ */
+function breakLongLines(text: string, maxLineLength: number): string {
+  if (text.length <= maxLineLength) {
+    return text;
+  }
+  const result: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxLineLength) {
+    const searchRange = remaining.slice(0, maxLineLength);
+    let splitPos = -1;
+    // Look for sentence-ending punctuation followed by a space (scan from end)
+    for (let i = searchRange.length - 1; i >= Math.floor(maxLineLength / 2); i -= 1) {
+      const ch = searchRange[i];
+      if (
+        (ch === "." || ch === "?" || ch === "!") &&
+        i + 1 < searchRange.length &&
+        searchRange[i + 1] === " "
+      ) {
+        splitPos = i + 1;
+        break;
+      }
+    }
+    if (splitPos === -1) {
+      // No sentence boundary found; fall back to last space
+      const lastSpace = searchRange.lastIndexOf(" ");
+      splitPos = lastSpace > Math.floor(maxLineLength / 2) ? lastSpace : maxLineLength;
+    }
+    result.push(remaining.slice(0, splitPos).trim());
+    remaining = remaining.slice(splitPos).trim();
+  }
+  if (remaining) {
+    result.push(remaining);
+  }
+  return result.join("\n");
+}
+
 export function extractSessionText(content: unknown): string | null {
   if (typeof content === "string") {
     const normalized = normalizeSessionText(content);
@@ -107,9 +146,11 @@ export async function buildSessionEntry(absPath: string): Promise<SessionFileEnt
       }
       const safe = redactSensitiveText(text, { mode: "tools" });
       const label = message.role === "user" ? "User" : "Assistant";
-      collected.push(`${label}: ${safe}`);
+      // Break long messages at sentence boundaries for better chunk quality
+      collected.push(`${label}: ${breakLongLines(safe, 1000)}`);
     }
-    const content = collected.join("\n");
+    // Use paragraph separators between messages for natural chunk boundaries
+    const content = collected.join("\n\n");
     return {
       path: sessionPathForFile(absPath),
       absPath,

@@ -89,7 +89,7 @@ const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
-const EMBEDDING_APPROX_CHARS_PER_TOKEN = 1;
+const EMBEDDING_APPROX_CHARS_PER_TOKEN = 4;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
 const EMBEDDING_RETRY_BASE_DELAY_MS = 500;
@@ -1660,25 +1660,47 @@ export class MemoryIndexManager implements MemorySearchManager {
   }
 
   private buildEmbeddingBatches(chunks: MemoryChunk[]): MemoryChunk[][] {
+    // Maximum characters per individual embedding input to stay within model limits.
+    // OpenAI text-embedding-3-small: 8191 tokens; at ~3 chars/token => 24K chars is safe.
+    const MAX_SAFE_CHARS_PER_INPUT = 24000;
     const batches: MemoryChunk[][] = [];
     let current: MemoryChunk[] = [];
     let currentTokens = 0;
 
     for (const chunk of chunks) {
-      const estimate = this.estimateEmbeddingTokens(chunk.text);
-      const wouldExceed =
-        current.length > 0 && currentTokens + estimate > EMBEDDING_BATCH_MAX_TOKENS;
-      if (wouldExceed) {
-        batches.push(current);
-        current = [];
-        currentTokens = 0;
+      // Safety: if a single chunk exceeds the per-input safety limit, re-chunk it
+      let safeChunks: MemoryChunk[];
+      if (chunk.text.length > MAX_SAFE_CHARS_PER_INPUT) {
+        log.warn(`single chunk too large (${chunk.text.length} chars); re-chunking`);
+        safeChunks = chunkMarkdown(chunk.text, {
+          tokens: Math.floor(MAX_SAFE_CHARS_PER_INPUT / 4),
+          overlap: 0,
+        });
+      } else {
+        safeChunks = [chunk];
       }
-      if (current.length === 0 && estimate > EMBEDDING_BATCH_MAX_TOKENS) {
-        batches.push([chunk]);
-        continue;
+
+      for (const safeChunk of safeChunks) {
+        const estimate = this.estimateEmbeddingTokens(safeChunk.text);
+        const wouldExceed =
+          current.length > 0 && currentTokens + estimate > EMBEDDING_BATCH_MAX_TOKENS;
+        if (wouldExceed) {
+          batches.push(current);
+          current = [];
+          currentTokens = 0;
+        }
+        if (current.length === 0 && estimate > EMBEDDING_BATCH_MAX_TOKENS) {
+          // Last resort: truncate (should not happen after re-chunking above)
+          log.warn(
+            `chunk still exceeds batch limit after re-chunking (${estimate} est. tokens); truncating`,
+          );
+          const maxChars = EMBEDDING_BATCH_MAX_TOKENS * EMBEDDING_APPROX_CHARS_PER_TOKEN;
+          batches.push([{ ...safeChunk, text: safeChunk.text.slice(0, maxChars) }]);
+          continue;
+        }
+        current.push(safeChunk);
+        currentTokens += estimate;
       }
-      current.push(chunk);
-      currentTokens += estimate;
     }
 
     if (current.length > 0) {
