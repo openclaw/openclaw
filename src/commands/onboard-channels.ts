@@ -92,7 +92,12 @@ async function promptRemovalAccountId(params: {
   if (!plugin) {
     return DEFAULT_ACCOUNT_ID;
   }
-  const accountIds = plugin.config.listAccountIds(cfg).filter(Boolean);
+  let accountIds: string[];
+  try {
+    accountIds = plugin.config.listAccountIds(cfg).filter(Boolean);
+  } catch {
+    accountIds = [DEFAULT_ACCOUNT_ID];
+  }
   const defaultAccountId = resolveChannelDefaultAccountId({ plugin, cfg, accountIds });
   if (accountIds.length <= 1) {
     return defaultAccountId;
@@ -119,14 +124,26 @@ async function collectChannelStatus(params: {
   const catalogEntries = listChannelPluginCatalogEntries({ workspaceDir }).filter(
     (entry) => !installedIds.has(entry.id),
   );
-  const statusEntries = await Promise.all(
-    listChannelOnboardingAdapters().map((adapter) =>
-      adapter.getStatus({
-        cfg: params.cfg,
-        options: params.options,
-        accountOverrides: params.accountOverrides,
+  const statusEntries = (
+    await Promise.all(
+      listChannelOnboardingAdapters().map(async (adapter) => {
+        try {
+          return await adapter.getStatus({
+            cfg: params.cfg,
+            options: params.options,
+            accountOverrides: params.accountOverrides,
+          });
+        } catch {
+          return {
+            channel: adapter.channel,
+            configured: false,
+            statusLines: [`${adapter.channel}: plugin error (skipped)`],
+            selectionHint: "error",
+            quickstartScore: 0,
+          };
+        }
       }),
-    ),
+    )
   );
   const statusByChannel = new Map(statusEntries.map((entry) => [entry.channel, entry]));
   const fallbackStatuses = listChatChannels()
@@ -370,20 +387,24 @@ export async function setupChannels(
       }
       return undefined;
     }
-    const accountId = resolveChannelDefaultAccountId({ plugin, cfg: next });
-    const account = plugin.config.resolveAccount(next, accountId);
-    let enabled: boolean | undefined;
-    if (plugin.config.isEnabled) {
-      enabled = plugin.config.isEnabled(account, next);
-    } else if (typeof (account as { enabled?: boolean })?.enabled === "boolean") {
-      enabled = (account as { enabled?: boolean }).enabled;
-    } else if (
-      typeof (next.channels as Record<string, { enabled?: boolean }> | undefined)?.[channel]
-        ?.enabled === "boolean"
-    ) {
-      enabled = (next.channels as Record<string, { enabled?: boolean }>)[channel]?.enabled;
+    try {
+      const accountId = resolveChannelDefaultAccountId({ plugin, cfg: next });
+      const account = plugin.config.resolveAccount(next, accountId);
+      let enabled: boolean | undefined;
+      if (plugin.config.isEnabled) {
+        enabled = plugin.config.isEnabled(account, next);
+      } else if (typeof (account as { enabled?: boolean })?.enabled === "boolean") {
+        enabled = (account as { enabled?: boolean }).enabled;
+      } else if (
+        typeof (next.channels as Record<string, { enabled?: boolean }> | undefined)?.[channel]
+          ?.enabled === "boolean"
+      ) {
+        enabled = (next.channels as Record<string, { enabled?: boolean }>)[channel]?.enabled;
+      }
+      return enabled === false ? "disabled" : undefined;
+    } catch {
+      return "plugin error";
     }
-    return enabled === false ? "disabled" : undefined;
   };
 
   const buildSelectionOptions = (
