@@ -164,6 +164,7 @@ export const buildTelegramMessageContext = async ({
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
   const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+  // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const route = resolveAgentRoute({
     cfg: loadConfig(),
     channel: "telegram",

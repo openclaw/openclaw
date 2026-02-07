@@ -219,6 +219,7 @@ export async function preflightDiscordMessage(
     earlyThreadParentType = parentInfo.type;
   }
 
+  // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const route = resolveAgentRoute({
     cfg: loadConfig(),
     channel: "discord",
