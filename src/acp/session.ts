@@ -8,7 +8,7 @@ export type AcpSessionStore = {
   setActiveRun: (sessionId: string, runId: string, abortController: AbortController) => void;
   clearActiveRun: (sessionId: string) => void;
   cancelActiveRun: (sessionId: string) => boolean;
-  setPendingReset: (sessionId: string, resetPromise: Promise<void>) => void;
+  setPendingReset: (sessionId: string, resetPromise: Promise<void> | null) => void;
   clearAllSessionsForTest: () => void;
 };
 
