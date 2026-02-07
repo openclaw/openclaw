@@ -280,6 +280,48 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.wakeMode).toBe("now");
   });
 
+  it("injects defaultTimezone into cron schedule without explicit tz", () => {
+    const normalized = normalizeCronJobCreate(
+      {
+        name: "no-tz",
+        schedule: { kind: "cron", expr: "0 9 * * *" },
+        payload: { kind: "systemEvent", text: "morning" },
+      },
+      { defaultTimezone: "America/New_York" },
+    ) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.tz).toBe("America/New_York");
+  });
+
+  it("preserves explicit tz even when defaultTimezone is provided", () => {
+    const normalized = normalizeCronJobCreate(
+      {
+        name: "explicit-tz",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Asia/Shanghai" },
+        payload: { kind: "systemEvent", text: "morning" },
+      },
+      { defaultTimezone: "America/New_York" },
+    ) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.tz).toBe("Asia/Shanghai");
+  });
+
+  it("does not inject defaultTimezone into non-cron schedules", () => {
+    const normalized = normalizeCronJobCreate(
+      {
+        name: "every-no-tz",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: { kind: "systemEvent", text: "tick" },
+      },
+      { defaultTimezone: "America/New_York" },
+    ) as unknown as Record<string, unknown>;
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.tz).toBeUndefined();
+  });
+
   it("strips invalid delivery mode from partial delivery objects", () => {
     const normalized = normalizeCronJobCreate({
       name: "delivery mode",
