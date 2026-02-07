@@ -3,7 +3,7 @@ import { resetAcpSessionInPlace } from "../../acp/persistent-bindings.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { isAcpSessionKey } from "../../routing/session-key.js";
+import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import { handleAcpCommand } from "./commands-acp.js";
@@ -204,6 +204,26 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       `Ignoring /reset from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
+  }
+
+  // Notify plugins the old session ended before starting the new one
+  if (resetRequested && params.command.isAuthorizedSender) {
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("session_end")) {
+      const prevEntry = params.previousSessionEntry;
+      const prevSessionId = prevEntry?.sessionId ?? "";
+      await hookRunner.runSessionEnd(
+        {
+          sessionId: prevSessionId,
+          messageCount: 0, // not tracked at this layer
+        },
+        {
+          agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+          sessionId: prevSessionId,
+          sessionKey: params.sessionKey,
+        },
+      );
+    }
   }
 
   // Trigger internal hook for reset/new commands
