@@ -39,12 +39,6 @@ const AUTH_CHOICE_GROUP_DEFS: {
   choices: AuthChoice[];
 }[] = [
   {
-    value: "xai",
-    label: "xAI (Grok)",
-    hint: "API key",
-    choices: ["xai-api-key"],
-  },
-  {
     value: "openai",
     label: "OpenAI",
     hint: "Codex OAuth + API key",
@@ -73,6 +67,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Google",
     hint: "Gemini API key + OAuth",
     choices: ["gemini-api-key", "google-antigravity", "google-gemini-cli"],
+  },
+  {
+    value: "xai",
+    label: "xAI (Grok)",
+    hint: "API key",
+    choices: ["xai-api-key"],
   },
   {
     value: "openrouter",
