@@ -92,8 +92,14 @@ describe("listSkillCommandsForAgents", () => {
       },
     });
     const names = commands.map((entry) => entry.name);
+
+    // "demo_skill" is in both, so it should appear only once (the first one found)
     expect(names).toContain("demo_skill");
-    expect(names).toContain("demo_skill_2");
+    expect(names.filter((n) => n === "demo_skill").length).toBe(1);
+
+    // "demo_skill_2" from the second workspace should NOT be present because it has same skillName "demo-skill"
+    expect(names).not.toContain("demo_skill_2");
+
     expect(names).toContain("extra_skill");
   });
 });
