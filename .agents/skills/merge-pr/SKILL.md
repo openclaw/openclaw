@@ -28,7 +28,7 @@ Merge a prepared PR via `gh pr merge --squash` and clean up the worktree after s
 
 ## Known Footguns
 
-- If you see "fatal: not a git repository", you are in the wrong directory. Use `~/Development/openclaw`, not `~/openclaw`.
+- If you see "fatal: not a git repository", you are in the wrong directory. Use `~/dev/openclaw` if available; otherwise ask user.
 - Read `.local/review.md` and `.local/prep.md` in the worktree. Do not skip.
 - Clean up the real worktree directory `.worktrees/pr-<PR>` only after a successful merge.
 - Expect cleanup to remove `.local/` artifacts.
