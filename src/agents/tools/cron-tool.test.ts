@@ -30,8 +30,8 @@ describe("cron tool", () => {
     ],
     ["remove", { action: "remove", jobId: "job-1" }, { id: "job-1" }],
     ["remove", { action: "remove", id: "job-2" }, { id: "job-2" }],
-    ["run", { action: "run", jobId: "job-1" }, { id: "job-1" }],
-    ["run", { action: "run", id: "job-2" }, { id: "job-2" }],
+    ["run", { action: "run", jobId: "job-1" }, { id: "job-1", mode: "force" }],
+    ["run", { action: "run", id: "job-2" }, { id: "job-2", mode: "force" }],
     ["runs", { action: "runs", jobId: "job-1" }, { id: "job-1" }],
     ["runs", { action: "runs", id: "job-2" }, { id: "job-2" }],
   ])("%s sends id to gateway", async (action, args, expectedParams) => {
@@ -58,7 +58,21 @@ describe("cron tool", () => {
     const call = callGatewayMock.mock.calls[0]?.[0] as {
       params?: unknown;
     };
-    expect(call?.params).toEqual({ id: "job-primary" });
+    expect(call?.params).toEqual({ id: "job-primary", mode: "force" });
+  });
+
+  it("supports due-only run mode", async () => {
+    const tool = createCronTool();
+    await tool.execute("call-due", {
+      action: "run",
+      jobId: "job-due",
+      runMode: "due",
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: unknown;
+    };
+    expect(call?.params).toEqual({ id: "job-due", mode: "due" });
   });
 
   it("normalizes cron.add job payloads", async () => {
@@ -86,7 +100,7 @@ describe("cron tool", () => {
       deleteAfterRun: true,
       schedule: { kind: "at", at: new Date(123).toISOString() },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+      wakeMode: "now",
       payload: { kind: "systemEvent", text: "hello" },
     });
   });

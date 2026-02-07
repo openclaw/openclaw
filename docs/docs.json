@@ -99,6 +99,10 @@
       "destination": "/providers/opencode"
     },
     {
+      "source": "/qianfan",
+      "destination": "/providers/qianfan"
+    },
+    {
       "source": "/mattermost",
       "destination": "/channels/mattermost"
     },
@@ -801,14 +805,8 @@
                 "pages": ["install/index", "install/installer"]
               },
               {
-                "group": "Install methods",
-                "pages": [
-                  "install/node",
-                  "install/docker",
-                  "install/nix",
-                  "install/ansible",
-                  "install/bun"
-                ]
+                "group": "Other install methods",
+                "pages": ["install/docker", "install/nix", "install/ansible", "install/bun"]
               },
               {
                 "group": "Maintenance",
@@ -1012,7 +1010,8 @@
                   "providers/opencode",
                   "providers/glm",
                   "providers/zai",
-                  "providers/synthetic"
+                  "providers/synthetic",
+                  "providers/qianfan"
                 ]
               }
             ]
@@ -1221,6 +1220,7 @@
               {
                 "group": "Environment and debugging",
                 "pages": [
+                  "install/node",
                   "environment",
                   "debugging",
                   "testing",
