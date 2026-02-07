@@ -50,6 +50,7 @@ import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
+import { applyModelRouting, logRoutingDecision } from "./routing-integration.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import { describeUnknownError } from "./utils.js";
@@ -109,12 +110,29 @@ export async function runEmbeddedPiAgent(
       }
       const prevCwd = process.cwd();
 
-      const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
-      const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured =
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
       await ensureOpenClawModelsJson(params.config, agentDir);
+
+      // Apply intelligent model routing if enabled
+      const routingDecision = applyModelRouting({
+        message: params.message || "",
+        provider,
+        modelId,
+        sessionKey: params.sessionKey,
+        config: params.config,
+        defaultProvider: DEFAULT_PROVIDER,
+      });
+
+      // Override model if routing suggests it
+      if (routingDecision.wasRouted && routingDecision.routedProvider && routingDecision.routedModel) {
+        provider = routingDecision.routedProvider;
+        modelId = routingDecision.routedModel;
+        logRoutingDecision(routingDecision, params.sessionId, params.runId);
+      }
 
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
