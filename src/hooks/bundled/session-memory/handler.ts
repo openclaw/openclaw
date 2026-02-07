@@ -121,7 +121,8 @@ const saveSessionToMemory: HookHandler = async (event) => {
         messageCount,
       });
 
-      if (sessionContent && cfg) {
+      // Avoid calling the model provider in unit tests, keep hooks fast and deterministic.
+      if (sessionContent && cfg && !process.env.VITEST && process.env.NODE_ENV !== "test") {
         log.debug("Calling generateSlugViaLLM...");
         // Dynamically import the LLM slug generator (avoids module caching issues)
         // When compiled, handler is at dist/hooks/bundled/session-memory/handler.js
