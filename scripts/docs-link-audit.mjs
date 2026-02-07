@@ -23,10 +23,15 @@ function walk(dir) {
   const out = [];
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
+    if (entry.name.startsWith(".")) {
+      continue;
+    }
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) out.push(...walk(full));
-    else if (entry.isFile()) out.push(full);
+    if (entry.isDirectory()) {
+      out.push(...walk(full));
+    } else if (entry.isFile()) {
+      out.push(full);
+    }
   }
   return out;
 }
@@ -70,13 +75,19 @@ for (const abs of markdownFiles) {
   }
 
   const text = fs.readFileSync(abs, "utf8");
-  if (!text.startsWith("---")) continue;
+  if (!text.startsWith("---")) {
+    continue;
+  }
 
   const end = text.indexOf("\n---", 3);
-  if (end === -1) continue;
+  if (end === -1) {
+    continue;
+  }
   const frontMatter = text.slice(3, end);
   const match = frontMatter.match(/^permalink:\s*(.+)\s*$/m);
-  if (!match) continue;
+  if (!match) {
+    continue;
+  }
   const permalink = String(match[1])
     .trim()
     .replace(/^['"]|['"]$/g, "");
@@ -86,7 +97,9 @@ for (const abs of markdownFiles) {
 /** @param {string} route */
 function resolveRoute(route) {
   let current = normalizeRoute(route);
-  if (current === "/") return { ok: true, terminal: "/" };
+  if (current === "/") {
+    return { ok: true, terminal: "/" };
+  }
 
   const seen = new Set([current]);
   while (redirects.has(current)) {
@@ -112,20 +125,30 @@ for (const abs of markdownFiles) {
 
   for (const match of text.matchAll(markdownLinkRegex)) {
     const raw = match[1]?.trim();
-    if (!raw) continue;
-    if (/^(https?:|mailto:|tel:|data:|#)/i.test(raw)) continue;
+    if (!raw) {
+      continue;
+    }
+    if (/^(https?:|mailto:|tel:|data:|#)/i.test(raw)) {
+      continue;
+    }
 
     const clean = raw.split("#")[0].split("?")[0];
-    if (!clean) continue;
+    if (!clean) {
+      continue;
+    }
     checked++;
 
     if (clean.startsWith("/")) {
       const route = normalizeRoute(clean);
       const resolvedRoute = resolveRoute(route);
-      if (resolvedRoute.ok) continue;
+      if (resolvedRoute.ok) {
+        continue;
+      }
 
       const staticRel = route.replace(/^\//, "");
-      if (relAllFiles.has(staticRel)) continue;
+      if (relAllFiles.has(staticRel)) {
+        continue;
+      }
 
       broken.push({
         file: rel,
@@ -137,7 +160,9 @@ for (const abs of markdownFiles) {
 
     // Relative placeholder strings used in code examples (for example "url")
     // are intentionally skipped.
-    if (!clean.startsWith(".") && !clean.includes("/")) continue;
+    if (!clean.startsWith(".") && !clean.includes("/")) {
+      continue;
+    }
 
     const normalizedRel = normalizeSlashes(path.normalize(path.join(baseDir, clean)));
 
@@ -177,4 +202,6 @@ for (const item of broken) {
   console.log(`${item.file} :: ${item.link} :: ${item.reason}`);
 }
 
-if (broken.length > 0) process.exit(1);
+if (broken.length > 0) {
+  process.exit(1);
+}
