@@ -19,6 +19,7 @@ export async function resolveDeliveryTarget(
   jobPayload: {
     channel?: "last" | ChannelId;
     to?: string;
+    accountId?: string;
   },
 ): Promise<{
   channel: Exclude<OutboundChannel, "none">;
@@ -70,11 +71,14 @@ export async function resolveDeliveryTarget(
   const mode = resolved.mode as "explicit" | "implicit";
   const toCandidate = resolved.to;
 
+  // Prefer explicit accountId from cron delivery config over session-inferred.
+  const accountId = jobPayload.accountId ?? resolved.accountId;
+
   if (!toCandidate) {
     return {
       channel,
       to: undefined,
-      accountId: resolved.accountId,
+      accountId,
       threadId: resolved.threadId,
       mode,
     };
@@ -84,13 +88,13 @@ export async function resolveDeliveryTarget(
     channel,
     to: toCandidate,
     cfg,
-    accountId: resolved.accountId,
+    accountId,
     mode,
   });
   return {
     channel,
     to: docked.ok ? docked.to : undefined,
-    accountId: resolved.accountId,
+    accountId,
     threadId: resolved.threadId,
     mode,
     error: docked.ok ? undefined : docked.error,
