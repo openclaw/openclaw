@@ -116,7 +116,7 @@ x-i18n:
 - 通过以下方式批准：
   - `openclaw pairing list signal`
   - `openclaw pairing approve signal <CODE>`
-- 配对是 Signal 私信的默认令牌交换方式。详情：[配对](/start/pairing)
+- 配对是 Signal 私信的默认令牌交换方式。详情：[配对](/channels/pairing)
 - 仅有 UUID 的发送者（来自 `sourceUuid`）在 `channels.signal.allowFrom` 中存储为 `uuid:<id>`。
 
 群组：

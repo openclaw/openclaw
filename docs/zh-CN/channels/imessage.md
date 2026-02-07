@@ -205,7 +205,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
 - 批准方式：
   - `openclaw pairing list imessage`
   - `openclaw pairing approve imessage <CODE>`
-- 配对是 iMessage 私信的默认令牌交换方式。详情：[配对](/start/pairing)
+- 配对是 iMessage 私信的默认令牌交换方式。详情：[配对](/channels/pairing)
 
 群组：
 

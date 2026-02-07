@@ -228,6 +228,6 @@ Suggested `.gitignore` starter:
 ## Advanced notes
 
 - Multi-agent routing can use different workspaces per agent. See
-  [Channel routing](/concepts/channel-routing) for routing configuration.
+  [Channel routing](/channels/channel-routing) for routing configuration.
 - If `agents.defaults.sandbox` is enabled, non-main sessions can use per-session sandbox
   workspaces under `agents.defaults.sandbox.workspaceRoot`.

@@ -27,7 +27,7 @@ Context is _not the same thing_ as “memory”: memory can be stored on disk an
 - `/usage tokens` → append per-reply usage footer to normal replies.
 - `/compact` → summarize older history into a compact entry to free window space.
 
-See also: [Slash commands](/tools/slash-commands), [Token use & costs](/token-use), [Compaction](/concepts/compaction).
+See also: [Slash commands](/tools/slash-commands), [Token use & costs](/reference/token-use), [Compaction](/concepts/compaction).
 
 ## Example output
 

@@ -34,7 +34,7 @@ x-i18n:
 - `/usage tokens` → 在正常回复后附加每次回复的使用量页脚。
 - `/compact` → 将较旧的历史总结为紧凑条目以释放窗口空间。
 
-另请参阅：[斜杠命令](/tools/slash-commands)、[Token 使用与成本](/token-use)、[压缩](/concepts/compaction)。
+另请参阅：[斜杠命令](/tools/slash-commands)、[Token 使用与成本](/reference/token-use)、[压缩](/concepts/compaction)。
 
 ## 示例输出
 

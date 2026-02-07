@@ -224,7 +224,7 @@ DMs:
 - Approve via:
   - `openclaw pairing list imessage`
   - `openclaw pairing approve imessage <CODE>`
-- Pairing is the default token exchange for iMessage DMs. Details: [Pairing](/start/pairing)
+- Pairing is the default token exchange for iMessage DMs. Details: [Pairing](/channels/pairing)
 
 Groups:
 

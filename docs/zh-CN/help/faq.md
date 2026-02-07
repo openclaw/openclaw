@@ -669,7 +669,7 @@ claude setup-token
 
 ### 支持 AWS Bedrock 吗
 
-是的——通过 pi-ai 的 **Amazon Bedrock (Converse)** 提供商进行**手动配置**。你必须在 Gateway 网关主机上提供 AWS 凭据/区域，并在模型配置中添加 Bedrock 提供商条目。参阅 [Amazon Bedrock](/bedrock) 和[模型提供商](/providers/models)。如果你更喜欢托管密钥流程，在 Bedrock 前面使用兼容 OpenAI 的代理仍然是有效选项。
+是的——通过 pi-ai 的 **Amazon Bedrock (Converse)** 提供商进行**手动配置**。你必须在 Gateway 网关主机上提供 AWS 凭据/区域，并在模型配置中添加 Bedrock 提供商条目。参阅 [Amazon Bedrock](/providers/bedrock) 和[模型提供商](/providers/models)。如果你更喜欢托管密钥流程，在 Bedrock 前面使用兼容 OpenAI 的代理仍然是有效选项。
 
 ### Codex 认证如何工作
 
@@ -1094,7 +1094,7 @@ openclaw browser extension path
 
 使用 `agents.defaults.sandbox.mode: "non-main"`，这样群组/频道会话（非主键）在 Docker 中运行，而主私信会话保持在主机上。然后通过 `tools.sandbox.tools` 限制沙箱会话中可用的工具。
 
-设置指南 + 示例配置：[群组：个人私信 + 公开群组](/concepts/groups#pattern-personal-dms-public-groups-single-agent)
+设置指南 + 示例配置：[群组：个人私信 + 公开群组](/channels/groups#pattern-personal-dms-public-groups-single-agent)
 
 关键配置参考：[Gateway 网关配置](/gateway/configuration#agentsdefaultssandbox)
 
@@ -1321,7 +1321,7 @@ Gateway 网关监视配置文件并支持热重载：
 - **子智能体：** 需要并行处理时从主智能体生成后台工作。
 - **TUI：** 连接到 Gateway 网关并切换智能体/会话。
 
-文档：[节点](/nodes)、[远程访问](/gateway/remote)、[多智能体路由](/concepts/multi-agent)、[子智能体](/tools/subagents)、[TUI](/tui)。
+文档：[节点](/nodes)、[远程访问](/gateway/remote)、[多智能体路由](/concepts/multi-agent)、[子智能体](/tools/subagents)、[TUI](/web/tui)。
 
 ### OpenClaw 浏览器可以无头运行吗
 
@@ -1527,7 +1527,7 @@ OpenClaw 从父进程（shell、launchd/systemd、CI 等）读取环境变量，
 }
 ```
 
-参阅 [/environment](/environment) 了解优先级和来源详情。
+参阅 [/environment](/help/environment) 了解优先级和来源详情。
 
 ### 我通过服务启动了 Gateway 网关，但环境变量消失了，怎么办
 
@@ -1570,7 +1570,7 @@ openclaw models status
 ```
 
 Copilot 令牌从 `COPILOT_GITHUB_TOKEN` 读取（也支持 `GH_TOKEN` / `GITHUB_TOKEN`）。
-参阅 [/concepts/model-providers](/concepts/model-providers) 和 [/environment](/environment)。
+参阅 [/concepts/model-providers](/concepts/model-providers) 和 [/environment](/help/environment)。
 
 ## 会话与多聊天
 
@@ -1731,11 +1731,11 @@ openclaw directory groups list --channel whatsapp
 - 提及限制已开启（默认）。你必须 @提及机器人（或匹配 `mentionPatterns`）。
 - 你配置了 `channels.whatsapp.groups` 但没有 `"*"` 且该群组未加入允许列表。
 
-参阅[群组](/concepts/groups)和[群组消息](/concepts/group-messages)。
+参阅[群组](/channels/groups)和[群组消息](/channels/group-messages)。
 
 ### 群组/线程与私聊共享上下文吗
 
-直接聊天默认折叠到主会话。群组/频道有自己的会话键，Telegram 话题 / Discord 线程是独立的会话。参阅[群组](/concepts/groups)和[群组消息](/concepts/group-messages)。
+直接聊天默认折叠到主会话。群组/频道有自己的会话键，Telegram 话题 / Discord 线程是独立的会话。参阅[群组](/channels/groups)和[群组消息](/channels/group-messages)。
 
 ### 可以创建多少个工作区和智能体
 
@@ -2410,7 +2410,7 @@ openclaw logs --follow
 
 在 TUI 中，使用 `/status` 查看当前状态。如果你期望在聊天渠道中收到回复，确保投递已启用（`/deliver on`）。
 
-文档：[TUI](/tui)、[斜杠命令](/tools/slash-commands)。
+文档：[TUI](/web/tui)、[斜杠命令](/tools/slash-commands)。
 
 ### 如何完全停止然后启动 Gateway 网关如果你安装了服务：
 
@@ -2492,7 +2492,7 @@ openclaw message send --target +15555550123 --message "Here you go" --media /pat
 
 从小处开始。只授予你实际需要的工具和账户的访问权限，以后需要时再扩展。
 
-文档：[安全](/gateway/security)、[配对](/start/pairing)。
+文档：[安全](/gateway/security)、[配对](/channels/pairing)。
 
 ### 我能让它自主管理我的短信吗？这安全吗
 

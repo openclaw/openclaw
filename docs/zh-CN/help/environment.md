@@ -10,7 +10,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: b49ae50e5d306612f89f93a86236188a4f2ec23f667e2388b043832be3ac1546
-  source_path: environment.md
+  source_path: help/environment.md
   workflow: 15
 ---
 

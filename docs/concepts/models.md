@@ -194,7 +194,7 @@ Scan results are ranked by:
 Input
 
 - OpenRouter `/models` list (filter `:free`)
-- Requires OpenRouter API key from auth profiles or `OPENROUTER_API_KEY` (see [/environment](/environment))
+- Requires OpenRouter API key from auth profiles or `OPENROUTER_API_KEY` (see [/environment](/help/environment))
 - Optional filters: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
 - Probe controls: `--timeout`, `--concurrency`
 

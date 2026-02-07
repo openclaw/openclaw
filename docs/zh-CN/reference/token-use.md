@@ -9,7 +9,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: aee417119851db9e36890487517ed9602d214849e412127e7f534ebec5c9e105
-  source_path: token-use.md
+  source_path: reference/token-use.md
   workflow: 15
 ---
 

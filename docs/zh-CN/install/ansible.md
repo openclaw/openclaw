@@ -114,7 +114,7 @@ nmap -p- YOUR_SERVER_IP
 
 Docker 用于**智能体沙箱**（隔离的工具执行），而不是用于运行 Gateway 网关本身。Gateway 网关仅绑定到 localhost，通过 Tailscale VPN 访问。
 
-沙箱配置参见[多智能体沙箱与工具](/multi-agent-sandbox-tools)。
+沙箱配置参见[多智能体沙箱与工具](/tools/multi-agent-sandbox-tools)。
 
 ## 手动安装
 
@@ -212,4 +212,4 @@ openclaw channels login
 - [openclaw-ansible](https://github.com/openclaw/openclaw-ansible) — 完整部署指南
 - [Docker](/install/docker) — 容器化 Gateway 网关设置
 - [沙箱隔离](/gateway/sandboxing) — 智能体沙箱配置
-- [多智能体沙箱与工具](/multi-agent-sandbox-tools) — 每个智能体的隔离
+- [多智能体沙箱与工具](/tools/multi-agent-sandbox-tools) — 每个智能体的隔离

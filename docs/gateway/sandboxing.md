@@ -168,7 +168,7 @@ Debugging:
 
 Each agent can override sandbox + tools:
 `agents.list[].sandbox` and `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools` for sandbox tool policy).
-See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence.
+See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
 
 ## Minimal enable example
 
@@ -189,5 +189,5 @@ See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence.
 ## Related docs
 
 - [Sandbox Configuration](/gateway/configuration#agentsdefaults-sandbox)
-- [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools)
+- [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools)
 - [Security](/gateway/security)

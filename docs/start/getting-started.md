@@ -115,6 +115,6 @@ If the Control UI loads, your Gateway is ready for use.
 
 ## Next steps
 
-- DM safety and approvals: [Pairing](/start/pairing)
+- DM safety and approvals: [Pairing](/channels/pairing)
 - Connect more channels: [Channels](/channels)
 - Advanced workflows and from source: [Setup](/start/setup)

@@ -46,7 +46,7 @@ OpenClaw 可以在你已经使用的任何聊天应用上与你交流。每个�
 - 渠道可以同时运行；配置多个渠道后，OpenClaw 会按聊天进行路由。
 - 最快的设置方式通常是 **Telegram**（简单的机器人令牌）。WhatsApp 需要二维码配对，
   并在磁盘上存储更多状态。
-- 群组行为因渠道而异；参见[群组](/concepts/groups)。
+- 群组行为因渠道而异；参见[群组](/channels/groups)。
 - 为安全起见，私信配对和允许列表会被强制执行；参见[安全](/gateway/security)。
 - Telegram 内部机制：[grammY 说明](/channels/grammy)。
 - 故障排除：[渠道故障排除](/channels/troubleshooting)。

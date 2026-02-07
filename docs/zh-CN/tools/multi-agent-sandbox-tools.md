@@ -8,7 +8,7 @@ x-i18n:
   model: claude-opus-4-5
   provider: pi
   source_hash: f602cb6192b84b404cd7b6336562888a239d0fe79514edd51bd73c5b090131ef
-  source_path: multi-agent-sandbox-tools.md
+  source_path: tools/multi-agent-sandbox-tools.md
   workflow: 15
 ---
 

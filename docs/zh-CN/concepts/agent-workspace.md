@@ -215,5 +215,5 @@ git push
 ## 高级注意事项
 
 - 多智能体路由可以为每个智能体使用不同的工作区。参见
-  [渠道路由](/concepts/channel-routing) 了解路由配置。
+  [渠道路由](/channels/channel-routing) 了解路由配置。
 - 如果启用了 `agents.defaults.sandbox`，非主会话可以在 `agents.defaults.sandbox.workspaceRoot` 下使用每会话沙箱工作区。

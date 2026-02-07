@@ -56,8 +56,8 @@ Common signatures:
 Related:
 
 - [/channels/troubleshooting](/channels/troubleshooting)
-- [/start/pairing](/start/pairing)
-- [/concepts/groups](/concepts/groups)
+- [/channels/pairing](/channels/pairing)
+- [/channels/groups](/channels/groups)
 
 ## Dashboard control ui connectivity
 
