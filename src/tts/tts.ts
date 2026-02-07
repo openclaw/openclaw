@@ -704,6 +704,9 @@ async function startPocketServer(config: ResolvedTtsConfig["pocket"]): Promise<b
         detached: false,
       });
 
+      // Register cleanup handlers only when we actually spawn a process
+      registerPocketCleanupHandlers();
+
       let spawnError: Error | null = null;
 
       pocketProcess.on("error", (err) => {
@@ -781,10 +784,17 @@ function stopPocketServer(): void {
   }
 }
 
-// Clean up on process exit (don't call process.exit - let Clawdbot handle graceful shutdown)
-process.on("exit", stopPocketServer);
-process.on("SIGINT", stopPocketServer);
-process.on("SIGTERM", stopPocketServer);
+// Track if cleanup handlers are registered (prevents duplicate listeners)
+let pocketHandlersRegistered = false;
+
+function registerPocketCleanupHandlers(): void {
+  if (pocketHandlersRegistered) return;
+  pocketHandlersRegistered = true;
+  // Clean up on process exit (don't call process.exit - let OpenClaw handle graceful shutdown)
+  process.on("exit", stopPocketServer);
+  process.on("SIGINT", stopPocketServer);
+  process.on("SIGTERM", stopPocketServer);
+}
 
 export async function textToSpeech(params: {
   text: string;
