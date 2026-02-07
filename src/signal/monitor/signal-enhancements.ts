@@ -94,113 +94,238 @@ export type SignalEnhancementDeps = Pick<
   }) => Promise<{ path: string; contentType?: string } | null>;
 };
 
-// ── Pre-cache uses upstream's inbound/ directory directly ────────────────────
+// ── Pre-cache: per-group persistent media index + LRU ────────────────────────
 //
 // fetchAttachment/fetchSticker both call saveMediaBuffer → ~/.openclaw/media/inbound/
 // Files there are NOT TTL-cleaned (cleanup only targets ~/.openclaw/media/ root).
-// We record the path in signal-media-precache.json for later lookup.
 //
-// All precache data (index + fallback files) lives under:
+// Directory layout:
 //   ~/.openclaw/media/inbound/signal_precache/
+//   ├── group-precache-config.json                  ← per-group GB quota
+//   ├── {group-id}/
+//   │   ├── signal-media-precache.json              ← timestamp→path index
+//   │   └── {timestamp}-{rand}.{ext}               ← fallback files
+//   └── ...
 
 const PRECACHE_DIR = path.join(resolveConfigDir(), "media", "inbound", "signal_precache");
+const PRECACHE_CONFIG_PATH = path.join(PRECACHE_DIR, "group-precache-config.json");
+const DEFAULT_MAX_SIZE_GB = 5;
 
-// ── Persistent media lookup cache (timestamp → path index) ──────────────────
+type PrecacheConfig = {
+  defaults?: { maxSizeGB?: number };
+  groups?: Record<string, { maxSizeGB?: number }>;
+};
 
-type MediaCacheEntry = { path: string; contentType?: string; savedAt: number };
-type MediaCacheData = Record<string, MediaCacheEntry>;
+type MediaCacheEntry = {
+  path: string;
+  contentType?: string;
+  savedAt: number;
+  size: number;
+};
 
-const MEDIA_CACHE_FILE = path.join(PRECACHE_DIR, "signal-media-precache.json");
-const MEDIA_CACHE_MAX_SIZE = 50_000;
-const MEDIA_CACHE_MAX_AGE_MS = 3650 * 24 * 60 * 60 * 1000; // ~10 years
+type GroupCacheIndex = {
+  entries: Record<string, MediaCacheEntry>; // keyed by timestamp string
+  totalSize: number;
+};
 
-let mediaCacheData: MediaCacheData = {};
-let mediaCacheLoaded = false;
-let savePending = false;
+// In-memory state
+const groupCaches = new Map<string, GroupCacheIndex>();
+const savePendingGroups = new Set<string>();
+let precacheConfig: PrecacheConfig | null = null;
 
-export async function loadSignalMediaCache(): Promise<void> {
-  if (mediaCacheLoaded) {
-    return;
+function resolveGroupDir(groupId: string): string {
+  return path.join(PRECACHE_DIR, groupId);
+}
+
+function resolveGroupIndexPath(groupId: string): string {
+  return path.join(resolveGroupDir(groupId), "signal-media-precache.json");
+}
+
+async function loadPrecacheConfig(): Promise<PrecacheConfig> {
+  if (precacheConfig) {
+    return precacheConfig;
   }
   try {
-    const content = await fs.readFile(MEDIA_CACHE_FILE, "utf-8");
-    mediaCacheData = JSON.parse(content) as MediaCacheData;
-    const now = Date.now();
-    for (const [key, entry] of Object.entries(mediaCacheData)) {
-      if (now - entry.savedAt > MEDIA_CACHE_MAX_AGE_MS) {
-        delete mediaCacheData[key];
-      }
-    }
-    logVerbose(`signal media cache loaded: ${Object.keys(mediaCacheData).length} entries`);
+    const content = await fs.readFile(PRECACHE_CONFIG_PATH, "utf-8");
+    precacheConfig = JSON.parse(content) as PrecacheConfig;
   } catch {
-    mediaCacheData = {};
+    precacheConfig = {};
   }
-  mediaCacheLoaded = true;
+  return precacheConfig;
 }
 
-async function persistMediaCache(): Promise<void> {
-  if (savePending) {
-    return; // debounce: only one write in flight
+function getGroupMaxBytes(config: PrecacheConfig, groupId: string): number {
+  const groupGB = config.groups?.[groupId]?.maxSizeGB;
+  const defaultGB = config.defaults?.maxSizeGB ?? DEFAULT_MAX_SIZE_GB;
+  return (groupGB ?? defaultGB) * 1024 * 1024 * 1024;
+}
+
+/** Lazy-load a group's cache index from disk. */
+async function loadGroupCache(groupId: string): Promise<GroupCacheIndex> {
+  const existing = groupCaches.get(groupId);
+  if (existing) {
+    return existing;
   }
-  savePending = true;
+  const indexPath = resolveGroupIndexPath(groupId);
   try {
-    await fs.mkdir(path.dirname(MEDIA_CACHE_FILE), { recursive: true });
-    await fs.writeFile(MEDIA_CACHE_FILE, JSON.stringify(mediaCacheData, null, 2));
-  } catch (err) {
-    logVerbose(`signal media cache save failed: ${String(err)}`);
-  } finally {
-    savePending = false;
+    const content = await fs.readFile(indexPath, "utf-8");
+    const index = JSON.parse(content) as GroupCacheIndex;
+    groupCaches.set(groupId, index);
+    const count = Object.keys(index.entries).length;
+    logVerbose(
+      `signal precache loaded: group=${groupId} entries=${count} size=${formatBytes(index.totalSize)}`,
+    );
+    return index;
+  } catch {
+    const empty: GroupCacheIndex = { entries: {}, totalSize: 0 };
+    groupCaches.set(groupId, empty);
+    return empty;
   }
 }
 
-function cacheMedia(timestamp: number | undefined, media: { path: string; contentType?: string }) {
-  if (!timestamp || !media.path) {
+async function persistGroupCache(groupId: string): Promise<void> {
+  if (savePendingGroups.has(groupId)) {
+    return; // debounce per group
+  }
+  savePendingGroups.add(groupId);
+  try {
+    const dir = resolveGroupDir(groupId);
+    await fs.mkdir(dir, { recursive: true });
+    const index = groupCaches.get(groupId);
+    if (index) {
+      await fs.writeFile(resolveGroupIndexPath(groupId), JSON.stringify(index, null, 2));
+    }
+  } catch (err) {
+    logVerbose(`signal precache save failed (group=${groupId}): ${String(err)}`);
+  } finally {
+    savePendingGroups.delete(groupId);
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes}B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)}KB`;
+  }
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)}GB`;
+}
+
+/** LRU eviction: delete oldest entries until totalSize <= targetSize. */
+async function evictOldEntries(index: GroupCacheIndex, targetSize: number): Promise<void> {
+  const sorted = Object.entries(index.entries).toSorted(([, a], [, b]) => a.savedAt - b.savedAt);
+  for (const [key, entry] of sorted) {
+    if (index.totalSize <= targetSize) {
+      break;
+    }
+    try {
+      await fs.unlink(entry.path);
+      logVerbose(`signal precache evict: deleted ${entry.path} (${formatBytes(entry.size)})`);
+    } catch {
+      // File may already be deleted
+    }
+    index.totalSize -= entry.size;
+    delete index.entries[key];
+  }
+}
+
+/** Startup hook — kept as no-op since group caches are lazy-loaded. */
+export async function loadSignalMediaCache(): Promise<void> {
+  // Groups are loaded lazily on first access; nothing to do at startup.
+}
+
+/** Record a media file in a group's precache index, with LRU eviction. */
+async function cacheMedia(
+  groupId: string | undefined,
+  timestamp: number | undefined,
+  media: { path: string; contentType?: string; size?: number },
+): Promise<void> {
+  if (!groupId || !timestamp || !media.path) {
     return;
   }
+  const index = await loadGroupCache(groupId);
   const key = String(timestamp);
 
-  // Evict oldest entries when lookup cache is full
-  const keys = Object.keys(mediaCacheData);
-  if (keys.length >= MEDIA_CACHE_MAX_SIZE) {
-    const sorted = keys.toSorted(
-      (a, b) => (mediaCacheData[a]?.savedAt ?? 0) - (mediaCacheData[b]?.savedAt ?? 0),
-    );
-    for (let i = 0; i < 100 && i < sorted.length; i++) {
-      const oldKey = sorted[i];
-      if (oldKey) {
-        delete mediaCacheData[oldKey];
-      }
+  // Estimate file size if not provided
+  let fileSize = media.size ?? 0;
+  if (!fileSize) {
+    try {
+      const stat = await fs.stat(media.path);
+      fileSize = stat.size;
+    } catch {
+      fileSize = 0;
     }
   }
 
-  mediaCacheData[key] = { path: media.path, contentType: media.contentType, savedAt: Date.now() };
-  logVerbose(`signal media cached (persistent): ts=${timestamp} path=${media.path}`);
-  void persistMediaCache();
+  // LRU eviction if adding this entry exceeds quota
+  const config = await loadPrecacheConfig();
+  const maxBytes = getGroupMaxBytes(config, groupId);
+  if (index.totalSize + fileSize > maxBytes) {
+    await evictOldEntries(index, maxBytes - fileSize);
+  }
+
+  index.entries[key] = {
+    path: media.path,
+    contentType: media.contentType,
+    savedAt: Date.now(),
+    size: fileSize,
+  };
+  index.totalSize += fileSize;
+  logVerbose(
+    `signal precache: group=${groupId} ts=${timestamp} path=${media.path} size=${formatBytes(fileSize)}`,
+  );
+  void persistGroupCache(groupId);
 }
 
-function getCachedMedia(
+/** Look up cached media by timestamp, searching the given group first. */
+async function getCachedMedia(
+  groupId: string | undefined,
   timestamp: number | undefined,
-): { path: string; contentType?: string } | null {
+): Promise<{ path: string; contentType?: string } | null> {
   if (!timestamp) {
     return null;
   }
-  const entry = mediaCacheData[String(timestamp)];
-  if (entry) {
-    logVerbose(`signal media cache hit (persistent): ts=${timestamp} path=${entry.path}`);
-    return { path: entry.path, contentType: entry.contentType };
+  const key = String(timestamp);
+
+  // Search specific group first
+  if (groupId) {
+    const index = await loadGroupCache(groupId);
+    const entry = index.entries[key];
+    if (entry) {
+      logVerbose(`signal precache hit: group=${groupId} ts=${timestamp} path=${entry.path}`);
+      return { path: entry.path, contentType: entry.contentType };
+    }
+  }
+
+  // Fallback: search all loaded groups (for DM quoting a group message)
+  for (const [gid, index] of groupCaches) {
+    if (gid === groupId) {
+      continue;
+    }
+    const entry = index.entries[key];
+    if (entry) {
+      logVerbose(`signal precache hit (cross-group ${gid}): ts=${timestamp} path=${entry.path}`);
+      return { path: entry.path, contentType: entry.contentType };
+    }
   }
   return null;
 }
 
-/** Save a buffer to the pre-cache fallback dir when it didn't land in upstream inbound/. */
+/** Save a buffer to the group's pre-cache fallback dir. */
 export async function saveToPrecache(
+  groupId: string | undefined,
   buffer: Buffer,
   contentType?: string,
 ): Promise<{ path: string; contentType?: string }> {
-  await fs.mkdir(PRECACHE_DIR, { recursive: true });
+  const dir = groupId ? resolveGroupDir(groupId) : PRECACHE_DIR;
+  await fs.mkdir(dir, { recursive: true });
   const ext = contentType?.split("/")[1]?.split(";")[0] ?? "bin";
   const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  const filePath = path.join(PRECACHE_DIR, filename);
+  const filePath = path.join(dir, filename);
   await fs.writeFile(filePath, buffer);
   logVerbose(`signal: saved to precache fallback: ${filePath}`);
   return { path: filePath, contentType };
@@ -366,7 +491,7 @@ export async function preCacheGroupMedia(params: {
         maxBytes: deps.mediaMaxBytes,
       });
       if (fetched) {
-        cacheMedia(enhanced.timestamp, {
+        await cacheMedia(groupId, enhanced.timestamp, {
           path: fetched.path,
           contentType: fetched.contentType ?? firstAtt.contentType ?? undefined,
         });
@@ -388,7 +513,7 @@ export async function preCacheGroupMedia(params: {
         deps,
       });
       if (stickerFetched) {
-        cacheMedia(enhanced.timestamp, {
+        await cacheMedia(groupId, enhanced.timestamp, {
           path: stickerFetched.path,
           contentType: stickerFetched.contentType ?? stk.contentType ?? "image/webp",
         });
@@ -429,7 +554,7 @@ export async function buildEnhancedMessage(params: {
     stickerInfo = `[Sticker${stickerEmoji}] `;
     if (!mediaPath) {
       // Check cache first (from pre-cache), avoiding double fetch
-      const cached = getCachedMedia(enhanced?.timestamp);
+      const cached = await getCachedMedia(groupId, enhanced?.timestamp);
       if (cached) {
         mediaPath = cached.path;
         mediaType = cached.contentType ?? sticker.contentType ?? "image/webp";
@@ -438,7 +563,10 @@ export async function buildEnhancedMessage(params: {
         if (fetched) {
           mediaPath = fetched.path;
           mediaType = fetched.contentType ?? sticker.contentType ?? "image/webp";
-          cacheMedia(enhanced?.timestamp, { path: mediaPath, contentType: mediaType });
+          await cacheMedia(groupId, enhanced?.timestamp, {
+            path: mediaPath,
+            contentType: mediaType,
+          });
         }
       }
     }
@@ -490,7 +618,7 @@ export async function buildEnhancedMessage(params: {
       // Fetch quoted media if we don't already have media
       if (!mediaPath && !quotedMediaPath) {
         const quoteTimestamp = typeof quote.id === "number" ? quote.id : undefined;
-        const cached = getCachedMedia(quoteTimestamp);
+        const cached = await getCachedMedia(groupId, quoteTimestamp);
         if (cached) {
           quotedMediaPath = cached.path;
           quotedMediaType = cached.contentType ?? contentType ?? undefined;
