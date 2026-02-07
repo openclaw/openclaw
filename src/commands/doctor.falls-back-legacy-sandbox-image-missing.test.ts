@@ -168,6 +168,7 @@ vi.mock("@clack/prompts", () => ({
   note,
   outro: vi.fn(),
   select,
+  spinner: () => ({ start: vi.fn(), stop: vi.fn(), message: vi.fn() }),
 }));
 
 vi.mock("../agents/skills-status.js", () => ({
