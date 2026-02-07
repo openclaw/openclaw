@@ -465,3 +465,152 @@ describe("cron cli", () => {
     expect(patch?.patch?.delivery?.bestEffort).toBe(false);
   });
 });
+
+  describe("cron list output with undefined state (fixes issue #6236)", () => {
+    it("handles job with undefined state without crashing", () => {
+      const { printCronList } = require("./cron-cli/shared.js");
+      const mockRuntime = { log: vi.fn() };
+
+      // Create a job with undefined state (edge case from prod)
+      const jobWithUndefinedState = {
+        id: "job-1",
+        name: "Test Job",
+        enabled: true,
+        createdAtMs: 1000,
+        updatedAtMs: 1000,
+        schedule: { kind: "every", everyMs: 60000 },
+        sessionTarget: "main",
+        wakeMode: "wake",
+        payload: { kind: "agentTurn", message: "test" },
+        state: undefined, // This is the edge case
+      };
+
+      // This should NOT throw
+      expect(() => {
+        printCronList([jobWithUndefinedState], mockRuntime);
+      }).not.toThrow();
+    });
+
+    it("shows 'unknown' status when job.state is undefined", () => {
+      const { printCronList } = require("./cron-cli/shared.js");
+      const mockRuntime = { log: vi.fn() };
+
+      const jobWithUndefinedState = {
+        id: "job-1",
+        name: "Test Job",
+        enabled: true,
+        createdAtMs: 1000,
+        updatedAtMs: 1000,
+        schedule: { kind: "every", everyMs: 60000 },
+        sessionTarget: "main",
+        wakeMode: "wake",
+        payload: { kind: "agentTurn", message: "test" },
+        state: undefined,
+      };
+
+      printCronList([jobWithUndefinedState], mockRuntime);
+
+      // Verify log was called
+      expect(mockRuntime.log).toHaveBeenCalled();
+
+      // Get the output lines
+      const calls = mockRuntime.log.mock.calls;
+      expect(calls.length).toBeGreaterThan(1); // header + data
+
+      // The data line should contain the job info without crashing
+      const dataLine = calls[calls.length - 1][0];
+      expect(dataLine).toContain("job-1");
+      expect(dataLine).toContain("Test Job");
+    });
+
+    it("handles job with null state gracefully", () => {
+      const { printCronList } = require("./cron-cli/shared.js");
+      const mockRuntime = { log: vi.fn() };
+
+      const jobWithNullState = {
+        id: "job-2",
+        name: "Null State Job",
+        enabled: false,
+        createdAtMs: 2000,
+        updatedAtMs: 2000,
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "isolated",
+        wakeMode: "wake",
+        payload: { kind: "agentTurn", message: "test" },
+        state: null,
+      };
+
+      // This should NOT throw
+      expect(() => {
+        printCronList([jobWithNullState], mockRuntime);
+      }).not.toThrow();
+    });
+
+    it("handles mixed jobs (some with state, some without)", () => {
+      const { printCronList } = require("./cron-cli/shared.js");
+      const mockRuntime = { log: vi.fn() };
+
+      const healthyJob = {
+        id: "job-healthy",
+        name: "Healthy Job",
+        enabled: true,
+        createdAtMs: 1000,
+        updatedAtMs: 1000,
+        schedule: { kind: "every", everyMs: 60000 },
+        sessionTarget: "main",
+        wakeMode: "wake",
+        payload: { kind: "agentTurn", message: "test" },
+        state: { lastStatus: "ok", lastRunAtMs: Date.now() - 30000 },
+      };
+
+      const brokenJob = {
+        id: "job-broken",
+        name: "Broken Job",
+        enabled: true,
+        createdAtMs: 2000,
+        updatedAtMs: 2000,
+        schedule: { kind: "cron", expr: "* * * * *" },
+        sessionTarget: "isolated",
+        wakeMode: "wake",
+        payload: { kind: "agentTurn", message: "test" },
+        state: undefined,
+      };
+
+      // Should handle both without throwing
+      expect(() => {
+        printCronList([healthyJob, brokenJob], mockRuntime);
+      }).not.toThrow();
+
+      expect(mockRuntime.log).toHaveBeenCalled();
+      const calls = mockRuntime.log.mock.calls;
+      expect(calls.length).toBeGreaterThan(1);
+    });
+
+    it("displays '-' for next/last times when state is missing", () => {
+      const { printCronList } = require("./cron-cli/shared.js");
+      const mockRuntime = { log: vi.fn() };
+
+      const jobWithMissingState = {
+        id: "job-missing-state",
+        name: "Missing State",
+        enabled: true,
+        createdAtMs: 1000,
+        updatedAtMs: 1000,
+        schedule: { kind: "at", at: new Date(Date.now() + 60000).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "wake",
+        payload: { kind: "agentTurn", message: "test" },
+        state: undefined,
+      };
+
+      printCronList([jobWithMissingState], mockRuntime);
+
+      // The output should have been logged without errors
+      expect(mockRuntime.log).toHaveBeenCalled();
+      const calls = mockRuntime.log.mock.calls;
+      
+      // Both header and data row should be present
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+});
