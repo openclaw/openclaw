@@ -815,23 +815,25 @@ export async function runEmbeddedPiAgent(
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
           const imageDimensionError = parseImageDimensionError(lastAssistant?.errorMessage ?? "");
 
-          if (imageDimensionError && lastProfileId) {
-            const details = [
-              imageDimensionError.messageIndex !== undefined
-                ? `message=${imageDimensionError.messageIndex}`
-                : null,
-              imageDimensionError.contentIndex !== undefined
-                ? `content=${imageDimensionError.contentIndex}`
-                : null,
-              imageDimensionError.maxDimensionPx !== undefined
-                ? `limit=${imageDimensionError.maxDimensionPx}px`
-                : null,
-            ]
-              .filter(Boolean)
-              .join(" ");
-            log.warn(
-              `Profile ${lastProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
-            );
+          if (imageDimensionError) {
+            if (lastProfileId) {
+              const details = [
+                imageDimensionError.messageIndex !== undefined
+                  ? `message=${imageDimensionError.messageIndex}`
+                  : null,
+                imageDimensionError.contentIndex !== undefined
+                  ? `content=${imageDimensionError.contentIndex}`
+                  : null,
+                imageDimensionError.maxDimensionPx !== undefined
+                  ? `limit=${imageDimensionError.maxDimensionPx}px`
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" ");
+              log.warn(
+                `Profile ${lastProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
+              );
+            }
             // Strip the rejected image from the session to prevent infinite retry loops.
             if (imageDimensionError.messageIndex !== undefined && params.sessionFile) {
               await stripOversizedImageFromSession(
