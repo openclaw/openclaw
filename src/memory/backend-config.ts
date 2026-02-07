@@ -67,7 +67,7 @@ const DEFAULT_QMD_TIMEOUT_MS = 4_000;
 const DEFAULT_QMD_EMBED_INTERVAL = "60m";
 const DEFAULT_QMD_COMMAND_TIMEOUT_MS = 30_000;
 const DEFAULT_QMD_UPDATE_TIMEOUT_MS = 120_000;
-const DEFAULT_QMD_EMBED_TIMEOUT_MS = 120_000;
+const DEFAULT_QMD_EMBED_TIMEOUT_MS = 600_000;
 const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
   maxResults: 6,
   maxSnippetChars: 700,
@@ -138,6 +138,13 @@ function resolveEmbedIntervalMs(raw: string | undefined): number {
   } catch {
     return parseDurationMs(DEFAULT_QMD_EMBED_INTERVAL, { defaultUnit: "m" });
   }
+}
+
+function resolveEmbedTimeoutMs(raw: number | undefined): number {
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_QMD_EMBED_TIMEOUT_MS;
 }
 
 function resolveDebounceMs(raw: number | undefined): number {
@@ -282,10 +289,7 @@ export function resolveMemoryBackendConfig(params: {
         qmdCfg?.update?.updateTimeoutMs,
         DEFAULT_QMD_UPDATE_TIMEOUT_MS,
       ),
-      embedTimeoutMs: resolveTimeoutMs(
-        qmdCfg?.update?.embedTimeoutMs,
-        DEFAULT_QMD_EMBED_TIMEOUT_MS,
-      ),
+      embedTimeoutMs: resolveEmbedTimeoutMs(qmdCfg?.update?.embedTimeoutMs),
     },
     limits: resolveLimits(qmdCfg?.limits),
     scope: qmdCfg?.scope ?? DEFAULT_QMD_SCOPE,

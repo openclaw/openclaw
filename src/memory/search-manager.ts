@@ -66,9 +66,11 @@ export async function getMemorySearchManager(params: {
 
 class FallbackMemoryManager implements MemorySearchManager {
   private fallback: MemorySearchManager | null = null;
-  private primaryFailed = false;
+  private primaryDisabled = false;
+  private consecutivePrimaryFailures = 0;
   private lastError?: string;
   private cacheEvicted = false;
+  private readonly maxConsecutiveFailuresBeforeDisable: number;
 
   constructor(
     private readonly deps: {
@@ -76,22 +78,60 @@ class FallbackMemoryManager implements MemorySearchManager {
       fallbackFactory: () => Promise<MemorySearchManager | null>;
     },
     private readonly onClose?: () => void,
-  ) {}
+    opts?: { maxConsecutiveFailuresBeforeDisable?: number },
+  ) {
+    this.maxConsecutiveFailuresBeforeDisable = Math.max(
+      1,
+      opts?.maxConsecutiveFailuresBeforeDisable ?? 5,
+    );
+  }
 
   async search(
     query: string,
     opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
   ) {
-    if (!this.primaryFailed) {
+    if (!this.primaryDisabled) {
       try {
-        return await this.deps.primary.search(query, opts);
+        const results = await this.deps.primary.search(query, opts);
+        if (this.consecutivePrimaryFailures > 0) {
+          log.info(
+            `qmd memory recovered after ${this.consecutivePrimaryFailures} failure(s); resuming primary`,
+          );
+          this.consecutivePrimaryFailures = 0;
+          this.lastError = undefined;
+        }
+        return results;
       } catch (err) {
-        this.primaryFailed = true;
         this.lastError = err instanceof Error ? err.message : String(err);
-        log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
-        await this.deps.primary.close?.().catch(() => {});
         // Evict the failed wrapper so the next request can retry QMD with a fresh manager.
         this.evictCacheEntry();
+        const transient = isTransientQmdError(err);
+
+        if (transient) {
+          // Per-query fallback only. Do not permanently disable QMD for transient failures.
+          log.warn(
+            `qmd memory search failed (transient; consecutive=${this.consecutivePrimaryFailures}); falling back to builtin for this query: ${this.lastError}`,
+          );
+        } else {
+          this.consecutivePrimaryFailures += 1;
+          const threshold = this.maxConsecutiveFailuresBeforeDisable;
+          if (this.consecutivePrimaryFailures >= threshold) {
+            this.primaryDisabled = true;
+            log.warn(
+              `qmd memory search failed ${this.consecutivePrimaryFailures}x; disabling qmd and switching to builtin index: ${this.lastError}`,
+            );
+            await this.deps.primary.close?.().catch(() => {});
+          } else {
+            log.warn(
+              `qmd memory search failed (consecutive=${this.consecutivePrimaryFailures}/${threshold}); falling back to builtin for this query: ${this.lastError}`,
+            );
+          }
+        }
+
+        const fallback = await this.ensureFallback();
+        if (fallback) {
+          return await fallback.search(query, opts);
+        }
       }
     }
     const fallback = await this.ensureFallback();
@@ -102,7 +142,7 @@ class FallbackMemoryManager implements MemorySearchManager {
   }
 
   async readFile(params: { relPath: string; from?: number; lines?: number }) {
-    if (!this.primaryFailed) {
+    if (!this.primaryDisabled) {
       return await this.deps.primary.readFile(params);
     }
     const fallback = await this.ensureFallback();
@@ -113,8 +153,23 @@ class FallbackMemoryManager implements MemorySearchManager {
   }
 
   status() {
-    if (!this.primaryFailed) {
-      return this.deps.primary.status();
+    if (!this.primaryDisabled) {
+      const status = this.deps.primary.status();
+      const custom = status.custom ?? {};
+      if (this.consecutivePrimaryFailures > 0) {
+        return {
+          ...status,
+          custom: {
+            ...custom,
+            fallback: {
+              ...custom.fallback,
+              consecutiveFailures: this.consecutivePrimaryFailures,
+              lastError: this.lastError ?? "unknown",
+            },
+          },
+        };
+      }
+      return status;
     }
     const fallbackStatus = this.fallback?.status();
     const fallbackInfo = { from: "qmd", reason: this.lastError ?? "unknown" };
@@ -146,7 +201,7 @@ class FallbackMemoryManager implements MemorySearchManager {
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
-    if (!this.primaryFailed) {
+    if (!this.primaryDisabled) {
       await this.deps.primary.sync?.(params);
       return;
     }
@@ -155,7 +210,7 @@ class FallbackMemoryManager implements MemorySearchManager {
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
-    if (!this.primaryFailed) {
+    if (!this.primaryDisabled) {
       return await this.deps.primary.probeEmbeddingAvailability();
     }
     const fallback = await this.ensureFallback();
@@ -166,7 +221,7 @@ class FallbackMemoryManager implements MemorySearchManager {
   }
 
   async probeVectorAvailability() {
-    if (!this.primaryFailed) {
+    if (!this.primaryDisabled) {
       return await this.deps.primary.probeVectorAvailability();
     }
     const fallback = await this.ensureFallback();
@@ -203,6 +258,39 @@ class FallbackMemoryManager implements MemorySearchManager {
 
 function buildQmdCacheKey(agentId: string, config: ResolvedQmdConfig): string {
   return `${agentId}:${stableSerialize(config)}`;
+}
+
+function isTransientQmdError(err: unknown): boolean {
+  const code = err && typeof err === "object" ? (err as { code?: unknown }).code : undefined;
+  if (typeof code === "string") {
+    if (code === "ENOENT") {
+      return false;
+    }
+    if (
+      code === "ETIMEDOUT" ||
+      code === "ECONNRESET" ||
+      code === "EPIPE" ||
+      code === "EAI_AGAIN" ||
+      code === "ECONNREFUSED" ||
+      code === "ENETUNREACH" ||
+      code === "EHOSTUNREACH"
+    ) {
+      return true;
+    }
+  }
+
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+  if (lower.includes("timed out") || lower.includes("timeout")) {
+    return true;
+  }
+  if (lower.includes("database is locked") || lower.includes("resource busy")) {
+    return true;
+  }
+  if (lower.includes("temporarily unavailable") || lower.includes("try again")) {
+    return true;
+  }
+  return false;
 }
 
 function stableSerialize(value: unknown): string {
