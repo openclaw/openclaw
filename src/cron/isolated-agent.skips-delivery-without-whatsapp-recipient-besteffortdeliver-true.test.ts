@@ -134,6 +134,48 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("announces only the final payload text", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
+          channels: { telegram: { botToken: "t-1" } },
+        }),
+        deps,
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "do it" }),
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
+        },
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(1);
+      expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
+        "123",
+        "Final weather summary",
+        expect.any(Object),
+      );
+    });
+  });
+
   it("skips announce when messaging tool already sent to target", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);

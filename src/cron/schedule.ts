@@ -2,6 +2,14 @@ import { Cron } from "croner";
 import type { CronSchedule } from "./types.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
 
+function resolveCronTimezone(tz?: string) {
+  const trimmed = typeof tz === "string" ? tz.trim() : "";
+  if (trimmed) {
+    return trimmed;
+  }
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {
   if (schedule.kind === "at") {
     // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
@@ -38,9 +46,20 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return undefined;
   }
   const cron = new Cron(expr, {
-    timezone: schedule.tz?.trim() || undefined,
+    timezone: resolveCronTimezone(schedule.tz),
     catch: false,
   });
-  const next = cron.nextRun(new Date(nowMs));
-  return next ? next.getTime() : undefined;
+  let cursor = nowMs;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const next = cron.nextRun(new Date(cursor));
+    if (!next) {
+      return undefined;
+    }
+    const nextMs = next.getTime();
+    if (Number.isFinite(nextMs) && nextMs > nowMs) {
+      return nextMs;
+    }
+    cursor += 1_000;
+  }
+  return undefined;
 }

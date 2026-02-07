@@ -16,7 +16,7 @@ export function formatAgo(ms?: number | null): string {
   const suffix = diff < 0 ? "from now" : "ago";
   const sec = Math.round(absDiff / 1000);
   if (sec < 60) {
-    return diff < 0 ? "just now" : `${sec}s ago`;
+    return diff < 0 ? "in <1m" : `${sec}s ago`;
   }
   const min = Math.round(sec / 60);
   if (min < 60) {
