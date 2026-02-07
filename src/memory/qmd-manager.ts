@@ -240,9 +240,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     const args = [primaryCmd, trimmed, "--json", "-n", String(limit)];
 
     let stdout: string;
+    let stderr: string;
     try {
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
       stdout = result.stdout;
+      stderr = result.stderr;
     } catch (err) {
       // If qmd query is slow / unavailable (can trigger model downloads), fall back to the lighter BM25 search.
       if (primaryCmd !== "search") {
@@ -251,6 +253,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             timeoutMs: this.qmd.limits.timeoutMs,
           });
           stdout = result.stdout;
+          stderr = result.stderr;
         } catch (fallbackErr) {
           log.warn(`qmd ${primaryCmd} failed: ${String(err)}`);
           log.warn(`qmd search fallback failed: ${String(fallbackErr)}`);
