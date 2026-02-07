@@ -26,7 +26,7 @@ describe("applyModelDefaults", () => {
       agents: {
         defaults: {
           models: {
-            "anthropic/claude-opus-4-6": { alias: "Opus" },
+            "anthropic/claude-opus-4-5": { alias: "Opus" },
           },
         },
       },
@@ -34,7 +34,7 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.alias).toBe("Opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.alias).toBe("Opus");
   });
 
   it("respects explicit empty alias disables", () => {

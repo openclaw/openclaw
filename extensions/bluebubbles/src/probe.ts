@@ -16,7 +16,9 @@ export type BlueBubblesServerInfo = {
   computer_id?: string;
 };
 
-/** Cache server info by account ID to avoid repeated API calls */
+/** Cache server info by account ID to avoid repeated API calls.
+ * Size-capped to prevent unbounded growth (#4948). */
+const MAX_SERVER_INFO_CACHE_SIZE = 64;
 const serverInfoCache = new Map<string, { info: BlueBubblesServerInfo; expires: number }>();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -56,6 +58,13 @@ export async function fetchBlueBubblesServerInfo(params: {
     const data = payload?.data as BlueBubblesServerInfo | undefined;
     if (data) {
       serverInfoCache.set(cacheKey, { info: data, expires: Date.now() + CACHE_TTL_MS });
+      // Evict oldest entries if cache exceeds max size
+      if (serverInfoCache.size > MAX_SERVER_INFO_CACHE_SIZE) {
+        const oldest = serverInfoCache.keys().next().value;
+        if (oldest !== undefined) {
+          serverInfoCache.delete(oldest);
+        }
+      }
     }
     return data ?? null;
   } catch {

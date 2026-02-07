@@ -3,6 +3,10 @@ name: Formal models (informational conformance)
 on:
   pull_request:
 
+concurrency:
+  group: formal-conformance-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   formal_conformance:
     runs-on: ubuntu-latest
