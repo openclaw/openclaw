@@ -6,11 +6,10 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Models: support Anthropic Opus 4.6 and OpenAI Codex gpt-5.3-codex (forward-compat fallbacks). (#9853, #10720, #9995) Thanks @TinyTb, @calvin-hpnet, @tyler6204.
 - Providers: add xAI (Grok) support. (#9885) Thanks @grp06.
 - Web UI: add token usage dashboard. (#10072) Thanks @Takhoffman.
-- Models: add Claude Opus 4.6 to the built-in catalog; set Antigravity default to Opus 4.6. (#9853, #10720) Thanks @TinyTb, @calvin-hpnet.
 - Memory: native Voyage AI support. (#7078) Thanks @mcinteerj.
-- OpenAI Codex: add strict gpt-5.3-codex fallback for Codex OAuth. (#9995) Thanks @tyler6204.
 - Sessions: cap sessions_history payloads to reduce context overflow. (#10000) Thanks @gut-puncture.
 - CLI: sort commands alphabetically in help output. (#8068) Thanks @deepsoumya617.
 - Agents: bump pi-mono to 0.52.7; add embedded forward-compat fallback for Opus 4.6 model ids.
