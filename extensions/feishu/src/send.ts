@@ -277,6 +277,8 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   const receiveIdType = resolveReceiveIdType(receiveId);
   const content = JSON.stringify(card);
 
+  const cardContentPreview = JSON.stringify(card).slice(0, 200);
+
   if (replyToMessageId) {
     const response = await client.im.message.reply({
       path: { message_id: replyToMessageId },
@@ -287,13 +289,27 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     });
 
     if (response.code !== 0) {
+      emitMessageSent({
+        to: receiveId,
+        content: cardContentPreview,
+        success: false,
+        error: response.msg || `code ${response.code}`,
+        accountId: account.accountId,
+        threadId: replyToMessageId,
+      });
       throw new Error(`Feishu card reply failed: ${response.msg || `code ${response.code}`}`);
     }
 
-    return {
-      messageId: response.data?.message_id ?? "unknown",
-      chatId: receiveId,
-    };
+    const resultMessageId = response.data?.message_id ?? "unknown";
+    emitMessageSent({
+      to: receiveId,
+      content: cardContentPreview,
+      success: true,
+      messageId: resultMessageId,
+      accountId: account.accountId,
+      threadId: replyToMessageId,
+    });
+    return { messageId: resultMessageId, chatId: receiveId };
   }
 
   const response = await client.im.message.create({
@@ -306,13 +322,25 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   });
 
   if (response.code !== 0) {
+    emitMessageSent({
+      to: receiveId,
+      content: cardContentPreview,
+      success: false,
+      error: response.msg || `code ${response.code}`,
+      accountId: account.accountId,
+    });
     throw new Error(`Feishu card send failed: ${response.msg || `code ${response.code}`}`);
   }
 
-  return {
-    messageId: response.data?.message_id ?? "unknown",
-    chatId: receiveId,
-  };
+  const resultMessageId = response.data?.message_id ?? "unknown";
+  emitMessageSent({
+    to: receiveId,
+    content: cardContentPreview,
+    success: true,
+    messageId: resultMessageId,
+    accountId: account.accountId,
+  });
+  return { messageId: resultMessageId, chatId: receiveId };
 }
 
 export async function updateCardFeishu(params: {
@@ -415,6 +443,21 @@ export async function editMessageFeishu(params: {
   });
 
   if (response.code !== 0) {
+    emitMessageSent({
+      to: messageId,
+      content: text,
+      success: false,
+      error: response.msg || `code ${response.code}`,
+      accountId: account.accountId,
+    });
     throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
   }
+
+  emitMessageSent({
+    to: messageId,
+    content: text,
+    success: true,
+    messageId,
+    accountId: account.accountId,
+  });
 }

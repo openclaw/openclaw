@@ -227,10 +227,38 @@ function extractContentText(content: string, messageType: string): string {
     if (messageType === "text") {
       return parsed.text ?? "";
     }
+    if (messageType === "post") {
+      return extractPostText(parsed);
+    }
     return "";
   } catch {
     return "";
   }
+}
+
+function extractPostText(parsed: Record<string, unknown>): string {
+  const parts: string[] = [];
+  const locales = Object.values(parsed) as Array<{ content?: unknown[][] }>;
+  for (const locale of locales) {
+    if (!Array.isArray(locale?.content)) {
+      continue;
+    }
+    for (const line of locale.content) {
+      if (!Array.isArray(line)) {
+        continue;
+      }
+      for (const node of line) {
+        const n = node as { tag?: string; text?: string; user_id?: string };
+        if (n.tag === "text" && n.text) {
+          parts.push(n.text);
+        }
+        if (n.tag === "at" && n.user_id) {
+          parts.push(`@${n.user_id}`);
+        }
+      }
+    }
+  }
+  return parts.join(" ");
 }
 
 function stripBotMention(
@@ -935,17 +963,17 @@ export async function handleFeishuMessage(params: {
       });
     } finally {
       if (streamingSession?.isActive()) {
-        const streamedText = streamingSession.getCurrentText();
+        const streamMessageId = streamingSession.getMessageId();
         await streamingSession.close();
         core.hooks
           .runMessageSent(
             {
               to: ctx.chatId,
-              content: streamedText,
+              content: streamingSession.getCurrentText(),
               success: true,
               metadata: {
                 channelId: "feishu",
-                messageId: streamingSession.getMessageId(),
+                messageId: streamMessageId,
                 threadId,
                 streaming: true,
               },
