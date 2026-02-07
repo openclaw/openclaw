@@ -32,12 +32,13 @@ export type SessionsProps = {
   onDelete: (key: string) => void;
 };
 
-const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high"] as const;
+const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
 const BINARY_THINK_LEVELS = ["", "off", "on"] as const;
 const VERBOSE_LEVELS = [
   { value: "", label: "inherit" },
   { value: "off", label: "off (explicit)" },
   { value: "on", label: "on" },
+  { value: "full", label: "full" },
 ] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 
@@ -58,6 +59,29 @@ function isBinaryThinkingProvider(provider?: string | null): boolean {
 
 function resolveThinkLevelOptions(provider?: string | null): readonly string[] {
   return isBinaryThinkingProvider(provider) ? BINARY_THINK_LEVELS : THINK_LEVELS;
+}
+
+function withCurrentOption(options: readonly string[], current: string): string[] {
+  if (!current) {
+    return [...options];
+  }
+  if (options.includes(current)) {
+    return [...options];
+  }
+  return [...options, current];
+}
+
+function withCurrentLabeledOption(
+  options: readonly { value: string; label: string }[],
+  current: string,
+): Array<{ value: string; label: string }> {
+  if (!current) {
+    return [...options];
+  }
+  if (options.some((option) => option.value === current)) {
+    return [...options];
+  }
+  return [...options, { value: current, label: `${current} (custom)` }];
 }
 
 function resolveThinkLevelDisplay(value: string, isBinary: boolean): string {
@@ -201,9 +225,11 @@ function renderRow(
   const rawThinking = row.thinkingLevel ?? "";
   const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
   const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
-  const thinkLevels = resolveThinkLevelOptions(row.modelProvider);
+  const thinkLevels = withCurrentOption(resolveThinkLevelOptions(row.modelProvider), thinking);
   const verbose = row.verboseLevel ?? "";
+  const verboseLevels = withCurrentLabeledOption(VERBOSE_LEVELS, verbose);
   const reasoning = row.reasoningLevel ?? "";
+  const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
   const displayName =
     typeof row.displayName === "string" && row.displayName.trim().length > 0
       ? row.displayName.trim()
@@ -258,7 +284,7 @@ function renderRow(
             onPatch(row.key, { verboseLevel: value || null });
           }}
         >
-          ${VERBOSE_LEVELS.map(
+          ${verboseLevels.map(
             (level) => html`<option value=${level.value}>${level.label}</option>`,
           )}
         </select>
@@ -272,7 +298,7 @@ function renderRow(
             onPatch(row.key, { reasoningLevel: value || null });
           }}
         >
-          ${REASONING_LEVELS.map(
+          ${reasoningLevels.map(
             (level) => html`<option value=${level}>${level || "inherit"}</option>`,
           )}
         </select>
