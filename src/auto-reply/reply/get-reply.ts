@@ -24,6 +24,7 @@ import { applyResetModelOverride } from "./session-reset-model.js";
 import { initSessionState } from "./session.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 import { createTypingController } from "./typing.js";
+import { executeUserPromptSubmitHooks } from "./user-prompt-hooks.js";
 
 function mergeSkillFilters(channelFilter?: string[], agentFilter?: string[]): string[] | undefined {
   const normalize = (list?: string[]) => {
@@ -288,6 +289,34 @@ export async function getReplyFromConfig(
     workspaceDir,
   });
 
+  // Execute UserPromptSubmit hooks before agent processing
+  const userPromptHooksResult = await executeUserPromptSubmitHooks({
+    cfg,
+    prompt: sessionCtx.BodyStripped ?? sessionCtx.Body ?? "",
+    sessionId: sessionId ?? sessionKey,
+    agentId,
+    sessionKey,
+    workspaceDir,
+    provider,
+    model,
+  });
+
+  // If hooks denied the message, return the deny reason
+  if (userPromptHooksResult.denied) {
+    return {
+      text: userPromptHooksResult.denyReason ?? "Message blocked by hook",
+    };
+  }
+
+  // Combine command inject content with hook output
+  let combinedInjectContent = commandInjectContent;
+  if (userPromptHooksResult.hookOutput) {
+    const hookSection = `## UserPromptSubmit Hook Output (auto-injected)\n\n${userPromptHooksResult.hookOutput}`;
+    combinedInjectContent = combinedInjectContent
+      ? `${combinedInjectContent}\n\n---\n\n${hookSection}`
+      : hookSection;
+  }
+
   return runPreparedReply({
     ctx,
     sessionCtx,
@@ -332,6 +361,6 @@ export async function getReplyFromConfig(
     storePath,
     workspaceDir,
     abortedLastRun,
-    commandInjectContent,
+    commandInjectContent: combinedInjectContent,
   });
 }
