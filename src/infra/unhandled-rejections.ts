@@ -84,7 +84,11 @@ export function isAbortError(err: unknown): boolean {
   }
 
   // Check error string representation for AbortError patterns
-  const errString = String(err);
+  // Use toString() if available, otherwise fall back to String() for objects
+  const errString =
+    typeof (err as { toString?: unknown }).toString === "function"
+      ? (err as { toString(): string }).toString()
+      : "";
   if (errString.includes("AbortError") || errString.includes("This operation was aborted")) {
     return true;
   }
@@ -123,7 +127,7 @@ export function isTransientNetworkError(err: unknown): boolean {
       ? err.message
       : typeof (err as { message?: unknown }).message === "string"
         ? (err as { message: string }).message
-        : String(err);
+        : "";
   const errorName =
     err instanceof Error
       ? err.name
