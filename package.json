@@ -191,6 +191,7 @@
     "vitest": "^4.0.18"
   },
   "peerDependencies": {
+    "@google-cloud/secret-manager": "^6.1.0",
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.15.1"
   },
