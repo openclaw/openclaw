@@ -9,7 +9,12 @@
 export type MemoryCategory = "core" | "preference" | "fact" | "decision" | "entity" | "other";
 export type EntityType = "person" | "organization" | "location" | "event" | "concept";
 export type ExtractionStatus = "pending" | "complete" | "failed" | "skipped";
-export type MemorySource = "user" | "auto-capture" | "memory-watcher" | "import";
+export type MemorySource =
+  | "user"
+  | "auto-capture"
+  | "auto-capture-assistant"
+  | "memory-watcher"
+  | "import";
 
 export type MemoryNode = {
   id: string;

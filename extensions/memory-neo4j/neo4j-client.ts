@@ -1390,6 +1390,75 @@ export class Neo4jMemoryClient {
   }
 
   // --------------------------------------------------------------------------
+  // Sleep Cycle: Conflict Detection
+  // --------------------------------------------------------------------------
+
+  /**
+   * Find memory pairs that share at least one entity (via MENTIONS relationships).
+   * These are candidates for conflict resolution — the LLM decides if they truly conflict.
+   * Excludes core memories (conflicts there are handled by promotion/demotion).
+   */
+  async findConflictingMemories(agentId?: string): Promise<
+    Array<{
+      memoryA: { id: string; text: string; importance: number; createdAt: string };
+      memoryB: { id: string; text: string; importance: number; createdAt: string };
+    }>
+  > {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      const agentFilter = agentId ? "AND m1.agentId = $agentId AND m2.agentId = $agentId" : "";
+      const result = await session.run(
+        `MATCH (m1:Memory)-[:MENTIONS]->(e:Entity)<-[:MENTIONS]-(m2:Memory)
+         WHERE m1.id < m2.id ${agentFilter}
+         AND m1.category <> 'core' AND m2.category <> 'core'
+         WITH m1, m2, count(e) AS sharedEntities
+         WHERE sharedEntities >= 1
+         RETURN DISTINCT m1.id AS m1Id, m1.text AS m1Text, m1.importance AS m1Importance, m1.createdAt AS m1CreatedAt,
+                m2.id AS m2Id, m2.text AS m2Text, m2.importance AS m2Importance, m2.createdAt AS m2CreatedAt
+         LIMIT 50`,
+        agentId ? { agentId } : {},
+      );
+
+      return result.records.map((r) => ({
+        memoryA: {
+          id: r.get("m1Id"),
+          text: r.get("m1Text"),
+          importance: r.get("m1Importance"),
+          createdAt: String(r.get("m1CreatedAt") ?? ""),
+        },
+        memoryB: {
+          id: r.get("m2Id"),
+          text: r.get("m2Text"),
+          importance: r.get("m2Importance"),
+          createdAt: String(r.get("m2CreatedAt") ?? ""),
+        },
+      }));
+    } finally {
+      await session.close();
+    }
+  }
+
+  /**
+   * Invalidate a memory by setting its importance to near-zero.
+   * Used by conflict resolution to effectively retire the losing memory
+   * without deleting it (it will be pruned naturally by the decay phase).
+   */
+  async invalidateMemory(id: string): Promise<void> {
+    await this.ensureInitialized();
+    const session = this.driver!.session();
+    try {
+      await session.run(
+        `MATCH (m:Memory {id: $id})
+         SET m.importance = 0.01, m.updatedAt = $now`,
+        { id, now: new Date().toISOString() },
+      );
+    } finally {
+      await session.close();
+    }
+  }
+
+  // --------------------------------------------------------------------------
   // Sleep Cycle: Core Memory Promotion
   // --------------------------------------------------------------------------
 

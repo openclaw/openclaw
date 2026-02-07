@@ -244,6 +244,63 @@ function validateExtractionResult(raw: Record<string, unknown>): ExtractionResul
 }
 
 // ============================================================================
+// Conflict Resolution
+// ============================================================================
+
+/**
+ * Use an LLM to determine whether two memories genuinely conflict.
+ * Returns which memory to keep, or "both" if they don't actually conflict.
+ * Returns "skip" on any failure (network, parse, disabled config).
+ */
+export async function resolveConflict(
+  memA: string,
+  memB: string,
+  config: ExtractionConfig,
+): Promise<"a" | "b" | "both" | "skip"> {
+  if (!config.enabled) return "skip";
+
+  const prompt = `Two memories may conflict with each other. Determine which should be kept.
+
+Memory A: "${memA}"
+Memory B: "${memB}"
+
+If they genuinely contradict each other, keep the one that is more current, specific, or accurate.
+If they don't actually conflict (they cover different aspects or are both valid), keep both.
+
+Return JSON: {"keep": "a"|"b"|"both", "reason": "brief explanation"}`;
+
+  try {
+    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.0,
+        response_format: { type: "json_object" },
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (!response.ok) return "skip";
+
+    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) return "skip";
+
+    const parsed = JSON.parse(content) as { keep?: string };
+    const keep = parsed.keep;
+    if (keep === "a" || keep === "b" || keep === "both") return keep;
+    return "skip";
+  } catch {
+    return "skip";
+  }
+}
+
+// ============================================================================
 // Background Extraction Pipeline
 // ============================================================================
 
@@ -394,6 +451,12 @@ export type SleepCycleResult = {
     clustersFound: number;
     memoriesMerged: number;
   };
+  // Phase 1b: Conflict Detection
+  conflict: {
+    pairsFound: number;
+    resolved: number;
+    invalidated: number;
+  };
   // Phase 2: Pareto Scoring & Threshold
   pareto: {
     totalMemories: number;
@@ -455,7 +518,15 @@ export type SleepCycleOptions = {
 
   // Progress callback
   onPhaseStart?: (
-    phase: "dedup" | "pareto" | "promotion" | "demotion" | "decay" | "extraction" | "cleanup",
+    phase:
+      | "dedup"
+      | "conflict"
+      | "pareto"
+      | "promotion"
+      | "demotion"
+      | "decay"
+      | "extraction"
+      | "cleanup",
   ) => void;
   onProgress?: (phase: string, message: string) => void;
 };
@@ -520,6 +591,7 @@ export async function runSleepCycle(
 
   const result: SleepCycleResult = {
     dedup: { clustersFound: 0, memoriesMerged: 0 },
+    conflict: { pairsFound: 0, resolved: 0, invalidated: 0 },
     pareto: { totalMemories: 0, coreMemories: 0, regularMemories: 0, threshold: 0 },
     promotion: { candidatesFound: 0, promoted: 0 },
     demotion: { candidatesFound: 0, demoted: 0 },
@@ -559,6 +631,47 @@ export async function runSleepCycle(
       );
     } catch (err) {
       logger.warn(`memory-neo4j: [sleep] Phase 1 error: ${String(err)}`);
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Phase 1b: Conflict Detection
+  // --------------------------------------------------------------------------
+  if (!abortSignal?.aborted) {
+    onPhaseStart?.("conflict");
+    logger.info("memory-neo4j: [sleep] Phase 1b: Conflict Detection");
+
+    try {
+      const pairs = await db.findConflictingMemories(agentId);
+      result.conflict.pairsFound = pairs.length;
+
+      for (const pair of pairs) {
+        if (abortSignal?.aborted) break;
+
+        const decision = await resolveConflict(pair.memoryA.text, pair.memoryB.text, config);
+
+        if (decision === "a") {
+          await db.invalidateMemory(pair.memoryB.id);
+          result.conflict.invalidated++;
+          result.conflict.resolved++;
+          onProgress?.("conflict", `Kept A, invalidated B: "${pair.memoryB.text.slice(0, 40)}..."`);
+        } else if (decision === "b") {
+          await db.invalidateMemory(pair.memoryA.id);
+          result.conflict.invalidated++;
+          result.conflict.resolved++;
+          onProgress?.("conflict", `Kept B, invalidated A: "${pair.memoryA.text.slice(0, 40)}..."`);
+        } else if (decision === "both") {
+          result.conflict.resolved++;
+          onProgress?.("conflict", `Kept both: no real conflict`);
+        }
+        // "skip" = LLM unavailable, don't count as resolved
+      }
+
+      logger.info(
+        `memory-neo4j: [sleep] Phase 1b complete — ${result.conflict.pairsFound} pairs, ${result.conflict.resolved} resolved, ${result.conflict.invalidated} invalidated`,
+      );
+    } catch (err) {
+      logger.warn(`memory-neo4j: [sleep] Phase 1b error: ${String(err)}`);
     }
   }
 
@@ -887,6 +1000,8 @@ export function stripMessageWrappers(text: string): string {
   s = s.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>\s*/g, "");
   s = s.replace(/<core-memory-refresh>[\s\S]*?<\/core-memory-refresh>\s*/g, "");
   s = s.replace(/<system>[\s\S]*?<\/system>\s*/g, "");
+  // File attachments (PDFs, images, etc. forwarded inline by channels)
+  s = s.replace(/<file\b[^>]*>[\s\S]*?<\/file>\s*/g, "");
   // Media attachment preamble (appears before Telegram wrapper)
   s = s.replace(/^\[media attached:[^\]]*\]\s*(?:To send an image[^\n]*\n?)*/i, "");
   // System exec output blocks (may appear before Telegram wrapper)
@@ -896,4 +1011,137 @@ export function stripMessageWrappers(text: string): string {
   // "[message_id: NNN]" suffix
   s = s.replace(/\n?\[message_id:\s*\d+\]\s*$/i, "");
   return s.trim();
+}
+
+// ============================================================================
+// Assistant Message Extraction
+// ============================================================================
+
+/**
+ * Strip tool-use, thinking, and code-output blocks from assistant messages
+ * so the attention gate sees only the substantive assistant text.
+ */
+export function stripAssistantWrappers(text: string): string {
+  let s = text;
+  // Tool-use / tool-result / function_call blocks
+  s = s.replace(/<tool_use>[\s\S]*?<\/tool_use>\s*/g, "");
+  s = s.replace(/<tool_result>[\s\S]*?<\/tool_result>\s*/g, "");
+  s = s.replace(/<function_call>[\s\S]*?<\/function_call>\s*/g, "");
+  // Thinking tags
+  s = s.replace(/<thinking>[\s\S]*?<\/thinking>\s*/g, "");
+  s = s.replace(/<antThinking>[\s\S]*?<\/antThinking>\s*/g, "");
+  // Code execution output
+  s = s.replace(/<code_output>[\s\S]*?<\/code_output>\s*/g, "");
+  return s.trim();
+}
+
+/**
+ * Extract assistant message texts from the event.messages array.
+ * Handles both string content and content block arrays.
+ */
+export function extractAssistantMessages(messages: unknown[]): string[] {
+  const texts: string[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    const msgObj = msg as Record<string, unknown>;
+
+    if (msgObj.role !== "assistant") {
+      continue;
+    }
+
+    const content = msgObj.content;
+    if (typeof content === "string") {
+      texts.push(content);
+      continue;
+    }
+
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (
+          block &&
+          typeof block === "object" &&
+          "type" in block &&
+          (block as Record<string, unknown>).type === "text" &&
+          "text" in block &&
+          typeof (block as Record<string, unknown>).text === "string"
+        ) {
+          texts.push((block as Record<string, unknown>).text as string);
+        }
+      }
+    }
+  }
+
+  return texts.map(stripAssistantWrappers).filter((t) => t.length >= 10);
+}
+
+// ============================================================================
+// LLM-Judged Importance Rating
+// ============================================================================
+
+const IMPORTANCE_RATING_PROMPT = `Rate the long-term importance of remembering this information on a scale of 1-10.
+1-3: Trivial/transient (greetings, temporary status)
+4-6: Moderately useful (general facts, minor preferences)
+7-9: Very important (key decisions, strong preferences, critical facts)
+10: Essential (identity-defining, safety-critical)
+
+Information: "{text}"
+
+Return JSON: {"score": N, "reason": "brief explanation"}`;
+
+/** Timeout for importance rating calls (much shorter than extraction) */
+const IMPORTANCE_TIMEOUT_MS = 5_000;
+
+/**
+ * Rate the long-term importance of a text using an LLM.
+ * Returns a value between 0.1 and 1.0, or 0.5 on any failure.
+ */
+export async function rateImportance(text: string, config: ExtractionConfig): Promise<number> {
+  if (!config.enabled) {
+    return 0.5;
+  }
+
+  const prompt = IMPORTANCE_RATING_PROMPT.replace("{text}", text);
+
+  try {
+    const response = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages: [{ role: "user", content: prompt }],
+        temperature: config.temperature,
+        response_format: { type: "json_object" },
+      }),
+      signal: AbortSignal.timeout(IMPORTANCE_TIMEOUT_MS),
+    });
+
+    if (!response.ok) {
+      return 0.5;
+    }
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) {
+      return 0.5;
+    }
+
+    const parsed = JSON.parse(content) as { score?: unknown };
+    const score = typeof parsed.score === "number" ? parsed.score : NaN;
+    if (Number.isNaN(score)) {
+      return 0.5;
+    }
+
+    const clamped = Math.max(1, Math.min(10, score));
+    return Math.max(0.1, Math.min(1.0, clamped / 10));
+  } catch {
+    return 0.5;
+  }
 }

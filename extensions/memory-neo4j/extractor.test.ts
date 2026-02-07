@@ -8,8 +8,16 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ExtractionConfig } from "./config.js";
-import { extractUserMessages, extractEntities, runBackgroundExtraction } from "./extractor.js";
-import { passesAttentionGate } from "./index.js";
+import {
+  extractUserMessages,
+  extractAssistantMessages,
+  stripAssistantWrappers,
+  extractEntities,
+  runBackgroundExtraction,
+  rateImportance,
+  resolveConflict,
+} from "./extractor.js";
+import { passesAttentionGate, passesAssistantAttentionGate } from "./index.js";
 
 // ============================================================================
 // passesAttentionGate()
@@ -336,6 +344,30 @@ describe("extractUserMessages", () => {
     ];
     const result = extractUserMessages(messages);
     expect(result).toEqual(["I want 4k imax copy of Interstellar"]);
+  });
+
+  it("should strip <file> attachment blocks and keep surrounding user text", () => {
+    const messages = [
+      {
+        role: "user",
+        content:
+          'Can you summarize this? <file name="doc.pdf" mime="application/pdf">Long PDF content here that would normally be very large</file>',
+      },
+    ];
+    const result = extractUserMessages(messages);
+    expect(result).toEqual(["Can you summarize this?"]);
+  });
+
+  it("should filter out messages that are only a <file> block", () => {
+    const messages = [
+      {
+        role: "user",
+        content: '<file name="image.png" mime="image/png">base64data</file>',
+      },
+    ];
+    const result = extractUserMessages(messages);
+    // After stripping, nothing remains (< 10 chars)
+    expect(result).toEqual([]);
   });
 });
 
@@ -970,5 +1002,575 @@ describe("runBackgroundExtraction", () => {
     );
 
     expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("extraction complete"));
+  });
+});
+
+// ============================================================================
+// Auto-recall filtering logic (Feature 1 + Feature 2)
+//
+// These test the filtering patterns used in index.ts auto-recall hook:
+//   - Feature 1: results.filter(r => r.score >= minScore)
+//   - Feature 2: results.filter(r => !coreIds.has(r.id))
+// ============================================================================
+
+describe("auto-recall score filtering", () => {
+  type FakeResult = { id: string; score: number; category: string; text: string };
+
+  function makeResult(id: string, score: number): FakeResult {
+    return { id, score, category: "fact", text: `Memory ${id}` };
+  }
+
+  it("should filter out results below the min score threshold", () => {
+    const results = [makeResult("a", 0.1), makeResult("b", 0.25), makeResult("c", 0.5)];
+    const minScore = 0.25;
+    const filtered = results.filter((r) => r.score >= minScore);
+    expect(filtered).toHaveLength(2);
+    expect(filtered.map((r) => r.id)).toEqual(["b", "c"]);
+  });
+
+  it("should keep all results when min score is 0", () => {
+    const results = [makeResult("a", 0.01), makeResult("b", 0.5)];
+    const filtered = results.filter((r) => r.score >= 0);
+    expect(filtered).toHaveLength(2);
+  });
+
+  it("should filter all results when min score is 1 and no perfect scores", () => {
+    const results = [makeResult("a", 0.99), makeResult("b", 0.5)];
+    const filtered = results.filter((r) => r.score >= 1);
+    expect(filtered).toHaveLength(0);
+  });
+
+  it("should keep results exactly at the threshold", () => {
+    const results = [makeResult("a", 0.25)];
+    const filtered = results.filter((r) => r.score >= 0.25);
+    expect(filtered).toHaveLength(1);
+  });
+});
+
+describe("auto-recall core memory deduplication", () => {
+  type FakeResult = { id: string; score: number; category: string; text: string };
+
+  function makeResult(id: string, score: number): FakeResult {
+    return { id, score, category: "core", text: `Core memory ${id}` };
+  }
+
+  it("should filter out results whose IDs are in the core memory set", () => {
+    const results = [
+      makeResult("core-1", 0.8),
+      makeResult("regular-1", 0.7),
+      makeResult("core-2", 0.6),
+    ];
+    const coreIds = new Set(["core-1", "core-2"]);
+    const filtered = results.filter((r) => !coreIds.has(r.id));
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].id).toBe("regular-1");
+  });
+
+  it("should keep all results when core set is empty", () => {
+    const results = [makeResult("a", 0.8), makeResult("b", 0.7)];
+    const coreIds = new Set<string>();
+    const filtered = results.filter((r) => !coreIds.has(r.id));
+    expect(filtered).toHaveLength(2);
+  });
+
+  it("should keep all results when core set is undefined", () => {
+    const results = [makeResult("a", 0.8), makeResult("b", 0.7)];
+    const coreIds: Set<string> | undefined = undefined;
+    const filtered = coreIds ? results.filter((r) => !coreIds.has(r.id)) : results;
+    expect(filtered).toHaveLength(2);
+  });
+
+  it("should remove all results when all are in core set", () => {
+    const results = [makeResult("core-1", 0.8), makeResult("core-2", 0.7)];
+    const coreIds = new Set(["core-1", "core-2"]);
+    const filtered = results.filter((r) => !coreIds.has(r.id));
+    expect(filtered).toHaveLength(0);
+  });
+
+  it("should work correctly when both score and core dedup filters are applied", () => {
+    const results = [
+      makeResult("core-1", 0.8), // core memory — should be deduped
+      makeResult("regular-1", 0.1), // low score — should be filtered by score
+      makeResult("regular-2", 0.5), // good score, not core — should survive
+    ];
+    const minScore = 0.25;
+    const coreIds = new Set(["core-1"]);
+
+    let filtered = results.filter((r) => r.score >= minScore);
+    filtered = filtered.filter((r) => !coreIds.has(r.id));
+
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0].id).toBe("regular-2");
+  });
+});
+
+// ============================================================================
+// stripAssistantWrappers()
+// ============================================================================
+
+describe("stripAssistantWrappers", () => {
+  it("should strip <tool_use> blocks", () => {
+    const text = "Here is my analysis. <tool_use>some tool call</tool_use> And more text.";
+    expect(stripAssistantWrappers(text)).toBe("Here is my analysis. And more text.");
+  });
+
+  it("should strip <tool_result> blocks", () => {
+    const text = "<tool_result>result data</tool_result> The result shows X.";
+    expect(stripAssistantWrappers(text)).toBe("The result shows X.");
+  });
+
+  it("should strip <function_call> blocks", () => {
+    const text = "Let me check. <function_call>fn()</function_call> Done.";
+    expect(stripAssistantWrappers(text)).toBe("Let me check. Done.");
+  });
+
+  it("should strip <thinking> blocks", () => {
+    const text = "<thinking>Let me think about this deeply...</thinking> The answer is 42.";
+    expect(stripAssistantWrappers(text)).toBe("The answer is 42.");
+  });
+
+  it("should strip <antThinking> blocks", () => {
+    const text = "<antThinking>internal reasoning</antThinking> Here is the response.";
+    expect(stripAssistantWrappers(text)).toBe("Here is the response.");
+  });
+
+  it("should strip <code_output> blocks", () => {
+    const text = "Running the script: <code_output>stdout output</code_output> It succeeded.";
+    expect(stripAssistantWrappers(text)).toBe("Running the script: It succeeded.");
+  });
+
+  it("should strip multiple wrapper types at once", () => {
+    const text =
+      "<thinking>hmm</thinking> I found that <tool_result>data</tool_result> the answer is clear.";
+    expect(stripAssistantWrappers(text)).toBe("I found that the answer is clear.");
+  });
+
+  it("should return empty string when only wrappers exist", () => {
+    const text = "<thinking>just thinking</thinking>";
+    expect(stripAssistantWrappers(text)).toBe("");
+  });
+
+  it("should pass through text with no wrappers", () => {
+    const text = "This is a normal assistant response with useful information.";
+    expect(stripAssistantWrappers(text)).toBe(text);
+  });
+});
+
+// ============================================================================
+// extractAssistantMessages()
+// ============================================================================
+
+describe("extractAssistantMessages", () => {
+  it("should extract string content from assistant messages", () => {
+    const messages = [
+      { role: "assistant", content: "I recommend using TypeScript for this project" },
+      { role: "assistant", content: "The database migration completed successfully" },
+    ];
+    const result = extractAssistantMessages(messages);
+    expect(result).toEqual([
+      "I recommend using TypeScript for this project",
+      "The database migration completed successfully",
+    ]);
+  });
+
+  it("should filter out user messages", () => {
+    const messages = [
+      { role: "user", content: "This is a user message that should be skipped" },
+      { role: "assistant", content: "This is an assistant message that should be kept" },
+    ];
+    const result = extractAssistantMessages(messages);
+    expect(result).toEqual(["This is an assistant message that should be kept"]);
+  });
+
+  it("should extract text from content block arrays", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Here is a content block response from assistant" },
+          { type: "tool_use", id: "123" },
+          { type: "text", text: "Another text block in the response" },
+        ],
+      },
+    ];
+    const result = extractAssistantMessages(messages);
+    expect(result).toEqual([
+      "Here is a content block response from assistant",
+      "Another text block in the response",
+    ]);
+  });
+
+  it("should strip thinking tags from assistant messages", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content:
+          "<thinking>Let me think about this...</thinking> The best approach is to use a factory pattern for this use case.",
+      },
+    ];
+    const result = extractAssistantMessages(messages);
+    expect(result).toEqual(["The best approach is to use a factory pattern for this use case."]);
+  });
+
+  it("should filter out messages shorter than 10 chars after stripping", () => {
+    const messages = [
+      { role: "assistant", content: "<thinking>long thinking block</thinking> OK" },
+      { role: "assistant", content: "Short" },
+    ];
+    const result = extractAssistantMessages(messages);
+    expect(result).toEqual([]);
+  });
+
+  it("should handle null and non-object messages gracefully", () => {
+    const messages = [
+      null,
+      undefined,
+      42,
+      { role: "assistant", content: "Valid assistant message with enough length" },
+    ];
+    const result = extractAssistantMessages(messages as unknown[]);
+    expect(result).toEqual(["Valid assistant message with enough length"]);
+  });
+
+  it("should return empty array for empty input", () => {
+    expect(extractAssistantMessages([])).toEqual([]);
+  });
+});
+
+// ============================================================================
+// passesAssistantAttentionGate()
+// ============================================================================
+
+describe("passesAssistantAttentionGate", () => {
+  it("should reject short messages below min chars", () => {
+    expect(passesAssistantAttentionGate("Hi there")).toBe(false);
+  });
+
+  it("should reject messages with fewer than 10 words", () => {
+    // 9 words — just under the threshold
+    expect(passesAssistantAttentionGate("I think we should use this approach here.")).toBe(false);
+  });
+
+  it("should accept messages with 10+ words and substantive content", () => {
+    expect(
+      passesAssistantAttentionGate(
+        "Based on my analysis, the best approach would be to refactor the database layer to use connection pooling for better performance.",
+      ),
+    ).toBe(true);
+  });
+
+  it("should reject messages exceeding 1000 chars", () => {
+    const longMsg = "word ".repeat(250); // ~1250 chars
+    expect(passesAssistantAttentionGate(longMsg)).toBe(false);
+  });
+
+  it("should reject messages that are mostly code blocks", () => {
+    const msg =
+      "Here is the fix:\n```typescript\nconst x = 1;\nconst y = 2;\nconst z = x + y;\nconsole.log(z);\nfunction foo() { return bar; }\nclass Baz extends Qux {}\n```";
+    expect(passesAssistantAttentionGate(msg)).toBe(false);
+  });
+
+  it("should accept messages with some code but mostly text", () => {
+    const msg =
+      "I recommend refactoring the authentication module to use JWT tokens instead of session-based auth. The key change would be in the middleware where we validate tokens. Here is a small example: ```const token = jwt.sign(payload, secret);``` This approach is more scalable.";
+    expect(passesAssistantAttentionGate(msg)).toBe(true);
+  });
+
+  it("should reject messages containing tool_result tags", () => {
+    const msg =
+      "The <tool_result>some output from executing a tool that returned data</tool_result> result shows that the system is working correctly and we should continue.";
+    expect(passesAssistantAttentionGate(msg)).toBe(false);
+  });
+
+  it("should reject messages containing tool_use tags", () => {
+    const msg =
+      "Let me check <tool_use>running some tool call right now</tool_use> and now we can see the output of the analysis clearly.";
+    expect(passesAssistantAttentionGate(msg)).toBe(false);
+  });
+
+  it("should reject messages with injected memory context", () => {
+    expect(
+      passesAssistantAttentionGate(
+        "<relevant-memories>some context here for the agent</relevant-memories> and here is a longer response with more than ten words to pass the word check.",
+      ),
+    ).toBe(false);
+  });
+
+  it("should reject noise patterns", () => {
+    expect(passesAssistantAttentionGate("ok")).toBe(false);
+    expect(passesAssistantAttentionGate("sounds good")).toBe(false);
+  });
+});
+
+// ============================================================================
+// rateImportance()
+// ============================================================================
+
+describe("rateImportance", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const enabledConfig: ExtractionConfig = {
+    enabled: true,
+    apiKey: "test-key",
+    model: "test-model",
+    baseUrl: "https://test.ai/api/v1",
+    temperature: 0.0,
+    maxRetries: 0,
+  };
+
+  const disabledConfig: ExtractionConfig = {
+    ...enabledConfig,
+    enabled: false,
+  };
+
+  it("should return 0.5 when extraction is disabled", async () => {
+    const result = await rateImportance("some text", disabledConfig);
+    expect(result).toBe(0.5);
+  });
+
+  it("should return mapped score on happy path", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            { message: { content: JSON.stringify({ score: 8, reason: "important decision" }) } },
+          ],
+        }),
+    });
+
+    const result = await rateImportance("I decided to switch to Neo4j", enabledConfig);
+    expect(result).toBe(0.8);
+  });
+
+  it("should clamp score to 1-10 range", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            { message: { content: JSON.stringify({ score: 15, reason: "very important" }) } },
+          ],
+        }),
+    });
+
+    const result = await rateImportance("test", enabledConfig);
+    expect(result).toBe(1.0); // 15 clamped to 10, mapped to 1.0
+  });
+
+  it("should clamp low scores", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: JSON.stringify({ score: 0, reason: "trivial" }) } }],
+        }),
+    });
+
+    const result = await rateImportance("test", enabledConfig);
+    expect(result).toBe(0.1); // 0 clamped to 1, mapped to 0.1
+  });
+
+  it("should return 0.5 on fetch timeout", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new DOMException("signal timed out", "TimeoutError"));
+
+    const result = await rateImportance("test", enabledConfig);
+    expect(result).toBe(0.5);
+  });
+
+  it("should return 0.5 on invalid JSON response", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: "not valid json" } }],
+        }),
+    });
+
+    const result = await rateImportance("test", enabledConfig);
+    expect(result).toBe(0.5);
+  });
+
+  it("should return 0.5 when API returns error status", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+    });
+
+    const result = await rateImportance("test", enabledConfig);
+    expect(result).toBe(0.5);
+  });
+
+  it("should return 0.5 when response has no content", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: null } }],
+        }),
+    });
+
+    const result = await rateImportance("test", enabledConfig);
+    expect(result).toBe(0.5);
+  });
+
+  it("should return 0.5 when score is not a number", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            { message: { content: JSON.stringify({ score: "high", reason: "important" }) } },
+          ],
+        }),
+    });
+
+    const result = await rateImportance("test", enabledConfig);
+    expect(result).toBe(0.5);
+  });
+});
+
+// ============================================================================
+// resolveConflict()
+// ============================================================================
+
+describe("resolveConflict", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const enabledConfig: ExtractionConfig = {
+    enabled: true,
+    apiKey: "test-key",
+    model: "test-model",
+    baseUrl: "https://test.ai/api/v1",
+    temperature: 0.0,
+    maxRetries: 0,
+  };
+
+  const disabledConfig: ExtractionConfig = {
+    ...enabledConfig,
+    enabled: false,
+  };
+
+  it("should return 'skip' when config is disabled", async () => {
+    const result = await resolveConflict("mem A", "mem B", disabledConfig);
+    expect(result).toBe("skip");
+  });
+
+  it("should return 'a' when LLM says keep a", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: JSON.stringify({ keep: "a", reason: "more recent" }) } }],
+        }),
+    });
+
+    const result = await resolveConflict(
+      "user prefers dark mode",
+      "user prefers light mode",
+      enabledConfig,
+    );
+    expect(result).toBe("a");
+  });
+
+  it("should return 'b' when LLM says keep b", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            { message: { content: JSON.stringify({ keep: "b", reason: "more specific" }) } },
+          ],
+        }),
+    });
+
+    const result = await resolveConflict("old preference", "new preference", enabledConfig);
+    expect(result).toBe("b");
+  });
+
+  it("should return 'both' when LLM says keep both", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            { message: { content: JSON.stringify({ keep: "both", reason: "no conflict" }) } },
+          ],
+        }),
+    });
+
+    const result = await resolveConflict("likes coffee", "works at Acme", enabledConfig);
+    expect(result).toBe("both");
+  });
+
+  it("should return 'skip' on fetch timeout", async () => {
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValue(new DOMException("signal timed out", "TimeoutError"));
+
+    const result = await resolveConflict("mem A", "mem B", enabledConfig);
+    expect(result).toBe("skip");
+  });
+
+  it("should return 'skip' on invalid JSON response", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: "not valid json" } }],
+        }),
+    });
+
+    const result = await resolveConflict("mem A", "mem B", enabledConfig);
+    expect(result).toBe("skip");
+  });
+
+  it("should return 'skip' when API returns error status", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: () => Promise.resolve("Internal Server Error"),
+    });
+
+    const result = await resolveConflict("mem A", "mem B", enabledConfig);
+    expect(result).toBe("skip");
+  });
+
+  it("should return 'skip' when response has no content", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: null } }],
+        }),
+    });
+
+    const result = await resolveConflict("mem A", "mem B", enabledConfig);
+    expect(result).toBe("skip");
+  });
+
+  it("should return 'skip' when LLM returns unrecognized keep value", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          choices: [
+            { message: { content: JSON.stringify({ keep: "neither", reason: "confusing" }) } },
+          ],
+        }),
+    });
+
+    const result = await resolveConflict("mem A", "mem B", enabledConfig);
+    expect(result).toBe("skip");
   });
 });
