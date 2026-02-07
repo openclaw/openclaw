@@ -223,6 +223,9 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["allowed"],
+          entries: {
+            allowed: { enabled: true },
+          },
         },
       },
     });
@@ -230,6 +233,51 @@ describe("loadOpenClawPlugins", () => {
     const loaded = registry.plugins.find((entry) => entry.id === "allowed");
     expect(loaded?.status).toBe("loaded");
     expect(Object.keys(registry.gatewayHandlers)).toContain("allowed.ping");
+  });
+
+  it("requires explicit workspace plugin trust before loading", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const workspaceDir = makeTempDir();
+    const workspaceExtDir = path.join(workspaceDir, ".openclaw", "extensions");
+    fs.mkdirSync(workspaceExtDir, { recursive: true });
+    writePlugin({
+      id: "workspace-demo",
+      body: `export default { id: "workspace-demo", register() {} };`,
+      dir: workspaceExtDir,
+      filename: "workspace-demo.ts",
+    });
+
+    const blocked = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      config: {
+        plugins: {
+          entries: {
+            "workspace-demo": { enabled: true },
+          },
+        },
+      },
+    });
+
+    const blockedEntry = blocked.plugins.find((entry) => entry.id === "workspace-demo");
+    expect(blockedEntry?.status).toBe("disabled");
+    expect(blockedEntry?.error).toContain("workspace plugins disabled");
+
+    const trusted = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      config: {
+        plugins: {
+          workspace: { enabled: true },
+          entries: {
+            "workspace-demo": { enabled: true },
+          },
+        },
+      },
+    });
+
+    const trustedEntry = trusted.plugins.find((entry) => entry.id === "workspace-demo");
+    expect(trustedEntry?.status).toBe("loaded");
   });
 
   it("denylist disables plugins even if allowed", () => {
@@ -247,6 +295,9 @@ describe("loadOpenClawPlugins", () => {
           load: { paths: [plugin.file] },
           allow: ["blocked"],
           deny: ["blocked"],
+          entries: {
+            blocked: { enabled: true },
+          },
         },
       },
     });
@@ -270,6 +321,7 @@ describe("loadOpenClawPlugins", () => {
           load: { paths: [plugin.file] },
           entries: {
             configurable: {
+              enabled: true,
               config: "nope" as unknown as Record<string, unknown>,
             },
           },
@@ -315,6 +367,9 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["channel-demo"],
+          entries: {
+            "channel-demo": { enabled: true },
+          },
         },
       },
     });
@@ -339,6 +394,9 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["http-demo"],
+          entries: {
+            "http-demo": { enabled: true },
+          },
         },
       },
     });
@@ -365,6 +423,9 @@ describe("loadOpenClawPlugins", () => {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["http-route-demo"],
+          entries: {
+            "http-route-demo": { enabled: true },
+          },
         },
       },
     });

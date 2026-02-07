@@ -13,6 +13,11 @@ export type PluginsLoadConfig = {
   paths?: string[];
 };
 
+export type PluginsWorkspaceConfig = {
+  /** Allow auto-discovered workspace plugins under .openclaw/extensions. */
+  enabled?: boolean;
+};
+
 export type PluginInstallRecord = {
   source: "npm" | "archive" | "path";
   spec?: string;
@@ -30,6 +35,7 @@ export type PluginsConfig = {
   /** Optional plugin denylist (plugin ids). */
   deny?: string[];
   load?: PluginsLoadConfig;
+  workspace?: PluginsWorkspaceConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;
   installs?: Record<string, PluginInstallRecord>;
