@@ -80,6 +80,15 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW = 1048576;
+const GOOGLE_GEMINI_CLI_DEFAULT_MAX_TOKENS = 8192;
+const GOOGLE_GEMINI_CLI_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 interface OllamaModel {
   name: string;
   modified_at: string;
@@ -403,6 +412,60 @@ async function buildOllamaProvider(): Promise<ProviderConfig> {
   };
 }
 
+function buildGoogleGeminiCliProvider(): ProviderConfig {
+  return {
+    api: "google-gemini-cli" as any,
+    baseUrl: "https://generativelanguage.googleapis.com",
+    models: [
+      {
+        id: "gemini-2.5-flash-lite",
+        name: "Gemini 2.5 Flash Lite",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: GOOGLE_GEMINI_CLI_DEFAULT_COST,
+        contextWindow: GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GOOGLE_GEMINI_CLI_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gemini-2.5-flash",
+        name: "Gemini 2.5 Flash",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: GOOGLE_GEMINI_CLI_DEFAULT_COST,
+        contextWindow: GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GOOGLE_GEMINI_CLI_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: GOOGLE_GEMINI_CLI_DEFAULT_COST,
+        contextWindow: GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GOOGLE_GEMINI_CLI_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: GOOGLE_GEMINI_CLI_DEFAULT_COST,
+        contextWindow: GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GOOGLE_GEMINI_CLI_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: GOOGLE_GEMINI_CLI_DEFAULT_COST,
+        contextWindow: GOOGLE_GEMINI_CLI_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GOOGLE_GEMINI_CLI_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
 }): Promise<ModelsConfig["providers"]> {
@@ -496,6 +559,16 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
   if (ollamaKey) {
     providers.ollama = { ...(await buildOllamaProvider()), apiKey: ollamaKey };
+  }
+
+  /* DEBUG LOGGING START */
+  console.log("DEBUG: Checking google-gemini-cli profiles...");
+  console.log("DEBUG: All profiles:", JSON.stringify(Object.keys(authStore.profiles)));
+  const googleGeminiProfiles = listProfilesForProvider(authStore, "google-gemini-cli");
+  console.log("DEBUG: Found google-gemini-cli profiles:", googleGeminiProfiles);
+  /* DEBUG LOGGING END */
+  if (googleGeminiProfiles.length > 0) {
+    providers["google-gemini-cli"] = buildGoogleGeminiCliProvider();
   }
 
   return providers;
