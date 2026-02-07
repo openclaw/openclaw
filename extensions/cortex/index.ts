@@ -20,6 +20,7 @@ import { Type } from "@sinclair/typebox";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { existsSync } from "node:fs";
 import type { OpenClawPlugin, OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { CortexBridge, type STMItem, estimateTokens } from "./cortex-bridge.js";
 
@@ -34,25 +35,166 @@ const IMPORTANCE_TRIGGERS = [
   { pattern: /preference|prefer|like to/i, importance: 1.5 },
 ];
 
-// Category detection patterns
-const CATEGORY_PATTERNS: Record<string, RegExp[]> = {
-  trading: [/trading|bot|profit|loss|market|price|volume|position/i],
-  moltbook: [/moltbook|post|thread|social|engagement/i],
-  coding: [/code|bug|fix|implement|function|api|error|debug/i],
-  meta: [/reflect|self|agency|consciousness|memory|cortex/i],
-  learning: [/learn|understand|realize|insight|pattern/i],
-  personal: [/prefer|like|want|feel|think/i],
-  system: [/config|setting|gateway|service|process/i],
-};
+/**
+ * Category configuration loaded from categories.json
+ * Fully dynamic - no hardcoded categories
+ */
+interface CategoryConfig {
+  description: string;
+  keywords: string[];
+}
 
-function detectCategory(content: string): string {
-  const lowerContent = content.toLowerCase();
-  for (const [category, patterns] of Object.entries(CATEGORY_PATTERNS)) {
-    if (patterns.some((p) => p.test(lowerContent))) {
-      return category;
+interface CategoriesFile {
+  categories: Record<string, CategoryConfig>;
+  extensible: boolean;
+  note?: string;
+}
+
+/**
+ * Dynamic category manager - loads from JSON, supports runtime additions
+ */
+class CategoryManager {
+  private categories: Map<string, CategoryConfig> = new Map();
+  private patterns: Map<string, RegExp> = new Map();
+  private configPath: string;
+  private loaded = false;
+
+  constructor(configPath: string) {
+    this.configPath = configPath;
+  }
+
+  async load(): Promise<void> {
+    try {
+      if (!existsSync(this.configPath)) {
+        // Create default categories file if it doesn't exist
+        const defaultCategories: CategoriesFile = {
+          categories: {
+            general: {
+              description: "General uncategorized memories",
+              keywords: [],
+            },
+          },
+          extensible: true,
+          note: "Categories are loaded dynamically. Add new categories here or via cortex_create_category tool.",
+        };
+        await writeFile(this.configPath, JSON.stringify(defaultCategories, null, 2));
+      }
+
+      const content = await readFile(this.configPath, "utf-8");
+      const data: CategoriesFile = JSON.parse(content);
+
+      this.categories.clear();
+      this.patterns.clear();
+
+      for (const [name, config] of Object.entries(data.categories)) {
+        this.categories.set(name, config);
+        if (config.keywords.length > 0) {
+          // Build regex from keywords
+          const pattern = new RegExp(config.keywords.join("|"), "i");
+          this.patterns.set(name, pattern);
+        }
+      }
+
+      this.loaded = true;
+    } catch (err) {
+      console.error("Failed to load categories:", err);
+      // Fallback to minimal default
+      this.categories.set("general", { description: "General", keywords: [] });
+      this.loaded = true;
     }
   }
-  return "general";
+
+  async addCategory(name: string, description: string, keywords: string[]): Promise<{ success: boolean; message: string; existing?: boolean }> {
+    if (!this.loaded) {
+      await this.load();
+    }
+
+    // Normalize name to lowercase
+    const normalizedName = name.toLowerCase().replace(/\s+/g, "_");
+
+    // Check for existing category (deduplication)
+    if (this.categories.has(normalizedName)) {
+      const existing = this.categories.get(normalizedName)!;
+      return {
+        success: false,
+        message: `Category "${normalizedName}" already exists: ${existing.description}. Keywords: ${existing.keywords.join(", ")}`,
+        existing: true,
+      };
+    }
+
+    // Check if any keywords overlap with existing categories
+    const lowerKeywords = new Set(keywords.map(k => k.toLowerCase()));
+    for (const [catName, config] of this.categories) {
+      const overlap = config.keywords.filter(k => lowerKeywords.has(k.toLowerCase()));
+      if (overlap.length > 0) {
+        return {
+          success: false,
+          message: `Keywords [${overlap.join(", ")}] already used in category "${catName}". Use that category or choose different keywords.`,
+          existing: true,
+        };
+      }
+    }
+
+    // Add to in-memory store
+    this.categories.set(normalizedName, { description, keywords });
+    if (keywords.length > 0) {
+      this.patterns.set(normalizedName, new RegExp(keywords.join("|"), "i"));
+    }
+
+    // Persist to file
+    try {
+      const content = await readFile(this.configPath, "utf-8");
+      const data: CategoriesFile = JSON.parse(content);
+      data.categories[normalizedName] = { description, keywords };
+      await writeFile(this.configPath, JSON.stringify(data, null, 2));
+      return {
+        success: true,
+        message: `Created category "${normalizedName}" with keywords: ${keywords.join(", ")}`,
+      };
+    } catch (err) {
+      console.error("Failed to save category:", err);
+      return {
+        success: false,
+        message: `Failed to persist category: ${err}`,
+      };
+    }
+  }
+
+  detectCategory(content: string): string {
+    if (!this.loaded) {
+      return "general";
+    }
+
+    const lowerContent = content.toLowerCase();
+    for (const [category, pattern] of this.patterns) {
+      if (pattern.test(lowerContent)) {
+        return category;
+      }
+    }
+    return "general";
+  }
+
+  getCategories(): string[] {
+    return Array.from(this.categories.keys());
+  }
+
+  getCategoryInfo(name: string): CategoryConfig | undefined {
+    return this.categories.get(name);
+  }
+
+  hasCategory(name: string): boolean {
+    return this.categories.has(name);
+  }
+}
+
+// Global category manager instance - initialized on plugin load
+let categoryManager: CategoryManager | null = null;
+
+function detectCategory(content: string): string {
+  if (!categoryManager) {
+    return "general";
+  }
+  return categoryManager.detectCategory(content);
 }
 
 function detectImportance(content: string): number {
@@ -329,6 +471,10 @@ const cortexPlugin: OpenClawPlugin = {
     // Track pending STM matches for re-ranking
     const pendingStmMatches = new Map<string, Array<STMItem & { matchScore: number }>>();
 
+    // PHASE 3: Initialize category manager (loads from categories.json)
+    const categoriesPath = join(homedir(), ".openclaw", "workspace", "memory", "categories.json");
+    categoryManager = new CategoryManager(categoriesPath);
+
     // PHASE 1 & 2: Warm up caches on startup
     void (async () => {
       const available = await bridge.isAvailable();
@@ -337,12 +483,18 @@ const cortexPlugin: OpenClawPlugin = {
         return;
       }
 
+      // PHASE 3: Load categories from JSON
+      if (categoryManager) {
+        await categoryManager.load();
+      }
+      const categoryCount = categoryManager?.getCategories().length ?? 0;
+
       // Warm up all RAM caches (PHASE 2: also starts delta sync)
       const warmupResult = await bridge.warmupCaches();
       const indexStats = bridge.memoryIndex.getStats();
       api.logger.info(
         `Cortex Phase 2 initialized: ${warmupResult.stm} STM, ${warmupResult.memories} memories, ` +
-        `${indexStats.hotCount} hot tier, token budget: ${config.maxContextTokens}`
+        `${indexStats.hotCount} hot tier, token budget: ${config.maxContextTokens}, ${categoryCount} categories`
       );
 
       // Update STM capacity in the JSON file
@@ -424,18 +576,110 @@ const cortexPlugin: OpenClawPlugin = {
     }
 
     // =========================================================================
+    // Tool: cortex_create_category - Dynamic category creation
+    // =========================================================================
+    api.registerTool(
+      {
+        name: "cortex_create_category",
+        description:
+          "Create a new memory category for organizing knowledge. Use when encountering a new topic domain that doesn't fit existing categories. Categories help with memory retrieval and context injection. Will reject if category or keywords already exist.",
+        parameters: Type.Object({
+          name: Type.String({ description: "Category name (lowercase, underscores for spaces)" }),
+          description: Type.String({ description: "What this category covers" }),
+          keywords: Type.Array(Type.String(), {
+            description: "Keywords that trigger this category (used for auto-detection)",
+            minItems: 1,
+          }),
+        }),
+        async execute(_toolCallId, params) {
+          const p = params as { name: string; description: string; keywords: string[] };
+
+          if (!categoryManager) {
+            return {
+              content: [{ type: "text", text: "Category manager not initialized" }],
+              details: { error: "not_initialized" },
+            };
+          }
+
+          const result = await categoryManager.addCategory(p.name, p.description, p.keywords);
+
+          if (result.existing) {
+            return {
+              content: [{ type: "text", text: result.message }],
+              details: { exists: true, suggestion: "Use the existing category instead" },
+            };
+          }
+
+          if (!result.success) {
+            return {
+              content: [{ type: "text", text: result.message }],
+              details: { error: result.message },
+            };
+          }
+
+          return {
+            content: [{ type: "text", text: result.message }],
+            details: { created: true, categories: categoryManager.getCategories() },
+          };
+        },
+      },
+      { names: ["cortex_create_category"] },
+    );
+
+    // =========================================================================
+    // Tool: cortex_list_categories - View available categories
+    // =========================================================================
+    api.registerTool(
+      {
+        name: "cortex_list_categories",
+        description:
+          "List all available memory categories with their descriptions and keywords. Use to understand what categories exist before adding memories or creating new categories.",
+        parameters: Type.Object({}),
+        async execute() {
+          if (!categoryManager) {
+            return {
+              content: [{ type: "text", text: "Category manager not initialized" }],
+              details: { error: "not_initialized" },
+            };
+          }
+
+          const categories = categoryManager.getCategories();
+          const details: Record<string, CategoryConfig> = {};
+          const lines: string[] = ["**Available Categories:**", ""];
+
+          for (const name of categories) {
+            const info = categoryManager.getCategoryInfo(name);
+            if (info) {
+              details[name] = info;
+              lines.push(`- **${name}**: ${info.description}`);
+              if (info.keywords.length > 0) {
+                lines.push(`  Keywords: ${info.keywords.join(", ")}`);
+              }
+            }
+          }
+
+          return {
+            content: [{ type: "text", text: lines.join("\n") }],
+            details: { categories: details, count: categories.length },
+          };
+        },
+      },
+      { names: ["cortex_list_categories"] },
+    );
+
+    // =========================================================================
     // Tool: cortex_add - Explicit memory storage with importance
     // =========================================================================
     api.registerTool(
       {
         name: "cortex_add",
         description:
-          "Store an important memory in Cortex STM. Use for significant insights, decisions, lessons learned, or preferences. Auto-detects category and importance if not specified. Importance: 1.0=routine, 2.0=notable, 3.0=critical.",
+          "Store an important memory in Cortex STM. Use for significant insights, decisions, lessons learned, or preferences. Auto-detects category from content keywords. Use cortex_list_categories to see available categories. Importance: 1.0=routine, 2.0=notable, 3.0=critical.",
         parameters: Type.Object({
           content: Type.String({ description: "Memory content to store" }),
           category: Type.Optional(
             Type.String({
-              description: "Category: trading, moltbook, coding, meta, learning, personal, system, general",
+              description: "Category name (use cortex_list_categories to see options, or let auto-detect)",
             }),
           ),
           importance: Type.Optional(
