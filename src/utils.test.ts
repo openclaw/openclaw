@@ -79,13 +79,12 @@ describe("jidToE164", () => {
   it("maps @lid using reverse mapping file", () => {
     const mappingPath = path.join(CONFIG_DIR, "credentials", "lid-mapping-123_reverse.json");
     const original = fs.readFileSync;
-    const spy = vi
-      .spyOn(fs, "readFileSync")
-      // biome-ignore lint/suspicious/noExplicitAny: forwarding to native signature
-      .mockImplementation((path: any, encoding?: any) => {
-        if (path === mappingPath) return `"5551234"`;
-        return original(path, encoding);
-      });
+    const spy = vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
+      if (args[0] === mappingPath) {
+        return `"5551234"`;
+      }
+      return original(...args);
+    });
     expect(jidToE164("123@lid")).toBe("+5551234");
     spy.mockRestore();
   });
@@ -164,5 +163,10 @@ describe("resolveUserPath", () => {
 
   it("resolves relative paths", () => {
     expect(resolveUserPath("tmp/dir")).toBe(path.resolve("tmp/dir"));
+  });
+
+  it("keeps blank paths blank", () => {
+    expect(resolveUserPath("")).toBe("");
+    expect(resolveUserPath("   ")).toBe("");
   });
 });

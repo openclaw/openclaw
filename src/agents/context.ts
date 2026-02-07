@@ -18,7 +18,9 @@ const loadPromise = (async () => {
     const modelRegistry = discoverModels(authStorage, agentDir);
     const models = modelRegistry.getAll() as ModelEntry[];
     for (const m of models) {
-      if (!m?.id) continue;
+      if (!m?.id) {
+        continue;
+      }
       if (typeof m.contextWindow === "number" && m.contextWindow > 0) {
         MODEL_CACHE.set(m.id, m.contextWindow);
       }
@@ -29,7 +31,9 @@ const loadPromise = (async () => {
 })();
 
 export function lookupContextTokens(modelId?: string): number | undefined {
-  if (!modelId) return undefined;
+  if (!modelId) {
+    return undefined;
+  }
   // Best-effort: kick off loading, but don't block.
   void loadPromise;
   return MODEL_CACHE.get(modelId);

@@ -1,3 +1,4 @@
+import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { type ResolvedBrowserConfig, resolveProfile } from "../../browser/config.js";
 import {
@@ -16,7 +17,6 @@ import {
 import { updateBrowserRegistry } from "./registry.js";
 import { slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
-import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 
 async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
@@ -27,7 +27,9 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
       const t = setTimeout(() => ctrl.abort(), 1000);
       try {
         const res = await fetch(url, { signal: ctrl.signal });
-        if (res.ok) return true;
+        if (res.ok) {
+          return true;
+        }
       } finally {
         clearTimeout(t);
       }
@@ -74,7 +76,9 @@ async function ensureSandboxBrowserImage(image: string) {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
   });
-  if (result.code === 0) return;
+  if (result.code === 0) {
+    return;
+  }
   throw new Error(
     `Sandbox browser image not found: ${image}. Build it with scripts/sandbox-browser-setup.sh.`,
   );
@@ -87,8 +91,12 @@ export async function ensureSandboxBrowser(params: {
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
 }): Promise<SandboxBrowserContext | null> {
-  if (!params.cfg.browser.enabled) return null;
-  if (!isToolAllowed(params.cfg.tools, "browser")) return null;
+  if (!params.cfg.browser.enabled) {
+    return null;
+  }
+  if (!isToolAllowed(params.cfg.tools, "browser")) {
+    return null;
+  }
 
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
   const name = `${params.cfg.browser.containerPrefix}${slug}`;
@@ -152,12 +160,16 @@ export async function ensureSandboxBrowser(params: {
   }
 
   const bridge = (() => {
-    if (shouldReuse && existing) return existing.bridge;
+    if (shouldReuse && existing) {
+      return existing.bridge;
+    }
     return null;
   })();
 
   const ensureBridge = async () => {
-    if (bridge) return bridge;
+    if (bridge) {
+      return bridge;
+    }
 
     const onEnsureAttachTarget = params.cfg.browser.autoStart
       ? async () => {

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
 export type AgentIdentityFile = {
@@ -42,20 +41,38 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
   for (const line of lines) {
     const cleaned = line.trim().replace(/^\s*-\s*/, "");
     const colonIndex = cleaned.indexOf(":");
-    if (colonIndex === -1) continue;
+    if (colonIndex === -1) {
+      continue;
+    }
     const label = cleaned.slice(0, colonIndex).replace(/[*_]/g, "").trim().toLowerCase();
     const value = cleaned
       .slice(colonIndex + 1)
       .replace(/^[*_]+|[*_]+$/g, "")
       .trim();
-    if (!value) continue;
-    if (isIdentityPlaceholder(value)) continue;
-    if (label === "name") identity.name = value;
-    if (label === "emoji") identity.emoji = value;
-    if (label === "creature") identity.creature = value;
-    if (label === "vibe") identity.vibe = value;
-    if (label === "theme") identity.theme = value;
-    if (label === "avatar") identity.avatar = value;
+    if (!value) {
+      continue;
+    }
+    if (isIdentityPlaceholder(value)) {
+      continue;
+    }
+    if (label === "name") {
+      identity.name = value;
+    }
+    if (label === "emoji") {
+      identity.emoji = value;
+    }
+    if (label === "creature") {
+      identity.creature = value;
+    }
+    if (label === "vibe") {
+      identity.vibe = value;
+    }
+    if (label === "theme") {
+      identity.theme = value;
+    }
+    if (label === "avatar") {
+      identity.avatar = value;
+    }
   }
   return identity;
 }
@@ -75,7 +92,9 @@ export function loadIdentityFromFile(identityPath: string): AgentIdentityFile | 
   try {
     const content = fs.readFileSync(identityPath, "utf-8");
     const parsed = parseIdentityMarkdown(content);
-    if (!identityHasValues(parsed)) return null;
+    if (!identityHasValues(parsed)) {
+      return null;
+    }
     return parsed;
   } catch {
     return null;

@@ -1,13 +1,14 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
+import type { Request, Response, NextFunction } from "express";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { LineInboundContext } from "./bot-message-context.js";
+import type { ResolvedLineAccount } from "./types.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveLineAccount } from "./accounts.js";
 import { handleLineWebhookEvents } from "./bot-handlers.js";
-import type { LineInboundContext } from "./bot-message-context.js";
 import { startLineWebhook } from "./webhook.js";
-import type { ResolvedLineAccount } from "./types.js";
 
 export interface LineBotOptions {
   channelAccessToken: string;
@@ -71,7 +72,7 @@ export function createLineWebhookCallback(
   bot: LineBot,
   channelSecret: string,
   path = "/line/webhook",
-) {
+): { path: string; handler: (req: Request, res: Response, _next: NextFunction) => Promise<void> } {
   const { handler } = startLineWebhook({
     channelSecret,
     onEvents: bot.handleWebhook,

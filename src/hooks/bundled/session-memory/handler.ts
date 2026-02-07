@@ -2,19 +2,21 @@
  * Session memory hook handler
  *
  * Saves session context to memory when /new command is triggered
- * Creates a new dated memory file with LLM-generated slug and type classification
+ * Creates a new dated memory file with LLM-generated slug
  */
 
 import fs from "node:fs/promises";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { HookHandler } from "../../hooks.js";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { resolveHookConfig } from "../../config.js";
-import type { HookHandler } from "../../hooks.js";
-import type { MemoryType } from "../../../memory/types.js";
+
+const log = createSubsystemLogger("hooks/session-memory");
 
 /**
  * Read recent messages from session file for slug generation
@@ -39,7 +41,8 @@ async function getRecentSessionContent(
           if ((role === "user" || role === "assistant") && msg.content) {
             // Extract text content
             const text = Array.isArray(msg.content)
-              ? msg.content.find((c: any) => c.type === "text")?.text
+              ? // oxlint-disable-next-line typescript/no-explicit-any
+                msg.content.find((c: any) => c.type === "text")?.text
               : msg.content;
             if (text && !text.startsWith("/")) {
               allMessages.push(`${role}: ${text}`);
@@ -60,18 +63,6 @@ async function getRecentSessionContent(
 }
 
 /**
- * Build YAML frontmatter for memory file
- */
-function buildFrontmatter(params: { type: MemoryType; date: string }): string {
-  return `---
-type: ${params.type}
-date: ${params.date}
----
-
-`;
-}
-
-/**
  * Save session context to memory when /new command is triggered
  */
 const saveSessionToMemory: HookHandler = async (event) => {
@@ -81,7 +72,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
   }
 
   try {
-    console.log("[session-memory] Hook triggered for /new command");
+    log.debug("Hook triggered for /new command");
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
@@ -104,9 +95,11 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const currentSessionId = sessionEntry.sessionId as string;
     const currentSessionFile = sessionEntry.sessionFile as string;
 
-    console.log("[session-memory] Current sessionId:", currentSessionId);
-    console.log("[session-memory] Current sessionFile:", currentSessionFile);
-    console.log("[session-memory] cfg present:", !!cfg);
+    log.debug("Session context resolved", {
+      sessionId: currentSessionId,
+      sessionFile: currentSessionFile,
+      hasCfg: Boolean(cfg),
+    });
 
     const sessionFile = currentSessionFile || undefined;
 
@@ -118,53 +111,54 @@ const saveSessionToMemory: HookHandler = async (event) => {
         : 15;
 
     let slug: string | null = null;
-    let memoryType: MemoryType = "unclassified";
     let sessionContent: string | null = null;
 
     if (sessionFile) {
       // Get recent conversation content
       sessionContent = await getRecentSessionContent(sessionFile, messageCount);
-      console.log("[session-memory] sessionContent length:", sessionContent?.length || 0);
+      log.debug("Session content loaded", {
+        length: sessionContent?.length ?? 0,
+        messageCount,
+      });
 
       if (sessionContent && cfg) {
-        console.log("[session-memory] Calling generateSlugAndTypeViaLLM...");
+        log.debug("Calling generateSlugViaLLM...");
         // Dynamically import the LLM slug generator (avoids module caching issues)
         // When compiled, handler is at dist/hooks/bundled/session-memory/handler.js
         // Going up ../.. puts us at dist/hooks/, so just add llm-slug-generator.js
         const openclawRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
         const slugGenPath = path.join(openclawRoot, "llm-slug-generator.js");
-        const { generateSlugAndTypeViaLLM } = await import(slugGenPath);
+        const { generateSlugViaLLM } = await import(slugGenPath);
 
-        // Use LLM to generate a descriptive slug and type
-        const result = await generateSlugAndTypeViaLLM({ sessionContent, cfg });
-        slug = result.slug;
-        memoryType = result.type;
-        console.log("[session-memory] Generated slug:", slug, "type:", memoryType);
+        // Use LLM to generate a descriptive slug
+        slug = await generateSlugViaLLM({ sessionContent, cfg });
+        log.debug("Generated slug", { slug });
       }
     }
 
     // If no slug, use timestamp
     if (!slug) {
-      const timeSlug = now.toISOString().split("T")[1]!.split(".")[0]!.replace(/:/g, "");
+      const timeSlug = now.toISOString().split("T")[1].split(".")[0].replace(/:/g, "");
       slug = timeSlug.slice(0, 4); // HHMM
-      console.log("[session-memory] Using fallback timestamp slug:", slug);
+      log.debug("Using fallback timestamp slug", { slug });
     }
 
     // Create filename with date and slug
     const filename = `${dateStr}-${slug}.md`;
     const memoryFilePath = path.join(memoryDir, filename);
-    console.log("[session-memory] Generated filename:", filename);
-    console.log("[session-memory] Full path:", memoryFilePath);
+    log.debug("Memory file path resolved", {
+      filename,
+      path: memoryFilePath.replace(os.homedir(), "~"),
+    });
 
     // Format time as HH:MM:SS UTC
-    const timeStr = now.toISOString().split("T")[1]!.split(".")[0];
+    const timeStr = now.toISOString().split("T")[1].split(".")[0];
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
     const source = (context.commandSource as string) || "unknown";
 
-    // Build Markdown entry with frontmatter
-    const frontmatter = buildFrontmatter({ type: memoryType, date: dateStr });
+    // Build Markdown entry
     const entryParts = [
       `# Session: ${dateStr} ${timeStr} UTC`,
       "",
@@ -179,20 +173,25 @@ const saveSessionToMemory: HookHandler = async (event) => {
       entryParts.push("## Conversation Summary", "", sessionContent, "");
     }
 
-    const entry = frontmatter + entryParts.join("\n");
+    const entry = entryParts.join("\n");
 
     // Write to new memory file
     await fs.writeFile(memoryFilePath, entry, "utf-8");
-    console.log("[session-memory] Memory file written successfully");
+    log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = memoryFilePath.replace(os.homedir(), "~");
-    console.log(`[session-memory] Session context saved to ${relPath}`);
+    log.info(`Session context saved to ${relPath}`);
   } catch (err) {
-    console.error(
-      "[session-memory] Failed to save session memory:",
-      err instanceof Error ? err.message : String(err),
-    );
+    if (err instanceof Error) {
+      log.error("Failed to save session memory", {
+        errorName: err.name,
+        errorMessage: err.message,
+        stack: err.stack,
+      });
+    } else {
+      log.error("Failed to save session memory", { error: String(err) });
+    }
   }
 };
 

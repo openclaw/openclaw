@@ -5,9 +5,9 @@
  * They support dependency injection via the `deps` parameter for testability.
  */
 
-import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
-import { getClientManager as getRegistryClientManager } from "./client-manager-registry.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { getClientManager as getRegistryClientManager } from "./client-manager-registry.js";
+import { DEFAULT_ACCOUNT_ID, getAccountConfig } from "./config.js";
 import { resolveTwitchToken } from "./token.js";
 import { stripMarkdownForTwitch } from "./utils/markdown.js";
 import { generateMessageId, isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";

@@ -1,5 +1,4 @@
 import path from "node:path";
-
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -43,15 +42,21 @@ export function resolveLinuxUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
 ): string[] {
-  if (!home) return [];
+  if (!home) {
+    return [];
+  }
 
   const dirs: string[] = [];
 
   const add = (dir: string | undefined) => {
-    if (dir) dirs.push(dir);
+    if (dir) {
+      dirs.push(dir);
+    }
   };
   const appendSubdir = (base: string | undefined, subdir: string) => {
-    if (!base) return undefined;
+    if (!base) {
+      return undefined;
+    }
     return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
   };
 
@@ -82,7 +87,9 @@ export function resolveLinuxUserBinDirs(
 
 export function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
   const platform = options.platform ?? process.platform;
-  if (platform === "win32") return [];
+  if (platform === "win32") {
+    return [];
+  }
 
   const parts: string[] = [];
   const extraDirs = options.extraDirs ?? [];
@@ -93,14 +100,24 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
     platform === "linux" ? resolveLinuxUserBinDirs(options.home, options.env) : [];
 
   const add = (dir: string) => {
-    if (!dir) return;
-    if (!parts.includes(dir)) parts.push(dir);
+    if (!dir) {
+      return;
+    }
+    if (!parts.includes(dir)) {
+      parts.push(dir);
+    }
   };
 
-  for (const dir of extraDirs) add(dir);
+  for (const dir of extraDirs) {
+    add(dir);
+  }
   // User dirs first so user-installed binaries take precedence
-  for (const dir of linuxUserDirs) add(dir);
-  for (const dir of systemDirs) add(dir);
+  for (const dir of linuxUserDirs) {
+    add(dir);
+  }
+  for (const dir of systemDirs) {
+    add(dir);
+  }
 
   return parts;
 }

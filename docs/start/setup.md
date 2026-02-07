@@ -1,27 +1,35 @@
 ---
-summary: "Setup guide: keep your OpenClaw setup tailored while staying up-to-date"
+summary: "Advanced setup and development workflows for OpenClaw"
 read_when:
   - Setting up a new machine
   - You want “latest + greatest” without breaking your personal setup
+title: "Setup"
 ---
 
 # Setup
 
+<Note>
+If you are setting up for the first time, start with [Getting Started](/start/getting-started).
+For wizard details, see [Onboarding Wizard](/start/wizard).
+</Note>
+
 Last updated: 2026-01-01
 
 ## TL;DR
+
 - **Tailoring lives outside the repo:** `~/.openclaw/workspace` (workspace) + `~/.openclaw/openclaw.json` (config).
 - **Stable workflow:** install the macOS app; let it run the bundled Gateway.
 - **Bleeding edge workflow:** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
 
 ## Prereqs (from source)
+
 - Node `>=22`
 - `pnpm`
 - Docker (optional; only for containerized setup/e2e — see [Docker](/install/docker))
 
 ## Tailoring strategy (so updates don’t hurt)
 
-If you want “100% tailored to me” *and* easy updates, keep your customization in:
+If you want “100% tailored to me” _and_ easy updates, keep your customization in:
 
 - **Config:** `~/.openclaw/openclaw.json` (JSON/JSON5-ish)
 - **Workspace:** `~/.openclaw/workspace` (skills, prompts, memories; make it a private git repo)
@@ -40,24 +48,33 @@ openclaw setup
 
 If you don’t have a global install yet, run it via `pnpm openclaw setup`.
 
+## Run the Gateway from this repo
+
+After `pnpm build`, you can run the packaged CLI directly:
+
+```bash
+node openclaw.mjs gateway --port 18789 --verbose
+```
+
 ## Stable workflow (macOS app first)
 
-1) Install + launch **OpenClaw.app** (menu bar).
-2) Complete the onboarding/permissions checklist (TCC prompts).
-3) Ensure Gateway is **Local** and running (the app manages it).
-4) Link surfaces (example: WhatsApp):
+1. Install + launch **OpenClaw.app** (menu bar).
+2. Complete the onboarding/permissions checklist (TCC prompts).
+3. Ensure Gateway is **Local** and running (the app manages it).
+4. Link surfaces (example: WhatsApp):
 
 ```bash
 openclaw channels login
 ```
 
-5) Sanity check:
+5. Sanity check:
 
 ```bash
 openclaw health
 ```
 
 If onboarding is not available in your build:
+
 - Run `openclaw setup`, then `openclaw channels login`, then start the Gateway manually (`openclaw gateway`).
 
 ## Bleeding edge workflow (Gateway in a terminal)
@@ -86,7 +103,7 @@ pnpm gateway:watch
 In **OpenClaw.app**:
 
 - Connection Mode: **Local**
-The app will attach to the running gateway on the configured port.
+  The app will attach to the running gateway on the configured port.
 
 ### 3) Verify
 
@@ -98,6 +115,7 @@ openclaw health
 ```
 
 ### Common footguns
+
 - **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
 - **Where state lives:**
   - Credentials: `~/.openclaw/credentials/`
@@ -115,7 +133,7 @@ Use this when debugging auth or deciding what to back up:
 - **Pairing allowlists**: `~/.openclaw/credentials/<channel>-allowFrom.json`
 - **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
-More detail: [Security](/gateway/security#credential-storage-map).
+  More detail: [Security](/gateway/security#credential-storage-map).
 
 ## Updating (without wrecking your setup)
 

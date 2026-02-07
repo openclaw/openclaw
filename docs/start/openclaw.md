@@ -3,7 +3,9 @@ summary: "End-to-end guide for running OpenClaw as a personal assistant with saf
 read_when:
   - Onboarding a new assistant instance
   - Reviewing safety/permission implications
+title: "Personal Assistant Setup"
 ---
+
 # Building a personal assistant with OpenClaw
 
 OpenClaw is a WhatsApp + Telegram + Discord + iMessage gateway for **Pi** agents. Plugins add Mattermost. This guide is the "personal assistant" setup: one dedicated WhatsApp number that behaves like your always-on agent.
@@ -11,36 +13,21 @@ OpenClaw is a WhatsApp + Telegram + Discord + iMessage gateway for **Pi** agents
 ## ⚠️ Safety first
 
 You’re putting an agent in a position to:
+
 - run commands on your machine (depending on your Pi tool setup)
 - read/write files in your workspace
 - send messages back out via WhatsApp/Telegram/Discord/Mattermost (plugin)
 
 Start conservative:
+
 - Always set `channels.whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
 - Heartbeats now default to every 30 minutes. Disable until you trust the setup by setting `agents.defaults.heartbeat.every: "0m"`.
 
 ## Prerequisites
 
-- Node **22+**
-- OpenClaw available on PATH (recommended: global install)
+- OpenClaw installed and onboarded — see [Getting Started](/start/getting-started) if you haven't done this yet
 - A second phone number (SIM/eSIM/prepaid) for the assistant
-
-```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
-```
-
-From source (development):
-
-```bash
-git clone https://github.com/openclaw/openclaw.git
-cd openclaw
-pnpm install
-pnpm ui:build # auto-installs UI deps on first run
-pnpm build
-pnpm link --global
-```
 
 ## The two-phone setup (recommended)
 
@@ -65,29 +52,29 @@ If you link your personal WhatsApp to OpenClaw, every message to you becomes “
 
 ## 5-minute quick start
 
-1) Pair WhatsApp Web (shows QR; scan with the assistant phone):
+1. Pair WhatsApp Web (shows QR; scan with the assistant phone):
 
 ```bash
 openclaw channels login
 ```
 
-2) Start the Gateway (leave it running):
+2. Start the Gateway (leave it running):
 
 ```bash
 openclaw gateway --port 18789
 ```
 
-3) Put a minimal config in `~/.openclaw/openclaw.json`:
+3. Put a minimal config in `~/.openclaw/openclaw.json`:
 
 ```json5
 {
-  channels: { whatsapp: { allowFrom: ["+15555550123"] } }
+  channels: { whatsapp: { allowFrom: ["+15555550123"] } },
 }
 ```
 
 Now message the assistant number from your allowlisted phone.
 
-When onboarding finishes, we auto-open the dashboard with your gateway token and print the tokenized link. To reopen later: `openclaw dashboard`.
+When onboarding finishes, we auto-open the dashboard and print a clean (non-tokenized) link. If it prompts for auth, paste the token from `gateway.auth.token` into Control UI settings. To reopen later: `openclaw dashboard`.
 
 ## Give the agent a workspace (AGENTS)
 
@@ -109,8 +96,8 @@ Optional: choose a different workspace with `agents.defaults.workspace` (support
 ```json5
 {
   agent: {
-    workspace: "~/.openclaw/workspace"
-  }
+    workspace: "~/.openclaw/workspace",
+  },
 }
 ```
 
@@ -119,14 +106,15 @@ If you already ship your own workspace files from a repo, you can disable bootst
 ```json5
 {
   agent: {
-    skipBootstrap: true
-  }
+    skipBootstrap: true,
+  },
 }
 ```
 
 ## The config that turns it into “an assistant”
 
 OpenClaw defaults to a good assistant setup, but you’ll usually want to tune:
+
 - persona/instructions in `SOUL.md`
 - thinking defaults (if desired)
 - heartbeats (once you trust it)
@@ -137,25 +125,25 @@ Example:
 {
   logging: { level: "info" },
   agent: {
-    model: "anthropic/claude-opus-4-5",
+    model: "anthropic/claude-opus-4-6",
     workspace: "~/.openclaw/workspace",
     thinkingDefault: "high",
     timeoutSeconds: 1800,
     // Start with 0; enable later.
-    heartbeat: { every: "0m" }
+    heartbeat: { every: "0m" },
   },
   channels: {
     whatsapp: {
       allowFrom: ["+15555550123"],
       groups: {
-        "*": { requireMention: true }
-      }
-    }
+        "*": { requireMention: true },
+      },
+    },
   },
   routing: {
     groupChat: {
-      mentionPatterns: ["@openclaw", "openclaw"]
-    }
+      mentionPatterns: ["@openclaw", "openclaw"],
+    },
   },
   session: {
     scope: "per-sender",
@@ -163,9 +151,9 @@ Example:
     reset: {
       mode: "daily",
       atHour: 4,
-      idleMinutes: 10080
-    }
-  }
+      idleMinutes: 10080,
+    },
+  },
 }
 ```
 
@@ -190,14 +178,15 @@ Set `agents.defaults.heartbeat.every: "0m"` to disable.
 ```json5
 {
   agent: {
-    heartbeat: { every: "30m" }
-  }
+    heartbeat: { every: "30m" },
+  },
 }
 ```
 
 ## Media in and out
 
 Inbound attachments (images/audio/docs) can be surfaced to your command via templates:
+
 - `{{MediaPath}}` (local temp file path)
 - `{{MediaUrl}}` (pseudo-URL)
 - `{{Transcript}}` (if audio transcription is enabled)
@@ -206,7 +195,7 @@ Outbound attachments from the agent: include `MEDIA:<path-or-url>` on its own li
 
 ```
 Here’s the screenshot.
-MEDIA:/tmp/screenshot.png
+MEDIA:https://example.com/screenshot.png
 ```
 
 OpenClaw extracts these and sends them as media alongside the text.

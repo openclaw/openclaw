@@ -1,9 +1,9 @@
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
+import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
@@ -15,6 +15,7 @@ import {
 type GatewayAuthChoice = "token" | "password";
 
 const ANTHROPIC_OAUTH_MODEL_KEYS = [
+  "anthropic/claude-opus-4-6",
   "anthropic/claude-opus-4-5",
   "anthropic/claude-sonnet-4-5",
   "anthropic/claude-haiku-4-5",
@@ -28,7 +29,9 @@ export function buildGatewayAuthConfig(params: {
 }): GatewayAuthConfig | undefined {
   const allowTailscale = params.existing?.allowTailscale;
   const base: GatewayAuthConfig = {};
-  if (typeof allowTailscale === "boolean") base.allowTailscale = allowTailscale;
+  if (typeof allowTailscale === "boolean") {
+    base.allowTailscale = allowTailscale;
+  }
 
   if (params.mode === "token") {
     return { ...base, mode: "token", token: params.token };
@@ -79,7 +82,7 @@ export async function promptAuthConfig(
     config: next,
     prompter,
     allowedKeys: anthropicOAuth ? ANTHROPIC_OAUTH_MODEL_KEYS : undefined,
-    initialSelections: anthropicOAuth ? ["anthropic/claude-opus-4-5"] : undefined,
+    initialSelections: anthropicOAuth ? ["anthropic/claude-opus-4-6"] : undefined,
     message: anthropicOAuth ? "Anthropic OAuth models" : undefined,
   });
   if (allowlistSelection.models) {

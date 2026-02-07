@@ -1,11 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { FailoverReason } from "./pi-embedded-helpers.js";
 import {
-  isCircuitOpen,
-  recordFailure,
-  recordSuccess,
-  type CircuitBreakerConfig,
-} from "./circuit-breaker.js";
+  ensureAuthProfileStore,
+  isProfileInCooldown,
+  resolveAuthProfileOrder,
+} from "./auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   coerceToFailoverError,
@@ -14,33 +13,12 @@ import {
   isTimeoutError,
 } from "./failover-error.js";
 import {
+  buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
   modelKey,
-  parseModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
-
-const log = createSubsystemLogger("agent/failover");
-
-const MAX_BACKOFF_MS = 10_000;
-
-function computeBackoffMs(attempt: number, retryAfterSeconds?: number): number {
-  if (retryAfterSeconds !== undefined && retryAfterSeconds > 0) {
-    return Math.min(retryAfterSeconds * 1000, MAX_BACKOFF_MS);
-  }
-  return Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-import type { FailoverReason } from "./pi-embedded-helpers.js";
-import {
-  ensureAuthProfileStore,
-  isProfileInCooldown,
-  resolveAuthProfileOrder,
-} from "./auth-profiles.js";
 
 type ModelCandidate = {
   provider: string;
@@ -57,8 +35,12 @@ type FallbackAttempt = {
 };
 
 function isAbortError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  if (isFailoverError(err)) return false;
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  if (isFailoverError(err)) {
+    return false;
+  }
   const name = "name" in err ? String(err.name) : "";
   // Only treat explicit AbortError names as user aborts.
   // Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
@@ -67,24 +49,6 @@ function isAbortError(err: unknown): boolean {
 
 function shouldRethrowAbort(err: unknown): boolean {
   return isAbortError(err) && !isTimeoutError(err);
-}
-
-function buildAllowedModelKeys(
-  cfg: OpenClawConfig | undefined,
-  defaultProvider: string,
-): Set<string> | null {
-  const rawAllowlist = (() => {
-    const modelMap = cfg?.agents?.defaults?.models ?? {};
-    return Object.keys(modelMap);
-  })();
-  if (rawAllowlist.length === 0) return null;
-  const keys = new Set<string>();
-  for (const raw of rawAllowlist) {
-    const parsed = parseModelRef(String(raw ?? ""), defaultProvider);
-    if (!parsed) continue;
-    keys.add(modelKey(parsed.provider, parsed.model));
-  }
-  return keys.size > 0 ? keys : null;
 }
 
 function resolveImageFallbackCandidates(params: {
@@ -96,15 +60,24 @@ function resolveImageFallbackCandidates(params: {
     cfg: params.cfg ?? {},
     defaultProvider: params.defaultProvider,
   });
-  const allowlist = buildAllowedModelKeys(params.cfg, params.defaultProvider);
+  const allowlist = buildConfiguredAllowlistKeys({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
 
   const addCandidate = (candidate: ModelCandidate, enforceAllowlist: boolean) => {
-    if (!candidate.provider || !candidate.model) return;
+    if (!candidate.provider || !candidate.model) {
+      return;
+    }
     const key = modelKey(candidate.provider, candidate.model);
-    if (seen.has(key)) return;
-    if (enforceAllowlist && allowlist && !allowlist.has(key)) return;
+    if (seen.has(key)) {
+      return;
+    }
+    if (enforceAllowlist && allowlist && !allowlist.has(key)) {
+      return;
+    }
     seen.add(key);
     candidates.push(candidate);
   };
@@ -115,7 +88,9 @@ function resolveImageFallbackCandidates(params: {
       defaultProvider: params.defaultProvider,
       aliasIndex,
     });
-    if (!resolved) return;
+    if (!resolved) {
+      return;
+    }
     addCandidate(resolved.ref, enforceAllowlist);
   };
 
@@ -127,7 +102,9 @@ function resolveImageFallbackCandidates(params: {
       | string
       | undefined;
     const primary = typeof imageModel === "string" ? imageModel.trim() : imageModel?.primary;
-    if (primary?.trim()) addRaw(primary, false);
+    if (primary?.trim()) {
+      addRaw(primary, false);
+    }
   }
 
   const imageFallbacks = (() => {
@@ -170,15 +147,24 @@ function resolveFallbackCandidates(params: {
     cfg: params.cfg ?? {},
     defaultProvider,
   });
-  const allowlist = buildAllowedModelKeys(params.cfg, defaultProvider);
+  const allowlist = buildConfiguredAllowlistKeys({
+    cfg: params.cfg,
+    defaultProvider,
+  });
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
 
   const addCandidate = (candidate: ModelCandidate, enforceAllowlist: boolean) => {
-    if (!candidate.provider || !candidate.model) return;
+    if (!candidate.provider || !candidate.model) {
+      return;
+    }
     const key = modelKey(candidate.provider, candidate.model);
-    if (seen.has(key)) return;
-    if (enforceAllowlist && allowlist && !allowlist.has(key)) return;
+    if (seen.has(key)) {
+      return;
+    }
+    if (enforceAllowlist && allowlist && !allowlist.has(key)) {
+      return;
+    }
     seen.add(key);
     candidates.push(candidate);
   };
@@ -186,12 +172,16 @@ function resolveFallbackCandidates(params: {
   addCandidate({ provider, model }, false);
 
   const modelFallbacks = (() => {
-    if (params.fallbacksOverride !== undefined) return params.fallbacksOverride;
+    if (params.fallbacksOverride !== undefined) {
+      return params.fallbacksOverride;
+    }
     const model = params.cfg?.agents?.defaults?.model as
       | { fallbacks?: string[] }
       | string
       | undefined;
-    if (model && typeof model === "object") return model.fallbacks ?? [];
+    if (model && typeof model === "object") {
+      return model.fallbacks ?? [];
+    }
     return [];
   })();
 
@@ -201,7 +191,9 @@ function resolveFallbackCandidates(params: {
       defaultProvider,
       aliasIndex,
     });
-    if (!resolved) continue;
+    if (!resolved) {
+      continue;
+    }
     addCandidate(resolved.ref, true);
   }
 
@@ -244,26 +236,9 @@ export async function runWithModelFallback<T>(params: {
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
-  const cbConfig: CircuitBreakerConfig | undefined = (
-    params.cfg?.agents as Record<string, unknown> | undefined
-  )?.failover as CircuitBreakerConfig | undefined;
 
   for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i] as ModelCandidate;
-    const providerKey = candidate.provider;
-
-    // Circuit breaker check
-    if (isCircuitOpen(providerKey, cbConfig)) {
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: `Provider ${candidate.provider} circuit is open`,
-        reason: "rate_limit",
-      });
-      log.debug(`Skipping ${providerKey} (circuit open)`);
-      continue;
-    }
-
+    const candidate = candidates[i];
     if (authStore) {
       const profileIds = resolveAuthProfileOrder({
         cfg: params.cfg,
@@ -283,19 +258,8 @@ export async function runWithModelFallback<T>(params: {
         continue;
       }
     }
-
-    // Exponential backoff between retry attempts (skip delay for the first attempt)
-    if (i > 0) {
-      const prevNormalized = lastError;
-      const retryAfterSec = isFailoverError(prevNormalized) ? prevNormalized.retryAfter : undefined;
-      const delayMs = computeBackoffMs(i - 1, retryAfterSec);
-      log.debug(`Backoff ${delayMs}ms before attempt ${i + 1}/${candidates.length}`);
-      await sleep(delayMs);
-    }
-
     try {
       const result = await params.run(candidate.provider, candidate.model);
-      recordSuccess(providerKey, cbConfig);
       return {
         result,
         provider: candidate.provider,
@@ -303,15 +267,18 @@ export async function runWithModelFallback<T>(params: {
         attempts,
       };
     } catch (err) {
-      if (shouldRethrowAbort(err)) throw err;
+      if (shouldRethrowAbort(err)) {
+        throw err;
+      }
       const normalized =
         coerceToFailoverError(err, {
           provider: candidate.provider,
           model: candidate.model,
         }) ?? err;
-      if (!isFailoverError(normalized)) throw err;
+      if (!isFailoverError(normalized)) {
+        throw err;
+      }
 
-      recordFailure(providerKey, cbConfig);
       lastError = normalized;
       const described = describeFailoverError(normalized);
       attempts.push({
@@ -322,9 +289,6 @@ export async function runWithModelFallback<T>(params: {
         status: described.status,
         code: described.code,
       });
-      log.warn(
-        `Attempt ${i + 1}/${candidates.length} failed: ${candidate.provider}/${candidate.model} - ${described.reason ?? "unknown"}`,
-      );
       await params.onError?.({
         provider: candidate.provider,
         model: candidate.model,
@@ -335,7 +299,9 @@ export async function runWithModelFallback<T>(params: {
     }
   }
 
-  if (attempts.length <= 1 && lastError) throw lastError;
+  if (attempts.length <= 1 && lastError) {
+    throw lastError;
+  }
   const summary =
     attempts.length > 0
       ? attempts
@@ -384,7 +350,7 @@ export async function runWithImageModelFallback<T>(params: {
   let lastError: unknown;
 
   for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i] as ModelCandidate;
+    const candidate = candidates[i];
     try {
       const result = await params.run(candidate.provider, candidate.model);
       return {
@@ -394,7 +360,9 @@ export async function runWithImageModelFallback<T>(params: {
         attempts,
       };
     } catch (err) {
-      if (shouldRethrowAbort(err)) throw err;
+      if (shouldRethrowAbort(err)) {
+        throw err;
+      }
       lastError = err;
       attempts.push({
         provider: candidate.provider,
@@ -411,7 +379,9 @@ export async function runWithImageModelFallback<T>(params: {
     }
   }
 
-  if (attempts.length <= 1 && lastError) throw lastError;
+  if (attempts.length <= 1 && lastError) {
+    throw lastError;
+  }
   const summary =
     attempts.length > 0
       ? attempts

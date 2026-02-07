@@ -1,13 +1,12 @@
-import JSON5 from "json5";
 import type { Command } from "commander";
-
+import JSON5 from "json5";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { danger, info } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { formatCliCommand } from "./command-format.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
+import { formatCliCommand } from "./command-format.js";
 
 type PathSegment = string;
 
@@ -17,7 +16,9 @@ function isIndexSegment(raw: string): boolean {
 
 function parsePath(raw: string): PathSegment[] {
   const trimmed = raw.trim();
-  if (!trimmed) return [];
+  if (!trimmed) {
+    return [];
+  }
   const parts: string[] = [];
   let current = "";
   let i = 0;
@@ -25,23 +26,33 @@ function parsePath(raw: string): PathSegment[] {
     const ch = trimmed[i];
     if (ch === "\\") {
       const next = trimmed[i + 1];
-      if (next) current += next;
+      if (next) {
+        current += next;
+      }
       i += 2;
       continue;
     }
     if (ch === ".") {
-      if (current) parts.push(current);
+      if (current) {
+        parts.push(current);
+      }
       current = "";
       i += 1;
       continue;
     }
     if (ch === "[") {
-      if (current) parts.push(current);
+      if (current) {
+        parts.push(current);
+      }
       current = "";
       const close = trimmed.indexOf("]", i);
-      if (close === -1) throw new Error(`Invalid path (missing "]"): ${raw}`);
+      if (close === -1) {
+        throw new Error(`Invalid path (missing "]"): ${raw}`);
+      }
       const inside = trimmed.slice(i + 1, close).trim();
-      if (!inside) throw new Error(`Invalid path (empty "[]"): ${raw}`);
+      if (!inside) {
+        throw new Error(`Invalid path (empty "[]"): ${raw}`);
+      }
       parts.push(inside);
       i = close + 1;
       continue;
@@ -49,7 +60,9 @@ function parsePath(raw: string): PathSegment[] {
     current += ch;
     i += 1;
   }
-  if (current) parts.push(current);
+  if (current) {
+    parts.push(current);
+  }
   return parts.map((part) => part.trim()).filter(Boolean);
 }
 
@@ -59,7 +72,7 @@ function parseValue(raw: string, opts: { json?: boolean }): unknown {
     try {
       return JSON5.parse(trimmed);
     } catch (err) {
-      throw new Error(`Failed to parse JSON5 value: ${String(err)}`);
+      throw new Error(`Failed to parse JSON5 value: ${String(err)}`, { cause: err });
     }
   }
 
@@ -73,9 +86,13 @@ function parseValue(raw: string, opts: { json?: boolean }): unknown {
 function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?: unknown } {
   let current: unknown = root;
   for (const segment of path) {
-    if (!current || typeof current !== "object") return { found: false };
+    if (!current || typeof current !== "object") {
+      return { found: false };
+    }
     if (Array.isArray(current)) {
-      if (!isIndexSegment(segment)) return { found: false };
+      if (!isIndexSegment(segment)) {
+        return { found: false };
+      }
       const index = Number.parseInt(segment, 10);
       if (!Number.isFinite(index) || index < 0 || index >= current.length) {
         return { found: false };
@@ -84,7 +101,9 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
       continue;
     }
     const record = current as Record<string, unknown>;
-    if (!(segment in record)) return { found: false };
+    if (!(segment in record)) {
+      return { found: false };
+    }
     current = record[segment];
   }
   return { found: true, value: current };
@@ -138,37 +157,55 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolea
   let current: unknown = root;
   for (let i = 0; i < path.length - 1; i += 1) {
     const segment = path[i];
-    if (!current || typeof current !== "object") return false;
+    if (!current || typeof current !== "object") {
+      return false;
+    }
     if (Array.isArray(current)) {
-      if (!isIndexSegment(segment)) return false;
+      if (!isIndexSegment(segment)) {
+        return false;
+      }
       const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) return false;
+      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+        return false;
+      }
       current = current[index];
       continue;
     }
     const record = current as Record<string, unknown>;
-    if (!(segment in record)) return false;
+    if (!(segment in record)) {
+      return false;
+    }
     current = record[segment];
   }
 
   const last = path[path.length - 1];
   if (Array.isArray(current)) {
-    if (!isIndexSegment(last)) return false;
+    if (!isIndexSegment(last)) {
+      return false;
+    }
     const index = Number.parseInt(last, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= current.length) return false;
+    if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      return false;
+    }
     current.splice(index, 1);
     return true;
   }
-  if (!current || typeof current !== "object") return false;
+  if (!current || typeof current !== "object") {
+    return false;
+  }
   const record = current as Record<string, unknown>;
-  if (!(last in record)) return false;
+  if (!(last in record)) {
+    return false;
+  }
   delete record[last];
   return true;
 }
 
 async function loadValidConfig() {
   const snapshot = await readConfigFileSnapshot();
-  if (snapshot.valid) return snapshot;
+  if (snapshot.valid) {
+    return snapshot;
+  }
   defaultRuntime.error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
   for (const issue of snapshot.issues) {
     defaultRuntime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
@@ -264,7 +301,9 @@ export function registerConfigCli(program: Command) {
     .action(async (path: string, value: string, opts) => {
       try {
         const parsedPath = parsePath(path);
-        if (parsedPath.length === 0) throw new Error("Path is empty.");
+        if (parsedPath.length === 0) {
+          throw new Error("Path is empty.");
+        }
         const parsedValue = parseValue(value, opts);
         const snapshot = await loadValidConfig();
         const next = snapshot.config as Record<string, unknown>;
@@ -284,7 +323,9 @@ export function registerConfigCli(program: Command) {
     .action(async (path: string) => {
       try {
         const parsedPath = parsePath(path);
-        if (parsedPath.length === 0) throw new Error("Path is empty.");
+        if (parsedPath.length === 0) {
+          throw new Error("Path is empty.");
+        }
         const snapshot = await loadValidConfig();
         const next = snapshot.config as Record<string, unknown>;
         const removed = unsetAtPath(next, parsedPath);

@@ -3,6 +3,8 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { MsgContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
+import type { createModelSelectionState } from "./model-selection.js";
+import type { TypingController } from "./typing.js";
 import { buildStatusReply } from "./commands.js";
 import {
   applyInlineDirectivesFastLane,
@@ -11,8 +13,6 @@ import {
   isDirectiveOnly,
   persistInlineDirectives,
 } from "./directive-handling.js";
-import type { createModelSelectionState } from "./model-selection.js";
-import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 
@@ -183,6 +183,7 @@ export async function applyInlineDirectiveOverrides(params: {
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
+      surface: ctx.Surface,
     });
     let statusReply: ReplyPayload | undefined;
     if (directives.hasStatusDirective && allowTextCommands && command.isAuthorizedSender) {
@@ -196,8 +197,8 @@ export async function applyInlineDirectiveOverrides(params: {
         model,
         contextTokens,
         resolvedThinkLevel: resolvedDefaultThinkLevel,
-        resolvedVerboseLevel: (currentVerboseLevel ?? "off") as VerboseLevel,
-        resolvedReasoningLevel: (currentReasoningLevel ?? "off") as ReasoningLevel,
+        resolvedVerboseLevel: currentVerboseLevel ?? "off",
+        resolvedReasoningLevel: currentReasoningLevel ?? "off",
         resolvedElevatedLevel,
         resolveDefaultThinkingLevel: async () => resolvedDefaultThinkLevel,
         isGroup,

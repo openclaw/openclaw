@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import {
   formatChannelSelectionLine,
   listChatChannels,
@@ -27,7 +26,9 @@ describe("channel registry", () => {
   it("formats selection lines with docs labels", () => {
     const channels = listChatChannels();
     const first = channels[0];
-    if (!first) throw new Error("Missing channel metadata.");
+    if (!first) {
+      throw new Error("Missing channel metadata.");
+    }
     const line = formatChannelSelectionLine(first, (path, label) =>
       [label, path].filter(Boolean).join(":"),
     );

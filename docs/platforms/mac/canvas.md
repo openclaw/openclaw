@@ -4,7 +4,9 @@ read_when:
   - Implementing the macOS Canvas panel
   - Adding agent controls for visual workspace
   - Debugging WKWebView canvas loads
+title: "Canvas"
 ---
+
 # Canvas (macOS app)
 
 The macOS app embeds an agent‑controlled **Canvas panel** using `WKWebView`. It
@@ -22,6 +24,7 @@ The Canvas panel serves those files via a **custom URL scheme**:
 - `openclaw-canvas://<session>/<path>`
 
 Examples:
+
 - `openclaw-canvas://main/` → `<canvasRoot>/main/index.html`
 - `openclaw-canvas://main/assets/app.css` → `<canvasRoot>/main/assets/app.css`
 - `openclaw-canvas://main/widgets/todo/` → `<canvasRoot>/main/widgets/todo/index.html`
@@ -57,6 +60,7 @@ openclaw nodes canvas snapshot --node <id>
 ```
 
 Notes:
+
 - `canvas.navigate` accepts **local canvas paths**, `http(s)` URLs, and `file://` URLs.
 - If you pass `"/"`, the Canvas shows the local scaffold or `index.html`.
 

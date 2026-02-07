@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { AuthChoice } from "./onboard-types.js";
 import { applyAuthChoiceAnthropic } from "./auth-choice.apply.anthropic.js";
 import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
 import { applyAuthChoiceCopilotProxy } from "./auth-choice.apply.copilot-proxy.js";
@@ -11,7 +12,7 @@ import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
 import { applyAuthChoiceOAuth } from "./auth-choice.apply.oauth.js";
 import { applyAuthChoiceOpenAI } from "./auth-choice.apply.openai.js";
 import { applyAuthChoiceQwenPortal } from "./auth-choice.apply.qwen-portal.js";
-import type { AuthChoice } from "./onboard-types.js";
+import { applyAuthChoiceXAI } from "./auth-choice.apply.xai.js";
 
 export type ApplyAuthChoiceParams = {
   authChoice: AuthChoice;
@@ -24,6 +25,10 @@ export type ApplyAuthChoiceParams = {
   opts?: {
     tokenProvider?: string;
     token?: string;
+    cloudflareAiGatewayAccountId?: string;
+    cloudflareAiGatewayGatewayId?: string;
+    cloudflareAiGatewayApiKey?: string;
+    xaiApiKey?: string;
   };
 };
 
@@ -46,11 +51,14 @@ export async function applyAuthChoice(
     applyAuthChoiceGoogleGeminiCli,
     applyAuthChoiceCopilotProxy,
     applyAuthChoiceQwenPortal,
+    applyAuthChoiceXAI,
   ];
 
   for (const handler of handlers) {
     const result = await handler(params);
-    if (result) return result;
+    if (result) {
+      return result;
+    }
   }
 
   return { config: params.config };

@@ -10,7 +10,9 @@ export function isWSLEnv(): boolean {
 }
 
 export async function isWSL(): Promise<boolean> {
-  if (wslCached !== null) return wslCached;
+  if (wslCached !== null) {
+    return wslCached;
+  }
   if (isWSLEnv()) {
     wslCached = true;
     return wslCached;

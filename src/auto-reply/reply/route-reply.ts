@@ -7,13 +7,13 @@
  * across multiple providers.
  */
 
+import type { OpenClawConfig } from "../../config/config.js";
+import type { OriginatingChannelType } from "../templating.js";
+import type { ReplyPayload } from "../types.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import type { OriginatingChannelType } from "../templating.js";
-import type { ReplyPayload } from "../types.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 
 export type RouteReplyParams = {
@@ -56,6 +56,7 @@ export type RouteReplyResult = {
  */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
+  const normalizedChannel = normalizeMessageChannel(channel);
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
   const responsePrefix = params.sessionKey
@@ -65,6 +66,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
           sessionKey: params.sessionKey,
           config: cfg,
         }),
+        { channel: normalizedChannel, accountId },
       ).responsePrefix
     : cfg.messages?.responsePrefix === "auto"
       ? undefined
@@ -72,7 +74,9 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
   });
-  if (!normalized) return { ok: true };
+  if (!normalized) {
+    return { ok: true };
+  }
 
   let text = normalized.text ?? "";
   let mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
@@ -151,6 +155,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 export function isRoutableChannel(
   channel: OriginatingChannelType | undefined,
 ): channel is Exclude<OriginatingChannelType, typeof INTERNAL_MESSAGE_CHANNEL> {
-  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) return false;
+  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
+    return false;
+  }
   return normalizeChannelId(channel) !== null;
 }

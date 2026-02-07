@@ -1,5 +1,5 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-
+import type { CoreConfig } from "../types.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import { getActiveMatrixClient } from "../active-client.js";
 import {
@@ -8,7 +8,6 @@ import {
   resolveMatrixAuth,
   resolveSharedMatrixClient,
 } from "../client.js";
-import type { CoreConfig } from "../types.js";
 
 const getCore = () => getMatrixRuntime();
 
@@ -31,9 +30,13 @@ export async function resolveMatrixClient(opts: {
   timeoutMs?: number;
 }): Promise<{ client: MatrixClient; stopOnDone: boolean }> {
   ensureNodeRuntime();
-  if (opts.client) return { client: opts.client, stopOnDone: false };
+  if (opts.client) {
+    return { client: opts.client, stopOnDone: false };
+  }
   const active = getActiveMatrixClient();
-  if (active) return { client: active, stopOnDone: false };
+  if (active) {
+    return { client: active, stopOnDone: false };
+  }
   const shouldShareClient = Boolean(process.env.OPENCLAW_GATEWAY_PORT);
   if (shouldShareClient) {
     const client = await resolveSharedMatrixClient({

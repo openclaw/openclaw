@@ -9,8 +9,10 @@ export type ResolvedCliBackend = {
 
 const CLAUDE_MODEL_ALIASES: Record<string, string> = {
   opus: "opus",
+  "opus-4.6": "opus",
   "opus-4.5": "opus",
   "opus-4": "opus",
+  "claude-opus-4-6": "opus",
   "claude-opus-4-5": "opus",
   "claude-opus-4": "opus",
   sonnet: "sonnet",
@@ -83,13 +85,17 @@ function pickBackendConfig(
   normalizedId: string,
 ): CliBackendConfig | undefined {
   for (const [key, entry] of Object.entries(config)) {
-    if (normalizeBackendKey(key) === normalizedId) return entry;
+    if (normalizeBackendKey(key) === normalizedId) {
+      return entry;
+    }
   }
   return undefined;
 }
 
 function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig): CliBackendConfig {
-  if (!override) return { ...base };
+  if (!override) {
+    return { ...base };
+  }
   return {
     ...base,
     ...override,
@@ -126,18 +132,26 @@ export function resolveCliBackendConfig(
   if (normalized === "claude-cli") {
     const merged = mergeBackendConfig(DEFAULT_CLAUDE_BACKEND, override);
     const command = merged.command?.trim();
-    if (!command) return null;
+    if (!command) {
+      return null;
+    }
     return { id: normalized, config: { ...merged, command } };
   }
   if (normalized === "codex-cli") {
     const merged = mergeBackendConfig(DEFAULT_CODEX_BACKEND, override);
     const command = merged.command?.trim();
-    if (!command) return null;
+    if (!command) {
+      return null;
+    }
     return { id: normalized, config: { ...merged, command } };
   }
 
-  if (!override) return null;
+  if (!override) {
+    return null;
+  }
   const command = override.command?.trim();
-  if (!command) return null;
+  if (!command) {
+    return null;
+  }
   return { id: normalized, config: { ...override, command } };
 }

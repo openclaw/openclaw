@@ -1,6 +1,5 @@
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
-
 import { isCacheEnabled, resolveCacheTtlMs } from "../../config/cache-utils.js";
 
 type SessionManagerCacheEntry = {
@@ -23,7 +22,9 @@ function isSessionManagerCacheEnabled(): boolean {
 }
 
 export function trackSessionManagerAccess(sessionFile: string): void {
-  if (!isSessionManagerCacheEnabled()) return;
+  if (!isSessionManagerCacheEnabled()) {
+    return;
+  }
   const now = Date.now();
   SESSION_MANAGER_CACHE.set(sessionFile, {
     sessionFile,
@@ -32,17 +33,25 @@ export function trackSessionManagerAccess(sessionFile: string): void {
 }
 
 function isSessionManagerCached(sessionFile: string): boolean {
-  if (!isSessionManagerCacheEnabled()) return false;
+  if (!isSessionManagerCacheEnabled()) {
+    return false;
+  }
   const entry = SESSION_MANAGER_CACHE.get(sessionFile);
-  if (!entry) return false;
+  if (!entry) {
+    return false;
+  }
   const now = Date.now();
   const ttl = getSessionManagerTtl();
   return now - entry.loadedAt <= ttl;
 }
 
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
-  if (!isSessionManagerCacheEnabled()) return;
-  if (isSessionManagerCached(sessionFile)) return;
+  if (!isSessionManagerCacheEnabled()) {
+    return;
+  }
+  if (isSessionManagerCached(sessionFile)) {
+    return;
+  }
 
   try {
     // Read a small chunk to encourage OS page cache warmup.

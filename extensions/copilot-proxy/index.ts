@@ -11,6 +11,7 @@ const DEFAULT_MODEL_IDS = [
   "gpt-5.1-codex",
   "gpt-5.1-codex-max",
   "gpt-5-mini",
+  "claude-opus-4.6",
   "claude-opus-4.5",
   "claude-sonnet-4.5",
   "claude-haiku-4.5",
@@ -21,10 +22,16 @@ const DEFAULT_MODEL_IDS = [
 
 function normalizeBaseUrl(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) return DEFAULT_BASE_URL;
+  if (!trimmed) {
+    return DEFAULT_BASE_URL;
+  }
   let normalized = trimmed;
-  while (normalized.endsWith("/")) normalized = normalized.slice(0, -1);
-  if (!normalized.endsWith("/v1")) normalized = `${normalized}/v1`;
+  while (normalized.endsWith("/")) {
+    normalized = normalized.slice(0, -1);
+  }
+  if (!normalized.endsWith("/v1")) {
+    normalized = `${normalized}/v1`;
+  }
   return normalized;
 }
 

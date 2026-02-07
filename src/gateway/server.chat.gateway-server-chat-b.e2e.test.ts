@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import {
   connectOk,
   getReplyFromConfig,
@@ -14,12 +15,13 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
-import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 installGatewayTestHooks({ scope: "suite" });
 async function waitFor(condition: () => boolean, timeoutMs = 1500) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (condition()) return;
+    if (condition()) {
+      return;
+    }
     await new Promise((r) => setTimeout(r, 5));
   }
   throw new Error("timeout waiting for condition");
@@ -111,9 +113,10 @@ describe("gateway server chat", () => {
           idempotencyKey: "idem-route",
         });
         expect(routeRes.ok).toBe(true);
-        const stored = JSON.parse(
-          await fs.readFile(testState.sessionStorePath as string, "utf-8"),
-        ) as Record<string, { lastChannel?: string; lastTo?: string } | undefined>;
+        const stored = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
+          string,
+          { lastChannel?: string; lastTo?: string } | undefined
+        >;
         expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
         expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
 
@@ -126,8 +129,12 @@ describe("gateway server chat", () => {
             opts?.onAgentRunStart?.(opts.runId ?? "idem-abort-1");
             const signal = opts?.abortSignal;
             await new Promise<void>((resolve) => {
-              if (!signal) return resolve();
-              if (signal.aborted) return resolve();
+              if (!signal) {
+                return resolve();
+              }
+              if (signal.aborted) {
+                return resolve();
+              }
               signal.addEventListener("abort", () => resolve(), { once: true });
             });
           });
@@ -154,9 +161,12 @@ describe("gateway server chat", () => {
           await new Promise<void>((resolve, reject) => {
             const deadline = Date.now() + 1000;
             const tick = () => {
-              if (spy.mock.calls.length > callsBefore) return resolve();
-              if (Date.now() > deadline)
+              if (spy.mock.calls.length > callsBefore) {
+                return resolve();
+              }
+              if (Date.now() > deadline) {
                 return reject(new Error("timeout waiting for getReplyFromConfig"));
+              }
               setTimeout(tick, 5);
             };
             tick();
@@ -182,8 +192,12 @@ describe("gateway server chat", () => {
             opts?.onAgentRunStart?.(opts.runId ?? "idem-abort-save-1");
             const signal = opts?.abortSignal;
             await new Promise<void>((resolve) => {
-              if (!signal) return resolve();
-              if (signal.aborted) return resolve();
+              if (!signal) {
+                return resolve();
+              }
+              if (signal.aborted) {
+                return resolve();
+              }
               signal.addEventListener("abort", () => resolve(), { once: true });
             });
           });
@@ -221,8 +235,12 @@ describe("gateway server chat", () => {
           opts?.onAgentRunStart?.(opts.runId ?? "idem-stop-1");
           const signal = opts?.abortSignal;
           await new Promise<void>((resolve) => {
-            if (!signal) return resolve();
-            if (signal.aborted) return resolve();
+            if (!signal) {
+              return resolve();
+            }
+            if (signal.aborted) {
+              return resolve();
+            }
             signal.addEventListener("abort", () => resolve(), { once: true });
           });
         });
@@ -302,8 +320,12 @@ describe("gateway server chat", () => {
           opts?.onAgentRunStart?.(opts.runId ?? "idem-abort-all-1");
           const signal = opts?.abortSignal;
           await new Promise<void>((resolve) => {
-            if (!signal) return resolve();
-            if (signal.aborted) return resolve();
+            if (!signal) {
+              return resolve();
+            }
+            if (signal.aborted) {
+              return resolve();
+            }
             signal.addEventListener("abort", () => resolve(), { once: true });
           });
         });
@@ -368,8 +390,12 @@ describe("gateway server chat", () => {
           agentStartedResolve?.();
           const signal = opts?.abortSignal;
           await new Promise<void>((resolve) => {
-            if (!signal) return resolve();
-            if (signal.aborted) return resolve();
+            if (!signal) {
+              return resolve();
+            }
+            if (signal.aborted) {
+              return resolve();
+            }
             signal.addEventListener("abort", () => resolve(), { once: true });
           });
         });

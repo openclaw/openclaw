@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { RunEmbeddedPiAgentParams } from "./run/params.js";
+import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
@@ -17,12 +18,7 @@ import {
   resolveContextWindowInfo,
 } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import {
-  FailoverError,
-  parseRetryAfter,
-  parseRetryAfterFromMessage,
-  resolveFailoverStatus,
-} from "../failover-error.js";
+import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import {
   ensureAuthProfileStore,
   getApiKeyForModel,
@@ -32,9 +28,11 @@ import {
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
+  BILLING_ERROR_USER_MESSAGE,
   classifyFailoverReason,
   formatAssistantErrorText,
   isAuthAssistantError,
+  isBillingAssistantError,
   isCompactionFailureError,
   isContextOverflowError,
   isFailoverAssistantError,
@@ -47,15 +45,13 @@ import {
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
-
+import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
 import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
-import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
-import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -65,7 +61,9 @@ const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_R
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
 
 function scrubAnthropicRefusalMagic(prompt: string): string {
-  if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) return prompt;
+  if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
+    return prompt;
+  }
   return prompt.replaceAll(
     ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL,
     ANTHROPIC_MAGIC_STRING_REPLACEMENT,
@@ -94,7 +92,21 @@ export async function runEmbeddedPiAgent(
   return enqueueSession(() =>
     enqueueGlobal(async () => {
       const started = Date.now();
-      const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+      const workspaceResolution = resolveRunWorkspaceDir({
+        workspaceDir: params.workspaceDir,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
+        config: params.config,
+      });
+      const resolvedWorkspace = workspaceResolution.workspaceDir;
+      const redactedSessionId = redactRunIdentifier(params.sessionId);
+      const redactedSessionKey = redactRunIdentifier(params.sessionKey);
+      const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
+      if (workspaceResolution.usedFallback) {
+        log.warn(
+          `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
+        );
+      }
       const prevCwd = process.cwd();
 
       const provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
@@ -179,7 +191,9 @@ export async function runEmbeddedPiAgent(
         allInCooldown: boolean;
         message: string;
       }): FailoverReason => {
-        if (params.allInCooldown) return "rate_limit";
+        if (params.allInCooldown) {
+          return "rate_limit";
+        }
         const classified = classifyFailoverReason(params.message);
         return classified ?? "auth";
       };
@@ -207,7 +221,9 @@ export async function runEmbeddedPiAgent(
             cause: params.error,
           });
         }
-        if (params.error instanceof Error) throw params.error;
+        if (params.error instanceof Error) {
+          throw params.error;
+        }
         throw new Error(message);
       };
 
@@ -247,7 +263,9 @@ export async function runEmbeddedPiAgent(
       };
 
       const advanceAuthProfile = async (): Promise<boolean> => {
-        if (lockedProfileId) return false;
+        if (lockedProfileId) {
+          return false;
+        }
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
@@ -262,7 +280,9 @@ export async function runEmbeddedPiAgent(
             attemptedThinking.clear();
             return true;
           } catch (err) {
-            if (candidate && candidate === lockedProfileId) throw err;
+            if (candidate && candidate === lockedProfileId) {
+              throw err;
+            }
             nextIndex += 1;
           }
         }
@@ -287,7 +307,9 @@ export async function runEmbeddedPiAgent(
           throwAuthProfileFailover({ allInCooldown: true });
         }
       } catch (err) {
-        if (err instanceof FailoverError) throw err;
+        if (err instanceof FailoverError) {
+          throw err;
+        }
         if (profileCandidates[profileIndex] === lockedProfileId) {
           throwAuthProfileFailover({ allInCooldown: false, error: err });
         }
@@ -297,15 +319,8 @@ export async function runEmbeddedPiAgent(
         }
       }
 
-      // Same-provider retry for rate limit (after failover exhausted)
-      // Max 3 total attempts (original + 2 retries), min 60s between retries
-      const MAX_RATE_LIMIT_RETRIES = 2;
-      const MIN_RATE_LIMIT_DELAY_S = 60;
-      const DEFAULT_RATE_LIMIT_DELAY_S = 60;
-      const MAX_RATE_LIMIT_DELAY_S = 120;
-      let rateLimitRetryCount = 0;
-
-      let overflowCompactionAttempted = false;
+      const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+      let overflowCompactionAttempts = 0;
       try {
         while (true) {
           attemptedThinking.add(thinkLevel);
@@ -326,12 +341,13 @@ export async function runEmbeddedPiAgent(
             groupChannel: params.groupChannel,
             groupSpace: params.groupSpace,
             spawnedBy: params.spawnedBy,
+            senderIsOwner: params.senderIsOwner,
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: params.sessionFile,
-            workspaceDir: params.workspaceDir,
+            workspaceDir: resolvedWorkspace,
             agentDir,
             config: params.config,
             skillsSnapshot: params.skillsSnapshot,
@@ -343,6 +359,7 @@ export async function runEmbeddedPiAgent(
             model,
             authStorage,
             modelRegistry,
+            agentId: workspaceResolution.agentId,
             thinkLevel,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
@@ -374,13 +391,23 @@ export async function runEmbeddedPiAgent(
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
             if (isContextOverflowError(errorText)) {
+              const msgCount = attempt.messagesSnapshot?.length ?? 0;
+              log.warn(
+                `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                  `provider=${provider}/${modelId} messages=${msgCount} ` +
+                  `sessionFile=${params.sessionFile} compactionAttempts=${overflowCompactionAttempts} ` +
+                  `error=${errorText.slice(0, 200)}`,
+              );
               const isCompactionFailure = isCompactionFailureError(errorText);
               // Attempt auto-compaction on context overflow (not compaction_failure)
-              if (!isCompactionFailure && !overflowCompactionAttempted) {
+              if (
+                !isCompactionFailure &&
+                overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
+              ) {
+                overflowCompactionAttempts++;
                 log.warn(
-                  `context overflow detected; attempting auto-compaction for ${provider}/${modelId}`,
+                  `context overflow detected (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${provider}/${modelId}`,
                 );
-                overflowCompactionAttempted = true;
                 const compactResult = await compactEmbeddedPiSessionDirect({
                   sessionId: params.sessionId,
                   sessionKey: params.sessionKey,
@@ -389,10 +416,11 @@ export async function runEmbeddedPiAgent(
                   agentAccountId: params.agentAccountId,
                   authProfileId: lastProfileId,
                   sessionFile: params.sessionFile,
-                  workspaceDir: params.workspaceDir,
+                  workspaceDir: resolvedWorkspace,
                   agentDir,
                   config: params.config,
                   skillsSnapshot: params.skillsSnapshot,
+                  senderIsOwner: params.senderIsOwner,
                   provider,
                   model: modelId,
                   thinkLevel,
@@ -499,24 +527,6 @@ export async function runEmbeddedPiAgent(
             ) {
               continue;
             }
-            // Same-provider retry for rate limit when failover is unavailable
-            if (
-              promptFailoverReason === "rate_limit" &&
-              rateLimitRetryCount < MAX_RATE_LIMIT_RETRIES
-            ) {
-              rateLimitRetryCount++;
-              const parsedDelay =
-                parseRetryAfter(promptError) ?? parseRetryAfterFromMessage(errorText);
-              const delaySeconds = Math.max(
-                MIN_RATE_LIMIT_DELAY_S,
-                Math.min(parsedDelay ?? DEFAULT_RATE_LIMIT_DELAY_S, MAX_RATE_LIMIT_DELAY_S),
-              );
-              log.warn(
-                `rate limit hit for ${provider}/${modelId}; retrying same provider in ${delaySeconds}s (attempt ${rateLimitRetryCount}/${MAX_RATE_LIMIT_RETRIES})`,
-              );
-              await new Promise((resolve) => setTimeout(resolve, delaySeconds * 1000));
-              continue;
-            }
             const fallbackThinking = pickFallbackThinkingLevel({
               message: errorText,
               attempted: attemptedThinking,
@@ -556,6 +566,7 @@ export async function runEmbeddedPiAgent(
 
           const authFailure = isAuthAssistantError(lastAssistant);
           const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
+          const billingFailure = isBillingAssistantError(lastAssistant);
           const failoverFailure = isFailoverAssistantError(lastAssistant);
           const assistantFailoverReason = classifyFailoverReason(lastAssistant?.errorMessage ?? "");
           const cloudCodeAssistFormatError = attempt.cloudCodeAssistFormatError;
@@ -609,23 +620,7 @@ export async function runEmbeddedPiAgent(
             }
 
             const rotated = await advanceAuthProfile();
-            if (rotated) continue;
-
-            // Same-provider retry for rate limit when rotation/failover is unavailable
-            if (
-              (rateLimitFailure || assistantFailoverReason === "rate_limit") &&
-              rateLimitRetryCount < MAX_RATE_LIMIT_RETRIES
-            ) {
-              rateLimitRetryCount++;
-              const parsedDelay = parseRetryAfterFromMessage(lastAssistant?.errorMessage ?? "");
-              const delaySeconds = Math.max(
-                MIN_RATE_LIMIT_DELAY_S,
-                Math.min(parsedDelay ?? DEFAULT_RATE_LIMIT_DELAY_S, MAX_RATE_LIMIT_DELAY_S),
-              );
-              log.warn(
-                `rate limit hit for ${provider}/${modelId}; retrying same provider in ${delaySeconds}s (attempt ${rateLimitRetryCount}/${MAX_RATE_LIMIT_RETRIES})`,
-              );
-              await new Promise((resolve) => setTimeout(resolve, delaySeconds * 1000));
+            if (rotated) {
               continue;
             }
 
@@ -643,9 +638,11 @@ export async function runEmbeddedPiAgent(
                   ? "LLM request timed out."
                   : rateLimitFailure
                     ? "LLM request rate limited."
-                    : authFailure
-                      ? "LLM request unauthorized."
-                      : "LLM request failed.");
+                    : billingFailure
+                      ? BILLING_ERROR_USER_MESSAGE
+                      : authFailure
+                        ? "LLM request unauthorized."
+                        : "LLM request failed.");
               const status =
                 resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
                 (isTimeoutErrorMessage(message) ? 408 : undefined);

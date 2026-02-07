@@ -1,18 +1,20 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
+import { buildBootstrapContextFiles, resolveBootstrapMaxChars } from "./pi-embedded-helpers.js";
 import {
   filterBootstrapFilesForSession,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
-import { buildBootstrapContextFiles, resolveBootstrapMaxChars } from "./pi-embedded-helpers.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 
 export function makeBootstrapWarn(params: {
   sessionLabel: string;
   warn?: (message: string) => void;
 }): ((message: string) => void) | undefined {
-  if (!params.warn) return undefined;
+  if (!params.warn) {
+    return undefined;
+  }
   return (message: string) => params.warn?.(`${message} (sessionKey=${params.sessionLabel})`);
 }
 

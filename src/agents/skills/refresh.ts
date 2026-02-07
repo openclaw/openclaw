@@ -1,7 +1,5 @@
-import path from "node:path";
-
 import chokidar, { type FSWatcher } from "chokidar";
-
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
@@ -92,14 +90,18 @@ export function bumpSkillsSnapshotVersion(params?: {
 }
 
 export function getSkillsSnapshotVersion(workspaceDir?: string): number {
-  if (!workspaceDir) return globalVersion;
+  if (!workspaceDir) {
+    return globalVersion;
+  }
   const local = workspaceVersions.get(workspaceDir) ?? 0;
   return Math.max(globalVersion, local);
 }
 
 export function ensureSkillsWatcher(params: { workspaceDir: string; config?: OpenClawConfig }) {
   const workspaceDir = params.workspaceDir.trim();
-  if (!workspaceDir) return;
+  if (!workspaceDir) {
+    return;
+  }
   const watchEnabled = params.config?.skills?.load?.watch !== false;
   const debounceMsRaw = params.config?.skills?.load?.watchDebounceMs;
   const debounceMs =
@@ -111,7 +113,9 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   if (!watchEnabled) {
     if (existing) {
       watchers.delete(workspaceDir);
-      if (existing.timer) clearTimeout(existing.timer);
+      if (existing.timer) {
+        clearTimeout(existing.timer);
+      }
       void existing.watcher.close().catch(() => {});
     }
     return;
@@ -124,7 +128,9 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   }
   if (existing) {
     watchers.delete(workspaceDir);
-    if (existing.timer) clearTimeout(existing.timer);
+    if (existing.timer) {
+      clearTimeout(existing.timer);
+    }
     void existing.watcher.close().catch(() => {});
   }
 
@@ -143,7 +149,9 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
 
   const schedule = (changedPath?: string) => {
     state.pendingPath = changedPath ?? state.pendingPath;
-    if (state.timer) clearTimeout(state.timer);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
     state.timer = setTimeout(() => {
       const pendingPath = state.pendingPath;
       state.pendingPath = undefined;

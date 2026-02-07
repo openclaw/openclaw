@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
 import { loadDotEnv } from "./dotenv.js";
 
 async function writeEnvFile(filePath: string, contents: string) {
@@ -36,11 +34,16 @@ describe("loadDotEnv", () => {
 
     process.chdir(prevCwd);
     for (const key of Object.keys(process.env)) {
-      if (!(key in prevEnv)) delete process.env[key];
+      if (!(key in prevEnv)) {
+        delete process.env[key];
+      }
     }
     for (const [key, value] of Object.entries(prevEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   });
 
@@ -66,11 +69,16 @@ describe("loadDotEnv", () => {
 
     process.chdir(prevCwd);
     for (const key of Object.keys(process.env)) {
-      if (!(key in prevEnv)) delete process.env[key];
+      if (!(key in prevEnv)) {
+        delete process.env[key];
+      }
     }
     for (const [key, value] of Object.entries(prevEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   });
 });

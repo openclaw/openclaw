@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { createOpenClawCodingTools } from "./pi-tools.js";
 import type { SandboxDockerConfig } from "./sandbox.js";
+import { createOpenClawCodingTools } from "./pi-tools.js";
 
 describe("Agent-specific tool filtering", () => {
   it("should apply global tool policy when no agent-specific policy exists", () => {
@@ -148,7 +148,7 @@ describe("Agent-specific tool filtering", () => {
       workspaceDir: "/tmp/test-provider",
       agentDir: "/tmp/agent-provider",
       modelProvider: "google-antigravity",
-      modelId: "claude-opus-4-5-thinking",
+      modelId: "claude-opus-4-6-thinking",
     });
 
     const toolNames = tools.map((t) => t.name);
@@ -176,7 +176,7 @@ describe("Agent-specific tool filtering", () => {
       workspaceDir: "/tmp/test-provider-profile",
       agentDir: "/tmp/agent-provider-profile",
       modelProvider: "google-antigravity",
-      modelId: "claude-opus-4-5-thinking",
+      modelId: "claude-opus-4-6-thinking",
     });
 
     const toolNames = tools.map((t) => t.name);

@@ -1,9 +1,8 @@
 import { html, nothing } from "lit";
-
-import { formatAgo } from "../format";
-import type { SignalStatus } from "../types";
-import type { ChannelsProps } from "./channels.types";
-import { renderChannelConfigSection } from "./channels.config";
+import type { SignalStatus } from "../types.ts";
+import type { ChannelsProps } from "./channels.types.ts";
+import { formatAgo } from "../format.ts";
+import { renderChannelConfigSection } from "./channels.config.ts";
 
 export function renderSignalCard(params: {
   props: ChannelsProps;
@@ -41,18 +40,22 @@ export function renderSignalCard(params: {
         </div>
       </div>
 
-      ${signal?.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">
+      ${
+        signal?.lastError
+          ? html`<div class="callout danger" style="margin-top: 12px;">
             ${signal.lastError}
           </div>`
-        : nothing}
+          : nothing
+      }
 
-      ${signal?.probe
-        ? html`<div class="callout" style="margin-top: 12px;">
+      ${
+        signal?.probe
+          ? html`<div class="callout" style="margin-top: 12px;">
             Probe ${signal.probe.ok ? "ok" : "failed"} ·
             ${signal.probe.status ?? ""} ${signal.probe.error ?? ""}
           </div>`
-        : nothing}
+          : nothing
+      }
 
       ${renderChannelConfigSection({ channelId: "signal", props })}
 

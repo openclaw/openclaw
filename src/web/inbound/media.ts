@@ -1,11 +1,11 @@
 import type { proto, WAMessage } from "@whiskeysockets/baileys";
 import { downloadMediaMessage, normalizeMessageContent } from "@whiskeysockets/baileys";
-import { logVerbose } from "../../globals.js";
 import type { createWaSocket } from "../session.js";
+import { logVerbose } from "../../globals.js";
 
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
-  const normalized = normalizeMessageContent(message as proto.IMessage | undefined);
-  return normalized as proto.IMessage | undefined;
+  const normalized = normalizeMessageContent(message);
+  return normalized;
 }
 
 export async function downloadInboundMedia(
@@ -13,7 +13,9 @@ export async function downloadInboundMedia(
   sock: Awaited<ReturnType<typeof createWaSocket>>,
 ): Promise<{ buffer: Buffer; mimetype?: string } | undefined> {
   const message = unwrapMessage(msg.message as proto.IMessage | undefined);
-  if (!message) return undefined;
+  if (!message) {
+    return undefined;
+  }
   const mimetype =
     message.imageMessage?.mimetype ??
     message.videoMessage?.mimetype ??
@@ -31,7 +33,7 @@ export async function downloadInboundMedia(
     return undefined;
   }
   try {
-    const buffer = (await downloadMediaMessage(
+    const buffer = await downloadMediaMessage(
       msg as WAMessage,
       "buffer",
       {},
@@ -39,7 +41,7 @@ export async function downloadInboundMedia(
         reuploadRequest: sock.updateMediaMessage,
         logger: sock.logger,
       },
-    )) as Buffer;
+    );
     return { buffer, mimetype };
   } catch (err) {
     logVerbose(`downloadMediaMessage failed: ${String(err)}`);

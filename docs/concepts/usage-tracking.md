@@ -3,14 +3,18 @@ summary: "Usage tracking surfaces and credential requirements"
 read_when:
   - You are wiring provider usage/quota surfaces
   - You need to explain usage tracking behavior or auth requirements
+title: "Usage Tracking"
 ---
+
 # Usage tracking
 
 ## What it is
+
 - Pulls provider usage/quota directly from their usage endpoints.
 - No estimated costs; only the provider-reported windows.
 
 ## Where it shows up
+
 - `/status` in chats: emoji‑rich status card with session tokens + estimated cost (API key only). Provider usage shows for the **current model provider** when available.
 - `/usage off|tokens|full` in chats: per-response usage footer (OAuth shows tokens only).
 - `/usage cost` in chats: local cost summary aggregated from OpenClaw session logs.
@@ -19,6 +23,7 @@ read_when:
 - macOS menu bar: “Usage” section under Context (only if available).
 
 ## Providers + credentials
+
 - **Anthropic (Claude)**: OAuth tokens in auth profiles.
 - **GitHub Copilot**: OAuth tokens in auth profiles.
 - **Gemini CLI**: OAuth tokens in auth profiles.

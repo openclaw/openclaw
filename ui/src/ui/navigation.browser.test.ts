@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-
-import { OpenClawApp } from "./app";
+import { OpenClawApp } from "./app.ts";
 import "../styles.css";
 
+// oxlint-disable-next-line typescript/unbound-method
 const originalConnect = OpenClawApp.prototype.connect;
 
 function mountApp(pathname: string) {
@@ -75,13 +75,9 @@ describe("control UI routing", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const link = app.querySelector<HTMLAnchorElement>(
-      'a.nav-item[href="/channels"]',
-    );
+    const link = app.querySelector<HTMLAnchorElement>('a.nav-item[href="/channels"]');
     expect(link).not.toBeNull();
-    link?.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
-    );
+    link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
     expect(app.tab).toBe("channels");
@@ -94,13 +90,13 @@ describe("control UI routing", () => {
 
     expect(window.matchMedia("(max-width: 768px)").matches).toBe(true);
 
-    const split = app.querySelector(".chat-split-container") as HTMLElement | null;
+    const split = app.querySelector(".chat-split-container");
     expect(split).not.toBeNull();
     if (split) {
       expect(getComputedStyle(split).position).not.toBe("fixed");
     }
 
-    const chatMain = app.querySelector(".chat-main") as HTMLElement | null;
+    const chatMain = app.querySelector(".chat-main");
     expect(chatMain).not.toBeNull();
     if (chatMain) {
       expect(getComputedStyle(chatMain).display).not.toBe("none");
@@ -120,9 +116,11 @@ describe("control UI routing", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const initialContainer = app.querySelector(".chat-thread") as HTMLElement | null;
+    const initialContainer: HTMLElement | null = app.querySelector(".chat-thread");
     expect(initialContainer).not.toBeNull();
-    if (!initialContainer) return;
+    if (!initialContainer) {
+      return;
+    }
     initialContainer.style.maxHeight = "180px";
     initialContainer.style.overflow = "auto";
 
@@ -137,37 +135,41 @@ describe("control UI routing", () => {
       await nextFrame();
     }
 
-    const container = app.querySelector(".chat-thread") as HTMLElement | null;
+    const container = app.querySelector(".chat-thread");
     expect(container).not.toBeNull();
-    if (!container) return;
+    if (!container) {
+      return;
+    }
     const maxScroll = container.scrollHeight - container.clientHeight;
     expect(maxScroll).toBeGreaterThan(0);
     for (let i = 0; i < 10; i++) {
-      if (container.scrollTop === maxScroll) break;
+      if (container.scrollTop === maxScroll) {
+        break;
+      }
       await nextFrame();
     }
     expect(container.scrollTop).toBe(maxScroll);
   });
 
-  it("hydrates token from URL params and strips it", async () => {
+  it("strips token URL params without importing them", async () => {
     const app = mountApp("/ui/overview?token=abc123");
     await app.updateComplete;
 
-    expect(app.settings.token).toBe("abc123");
+    expect(app.settings.token).toBe("");
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.search).toBe("");
   });
 
-  it("hydrates password from URL params and strips it", async () => {
+  it("strips password URL params without importing them", async () => {
     const app = mountApp("/ui/overview?password=sekret");
     await app.updateComplete;
 
-    expect(app.password).toBe("sekret");
+    expect(app.password).toBe("");
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.search).toBe("");
   });
 
-  it("hydrates token from URL params even when settings already set", async () => {
+  it("does not override stored settings from URL token params", async () => {
     localStorage.setItem(
       "openclaw.control.settings.v1",
       JSON.stringify({ token: "existing-token" }),
@@ -175,7 +177,7 @@ describe("control UI routing", () => {
     const app = mountApp("/ui/overview?token=abc123");
     await app.updateComplete;
 
-    expect(app.settings.token).toBe("abc123");
+    expect(app.settings.token).toBe("existing-token");
     expect(window.location.pathname).toBe("/ui/overview");
     expect(window.location.search).toBe("");
   });

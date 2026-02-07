@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import type { CoreConfig } from "../types.js";
 import { resolveMatrixConfig } from "./client.js";
 

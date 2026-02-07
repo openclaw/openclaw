@@ -1,4 +1,6 @@
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   CONFIG_PATH,
   loadConfig,
@@ -10,14 +12,18 @@ import {
 } from "../../config/config.js";
 import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import {
+  redactConfigObject,
+  redactConfigSnapshot,
+  restoreRedactedValues,
+} from "../../config/redact-snapshot.js";
 import { buildConfigSchema } from "../../config/schema.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import {
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import {
   ErrorCodes,
@@ -29,11 +35,12 @@ import {
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 function resolveBaseHash(params: unknown): string | null {
   const raw = (params as { baseHash?: unknown })?.baseHash;
-  if (typeof raw !== "string") return null;
+  if (typeof raw !== "string") {
+    return null;
+  }
   const trimmed = raw.trim();
   return trimmed ? trimmed : null;
 }
@@ -43,7 +50,9 @@ function requireConfigBaseHash(
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
   respond: RespondFn,
 ): boolean {
-  if (!snapshot.exists) return true;
+  if (!snapshot.exists) {
+    return true;
+  }
   const snapshotHash = resolveConfigSnapshotHash(snapshot);
   if (!snapshotHash) {
     respond(
@@ -96,7 +105,7 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const snapshot = await readConfigFileSnapshot();
-    respond(true, snapshot, undefined);
+    respond(true, redactConfigSnapshot(snapshot), undefined);
   },
   "config.schema": ({ params, respond }) => {
     if (!validateConfigSchemaParams(params)) {
@@ -181,13 +190,27 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await writeConfigFile(validated.config);
+    let restored: typeof validated.config;
+    try {
+      restored = restoreRedactedValues(
+        validated.config,
+        snapshot.config,
+      ) as typeof validated.config;
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, String(err instanceof Error ? err.message : err)),
+      );
+      return;
+    }
+    await writeConfigFile(restored);
     respond(
       true,
       {
         ok: true,
         path: CONFIG_PATH,
-        config: validated.config,
+        config: redactConfigObject(restored),
       },
       undefined,
     );
@@ -246,8 +269,19 @@ export const configHandlers: GatewayRequestHandlers = {
       return;
     }
     const merged = applyMergePatch(snapshot.config, parsedRes.parsed);
-    const migrated = applyLegacyMigrations(merged);
-    const resolved = migrated.next ?? merged;
+    let restoredMerge: unknown;
+    try {
+      restoredMerge = restoreRedactedValues(merged, snapshot.config);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, String(err instanceof Error ? err.message : err)),
+      );
+      return;
+    }
+    const migrated = applyLegacyMigrations(restoredMerge);
+    const resolved = migrated.next ?? restoredMerge;
     const validated = validateConfigObjectWithPlugins(resolved);
     if (!validated.ok) {
       respond(
@@ -302,7 +336,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: CONFIG_PATH,
-        config: validated.config,
+        config: redactConfigObject(validated.config),
         restart,
         sentinel: {
           path: sentinelPath,
@@ -356,7 +390,21 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    await writeConfigFile(validated.config);
+    let restoredApply: typeof validated.config;
+    try {
+      restoredApply = restoreRedactedValues(
+        validated.config,
+        snapshot.config,
+      ) as typeof validated.config;
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, String(err instanceof Error ? err.message : err)),
+      );
+      return;
+    }
+    await writeConfigFile(restoredApply);
 
     const sessionKey =
       typeof (params as { sessionKey?: unknown }).sessionKey === "string"
@@ -399,7 +447,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: CONFIG_PATH,
-        config: validated.config,
+        config: redactConfigObject(restoredApply),
         restart,
         sentinel: {
           path: sentinelPath,

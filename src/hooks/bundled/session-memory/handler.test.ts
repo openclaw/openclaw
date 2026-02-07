@@ -1,12 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
 import { describe, expect, it } from "vitest";
-
-import handler from "./handler.js";
-import { createHookEvent } from "../../hooks.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
+import { createHookEvent } from "../../hooks.js";
+import handler from "./handler.js";
 
 /**
  * Create a mock session JSONL file with various entry types
@@ -98,7 +96,7 @@ describe("session-memory hook", () => {
     expect(files.length).toBe(1);
 
     // Read the memory file and verify content
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
     expect(memoryContent).toContain("user: Hello there");
     expect(memoryContent).toContain("assistant: Hi! How can I help?");
     expect(memoryContent).toContain("user: What is 2+2?");
@@ -140,7 +138,7 @@ describe("session-memory hook", () => {
 
     const memoryDir = path.join(tempDir, "memory");
     const files = await fs.readdir(memoryDir);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     // Only user/assistant messages should be present
     expect(memoryContent).toContain("user: Hello");
@@ -185,7 +183,7 @@ describe("session-memory hook", () => {
 
     const memoryDir = path.join(tempDir, "memory");
     const files = await fs.readdir(memoryDir);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     // Command messages should be filtered out
     expect(memoryContent).not.toContain("/help");
@@ -236,7 +234,7 @@ describe("session-memory hook", () => {
 
     const memoryDir = path.join(tempDir, "memory");
     const files = await fs.readdir(memoryDir);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     // Only last 3 messages should be present
     expect(memoryContent).not.toContain("user: Message 1\n");
@@ -297,7 +295,7 @@ describe("session-memory hook", () => {
 
     const memoryDir = path.join(tempDir, "memory");
     const files = await fs.readdir(memoryDir);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     // Should have exactly 3 user/assistant messages (the last 3)
     expect(memoryContent).not.toContain("First message");
@@ -370,7 +368,7 @@ describe("session-memory hook", () => {
 
     const memoryDir = path.join(tempDir, "memory");
     const files = await fs.readdir(memoryDir);
-    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]!), "utf-8");
+    const memoryContent = await fs.readFile(path.join(memoryDir, files[0]), "utf-8");
 
     // Both messages should be included
     expect(memoryContent).toContain("user: Only message 1");

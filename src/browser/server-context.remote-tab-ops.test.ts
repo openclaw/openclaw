@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import type { BrowserServerState } from "./server-context.js";
 
 vi.mock("./chrome.js", () => ({
@@ -16,7 +15,7 @@ function makeState(
   profile: "remote" | "openclaw",
 ): BrowserServerState & { profiles: Map<string, { lastTargetId?: string | null }> } {
   return {
-    // biome-ignore lint/suspicious/noExplicitAny: test stub
+    // oxlint-disable-next-line typescript/no-explicit-any
     server: null as any,
     port: 0,
     resolved: {
@@ -68,7 +67,7 @@ describe("browser server-context remote profile tab operations", () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
     });
-    // @ts-expect-error test override
+
     global.fetch = fetchMock;
 
     const { createBrowserRouteContext } = await import("./server-context.js");
@@ -116,7 +115,9 @@ describe("browser server-context remote profile tab operations", () => {
 
     const listPagesViaPlaywright = vi.fn(async () => {
       const next = responses.shift();
-      if (!next) throw new Error("no more responses");
+      if (!next) {
+        throw new Error("no more responses");
+      }
       return next;
     });
 
@@ -133,7 +134,7 @@ describe("browser server-context remote profile tab operations", () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
     });
-    // @ts-expect-error test override
+
     global.fetch = fetchMock;
 
     const { createBrowserRouteContext } = await import("./server-context.js");
@@ -162,7 +163,7 @@ describe("browser server-context remote profile tab operations", () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
     });
-    // @ts-expect-error test override
+
     global.fetch = fetchMock;
 
     const { createBrowserRouteContext } = await import("./server-context.js");
@@ -190,7 +191,7 @@ describe("browser server-context remote profile tab operations", () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
     });
-    // @ts-expect-error test override
+
     global.fetch = fetchMock;
 
     const { createBrowserRouteContext } = await import("./server-context.js");
@@ -212,7 +213,9 @@ describe("browser server-context remote profile tab operations", () => {
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);
-      if (!u.includes("/json/list")) throw new Error(`unexpected fetch: ${u}`);
+      if (!u.includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
       return {
         ok: true,
         json: async () => [
@@ -226,7 +229,7 @@ describe("browser server-context remote profile tab operations", () => {
         ],
       } as unknown as Response;
     });
-    // @ts-expect-error test override
+
     global.fetch = fetchMock;
 
     const { createBrowserRouteContext } = await import("./server-context.js");
@@ -254,7 +257,9 @@ describe("browser server-context tab selection state", () => {
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);
-      if (!u.includes("/json/list")) throw new Error(`unexpected fetch: ${u}`);
+      if (!u.includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
       return {
         ok: true,
         json: async () => [
@@ -268,7 +273,7 @@ describe("browser server-context tab selection state", () => {
         ],
       } as unknown as Response;
     });
-    // @ts-expect-error test override
+
     global.fetch = fetchMock;
 
     const { createBrowserRouteContext } = await import("./server-context.js");

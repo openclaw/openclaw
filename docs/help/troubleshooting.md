@@ -3,6 +3,7 @@ summary: "Troubleshooting hub: symptoms → checks → fixes"
 read_when:
   - You see an error and want the fix path
   - The installer says “success” but the CLI doesn’t work
+title: "Troubleshooting"
 ---
 
 # Troubleshooting
@@ -38,13 +39,13 @@ Almost always a Node/npm PATH issue. Start here:
 Re-run the installer in verbose mode to see the full trace and npm output:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --verbose
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --verbose
 ```
 
 For beta installs:
 
 ```bash
-curl -fsSL https://openclaw.bot/install.sh | bash -s -- --beta --verbose
+curl -fsSL https://openclaw.ai/install.sh | bash -s -- --beta --verbose
 ```
 
 You can also set `OPENCLAW_VERBOSE=1` instead of the flag.
@@ -64,7 +65,7 @@ You can also set `OPENCLAW_VERBOSE=1` instead of the flag.
 Some Comcast/Xfinity connections block `docs.openclaw.ai` via Xfinity Advanced Security.
 Disable Advanced Security or add `docs.openclaw.ai` to the allowlist, then retry.
 
-- Xfinity Advanced Security help: https://www.xfinity.com/support/articles/using-xfinity-xfi-advanced-security
+- Xfinity Advanced Security help: [https://www.xfinity.com/support/articles/using-xfinity-xfi-advanced-security](https://www.xfinity.com/support/articles/using-xfinity-xfi-advanced-security)
 - Quick sanity checks: try a mobile hotspot or VPN to confirm it’s ISP-level filtering
 
 ### Service says running, but RPC probe fails

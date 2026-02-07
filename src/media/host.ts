@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
+import { formatCliCommand } from "../cli/command-format.js";
 import { ensurePortAvailable, PortInUseError } from "../infra/ports.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
 import { logInfo } from "../logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { startMediaServer } from "./server.js";
 import { saveMediaSource } from "./store.js";
 
@@ -60,7 +60,9 @@ async function isPortFree(port: number) {
     await ensurePortAvailable(port);
     return true;
   } catch (err) {
-    if (err instanceof PortInUseError) return false;
+    if (err instanceof PortInUseError) {
+      return false;
+    }
     throw err;
   }
 }

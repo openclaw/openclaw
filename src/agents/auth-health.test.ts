@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
 import { buildAuthHealthSummary, DEFAULT_OAUTH_WARN_MS } from "./auth-health.js";
 
 describe("buildAuthHealthSummary", () => {

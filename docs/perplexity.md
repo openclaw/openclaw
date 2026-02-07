@@ -3,6 +3,7 @@ summary: "Perplexity Sonar setup for web_search"
 read_when:
   - You want to use Perplexity Sonar for web search
   - You need PERPLEXITY_API_KEY or OpenRouter setup
+title: "Perplexity Sonar"
 ---
 
 # Perplexity Sonar
@@ -14,12 +15,12 @@ through Perplexity’s direct API or via OpenRouter.
 
 ### Perplexity (direct)
 
-- Base URL: https://api.perplexity.ai
+- Base URL: [https://api.perplexity.ai](https://api.perplexity.ai)
 - Environment variable: `PERPLEXITY_API_KEY`
 
 ### OpenRouter (alternative)
 
-- Base URL: https://openrouter.ai/api/v1
+- Base URL: [https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)
 - Environment variable: `OPENROUTER_API_KEY`
 - Supports prepaid/crypto credits.
 
@@ -34,11 +35,11 @@ through Perplexity’s direct API or via OpenRouter.
         perplexity: {
           apiKey: "pplx-...",
           baseUrl: "https://api.perplexity.ai",
-          model: "perplexity/sonar-pro"
-        }
-      }
-    }
-  }
+          model: "perplexity/sonar-pro",
+        },
+      },
+    },
+  },
 }
 ```
 
@@ -52,11 +53,11 @@ through Perplexity’s direct API or via OpenRouter.
         provider: "perplexity",
         perplexity: {
           apiKey: "pplx-...",
-          baseUrl: "https://api.perplexity.ai"
-        }
-      }
-    }
-  }
+          baseUrl: "https://api.perplexity.ai",
+        },
+      },
+    },
+  },
 }
 ```
 

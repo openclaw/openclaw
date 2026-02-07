@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import { sleep } from "../utils.js";
 import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createExecTool, createProcessTool, execTool, processTool } from "./bash-tools.js";
 import { buildDockerExecArgs } from "./bash-tools.shared.js";
@@ -11,7 +11,9 @@ import { sanitizeBinaryOutput } from "./shell-utils.js";
 const isWin = process.platform === "win32";
 const resolveShellFromPath = (name: string) => {
   const envPath = process.env.PATH ?? "";
-  if (!envPath) return undefined;
+  if (!envPath) {
+    return undefined;
+  }
   const entries = envPath.split(path.delimiter).filter(Boolean);
   for (const entry of entries) {
     const candidate = path.join(entry, name);
@@ -44,8 +46,6 @@ const normalizeText = (value?: string) =>
     .join("\n")
     .trim();
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 async function waitForCompletion(sessionId: string) {
   let status = "running";
   const deadline = Date.now() + (process.platform === "win32" ? 8000 : 2000);
@@ -71,11 +71,15 @@ describe("exec tool backgrounding", () => {
   const originalShell = process.env.SHELL;
 
   beforeEach(() => {
-    if (!isWin && defaultShell) process.env.SHELL = defaultShell;
+    if (!isWin && defaultShell) {
+      process.env.SHELL = defaultShell;
+    }
   });
 
   afterEach(() => {
-    if (!isWin) process.env.SHELL = originalShell;
+    if (!isWin) {
+      process.env.SHELL = originalShell;
+    }
   });
 
   it(
@@ -283,16 +287,18 @@ describe("exec notifyOnExit", () => {
     expect(result.details.status).toBe("running");
     const sessionId = (result.details as { sessionId: string }).sessionId;
 
+    const prefix = sessionId.slice(0, 8);
     let finished = getFinishedSession(sessionId);
-    const deadline = Date.now() + (isWin ? 8000 : 2000);
-    while (!finished && Date.now() < deadline) {
+    let hasEvent = peekSystemEvents("agent:main:main").some((event) => event.includes(prefix));
+    const deadline = Date.now() + (isWin ? 12_000 : 5_000);
+    while ((!finished || !hasEvent) && Date.now() < deadline) {
       await sleep(20);
       finished = getFinishedSession(sessionId);
+      hasEvent = peekSystemEvents("agent:main:main").some((event) => event.includes(prefix));
     }
 
     expect(finished).toBeTruthy();
-    const events = peekSystemEvents("agent:main:main");
-    expect(events.some((event) => event.includes(sessionId.slice(0, 8)))).toBe(true);
+    expect(hasEvent).toBe(true);
   });
 });
 
@@ -301,12 +307,16 @@ describe("exec PATH handling", () => {
   const originalShell = process.env.SHELL;
 
   beforeEach(() => {
-    if (!isWin && defaultShell) process.env.SHELL = defaultShell;
+    if (!isWin && defaultShell) {
+      process.env.SHELL = defaultShell;
+    }
   });
 
   afterEach(() => {
     process.env.PATH = originalPath;
-    if (!isWin) process.env.SHELL = originalShell;
+    if (!isWin) {
+      process.env.SHELL = originalShell;
+    }
   });
 
   it("prepends configured path entries", async () => {

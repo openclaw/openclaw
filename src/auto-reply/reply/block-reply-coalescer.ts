@@ -18,6 +18,7 @@ export function createBlockReplyCoalescer(params: {
   const maxChars = Math.max(minChars, Math.floor(config.maxChars));
   const idleMs = Math.max(0, Math.floor(config.idleMs));
   const joiner = config.joiner ?? "";
+  const flushOnEnqueue = config.flushOnEnqueue === true;
 
   let bufferText = "";
   let bufferReplyToId: ReplyPayload["replyToId"];
@@ -25,7 +26,9 @@ export function createBlockReplyCoalescer(params: {
   let idleTimer: NodeJS.Timeout | undefined;
 
   const clearIdleTimer = () => {
-    if (!idleTimer) return;
+    if (!idleTimer) {
+      return;
+    }
     clearTimeout(idleTimer);
     idleTimer = undefined;
   };
@@ -37,7 +40,9 @@ export function createBlockReplyCoalescer(params: {
   };
 
   const scheduleIdleFlush = () => {
-    if (idleMs <= 0) return;
+    if (idleMs <= 0) {
+      return;
+    }
     clearIdleTimer();
     idleTimer = setTimeout(() => {
       void flush({ force: false });
@@ -50,8 +55,10 @@ export function createBlockReplyCoalescer(params: {
       resetBuffer();
       return;
     }
-    if (!bufferText) return;
-    if (!options?.force && bufferText.length < minChars) {
+    if (!bufferText) {
+      return;
+    }
+    if (!options?.force && !flushOnEnqueue && bufferText.length < minChars) {
       scheduleIdleFlush();
       return;
     }
@@ -65,7 +72,9 @@ export function createBlockReplyCoalescer(params: {
   };
 
   const enqueue = (payload: ReplyPayload) => {
-    if (shouldAbort()) return;
+    if (shouldAbort()) {
+      return;
+    }
     const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
     const text = payload.text ?? "";
     const hasText = text.trim().length > 0;
@@ -74,7 +83,22 @@ export function createBlockReplyCoalescer(params: {
       void onFlush(payload);
       return;
     }
-    if (!hasText) return;
+    if (!hasText) {
+      return;
+    }
+
+    // When flushOnEnqueue is set (chunkMode="newline"), each enqueued payload is treated
+    // as a separate paragraph and flushed immediately so delivery matches streaming boundaries.
+    if (flushOnEnqueue) {
+      if (bufferText) {
+        void flush({ force: true });
+      }
+      bufferReplyToId = payload.replyToId;
+      bufferAudioAsVoice = payload.audioAsVoice;
+      bufferText = text;
+      void flush({ force: true });
+      return;
+    }
 
     if (
       bufferText &&

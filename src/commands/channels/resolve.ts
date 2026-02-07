@@ -1,9 +1,9 @@
+import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/plugins/types.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { loadConfig } from "../../config/config.js";
 import { danger } from "../../globals.js";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelResolveKind, ChannelResolveResult } from "../../channels/plugins/types.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import type { RuntimeEnv } from "../../runtime.js";
 
 export type ChannelsResolveOptions = {
   channel?: string;
@@ -25,17 +25,29 @@ type ResolveResult = {
 function resolvePreferredKind(
   kind?: ChannelsResolveOptions["kind"],
 ): ChannelResolveKind | undefined {
-  if (!kind || kind === "auto") return undefined;
-  if (kind === "user") return "user";
+  if (!kind || kind === "auto") {
+    return undefined;
+  }
+  if (kind === "user") {
+    return "user";
+  }
   return "group";
 }
 
 function detectAutoKind(input: string): ChannelResolveKind {
   const trimmed = input.trim();
-  if (!trimmed) return "group";
-  if (trimmed.startsWith("@")) return "user";
-  if (/^<@!?/.test(trimmed)) return "user";
-  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return "user";
+  if (!trimmed) {
+    return "group";
+  }
+  if (trimmed.startsWith("@")) {
+    return "user";
+  }
+  if (/^<@!?/.test(trimmed)) {
+    return "user";
+  }
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+    return "user";
+  }
   if (
     /^(user|discord|slack|matrix|msteams|teams|zalo|zalouser|googlechat|google-chat|gchat):/i.test(
       trimmed,
@@ -47,7 +59,9 @@ function detectAutoKind(input: string): ChannelResolveKind {
 }
 
 function formatResolveResult(result: ResolveResult): string {
-  if (!result.resolved || !result.id) return `${result.input} -> unresolved`;
+  if (!result.resolved || !result.id) {
+    return `${result.input} -> unresolved`;
+  }
   const name = result.name ? ` (${result.name})` : "";
   const note = result.note ? ` [${result.note}]` : "";
   return `${result.input} -> ${result.id}${name}${note}`;

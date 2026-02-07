@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -62,11 +61,15 @@ vi.mock("@mariozechner/pi-ai", async () => {
   return {
     ...actual,
     complete: async (model: { api: string; provider: string; id: string }) => {
-      if (model.id === "mock-error") return buildAssistantErrorMessage(model);
+      if (model.id === "mock-error") {
+        return buildAssistantErrorMessage(model);
+      }
       return buildAssistantMessage(model);
     },
     completeSimple: async (model: { api: string; provider: string; id: string }) => {
-      if (model.id === "mock-error") return buildAssistantErrorMessage(model);
+      if (model.id === "mock-error") {
+        return buildAssistantErrorMessage(model);
+      }
       return buildAssistantMessage(model);
     },
     streamSimple: (model: { api: string; provider: string; id: string }) => {
@@ -104,7 +107,9 @@ beforeAll(async () => {
 }, 20_000);
 
 afterAll(async () => {
-  if (!tempRoot) return;
+  if (!tempRoot) {
+    return;
+  }
   await fs.rm(tempRoot, { recursive: true, force: true });
   tempRoot = undefined;
 });
@@ -142,7 +147,9 @@ const testSessionKey = "agent:test:embedded";
 const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
 const textFromContent = (content: unknown) => {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return content;
+  }
   if (Array.isArray(content) && content[0]?.type === "text") {
     return (content[0] as { text?: string }).text;
   }
@@ -210,6 +217,75 @@ describe("runEmbeddedPiAgent", () => {
     ).rejects.toThrow(/Unknown model:/);
 
     await expect(fs.stat(path.join(agentDir, "models.json"))).resolves.toBeTruthy();
+  });
+
+  it("falls back to per-agent workspace when runtime workspaceDir is missing", async () => {
+    const sessionFile = nextSessionFile();
+    const fallbackWorkspace = path.join(tempRoot ?? os.tmpdir(), "workspace-fallback-main");
+    const cfg = {
+      ...makeOpenAiConfig(["mock-1"]),
+      agents: {
+        defaults: {
+          workspace: fallbackWorkspace,
+        },
+      },
+    } satisfies OpenClawConfig;
+    await ensureModels(cfg);
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test-fallback",
+      sessionKey: "agent:main:subagent:fallback-workspace",
+      sessionFile,
+      workspaceDir: undefined as unknown as string,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: "run-fallback-workspace",
+      enqueue: immediateEnqueue,
+    });
+
+    expect(result.payloads?.[0]?.text).toBe("ok");
+    await expect(fs.stat(fallbackWorkspace)).resolves.toBeTruthy();
+  });
+
+  it("throws when sessionKey is malformed", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = {
+      ...makeOpenAiConfig(["mock-1"]),
+      agents: {
+        defaults: {
+          workspace: path.join(tempRoot ?? os.tmpdir(), "workspace-fallback-main"),
+        },
+        list: [
+          {
+            id: "research",
+            workspace: path.join(tempRoot ?? os.tmpdir(), "workspace-fallback-research"),
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    await ensureModels(cfg);
+
+    await expect(
+      runEmbeddedPiAgent({
+        sessionId: "session:test-fallback-malformed",
+        sessionKey: "agent::broken",
+        agentId: "research",
+        sessionFile,
+        workspaceDir: undefined as unknown as string,
+        config: cfg,
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        agentDir,
+        runId: "run-fallback-workspace-malformed",
+        enqueue: immediateEnqueue,
+      }),
+    ).rejects.toThrow("Malformed agent session key");
   });
 
   itIfNotWin32(

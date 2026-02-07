@@ -3,6 +3,7 @@ summary: "Plan: Add OpenResponses /v1/responses endpoint and deprecate chat comp
 owner: "openclaw"
 status: "draft"
 last_updated: "2026-01-19"
+title: "OpenResponses Gateway Plan"
 ---
 
 # OpenResponses Gateway Integration Plan

@@ -1,3 +1,8 @@
-export type { MemoryIndexManager, MemorySearchResult } from "./manager.js";
+export { MemoryIndexManager } from "./manager.js";
+export type {
+  MemoryEmbeddingProbeResult,
+  MemorySearchManager,
+  MemorySearchResult,
+} from "./types.js";
 export { getMemorySearchManager, type MemorySearchManagerResult } from "./search-manager.js";
 export type { MemoryType, SlugAndTypeResult } from "./types.js";

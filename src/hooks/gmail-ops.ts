@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-
+import { formatCliCommand } from "../cli/command-format.js";
 import {
   type OpenClawConfig,
   CONFIG_PATH,
@@ -11,8 +11,16 @@ import {
 } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatCliCommand } from "../cli/command-format.js";
 import { displayPath } from "../utils.js";
+import {
+  ensureDependency,
+  ensureGcloudAuth,
+  ensureSubscription,
+  ensureTailscaleEndpoint,
+  ensureTopic,
+  resolveProjectIdFromGogCredentials,
+  runGcloud,
+} from "./gmail-setup-utils.js";
 import {
   buildDefaultHookUrl,
   buildGogWatchServeArgs,
@@ -35,15 +43,6 @@ import {
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
-import {
-  ensureDependency,
-  ensureGcloudAuth,
-  ensureSubscription,
-  ensureTailscaleEndpoint,
-  ensureTopic,
-  resolveProjectIdFromGogCredentials,
-  runGcloud,
-} from "./gmail-setup-utils.js";
 
 export type GmailSetupOptions = {
   account: string;
@@ -332,7 +331,9 @@ export async function runGmailService(opts: GmailRunOptions) {
   }, renewMs);
 
   const shutdown = () => {
-    if (shuttingDown) return;
+    if (shuttingDown) {
+      return;
+    }
     shuttingDown = true;
     clearInterval(renewTimer);
     child.kill("SIGTERM");
@@ -342,10 +343,14 @@ export async function runGmailService(opts: GmailRunOptions) {
   process.on("SIGTERM", shutdown);
 
   child.on("exit", () => {
-    if (shuttingDown) return;
+    if (shuttingDown) {
+      return;
+    }
     defaultRuntime.log("gog watch serve exited; restarting in 2s");
     setTimeout(() => {
-      if (shuttingDown) return;
+      if (shuttingDown) {
+        return;
+      }
       child = spawnGogServe(runtimeConfig);
     }, 2000);
   });
@@ -365,7 +370,9 @@ async function startGmailWatch(
   const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
   if (result.code !== 0) {
     const message = result.stderr || result.stdout || "gog watch start failed";
-    if (fatal) throw new Error(message);
+    if (fatal) {
+      throw new Error(message);
+    }
     defaultRuntime.error(message);
   }
 }

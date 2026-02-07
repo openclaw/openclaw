@@ -4,6 +4,7 @@ read_when:
   - You want reproducible, rollback-able installs
   - You're already using Nix/NixOS/Home Manager
   - You want everything pinned and managed declaratively
+title: "Nix"
 ---
 
 # Nix Installation

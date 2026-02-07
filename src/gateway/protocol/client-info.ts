@@ -42,12 +42,20 @@ export type GatewayClientInfo = {
   instanceId?: string;
 };
 
+export const GATEWAY_CLIENT_CAPS = {
+  TOOL_EVENTS: "tool-events",
+} as const;
+
+export type GatewayClientCap = (typeof GATEWAY_CLIENT_CAPS)[keyof typeof GATEWAY_CLIENT_CAPS];
+
 const GATEWAY_CLIENT_ID_SET = new Set<GatewayClientId>(Object.values(GATEWAY_CLIENT_IDS));
 const GATEWAY_CLIENT_MODE_SET = new Set<GatewayClientMode>(Object.values(GATEWAY_CLIENT_MODES));
 
 export function normalizeGatewayClientId(raw?: string | null): GatewayClientId | undefined {
   const normalized = raw?.trim().toLowerCase();
-  if (!normalized) return undefined;
+  if (!normalized) {
+    return undefined;
+  }
   return GATEWAY_CLIENT_ID_SET.has(normalized as GatewayClientId)
     ? (normalized as GatewayClientId)
     : undefined;
@@ -59,8 +67,20 @@ export function normalizeGatewayClientName(raw?: string | null): GatewayClientNa
 
 export function normalizeGatewayClientMode(raw?: string | null): GatewayClientMode | undefined {
   const normalized = raw?.trim().toLowerCase();
-  if (!normalized) return undefined;
+  if (!normalized) {
+    return undefined;
+  }
   return GATEWAY_CLIENT_MODE_SET.has(normalized as GatewayClientMode)
     ? (normalized as GatewayClientMode)
     : undefined;
+}
+
+export function hasGatewayClientCap(
+  caps: string[] | null | undefined,
+  cap: GatewayClientCap,
+): boolean {
+  if (!Array.isArray(caps)) {
+    return false;
+  }
+  return caps.includes(cap);
 }

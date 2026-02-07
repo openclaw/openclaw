@@ -16,6 +16,7 @@ The best way to help the project right now is by sending PRs.
 
 - Public Internet Exposure
 - Using OpenClaw in ways that the docs recommend not to
+- Prompt injection attacks
 
 ## Operational Guidance
 

@@ -1,5 +1,4 @@
 import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
-
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
@@ -11,12 +10,20 @@ export function isEmptyAssistantMessageContent(
   message: Extract<AgentMessage, { role: "assistant" }>,
 ): boolean {
   const content = message.content;
-  if (content == null) return true;
-  if (!Array.isArray(content)) return false;
+  if (content == null) {
+    return true;
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
   return content.every((block) => {
-    if (!block || typeof block !== "object") return true;
+    if (!block || typeof block !== "object") {
+      return true;
+    }
     const rec = block as { type?: unknown; text?: unknown };
-    if (rec.type !== "text") return false;
+    if (rec.type !== "text") {
+      return false;
+    }
     return typeof rec.text !== "string" || rec.text.trim().length === 0;
   });
 }
@@ -60,7 +67,7 @@ export async function sanitizeSessionMessagesImages(
       const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
       const content = Array.isArray(toolMsg.content) ? toolMsg.content : [];
       const nextContent = (await sanitizeContentBlocksImages(
-        content as ContentBlock[],
+        content,
         label,
       )) as unknown as typeof toolMsg.content;
       out.push({ ...toolMsg, content: nextContent });
@@ -110,9 +117,13 @@ export async function sanitizeSessionMessagesImages(
           : stripThoughtSignatures(content, options?.sanitizeThoughtSignatures); // Strip for Gemini
 
         const filteredContent = strippedContent.filter((block) => {
-          if (!block || typeof block !== "object") return true;
+          if (!block || typeof block !== "object") {
+            return true;
+          }
           const rec = block as { type?: unknown; text?: unknown };
-          if (rec.type !== "text" || typeof rec.text !== "string") return true;
+          if (rec.type !== "text" || typeof rec.text !== "string") {
+            return true;
+          }
           return rec.text.trim().length > 0;
         });
         const finalContent = (await sanitizeContentBlocksImages(

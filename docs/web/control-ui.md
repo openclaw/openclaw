@@ -3,7 +3,9 @@ summary: "Browser-based control UI for the Gateway (chat, nodes, config)"
 read_when:
   - You want to operate the Gateway from a browser
   - You want Tailnet access without SSH tunnels
+title: "Control UI"
 ---
+
 # Control UI (browser)
 
 The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
@@ -17,17 +19,49 @@ It speaks **directly to the Gateway WebSocket** on the same port.
 
 If the Gateway is running on the same computer, open:
 
-- http://127.0.0.1:18789/ (or http://localhost:18789/)
+- [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/))
 
 If the page fails to load, start the Gateway first: `openclaw gateway`.
 
 Auth is supplied during the WebSocket handshake via:
+
 - `connect.params.auth.token`
 - `connect.params.auth.password`
-The dashboard settings panel lets you store a token; passwords are not persisted.
-The onboarding wizard generates a gateway token by default, so paste it here on first connect.
+  The dashboard settings panel lets you store a token; passwords are not persisted.
+  The onboarding wizard generates a gateway token by default, so paste it here on first connect.
+
+## Device pairing (first connection)
+
+When you connect to the Control UI from a new browser or device, the Gateway
+requires a **one-time pairing approval** — even if you're on the same Tailnet
+with `gateway.auth.allowTailscale: true`. This is a security measure to prevent
+unauthorized access.
+
+**What you'll see:** "disconnected (1008): pairing required"
+
+**To approve the device:**
+
+```bash
+# List pending requests
+openclaw devices list
+
+# Approve by request ID
+openclaw devices approve <requestId>
+```
+
+Once approved, the device is remembered and won't require re-approval unless
+you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
+[Devices CLI](/cli/devices) for token rotation and revocation.
+
+**Notes:**
+
+- Local connections (`127.0.0.1`) are auto-approved.
+- Remote connections (LAN, Tailnet, etc.) require explicit approval.
+- Each browser profile generates a unique device ID, so switching browsers or
+  clearing browser data will require re-pairing.
 
 ## What it can do (today)
+
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`)
 - Stream tool calls + live tool output cards in Chat (agent events)
 - Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost, etc.) status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
@@ -44,6 +78,11 @@ The onboarding wizard generates a gateway token by default, so paste it here on 
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
 - Logs: live tail of gateway file logs with filter/export (`logs.tail`)
 - Update: run a package/git update + restart (`update.run`) with a restart report
+
+Cron jobs panel notes:
+
+- For isolated jobs, delivery defaults to announce summary. You can switch to none if you want internal-only runs.
+- Channel/target fields appear when announce is selected.
 
 ## Chat behavior
 
@@ -66,6 +105,7 @@ openclaw gateway --tailscale serve
 ```
 
 Open:
+
 - `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
 By default, Serve requests can authenticate via Tailscale identity headers
@@ -83,6 +123,7 @@ openclaw gateway --bind tailnet --token "$(openssl rand -hex 32)"
 ```
 
 Then open:
+
 - `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`)
 
 Paste the token into the UI settings (sent as `connect.params.auth.token`).
@@ -94,6 +135,7 @@ the browser runs in a **non-secure context** and blocks WebCrypto. By default,
 OpenClaw **blocks** Control UI connections without device identity.
 
 **Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally:
+
 - `https://<magicdns>/` (Serve)
 - `http://127.0.0.1:18789/` (on the gateway host)
 
@@ -104,8 +146,8 @@ OpenClaw **blocks** Control UI connections without device identity.
   gateway: {
     controlUi: { allowInsecureAuth: true },
     bind: "tailnet",
-    auth: { mode: "token", token: "replace-me" }
-  }
+    auth: { mode: "token", token: "replace-me" },
+  },
 }
 ```
 
@@ -142,8 +184,8 @@ The Control UI is static files; the WebSocket target is configurable and can be
 different from the HTTP origin. This is handy when you want the Vite dev server
 locally but the Gateway runs elsewhere.
 
-1) Start the UI dev server: `pnpm ui:dev`
-2) Open a URL like:
+1. Start the UI dev server: `pnpm ui:dev`
+2. Open a URL like:
 
 ```text
 http://localhost:5173/?gatewayUrl=ws://<gateway-host>:18789
@@ -156,8 +198,26 @@ http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789&token=<gateway-toke
 ```
 
 Notes:
+
 - `gatewayUrl` is stored in localStorage after load and removed from the URL.
 - `token` is stored in localStorage; `password` is kept in memory only.
+- When `gatewayUrl` is set, the UI does not fall back to config or environment credentials.
+  Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
 - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
+- `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
+- For cross-origin dev setups (e.g. `pnpm ui:dev` to a remote Gateway), add the UI
+  origin to `gateway.controlUi.allowedOrigins`.
+
+Example:
+
+```json5
+{
+  gateway: {
+    controlUi: {
+      allowedOrigins: ["http://localhost:5173"],
+    },
+  },
+}
+```
 
 Remote access setup details: [Remote access](/gateway/remote).

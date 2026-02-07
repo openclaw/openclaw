@@ -1,14 +1,14 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type {
   ExecApprovalForwardingConfig,
   ExecApprovalForwardTarget,
 } from "../config/types.approvals.js";
+import type { ExecApprovalDecision } from "./exec-approvals.js";
+import { loadConfig } from "../config/config.js";
+import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
-import type { ExecApprovalDecision } from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 
@@ -82,18 +82,28 @@ function shouldForward(params: {
   request: ExecApprovalRequest;
 }): boolean {
   const config = params.config;
-  if (!config?.enabled) return false;
+  if (!config?.enabled) {
+    return false;
+  }
   if (config.agentFilter?.length) {
     const agentId =
       params.request.request.agentId ??
       parseAgentSessionKey(params.request.request.sessionKey)?.agentId;
-    if (!agentId) return false;
-    if (!config.agentFilter.includes(agentId)) return false;
+    if (!agentId) {
+      return false;
+    }
+    if (!config.agentFilter.includes(agentId)) {
+      return false;
+    }
   }
   if (config.sessionFilter?.length) {
     const sessionKey = params.request.request.sessionKey;
-    if (!sessionKey) return false;
-    if (!matchSessionFilter(sessionKey, config.sessionFilter)) return false;
+    if (!sessionKey) {
+      return false;
+    }
+    if (!matchSessionFilter(sessionKey, config.sessionFilter)) {
+      return false;
+    }
   }
   return true;
 }
@@ -108,11 +118,21 @@ function buildTargetKey(target: ExecApprovalForwardTarget): string {
 function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
   lines.push(`Command: ${request.request.command}`);
-  if (request.request.cwd) lines.push(`CWD: ${request.request.cwd}`);
-  if (request.request.host) lines.push(`Host: ${request.request.host}`);
-  if (request.request.agentId) lines.push(`Agent: ${request.request.agentId}`);
-  if (request.request.security) lines.push(`Security: ${request.request.security}`);
-  if (request.request.ask) lines.push(`Ask: ${request.request.ask}`);
+  if (request.request.cwd) {
+    lines.push(`CWD: ${request.request.cwd}`);
+  }
+  if (request.request.host) {
+    lines.push(`Host: ${request.request.host}`);
+  }
+  if (request.request.agentId) {
+    lines.push(`Agent: ${request.request.agentId}`);
+  }
+  if (request.request.security) {
+    lines.push(`Security: ${request.request.security}`);
+  }
+  if (request.request.ask) {
+    lines.push(`Ask: ${request.request.ask}`);
+  }
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
   lines.push("Reply with: /approve <id> allow-once|allow-always|deny");
@@ -120,8 +140,12 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
 }
 
 function decisionLabel(decision: ExecApprovalDecision): string {
-  if (decision === "allow-once") return "allowed once";
-  if (decision === "allow-always") return "allowed always";
+  if (decision === "allow-once") {
+    return "allowed once";
+  }
+  if (decision === "allow-always") {
+    return "allowed always";
+  }
   return "denied";
 }
 
@@ -140,16 +164,24 @@ function defaultResolveSessionTarget(params: {
   request: ExecApprovalRequest;
 }): ExecApprovalForwardTarget | null {
   const sessionKey = params.request.request.sessionKey?.trim();
-  if (!sessionKey) return null;
+  if (!sessionKey) {
+    return null;
+  }
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
   const entry = store[sessionKey];
-  if (!entry) return null;
+  if (!entry) {
+    return null;
+  }
   const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
-  if (!target.channel || !target.to) return null;
-  if (!isDeliverableMessageChannel(target.channel)) return null;
+  if (!target.channel || !target.to) {
+    return null;
+  }
+  if (!isDeliverableMessageChannel(target.channel)) {
+    return null;
+  }
   return {
     channel: target.channel,
     to: target.to,
@@ -166,9 +198,13 @@ async function deliverToTargets(params: {
   shouldSend?: () => boolean;
 }) {
   const deliveries = params.targets.map(async (target) => {
-    if (params.shouldSend && !params.shouldSend()) return;
+    if (params.shouldSend && !params.shouldSend()) {
+      return;
+    }
     const channel = normalizeMessageChannel(target.channel) ?? target.channel;
-    if (!isDeliverableMessageChannel(channel)) return;
+    if (!isDeliverableMessageChannel(channel)) {
+      return;
+    }
     try {
       await params.deliver({
         cfg: params.cfg,
@@ -197,7 +233,9 @@ export function createExecApprovalForwarder(
   const handleRequested = async (request: ExecApprovalRequest) => {
     const cfg = getConfig();
     const config = cfg.approvals?.exec;
-    if (!shouldForward({ config, request })) return;
+    if (!shouldForward({ config, request })) {
+      return;
+    }
 
     const mode = normalizeMode(config?.mode);
     const targets: ForwardTarget[] = [];
@@ -218,19 +256,25 @@ export function createExecApprovalForwarder(
       const explicitTargets = config?.targets ?? [];
       for (const target of explicitTargets) {
         const key = buildTargetKey(target);
-        if (seen.has(key)) continue;
+        if (seen.has(key)) {
+          continue;
+        }
         seen.add(key);
         targets.push({ ...target, source: "target" });
       }
     }
 
-    if (targets.length === 0) return;
+    if (targets.length === 0) {
+      return;
+    }
 
     const expiresInMs = Math.max(0, request.expiresAtMs - nowMs());
     const timeoutId = setTimeout(() => {
       void (async () => {
         const entry = pending.get(request.id);
-        if (!entry) return;
+        if (!entry) {
+          return;
+        }
         pending.delete(request.id);
         const expiredText = buildExpiredMessage(request);
         await deliverToTargets({ cfg, targets: entry.targets, text: expiredText, deliver });
@@ -241,7 +285,9 @@ export function createExecApprovalForwarder(
     const pendingEntry: PendingApproval = { request, targets, timeoutId };
     pending.set(request.id, pendingEntry);
 
-    if (pending.get(request.id) !== pendingEntry) return;
+    if (pending.get(request.id) !== pendingEntry) {
+      return;
+    }
 
     const text = buildRequestMessage(request, nowMs());
     await deliverToTargets({
@@ -255,8 +301,12 @@ export function createExecApprovalForwarder(
 
   const handleResolved = async (resolved: ExecApprovalResolved) => {
     const entry = pending.get(resolved.id);
-    if (!entry) return;
-    if (entry.timeoutId) clearTimeout(entry.timeoutId);
+    if (!entry) {
+      return;
+    }
+    if (entry.timeoutId) {
+      clearTimeout(entry.timeoutId);
+    }
     pending.delete(resolved.id);
 
     const cfg = getConfig();
@@ -266,7 +316,9 @@ export function createExecApprovalForwarder(
 
   const stop = () => {
     for (const entry of pending.values()) {
-      if (entry.timeoutId) clearTimeout(entry.timeoutId);
+      if (entry.timeoutId) {
+        clearTimeout(entry.timeoutId);
+      }
     }
     pending.clear();
   };

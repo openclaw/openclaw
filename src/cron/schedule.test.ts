@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { computeNextRunAtMs } from "./schedule.js";
 
 describe("cron schedule", () => {

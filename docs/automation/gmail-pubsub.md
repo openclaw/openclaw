@@ -3,6 +3,7 @@ summary: "Gmail Pub/Sub push wired into OpenClaw webhooks via gogcli"
 read_when:
   - Wiring Gmail inbox triggers to OpenClaw
   - Setting up Pub/Sub push for agent wake
+title: "Gmail PubSub"
 ---
 
 # Gmail Pub/Sub -> OpenClaw
@@ -26,8 +27,8 @@ Example hook config (enable Gmail preset mapping):
     enabled: true,
     token: "OPENCLAW_HOOK_TOKEN",
     path: "/hooks",
-    presets: ["gmail"]
-  }
+    presets: ["gmail"],
+  },
 }
 ```
 
@@ -47,15 +48,14 @@ that sets `deliver` + optional `channel`/`to`:
         wakeMode: "now",
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
-        messageTemplate:
-          "New email from {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}\n{{messages[0].body}}",
+        messageTemplate: "New email from {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}\n{{messages[0].body}}",
         model: "openai/gpt-5.2-mini",
         deliver: true,
-        channel: "last"
+        channel: "last",
         // to: "+15551234567"
-      }
-    ]
-  }
+      },
+    ],
+  },
 }
 ```
 
@@ -73,13 +73,14 @@ To set a default model and thinking level specifically for Gmail hooks, add
   hooks: {
     gmail: {
       model: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-      thinking: "off"
-    }
-  }
+      thinking: "off",
+    },
+  },
 }
 ```
 
 Notes:
+
 - Per-hook `model`/`thinking` in the mapping still overrides these defaults.
 - Fallback order: `hooks.gmail.model` → `agents.defaults.model.fallbacks` → primary (auth/rate-limit/timeouts).
 - If `agents.defaults.models` is set, the Gmail model must be in the allowlist.
@@ -99,6 +100,7 @@ openclaw webhooks gmail setup \
 ```
 
 Defaults:
+
 - Uses Tailscale Funnel for the public push endpoint.
 - Writes `hooks.gmail` config for `openclaw webhooks gmail run`.
 - Enables the Gmail hook preset (`hooks.presets: ["gmail"]`).
@@ -117,6 +119,7 @@ Platform note: on macOS the wizard installs `gcloud`, `gogcli`, and `tailscale`
 via Homebrew; on Linux install them manually first.
 
 Gateway auto-start (recommended):
+
 - When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts
   `gog gmail watch serve` on boot and auto-renews the watch.
 - Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out (useful if you run the daemon yourself).
@@ -131,7 +134,7 @@ openclaw webhooks gmail run
 
 ## One-time setup
 
-1) Select the GCP project **that owns the OAuth client** used by `gog`.
+1. Select the GCP project **that owns the OAuth client** used by `gog`.
 
 ```bash
 gcloud auth login
@@ -140,19 +143,19 @@ gcloud config set project <project-id>
 
 Note: Gmail watch requires the Pub/Sub topic to live in the same project as the OAuth client.
 
-2) Enable APIs:
+2. Enable APIs:
 
 ```bash
 gcloud services enable gmail.googleapis.com pubsub.googleapis.com
 ```
 
-3) Create a topic:
+3. Create a topic:
 
 ```bash
 gcloud pubsub topics create gog-gmail-watch
 ```
 
-4) Allow Gmail push to publish:
+4. Allow Gmail push to publish:
 
 ```bash
 gcloud pubsub topics add-iam-policy-binding gog-gmail-watch \
@@ -189,6 +192,7 @@ gog gmail watch serve \
 ```
 
 Notes:
+
 - `--token` protects the push endpoint (`x-gog-token` or `?token=`).
 - `--hook-url` points to OpenClaw `/hooks/gmail` (mapped; isolated run + summary to main).
 - `--include-body` and `--max-bytes` control the body snippet sent to OpenClaw.

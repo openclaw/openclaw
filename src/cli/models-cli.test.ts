@@ -4,9 +4,8 @@ const githubCopilotLoginCommand = vi.fn();
 const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("../commands/models.js", async () => {
-  const actual = (await vi.importActual<typeof import("../commands/models.js")>(
-    "../commands/models.js",
-  )) as typeof import("../commands/models.js");
+  const actual =
+    await vi.importActual<typeof import("../commands/models.js")>("../commands/models.js");
 
   return {
     ...actual,

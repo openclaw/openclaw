@@ -80,8 +80,12 @@ function parseTableRow(row: string): string[] {
     .map((cell) => cell.trim())
     .filter((cell, index, arr) => {
       // Filter out empty cells at start/end (from leading/trailing pipes)
-      if (index === 0 && cell === "") return false;
-      if (index === arr.length - 1 && cell === "") return false;
+      if (index === 0 && cell === "") {
+        return false;
+      }
+      if (index === arr.length - 1 && cell === "") {
+        return false;
+      }
       return true;
     });
 }
@@ -94,7 +98,9 @@ export function convertTableToFlexBubble(table: MarkdownTable): FlexBubble {
     value: string | undefined,
   ): { text: string; bold: boolean; hasMarkup: boolean } => {
     const raw = value?.trim() ?? "";
-    if (!raw) return { text: "-", bold: false, hasMarkup: false };
+    if (!raw) {
+      return { text: "-", bold: false, hasMarkup: false };
+    }
 
     let hasMarkup = false;
     const stripped = raw.replace(/\*\*(.+?)\*\*/g, (_, inner) => {
@@ -417,17 +423,29 @@ export function processLineMessage(text: string): ProcessedLineMessage {
 export function hasMarkdownToConvert(text: string): boolean {
   // Check for tables
   MARKDOWN_TABLE_REGEX.lastIndex = 0;
-  if (MARKDOWN_TABLE_REGEX.test(text)) return true;
+  if (MARKDOWN_TABLE_REGEX.test(text)) {
+    return true;
+  }
 
   // Check for code blocks
   MARKDOWN_CODE_BLOCK_REGEX.lastIndex = 0;
-  if (MARKDOWN_CODE_BLOCK_REGEX.test(text)) return true;
+  if (MARKDOWN_CODE_BLOCK_REGEX.test(text)) {
+    return true;
+  }
 
   // Check for other markdown patterns
-  if (/\*\*[^*]+\*\*/.test(text)) return true; // bold
-  if (/~~[^~]+~~/.test(text)) return true; // strikethrough
-  if (/^#{1,6}\s+/m.test(text)) return true; // headers
-  if (/^>\s+/m.test(text)) return true; // blockquotes
+  if (/\*\*[^*]+\*\*/.test(text)) {
+    return true;
+  } // bold
+  if (/~~[^~]+~~/.test(text)) {
+    return true;
+  } // strikethrough
+  if (/^#{1,6}\s+/m.test(text)) {
+    return true;
+  } // headers
+  if (/^>\s+/m.test(text)) {
+    return true;
+  } // blockquotes
 
   return false;
 }

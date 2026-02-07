@@ -1,17 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { setupChannels } from "./onboard-channels.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { discordPlugin } from "../../extensions/discord/src/channel.js";
 import { imessagePlugin } from "../../extensions/imessage/src/channel.js";
 import { signalPlugin } from "../../extensions/signal/src/channel.js";
 import { slackPlugin } from "../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { setupChannels } from "./onboard-channels.js";
 
 vi.mock("node:fs/promises", () => ({
   default: {
@@ -90,8 +89,12 @@ describe("setupChannels", () => {
 
   it("prompts for configured channel action and skips configuration when told to skip", async () => {
     const select = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Select channel (QuickStart)") return "telegram";
-      if (message.includes("already configured")) return "skip";
+      if (message === "Select channel (QuickStart)") {
+        return "telegram";
+      }
+      if (message.includes("already configured")) {
+        return "skip";
+      }
       throw new Error(`unexpected select prompt: ${message}`);
     });
     const multiselect = vi.fn(async () => {
@@ -156,7 +159,9 @@ describe("setupChannels", () => {
         expect(telegram?.hint).toContain("disabled");
         return selectionCount === 1 ? "telegram" : "__done__";
       }
-      if (message.includes("already configured")) return "skip";
+      if (message.includes("already configured")) {
+        return "skip";
+      }
       return "__done__";
     });
     const multiselect = vi.fn(async () => {

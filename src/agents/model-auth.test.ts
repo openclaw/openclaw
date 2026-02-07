@@ -1,7 +1,7 @@
+import type { Api, Model } from "@mariozechner/pi-ai";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
 const oauthFixture = {
@@ -140,7 +140,7 @@ describe("getApiKeyForModel", () => {
       } catch (err) {
         error = err;
       }
-      expect(String(error)).toContain("openai-codex/gpt-5.2");
+      expect(String(error)).toContain("openai-codex/gpt-5.3-codex");
     } finally {
       if (previousOpenAiKey === undefined) {
         delete process.env.OPENAI_API_KEY;
@@ -460,6 +460,30 @@ describe("getApiKeyForModel", () => {
         delete process.env.AWS_PROFILE;
       } else {
         process.env.AWS_PROFILE = previous.profile;
+      }
+    }
+  });
+
+  it("accepts VOYAGE_API_KEY for voyage", async () => {
+    const previous = process.env.VOYAGE_API_KEY;
+
+    try {
+      process.env.VOYAGE_API_KEY = "voyage-test-key";
+
+      vi.resetModules();
+      const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+      const resolved = await resolveApiKeyForProvider({
+        provider: "voyage",
+        store: { version: 1, profiles: {} },
+      });
+      expect(resolved.apiKey).toBe("voyage-test-key");
+      expect(resolved.source).toContain("VOYAGE_API_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.VOYAGE_API_KEY;
+      } else {
+        process.env.VOYAGE_API_KEY = previous;
       }
     }
   });

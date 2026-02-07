@@ -1,5 +1,4 @@
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-
 import { loginGeminiCliOAuth } from "./oauth.js";
 
 const PROVIDER_ID = "google-gemini-cli";
@@ -69,9 +68,7 @@ const geminiCliPlugin = {
                   },
                 },
                 defaultModel: DEFAULT_MODEL,
-                notes: [
-                  "If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID.",
-                ],
+                notes: ["If requests fail, set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID."],
               };
             } catch (err) {
               spin.stop("Gemini CLI OAuth failed");

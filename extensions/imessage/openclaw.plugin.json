@@ -1,8 +1,6 @@
 {
   "id": "imessage",
-  "channels": [
-    "imessage"
-  ],
+  "channels": ["imessage"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

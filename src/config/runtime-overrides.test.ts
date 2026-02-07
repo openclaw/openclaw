@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "./types.js";
 import {
   applyConfigOverrides,
   getConfigOverrides,
@@ -6,7 +7,6 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "./runtime-overrides.js";
-import type { OpenClawConfig } from "./types.js";
 
 describe("runtime overrides", () => {
   beforeEach(() => {

@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
     "build": "vite build",
+    "dev": "vite",
     "preview": "vite preview",
     "test": "vitest run --config vitest.config.ts"
   },
@@ -18,7 +18,6 @@
   "devDependencies": {
     "@vitest/browser-playwright": "4.0.18",
     "playwright": "^1.58.1",
-    "typescript": "^5.9.3",
     "vitest": "4.0.18"
   }
 }

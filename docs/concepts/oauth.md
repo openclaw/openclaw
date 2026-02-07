@@ -5,7 +5,9 @@ read_when:
   - You hit token invalidation / logout issues
   - You want setup-token or OAuth auth flows
   - You want multiple accounts or profile routing
+title: "OAuth"
 ---
+
 # OAuth
 
 OpenClaw supports “subscription auth” via OAuth for providers that offer it (notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic subscriptions, use the **setup-token** flow. This page explains:
@@ -26,9 +28,11 @@ openclaw models auth login --provider <id>
 OAuth providers commonly mint a **new refresh token** during login/refresh flows. Some providers (or OAuth clients) can invalidate older refresh tokens when a new one is issued for the same user/app.
 
 Practical symptom:
-- you log in via OpenClaw *and* via Claude Code / Codex CLI → one of them randomly gets “logged out” later
+
+- you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets “logged out” later
 
 To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
+
 - the runtime reads credentials from **one place**
 - we can keep multiple profiles and route them deterministically
 
@@ -40,6 +44,7 @@ Secrets are stored **per-agent**:
 - Runtime cache (managed automatically; don’t edit): `~/.openclaw/agents/<agentId>/agent/auth.json`
 
 Legacy import-only file (still supported, but not the main store):
+
 - `~/.openclaw/credentials/oauth.json` (imported into `auth-profiles.json` on first use)
 
 All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full reference: [/gateway/configuration](/gateway/configuration#auth-storage-oauth--api-keys)
@@ -72,9 +77,9 @@ OpenClaw’s interactive login flows are implemented in `@mariozechner/pi-ai` an
 
 Flow shape:
 
-1) run `claude setup-token`
-2) paste the token into OpenClaw
-3) store as a token auth profile (no refresh)
+1. run `claude setup-token`
+2. paste the token into OpenClaw
+3. store as a token auth profile (no refresh)
 
 The wizard path is `openclaw onboard` → auth choice `setup-token` (Anthropic).
 
@@ -82,12 +87,12 @@ The wizard path is `openclaw onboard` → auth choice `setup-token` (Anthropic).
 
 Flow shape (PKCE):
 
-1) generate PKCE verifier/challenge + random `state`
-2) open `https://auth.openai.com/oauth/authorize?...`
-3) try to capture callback on `http://127.0.0.1:1455/auth/callback`
-4) if callback can’t bind (or you’re remote/headless), paste the redirect URL/code
-5) exchange at `https://auth.openai.com/oauth/token`
-6) extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
+1. generate PKCE verifier/challenge + random `state`
+2. open `https://auth.openai.com/oauth/authorize?...`
+3. try to capture callback on `http://127.0.0.1:1455/auth/callback`
+4. if callback can’t bind (or you’re remote/headless), paste the redirect URL/code
+5. exchange at `https://auth.openai.com/oauth/token`
+6. extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
 
 Wizard path is `openclaw onboard` → auth choice `openai-codex`.
 
@@ -96,6 +101,7 @@ Wizard path is `openclaw onboard` → auth choice `openai-codex`.
 Profiles store an `expires` timestamp.
 
 At runtime:
+
 - if `expires` is in the future → use the stored access token
 - if expired → refresh (under a file lock) and overwrite the stored credentials
 
@@ -121,15 +127,19 @@ Then configure auth per-agent (wizard) and route chats to the right agent.
 `auth-profiles.json` supports multiple profile IDs for the same provider.
 
 Pick which profile is used:
+
 - globally via config ordering (`auth.order`)
 - per-session via `/model ...@<profileId>`
 
 Example (session override):
+
 - `/model Opus@anthropic:work`
 
 How to see what profile IDs exist:
+
 - `openclaw channels list --json` (shows `auth[]`)
 
 Related docs:
+
 - [/concepts/model-failover](/concepts/model-failover) (rotation + cooldown rules)
 - [/tools/slash-commands](/tools/slash-commands) (command surface)

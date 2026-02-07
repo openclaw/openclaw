@@ -1,8 +1,9 @@
+import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { callGateway } from "../../gateway/call.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import type { AnnounceTarget } from "./sessions-send-helpers.js";
+import { SessionListRow } from "./sessions-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/announce-target");
@@ -25,14 +26,14 @@ export async function resolveAnnounceTarget(params: {
   }
 
   try {
-    const list = (await callGateway({
+    const list = await callGateway<{ sessions: Array<SessionListRow> }>({
       method: "sessions.list",
       params: {
         includeGlobal: true,
         includeUnknown: true,
         limit: 200,
       },
-    })) as { sessions?: Array<Record<string, unknown>> };
+    });
     const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
     const match =
       sessions.find((entry) => entry?.key === params.sessionKey) ??

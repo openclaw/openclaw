@@ -1,14 +1,13 @@
+import type { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
-import type { Command } from "commander";
-
-import { loadConfig, writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginRecord } from "../plugins/registry.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
-import type { PluginRecord } from "../plugins/registry.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
@@ -58,11 +57,15 @@ function formatPluginLine(plugin: PluginRecord, verbose = false): string {
     `  source: ${theme.muted(shortenHomeInString(plugin.source))}`,
     `  origin: ${plugin.origin}`,
   ];
-  if (plugin.version) parts.push(`  version: ${plugin.version}`);
+  if (plugin.version) {
+    parts.push(`  version: ${plugin.version}`);
+  }
   if (plugin.providerIds.length > 0) {
     parts.push(`  providers: ${plugin.providerIds.join(", ")}`);
   }
-  if (plugin.error) parts.push(theme.error(`  error: ${plugin.error}`));
+  if (plugin.error) {
+    parts.push(theme.error(`  error: ${plugin.error}`));
+  }
   return parts.join("\n");
 }
 
@@ -85,7 +88,9 @@ function applySlotSelectionForPlugin(
 }
 
 function logSlotWarnings(warnings: string[]) {
-  if (warnings.length === 0) return;
+  if (warnings.length === 0) {
+    return;
+  }
   for (const warning of warnings) {
     defaultRuntime.log(theme.warn(warning));
   }
@@ -200,12 +205,16 @@ export function registerPluginsCli(program: Command) {
       if (plugin.name && plugin.name !== plugin.id) {
         lines.push(theme.muted(`id: ${plugin.id}`));
       }
-      if (plugin.description) lines.push(plugin.description);
+      if (plugin.description) {
+        lines.push(plugin.description);
+      }
       lines.push("");
       lines.push(`${theme.muted("Status:")} ${plugin.status}`);
       lines.push(`${theme.muted("Source:")} ${shortenHomeInString(plugin.source)}`);
       lines.push(`${theme.muted("Origin:")} ${plugin.origin}`);
-      if (plugin.version) lines.push(`${theme.muted("Version:")} ${plugin.version}`);
+      if (plugin.version) {
+        lines.push(`${theme.muted("Version:")} ${plugin.version}`);
+      }
       if (plugin.toolNames.length > 0) {
         lines.push(`${theme.muted("Tools:")} ${plugin.toolNames.join(", ")}`);
       }
@@ -224,18 +233,27 @@ export function registerPluginsCli(program: Command) {
       if (plugin.services.length > 0) {
         lines.push(`${theme.muted("Services:")} ${plugin.services.join(", ")}`);
       }
-      if (plugin.error) lines.push(`${theme.error("Error:")} ${plugin.error}`);
+      if (plugin.error) {
+        lines.push(`${theme.error("Error:")} ${plugin.error}`);
+      }
       if (install) {
         lines.push("");
         lines.push(`${theme.muted("Install:")} ${install.source}`);
-        if (install.spec) lines.push(`${theme.muted("Spec:")} ${install.spec}`);
-        if (install.sourcePath)
+        if (install.spec) {
+          lines.push(`${theme.muted("Spec:")} ${install.spec}`);
+        }
+        if (install.sourcePath) {
           lines.push(`${theme.muted("Source path:")} ${shortenHomePath(install.sourcePath)}`);
-        if (install.installPath)
+        }
+        if (install.installPath) {
           lines.push(`${theme.muted("Install path:")} ${shortenHomePath(install.installPath)}`);
-        if (install.version) lines.push(`${theme.muted("Recorded version:")} ${install.version}`);
-        if (install.installedAt)
+        }
+        if (install.version) {
+          lines.push(`${theme.muted("Recorded version:")} ${install.version}`);
+        }
+        if (install.installedAt) {
           lines.push(`${theme.muted("Installed at:")} ${install.installedAt}`);
+        }
       }
       defaultRuntime.log(lines.join("\n"));
     });
@@ -514,7 +532,9 @@ export function registerPluginsCli(program: Command) {
         }
       }
       if (diags.length > 0) {
-        if (lines.length > 0) lines.push("");
+        if (lines.length > 0) {
+          lines.push("");
+        }
         lines.push(theme.warn("Diagnostics:"));
         for (const diag of diags) {
           const target = diag.pluginId ? `${diag.pluginId}: ` : "";

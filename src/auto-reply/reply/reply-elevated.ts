@@ -1,21 +1,27 @@
+import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
+import type { MsgContext } from "../templating.js";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { CHAT_CHANNEL_ORDER } from "../../channels/registry.js";
-import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import type { MsgContext } from "../templating.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 function normalizeAllowToken(value?: string) {
-  if (!value) return "";
+  if (!value) {
+    return "";
+  }
   return value.trim().toLowerCase();
 }
 
 function slugAllowToken(value?: string) {
-  if (!value) return "";
+  if (!value) {
+    return "";
+  }
   let text = value.trim().toLowerCase();
-  if (!text) return "";
+  if (!text) {
+    return "";
+  }
   text = text.replace(/^[@#]+/, "");
   text = text.replace(/[\s_]+/g, "-");
   text = text.replace(/[^a-z0-9-]+/g, "-");
@@ -32,7 +38,9 @@ const SENDER_PREFIXES = [
 const SENDER_PREFIX_RE = new RegExp(`^(${SENDER_PREFIXES.join("|")}):`, "i");
 
 function stripSenderPrefix(value?: string) {
-  if (!value) return "";
+  if (!value) {
+    return "";
+  }
   const trimmed = value.trim();
   return trimmed.replace(SENDER_PREFIX_RE, "");
 }
@@ -42,7 +50,9 @@ function resolveElevatedAllowList(
   provider: string,
   fallbackAllowFrom?: Array<string | number>,
 ): Array<string | number> | undefined {
-  if (!allowFrom) return fallbackAllowFrom;
+  if (!allowFrom) {
+    return fallbackAllowFrom;
+  }
   const value = allowFrom[provider];
   return Array.isArray(value) ? value : fallbackAllowFrom;
 }
@@ -58,22 +68,36 @@ function isApprovedElevatedSender(params: {
     params.provider,
     params.fallbackAllowFrom,
   );
-  if (!rawAllow || rawAllow.length === 0) return false;
+  if (!rawAllow || rawAllow.length === 0) {
+    return false;
+  }
 
   const allowTokens = rawAllow.map((entry) => String(entry).trim()).filter(Boolean);
-  if (allowTokens.length === 0) return false;
-  if (allowTokens.some((entry) => entry === "*")) return true;
+  if (allowTokens.length === 0) {
+    return false;
+  }
+  if (allowTokens.some((entry) => entry === "*")) {
+    return true;
+  }
 
   const tokens = new Set<string>();
   const addToken = (value?: string) => {
-    if (!value) return;
+    if (!value) {
+      return;
+    }
     const trimmed = value.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      return;
+    }
     tokens.add(trimmed);
     const normalized = normalizeAllowToken(trimmed);
-    if (normalized) tokens.add(normalized);
+    if (normalized) {
+      tokens.add(normalized);
+    }
     const slugged = slugAllowToken(trimmed);
-    if (slugged) tokens.add(slugged);
+    if (slugged) {
+      tokens.add(slugged);
+    }
   };
 
   addToken(params.ctx.SenderName);
@@ -87,13 +111,21 @@ function isApprovedElevatedSender(params: {
 
   for (const rawEntry of allowTokens) {
     const entry = rawEntry.trim();
-    if (!entry) continue;
+    if (!entry) {
+      continue;
+    }
     const stripped = stripSenderPrefix(entry);
-    if (tokens.has(entry) || tokens.has(stripped)) return true;
+    if (tokens.has(entry) || tokens.has(stripped)) {
+      return true;
+    }
     const normalized = normalizeAllowToken(stripped);
-    if (normalized && tokens.has(normalized)) return true;
+    if (normalized && tokens.has(normalized)) {
+      return true;
+    }
     const slugged = slugAllowToken(stripped);
-    if (slugged && tokens.has(slugged)) return true;
+    if (slugged && tokens.has(slugged)) {
+      return true;
+    }
   }
 
   return false;
@@ -115,13 +147,18 @@ export function resolveElevatedPermissions(params: {
   const agentEnabled = agentConfig?.enabled !== false;
   const enabled = globalEnabled && agentEnabled;
   const failures: Array<{ gate: string; key: string }> = [];
-  if (!globalEnabled) failures.push({ gate: "enabled", key: "tools.elevated.enabled" });
-  if (!agentEnabled)
+  if (!globalEnabled) {
+    failures.push({ gate: "enabled", key: "tools.elevated.enabled" });
+  }
+  if (!agentEnabled) {
     failures.push({
       gate: "enabled",
       key: "agents.list[].tools.elevated.enabled",
     });
-  if (!enabled) return { enabled, allowed: false, failures };
+  }
+  if (!enabled) {
+    return { enabled, allowed: false, failures };
+  }
   if (!params.provider) {
     failures.push({ gate: "provider", key: "ctx.Provider" });
     return { enabled, allowed: false, failures };

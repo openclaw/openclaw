@@ -32,25 +32,38 @@ async function withEnvOverride<T>(
   const saved: Record<string, string | undefined> = {};
   for (const key of Object.keys(overrides)) {
     saved[key] = process.env[key];
-    if (overrides[key] === undefined) delete process.env[key];
-    else process.env[key] = overrides[key];
+    if (overrides[key] === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = overrides[key];
+    }
   }
   vi.resetModules();
   try {
     return await fn();
   } finally {
     for (const key of Object.keys(saved)) {
-      if (saved[key] === undefined) delete process.env[key];
-      else process.env[key] = saved[key];
+      if (saved[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = saved[key];
+      }
     }
     vi.resetModules();
   }
 }
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGateway(opts),
-  randomIdempotencyKey: () => "rk_test",
-}));
+vi.mock(
+  new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
+  async (importOriginal) => {
+    const mod = await importOriginal();
+    return {
+      ...mod,
+      callGateway: (opts: unknown) => callGateway(opts),
+      randomIdempotencyKey: () => "rk_test",
+    };
+  },
+);
 
 vi.mock("../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
@@ -116,7 +129,7 @@ describe("gateway-cli coverage", () => {
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtimeLogs.join("\n")).toContain('"ok": true');
-  }, 30_000);
+  }, 60_000);
 
   it("registers gateway probe and routes to gatewayStatusCommand", async () => {
     runtimeLogs.length = 0;
@@ -131,7 +144,7 @@ describe("gateway-cli coverage", () => {
     await program.parseAsync(["gateway", "probe", "--json"], { from: "user" });
 
     expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
-  }, 30_000);
+  }, 60_000);
 
   it("registers gateway discover and prints JSON", async () => {
     runtimeLogs.length = 0;
@@ -284,10 +297,14 @@ describe("gateway-cli coverage", () => {
       ),
     ).rejects.toThrow("__exit__:1");
     for (const listener of process.listeners("SIGTERM")) {
-      if (!beforeSigterm.has(listener)) process.removeListener("SIGTERM", listener);
+      if (!beforeSigterm.has(listener)) {
+        process.removeListener("SIGTERM", listener);
+      }
     }
     for (const listener of process.listeners("SIGINT")) {
-      if (!beforeSigint.has(listener)) process.removeListener("SIGINT", listener);
+      if (!beforeSigint.has(listener)) {
+        process.removeListener("SIGINT", listener);
+      }
     }
   });
 

@@ -94,7 +94,7 @@ describe("Session Store Cache", () => {
     const loaded1 = loadSessionStore(storePath);
     loaded1["session:1"].cliSessionIds = { openai: "mutated" };
     if (loaded1["session:1"].skillsSnapshot?.skills?.length) {
-      loaded1["session:1"].skillsSnapshot!.skills[0].name = "mutated";
+      loaded1["session:1"].skillsSnapshot.skills[0].name = "mutated";
     }
 
     const loaded2 = loadSessionStore(storePath);

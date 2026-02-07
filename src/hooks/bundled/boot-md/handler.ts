@@ -1,8 +1,8 @@
 import type { CliDeps } from "../../../cli/deps.js";
-import { createDefaultDeps } from "../../../cli/deps.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { runBootOnce } from "../../../gateway/boot.js";
 import type { HookHandler } from "../../hooks.js";
+import { createDefaultDeps } from "../../../cli/deps.js";
+import { runBootOnce } from "../../../gateway/boot.js";
 
 type BootHookContext = {
   cfg?: OpenClawConfig;

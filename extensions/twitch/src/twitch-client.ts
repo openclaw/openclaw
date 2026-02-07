@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { resolveTwitchToken } from "./token.js";
 import { normalizeToken } from "./utils/twitch.js";
@@ -119,22 +119,22 @@ export class TwitchClientManager {
           log: (level, message) => {
             switch (level) {
               case LogLevel.CRITICAL:
-                this.logger.error(`${message}`);
+                this.logger.error(message);
                 break;
               case LogLevel.ERROR:
-                this.logger.error(`${message}`);
+                this.logger.error(message);
                 break;
               case LogLevel.WARNING:
-                this.logger.warn(`${message}`);
+                this.logger.warn(message);
                 break;
               case LogLevel.INFO:
-                this.logger.info(`${message}`);
+                this.logger.info(message);
                 break;
               case LogLevel.DEBUG:
-                this.logger.debug?.(`${message}`);
+                this.logger.debug?.(message);
                 break;
               case LogLevel.TRACE:
-                this.logger.debug?.(`${message}`);
+                this.logger.debug?.(message);
                 break;
             }
           },

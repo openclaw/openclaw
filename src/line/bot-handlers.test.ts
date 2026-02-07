@@ -1,5 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageEvent } from "@line/bot-sdk";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
   buildLineMessageContextMock: vi.fn(async () => ({

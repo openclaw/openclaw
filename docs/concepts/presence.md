@@ -4,10 +4,13 @@ read_when:
   - Debugging the Instances tab
   - Investigating duplicate or stale instance rows
   - Changing gateway WS connect or system-event beacons
+title: "Presence"
 ---
+
 # Presence
 
 OpenClaw “presence” is a lightweight, best‑effort view of:
+
 - the **Gateway** itself, and
 - **clients connected to the Gateway** (mac app, WebChat, CLI, etc.)
 
@@ -53,6 +56,7 @@ Clients can send richer periodic beacons via the `system-event` method. The mac
 app uses this to report host name, IP, and `lastInputSeconds`.
 
 ### 4) Node connects (role: node)
+
 When a node connects over the Gateway WebSocket with `role: node`, the Gateway
 upserts a presence entry for that node (same flow as other WS clients).
 

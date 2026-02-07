@@ -5,8 +5,12 @@ const MEDIA_PLACEHOLDER_TOKEN_RE = /^<media:[^>]+>(\s*\([^)]*\))?\s*/i;
 
 export function extractMediaUserText(body?: string): string | undefined {
   const trimmed = body?.trim() ?? "";
-  if (!trimmed) return undefined;
-  if (MEDIA_PLACEHOLDER_RE.test(trimmed)) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
+  if (MEDIA_PLACEHOLDER_RE.test(trimmed)) {
+    return undefined;
+  }
   const cleaned = trimmed.replace(MEDIA_PLACEHOLDER_TOKEN_RE, "").trim();
   return cleaned || undefined;
 }
@@ -87,6 +91,8 @@ export function formatMediaUnderstandingBody(params: {
 }
 
 export function formatAudioTranscripts(outputs: MediaUnderstandingOutput[]): string {
-  if (outputs.length === 1) return outputs[0].text;
+  if (outputs.length === 1) {
+    return outputs[0].text;
+  }
   return outputs.map((output, index) => `Audio ${index + 1}:\n${output.text}`).join("\n\n");
 }

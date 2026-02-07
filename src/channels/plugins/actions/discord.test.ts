@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import type { OpenClawConfig } from "../../../config/config.js";
 type SendMessageDiscord = typeof import("../../../discord/send.js").sendMessageDiscord;
 type SendPollDiscord = typeof import("../../../discord/send.js").sendPollDiscord;

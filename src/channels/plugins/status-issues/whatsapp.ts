@@ -1,5 +1,5 @@
-import { formatCliCommand } from "../../../cli/command-format.js";
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
 import { asString, isRecord } from "./shared.js";
 
 type WhatsAppAccountStatus = {
@@ -13,7 +13,9 @@ type WhatsAppAccountStatus = {
 };
 
 function readWhatsAppAccountStatus(value: ChannelAccountSnapshot): WhatsAppAccountStatus | null {
-  if (!isRecord(value)) return null;
+  if (!isRecord(value)) {
+    return null;
+  }
   return {
     accountId: value.accountId,
     enabled: value.enabled,
@@ -31,10 +33,14 @@ export function collectWhatsAppStatusIssues(
   const issues: ChannelStatusIssue[] = [];
   for (const entry of accounts) {
     const account = readWhatsAppAccountStatus(entry);
-    if (!account) continue;
+    if (!account) {
+      continue;
+    }
     const accountId = asString(account.accountId) ?? "default";
     const enabled = account.enabled !== false;
-    if (!enabled) continue;
+    if (!enabled) {
+      continue;
+    }
     const linked = account.linked === true;
     const running = account.running === true;
     const connected = account.connected === true;

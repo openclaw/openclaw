@@ -1,7 +1,7 @@
 import type { ChannelId } from "../channels/plugins/types.js";
-import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 
 export type GroupPolicyChannel = ChannelId;
 
@@ -29,7 +29,9 @@ export type GroupToolPolicySender = {
 
 function normalizeSenderKey(value: string): string {
   const trimmed = value.trim();
-  if (!trimmed) return "";
+  if (!trimmed) {
+    return "";
+  }
   const withoutAt = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
   return withoutAt.toLowerCase();
 }
@@ -40,16 +42,24 @@ export function resolveToolsBySender(
   } & GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
   const toolsBySender = params.toolsBySender;
-  if (!toolsBySender) return undefined;
+  if (!toolsBySender) {
+    return undefined;
+  }
   const entries = Object.entries(toolsBySender);
-  if (entries.length === 0) return undefined;
+  if (entries.length === 0) {
+    return undefined;
+  }
 
   const normalized = new Map<string, GroupToolPolicyConfig>();
   let wildcard: GroupToolPolicyConfig | undefined;
   for (const [rawKey, policy] of entries) {
-    if (!policy) continue;
+    if (!policy) {
+      continue;
+    }
     const key = normalizeSenderKey(rawKey);
-    if (!key) continue;
+    if (!key) {
+      continue;
+    }
     if (key === "*") {
       wildcard = policy;
       continue;
@@ -62,7 +72,9 @@ export function resolveToolsBySender(
   const candidates: string[] = [];
   const pushCandidate = (value?: string | null) => {
     const trimmed = value?.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      return;
+    }
     candidates.push(trimmed);
   };
   pushCandidate(params.senderId);
@@ -72,9 +84,13 @@ export function resolveToolsBySender(
 
   for (const candidate of candidates) {
     const key = normalizeSenderKey(candidate);
-    if (!key) continue;
+    if (!key) {
+      continue;
+    }
     const match = normalized.get(key);
-    if (match) return match;
+    if (match) {
+      return match;
+    }
   }
   return wildcard;
 }
@@ -91,7 +107,9 @@ function resolveChannelGroups(
         groups?: ChannelGroups;
       }
     | undefined;
-  if (!channelConfig) return undefined;
+  if (!channelConfig) {
+    return undefined;
+  }
   const accountGroups =
     channelConfig.accounts?.[normalizedAccountId]?.groups ??
     channelConfig.accounts?.[
@@ -147,7 +165,9 @@ export function resolveChannelGroupRequireMention(params: {
   if (overrideOrder === "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
   }
-  if (typeof configMention === "boolean") return configMention;
+  if (typeof configMention === "boolean") {
+    return configMention;
+  }
   if (overrideOrder !== "before-config" && typeof requireMentionOverride === "boolean") {
     return requireMentionOverride;
   }
@@ -170,8 +190,12 @@ export function resolveChannelGroupToolsPolicy(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
-  if (groupSenderPolicy) return groupSenderPolicy;
-  if (groupConfig?.tools) return groupConfig.tools;
+  if (groupSenderPolicy) {
+    return groupSenderPolicy;
+  }
+  if (groupConfig?.tools) {
+    return groupConfig.tools;
+  }
   const defaultSenderPolicy = resolveToolsBySender({
     toolsBySender: defaultConfig?.toolsBySender,
     senderId: params.senderId,
@@ -179,7 +203,11 @@ export function resolveChannelGroupToolsPolicy(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
-  if (defaultSenderPolicy) return defaultSenderPolicy;
-  if (defaultConfig?.tools) return defaultConfig.tools;
+  if (defaultSenderPolicy) {
+    return defaultSenderPolicy;
+  }
+  if (defaultConfig?.tools) {
+    return defaultConfig.tools;
+  }
   return undefined;
 }

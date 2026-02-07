@@ -1,12 +1,26 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
-import { compareSemverStrings } from "./update-check.js";
-import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
-import { detectGlobalInstallManagerForRoot, globalInstallArgs } from "./update-global.js";
+import {
+  resolveControlUiDistIndexHealth,
+  resolveControlUiDistIndexPathForRoot,
+} from "./control-ui-assets.js";
 import { trimLogTail } from "./restart-sentinel.js";
+import {
+  channelToNpmTag,
+  DEFAULT_PACKAGE_CHANNEL,
+  DEV_BRANCH,
+  isBetaTag,
+  isStableTag,
+  type UpdateChannel,
+} from "./update-channels.js";
+import { compareSemverStrings } from "./update-check.js";
+import {
+  cleanupGlobalRenameDirs,
+  detectGlobalInstallManagerForRoot,
+  globalInstallArgs,
+} from "./update-global.js";
 
 export type UpdateStepResult = {
   name: string;
@@ -70,9 +84,13 @@ const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 function normalizeDir(value?: string | null) {
-  if (!value) return null;
+  if (!value) {
+    return null;
+  }
   const trimmed = value.trim();
-  if (!trimmed) return null;
+  if (!trimmed) {
+    return null;
+  }
   return path.resolve(trimmed);
 }
 
@@ -80,8 +98,12 @@ function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
   const normalized = path.resolve(argv1);
   const parts = normalized.split(path.sep);
   const binIndex = parts.lastIndexOf(".bin");
-  if (binIndex <= 0) return null;
-  if (parts[binIndex - 1] !== "node_modules") return null;
+  if (binIndex <= 0) {
+    return null;
+  }
+  if (parts[binIndex - 1] !== "node_modules") {
+    return null;
+  }
   const binName = path.basename(normalized);
   const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
   return path.join(nodeModulesDir, binName);
@@ -90,15 +112,21 @@ function resolveNodeModulesBinPackageRoot(argv1: string): string | null {
 function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   const dirs: string[] = [];
   const cwd = normalizeDir(opts.cwd);
-  if (cwd) dirs.push(cwd);
+  if (cwd) {
+    dirs.push(cwd);
+  }
   const argv1 = normalizeDir(opts.argv1);
   if (argv1) {
     dirs.push(path.dirname(argv1));
     const packageRoot = resolveNodeModulesBinPackageRoot(argv1);
-    if (packageRoot) dirs.push(packageRoot);
+    if (packageRoot) {
+      dirs.push(packageRoot);
+    }
   }
   const proc = normalizeDir(process.cwd());
-  if (proc) dirs.push(proc);
+  if (proc) {
+    dirs.push(proc);
+  }
   return Array.from(new Set(dirs));
 }
 
@@ -131,7 +159,9 @@ async function readBranchName(
   const res = await runCommand(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
     timeoutMs,
   }).catch(() => null);
-  if (!res || res.code !== 0) return null;
+  if (!res || res.code !== 0) {
+    return null;
+  }
   const branch = res.stdout.trim();
   return branch || null;
 }
@@ -145,7 +175,9 @@ async function listGitTags(
   const res = await runCommand(["git", "-C", root, "tag", "--list", pattern, "--sort=-v:refname"], {
     timeoutMs,
   }).catch(() => null);
-  if (!res || res.code !== 0) return [];
+  if (!res || res.code !== 0) {
+    return [];
+  }
   return res.stdout
     .split("\n")
     .map((line) => line.trim())
@@ -162,10 +194,16 @@ async function resolveChannelTag(
   if (channel === "beta") {
     const betaTag = tags.find((tag) => isBetaTag(tag)) ?? null;
     const stableTag = tags.find((tag) => isStableTag(tag)) ?? null;
-    if (!betaTag) return stableTag;
-    if (!stableTag) return betaTag;
+    if (!betaTag) {
+      return stableTag;
+    }
+    if (!stableTag) {
+      return betaTag;
+    }
     const cmp = compareSemverStrings(betaTag, stableTag);
-    if (cmp != null && cmp < 0) return stableTag;
+    if (cmp != null && cmp < 0) {
+      return stableTag;
+    }
     return betaTag;
   }
   return tags.find((tag) => isStableTag(tag)) ?? null;
@@ -182,7 +220,9 @@ async function resolveGitRoot(
     });
     if (res.code === 0) {
       const root = res.stdout.trim();
-      if (root) return root;
+      if (root) {
+        return root;
+      }
     }
   }
   return null;
@@ -197,12 +237,16 @@ async function findPackageRoot(candidates: string[]) {
         const raw = await fs.readFile(pkgPath, "utf-8");
         const parsed = JSON.parse(raw) as { name?: string };
         const name = parsed?.name?.trim();
-        if (name && CORE_PACKAGE_NAMES.has(name)) return current;
+        if (name && CORE_PACKAGE_NAMES.has(name)) {
+          return current;
+        }
       } catch {
         // ignore
       }
       const parent = path.dirname(current);
-      if (parent === current) break;
+      if (parent === current) {
+        break;
+      }
       current = parent;
     }
   }
@@ -214,15 +258,23 @@ async function detectPackageManager(root: string) {
     const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
     const parsed = JSON.parse(raw) as { packageManager?: string };
     const pm = parsed?.packageManager?.split("@")[0]?.trim();
-    if (pm === "pnpm" || pm === "bun" || pm === "npm") return pm;
+    if (pm === "pnpm" || pm === "bun" || pm === "npm") {
+      return pm;
+    }
   } catch {
     // ignore
   }
 
   const files = await fs.readdir(root).catch((): string[] => []);
-  if (files.includes("pnpm-lock.yaml")) return "pnpm";
-  if (files.includes("bun.lockb")) return "bun";
-  if (files.includes("package-lock.json")) return "npm";
+  if (files.includes("pnpm-lock.yaml")) {
+    return "pnpm";
+  }
+  if (files.includes("bun.lockb")) {
+    return "bun";
+  }
+  if (files.includes("package-lock.json")) {
+    return "npm";
+  }
   return "npm";
 }
 
@@ -276,22 +328,36 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
 }
 
 function managerScriptArgs(manager: "pnpm" | "bun" | "npm", script: string, args: string[] = []) {
-  if (manager === "pnpm") return ["pnpm", script, ...args];
-  if (manager === "bun") return ["bun", "run", script, ...args];
-  if (args.length > 0) return ["npm", "run", script, "--", ...args];
+  if (manager === "pnpm") {
+    return ["pnpm", script, ...args];
+  }
+  if (manager === "bun") {
+    return ["bun", "run", script, ...args];
+  }
+  if (args.length > 0) {
+    return ["npm", "run", script, "--", ...args];
+  }
   return ["npm", "run", script];
 }
 
 function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
-  if (manager === "pnpm") return ["pnpm", "install"];
-  if (manager === "bun") return ["bun", "install"];
+  if (manager === "pnpm") {
+    return ["pnpm", "install"];
+  }
+  if (manager === "bun") {
+    return ["bun", "install"];
+  }
   return ["npm", "install"];
 }
 
 function normalizeTag(tag?: string) {
   const trimmed = tag?.trim();
-  if (!trimmed) return "latest";
-  if (trimmed.startsWith("openclaw@")) return trimmed.slice("openclaw@".length);
+  if (!trimmed) {
+    return "latest";
+  }
+  if (trimmed.startsWith("openclaw@")) {
+    return trimmed.slice("openclaw@".length);
+  }
   if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
     return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
   }
@@ -537,25 +603,33 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             ),
           );
           steps.push(checkoutStep);
-          if (checkoutStep.exitCode !== 0) continue;
+          if (checkoutStep.exitCode !== 0) {
+            continue;
+          }
 
           const depsStep = await runStep(
             step(`preflight deps install (${shortSha})`, managerInstallArgs(manager), worktreeDir),
           );
           steps.push(depsStep);
-          if (depsStep.exitCode !== 0) continue;
-
-          const lintStep = await runStep(
-            step(`preflight lint (${shortSha})`, managerScriptArgs(manager, "lint"), worktreeDir),
-          );
-          steps.push(lintStep);
-          if (lintStep.exitCode !== 0) continue;
+          if (depsStep.exitCode !== 0) {
+            continue;
+          }
 
           const buildStep = await runStep(
             step(`preflight build (${shortSha})`, managerScriptArgs(manager, "build"), worktreeDir),
           );
           steps.push(buildStep);
-          if (buildStep.exitCode !== 0) continue;
+          if (buildStep.exitCode !== 0) {
+            continue;
+          }
+
+          const lintStep = await runStep(
+            step(`preflight lint (${shortSha})`, managerScriptArgs(manager, "lint"), worktreeDir),
+          );
+          steps.push(lintStep);
+          if (lintStep.exitCode !== 0) {
+            continue;
+          }
 
           selectedSha = sha;
           break;
@@ -676,26 +750,88 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     );
     steps.push(uiBuildStep);
 
-    // Restore dist/control-ui/ to committed state to prevent dirty repo after update
-    // (ui:build regenerates assets with new hashes, which would block future updates)
-    const restoreUiStep = await runStep(
-      step(
-        "restore control-ui",
-        ["git", "-C", gitRoot, "checkout", "--", "dist/control-ui/"],
-        gitRoot,
-      ),
-    );
-    steps.push(restoreUiStep);
+    const doctorEntry = path.join(gitRoot, "openclaw.mjs");
+    const doctorEntryExists = await fs
+      .stat(doctorEntry)
+      .then(() => true)
+      .catch(() => false);
+    if (!doctorEntryExists) {
+      steps.push({
+        name: "openclaw doctor entry",
+        command: `verify ${doctorEntry}`,
+        cwd: gitRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: `missing ${doctorEntry}`,
+      });
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "doctor-entry-missing",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
+    const doctorArgv = [process.execPath, doctorEntry, "doctor", "--non-interactive"];
     const doctorStep = await runStep(
-      step(
-        "openclaw doctor",
-        managerScriptArgs(manager, "openclaw", ["doctor", "--non-interactive"]),
-        gitRoot,
-        { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-      ),
+      step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
     );
     steps.push(doctorStep);
+
+    const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+    if (!uiIndexHealth.exists) {
+      const repairArgv = managerScriptArgs(manager, "ui:build");
+      const started = Date.now();
+      const repairResult = await runCommand(repairArgv, { cwd: gitRoot, timeoutMs });
+      const repairStep: UpdateStepResult = {
+        name: "ui:build (post-doctor repair)",
+        command: repairArgv.join(" "),
+        cwd: gitRoot,
+        durationMs: Date.now() - started,
+        exitCode: repairResult.code,
+        stdoutTail: trimLogTail(repairResult.stdout, MAX_LOG_CHARS),
+        stderrTail: trimLogTail(repairResult.stderr, MAX_LOG_CHARS),
+      };
+      steps.push(repairStep);
+
+      if (repairResult.code !== 0) {
+        return {
+          status: "error",
+          mode: "git",
+          root: gitRoot,
+          reason: repairStep.name,
+          before: { sha: beforeSha, version: beforeVersion },
+          steps,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+
+      const repairedUiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
+      if (!repairedUiIndexHealth.exists) {
+        const uiIndexPath =
+          repairedUiIndexHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(gitRoot);
+        steps.push({
+          name: "ui assets verify",
+          command: `verify ${uiIndexPath}`,
+          cwd: gitRoot,
+          durationMs: 0,
+          exitCode: 1,
+          stderrTail: `missing ${uiIndexPath}`,
+        });
+        return {
+          status: "error",
+          mode: "git",
+          root: gitRoot,
+          reason: "ui-assets-missing",
+          before: { sha: beforeSha, version: beforeVersion },
+          steps,
+          durationMs: Date.now() - startedAt,
+        };
+      }
+    }
 
     const failedStep = steps.find((s) => s.exitCode !== 0);
     const afterShaStep = await runStep(
@@ -733,7 +869,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
     const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
-    const spec = `${packageName}@${normalizeTag(opts.tag)}`;
+    await cleanupGlobalRenameDirs({
+      globalRoot: path.dirname(pkgRoot),
+      packageName,
+    });
+    const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
+    const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
+    const spec = `${packageName}@${tag}`;
     const updateStep = await runStep({
       runCommand,
       name: "global update",

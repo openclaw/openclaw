@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 
 describe("msteams media-helpers", () => {
@@ -46,7 +45,9 @@ describe("msteams media-helpers", () => {
 
     it("defaults to application/octet-stream for unknown extensions", async () => {
       expect(await getMimeType("https://example.com/image")).toBe("application/octet-stream");
-      expect(await getMimeType("https://example.com/image.unknown")).toBe("application/octet-stream");
+      expect(await getMimeType("https://example.com/image.unknown")).toBe(
+        "application/octet-stream",
+      );
     });
 
     it("is case-insensitive", async () => {
@@ -110,15 +111,17 @@ describe("msteams media-helpers", () => {
 
     it("extracts original filename with uppercase UUID", async () => {
       expect(
-        await extractFilename("/media/inbound/Document---A1B2C3D4-E5F6-7890-ABCD-EF1234567890.docx"),
+        await extractFilename(
+          "/media/inbound/Document---A1B2C3D4-E5F6-7890-ABCD-EF1234567890.docx",
+        ),
       ).toBe("Document.docx");
     });
 
     it("falls back to UUID filename for legacy paths", async () => {
       // UUID-only filename (legacy format, no embedded name)
-      expect(
-        await extractFilename("/media/inbound/a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf"),
-      ).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf");
+      expect(await extractFilename("/media/inbound/a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf")).toBe(
+        "a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
+      );
     });
 
     it("handles --- in filename without valid UUID pattern", async () => {

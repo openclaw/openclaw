@@ -1,6 +1,7 @@
 ---
 summary: "SSH tunnel setup for OpenClaw.app connecting to a remote gateway"
 read_when: "Connecting the macOS app to a remote gateway over SSH"
+title: "Remote Gateway Setup"
 ---
 
 # Running OpenClaw.app with a Remote Gateway
@@ -112,6 +113,7 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist
 ```
 
 The tunnel will now:
+
 - Start automatically when you log in
 - Restart if it crashes
 - Keep running in the background
@@ -145,11 +147,11 @@ launchctl bootout gui/$UID/bot.molt.ssh-tunnel
 
 ## How It Works
 
-| Component | What It Does |
-|-----------|--------------|
-| `LocalForward 18789 127.0.0.1:18789` | Forwards local port 18789 to remote port 18789 |
-| `ssh -N` | SSH without executing remote commands (just port forwarding) |
-| `KeepAlive` | Automatically restarts tunnel if it crashes |
-| `RunAtLoad` | Starts tunnel when the agent loads |
+| Component                            | What It Does                                                 |
+| ------------------------------------ | ------------------------------------------------------------ |
+| `LocalForward 18789 127.0.0.1:18789` | Forwards local port 18789 to remote port 18789               |
+| `ssh -N`                             | SSH without executing remote commands (just port forwarding) |
+| `KeepAlive`                          | Automatically restarts tunnel if it crashes                  |
+| `RunAtLoad`                          | Starts tunnel when the agent loads                           |
 
 OpenClaw.app connects to `ws://127.0.0.1:18789` on your client machine. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.

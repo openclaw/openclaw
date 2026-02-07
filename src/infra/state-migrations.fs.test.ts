@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-
 import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 
 describe("state migrations fs", () => {

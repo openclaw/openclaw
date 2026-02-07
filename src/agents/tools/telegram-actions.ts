@@ -1,6 +1,10 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { chunkMarkdownText } from "../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { chunkMarkdownText } from "../../auto-reply/chunk.js";
+import {
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramTargetChatType,
+} from "../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../telegram/reaction-level.js";
 import {
   deleteMessageTelegram,
@@ -11,10 +15,6 @@ import {
 } from "../../telegram/send.js";
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
-import {
-  resolveTelegramInlineButtonsScope,
-  resolveTelegramTargetChatType,
-} from "../../telegram/inline-buttons.js";
 import {
   createActionGate,
   jsonResult,
@@ -33,7 +33,9 @@ export function readTelegramButtons(
   params: Record<string, unknown>,
 ): TelegramButton[][] | undefined {
   const raw = params.buttons;
-  if (raw == null) return undefined;
+  if (raw == null) {
+    return undefined;
+  }
   if (!Array.isArray(raw)) {
     throw new Error("buttons must be an array of button rows");
   }

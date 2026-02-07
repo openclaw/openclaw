@@ -1,6 +1,7 @@
 ---
 description: Analyze GitHub issues (bugs or feature requests)
 ---
+
 Analyze GitHub issue(s): $ARGUMENTS
 
 For each issue:

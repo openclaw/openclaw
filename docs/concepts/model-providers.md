@@ -3,7 +3,9 @@ summary: "Model provider overview with example configs + CLI flows"
 read_when:
   - You need a provider-by-provider model setup reference
   - You want example configs or CLI onboarding commands for model providers
+title: "Model Providers"
 ---
+
 # Model providers
 
 This page covers **LLM/model providers** (not chat channels like WhatsApp/Telegram).
@@ -11,7 +13,7 @@ For model selection rules, see [/concepts/models](/concepts/models).
 
 ## Quick rules
 
-- Model refs use `provider/model` (example: `opencode/claude-opus-4-5`).
+- Model refs use `provider/model` (example: `opencode/claude-opus-4-6`).
 - If you set `agents.defaults.models`, it becomes the allowlist.
 - CLI helpers: `openclaw onboard`, `openclaw models list`, `openclaw models set <provider/model>`.
 
@@ -24,12 +26,12 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `openai`
 - Auth: `OPENAI_API_KEY`
-- Example model: `openai/gpt-5.2`
+- Example model: `openai/gpt-5.1-codex`
 - CLI: `openclaw onboard --auth-choice openai-api-key`
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai/gpt-5.2" } } }
+  agents: { defaults: { model: { primary: "openai/gpt-5.1-codex" } } },
 }
 ```
 
@@ -37,12 +39,12 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `anthropic`
 - Auth: `ANTHROPIC_API_KEY` or `claude setup-token`
-- Example model: `anthropic/claude-opus-4-5`
+- Example model: `anthropic/claude-opus-4-6`
 - CLI: `openclaw onboard --auth-choice token` (paste setup-token) or `openclaw models auth paste-token --provider anthropic`
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } }
+  agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 }
 ```
 
@@ -50,12 +52,12 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `openai-codex`
 - Auth: OAuth (ChatGPT)
-- Example model: `openai-codex/gpt-5.2`
+- Example model: `openai-codex/gpt-5.3-codex`
 - CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "openai-codex/gpt-5.2" } } }
+  agents: { defaults: { model: { primary: "openai-codex/gpt-5.3-codex" } } },
 }
 ```
 
@@ -63,12 +65,12 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `opencode`
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
-- Example model: `opencode/claude-opus-4-5`
+- Example model: `opencode/claude-opus-4-6`
 - CLI: `openclaw onboard --auth-choice opencode-zen`
 
 ```json5
 {
-  agents: { defaults: { model: { primary: "opencode/claude-opus-4-5" } } }
+  agents: { defaults: { model: { primary: "opencode/claude-opus-4-6" } } },
 }
 ```
 
@@ -79,7 +81,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `google/gemini-3-pro-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`
 
-### Google Vertex / Antigravity / Gemini CLI
+### Google Vertex, Antigravity, and Gemini CLI
 
 - Providers: `google-vertex`, `google-antigravity`, `google-gemini-cli`
 - Auth: Vertex uses gcloud ADC; Antigravity/Gemini CLI use their respective auth flows
@@ -104,7 +106,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `vercel-ai-gateway`
 - Auth: `AI_GATEWAY_API_KEY`
-- Example model: `vercel-ai-gateway/anthropic/claude-opus-4.5`
+- Example model: `vercel-ai-gateway/anthropic/claude-opus-4.6`
 - CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
 
 ### Other built-in providers
@@ -131,18 +133,22 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`
 - Example model: `moonshot/kimi-k2.5`
-- Kimi K2 model IDs:
-  {/* moonshot-kimi-k2-model-refs:start */}
-  - `moonshot/kimi-k2.5`
-  - `moonshot/kimi-k2-0905-preview`
-  - `moonshot/kimi-k2-turbo-preview`
-  - `moonshot/kimi-k2-thinking`
-  - `moonshot/kimi-k2-thinking-turbo`
-  {/* moonshot-kimi-k2-model-refs:end */}
+
+Kimi K2 model IDs:
+
+{/_moonshot-kimi-k2-model-refs:start_/ && null}
+
+- `moonshot/kimi-k2.5`
+- `moonshot/kimi-k2-0905-preview`
+- `moonshot/kimi-k2-turbo-preview`
+- `moonshot/kimi-k2-thinking`
+- `moonshot/kimi-k2-thinking-turbo`
+  {/_moonshot-kimi-k2-model-refs:end_/ && null}
+
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "moonshot/kimi-k2.5" } }
+    defaults: { model: { primary: "moonshot/kimi-k2.5" } },
   },
   models: {
     mode: "merge",
@@ -151,10 +157,10 @@ Moonshot uses OpenAI-compatible endpoints, so configure it as a custom provider:
         baseUrl: "https://api.moonshot.ai/v1",
         apiKey: "${MOONSHOT_API_KEY}",
         api: "openai-completions",
-        models: [{ id: "kimi-k2.5", name: "Kimi K2.5" }]
-      }
-    }
-  }
+        models: [{ id: "kimi-k2.5", name: "Kimi K2.5" }],
+      },
+    },
+  },
 }
 ```
 
@@ -170,8 +176,8 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 {
   env: { KIMI_API_KEY: "sk-..." },
   agents: {
-    defaults: { model: { primary: "kimi-coding/k2p5" } }
-  }
+    defaults: { model: { primary: "kimi-coding/k2p5" } },
+  },
 }
 ```
 
@@ -186,6 +192,7 @@ openclaw models auth login --provider qwen-portal --set-default
 ```
 
 Model refs:
+
 - `qwen-portal/coder-model`
 - `qwen-portal/vision-model`
 
@@ -203,7 +210,7 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" } }
+    defaults: { model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.1" } },
   },
   models: {
     mode: "merge",
@@ -212,10 +219,10 @@ Synthetic provides Anthropic-compatible models behind the `synthetic` provider:
         baseUrl: "https://api.synthetic.new/anthropic",
         apiKey: "${SYNTHETIC_API_KEY}",
         api: "anthropic-messages",
-        models: [{ id: "hf:MiniMaxAI/MiniMax-M2.1", name: "MiniMax M2.1" }]
-      }
-    }
-  }
+        models: [{ id: "hf:MiniMaxAI/MiniMax-M2.1", name: "MiniMax M2.1" }],
+      },
+    },
+  },
 }
 ```
 
@@ -235,7 +242,7 @@ Ollama is a local LLM runtime that provides an OpenAI-compatible API:
 - Provider: `ollama`
 - Auth: None required (local server)
 - Example model: `ollama/llama3.3`
-- Installation: https://ollama.ai
+- Installation: [https://ollama.ai](https://ollama.ai)
 
 ```bash
 # Install Ollama, then pull a model:
@@ -245,8 +252,8 @@ ollama pull llama3.3
 ```json5
 {
   agents: {
-    defaults: { model: { primary: "ollama/llama3.3" } }
-  }
+    defaults: { model: { primary: "ollama/llama3.3" } },
+  },
 }
 ```
 
@@ -261,8 +268,8 @@ Example (OpenAI‑compatible):
   agents: {
     defaults: {
       model: { primary: "lmstudio/minimax-m2.1-gs32" },
-      models: { "lmstudio/minimax-m2.1-gs32": { alias: "Minimax" } }
-    }
+      models: { "lmstudio/minimax-m2.1-gs32": { alias: "Minimax" } },
+    },
   },
   models: {
     providers: {
@@ -278,16 +285,17 @@ Example (OpenAI‑compatible):
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 200000,
-            maxTokens: 8192
-          }
-        ]
-      }
-    }
-  }
+            maxTokens: 8192,
+          },
+        ],
+      },
+    },
+  },
 }
 ```
 
 Notes:
+
 - For custom providers, `reasoning`, `input`, `cost`, `contextWindow`, and `maxTokens` are optional.
   When omitted, OpenClaw defaults to:
   - `reasoning: false`
@@ -301,7 +309,7 @@ Notes:
 
 ```bash
 openclaw onboard --auth-choice opencode-zen
-openclaw models set opencode/claude-opus-4-5
+openclaw models set opencode/claude-opus-4-6
 openclaw models list
 ```
 

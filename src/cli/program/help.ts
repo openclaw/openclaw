@@ -1,9 +1,9 @@
 import type { Command } from "commander";
+import type { ProgramContext } from "./context.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { isRich, theme } from "../../terminal/theme.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
-import type { ProgramContext } from "./context.js";
 
 const CLI_NAME = resolveCliName();
 
@@ -47,6 +47,9 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   program.option("--no-color", "Disable ANSI colors", false);
 
   program.configureHelp({
+    // sort options and subcommands alphabetically
+    sortSubcommands: true,
+    sortOptions: true,
     optionTerm: (option) => theme.option(option.flags),
     subcommandTerm: (cmd) => theme.command(cmd.name()),
   });
@@ -73,7 +76,9 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   }
 
   program.addHelpText("beforeAll", () => {
-    if (hasEmittedCliBanner()) return "";
+    if (hasEmittedCliBanner()) {
+      return "";
+    }
     const rich = isRich();
     const line = formatCliBannerLine(ctx.programVersion, { richTty: rich });
     return `\n${line}\n`;
@@ -84,7 +89,9 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
   ).join("\n");
 
   program.addHelpText("afterAll", ({ command }) => {
-    if (command !== program) return "";
+    if (command !== program) {
+      return "";
+    }
     const docs = formatDocsLink("/cli", "docs.openclaw.ai/cli");
     return `\n${theme.heading("Examples:")}\n${fmtExamples}\n\n${theme.muted("Docs:")} ${docs}\n`;
   });

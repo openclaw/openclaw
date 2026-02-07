@@ -1,15 +1,15 @@
-import fs from "node:fs/promises";
 import type { Command } from "commander";
+import fs from "node:fs/promises";
+import type { NodesRpcOpts } from "./types.js";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
+import { shortenHomePath } from "../../utils.js";
 import { writeBase64ToFile } from "../nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../nodes-canvas.js";
 import { parseTimeoutMs } from "../nodes-run.js";
 import { buildA2UITextJsonl, validateA2UIJsonl } from "./a2ui-jsonl.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
-import type { NodesRpcOpts } from "./types.js";
-import { shortenHomePath } from "../../utils.js";
 
 async function invokeCanvas(opts: NodesRpcOpts, command: string, params?: Record<string, unknown>) {
   const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
@@ -72,7 +72,7 @@ export function registerNodesCanvasCommands(nodes: Command) {
             invokeParams.timeoutMs = timeoutMs;
           }
 
-          const raw = (await callGatewayCli("node.invoke", opts, invokeParams)) as unknown;
+          const raw = await callGatewayCli("node.invoke", opts, invokeParams);
           const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
           const payload = parseCanvasSnapshotPayload(res.payload);
           const filePath = canvasSnapshotTempPath({
@@ -112,7 +112,9 @@ export function registerNodesCanvasCommands(nodes: Command) {
             height: opts.height ? Number.parseFloat(opts.height) : undefined,
           };
           const params: Record<string, unknown> = {};
-          if (opts.target) params.url = String(opts.target);
+          if (opts.target) {
+            params.url = String(opts.target);
+          }
           if (
             Number.isFinite(placement.x) ||
             Number.isFinite(placement.y) ||
@@ -176,7 +178,9 @@ export function registerNodesCanvasCommands(nodes: Command) {
       .action(async (jsArg: string | undefined, opts: NodesRpcOpts) => {
         await runNodesCommand("canvas eval", async () => {
           const js = opts.js ?? jsArg;
-          if (!js) throw new Error("missing --js or <js>");
+          if (!js) {
+            throw new Error("missing --js or <js>");
+          }
           const raw = await invokeCanvas(opts, "canvas.eval", {
             javaScript: js,
           });
@@ -188,8 +192,9 @@ export function registerNodesCanvasCommands(nodes: Command) {
             typeof raw === "object" && raw !== null
               ? (raw as { payload?: { result?: string } }).payload
               : undefined;
-          if (payload?.result) defaultRuntime.log(payload.result);
-          else {
+          if (payload?.result) {
+            defaultRuntime.log(payload.result);
+          } else {
             const { ok } = getNodesTheme();
             defaultRuntime.log(ok("canvas eval ok"));
           }

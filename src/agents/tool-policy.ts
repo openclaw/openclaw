@@ -1,3 +1,5 @@
+import type { AnyAgentTool } from "./tools/common.js";
+
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 type ToolProfilePolicy = {
@@ -56,6 +58,8 @@ export const TOOL_GROUPS: Record<string, string[]> = {
   ],
 };
 
+const OWNER_ONLY_TOOL_NAMES = new Set<string>(["whatsapp_login"]);
+
 const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   minimal: {
     allow: ["session_status"],
@@ -80,8 +84,35 @@ export function normalizeToolName(name: string) {
   return TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
+export function isOwnerOnlyToolName(name: string) {
+  return OWNER_ONLY_TOOL_NAMES.has(normalizeToolName(name));
+}
+
+export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
+  const withGuard = tools.map((tool) => {
+    if (!isOwnerOnlyToolName(tool.name)) {
+      return tool;
+    }
+    if (senderIsOwner || !tool.execute) {
+      return tool;
+    }
+    return {
+      ...tool,
+      execute: async () => {
+        throw new Error("Tool restricted to owner senders.");
+      },
+    };
+  });
+  if (senderIsOwner) {
+    return withGuard;
+  }
+  return withGuard.filter((tool) => !isOwnerOnlyToolName(tool.name));
+}
+
 export function normalizeToolList(list?: string[]) {
-  if (!list) return [];
+  if (!list) {
+    return [];
+  }
   return list.map(normalizeToolName).filter(Boolean);
 }
 
@@ -118,11 +149,17 @@ export function expandToolGroups(list?: string[]) {
 export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
   const entries: string[] = [];
   for (const policy of policies) {
-    if (!policy?.allow) continue;
+    if (!policy?.allow) {
+      continue;
+    }
     for (const value of policy.allow) {
-      if (typeof value !== "string") continue;
+      if (typeof value !== "string") {
+        continue;
+      }
       const trimmed = value.trim();
-      if (trimmed) entries.push(trimmed);
+      if (trimmed) {
+        entries.push(trimmed);
+      }
     }
   }
   return entries;
@@ -136,7 +173,9 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
   const byPlugin = new Map<string, string[]>();
   for (const tool of params.tools) {
     const meta = params.toolMeta(tool);
-    if (!meta) continue;
+    if (!meta) {
+      continue;
+    }
     const name = normalizeToolName(tool.name);
     all.push(name);
     const pluginId = meta.pluginId.toLowerCase();
@@ -151,7 +190,9 @@ export function expandPluginGroups(
   list: string[] | undefined,
   groups: PluginToolGroups,
 ): string[] | undefined {
-  if (!list || list.length === 0) return list;
+  if (!list || list.length === 0) {
+    return list;
+  }
   const expanded: string[] = [];
   for (const entry of list) {
     const normalized = normalizeToolName(entry);
@@ -177,7 +218,9 @@ export function expandPolicyWithPluginGroups(
   policy: ToolPolicyLike | undefined,
   groups: PluginToolGroups,
 ): ToolPolicyLike | undefined {
-  if (!policy) return undefined;
+  if (!policy) {
+    return undefined;
+  }
   return {
     allow: expandPluginGroups(policy.allow, groups),
     deny: expandPluginGroups(policy.deny, groups),
@@ -201,12 +244,20 @@ export function stripPluginOnlyAllowlist(
   const unknownAllowlist: string[] = [];
   let hasCoreEntry = false;
   for (const entry of normalized) {
+    if (entry === "*") {
+      hasCoreEntry = true;
+      continue;
+    }
     const isPluginEntry =
       entry === "group:plugins" || pluginIds.has(entry) || pluginTools.has(entry);
     const expanded = expandToolGroups([entry]);
     const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
-    if (isCoreEntry) hasCoreEntry = true;
-    if (!isCoreEntry && !isPluginEntry) unknownAllowlist.push(entry);
+    if (isCoreEntry) {
+      hasCoreEntry = true;
+    }
+    if (!isCoreEntry && !isPluginEntry) {
+      unknownAllowlist.push(entry);
+    }
   }
   const strippedAllowlist = !hasCoreEntry;
   // When an allowlist contains only plugin tools, we strip it to avoid accidentally
@@ -223,10 +274,16 @@ export function stripPluginOnlyAllowlist(
 }
 
 export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
-  if (!profile) return undefined;
+  if (!profile) {
+    return undefined;
+  }
   const resolved = TOOL_PROFILES[profile as ToolProfileId];
-  if (!resolved) return undefined;
-  if (!resolved.allow && !resolved.deny) return undefined;
+  if (!resolved) {
+    return undefined;
+  }
+  if (!resolved.allow && !resolved.deny) {
+    return undefined;
+  }
   return {
     allow: resolved.allow ? [...resolved.allow] : undefined,
     deny: resolved.deny ? [...resolved.deny] : undefined,

@@ -1,9 +1,8 @@
 import crypto from "node:crypto";
-
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
@@ -18,14 +17,22 @@ export async function prependSystemEvents(params: {
 }): Promise<string> {
   const compactSystemEvent = (line: string): string | null => {
     const trimmed = line.trim();
-    if (!trimmed) return null;
+    if (!trimmed) {
+      return null;
+    }
     const lower = trimmed.toLowerCase();
-    if (lower.includes("reason periodic")) return null;
+    if (lower.includes("reason periodic")) {
+      return null;
+    }
     // Filter out the actual heartbeat prompt, but not cron jobs that mention "heartbeat"
     // The heartbeat prompt starts with "Read HEARTBEAT.md" - cron payloads won't match this
-    if (lower.startsWith("read heartbeat.md")) return null;
+    if (lower.startsWith("read heartbeat.md")) {
+      return null;
+    }
     // Also filter heartbeat poll/wake noise
-    if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) return null;
+    if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
+      return null;
+    }
     if (trimmed.startsWith("Node:")) {
       return trimmed.replace(/ · last input [^·]+/i, "").trim();
     }
@@ -43,10 +50,16 @@ export async function prependSystemEvents(params: {
 
   const resolveSystemEventTimezone = (cfg: OpenClawConfig) => {
     const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
-    if (!raw) return { mode: "local" as const };
+    if (!raw) {
+      return { mode: "local" as const };
+    }
     const lowered = raw.toLowerCase();
-    if (lowered === "utc" || lowered === "gmt") return { mode: "utc" as const };
-    if (lowered === "local" || lowered === "host") return { mode: "local" as const };
+    if (lowered === "utc" || lowered === "gmt") {
+      return { mode: "utc" as const };
+    }
+    if (lowered === "local" || lowered === "host") {
+      return { mode: "local" as const };
+    }
     if (lowered === "user") {
       return {
         mode: "iana" as const,
@@ -87,19 +100,27 @@ export async function prependSystemEvents(params: {
     const min = pick("minute");
     const sec = pick("second");
     const tz = [...parts]
-      .reverse()
+      .toReversed()
       .find((part) => part.type === "timeZoneName")
       ?.value?.trim();
-    if (!yyyy || !mm || !dd || !hh || !min || !sec) return undefined;
+    if (!yyyy || !mm || !dd || !hh || !min || !sec) {
+      return undefined;
+    }
     return `${yyyy}-${mm}-${dd} ${hh}:${min}:${sec}${tz ? ` ${tz}` : ""}`;
   };
 
   const formatSystemEventTimestamp = (ts: number, cfg: OpenClawConfig) => {
     const date = new Date(ts);
-    if (Number.isNaN(date.getTime())) return "unknown-time";
+    if (Number.isNaN(date.getTime())) {
+      return "unknown-time";
+    }
     const zone = resolveSystemEventTimezone(cfg);
-    if (zone.mode === "utc") return formatUtcTimestamp(date);
-    if (zone.mode === "local") return formatZonedTimestamp(date) ?? "unknown-time";
+    if (zone.mode === "utc") {
+      return formatUtcTimestamp(date);
+    }
+    if (zone.mode === "local") {
+      return formatZonedTimestamp(date) ?? "unknown-time";
+    }
     return formatZonedTimestamp(date, zone.timeZone) ?? "unknown-time";
   };
 
@@ -109,16 +130,22 @@ export async function prependSystemEvents(params: {
     ...queued
       .map((event) => {
         const compacted = compactSystemEvent(event.text);
-        if (!compacted) return null;
+        if (!compacted) {
+          return null;
+        }
         return `[${formatSystemEventTimestamp(event.ts, params.cfg)}] ${compacted}`;
       })
       .filter((v): v is string => Boolean(v)),
   );
   if (params.isMainSession && params.isNewSession) {
     const summary = await buildChannelSummary(params.cfg);
-    if (summary.length > 0) systemLines.unshift(...summary);
+    if (summary.length > 0) {
+      systemLines.unshift(...summary);
+    }
   }
-  if (systemLines.length === 0) return params.prefixedBodyBase;
+  if (systemLines.length === 0) {
+    return params.prefixedBodyBase;
+  }
 
   const block = systemLines.map((l) => `System: ${l}`).join("\n");
   return `${block}\n\n${params.prefixedBodyBase}`;
@@ -252,9 +279,13 @@ export async function incrementCompactionCount(params: {
     now = Date.now(),
     tokensAfter,
   } = params;
-  if (!sessionStore || !sessionKey) return undefined;
+  if (!sessionStore || !sessionKey) {
+    return undefined;
+  }
   const entry = sessionStore[sessionKey] ?? sessionEntry;
-  if (!entry) return undefined;
+  if (!entry) {
+    return undefined;
+  }
   const nextCount = (entry.compactionCount ?? 0) + 1;
   // Build update payload with compaction count and optionally updated token counts
   const updates: Partial<SessionEntry> = {

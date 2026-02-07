@@ -1,6 +1,7 @@
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { withProgress } from "../../cli/progress.js";
 import { type OpenClawConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
@@ -8,7 +9,6 @@ import { formatAge } from "../../infra/channel-summary.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
-import { formatCliCommand } from "../../cli/command-format.js";
 import { theme } from "../../terminal/theme.js";
 import { type ChatChannel, formatChannelAccountLabel, requireValidConfig } from "./shared.js";
 
@@ -47,8 +47,12 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
         typeof account.lastOutboundAt === "number" && Number.isFinite(account.lastOutboundAt)
           ? account.lastOutboundAt
           : null;
-      if (inboundAt) bits.push(`in:${formatAge(Date.now() - inboundAt)}`);
-      if (outboundAt) bits.push(`out:${formatAge(Date.now() - outboundAt)}`);
+      if (inboundAt) {
+        bits.push(`in:${formatAge(Date.now() - inboundAt)}`);
+      }
+      if (outboundAt) {
+        bits.push(`out:${formatAge(Date.now() - outboundAt)}`);
+      }
       if (typeof account.mode === "string" && account.mode.length > 0) {
         bits.push(`mode:${account.mode}`);
       }
@@ -56,9 +60,13 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
         const bot = account.bot as { username?: string | null } | undefined;
         const probeBot = (account.probe as { bot?: { username?: string | null } } | undefined)?.bot;
         const raw = bot?.username ?? probeBot?.username ?? "";
-        if (typeof raw !== "string") return "";
+        if (typeof raw !== "string") {
+          return "";
+        }
         const trimmed = raw.trim();
-        if (!trimmed) return "";
+        if (!trimmed) {
+          return "";
+        }
         return trimmed.startsWith("@") ? trimmed : `@${trimmed}`;
       })();
       if (botUsername) {
@@ -130,7 +138,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   for (const plugin of plugins) {
     const accounts = accountPayloads[plugin.id];
     if (accounts && accounts.length > 0) {
-      lines.push(...accountLines(plugin.id as ChatChannel, accounts));
+      lines.push(...accountLines(plugin.id, accounts));
     }
   }
 
@@ -164,7 +172,9 @@ async function formatConfigChannelsStatusLines(
   if (meta.mode) {
     lines.push(`Mode: ${meta.mode}`);
   }
-  if (meta.path || meta.mode) lines.push("");
+  if (meta.path || meta.mode) {
+    lines.push("");
+  }
 
   const accountLines = (provider: ChatChannel, accounts: Array<Record<string, unknown>>) =>
     accounts.map((account) => {
@@ -206,7 +216,9 @@ async function formatConfigChannelsStatusLines(
   const plugins = listChannelPlugins();
   for (const plugin of plugins) {
     const accountIds = plugin.config.listAccountIds(cfg);
-    if (!accountIds.length) continue;
+    if (!accountIds.length) {
+      continue;
+    }
     const snapshots: ChannelAccountSnapshot[] = [];
     for (const accountId of accountIds) {
       const snapshot = await buildChannelAccountSnapshot({
@@ -217,7 +229,7 @@ async function formatConfigChannelsStatusLines(
       snapshots.push(snapshot);
     }
     if (snapshots.length > 0) {
-      lines.push(...accountLines(plugin.id as ChatChannel, snapshots));
+      lines.push(...accountLines(plugin.id, snapshots));
     }
   }
 
@@ -235,7 +247,9 @@ export async function channelsStatusCommand(
   const timeoutMs = Number(opts.timeout ?? 10_000);
   const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
-  if (shouldLogStatus) runtime.log(statusLabel);
+  if (shouldLogStatus) {
+    runtime.log(statusLabel);
+  }
   try {
     const payload = await withProgress(
       {
@@ -254,11 +268,13 @@ export async function channelsStatusCommand(
       runtime.log(JSON.stringify(payload, null, 2));
       return;
     }
-    runtime.log(formatGatewayChannelsStatusLines(payload as Record<string, unknown>).join("\n"));
+    runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
     runtime.error(`Gateway not reachable: ${String(err)}`);
     const cfg = await requireValidConfig(runtime);
-    if (!cfg) return;
+    if (!cfg) {
+      return;
+    }
     const snapshot = await readConfigFileSnapshot();
     const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
     runtime.log(

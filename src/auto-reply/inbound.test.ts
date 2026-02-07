@@ -1,13 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
-import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
+import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   buildInboundDedupeKey,
@@ -16,13 +14,13 @@ import {
 } from "./reply/inbound-dedupe.js";
 import { formatInboundBodyWithSenderMeta } from "./reply/inbound-sender-meta.js";
 import { normalizeInboundTextNewlines } from "./reply/inbound-text.js";
-import { resolveGroupRequireMention } from "./reply/groups.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
   normalizeMentionText,
 } from "./reply/mentions.js";
 import { initSessionState } from "./reply/session.js";
+import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
 
 describe("applyTemplate", () => {
   it("renders primitive values", () => {

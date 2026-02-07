@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { buildTelegramMessageContext } from "./bot-message-context.js";
 
 describe("buildTelegramMessageContext dm thread sessions", () => {

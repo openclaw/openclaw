@@ -2,7 +2,9 @@
 summary: "Gateway lifecycle on macOS (launchd)"
 read_when:
   - Integrating the mac app with the gateway lifecycle
+title: "Gateway Lifecycle"
 ---
+
 # Gateway lifecycle on macOS
 
 The macOS app **manages the Gateway via launchd** by default and does not spawn

@@ -1,21 +1,33 @@
+import type { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
-import type { Command } from "commander";
-
+import { movePathToTrash } from "../browser/trash.js";
 import { STATE_DIR } from "../config/paths.js";
 import { danger, info } from "../globals.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { defaultRuntime } from "../runtime.js";
-import { movePathToTrash } from "../browser/trash.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 
-function bundledExtensionRootDir() {
-  const here = path.dirname(fileURLToPath(import.meta.url));
+export function resolveBundledExtensionRootDir(
+  here = path.dirname(fileURLToPath(import.meta.url)),
+) {
+  let current = here;
+  while (true) {
+    const candidate = path.join(current, "assets", "chrome-extension");
+    if (hasManifest(candidate)) {
+      return candidate;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+
   return path.resolve(here, "../../assets/chrome-extension");
 }
 
@@ -31,7 +43,7 @@ export async function installChromeExtension(opts?: {
   stateDir?: string;
   sourceDir?: string;
 }): Promise<{ path: string }> {
-  const src = opts?.sourceDir ?? bundledExtensionRootDir();
+  const src = opts?.sourceDir ?? resolveBundledExtensionRootDir();
   if (!hasManifest(src)) {
     throw new Error("Bundled Chrome extension is missing. Reinstall OpenClaw and try again.");
   }
@@ -120,6 +132,8 @@ export function registerBrowserExtensionCommands(
       const displayPath = shortenHomePath(dir);
       defaultRuntime.log(displayPath);
       const copied = await copyToClipboard(dir).catch(() => false);
-      if (copied) defaultRuntime.error(info("Copied to clipboard."));
+      if (copied) {
+        defaultRuntime.error(info("Copied to clipboard."));
+      }
     });
 }

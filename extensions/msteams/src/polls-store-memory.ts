@@ -18,7 +18,9 @@ export function createMSTeamsPollStoreMemory(initial: MSTeamsPoll[] = []): MSTea
 
   const recordVote = async (params: { pollId: string; voterId: string; selections: string[] }) => {
     const poll = polls.get(params.pollId);
-    if (!poll) return null;
+    if (!poll) {
+      return null;
+    }
     const normalized = normalizeMSTeamsPollSelections(poll, params.selections);
     poll.votes[params.voterId] = normalized;
     poll.updatedAt = new Date().toISOString();

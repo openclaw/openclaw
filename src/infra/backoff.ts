@@ -14,12 +14,14 @@ export function computeBackoff(policy: BackoffPolicy, attempt: number) {
 }
 
 export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal) {
-  if (ms <= 0) return;
+  if (ms <= 0) {
+    return;
+  }
   try {
     await delay(ms, undefined, { signal: abortSignal });
   } catch (err) {
     if (abortSignal?.aborted) {
-      throw new Error("aborted");
+      throw new Error("aborted", { cause: err });
     }
     throw err;
   }

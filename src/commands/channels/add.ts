@@ -1,13 +1,13 @@
+import type { ChannelId } from "../../channels/plugins/types.js";
+import type { ChannelChoice } from "../onboard-types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelId } from "../../channels/plugins/types.js";
 import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { setupChannels } from "../onboard-channels.js";
-import type { ChannelChoice } from "../onboard-types.js";
 import {
   ensureOnboardingPluginInstalled,
   reloadOnboardingPluginRegistry,
@@ -52,7 +52,9 @@ export type ChannelsAddOptions = {
 };
 
 function parseList(value: string | undefined): string[] | undefined {
-  if (!value?.trim()) return undefined;
+  if (!value?.trim()) {
+    return undefined;
+  }
   const parsed = value
     .split(/[\n,;]+/g)
     .map((entry) => entry.trim())
@@ -62,10 +64,14 @@ function parseList(value: string | undefined): string[] | undefined {
 
 function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = raw.trim().toLowerCase();
-  if (!trimmed) return undefined;
+  if (!trimmed) {
+    return undefined;
+  }
   const workspaceDir = cfg ? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) : undefined;
   return listChannelPluginCatalogEntries({ workspaceDir }).find((entry) => {
-    if (entry.id.toLowerCase() === trimmed) return true;
+    if (entry.id.toLowerCase() === trimmed) {
+      return true;
+    }
     return (entry.meta.aliases ?? []).some((alias) => alias.trim().toLowerCase() === trimmed);
   });
 }
@@ -76,7 +82,9 @@ export async function channelsAddCommand(
   params?: { hasFlags?: boolean },
 ) {
   const cfg = await requireValidConfig(runtime);
-  if (!cfg) return;
+  if (!cfg) {
+    return;
+  }
   let nextConfig = cfg;
 
   const useWizard = shouldUseWizard(params);
@@ -108,7 +116,7 @@ export async function channelsAddCommand(
     if (wantsNames) {
       for (const channel of selection) {
         const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
-        const plugin = getChannelPlugin(channel as ChannelId);
+        const plugin = getChannelPlugin(channel);
         const account = plugin?.config.resolveAccount(nextConfig, accountId) as
           | { name?: string }
           | undefined;
@@ -149,7 +157,9 @@ export async function channelsAddCommand(
       workspaceDir,
     });
     nextConfig = result.cfg;
-    if (!result.installed) return;
+    if (!result.installed) {
+      return;
+    }
     reloadOnboardingPluginRegistry({ cfg: nextConfig, runtime, workspaceDir });
     channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
   }

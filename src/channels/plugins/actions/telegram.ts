@@ -1,3 +1,4 @@
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import {
   createActionGate,
   readNumberParam,
@@ -8,7 +9,6 @@ import {
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import { listEnabledTelegramAccounts } from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
 const providerId = "telegram";
 
@@ -42,12 +42,20 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const accounts = listEnabledTelegramAccounts(cfg).filter(
       (account) => account.tokenSource !== "none",
     );
-    if (accounts.length === 0) return [];
+    if (accounts.length === 0) {
+      return [];
+    }
     const gate = createActionGate(cfg.channels?.telegram?.actions);
     const actions = new Set<ChannelMessageActionName>(["send"]);
-    if (gate("reactions")) actions.add("react");
-    if (gate("deleteMessage")) actions.add("delete");
-    if (gate("editMessage")) actions.add("edit");
+    if (gate("reactions")) {
+      actions.add("react");
+    }
+    if (gate("deleteMessage")) {
+      actions.add("delete");
+    }
+    if (gate("editMessage")) {
+      actions.add("edit");
+    }
     if (gate("sticker", false)) {
       actions.add("sticker");
       actions.add("sticker-search");
@@ -58,16 +66,22 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     const accounts = listEnabledTelegramAccounts(cfg).filter(
       (account) => account.tokenSource !== "none",
     );
-    if (accounts.length === 0) return false;
+    if (accounts.length === 0) {
+      return false;
+    }
     return accounts.some((account) =>
       isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
     );
   },
   extractToolSend: ({ args }) => {
     const action = typeof args.action === "string" ? args.action.trim() : "";
-    if (action !== "sendMessage") return null;
+    if (action !== "sendMessage") {
+      return null;
+    }
     const to = typeof args.to === "string" ? args.to : undefined;
-    if (!to) return null;
+    if (!to) {
+      return null;
+    }
     const accountId = typeof args.accountId === "string" ? args.accountId.trim() : undefined;
     return { to, accountId };
   },

@@ -93,7 +93,9 @@ export function resolveMSTeamsGroupToolPolicy(
   params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
   const cfg = params.cfg.channels?.msteams;
-  if (!cfg) return undefined;
+  if (!cfg) {
+    return undefined;
+  }
   const groupId = params.groupId?.trim();
   const groupChannel = params.groupChannel?.trim();
   const groupSpace = params.groupSpace?.trim();
@@ -114,8 +116,12 @@ export function resolveMSTeamsGroupToolPolicy(
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
     });
-    if (senderPolicy) return senderPolicy;
-    if (resolved.channelConfig.tools) return resolved.channelConfig.tools;
+    if (senderPolicy) {
+      return senderPolicy;
+    }
+    if (resolved.channelConfig.tools) {
+      return resolved.channelConfig.tools;
+    }
     const teamSenderPolicy = resolveToolsBySender({
       toolsBySender: resolved.teamConfig?.toolsBySender,
       senderId: params.senderId,
@@ -123,7 +129,9 @@ export function resolveMSTeamsGroupToolPolicy(
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
     });
-    if (teamSenderPolicy) return teamSenderPolicy;
+    if (teamSenderPolicy) {
+      return teamSenderPolicy;
+    }
     return resolved.teamConfig?.tools;
   }
   if (resolved.teamConfig) {
@@ -134,11 +142,17 @@ export function resolveMSTeamsGroupToolPolicy(
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
     });
-    if (teamSenderPolicy) return teamSenderPolicy;
-    if (resolved.teamConfig.tools) return resolved.teamConfig.tools;
+    if (teamSenderPolicy) {
+      return teamSenderPolicy;
+    }
+    if (resolved.teamConfig.tools) {
+      return resolved.teamConfig.tools;
+    }
   }
 
-  if (!groupId) return undefined;
+  if (!groupId) {
+    return undefined;
+  }
 
   const channelCandidates = buildChannelKeyCandidates(
     groupId,
@@ -160,8 +174,12 @@ export function resolveMSTeamsGroupToolPolicy(
         senderUsername: params.senderUsername,
         senderE164: params.senderE164,
       });
-      if (senderPolicy) return senderPolicy;
-      if (match.entry.tools) return match.entry.tools;
+      if (senderPolicy) {
+        return senderPolicy;
+      }
+      if (match.entry.tools) {
+        return match.entry.tools;
+      }
       const teamSenderPolicy = resolveToolsBySender({
         toolsBySender: teamConfig?.toolsBySender,
         senderId: params.senderId,
@@ -169,7 +187,9 @@ export function resolveMSTeamsGroupToolPolicy(
         senderUsername: params.senderUsername,
         senderE164: params.senderE164,
       });
-      if (teamSenderPolicy) return teamSenderPolicy;
+      if (teamSenderPolicy) {
+        return teamSenderPolicy;
+      }
       return teamConfig?.tools;
     }
   }
@@ -192,7 +212,9 @@ export function resolveMSTeamsAllowlistMatch(params: {
   const allowFrom = params.allowFrom
     .map((entry) => String(entry).trim().toLowerCase())
     .filter(Boolean);
-  if (allowFrom.length === 0) return { allowed: false };
+  if (allowFrom.length === 0) {
+    return { allowed: false };
+  }
   if (allowFrom.includes("*")) {
     return { allowed: true, matchKey: "*", matchSource: "wildcard" };
   }
@@ -241,7 +263,11 @@ export function isMSTeamsGroupAllowed(params: {
   senderName?: string | null;
 }): boolean {
   const { groupPolicy } = params;
-  if (groupPolicy === "disabled") return false;
-  if (groupPolicy === "open") return true;
+  if (groupPolicy === "disabled") {
+    return false;
+  }
+  if (groupPolicy === "open") {
+    return true;
+  }
   return resolveMSTeamsAllowlistMatch(params).allowed;
 }

@@ -1,8 +1,7 @@
-import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { detectMime } from "../media/mime.js";
 
 export const A2UI_PATH = "/__openclaw__/a2ui";
@@ -44,7 +43,9 @@ async function resolveA2uiRoot(): Promise<string | null> {
 }
 
 async function resolveA2uiRootReal(): Promise<string | null> {
-  if (cachedA2uiRootReal !== undefined) return cachedA2uiRootReal;
+  if (cachedA2uiRootReal !== undefined) {
+    return cachedA2uiRootReal;
+  }
   if (!resolvingA2uiRoot) {
     resolvingA2uiRoot = (async () => {
       const root = await resolveA2uiRoot();
@@ -64,7 +65,9 @@ function normalizeUrlPath(rawPath: string): string {
 async function resolveA2uiFilePath(rootReal: string, urlPath: string) {
   const normalized = normalizeUrlPath(urlPath);
   const rel = normalized.replace(/^\/+/, "");
-  if (rel.split("/").some((p) => p === "..")) return null;
+  if (rel.split("/").some((p) => p === "..")) {
+    return null;
+  }
 
   let candidate = path.join(rootReal, rel);
   if (normalized.endsWith("/")) {
@@ -83,9 +86,13 @@ async function resolveA2uiFilePath(rootReal: string, urlPath: string) {
   const rootPrefix = rootReal.endsWith(path.sep) ? rootReal : `${rootReal}${path.sep}`;
   try {
     const lstat = await fs.lstat(candidate);
-    if (lstat.isSymbolicLink()) return null;
+    if (lstat.isSymbolicLink()) {
+      return null;
+    }
     const real = await fs.realpath(candidate);
-    if (!real.startsWith(rootPrefix)) return null;
+    if (!real.startsWith(rootPrefix)) {
+      return null;
+    }
     return real;
   } catch {
     return null;
@@ -156,12 +163,16 @@ export async function handleA2uiHttpRequest(
   res: ServerResponse,
 ): Promise<boolean> {
   const urlRaw = req.url;
-  if (!urlRaw) return false;
+  if (!urlRaw) {
+    return false;
+  }
 
   const url = new URL(urlRaw, "http://localhost");
   const basePath =
     url.pathname === A2UI_PATH || url.pathname.startsWith(`${A2UI_PATH}/`) ? A2UI_PATH : undefined;
-  if (!basePath) return false;
+  if (!basePath) {
+    return false;
+  }
 
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import { formatRawAssistantErrorForUi } from "./pi-embedded-helpers.js";
 
 describe("formatRawAssistantErrorForUi", () => {

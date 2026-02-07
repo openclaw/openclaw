@@ -1,15 +1,9 @@
-import type {
-  MessageEvent,
-  TextEventMessage,
-  StickerEventMessage,
-  LocationEventMessage,
-  EventSource,
-  PostbackEvent,
-} from "@line/bot-sdk";
+import type { MessageEvent, StickerEventMessage, EventSource, PostbackEvent } from "@line/bot-sdk";
+import type { OpenClawConfig } from "../config/config.js";
+import type { ResolvedLineAccount } from "./types.js";
 import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../auto-reply/envelope.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { formatLocationText, toLocationContext } from "../channels/location.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
@@ -19,7 +13,6 @@ import {
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import type { ResolvedLineAccount } from "./types.js";
 
 interface MediaRef {
   path: string;
@@ -102,10 +95,10 @@ function describeStickerKeywords(sticker: StickerEventMessage): string {
 
 function extractMessageText(message: MessageEvent["message"]): string {
   if (message.type === "text") {
-    return (message as TextEventMessage).text;
+    return message.text;
   }
   if (message.type === "location") {
-    const loc = message as LocationEventMessage;
+    const loc = message;
     return (
       formatLocationText({
         latitude: loc.latitude,
@@ -116,7 +109,7 @@ function extractMessageText(message: MessageEvent["message"]): string {
     );
   }
   if (message.type === "sticker") {
-    const sticker = message as StickerEventMessage;
+    const sticker = message;
     const packageName = STICKER_PACKAGES[sticker.packageId] ?? "sticker";
     const keywords = describeStickerKeywords(sticker);
 
@@ -222,7 +215,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   // Build location context if applicable
   let locationContext: ReturnType<typeof toLocationContext> | undefined;
   if (message.type === "location") {
-    const loc = message as LocationEventMessage;
+    const loc = message;
     locationContext = toLocationContext({
       latitude: loc.latitude,
       longitude: loc.longitude,
@@ -342,7 +335,9 @@ export async function buildLinePostbackContext(params: {
 
   const timestamp = event.timestamp;
   const rawData = event.postback?.data?.trim() ?? "";
-  if (!rawData) return null;
+  if (!rawData) {
+    return null;
+  }
   let rawBody = rawData;
   if (rawData.includes("line.action=")) {
     const params = new URLSearchParams(rawData);

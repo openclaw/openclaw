@@ -3,6 +3,7 @@ summary: "Date and time handling across envelopes, prompts, tools, and connector
 read_when:
   - You are changing how timestamps are shown to the model or users
   - You are debugging time formatting in messages or system prompt output
+title: "Date and Time"
 ---
 
 # Date & Time
@@ -28,9 +29,9 @@ You can override this behavior:
     defaults: {
       envelopeTimezone: "local", // "utc" | "local" | "user" | IANA timezone
       envelopeTimestamp: "on", // "on" | "off"
-      envelopeElapsed: "on" // "on" | "off"
-    }
-  }
+      envelopeElapsed: "on", // "on" | "off"
+    },
+  },
 }
 ```
 
@@ -90,9 +91,9 @@ System: [2026-01-12 12:19:17 PST] Model switched.
   agents: {
     defaults: {
       userTimezone: "America/Chicago",
-      timeFormat: "auto" // auto | 12 | 24
-    }
-  }
+      timeFormat: "auto", // auto | 12 | 24
+    },
+  },
 }
 ```
 

@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 
@@ -17,6 +16,9 @@ vi.mock("../infra/update-runner.js", () => ({
   })),
 }));
 
+import { writeConfigFile } from "../config/config.js";
+import { runGatewayUpdate } from "../infra/update-runner.js";
+import { sleep } from "../utils.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -43,8 +45,6 @@ afterAll(async () => {
   ws.close();
   await server.close();
 });
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const connectNodeClient = async (params: {
   port: number;
@@ -73,17 +73,23 @@ const connectNodeClient = async (params: {
     commands: params.commands,
     onEvent: params.onEvent,
     onHelloOk: () => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       resolveReady?.();
     },
     onConnectError: (err) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       rejectReady?.(err);
     },
     onClose: (code, reason) => {
-      if (settled) return;
+      if (settled) {
+        return;
+      }
       settled = true;
       rejectReady?.(new Error(`gateway closed (${code}): ${reason}`));
     },
@@ -101,7 +107,9 @@ const connectNodeClient = async (params: {
 async function waitForSignal(check: () => boolean, timeoutMs = 2000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (check()) return;
+    if (check()) {
+      return;
+    }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("timeout");
@@ -183,6 +191,37 @@ describe("gateway update.run", () => {
       };
       expect(parsed.payload?.kind).toBe("update");
       expect(parsed.payload?.stats?.mode).toBe("git");
+    } finally {
+      process.off("SIGUSR1", sigusr1);
+    }
+  });
+
+  test("uses configured update channel", async () => {
+    const sigusr1 = vi.fn();
+    process.on("SIGUSR1", sigusr1);
+
+    try {
+      await writeConfigFile({ update: { channel: "beta" } });
+      const updateMock = vi.mocked(runGatewayUpdate);
+      updateMock.mockClear();
+
+      const id = "req-update-channel";
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id,
+          method: "update.run",
+          params: {
+            restartDelayMs: 0,
+          },
+        }),
+      );
+      const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
+        ws,
+        (o) => o.type === "res" && o.id === id,
+      );
+      expect(res.ok).toBe(true);
+      expect(updateMock.mock.calls[0]?.[0]?.channel).toBe("beta");
     } finally {
       process.off("SIGUSR1", sigusr1);
     }

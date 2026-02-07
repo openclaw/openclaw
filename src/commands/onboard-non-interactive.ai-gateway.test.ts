@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
 import { describe, expect, it, vi } from "vitest";
 
 describe("onboard (non-interactive): Vercel AI Gateway", () => {
@@ -67,7 +66,7 @@ describe("onboard (non-interactive): Vercel AI Gateway", () => {
       expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.provider).toBe("vercel-ai-gateway");
       expect(cfg.auth?.profiles?.["vercel-ai-gateway:default"]?.mode).toBe("api_key");
       expect(cfg.agents?.defaults?.model?.primary).toBe(
-        "vercel-ai-gateway/anthropic/claude-opus-4.5",
+        "vercel-ai-gateway/anthropic/claude-opus-4.6",
       );
 
       const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");

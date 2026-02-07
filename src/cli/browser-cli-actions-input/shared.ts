@@ -56,9 +56,13 @@ export async function readFields(opts: {
   fieldsFile?: string;
 }): Promise<BrowserFormField[]> {
   const payload = opts.fieldsFile ? await readFile(opts.fieldsFile) : (opts.fields ?? "");
-  if (!payload.trim()) throw new Error("fields are required");
+  if (!payload.trim()) {
+    throw new Error("fields are required");
+  }
   const parsed = JSON.parse(payload) as unknown;
-  if (!Array.isArray(parsed)) throw new Error("fields must be an array");
+  if (!Array.isArray(parsed)) {
+    throw new Error("fields must be an array");
+  }
   return parsed.map((entry, index) => {
     if (!entry || typeof entry !== "object") {
       throw new Error(`fields[${index}] must be an object`);

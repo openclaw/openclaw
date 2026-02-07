@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw approvals` (exec approvals for gateway or 
 read_when:
   - You want to edit exec approvals from the CLI
   - You need to manage allowlists on gateway or node hosts
+title: "approvals"
 ---
 
 # `openclaw approvals`
@@ -11,6 +12,7 @@ Manage exec approvals for the **local host**, **gateway host**, or a **node host
 By default, commands target the local approvals file on disk. Use `--gateway` to target the gateway, or `--node` to target a specific node.
 
 Related:
+
 - Exec approvals: [Exec approvals](/tools/exec-approvals)
 - Nodes: [Nodes](/nodes)
 

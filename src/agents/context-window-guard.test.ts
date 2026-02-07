@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-
 import type { OpenClawConfig } from "../config/config.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
@@ -78,7 +77,7 @@ describe("context-window-guard", () => {
       cfg,
       provider: "openrouter",
       modelId: "tiny",
-      modelContextWindow: undefined,
+      modelContextWindow: 64_000,
       defaultTokens: 200_000,
     });
     const guard = evaluateContextWindowGuard({ info });
@@ -86,7 +85,7 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(true);
   });
 
-  it("falls back to agents.defaults.contextTokens", () => {
+  it("caps with agents.defaults.contextTokens", () => {
     const cfg = {
       agents: { defaults: { contextTokens: 20_000 } },
     } satisfies OpenClawConfig;
@@ -94,13 +93,28 @@ describe("context-window-guard", () => {
       cfg,
       provider: "anthropic",
       modelId: "whatever",
-      modelContextWindow: undefined,
+      modelContextWindow: 200_000,
       defaultTokens: 200_000,
     });
     const guard = evaluateContextWindowGuard({ info });
     expect(info.source).toBe("agentContextTokens");
     expect(guard.shouldWarn).toBe(true);
     expect(guard.shouldBlock).toBe(false);
+  });
+
+  it("does not override when cap exceeds base window", () => {
+    const cfg = {
+      agents: { defaults: { contextTokens: 128_000 } },
+    } satisfies OpenClawConfig;
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "anthropic",
+      modelId: "whatever",
+      modelContextWindow: 64_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("model");
+    expect(info.tokens).toBe(64_000);
   });
 
   it("uses default when nothing else is available", () => {

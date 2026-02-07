@@ -1,8 +1,9 @@
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -17,9 +18,13 @@ function buildSkillsSection(params: {
   isMinimal: boolean;
   readToolName: string;
 }) {
-  if (params.isMinimal) return [];
+  if (params.isMinimal) {
+    return [];
+  }
   const trimmed = params.skillsPrompt?.trim();
-  if (!trimmed) return [];
+  if (!trimmed) {
+    return [];
+  }
   return [
     "## Skills (mandatory)",
     "Before replying: scan <available_skills> <description> entries.",
@@ -32,30 +37,52 @@ function buildSkillsSection(params: {
   ];
 }
 
-function buildMemorySection(params: { isMinimal: boolean; availableTools: Set<string> }) {
-  if (params.isMinimal) return [];
+function buildMemorySection(params: {
+  isMinimal: boolean;
+  availableTools: Set<string>;
+  citationsMode?: MemoryCitationsMode;
+}) {
+  if (params.isMinimal) {
+    return [];
+  }
   if (!params.availableTools.has("memory_search") && !params.availableTools.has("memory_get")) {
     return [];
   }
-  return [
+  const lines = [
     "## Memory Recall",
     "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
-    "",
   ];
+  if (params.citationsMode === "off") {
+    lines.push(
+      "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
+    );
+  } else {
+    lines.push(
+      "Citations: include Source: <path#line> when it helps the user verify memory snippets.",
+    );
+  }
+  lines.push("");
+  return lines;
 }
 
 function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: boolean) {
-  if (!ownerLine || isMinimal) return [];
+  if (!ownerLine || isMinimal) {
+    return [];
+  }
   return ["## User Identity", ownerLine, ""];
 }
 
 function buildTimeSection(params: { userTimezone?: string }) {
-  if (!params.userTimezone) return [];
+  if (!params.userTimezone) {
+    return [];
+  }
   return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
 }
 
 function buildReplyTagsSection(isMinimal: boolean) {
-  if (isMinimal) return [];
+  if (isMinimal) {
+    return [];
+  }
   return [
     "## Reply Tags",
     "To request a native reply/quote on supported surfaces, include one tag in your reply:",
@@ -75,7 +102,9 @@ function buildMessagingSection(params: {
   runtimeChannel?: string;
   messageToolHints?: string[];
 }) {
-  if (params.isMinimal) return [];
+  if (params.isMinimal) {
+    return [];
+  }
   return [
     "## Messaging",
     "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
@@ -104,15 +133,21 @@ function buildMessagingSection(params: {
 }
 
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
-  if (params.isMinimal) return [];
+  if (params.isMinimal) {
+    return [];
+  }
   const hint = params.ttsHint?.trim();
-  if (!hint) return [];
+  if (!hint) {
+    return [];
+  }
   return ["## Voice (TTS)", hint, ""];
 }
 
 function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readToolName: string }) {
   const docsPath = params.docsPath?.trim();
-  if (!docsPath || params.isMinimal) return [];
+  if (!docsPath || params.isMinimal) {
+    return [];
+  }
   return [
     "## Documentation",
     `OpenClaw docs: ${docsPath}`,
@@ -178,6 +213,7 @@ export function buildAgentSystemPrompt(params: {
     level: "minimal" | "extensive";
     channel: string;
   };
+  memoryCitationsMode?: MemoryCitationsMode;
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -252,7 +288,9 @@ export function buildAgentSystemPrompt(params: {
   const externalToolSummaries = new Map<string, string>();
   for (const [key, value] of Object.entries(params.toolSummaries ?? {})) {
     const normalized = key.trim().toLowerCase();
-    if (!normalized || !value?.trim()) continue;
+    if (!normalized || !value?.trim()) {
+      continue;
+    }
     externalToolSummaries.set(normalized, value.trim());
   }
   const extraTools = Array.from(
@@ -264,7 +302,7 @@ export function buildAgentSystemPrompt(params: {
     const name = resolveToolName(tool);
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
-  for (const tool of extraTools.sort()) {
+  for (const tool of extraTools.toSorted()) {
     const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
     const name = resolveToolName(tool);
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
@@ -321,7 +359,11 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     readToolName,
   });
-  const memorySection = buildMemorySection({ isMinimal, availableTools });
+  const memorySection = buildMemorySection({
+    isMinimal,
+    availableTools,
+    citationsMode: params.memoryCitationsMode,
+  });
   const docsSection = buildDocsSection({
     docsPath: params.docsPath,
     isMinimal,
@@ -350,13 +392,14 @@ export function buildAgentSystemPrompt(params: {
           "- apply_patch: apply multi-file patches",
           `- ${execToolName}: run shell commands (supports background via yieldMs/background)`,
           `- ${processToolName}: manage background exec sessions`,
-          "- browser: control openclaw's dedicated browser",
+          "- browser: control OpenClaw's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
           "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
+          '- session_status: show usage/time/model state and answer "what model are we using?"',
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     "If a task is more complex or takes longer, spawn a sub-agent. It will do the work for you and ping you when it's done. You can always check up on it.",
@@ -402,6 +445,9 @@ export function buildAgentSystemPrompt(params: {
       ? params.modelAliasLines.join("\n")
       : "",
     params.modelAliasLines && params.modelAliasLines.length > 0 && !isMinimal ? "" : "",
+    userTimezone
+      ? "If you need the current date, time, or day of week, run session_status (📊 session_status)."
+      : "",
     "## Workspace",
     `Your working directory is: ${params.workspaceDir}`,
     "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.",
