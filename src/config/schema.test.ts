@@ -207,6 +207,61 @@ describe("config schema", () => {
     expect(problematic).toEqual([]);
   });
 
+  it("custom command fields in channel schemas are not empty objects after patching", () => {
+    // Regression: TelegramCustomCommandSchema used .transform() which emitted {}
+    // in JSON schema. The fix uses .pipe() and patchSchemaForUI replaces any
+    // remaining {} leaves with {type:"string"}. Verify by merging a channel that
+    // uses the same customCommands array-of-objects shape.
+    const res = buildConfigSchema({
+      channels: [
+        {
+          id: "testchan",
+          label: "Test",
+          configSchema: {
+            type: "object",
+            properties: {
+              customCommands: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    command: {},
+                    description: {},
+                  },
+                  required: ["command", "description"],
+                  additionalProperties: false,
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+    const schema = res.schema as Record<string, unknown>;
+    const channels = (schema.properties as Record<string, unknown>)?.channels as Record<
+      string,
+      unknown
+    >;
+    const testchan = (channels.properties as Record<string, unknown>)?.testchan as Record<
+      string,
+      unknown
+    >;
+    const cc = (testchan.properties as Record<string, unknown>)?.customCommands as Record<
+      string,
+      unknown
+    >;
+    const items = cc.items as Record<string, unknown>;
+    const itemProps = items.properties as Record<string, unknown>;
+    const command = itemProps.command as Record<string, unknown>;
+    const description = itemProps.description as Record<string, unknown>;
+
+    // Should have been patched to {type:"string"}, not left as {}
+    expect(Object.keys(command).length).toBeGreaterThan(0);
+    expect(command.type).toBe("string");
+    expect(Object.keys(description).length).toBeGreaterThan(0);
+    expect(description.type).toBe("string");
+  });
+
   it("adds heartbeat target hints with dynamic channels", () => {
     const res = buildConfigSchema({
       channels: [
