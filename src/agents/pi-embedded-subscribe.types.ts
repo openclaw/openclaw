@@ -1,5 +1,6 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/config.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 
 export type ToolResultFormat = "markdown" | "plain";
@@ -7,6 +8,12 @@ export type ToolResultFormat = "markdown" | "plain";
 export type SubscribeEmbeddedPiSessionParams = {
   session: AgentSession;
   runId: string;
+  /** OpenClaw configuration for hook execution */
+  cfg?: OpenClawConfig;
+  /** Session identifier for hook context */
+  sessionId?: string;
+  /** Agent identifier for hook context */
+  agentId?: string;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;

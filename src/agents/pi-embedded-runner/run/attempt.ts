@@ -7,6 +7,8 @@ import os from "node:os";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { getConfiguredHooks } from "../../../hooks/agent-hooks-config.js";
+import { executeShellHooksSequential } from "../../../hooks/shell-hooks.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -625,6 +627,9 @@ export async function runEmbeddedAttempt(
       const subscription = subscribeEmbeddedPiSession({
         session: activeSession,
         runId: params.runId,
+        cfg: params.config,
+        sessionId: params.sessionId,
+        agentId: sessionAgentId,
         verboseLevel: params.verboseLevel,
         reasoningMode: params.reasoningLevel ?? "off",
         toolResultFormat: params.toolResultFormat,
@@ -872,6 +877,40 @@ export async function runEmbeddedAttempt(
             )
             .catch((err) => {
               log.warn(`agent_end hook failed: ${err}`);
+            });
+        }
+
+        // ── Stop shell hooks (Claude Code-style) ──────────────────────────────────
+        // Execute configured Stop hooks after agent generates response.
+        // These hooks are informational only (cannot block) - used for analytics/monitoring.
+        // Fire-and-forget to avoid blocking the response.
+        const stopHooks = getConfiguredHooks(params.config, "Stop");
+        if (stopHooks.length > 0) {
+          const lastAssistantText = assistantTexts.length > 0 ? assistantTexts.join("\n") : "";
+          const stopHookInput = {
+            response: lastAssistantText,
+            sessionId: params.sessionId,
+            agentId: hookAgentId,
+            model: params.modelId,
+            provider: params.provider,
+            durationMs: Date.now() - promptStartedAt,
+          };
+          const stopCommands = stopHooks.map((h) => h.command);
+          const firstStopHook = stopHooks[0];
+          executeShellHooksSequential(stopCommands, stopHookInput, {
+            timeoutMs: firstStopHook.timeoutMs,
+            cwd: firstStopHook.cwd ?? params.workspaceDir,
+          })
+            .then((result) => {
+              if (result.outputs.length > 0) {
+                log.debug(`[Stop] Hook outputs: ${result.outputs.length}`);
+              }
+              for (const err of result.errors) {
+                log.warn(`[Stop] Hook error: ${err}`);
+              }
+            })
+            .catch((err) => {
+              log.warn(`[Stop] Hook execution failed: ${String(err)}`);
             });
         }
       } finally {

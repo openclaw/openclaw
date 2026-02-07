@@ -1,5 +1,7 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { getConfiguredHooks } from "../hooks/agent-hooks-config.js";
+import { executeShellHooksSequential } from "../hooks/shell-hooks.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
@@ -40,16 +42,57 @@ export async function handleToolExecutionStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ) {
+  const rawToolName = String(evt.toolName);
+  const toolName = normalizeToolName(rawToolName);
+  const toolCallId = String(evt.toolCallId);
+  const args = evt.args;
+
+  // ── PreToolUse hook execution ──────────────────────────────────────────────
+  // Execute shell hooks before tool runs. If a hook denies (exit code 2),
+  // log a warning. NOTE: Cannot block tool execution here - this is fire-and-forget.
+  const cfg = ctx.params.cfg;
+  if (cfg) {
+    const hooks = getConfiguredHooks(cfg, "PreToolUse", toolName);
+    if (hooks.length > 0) {
+      const hookInput = {
+        tool_name: toolName,
+        tool_input: args,
+        sessionId: ctx.params.sessionId,
+        agentId: ctx.params.agentId,
+        runId: ctx.params.runId,
+      };
+      const commands = hooks.map((h) => h.command);
+      const firstHook = hooks[0];
+      executeShellHooksSequential(commands, hookInput, {
+        timeoutMs: firstHook.timeoutMs,
+        cwd: firstHook.cwd,
+      })
+        .then((result) => {
+          if (result.denied) {
+            ctx.log.warn(
+              `[PreToolUse] Hook denied tool=${toolName}: ${result.denyReason ?? "no reason"}`,
+            );
+          }
+          if (result.outputs.length > 0) {
+            ctx.log.debug(
+              `[PreToolUse] Hook outputs for tool=${toolName}: ${result.outputs.length}`,
+            );
+          }
+          for (const err of result.errors) {
+            ctx.log.warn(`[PreToolUse] Hook error for tool=${toolName}: ${err}`);
+          }
+        })
+        .catch((err) => {
+          ctx.log.warn(`[PreToolUse] Hook execution failed for tool=${toolName}: ${String(err)}`);
+        });
+    }
+  }
+
   // Flush pending block replies to preserve message boundaries before tool execution.
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
     void ctx.params.onBlockReplyFlush();
   }
-
-  const rawToolName = String(evt.toolName);
-  const toolName = normalizeToolName(rawToolName);
-  const toolCallId = String(evt.toolCallId);
-  const args = evt.args;
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
