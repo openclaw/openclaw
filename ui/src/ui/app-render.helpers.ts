@@ -206,13 +206,13 @@ function resolveMainSessionKey(
 }
 
 function resolveSessionDisplayName(key: string, row?: SessionsListResult["sessions"][number]) {
-  const label = row?.label?.trim();
-  if (label) {
+  const label = row?.label?.trim() || "";
+  const displayName = row?.displayName?.trim() || "";
+  if (label && label !== key) {
     return `${label} (${key})`;
   }
-  const displayName = row?.displayName?.trim();
-  if (displayName) {
-    return displayName;
+  if (displayName && displayName !== key) {
+    return `${key} (${displayName})`;
   }
   return key;
 }

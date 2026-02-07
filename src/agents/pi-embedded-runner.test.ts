@@ -219,6 +219,75 @@ describe("runEmbeddedPiAgent", () => {
     await expect(fs.stat(path.join(agentDir, "models.json"))).resolves.toBeTruthy();
   });
 
+  it("falls back to per-agent workspace when runtime workspaceDir is missing", async () => {
+    const sessionFile = nextSessionFile();
+    const fallbackWorkspace = path.join(tempRoot ?? os.tmpdir(), "workspace-fallback-main");
+    const cfg = {
+      ...makeOpenAiConfig(["mock-1"]),
+      agents: {
+        defaults: {
+          workspace: fallbackWorkspace,
+        },
+      },
+    } satisfies OpenClawConfig;
+    await ensureModels(cfg);
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test-fallback",
+      sessionKey: "agent:main:subagent:fallback-workspace",
+      sessionFile,
+      workspaceDir: undefined as unknown as string,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: "run-fallback-workspace",
+      enqueue: immediateEnqueue,
+    });
+
+    expect(result.payloads?.[0]?.text).toBe("ok");
+    await expect(fs.stat(fallbackWorkspace)).resolves.toBeTruthy();
+  });
+
+  it("throws when sessionKey is malformed", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = {
+      ...makeOpenAiConfig(["mock-1"]),
+      agents: {
+        defaults: {
+          workspace: path.join(tempRoot ?? os.tmpdir(), "workspace-fallback-main"),
+        },
+        list: [
+          {
+            id: "research",
+            workspace: path.join(tempRoot ?? os.tmpdir(), "workspace-fallback-research"),
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+    await ensureModels(cfg);
+
+    await expect(
+      runEmbeddedPiAgent({
+        sessionId: "session:test-fallback-malformed",
+        sessionKey: "agent::broken",
+        agentId: "research",
+        sessionFile,
+        workspaceDir: undefined as unknown as string,
+        config: cfg,
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        agentDir,
+        runId: "run-fallback-workspace-malformed",
+        enqueue: immediateEnqueue,
+      }),
+    ).rejects.toThrow("Malformed agent session key");
+  });
+
   itIfNotWin32(
     "persists the first user message before assistant output",
     { timeout: 120_000 },

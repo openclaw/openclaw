@@ -71,7 +71,7 @@ export function registerCronAddCommand(cron: Command) {
       .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
       .option("--agent <id>", "Agent id for this job")
       .option("--session <target>", "Session target (main|isolated)")
-      .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "next-heartbeat")
+      .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "now")
       .option("--at <when>", "Run once at time (ISO) or +duration (e.g. 20m)")
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
       .option("--cron <expr>", "Cron expression (5-field)")
@@ -122,8 +122,8 @@ export function registerCronAddCommand(cron: Command) {
             };
           })();
 
-          const wakeModeRaw = typeof opts.wake === "string" ? opts.wake : "next-heartbeat";
-          const wakeMode = wakeModeRaw.trim() || "next-heartbeat";
+          const wakeModeRaw = typeof opts.wake === "string" ? opts.wake : "now";
+          const wakeMode = wakeModeRaw.trim() || "now";
           if (wakeMode !== "now" && wakeMode !== "next-heartbeat") {
             throw new Error("--wake must be now or next-heartbeat");
           }

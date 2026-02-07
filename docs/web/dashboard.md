@@ -12,7 +12,7 @@ The Gateway dashboard is the browser Control UI served at `/` by default
 
 Quick open (local Gateway):
 
-- http://127.0.0.1:18789/ (or http://localhost:18789/)
+- [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/))
 
 Key references:
 

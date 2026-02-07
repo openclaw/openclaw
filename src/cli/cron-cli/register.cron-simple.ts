@@ -92,12 +92,12 @@ export function registerCronSimpleCommands(cron: Command) {
       .command("run")
       .description("Run a cron job now (debug)")
       .argument("<id>", "Job id")
-      .option("--force", "Run even if not due", false)
+      .option("--due", "Run only when due (default behavior in older versions)", false)
       .action(async (id, opts) => {
         try {
           const res = await callGatewayFromCli("cron.run", opts, {
             id,
-            mode: opts.force ? "force" : "due",
+            mode: opts.due ? "due" : "force",
           });
           defaultRuntime.log(JSON.stringify(res, null, 2));
         } catch (err) {
