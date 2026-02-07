@@ -285,6 +285,10 @@
 | 2026-02-02 | qwen3:8b `/no_think` 사용 금지 | 4/5 확률로 content 비고 thinking에만 응답 → 폴백 로직 추가 (T004-LL) |
 | 2026-02-02 | Cloudflare Quick Tunnel 채택 | 무료, 계정 불필요, 즉시 사용. 프로덕션은 Named Tunnel로 업그레이드 |
 | 2026-02-07 | 개발 방식 변경: MAIBOT 직접 구현 | 하이브리드(Claude Code CLI) MCP/plugins 충돌로 hang → 직접 구현이 안정적 |
+| 2026-02-07 | 파이프라인 7→10단계 확장 | TikTok 영상 생성/검수/발행 3단계 추가 (D021) |
+| 2026-02-07 | VideoJob 큐 + Worker 아키텍처 | Railway(서버) → DB Job → 로컬 Worker(GPU) 분리 |
+| 2026-02-07 | TikTok 발행은 계정 생성 후 | 지니님 결정 — Phase C 보류 |
+| 2026-02-07 | Worker E2E 테스트 성공 | DERMAEL 마스크 → 720x1280 TikTok 영상 ~3분13초, $0 |
 
 ---
 
@@ -514,6 +518,60 @@
 - **URL**: https://jini92.github.io/MAIBEAUTY/
 - **API**: https://maibeauty-api-production.up.railway.app
 - **7개 모듈**: 대시보드, CRM 리드, 제품 관리, 콘텐츠, 마케팅, 가격 모니터링, 설정
+
+### 2026-02-07 (오후) — 파이프라인 뷰어 + TikTok 영상 파이프라인
+- [x] **I029 — 파이프라인 결과 뷰어 구현** (5 태스크 전량 완료)
+  - React Query 훅 + API 함수 (aiResultsApi 6개)
+  - PipelineTimeline 컴포넌트 (7단계 타임라인, 색상 코딩)
+  - AIResultsViewer (Copy/USP/Translation/Generic 카드 4종)
+  - product-detail-sheet 통합
+  - Railway 배포 + 검증 (T019: 6/6 PASS)
+  - 배포 중 버그 2건 발견/수정 (alembic down_revision, Lead 필드명)
+- [x] **D021 — 제품→TikTok 영상 파이프라인 설계**
+  - GAP 분석: 제품 파이프라인(7단계)이 USP에서 끝나고 TikTok 영상까지 연결 안 됨
+  - 10단계 파이프라인 설계 (Step 8: 영상 생성, Step 9: 검수, Step 10: TikTok 발행)
+  - Phase A/B/C/D 개발 계획
+- [x] **Phase A — 파이프라인 10단계 UI + API** (`dab987d`, `e083a29`)
+  - 파이프라인 7→10단계 확장 (영상 생성/검수/TikTok 발행)
+  - generate-video API 엔드포인트
+  - VideoResultCard (프리뷰/승인/반려)
+  - "🎬 AI 영상 생성" 버튼 제품 상세에 추가
+  - blocked 상태 + 액션 버튼 UI
+- [x] **Phase B — M01 서버 통합** (`ce45857`)
+  - VideoJob 모델 + 009 마이그레이션
+  - Video Jobs API 6개 엔드포인트 (Worker Key 인증)
+  - 로컬 Video Worker (`src/workers/video_worker.py`) — 10초 polling
+  - generate-video → VideoJob 생성 방식으로 변경
+  - pipeline-status Step 8에서 VideoJob 상태 반영
+- [x] **Railway 배포 + 검증 (T020: 6/6 PASS)**
+  - VIDEO_WORKER_KEY 환경변수: `0aP87uilc4OH93kTwjYbXpNnhBgrQx6e`
+  - 009_video_jobs 마이그레이션 자동 실행
+- [x] **Worker E2E 테스트 성공!!** 🎉
+  - DERMAEL 어성초 마스크 → TikTok 영상 자동 생성 전체 파이프라인
+  - Step 1: 스크립트 (Ollama) 13초 / Step 2: 발음후처리 1초 / Step 3: TTS 23초 (61.9초 오디오)
+  - Step 4: 아바타 (SadTalker 256px) 149초 / Step 5: 후처리 (FFmpeg 720x1280) 5초
+  - 총 ~3분 13초, 비용 $0, final.mp4 2.7MB (720x1280 세로영상)
+  - Railway API → DB Job 등록 → 로컬 Worker polling → GPU 실행 → 결과 업로드 전체 흐름 정상
+- [ ] **Phase C — TikTok 발행** (⏳ TikTok 비즈니스 계정 생성 후)
+- [ ] **Phase D — 영상 스토리지** (Cloudflare R2 검토중)
+
+### Worker 테스트 계정 (2026-02-07 생성)
+| 항목 | 값 |
+|------|-----|
+| 이메일 | `worker-test@maibeauty.com` |
+| 비밀번호 | `WorkerTest2026!` |
+| 용도 | API 테스트용 |
+
+### Railway 환경변수 추가 (2026-02-07)
+| 변수 | 용도 |
+|------|------|
+| `VIDEO_WORKER_KEY` | 로컬 GPU Worker 인증 (`0aP87uilc4OH93kTwjYbXpNnhBgrQx6e`) |
+
+### Worker 실행 명령 (로컬 GPU)
+```powershell
+cd C:\TEST\MAIBEAUTY
+python src/workers/video_worker.py --api-url https://maibeauty-api-production.up.railway.app --worker-key 0aP87uilc4OH93kTwjYbXpNnhBgrQx6e
+```
 
 ---
 
