@@ -1994,7 +1994,7 @@ Safe options:
 
 - `/model` in chat (quick, per-session)
 - `openclaw models set ...` (updates just model config)
-- `openclaw configure --section models` (interactive)
+- `openclaw configure --section model` (interactive)
 - edit `agents.defaults.model` in `~/.openclaw/openclaw.json`
 
 Avoid `config.apply` with a partial object unless you intend to replace the whole config.
