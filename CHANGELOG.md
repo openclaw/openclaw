@@ -6,137 +6,67 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Tests: add test coverage for security/windows-acl.ts. (#9335) Thanks @M00N7682.
-- Tests: stabilize Windows ACL tests + command auth registry. (#9493) Thanks @steipete.
-- Docs: streamline start and install docs. (#9648) Thanks @sebslight.
-- enhancement(CLI): sort commands alphabetically in help output. (#8068) Thanks @deepsoumya617.
-- docs: add bootstrapping page. (#9767) Thanks @sebslight.
-- Docs: simplify onboarding IA for CLI and macOS. (#9830) Thanks @sebslight.
-- docs: fix incorrect model.fallback to model.fallbacks in Ollama config (#9384). (#9749) Thanks @lailoo.
-- feat: add Claude Opus 4.6 to built-in model catalog. (#9853) Thanks @TinyTb.
-- chore: add agent credentials to gitignore. (#9874) Thanks @caelum0x.
-- Docs: escape hash symbol in help channel names in issue template. (#9695) Thanks @mattqdev.
-- feat(skills): add QR code generation and reading skill (reverted). (#8817) Thanks @Omar-Khaleel.
-- chore(agentsmd): add missing tsgo commands to AGENTS.md. (#9894) Thanks @vincentkoc.
-- chore: apply local workspace updates. (#9911) Thanks @gumadeiras.
-- docs: improve DM security guidance with concrete example. (#9377) Thanks @Shrinija17.
-- Agents: bump pi-mono to 0.52.5. (#9949) Thanks @gumadeiras.
-- docs: restructure Get Started tab and improve onboarding flow. (#9950) Thanks @sebslight.
-- feat: add xAI (Grok) provider support. (#9885) Thanks @grp06.
-- Thinking: accept extra-high alias and sync Codex 5.3 FAQ wording. (#9976) Thanks @slonce70.
-- Model: add strict gpt-5.3-codex fallback for OpenAI Codex (fixes #9989). (#9995) Thanks @tyler6204.
-- Cap sessions_history payloads to prevent context overflow. (#10000) Thanks @gut-puncture.
-- Chore: Update memory.md with current default workspace path. (#9559) Thanks @mattezell.
-- docs: add activeHours to heartbeat field notes and examples. (#9366) Thanks @unisone.
+- Providers: add xAI (Grok) support. (#9885) Thanks @grp06.
 - Web UI: add token usage dashboard. (#10072) Thanks @Takhoffman.
-- Docs: add PR and issue submission guides. (#10150) Thanks @Takhoffman.
-- Update: harden control UI asset handling in update flow. (#10146) Thanks @gumadeiras.
-- Docs: sharpen Install tab to stop duplicating Getting Started. (#10416) Thanks @sebslight.
-- Docs: enable markdownlint autofixables except list numbering. (#10476) Thanks @sebslight.
-- Docs: revamp installer internals for readability and accuracy. (#10499) Thanks @sebslight.
-- Docs: add PR sign-off template. (#10561) Thanks @Takhoffman.
-- Docs: revise PR and issue submission guides. (#10617) Thanks @Takhoffman.
-- feat(memory): native Voyage AI support. (#7078) Thanks @mcinteerj.
-- Memory: document Voyage embeddings env var. (#10699) Thanks @Takhoffman.
-- feat(antigravity): update default model to Claude Opus 4.6. (#10720) Thanks @calvin-hpnet.
+- Models: add Claude Opus 4.6 to the built-in catalog; set Antigravity default to Opus 4.6. (#9853, #10720) Thanks @TinyTb, @calvin-hpnet.
+- Memory: native Voyage AI support. (#7078) Thanks @mcinteerj.
+- OpenAI Codex: add strict gpt-5.3-codex fallback for Codex OAuth. (#9995) Thanks @tyler6204.
+- Sessions: cap sessions_history payloads to reduce context overflow. (#10000) Thanks @gut-puncture.
+- CLI: sort commands alphabetically in help output. (#8068) Thanks @deepsoumya617.
+- Agents: bump pi-mono to 0.52.7; add embedded forward-compat fallback for Opus 4.6 model ids.
 
 ### Fixes
 
-- fix: gracefully downgrade xhigh thinking level in cron isolated agent. (#9363) Thanks @hyf0-agent.
-- Fix chrome extension bundled path resolution. (#8914) Thanks @kelvinCB.
-- fix(telegram): preserve DM topic threadId in deliveryContext. (#9039) Thanks @lailoo.
-- fix(telegram): pass parentPeer for forum topic binding inheritance. (#9789) Thanks @christianklotz.
-- 🔴 FIX: Telegram DM Topics — auto-inject threadId in message tool & subagent announce. (#7235) Thanks @Lukavyi.
-- fix(cli): pass --disable-warning via execArgv instead of NODE_OPTIONS. (#9691) Thanks @18-RAJAT.
-- fix: remove orphaned tool_results during compaction pruning. (#9868) Thanks @christianklotz.
-- fix cron scheduling and reminder delivery regressions. (#9733) Thanks @tyler6204.
-- fix(runtime): bump minimum Node.js version to 22.12.0. (#5370) Thanks @Glucksberg.
-- fix: clear stale token metrics on /new and /reset. (#8929) Thanks @Glucksberg.
-- fix: allow multiple compaction retries on context overflow. (#8928) Thanks @Glucksberg.
-- fix(errors): show clear billing error instead of cryptic API response (#8136). (#8391) Thanks @Glucksberg.
-- fix(telegram): accept messages from group members in allowlisted groups. (#9775) Thanks @nicolasstanley.
-- Fix: Enable scrolling on the dashboard config page. (#1822) Thanks @dxd5001.
-- fix(cron): prevent recomputeNextRuns from skipping due jobs in onTimer. (#9823) Thanks @pycckuu.
-- fix(cron): re-arm timer in finally to survive transient errors. (#9948) Thanks @j2h4u.
-- fix(cron): handle legacy atMs field in schedule when computing next run. (#9932) Thanks @fujiwara-tofu-shop.
-- fix(exec-approvals): coerce bare string allowlist entries to objects (#9790). (#9903) Thanks @mcaxtr.
-- security: add skill/plugin code safety scanner. (#9806) Thanks @abdelsfane.
-- fix(agents): skip tool extraction for aborted/errored assistant messages. (#4598) Thanks @aisling404.
-- fix(cron): handle undefined sessionTarget in list output (#9649). (#9752) Thanks @lailoo.
-- fix(nextcloud-talk): sign message text instead of JSON body. (#2092) Thanks @wangai-studio.
-- fix(slack): add mention stripPatterns for /new and /reset commands. (#9971) Thanks @ironbyte-rgb.
-- security: redact credentials from config.get gateway responses. (#9858) Thanks @abdelsfane.
-- fix: release session locks on process termination [AI-assisted]. (#1962) Thanks @zats.
-- fix(ollama): add streaming config and fix OLLAMA_API_KEY env var support. (#9870) Thanks @rafelbev.
-- fix: untrack dist/control-ui build artifacts. (#1856) Thanks @zerone0x.
-- fix: wire onToolResult callback for verbose tool summaries. (#2022) Thanks @adam91holt.
-- fix: Gateway canvas host bypasses auth and serves files unauthenticated. (#9518) Thanks @coygeek.
-- fix(docs): correct OpenCode Zen description in code comment. (#9998) Thanks @therealZpoint-bot.
-- fix: silence unused hook token url param. (#9436) Thanks @coygeek.
-- fix: guard resolveUserPath against undefined input. (#10176) Thanks @Yida-Dev.
-- fix(hooks): replace debug console.log with proper subsystem logging in session-memory. (#10730) Thanks @shadril238.
+- Telegram: auto-inject DM topic threadId in message tool + subagent announce. (#7235) Thanks @Lukavyi.
+- Security: require auth for Gateway canvas host and A2UI assets. (#9518) Thanks @coygeek.
+- Cron: fix scheduling and reminder delivery regressions; harden next-run recompute + timer re-arming + legacy schedule fields. (#9733, #9823, #9948, #9932) Thanks @tyler6204, @pycckuu, @j2h4u, @fujiwara-tofu-shop.
+- Update: harden Control UI asset handling in update flow. (#10146) Thanks @gumadeiras.
+- Security: add skill/plugin code safety scanner; redact credentials from config.get gateway responses. (#9806, #9858) Thanks @abdelsfane.
+- Exec approvals: coerce bare string allowlist entries to objects. (#9903) Thanks @mcaxtr.
+- Slack: add mention stripPatterns for /new and /reset. (#9971) Thanks @ironbyte-rgb.
+- Chrome extension: fix bundled path resolution. (#8914) Thanks @kelvinCB.
+- Compaction/errors: allow multiple compaction retries on context overflow; show clear billing errors. (#8928, #8391) Thanks @Glucksberg.
 
-### Non-PR Commits
+## 2026.2.3
 
-- d84eb464 fix: restore discord owner hint from allowlists (Peter Steinberger).
-- 3b40227b fix: remove unused cron import (Peter Steinberger).
-- 0621d0e9 fix(cli): resolve bundled chrome extension path (Kelvin Calcano).
-- 1008c28f test(cli): use unique temp dir for extension install (Kelvin Calcano).
-- 44bbe09b fix(cli): support bundled extension path in dist root (Kelvin Calcano).
-- 34e78a70 style(cli): satisfy lint rules in extension path resolver (Kelvin Calcano).
-- bdb90ea4 test: register discord plugin in allowlist test (Peter Steinberger).
-- 5031b283 chore: bump version to 2026.2.4 (Peter Steinberger).
-- a4d1af1b fix: resolve discord owner allowFrom matches (Peter Steinberger).
-- 8860d2ed fix(telegram): preserve DM topic threadId in deliveryContext (damaozi).
-- c0b267a0 test(telegram): add DM topic threadId deliveryContext test for #8891 (damaozi).
-- 460808e0 Update deps. (cpojer).
-- 8b845123 chore: Typecheck test helper files. (cpojer).
-- 34424ce5 docs(install): rename install overview page (sebslight).
-- 203e3804 CLI: sort commands alphabetically in help output (Soumyadeep Ghosh).
-- c8f4bca0 docs: fix onboarding rendering issues (Sebastian).
-- 54737422 chore: reset appcast to 2026.2.3 (Peter Steinberger).
-- eef247b7 fix: auto-inject Telegram forum topic threadId in message tool (Clawdbot).
-- 6ac5dd2c test: cover telegram topic threadId auto-injection and subagent origin threading (Clawdbot).
-- a13efbe2 fix: pass threadId/to/accountId from parent to subagent gateway call (Clawdbot).
-- 1473fb19 update handle (Gustavo Madeira Santana).
-- 4fc4c525 🤖 Feishu: expand channel support (Josh Palmer).
-- 7c951b01 🤖 Feishu: tighten mention gating (Josh Palmer).
-- 6b7d3c30 Revert "feat(skills): add QR code skill (#8817)" (Gustavo Madeira Santana).
-- b8004a28 docs: improve DM security guidance with concrete example (Shrinija Kummari).
-- 873182ec docs: tighten secure DM example (George Pickett).
-- 8577d015 chore: remove tracked .DS_Store files (Gustavo Madeira Santana).
-- db31c0cc feat: add xAI Grok provider support (George Pickett).
-- 155dfa93 fix(onboard): align xAI default model to grok-4 (George Pickett).
-- 6ff209e9 fix(exec-approvals): coerce bare string allowlist entries to objects (#9790) (Marcus Castro).
-- 5958e569 Thinking: accept extra-high alias and sync Codex FAQ wording (slonce70).
-- 7db83954 Changelog: note #9976 thinking alias + Codex 5.3 docs sync (slonce70).
-- 6f4665dd chore: Update deps. (cpojer).
-- 2267d58a feat(feishu): replace built-in SDK with community plugin (Yifeng Wang).
-- 7e32f1ce fix(feishu): add targeted eslint-disable comments for SDK integration (Yifeng Wang).
-- 8ba1387b fix(feishu): fix webhook mode silent exit and receive_id_type default (Yifeng Wang).
-- 7e005acd chore: update pnpm-lock.yaml for feishu extension deps (Yifeng Wang).
-- 5f6e1c19 feat(feishu): sync with clawdbot-feishu #137 (multi-account support) (Yifeng Wang).
-- 0a485924 add PR review workflow templates (Gustavo Madeira Santana).
-- 47538bca fix: Gateway canvas host bypasses auth and serves files unauthenticated (Coy Geek).
-- ee1ec3fa Add proper `onToolResult` fallback. (cpojer).
-- 6c42d346 chore: Add VS Code defaults and extensions so that Oxlint/Oxfmt work automatically. (cpojer).
-- 8abce8a8 fix: `onToolResult` fallback is not expected. (cpojer).
-- f16e32b7 fix: Do not `process.exit(0)` in the middle of a test. (cpojer).
-- 328b69be chore: Fix audit test on Windows. (cpojer).
-- ac0c2f26 docs: update clawtributors (add @unisone) (Sebastian).
-- 7b2a2212 chore: run lint step after build during preflight check (Gustavo Madeira Santana).
-- 72245855 fix: add fallback for Control UI asset resolution in global installs (Gustavo Madeira Santana).
-- b40da2cb fix: remove dead restore control-ui step from update runner (Gustavo Madeira Santana).
-- 4a59b778 fix: CLI harden update restart imports and fix nested bundle version resolution (Gustavo Madeira Santana).
-- 134c03a9 feat: add markdownlint configuration for documentation formatting and linting (Sebastian).
-- 1bf9f237 docs: linting (Sebastian).
-- c7aec066 docs(markdownlint): enable autofixable rules and normalize links (Sebastian).
-- 0a1f4f66 revert(docs): undo markdownlint autofix churn (Sebastian).
-- 3b768a28 docs(changelog): prepare 2026.2.6 (Peter Steinberger).
-- ac5944cd docs(changelog): include merged PRs since v2026.2.3 (Peter Steinberger).
-- 677450cd chore(release): bump version to 2026.2.6 (Peter Steinberger).
-- d898ad68 fix(telegram): cast fetch for grammY ApiClientOptions (Peter Steinberger).
-- 5163833b docs: fix markdownlint fragments + headings (Peter Steinberger).
+### Changes
+
+- Telegram: remove last `@ts-nocheck` from `bot-handlers.ts`, use Grammy types directly, deduplicate `StickerMetadata`. Zero `@ts-nocheck` remaining in `src/telegram/`. (#9206)
+- Telegram: remove `@ts-nocheck` from `bot-message.ts`, type deps via `Omit<BuildTelegramMessageContextParams>`, widen `allMedia` to `TelegramMediaRef[]`. (#9180)
+- Telegram: remove `@ts-nocheck` from `bot.ts`, fix duplicate `bot.catch` error handler (Grammy overrides), remove dead reaction `message_thread_id` routing, harden sticker cache guard. (#9077)
+- Onboarding: add Cloudflare AI Gateway provider setup and docs. (#7914) Thanks @roerohan.
+- Onboarding: add Moonshot (.cn) auth choice and keep the China base URL when preserving defaults. (#7180) Thanks @waynelwz.
+- Docs: clarify tmux send-keys for TUI by splitting text and Enter. (#7737) Thanks @Wangnov.
+- Docs: mirror the landing page revamp for zh-CN (features, quickstart, docs directory, network model, credits). (#8994) Thanks @joshp123.
+- Messages: add per-channel and per-account responsePrefix overrides across channels. (#9001) Thanks @mudrii.
+- Cron: add announce delivery mode for isolated jobs (CLI + Control UI) and delivery mode config.
+- Cron: default isolated jobs to announce delivery; accept ISO 8601 `schedule.at` in tool inputs.
+- Cron: hard-migrate isolated jobs to announce/none delivery; drop legacy post-to-main/payload delivery fields and `atMs` inputs.
+- Cron: delete one-shot jobs after success by default; add `--keep-after-run` for CLI.
+- Cron: suppress messaging tools during announce delivery so summaries post consistently.
+- Cron: avoid duplicate deliveries when isolated runs send messages directly.
+
+### Fixes
+
+- Heartbeat: allow explicit accountId routing for multi-account channels. (#8702) Thanks @lsh411.
+- TUI/Gateway: handle non-streaming finals, refresh history for non-local chat runs, and avoid event gap warnings for targeted tool streams. (#8432) Thanks @gumadeiras.
+- Shell completion: auto-detect and migrate slow dynamic patterns to cached files for faster terminal startup; add completion health checks to doctor/update/onboard.
+- Telegram: honor session model overrides in inline model selection. (#8193) Thanks @gildo.
+- Web UI: fix agent model selection saves for default/non-default agents and wrap long workspace paths. Thanks @Takhoffman.
+- Web UI: resolve header logo path when `gateway.controlUi.basePath` is set. (#7178) Thanks @Yeom-JinHo.
+- Web UI: apply button styling to the new-messages indicator.
+- Onboarding: infer auth choice from non-interactive API key flags. (#8484) Thanks @f-trycua.
+- Security: keep untrusted channel metadata out of system prompts (Slack/Discord). Thanks @KonstantinMirin.
+- Security: enforce sandboxed media paths for message tool attachments. (#9182) Thanks @victormier.
+- Security: require explicit credentials for gateway URL overrides to prevent credential leakage. (#8113) Thanks @victormier.
+- Security: gate `whatsapp_login` tool to owner senders and default-deny non-owner contexts. (#8768) Thanks @victormier.
+- Voice call: harden webhook verification with host allowlists/proxy trust and keep ngrok loopback bypass.
+- Voice call: add regression coverage for anonymous inbound caller IDs with allowlist policy. (#8104) Thanks @victormier.
+- Cron: accept epoch timestamps and 0ms durations in CLI `--at` parsing.
+- Cron: reload store data when the store file is recreated or mtime changes.
+- Cron: deliver announce runs directly, honor delivery mode, and respect wakeMode for summaries. (#8540) Thanks @tyler6204.
+- Telegram: include forward_from_chat metadata in forwarded messages and harden cron delivery target checks. (#8392) Thanks @Glucksberg.
+- macOS: fix cron payload summary rendering and ISO 8601 formatter concurrency safety.
 
 ## 2026.2.2-3
 
