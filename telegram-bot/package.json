@@ -1,7 +1,6 @@
 {
-  "name": "openclaw-telegram-bot",
+  "name": "openclaw-bot",
   "version": "1.0.0",
-  "type": "commonjs",
   "main": "webhook.js",
   "dependencies": {
     "grammy": "^1.19.2"
