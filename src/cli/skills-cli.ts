@@ -11,6 +11,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
+import { createSkill } from "../commands/skills.create.js";
 import { formatCliCommand } from "./command-format.js";
 
 export type SkillsListOptions = {
@@ -347,6 +348,19 @@ export function registerSkillsCli(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/skills", "docs.openclaw.ai/cli/skills")}\n`,
     );
+
+  skills
+    .command("create")
+    .description("Create a new skill from a template")
+    .argument("<name>", "Skill name (kebab-case)")
+    .action(async (name) => {
+      try {
+        await createSkill({ name });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
 
   skills
     .command("list")
