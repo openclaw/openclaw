@@ -44,11 +44,13 @@ export class Embeddings {
 
   /**
    * Truncate text to fit within the model's context length.
-   * Uses a conservative ~4 chars/token estimate to leave headroom.
+   * Uses a conservative ~3 chars/token estimate to leave headroom —
+   * code, URLs, and punctuation-heavy text tokenize at 1–2 chars/token,
+   * so the classic ~4 estimate is too generous for mixed content.
    * Truncates at a word boundary when possible.
    */
   private truncateToContext(text: string): string {
-    const maxChars = this.contextLength * 4;
+    const maxChars = this.contextLength * 3;
     if (text.length <= maxChars) {
       return text;
     }
