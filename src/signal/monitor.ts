@@ -200,39 +200,6 @@ async function fetchAttachment(params: {
   return { path: saved.path, contentType: saved.contentType };
 }
 
-// Signal enhancements: fetch sticker via getSticker RPC
-async function fetchSticker(params: {
-  baseUrl: string;
-  account?: string;
-  packId: string;
-  stickerId: number;
-  maxBytes: number;
-}): Promise<{ path: string; contentType?: string } | null> {
-  const rpcParams: Record<string, unknown> = {
-    packId: params.packId,
-    stickerId: params.stickerId,
-  };
-  if (params.account) {
-    rpcParams.account = params.account;
-  }
-  try {
-    const result = await signalRpcRequest<{ data?: string; contentType?: string }>(
-      "getSticker",
-      rpcParams,
-      { baseUrl: params.baseUrl },
-    );
-    if (!result?.data) {
-      return null;
-    }
-    const buffer = Buffer.from(result.data, "base64");
-    const contentType = result.contentType ?? "image/webp";
-    const saved = await saveMediaBuffer(buffer, contentType, "inbound", params.maxBytes);
-    return { path: saved.path, contentType: saved.contentType };
-  } catch {
-    return null;
-  }
-}
-
 async function deliverReplies(params: {
   replies: ReplyPayload[];
   target: string;
@@ -367,7 +334,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       ignoreAttachments,
       fetchAttachment,
       requireMention,
-      fetchSticker,
     };
 
     const handleEvent = createSignalEventHandler({

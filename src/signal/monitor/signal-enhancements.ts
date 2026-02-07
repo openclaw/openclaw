@@ -14,7 +14,9 @@ import type {
 } from "./event-handler.types.js";
 import { logVerbose } from "../../globals.js";
 import { mediaKindFromMime } from "../../media/constants.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { resolveConfigDir } from "../../utils.js";
+import { signalRpcRequest } from "../client.js";
 
 // ── Extended types (not modifying upstream types) ────────────────────────────
 
@@ -85,13 +87,6 @@ export type SignalEnhancementDeps = Pick<
   | "fetchAttachment"
 > & {
   requireMention: boolean;
-  fetchSticker?: (params: {
-    baseUrl: string;
-    account?: string;
-    packId: string;
-    stickerId: number;
-    maxBytes: number;
-  }) => Promise<{ path: string; contentType?: string } | null>;
 };
 
 // ── Pre-cache: per-group persistent media index + LRU ────────────────────────
@@ -346,18 +341,27 @@ async function fetchStickerMedia(params: {
     logVerbose(
       `sticker has no attachment.id, packId=${sticker.packId}, stickerId=${sticker.stickerId}`,
     );
-    // Try getSticker RPC (packId + stickerId)
+    // Try getSticker RPC (packId + stickerId) → base64 decode → save to inbound/
     if (sticker.packId && typeof sticker.stickerId === "number") {
       try {
-        return (
-          (await deps.fetchSticker?.({
-            baseUrl: deps.baseUrl,
-            account: deps.account,
-            packId: sticker.packId,
-            stickerId: sticker.stickerId,
-            maxBytes: deps.mediaMaxBytes,
-          })) ?? null
+        const rpcParams: Record<string, unknown> = {
+          packId: sticker.packId,
+          stickerId: sticker.stickerId,
+        };
+        if (deps.account) {
+          rpcParams.account = deps.account;
+        }
+        const result = await signalRpcRequest<{ data?: string; contentType?: string }>(
+          "getSticker",
+          rpcParams,
+          { baseUrl: deps.baseUrl },
         );
+        if (result?.data) {
+          const buffer = Buffer.from(result.data, "base64");
+          const ct = result.contentType ?? "image/webp";
+          const saved = await saveMediaBuffer(buffer, ct, "inbound", deps.mediaMaxBytes);
+          return { path: saved.path, contentType: saved.contentType };
+        }
       } catch (err) {
         logVerbose(`sticker fetch via packId failed: ${String(err)}`);
       }
