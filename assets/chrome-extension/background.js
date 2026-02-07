@@ -436,3 +436,46 @@ chrome.runtime.onInstalled.addListener(() => {
   // Useful: first-time instructions.
   void chrome.runtime.openOptionsPage()
 })
+
+/**
+ * Auto-connect on startup if relay server is running
+ */
+async function tryAutoConnect() {
+  try {
+    const port = await getRelayPort()
+    const httpBase = `http://127.0.0.1:${port}`
+    
+    // Check if relay server is running
+    const response = await fetch(`${httpBase}/`, { 
+      method: 'HEAD', 
+      signal: AbortSignal.timeout(1000) 
+    })
+    
+    if (response.ok) {
+      console.log('[OpenClaw] Relay server detected, auto-connecting...')
+      
+      // Get active tab and auto-attach
+      const [active] = await chrome.tabs.query({ active: true, currentWindow: true })
+      if (active?.id) {
+        await connectOrToggleForActiveTab()
+        console.log('[OpenClaw] Auto-connected to relay server')
+      }
+    }
+  } catch (err) {
+    // Relay server not running yet, that's OK
+    console.log('[OpenClaw] Relay server not available on startup:', err.message)
+  }
+}
+
+// Auto-connect on startup (when service worker starts)
+chrome.runtime.onStartup.addListener(() => {
+  console.log('[OpenClaw] Chrome started, attempting auto-connect...')
+  void tryAutoConnect()
+})
+
+// Also try auto-connect when extension loads (e.g., after Chrome restart)
+void (async () => {
+  // Wait a bit for Chrome to fully start
+  await new Promise(r => setTimeout(r, 2000))
+  await tryAutoConnect()
+})()

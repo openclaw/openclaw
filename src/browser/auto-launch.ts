@@ -122,19 +122,50 @@ export async function isChromeRunning(): Promise<boolean> {
 /**
  * Get Chrome launch arguments
  */
-function getChromeLaunchArgs(profile: ResolvedBrowserProfile): string[] {
+function getChromeLaunchArgs(
+  profile: ResolvedBrowserProfile,
+  extensionPath?: string
+): string[] {
   const args = [
     `--remote-debugging-port=${profile.cdpPort}`,
     "--no-first-run",
     "--no-default-browser-check",
   ];
 
-  // Add extension loading if available
-  // Note: Extension path would need to be configured
-  // For now, we just launch Chrome with CDP enabled
-  // Extension will need to be manually installed first
+  // Load OpenClaw Browser Relay extension if path provided
+  if (extensionPath && existsSync(extensionPath)) {
+    args.push(`--load-extension=${extensionPath}`);
+    log.debug(`[${profile.name}] Loading extension from: ${extensionPath}`);
+  }
 
   return args;
+}
+
+/**
+ * Get OpenClaw extension path
+ */
+function getExtensionPath(): string | undefined {
+  // Try to find extension relative to OpenClaw installation
+  const paths = [
+    // Relative to node_modules (when running from npm)
+    process.cwd() + "/assets/chrome-extension",
+    process.cwd() + "/../assets/chrome-extension",
+    // Relative to workspace
+    process.env.HOME + "/.openclaw/workspace/openclaw-dev/assets/chrome-extension",
+    // Windows paths
+    process.env.USERPROFILE + "\\.openclaw\\workspace\\openclaw-dev\\assets\\chrome-extension",
+  ].filter((p) => p && !p.includes("undefined"));
+
+  for (const path of paths) {
+    const manifestPath = path + "/manifest.json";
+    if (existsSync(manifestPath)) {
+      log.debug(`Found extension at: ${path}`);
+      return path;
+    }
+  }
+
+  log.warn("OpenClaw extension not found in standard locations");
+  return undefined;
 }
 
 /**
@@ -171,8 +202,14 @@ export async function launchChrome(
     };
   }
 
+  // Get extension path
+  const extensionPath = getExtensionPath();
+  if (extensionPath) {
+    log.info(`[${profile.name}] Will load extension from: ${extensionPath}`);
+  }
+
   // Launch Chrome
-  const args = getChromeLaunchArgs(profile);
+  const args = getChromeLaunchArgs(profile, extensionPath);
 
   log.info(
     `[${profile.name}] Launching Chrome at ${chromePath} with CDP port ${profile.cdpPort}`
@@ -188,6 +225,12 @@ export async function launchChrome(
     child.unref();
 
     log.info(`[${profile.name}] Chrome launched (PID: ${child.pid})`);
+
+    if (extensionPath) {
+      log.info(
+        `[${profile.name}] Extension loaded - will auto-connect to relay server`
+      );
+    }
 
     return {
       success: true,
