@@ -20,8 +20,8 @@ export interface SecretsConfig {
 
   /** GCP Secret Manager options. */
   gcp?: {
-    /** GCP project ID. Defaults to the gcloud default project. */
-    project?: string;
+    /** GCP project ID (required — Secret Manager doesn't support automatic project discovery). */
+    project: string;
   };
 
   /** AWS Secrets Manager options. */

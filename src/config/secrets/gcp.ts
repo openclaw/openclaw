@@ -64,8 +64,7 @@ export function createGcpSecretsProvider(options: GcpSecretsProviderOptions = {}
   }
 
   function buildSecretPath(secretName: string): string {
-    const project = options.project ?? "-"; // "-" uses ADC default project
-    return `projects/${project}/secrets/${secretName}/versions/latest`;
+    return `projects/${options.project}/secrets/${secretName}/versions/latest`;
   }
 
   return {
