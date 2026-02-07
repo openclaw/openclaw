@@ -586,20 +586,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
 
   // Deploy slash commands in the background so it never blocks message
-  // processing.  Failures are logged but do not prevent the bot from
-  // receiving messages.
+  // processing.  Both deployDiscordCommands and clearDiscordNativeCommands
+  // handle their own errors internally (catch + log), so no outer try/catch
+  // is needed.
   const deployPromise = (async () => {
-    try {
-      await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
-    } catch (err) {
-      runtime.error?.(danger(`discord: background command deploy failed: ${formatErrorMessage(err)}`));
-    }
+    await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
     if (nativeDisabledExplicit) {
-      try {
-        await clearDiscordNativeCommands({ client, applicationId, runtime });
-      } catch (err) {
-        runtime.error?.(danger(`discord: background command clear failed: ${formatErrorMessage(err)}`));
-      }
+      await clearDiscordNativeCommands({ client, applicationId, runtime });
     }
   })();
 
