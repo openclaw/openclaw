@@ -709,7 +709,7 @@ function generateDashboard(configPath, { outputJson = false, update = false } = 
   const chatResults = [];
 
   for (const chatConfig of monitoredChats) {
-    const messages = getChatMessages(chatConfig.id, { limit: 100, minutesBack: 120 });
+    const messages = getChatMessages(chatConfig.id, { limit: 500, minutesBack: 360 });
     const activity = analyzeChatActivity(messages);
     const turningPoints = detectTurningPoints(messages);
 

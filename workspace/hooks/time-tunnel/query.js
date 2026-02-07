@@ -6800,6 +6800,9 @@ export function getChatMessages(chatId, { limit = 100, minutesBack = 60 } = {}) 
   try {
     const cutoff = new Date(Date.now() - minutesBack * 60 * 1000).toISOString();
 
+    // DB stores dual formats: plain "-5262004625" and prefixed "telegram:-5262004625"
+    // Match both to avoid missing messages
+    const prefixed = chatId.includes(":") ? null : `telegram:${chatId}`;
     const stmt = database.prepare(`
       SELECT
         id,
@@ -6813,13 +6816,15 @@ export function getChatMessages(chatId, { limit = 100, minutesBack = 60 } = {}) 
         content,
         media_type
       FROM messages
-      WHERE chat_id = ?
+      WHERE (chat_id = ? ${prefixed ? "OR chat_id = ?" : ""})
         AND timestamp > ?
       ORDER BY timestamp DESC
       LIMIT ?
     `);
 
-    const rows = stmt.all(chatId, cutoff, limit);
+    const rows = prefixed
+      ? stmt.all(chatId, prefixed, cutoff, limit)
+      : stmt.all(chatId, cutoff, limit);
     return rows.reverse(); // 時間正序
   } catch (err) {
     console.error("[time-tunnel] getChatMessages error:", err.message);
