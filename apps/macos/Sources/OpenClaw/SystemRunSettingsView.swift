@@ -150,7 +150,9 @@ private enum ExecApprovalsSettingsTab: String, CaseIterable, Identifiable {
     case policy
     case allowlist
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var title: String {
         switch self {
