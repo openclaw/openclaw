@@ -45,8 +45,12 @@ describe("sessions_spawn thinking defaults", () => {
     const agentCall = calls
       .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
       .findLast((call) => call.method === "agent");
+    const thinkingPatch = calls
+      .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
+      .findLast((call) => call.method === "sessions.patch" && call.params?.thinkingLevel);
 
     expect(agentCall?.params?.thinking).toBe("high");
+    expect(thinkingPatch?.params?.thinkingLevel).toBe("high");
   });
 
   it("prefers explicit sessions_spawn.thinking over config default", async () => {
@@ -60,7 +64,11 @@ describe("sessions_spawn thinking defaults", () => {
     const agentCall = calls
       .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
       .findLast((call) => call.method === "agent");
+    const thinkingPatch = calls
+      .map((call) => call[0] as { method: string; params?: Record<string, unknown> })
+      .findLast((call) => call.method === "sessions.patch" && call.params?.thinkingLevel);
 
     expect(agentCall?.params?.thinking).toBe("low");
+    expect(thinkingPatch?.params?.thinkingLevel).toBe("low");
   });
 });

@@ -56,6 +56,7 @@ import { resolveCronDeliveryPlan } from "../delivery.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 import {
   isHeartbeatOnlyResponse,
+  pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromOutput,
   pickSummaryFromPayloads,
@@ -97,6 +98,8 @@ export type RunCronAgentTurnResult = {
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
   error?: string;
+  sessionId?: string;
+  sessionKey?: string;
 };
 
 export async function runCronIsolatedAgentTurn(params: {
@@ -187,14 +190,12 @@ export async function runCronIsolatedAgentTurn(params: {
   }
   const modelOverrideRaw =
     params.job.payload.kind === "agentTurn" ? params.job.payload.model : undefined;
-  if (modelOverrideRaw !== undefined) {
-    if (typeof modelOverrideRaw !== "string") {
-      return { status: "error", error: "invalid model: expected string" };
-    }
+  const modelOverride = typeof modelOverrideRaw === "string" ? modelOverrideRaw.trim() : undefined;
+  if (modelOverride !== undefined && modelOverride.length > 0) {
     const resolvedOverride = resolveAllowedModelRef({
       cfg: cfgWithAgentDefaults,
       catalog: await loadCatalog(),
-      raw: modelOverrideRaw,
+      raw: modelOverride,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
     });
@@ -211,6 +212,36 @@ export async function runCronIsolatedAgentTurn(params: {
     agentId,
     nowMs: now,
   });
+  const runSessionId = cronSession.sessionEntry.sessionId;
+  const runSessionKey = baseSessionKey.startsWith("cron:")
+    ? `${agentSessionKey}:run:${runSessionId}`
+    : agentSessionKey;
+  const persistSessionEntry = async () => {
+    cronSession.store[agentSessionKey] = cronSession.sessionEntry;
+    if (runSessionKey !== agentSessionKey) {
+      cronSession.store[runSessionKey] = cronSession.sessionEntry;
+    }
+    await updateSessionStore(cronSession.storePath, (store) => {
+      store[agentSessionKey] = cronSession.sessionEntry;
+      if (runSessionKey !== agentSessionKey) {
+        store[runSessionKey] = cronSession.sessionEntry;
+      }
+    });
+  };
+  const withRunSession = (
+    result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
+  ): RunCronAgentTurnResult => ({
+    ...result,
+    sessionId: runSessionId,
+    sessionKey: runSessionKey,
+  });
+  if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
+    const labelSuffix =
+      typeof params.job.name === "string" && params.job.name.trim()
+        ? params.job.name.trim()
+        : params.job.id;
+    cronSession.sessionEntry.label = `Cron: ${labelSuffix}`;
+  }
 
   // Resolve thinking level - job thinking > hooks.gmail.thinking > agent default
   const hooksGmailThinking = isGmailHook
@@ -317,18 +348,12 @@ export async function runCronIsolatedAgentTurn(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    cronSession.store[agentSessionKey] = cronSession.sessionEntry;
-    await updateSessionStore(cronSession.storePath, (store) => {
-      store[agentSessionKey] = cronSession.sessionEntry;
-    });
+    await persistSessionEntry();
   }
 
   // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
   cronSession.sessionEntry.systemSent = true;
-  cronSession.store[agentSessionKey] = cronSession.sessionEntry;
-  await updateSessionStore(cronSession.storePath, (store) => {
-    store[agentSessionKey] = cronSession.sessionEntry;
-  });
+  await persistSessionEntry();
 
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
@@ -396,7 +421,7 @@ export async function runCronIsolatedAgentTurn(params: {
     fallbackProvider = fallbackResult.provider;
     fallbackModel = fallbackResult.model;
   } catch (err) {
-    return { status: "error", error: String(err) };
+    return withRunSession({ status: "error", error: String(err) });
   }
 
   const payloads = runResult.payloads ?? [];
@@ -427,14 +452,19 @@ export async function runCronIsolatedAgentTurn(params: {
       cronSession.sessionEntry.totalTokens =
         promptTokens > 0 ? promptTokens : (usage.total ?? input);
     }
-    cronSession.store[agentSessionKey] = cronSession.sessionEntry;
-    await updateSessionStore(cronSession.storePath, (store) => {
-      store[agentSessionKey] = cronSession.sessionEntry;
-    });
+    await persistSessionEntry();
   }
   const firstText = payloads[0]?.text ?? "";
   const summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   const outputText = pickLastNonEmptyTextFromPayloads(payloads);
+  const synthesizedText = outputText?.trim() || summary?.trim() || undefined;
+  const deliveryPayload = pickLastDeliverablePayload(payloads);
+  const deliveryPayloads =
+    deliveryPayload !== undefined
+      ? [deliveryPayload]
+      : synthesizedText
+        ? [{ text: synthesizedText }]
+        : [];
   const deliveryBestEffort = resolveCronDeliveryBestEffort(params.job);
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
@@ -454,28 +484,28 @@ export async function runCronIsolatedAgentTurn(params: {
   if (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery) {
     if (resolvedDelivery.error) {
       if (!deliveryBestEffort) {
-        return {
+        return withRunSession({
           status: "error",
           error: resolvedDelivery.error.message,
           summary,
           outputText,
-        };
+        });
       }
       logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
-      return { status: "ok", summary, outputText };
+      return withRunSession({ status: "ok", summary, outputText });
     }
     if (!resolvedDelivery.to) {
       const message = "cron delivery target is missing";
       if (!deliveryBestEffort) {
-        return {
+        return withRunSession({
           status: "error",
           error: message,
           summary,
           outputText,
-        };
+        });
       }
       logWarn(`[cron:${params.job.id}] ${message}`);
-      return { status: "ok", summary, outputText };
+      return withRunSession({ status: "ok", summary, outputText });
     }
     try {
       await deliverOutboundPayloads({
@@ -484,16 +514,16 @@ export async function runCronIsolatedAgentTurn(params: {
         to: resolvedDelivery.to,
         accountId: resolvedDelivery.accountId,
         threadId: resolvedDelivery.threadId,
-        payloads,
+        payloads: deliveryPayloads,
         bestEffort: deliveryBestEffort,
         deps: createOutboundSendDeps(params.deps),
       });
     } catch (err) {
       if (!deliveryBestEffort) {
-        return { status: "error", summary, outputText, error: String(err) };
+        return withRunSession({ status: "error", summary, outputText, error: String(err) });
       }
     }
   }
 
-  return { status: "ok", summary, outputText };
+  return withRunSession({ status: "ok", summary, outputText });
 }
