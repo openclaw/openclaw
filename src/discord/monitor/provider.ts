@@ -549,7 +549,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     ? new DiscordPresenceListener({ logger, accountId: account.accountId })
     : null;
 
-  const initialListeners: BaseListener[] = [messageListener, reactionListener, reactionRemoveListener];
+  const initialListeners: BaseListener[] = [
+    messageListener,
+    reactionListener,
+    reactionRemoveListener,
+  ];
   if (presenceListener) {
     initialListeners.push(presenceListener);
   }
