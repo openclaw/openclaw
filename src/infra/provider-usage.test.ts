@@ -482,7 +482,7 @@ describe("provider usage loading", () => {
     const summary = await loadProviderUsageSummary({
       now: Date.UTC(2026, 0, 7, 0, 0, 0),
       auth: [{ provider: "huawei-maas", token: "sk-huawei-test" }],
-      fetch: mockFetch as any,
+      fetch: mockFetch,
     });
 
     expect(summary.providers).toHaveLength(1);
