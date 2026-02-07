@@ -583,12 +583,284 @@ async function main() {
   });
   if (updated) anyUpdated = true;
 
+  // Generate Kanban boards
+  for (const kanban of KANBAN_MAP) {
+    const normalizedMemory = kanban.memoryFile.replace(/\\/g, "/");
+    if (!changedSet.has(normalizedMemory)) continue;
+
+    const memoryPath = path.join(repoRoot, kanban.memoryFile);
+    if (!(await pathExists(memoryPath))) {
+      console.warn(`  [skip] memory file not found: ${memoryPath}`);
+      continue;
+    }
+
+    let memoryText: string;
+    try {
+      memoryText = await readFile(memoryPath, "utf-8");
+    } catch (err) {
+      console.warn(`  [skip] failed to read: ${memoryPath} — ${err}`);
+      continue;
+    }
+
+    console.log(`\n[kanban] ${kanban.memoryFile} → ${kanban.kanbanPath}`);
+
+    try {
+      const columns = kanban.extractor(memoryText);
+      const content = buildKanbanContent(columns);
+      const kanbanUpdated = await writeKanbanFile(
+        vaultPath,
+        kanban.kanbanPath,
+        content,
+      );
+      if (kanbanUpdated) anyUpdated = true;
+    } catch (err) {
+      console.warn(`  [skip] kanban generation failed: ${err}`);
+    }
+  }
+
   if (anyUpdated) {
     console.log("\n[sync-obsidian] dashboards updated successfully");
   } else {
     console.log("\n[sync-obsidian] no dashboards needed updating");
   }
 }
+
+// ---------------------------------------------------------------------------
+// Kanban board generation
+// ---------------------------------------------------------------------------
+
+interface KanbanMapping {
+  memoryFile: string;
+  kanbanPath: string;
+  extractor: (text: string) => KanbanColumns;
+}
+
+interface KanbanColumns {
+  [columnName: string]: string[];
+}
+
+const KANBAN_MAP: KanbanMapping[] = [
+  {
+    memoryFile: "memory/maioss.md",
+    kanbanPath: "04.MAIOSS/_KANBAN.md",
+    extractor: extractMaiossKanbanColumns,
+  },
+  {
+    memoryFile: "memory/vietnam-beauty.md",
+    kanbanPath: "07.MAIBEAUTY/_KANBAN.md",
+    extractor: extractBeautyKanbanColumns,
+  },
+];
+
+function extractMaiossKanbanColumns(memoryText: string): KanbanColumns {
+  const columns: KanbanColumns = {};
+
+  // Done: completed milestone headings (### ✅ ...), most recent 5
+  const doneItems: string[] = [];
+  const milestoneMatches = [
+    ...memoryText.matchAll(/^###\s+✅\s+(.+?)(?:\s*\(([^)]+)\))?\s*$/gm),
+  ];
+  const recentMilestones = milestoneMatches.slice(-5);
+  for (const m of recentMilestones) {
+    const name = m[1].trim();
+    const date = m[2]?.trim();
+    const label = date ? `${name} (${date})` : name;
+    doneItems.push(`- [x] ${label}`);
+  }
+  columns["✅ Done"] = doneItems;
+
+  // In Progress: currently empty — placeholder
+  columns["🔄 In Progress"] = [];
+
+  // Todo: "기존 과제" section unchecked items
+  const todoSection = extractSectionContent(memoryText, "기존 과제", 3);
+  if (todoSection) {
+    columns["📋 Todo"] = extractCheckboxItems(todoSection, true);
+  } else {
+    columns["📋 Todo"] = [];
+  }
+
+  // Blocked: detect items containing blocking keywords
+  const blockedItems: string[] = [];
+  const blockPatterns = /대기|차단|blocked|미제공|미구현|확보 대기/i;
+  // Scan entire text for lines that look like task items with blocking keywords
+  for (const line of memoryText.split("\n")) {
+    if (blockPatterns.test(line) && /^\s*-\s*\[[ x]\]/.test(line)) {
+      // Skip already-completed items (strikethrough ~~...~~)
+      if (/~~.+~~/.test(line)) continue;
+      blockedItems.push(line.replace(/^\s*-\s*\[[ x]\]/, "- [ ]").trim());
+    }
+  }
+  // Also check for CAVD API status paragraph
+  if (
+    memoryText.includes("API 키 확보 대기") ||
+    memoryText.includes("공개 REST API 미제공")
+  ) {
+    const cavdBlocked = "- [ ] CAVD API 키 확보 대기 (CATARC 협약 필요)";
+    if (!blockedItems.some((i) => i.includes("CAVD"))) {
+      blockedItems.push(cavdBlocked);
+    }
+  }
+  columns["🔴 Blocked"] = blockedItems;
+
+  return columns;
+}
+
+function extractBeautyKanbanColumns(memoryText: string): KanbanColumns {
+  const columns: KanbanColumns = {};
+
+  // Done: "🔵 완료" section checked items, most recent 5
+  // The heading may have a date suffix like "🔵 완료 (2026-02-03)"
+  const doneItems: string[] = [];
+  const nextActionText = extractSectionContent(memoryText, "다음 액션") ?? "";
+  // Find any heading starting with "🔵 완료" (with or without date)
+  const completedHeadingMatch = nextActionText.match(
+    /^###\s+(🔵\s+완료(?:\s*\([^)]+\))?)\s*$/m,
+  );
+  if (completedHeadingMatch) {
+    const headingText = completedHeadingMatch[1].trim();
+    const completedSection = extractSectionContent(
+      `## dummy\n${nextActionText}`,
+      headingText,
+      3,
+    );
+    if (completedSection) {
+      const allChecked = completedSection
+        .split("\n")
+        .filter((line) => /^\s*-\s*\[x\]/i.test(line));
+      doneItems.push(...allChecked.slice(-5));
+    }
+  }
+  columns["✅ Done"] = doneItems;
+
+  // In Progress: currently empty — placeholder
+  columns["🔄 In Progress"] = [];
+
+  // Todo: "🟢 다음 단계" unchecked items
+  const nextActionSection = extractSectionContent(memoryText, "다음 액션");
+  if (nextActionSection) {
+    const nextSection = extractSectionContent(
+      `## dummy\n${nextActionSection}`,
+      "🟢 다음 단계",
+      3,
+    );
+    if (nextSection) {
+      columns["📋 Todo"] = extractCheckboxItems(nextSection, true);
+    } else {
+      columns["📋 Todo"] = [];
+    }
+  } else {
+    columns["📋 Todo"] = [];
+  }
+
+  // Waiting (지니): "🟡 지니 액션 필요" unchecked items
+  if (nextActionSection) {
+    const jiniSection = extractSectionContent(
+      `## dummy\n${nextActionSection}`,
+      "🟡 지니 액션 필요",
+      3,
+    );
+    if (jiniSection) {
+      columns["🟡 Waiting (지니)"] = extractCheckboxItems(jiniSection, true);
+    } else {
+      columns["🟡 Waiting (지니)"] = [];
+    }
+  } else {
+    columns["🟡 Waiting (지니)"] = [];
+  }
+
+  // Blocked: detect Zalo and other blocking patterns
+  const blockedItems: string[] = [];
+  const blockPatterns = /대기|차단|blocked|⚠️.*필요|번호 필요/i;
+  const allLines = memoryText.split("\n");
+  for (const line of allLines) {
+    if (blockPatterns.test(line) && /^\s*-\s*\[\s\]/.test(line)) {
+      blockedItems.push(line.trim());
+    }
+  }
+  columns["🔴 Blocked"] = blockedItems;
+
+  return columns;
+}
+
+function buildKanbanContent(columns: KanbanColumns): string {
+  const lines: string[] = [];
+
+  // Frontmatter for Obsidian Kanban plugin
+  lines.push("---");
+  lines.push("kanban-plugin: basic");
+  lines.push("---");
+  lines.push("");
+
+  // Column order matters for Kanban display
+  const columnOrder = [
+    "✅ Done",
+    "🔄 In Progress",
+    "📋 Todo",
+    "🟡 Waiting (지니)",
+    "🔴 Blocked",
+  ];
+
+  for (const colName of columnOrder) {
+    if (!(colName in columns)) continue;
+
+    lines.push(`## ${colName}`);
+    lines.push("");
+    const items = columns[colName];
+    if (items.length > 0) {
+      for (const item of items) {
+        // Ensure proper checkbox format
+        const normalized = item.startsWith("- [")
+          ? item
+          : `- [ ] ${item}`;
+        lines.push(normalized);
+      }
+    }
+    lines.push("");
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  lines.push(`%% Auto-generated by MAIBOT on ${today} %%`);
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+async function writeKanbanFile(
+  vaultPath: string,
+  kanbanRelPath: string,
+  content: string,
+): Promise<boolean> {
+  const filePath = path.join(vaultPath, kanbanRelPath);
+
+  // Ensure directory exists
+  const dir = path.dirname(filePath);
+  if (!(await pathExists(dir))) {
+    console.warn(`  [skip] kanban directory not found: ${dir}`);
+    return false;
+  }
+
+  // Check if content changed
+  let existing = "";
+  try {
+    existing = await readFile(filePath, "utf-8");
+  } catch {
+    // File doesn't exist yet — will create
+  }
+
+  if (existing === content) {
+    console.log(`  [no change] ${kanbanRelPath}`);
+    return false;
+  }
+
+  await writeFile(filePath, content);
+  console.log(`  [updated] ${kanbanRelPath}`);
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Section builder (for dashboard updates)
+// ---------------------------------------------------------------------------
 
 function buildSection(
   memoryFile: string,
