@@ -519,11 +519,11 @@
 
 ### 최근 커밋 (자동 동기화)
 <!-- AUTO:subrepo-commits:START -->
+- `e083a29 feat(web): Phase A - TikTok video pipeline UI integration (02-07)`
 - `dab987d feat(api): extend pipeline to 10 steps + add generate-video endpoint (02-07)`
 - `64ead63 docs: D021 Product-to-TikTok video pipeline design plan (02-07)`
 - `ce6ccde chore: remove hook test file (02-07)`
 - `5bbc9eb test: verify MAIBOT post-commit hook sync (02-07)`
-- `9ce2b34 docs: I029 pipeline result viewer implementation + T019 deploy verification + STATUS update (02-07)`
 <!-- AUTO:subrepo-commits:END -->
 
 *Last updated: 2026-02-07*
