@@ -17,12 +17,12 @@ describe("resolveSignalSender", () => {
 
   it("returns phone sender without uuid when sourceUuid is missing", () => {
     const sender = resolveSignalSender({ sourceNumber: "+15550001111" });
-    expect(sender).toEqual({
+    expect(sender).toMatchObject({
       kind: "phone",
       raw: "+15550001111",
       e164: "+15550001111",
-      uuid: undefined,
     });
+    expect((sender as { uuid?: string }).uuid).toBeUndefined();
   });
 
   it("falls back to uuid sender when sourceNumber is absent", () => {
