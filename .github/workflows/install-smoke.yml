@@ -11,7 +11,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  docs-change-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect docs-only changes
+        id: scope
+        uses: ./.github/actions/detect-docs-only
+
   install-smoke:
+    needs: docs-change-scope
+    if: needs.docs-change-scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout CLI

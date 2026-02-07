@@ -10,7 +10,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  docs-change-scope:
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect docs-only changes
+        id: scope
+        uses: ./.github/actions/detect-docs-only
+
   install-check:
+    needs: docs-change-scope
+    if: needs.docs-change-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -71,6 +85,8 @@ jobs:
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
   checks:
+    needs: docs-change-scope
+    if: needs.docs-change-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false
@@ -162,6 +178,8 @@ jobs:
         run: ${{ matrix.command }}
 
   secrets:
+    needs: docs-change-scope
+    if: needs.docs-change-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -187,6 +205,8 @@ jobs:
           fi
 
   checks-windows:
+    needs: docs-change-scope
+    if: needs.docs-change-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-windows-2025
     env:
       NODE_OPTIONS: --max-old-space-size=4096
@@ -300,7 +320,8 @@ jobs:
   # running 4 separate jobs per PR (as before) starved the queue. One job
   # per PR allows 5 PRs to run macOS checks simultaneously.
   macos:
-    if: github.event_name == 'pull_request'
+    needs: docs-change-scope
+    if: needs.docs-change-scope.outputs.docs_only != 'true' && github.event_name == 'pull_request'
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -585,6 +606,8 @@ jobs:
           PY
 
   android:
+    needs: docs-change-scope
+    if: needs.docs-change-scope.outputs.docs_only != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false

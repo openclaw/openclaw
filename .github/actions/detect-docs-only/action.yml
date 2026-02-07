@@ -1,0 +1,70 @@
+name: Detect docs-only changes
+description: Detect whether all changed files are under docs/.
+outputs:
+  docs_only:
+    description: true when all changed files are under docs/.
+    value: ${{ steps.scope.outputs.docs_only }}
+runs:
+  using: composite
+  steps:
+    - name: Detect docs-only changes
+      id: scope
+      uses: actions/github-script@v7
+      with:
+        script: |
+          try {
+            const DOCS_PREFIX = "docs/";
+            const isDocsOnlyPath = (path) => path.startsWith(DOCS_PREFIX);
+
+            /** @type {string[]} */
+            let files = [];
+
+            if (context.eventName === "pull_request") {
+              files = await github.paginate(
+                github.rest.pulls.listFiles,
+                {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.payload.pull_request.number,
+                  per_page: 100,
+                },
+                (response) => response.data.map((file) => file.filename),
+              );
+            } else if (context.eventName === "push") {
+              const before = context.payload.before;
+              const head = context.payload.after || context.sha;
+
+              if (!before || /^0+$/.test(before)) {
+                core.info("Push event has no comparable base commit. Running full workflow.");
+                core.setOutput("docs_only", "false");
+                return;
+              }
+
+              const compare = await github.rest.repos.compareCommits({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                base: before,
+                head,
+              });
+              const compareFiles = compare.data.files || [];
+              if (compareFiles.length === 300) {
+                core.info("Push diff hit compare file limit. Running full workflow.");
+                core.setOutput("docs_only", "false");
+                return;
+              }
+              files = compareFiles.map((file) => file.filename);
+            } else {
+              core.info(`Unsupported event '${context.eventName}'. Running full workflow.`);
+              core.setOutput("docs_only", "false");
+              return;
+            }
+
+            const docsOnly = files.length > 0 && files.every(isDocsOnlyPath);
+            core.info(`Changed files: ${files.length}`);
+            core.info(`Docs-only change: ${docsOnly}`);
+            core.setOutput("docs_only", docsOnly ? "true" : "false");
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            core.warning(`Docs-only detection failed (${message}). Running full workflow.`);
+            core.setOutput("docs_only", "false");
+          }
