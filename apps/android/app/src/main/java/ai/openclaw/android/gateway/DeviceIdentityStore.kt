@@ -72,19 +72,26 @@ class DeviceIdentityStore(context: Context) {
       }
     }
 
-    // Fall back to BouncyCastle lightweight API
+    // Fall back to BouncyCastle JCE provider for PKCS8 keys, lightweight API for raw keys
     return try {
-      val rawPrivateKey = if (privateKeyBytes.size == 32) {
-        privateKeyBytes
+      if (privateKeyBytes.size == 32) {
+        // Legacy raw 32-byte seed — use BC lightweight API directly
+        val privateKeyParams = Ed25519PrivateKeyParameters(privateKeyBytes, 0)
+        val signer = Ed25519Signer()
+        signer.init(true, privateKeyParams)
+        val payloadBytes = payload.toByteArray(Charsets.UTF_8)
+        signer.update(payloadBytes, 0, payloadBytes.size)
+        base64UrlEncode(signer.generateSignature())
       } else {
-        stripPkcs8PrivateKeyPrefix(privateKeyBytes)
+        // PKCS8-encoded key — use BC's JCE provider to parse it properly
+        val keySpec = PKCS8EncodedKeySpec(privateKeyBytes)
+        val keyFactory = KeyFactory.getInstance("Ed25519", BouncyCastleProvider.PROVIDER_NAME)
+        val privateKey = keyFactory.generatePrivate(keySpec)
+        val signature = Signature.getInstance("Ed25519", BouncyCastleProvider.PROVIDER_NAME)
+        signature.initSign(privateKey)
+        signature.update(payload.toByteArray(Charsets.UTF_8))
+        base64UrlEncode(signature.sign())
       }
-      val privateKeyParams = Ed25519PrivateKeyParameters(rawPrivateKey, 0)
-      val signer = Ed25519Signer()
-      signer.init(true, privateKeyParams)
-      val payloadBytes = payload.toByteArray(Charsets.UTF_8)
-      signer.update(payloadBytes, 0, payloadBytes.size)
-      base64UrlEncode(signer.generateSignature())
     } catch (err: Throwable) {
       Log.w(logTag, "BouncyCastle Ed25519 sign also failed: ${err.message}")
       null
@@ -170,17 +177,6 @@ class DeviceIdentityStore(context: Context) {
       privateKeyPkcs8Base64 = Base64.encodeToString(pkcs8Private, Base64.NO_WRAP),
       createdAtMs = System.currentTimeMillis(),
     )
-  }
-
-  private fun stripPkcs8PrivateKeyPrefix(pkcs8: ByteArray): ByteArray {
-    // Ed25519 PKCS8 structure: 16-byte prefix + 32-byte raw key
-    if (pkcs8.size == ED25519_PKCS8_PREFIX.size + 32 &&
-      pkcs8.copyOfRange(0, ED25519_PKCS8_PREFIX.size).contentEquals(ED25519_PKCS8_PREFIX)
-    ) {
-      return pkcs8.copyOfRange(ED25519_PKCS8_PREFIX.size, pkcs8.size)
-    }
-    // If we can't parse it, return as-is and let BouncyCastle fail with a clear error
-    return pkcs8
   }
 
   private fun deriveDeviceId(publicKeyRawBase64: String): String? {

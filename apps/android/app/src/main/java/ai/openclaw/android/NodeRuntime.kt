@@ -422,13 +422,9 @@ class NodeRuntime(context: Context) {
     prefs.setManualHost(value)
     // Auto-suggest port 443 and TLS for .ts.net hosts (Tailscale serve uses HTTPS/443).
     // Only auto-set when port is still the default; user can still override afterward.
-    val isTailscale = value.trim().endsWith(".ts.net", ignoreCase = true)
-    if (isTailscale && manualPort.value == DEFAULT_GATEWAY_PORT) {
+    if (value.trim().endsWith(".ts.net", ignoreCase = true) && manualPort.value == DEFAULT_GATEWAY_PORT) {
       prefs.setManualPort(443)
       prefs.setManualTls(true)
-    } else if (!isTailscale && manualPort.value == 443) {
-      // Revert to default when switching away from a .ts.net host
-      prefs.setManualPort(DEFAULT_GATEWAY_PORT)
     }
   }
 
